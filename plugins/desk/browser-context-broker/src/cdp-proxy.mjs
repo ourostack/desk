@@ -20,6 +20,7 @@ const ACTIVATION_METHODS = new Set([
 ]);
 const SAFE_BROWSER_METHODS = new Set([
   'Browser.getVersion',
+  'Browser.getWindowForTarget',
 ]);
 const SAFE_SESSION_STORAGE_METHODS = new Set([
   'DOMStorage.disable',
@@ -179,6 +180,13 @@ export async function startLeaseProxy({
       }
       if (message.sessionId && !ownedSessions.has(message.sessionId)) {
         downstream.send(errorResponse(message.id, -32003, 'Cannot access a target session owned by another lease'));
+        return;
+      }
+      if (
+        message.method === 'Browser.getWindowForTarget' &&
+        !ownedTargets.has(message.params?.targetId)
+      ) {
+        downstream.send(errorResponse(message.id, -32002, 'An explicit lease-owned target is required for window observation'));
         return;
       }
       if (

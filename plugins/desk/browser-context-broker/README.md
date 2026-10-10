@@ -36,9 +36,13 @@ with its close/reconciliation diagnostic; explicit release remains failed and
 retryable rather than deleting the lease.
 
 Browser-global commands are restricted independently of flattened target
-session ownership. `Browser.getVersion` is the only allowed `Browser.*`
-method; `Browser.close` and every other browser-global mutation are rejected
-whether sent at the root or through an owned target session.
+session ownership. `Browser.getVersion` is allowed. `Browser.getWindowForTarget`
+requires an explicit lease-owned target ID, even through an owned session;
+missing, unowned and closed targets are refused before dispatch. It reports the
+window containing that target, not ownership of the entire window or permission
+to inspect its other tabs. `Browser.getWindowBounds`, `Browser.setWindowBounds`,
+`Browser.close` and every browser-global mutation remain rejected. Cleanup
+continues to close exact owned targets, never a window by this diagnostic ID.
 
 Owned target sessions also have an explicit profile-storage boundary.
 `Network.getAllCookies`, `Network.getCookies`, cookie set/delete/clear methods,

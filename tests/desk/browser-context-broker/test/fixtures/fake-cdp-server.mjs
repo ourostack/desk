@@ -57,6 +57,11 @@ export async function startFakeCdpServer(options = {}) {
           userAgent: 'Mozilla/5.0 HeadlessChrome/140.0.0.0',
           jsVersion: '14.0.0',
         };
+      } else if (message.method === 'Browser.getWindowForTarget') {
+        result = {
+          windowId: 1001,
+          bounds: { left: 20, top: 30, width: 800, height: 600, windowState: 'normal' },
+        };
       } else if (message.method === 'Target.getTargets') {
         result = { targetInfos: [...targets.values()] };
       } else if (message.method === 'Target.getTargetInfo') {
