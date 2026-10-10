@@ -36,7 +36,12 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   // (every client already gets a refresh token); ChatGPT asks for refresh
   // tokens only when the server lists it. The protected-resource metadata
   // keeps `desk` alone, because offline_access is not a scope of the resource.
-  const authorizationServerMetadata = { ...createOAuthMetadata(routerOptions), scopes_supported: ["desk", "offline_access"] };
+  // Clients may use an https URL to their metadata document as their id.
+  const authorizationServerMetadata = {
+    ...createOAuthMetadata(routerOptions),
+    scopes_supported: ["desk", "offline_access"],
+    client_id_metadata_document_supported: true,
+  };
   app.use("/.well-known/oauth-authorization-server", metadataHandler(authorizationServerMetadata));
   app.use(mcpAuthRouter(routerOptions));
   app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider, { issuer }));

@@ -1,0 +1,486 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createServer } from "node:https";
+import { once } from "node:events";
+import { createClientDocuments, isPublicAddress } from "../src/auth/client-document.js";
+import { createRedirectPolicy } from "../src/auth/redirects.js";
+
+// A self-signed certificate for client.example, valid until 2126, made for
+// these tests only (openssl req -x509 -newkey ec ... -subj /CN=client.example).
+// The client trusts it through the injected `ca`, so no test touches the
+// system's trust store.
+const TLS = {
+  key: readFileSync(new URL("./fixtures/client-document-tls.key", import.meta.url)),
+  cert: readFileSync(new URL("./fixtures/client-document-tls.crt", import.meta.url)),
+};
+const HOST = "client.example";
+const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
+
+// A metadata-document server on 127.0.0.1. `routes` maps a path to a handler;
+// `hits` counts the requests each path received.
+async function documentServer(t, routes) {
+  const hits = {};
+  const server = createServer(TLS, (req, res) => {
+    const path = req.url.split("?")[0];
+    hits[req.url] = (hits[req.url] ?? 0) + 1;
+    const route = routes[path];
+    if (!route) {
+      res.writeHead(404).end();
+      return;
+    }
+    route(req, res);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const port = server.address().port;
+  return { hits, url: (path) => `https://${HOST}:${port}${path}` };
+}
+
+const json = (body, headers = {}) => (_req, res) => {
+  const text = JSON.stringify(body);
+  res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text), ...headers }).end(text);
+};
+
+// The client document a well-behaved client would serve at `url`.
+const documentFor = (url, extra = {}) => ({ client_id: url, client_name: "Example", redirect_uris: [CLAUDE_CALLBACK], ...extra });
+
+// A resolver that answers every host with `addresses`, recording each call.
+function resolver(addresses = [{ address: "127.0.0.1", family: 4 }]) {
+  const calls = [];
+  const lookup = async (host, options) => {
+    calls.push({ host, options });
+    return addresses;
+  };
+  return { lookup, calls };
+}
+
+// The test server lives on loopback, which the real check refuses; tests
+// that need to reach it mark 127.0.0.1, and only it, as public.
+const testServerIsPublic = (address) => address === "127.0.0.1" || isPublicAddress(address);
+
+function makeDocuments(overrides = {}) {
+  const logs = [];
+  const documents = createClientDocuments({
+    redirects: createRedirectPolicy(undefined),
+    lookup: resolver().lookup,
+    ca: TLS.cert,
+    log: (line) => logs.push(line),
+    isPublic: testServerIsPublic,
+    ...overrides,
+  });
+  return { documents, logs };
+}
+
+test("a well-formed document from a public address becomes a public client", async (t) => {
+  const routes = {};
+  const live = await documentServer(t, routes);
+  const liveUrl = live.url("/oauth/client.json");
+  routes["/oauth/client.json"] = json(documentFor(liveUrl, { scope: "desk offline_access", extra_field: "dropped" }));
+  const dns = resolver();
+  const { documents, logs } = makeDocuments({ lookup: dns.lookup });
+  const client = await documents.get(liveUrl);
+  assert.equal(client.client_id, liveUrl);
+  assert.equal(client.client_name, "Example");
+  assert.deepEqual(client.redirect_uris, [CLAUDE_CALLBACK]);
+  assert.equal(client.token_endpoint_auth_method, "none", "a missing method defaults to none");
+  assert.equal(client.client_secret, undefined);
+  assert.equal(client.extra_field, undefined);
+  assert.deepEqual(logs, []);
+  // The host was resolved once, by our resolver; the TLS connection to the
+  // address it returned verified the certificate for client.example.
+  assert.deepEqual(dns.calls.map((call) => call.host), [HOST]);
+  assert.equal(dns.calls[0].options.all, true);
+});
+
+test("a client id that is not a plain https URL is refused before any lookup", async () => {
+  const dns = resolver();
+  const { documents, logs } = makeDocuments({ lookup: dns.lookup });
+  for (const id of [
+    "http://client.example/client.json",
+    "https://client.example/client.json#frag",
+    "https://client.example/client.json#",
+    "https://user@client.example/client.json",
+    "https://user:pass@client.example/client.json",
+    "https://client.example/a/../client.json",
+    "https://client.example/a/./client.json",
+    "https://client.example/a/%2e%2e/client.json",
+    "https://client.example/a/%2E%2e/client.json",
+    "https://client.example/a/.%2e/client.json",
+    "https://client.example/a/%2e/client.json",
+    "https://client.example/..",
+    "https://client.example/",
+    "https://client.example",
+    "https://CLIENT.example/client.json",
+    "https://client.example:443/client.json",
+    "https://client.example/client json",
+    "not a url",
+    "",
+    undefined,
+  ]) {
+    assert.equal(await documents.get(id), undefined, String(id));
+  }
+  assert.equal(dns.calls.length, 0);
+  assert.ok(logs.every((line) => line === "client refused: invalid_client_id_url"), logs.join("\n"));
+});
+
+test("isPublicAddress refuses private, loopback, link-local, unique-local, CGNAT, unspecified, multicast and their IPv4-mapped forms", () => {
+  const refused = [
+    "10.0.0.1",
+    "10.255.255.255",
+    "172.16.0.1",
+    "172.31.255.254",
+    "192.168.1.1",
+    "127.0.0.1",
+    "127.1.2.3",
+    "169.254.169.254",
+    "100.64.0.1",
+    "100.127.255.255",
+    "0.0.0.0",
+    "0.1.2.3",
+    "224.0.0.1",
+    "239.255.255.250",
+    "255.255.255.255",
+    "::",
+    "::1",
+    "fe80::1",
+    "febf::1",
+    "fc00::1",
+    "fd12:3456::1",
+    "ff02::1",
+    "::ffff:10.0.0.1",
+    "::ffff:127.0.0.1",
+    "::ffff:7f00:1",
+    "::ffff:169.254.169.254",
+    "::ffff:192.168.0.1",
+    "::ffff:100.64.0.1",
+    "::ffff:0.0.0.0",
+    "::ffff:224.0.0.1",
+    "64:ff9b::7f00:1",
+    "2002:7f00:1::",
+    "::127.0.0.1",
+    "fe80::1%en0",
+    "not an address",
+    "",
+  ];
+  for (const address of refused) assert.equal(isPublicAddress(address), false, address);
+  for (const address of ["8.8.8.8", "1.1.1.1", "172.32.0.1", "100.128.0.1", "172.15.255.255", "2606:4700::1111", "::ffff:8.8.8.8", "2002:808:808::"]) {
+    assert.equal(isPublicAddress(address), true, address);
+  }
+});
+
+test("a host that resolves to any non-public address is refused and never contacted", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  for (const address of ["10.0.0.1", "172.16.0.1", "192.168.0.1", "127.0.0.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1"]) {
+    const { documents, logs } = makeDocuments({ lookup: resolver([{ address, family: 4 }]).lookup, isPublic: isPublicAddress });
+    assert.equal(await documents.get(url), undefined, address);
+    assert.deepEqual(logs, [`client refused: private_address client ${url}`], address);
+  }
+  for (const address of ["::1", "fe80::1", "fc00::1", "::", "ff02::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1"]) {
+    const { documents } = makeDocuments({ lookup: resolver([{ address, family: 6 }]).lookup, isPublic: isPublicAddress });
+    assert.equal(await documents.get(url), undefined, address);
+  }
+  assert.equal(server.hits["/client.json"], undefined);
+});
+
+test("a host that resolves to both a public and a private address is refused, not raced (DNS rebinding)", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  for (const addresses of [
+    [{ address: "127.0.0.1", family: 4 }, { address: "10.0.0.1", family: 4 }],
+    [{ address: "10.0.0.1", family: 4 }, { address: "127.0.0.1", family: 4 }],
+    [{ address: "127.0.0.1", family: 4 }, { address: "::1", family: 6 }],
+  ]) {
+    const { documents, logs } = makeDocuments({ lookup: resolver(addresses).lookup });
+    assert.equal(await documents.get(url), undefined, JSON.stringify(addresses));
+    assert.deepEqual(logs, [`client refused: private_address client ${url}`]);
+  }
+  assert.equal(server.hits["/client.json"], undefined);
+});
+
+test("a host that does not resolve, or resolves to nothing, is refused", async () => {
+  const url = "https://client.example/client.json";
+  const failing = makeDocuments({
+    lookup: async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    },
+  });
+  assert.equal(await failing.documents.get(url), undefined);
+  assert.deepEqual(failing.logs, [`client refused: dns_failed client ${url}`]);
+  const empty = makeDocuments({ lookup: resolver([]).lookup });
+  assert.equal(await empty.documents.get(url), undefined);
+  assert.deepEqual(empty.logs, [`client refused: dns_failed client ${url}`]);
+});
+
+test("any redirect is refused and not followed", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const target = server.url("/real.json");
+  routes["/real.json"] = json(documentFor(target));
+  for (const status of [301, 302, 303, 307, 308]) {
+    const url = server.url(`/moved-${status}.json`);
+    routes[`/moved-${status}.json`] = (_req, res) => res.writeHead(status, { location: target }).end();
+    const { documents, logs } = makeDocuments();
+    assert.equal(await documents.get(url), undefined, String(status));
+    assert.deepEqual(logs, [`client refused: redirect client ${url}`]);
+  }
+  assert.equal(server.hits["/real.json"], undefined);
+});
+
+test("a status other than 200 is refused", async (t) => {
+  const server = await documentServer(t, { "/gone.json": (_req, res) => res.writeHead(410).end("{}") });
+  const { documents, logs } = makeDocuments();
+  assert.equal(await documents.get(server.url("/gone.json")), undefined);
+  assert.deepEqual(logs, [`client refused: http_status client ${server.url("/gone.json")}`]);
+  assert.equal(await documents.get(server.url("/missing.json")), undefined);
+});
+
+test("a server that answers too slowly, or dribbles bytes past the limit, is cut off", async (t) => {
+  const closed = [];
+  const timers = [];
+  t.after(() => timers.forEach(clearInterval));
+  const server = await documentServer(t, {
+    "/silent.json": (req) => req.on("close", () => closed.push("silent")),
+    "/dribble.json": (req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("{");
+      const timer = setInterval(() => res.write(" "), 5);
+      timers.push(timer);
+      res.on("close", () => {
+        clearInterval(timer);
+        closed.push("dribble");
+      });
+    },
+  });
+  for (const path of ["/silent.json", "/dribble.json"]) {
+    const { documents, logs } = makeDocuments({ timeoutMs: 50 });
+    const started = Date.now();
+    assert.equal(await documents.get(server.url(path)), undefined, path);
+    assert.ok(Date.now() - started < 1000, `${path} took ${Date.now() - started} ms`);
+    assert.deepEqual(logs, [`client refused: timeout client ${server.url(path)}`]);
+  }
+  for (let i = 0; i < 50 && closed.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(closed.sort(), ["dribble", "silent"], "the gateway closed both connections");
+});
+
+test("a slow resolver counts against the same time limit", async () => {
+  const { documents, logs } = makeDocuments({ timeoutMs: 50, lookup: () => new Promise(() => {}) });
+  assert.equal(await documents.get("https://client.example/client.json"), undefined);
+  assert.deepEqual(logs, ["client refused: timeout client https://client.example/client.json"]);
+});
+
+test("the time limit defaults to 5 seconds", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { documents, logs } = makeDocuments({ lookup: () => new Promise(() => {}) });
+  const result = documents.get("https://client.example/client.json");
+  await Promise.resolve();
+  t.mock.timers.tick(4999);
+  await Promise.resolve();
+  assert.deepEqual(logs, []);
+  t.mock.timers.tick(1);
+  assert.equal(await result, undefined);
+  assert.deepEqual(logs, ["client refused: timeout client https://client.example/client.json"]);
+});
+
+test("a document over 10 KB is refused, with or without Content-Length, and is not read to the end", async (t) => {
+  const closed = [];
+  const timers = [];
+  t.after(() => timers.forEach(clearInterval));
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const declared = server.url("/declared.json");
+  const streamed = server.url("/streamed.json");
+  const exact = server.url("/exact.json");
+  const big = (url, size) => {
+    const base = JSON.stringify(documentFor(url, { padding: "" }));
+    return JSON.stringify(documentFor(url, { padding: "x".repeat(size - base.length) }));
+  };
+  routes["/declared.json"] = (_req, res) => {
+    const text = big(declared, 10 * 1024 + 1);
+    res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) }).end(text);
+  };
+  // Chunked, with no Content-Length, and never ending: 1 KB every 2 ms.
+  routes["/streamed.json"] = (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    let sent = 0;
+    const timer = setInterval(() => {
+      res.write(" ".repeat(1024));
+      sent += 1024;
+    }, 2);
+    timers.push(timer);
+    res.on("close", () => {
+      clearInterval(timer);
+      closed.push(sent);
+    });
+  };
+  routes["/exact.json"] = (_req, res) => {
+    const text = big(exact, 10 * 1024);
+    res.writeHead(200, { "content-type": "application/json", "transfer-encoding": "chunked" });
+    res.end(text);
+  };
+  const { documents, logs } = makeDocuments();
+  assert.equal(await documents.get(declared), undefined);
+  assert.equal(await documents.get(streamed), undefined);
+  assert.deepEqual(logs, [`client refused: too_large client ${declared}`, `client refused: too_large client ${streamed}`]);
+  for (let i = 0; i < 50 && closed.length < 1; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(closed.length, 1, "the gateway closed the streaming connection");
+  assert.ok(closed[0] < 64 * 1024, `the server sent ${closed[0]} bytes before the cut`);
+  assert.equal((await documents.get(exact))?.client_id, exact, "exactly 10 KB is allowed");
+});
+
+test("a body that is not a JSON object is refused", async (t) => {
+  const server = await documentServer(t, {
+    "/text.json": (_req, res) => res.writeHead(200, { "content-type": "text/plain" }).end("hello"),
+    "/array.json": (_req, res) => res.writeHead(200, { "content-type": "application/json" }).end("[]"),
+    "/null.json": (_req, res) => res.writeHead(200, { "content-type": "application/json" }).end("null"),
+  });
+  for (const path of ["/text.json", "/array.json", "/null.json"]) {
+    const { documents, logs } = makeDocuments();
+    assert.equal(await documents.get(server.url(path)), undefined, path);
+    assert.deepEqual(logs, [`client refused: not_json client ${server.url(path)}`], path);
+  }
+});
+
+test("a document whose client_id is not its own URL is refused", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  for (const clientId of [server.url("/other.json"), `${url}/`, url.replace(HOST, "CLIENT.example"), undefined]) {
+    routes["/client.json"] = json(documentFor(url, { client_id: clientId }));
+    const { documents, logs } = makeDocuments();
+    assert.equal(await documents.get(url), undefined, String(clientId));
+    assert.deepEqual(logs, [`client refused: client_id_mismatch client ${url}`]);
+  }
+});
+
+test("a document is refused when any redirect fails DESK_REDIRECTS; the document alone never admits one", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  for (const redirectUris of [[CLAUDE_CALLBACK, "https://client.example/callback"], ["https://evil.example/cb"], []]) {
+    routes["/client.json"] = json(documentFor(url, { redirect_uris: redirectUris }));
+    const { documents, logs } = makeDocuments();
+    assert.equal(await documents.get(url), undefined, JSON.stringify(redirectUris));
+    assert.deepEqual(logs, [`client refused: invalid_redirect_uri client ${url}`]);
+  }
+  routes["/client.json"] = json(documentFor(url, { redirect_uris: ["https://client.example/callback"] }));
+  const configured = makeDocuments({ redirects: createRedirectPolicy("https://client.example/callback") });
+  assert.deepEqual((await configured.documents.get(url)).redirect_uris, ["https://client.example/callback"]);
+});
+
+test("a document that is not valid client metadata is refused", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  for (const extra of [{ redirect_uris: "https://claude.ai/api/mcp/auth_callback" }, { redirect_uris: ["javascript:alert(1)"] }, { client_name: 42 }]) {
+    routes["/client.json"] = json(documentFor(url, extra));
+    const { documents, logs } = makeDocuments();
+    assert.equal(await documents.get(url), undefined, JSON.stringify(extra));
+    assert.deepEqual(logs, [`client refused: invalid_document client ${url}`]);
+  }
+});
+
+test("a document asking for a secret-based token method, or carrying a secret, is refused", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  for (const extra of [{ token_endpoint_auth_method: "client_secret_post" }, { token_endpoint_auth_method: "private_key_jwt" }, { client_secret: "s" }]) {
+    routes["/client.json"] = json(documentFor(url, extra));
+    const { documents, logs } = makeDocuments();
+    assert.equal(await documents.get(url), undefined, JSON.stringify(extra));
+    assert.deepEqual(logs, [`client refused: confidential_client client ${url}`]);
+  }
+  routes["/client.json"] = json(documentFor(url, { token_endpoint_auth_method: "none" }));
+  assert.equal((await makeDocuments().documents.get(url)).token_endpoint_auth_method, "none");
+});
+
+test("documents are cached for their max-age, clamped to between 5 minutes and 24 hours", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  let clock = 1_000_000_000_000;
+  const { documents } = makeDocuments({ now: () => clock });
+  const cases = [
+    { path: "/none.json", headers: {}, seconds: 300 },
+    { path: "/short.json", headers: { "cache-control": "public, max-age=10" }, seconds: 300 },
+    { path: "/mid.json", headers: { "cache-control": "max-age=1000" }, seconds: 1000 },
+    { path: "/long.json", headers: { "cache-control": "max-age=999999, public" }, seconds: 86400 },
+    { path: "/nostore.json", headers: { "cache-control": "no-store" }, seconds: 300 },
+  ];
+  for (const { path, headers } of cases) routes[path] = json(documentFor(server.url(path)), headers);
+  for (const { path, seconds } of cases) {
+    const url = server.url(path);
+    const start = clock;
+    assert.ok(await documents.get(url));
+    clock = start + seconds * 1000 - 1;
+    assert.ok(await documents.get(url));
+    assert.equal(server.hits[path], 1, `${path} is cached just short of ${seconds} s`);
+    clock = start + seconds * 1000;
+    assert.ok(await documents.get(url));
+    assert.equal(server.hits[path], 2, `${path} is fetched again at ${seconds} s`);
+  }
+});
+
+test("a refused document is not cached", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url, { redirect_uris: ["https://evil.example/cb"] }));
+  const { documents } = makeDocuments();
+  assert.equal(await documents.get(url), undefined);
+  routes["/client.json"] = json(documentFor(url));
+  assert.equal((await documents.get(url)).client_id, url);
+  assert.equal(server.hits["/client.json"], 2);
+});
+
+test("the cache holds at most 500 documents and evicts the oldest", async (t) => {
+  const server = await documentServer(t, {
+    "/client.json": (req, res) => json(documentFor(server.url(req.url)))(req, res),
+  });
+  const { documents } = makeDocuments();
+  const urls = Array.from({ length: 501 }, (_, i) => server.url(`/client.json?n=${i}`));
+  for (const url of urls) assert.ok(await documents.get(url));
+  // The first was evicted when the 501st arrived; the second is still held.
+  assert.ok(await documents.get(urls[1]));
+  assert.equal(server.hits["/client.json?n=1"], 1);
+  assert.ok(await documents.get(urls[0]));
+  assert.equal(server.hits["/client.json?n=0"], 2);
+  assert.ok(await documents.get(urls[500]));
+  assert.equal(server.hits["/client.json?n=500"], 1);
+});
+
+test("concurrent gets of one uncached document share one fetch and one answer", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = (req, res) => setTimeout(() => json(documentFor(url))(req, res), 20);
+  const { documents } = makeDocuments();
+  const [first, second, third] = await Promise.all([documents.get(url), documents.get(url), documents.get(url)]);
+  assert.equal(server.hits["/client.json"], 1);
+  assert.equal(first.client_id, url);
+  assert.deepEqual(second, first);
+  assert.deepEqual(third, first);
+
+  const bad = server.url("/bad.json");
+  routes["/bad.json"] = (_req, res) => setTimeout(() => res.writeHead(500).end(), 20);
+  assert.deepEqual(await Promise.all([documents.get(bad), documents.get(bad)]), [undefined, undefined]);
+  assert.equal(server.hits["/bad.json"], 1);
+});
+
+test("a certificate the client does not trust is refused", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  const { documents, logs } = makeDocuments({ ca: undefined });
+  assert.equal(await documents.get(url), undefined);
+  assert.deepEqual(logs, [`client refused: fetch_failed client ${url}`]);
+});

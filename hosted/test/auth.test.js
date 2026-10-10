@@ -745,3 +745,82 @@ test("a code or refresh token sealed for another audience gets invalid_grant", a
 test("createProvider needs the MCP resource", () => {
   assert.throws(() => makeProvider(fakeGitHub(), { resource: undefined }), /resource/);
 });
+
+const DOCUMENT_ID = "https://client.example/oauth/client.json";
+
+// A stand-in for the client-document fetcher: it knows one document.
+function fakeDocuments(client = { client_id: DOCUMENT_ID, client_name: "Example App", redirect_uris: [CLAUDE_CALLBACK], token_endpoint_auth_method: "none" }) {
+  const asked = [];
+  return {
+    asked,
+    async get(clientId) {
+      asked.push(clientId);
+      return clientId === DOCUMENT_ID ? client : undefined;
+    },
+  };
+}
+
+test("getClient sends an https client id to the document fetcher and a sealed one never", async (t) => {
+  const documents = fakeDocuments();
+  const { base, provider } = await start(t, fakeGitHub(), { clientDocuments: documents });
+  assert.equal((await provider.clientsStore.getClient(DOCUMENT_ID)).client_name, "Example App");
+  assert.equal(await provider.clientsStore.getClient("https://client.example/unknown.json"), undefined);
+  const sealed = (await register(base)).body;
+  assert.ok(await provider.clientsStore.getClient(sealed.client_id));
+  assert.equal(await provider.clientsStore.getClient("http://client.example/oauth/client.json"), undefined);
+  assert.deepEqual(documents.asked, [DOCUMENT_ID, "https://client.example/unknown.json"]);
+});
+
+test("a client metadata document signs in end to end as a public client", async (t) => {
+  const { base, provider } = await start(t, fakeGitHub(), { clientDocuments: fakeDocuments() });
+  const client = await provider.clientsStore.getClient(DOCUMENT_ID);
+  const { verifier, challenge } = pkce();
+  const { response, html, consent } = await consentPage(base, client, { challenge });
+  assert.equal(response.status, 200);
+  // The host the client id names comes first, above the name the document
+  // gives itself, which anyone could choose.
+  assert.match(html, /<p>From <strong>client\.example<\/strong><\/p><p>Connect Example App to Hosted Desk\?/);
+  const toGitHub = await approve(base, consent);
+  const state = new URL(toGitHub.headers.get("location")).searchParams.get("state");
+  const callback = await fetch(`${base}/oauth/github/callback?${new URLSearchParams({ code: "gh-code", state })}`, { redirect: "manual" });
+  const code = new URL(callback.headers.get("location")).searchParams.get("code");
+  const { status, body } = await tokenRequest(base, {
+    grant_type: "authorization_code",
+    client_id: DOCUMENT_ID,
+    code,
+    code_verifier: verifier,
+    redirect_uri: CLAUDE_CALLBACK,
+    resource: MCP_URL,
+  });
+  assert.equal(status, 200);
+  assert.equal((await provider.verifyAccessToken(body.access_token)).clientId, DOCUMENT_ID);
+  const refreshed = await tokenRequest(base, { grant_type: "refresh_token", client_id: DOCUMENT_ID, refresh_token: body.refresh_token });
+  assert.equal(refreshed.status, 200);
+});
+
+test("authorize with a client document that cannot be read answers invalid_client", async (t) => {
+  const { base } = await start(t, fakeGitHub(), { clientDocuments: fakeDocuments() });
+  const { response, html } = await consentPage(base, { client_id: "https://client.example/unknown.json", redirect_uris: [CLAUDE_CALLBACK] });
+  assert.equal(response.status, 400);
+  assert.equal(JSON.parse(html).error, "invalid_client");
+});
+
+test("the consent page escapes a hostile document's name and shows the host of its id with a port", async (t) => {
+  const hostile = `<script>x</script>`;
+  const documents = fakeDocuments({ client_id: DOCUMENT_ID, client_name: hostile, redirect_uris: [CLAUDE_CALLBACK], token_endpoint_auth_method: "none" });
+  const { base, provider } = await start(t, fakeGitHub(), { clientDocuments: documents });
+  const { html } = await consentPage(base, await provider.clientsStore.getClient(DOCUMENT_ID));
+  assert.ok(!html.includes("<script>"));
+  assert.match(html, /Connect &lt;script&gt;x&lt;\/script&gt; to Hosted Desk\?/);
+  const { consentPage: render } = await import("../src/auth/pages.js");
+  const page = render({ clientName: "A", clientHost: "client.example:8443", redirectUri: CLAUDE_CALLBACK, consent: "c" });
+  assert.match(page.html, /From <strong>client\.example:8443<\/strong>/);
+  assert.doesNotMatch(render({ clientName: "A", redirectUri: CLAUDE_CALLBACK, consent: "c" }).html, /From /);
+});
+
+test("by default the provider reads client documents itself, under the same redirect policy and log", async () => {
+  const provider = makeProvider();
+  // An IP literal resolves to itself with no network, and loopback is refused.
+  assert.equal(await provider.clientsStore.getClient("https://127.0.0.1/client.json"), undefined);
+  assert.deepEqual(logs, ["client refused: private_address client https://127.0.0.1/client.json"]);
+});

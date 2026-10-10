@@ -75,6 +75,7 @@ test("the authorization-server metadata advertises S256, registration and offlin
   assert.equal(response.headers.get("access-control-allow-origin"), "*");
   const body = await response.json();
   assert.deepEqual(body.scopes_supported, ["desk", "offline_access"]);
+  assert.equal(body.client_id_metadata_document_supported, true);
   assert.equal(body.token_endpoint, `${ISSUER}/token`);
   assert.deepEqual(body.code_challenge_methods_supported, ["S256"]);
   assert.equal(body.registration_endpoint, `${ISSUER}/register`);

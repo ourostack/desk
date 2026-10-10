@@ -15,6 +15,7 @@ import { seal, unseal, derive, TTL } from "./seal.js";
 import { createGitHubSignIn } from "./github.js";
 import { consentPage, page, sendPage } from "./pages.js";
 import { createRedirectPolicy } from "./redirects.js";
+import { createClientDocuments } from "./client-document.js";
 
 const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message}\n`);
 
@@ -24,8 +25,18 @@ const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message
 //
 // `resource` is the MCP endpoint's URL, the one audience every code and token
 // is sealed for. `redirects` is the redirect policy (see redirects.js); by
-// default Claude's callbacks, ChatGPT's and loopback.
-export function createProvider({ key, issuer, github, allowedLogins, resource, redirects = createRedirectPolicy(), log = stderrLog }) {
+// default Claude's callbacks, ChatGPT's and loopback. `clientDocuments`
+// reads clients whose id is an https URL (see client-document.js).
+export function createProvider({
+  key,
+  issuer,
+  github,
+  allowedLogins,
+  resource,
+  redirects = createRedirectPolicy(),
+  log = stderrLog,
+  clientDocuments = createClientDocuments({ redirects, log }),
+}) {
   if (!key) throw new Error("createProvider needs a signing key");
   if (!resource) throw new Error("createProvider needs the MCP resource URL");
   const audience = new URL(resource).href;
@@ -65,10 +76,13 @@ export function createProvider({ key, issuer, github, allowedLogins, resource, r
       return registered;
     },
 
-    // A client id never expires, so its redirects are checked again on every
-    // use: removing one from DESK_REDIRECTS then also shuts out the clients
-    // that registered it before.
+    // An https client id names the client's metadata document; any other is
+    // one this gateway sealed at registration. A sealed id never expires, so
+    // its redirects are checked again on every use: removing one from
+    // DESK_REDIRECTS then also shuts out the clients that registered it
+    // before. The SDK awaits this.
     getClient(clientId) {
+      if (typeof clientId === "string" && clientId.startsWith("https://")) return clientDocuments.get(clientId);
       const registration = unseal("client", clientId, { key });
       if (!registration) return undefined;
       if (!registration.redirect_uris?.length || !registration.redirect_uris.every(redirects.allows)) {
@@ -141,7 +155,10 @@ export function createProvider({ key, issuer, github, allowedLogins, resource, r
     async authorize(client, { state, scopes, redirectUri, codeChallenge, resource: requested }, res) {
       checkResource(requested, client, "authorize");
       const consent = seal("consent", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes, aud: audience }, { key, ttlSec: TTL.consent });
-      sendPage(res, consentPage({ clientName: client.client_name, redirectUri, consent }));
+      // A document's client_name is whatever its author chose; the host of
+      // its id is the part they had to control, so the page shows it too.
+      const clientHost = client.client_id.startsWith("https://") ? new URL(client.client_id).host : undefined;
+      sendPage(res, consentPage({ clientName: client.client_name, clientHost, redirectUri, consent }));
     },
 
     // The Approve form's POST. Returns `{ redirectTo }` (GitHub sign-in,
