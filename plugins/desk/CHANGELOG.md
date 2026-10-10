@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.278 — 2026-10-10
+
+A hosted Desk now works fully in claude.ai, which never shows the model a server's MCP instructions and can't load Desk's skills as plugin skills. The first `desk_status` answer in a hosted session carries Desk's instructions, once. It waits up to ten seconds while Desk is still admitting the desk or loading its status detail, so the session doesn't start from an empty root and sync. The new read-only `desk_skill` tool lists Desk's skills, or returns one skill's text to follow; a hosted Desk refuses the skills that need a shell, with the reason.
+
+`task_focus` now also returns the card's `next_step`, so one call reads where a task stands. `desk_save` reports the commit it made as `desk_commit`, with `desk_pushed: false` and a note, as `task_update` does. Desk reads that hash before it schedules the push. Answers that carry `desk_commit` now add `desk_commit_note`, which says the hash is the local commit: if the background push has to rebase, the remote has the commit under a new hash.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.277 — 2026-10-10
 
 [The always-on foundation](skills/using-desk/SKILL.md#alignment-then-ownership) now explicitly forbids structured-question tools and forms: they disrupt conversation (HX) and obscure whether judgment, permission or execution is needed (AX). Routine implementation choices stay with the agent, which continues scoped work after corrections or apologies rather than seeking redundant permission. Avoid preventable host prompts through permitted noninteractive operations, never by evading safety controls or granting new authority. Human-only gates need a plain explanation, recommendation and concrete consequence before asking for irreducible input; stop requests, intentional conversation and authority boundaries remain intact.
