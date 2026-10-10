@@ -10,3 +10,5 @@ spawn, and qualify genuine customization triggers and admitted targets
 rather than generic outside sentinels.
 
 Audit native Glob pattern-derived scope and all returned search paths globally, including Grep content/count aliases and symlink traversal. Reject malformed policy documents and native invalid-settings diagnostics with fixed no-echo codes before admission.
+
+Match pinned native tool-input whitespace, HOME, relative-path and NFC interpretation before scope checks and probe correlation, while preserving literal returned filenames and Glob filter tails. Reject unstable Read/Edit inputs rather than relying on stream backfill.

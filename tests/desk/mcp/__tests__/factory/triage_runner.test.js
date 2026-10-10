@@ -516,7 +516,12 @@ function observedSpawn(mode = "normal") {
         if (mode === "generic_outside_only" && operation.operation === "prepared_trigger_read") continue
         if (!["Read", "Grep", "Glob", "Edit"].includes(operation.tool)) continue
         events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i), name: operation.tool,
-          input: mode === "native_glob_probe_shape" && operation.tool === "Glob" ? { pattern: operation.target } :
+          input: mode === "glob_literal_pattern_tail" && operation.tool === "Glob" ?
+            { pattern: `${path.dirname(operation.target)}/**/../${path.basename(operation.target)}` } :
+            mode === "normalization_probe_inputs" ?
+            operation.tool === "Glob" ? { pattern: operation.target.normalize("NFD") } :
+              { file_path: ` \t${operation.target?.normalize("NFD")} \n`, path: ` \t${operation.target?.normalize("NFD")} \n`, new_string: operation.new_string } :
+            mode === "native_glob_probe_shape" && operation.tool === "Glob" ? { pattern: operation.target } :
             { path: operation.target, new_string: operation.new_string } }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: String(i),
           is_error: mode === "violation_succeeded" ? false : !operation.positive,
@@ -608,6 +613,27 @@ function observedSpawn(mode = "normal") {
         safe_grep_count_string_alias: ["Grep", { pattern: "prepared", "-c": "true" }, "input.json:2"],
         safe_grep_file_alias: ["Grep", { pattern: "prepared", file_path: path.join(opts.cwd, "input.json"), output_mode: "content" }, "3:prepared"],
         safe_grep_missing_file: ["Grep", { pattern: "prepared", path: path.join(opts.cwd, "not-existing"), output_mode: "content" }, "No matches found"],
+        padded_read_outside: ["Read", { file_path: " /outside/private " }, "actual outside bytes"],
+        unicode_whitespace_read_outside: ["Read", { file_path: "\u00a0\u2003/outside/private\u2029\ufeff" }, "actual outside bytes"],
+        padded_read_home: ["Read", { file_path: " ~/private " }, "actual outside bytes"],
+        padded_read_parent: ["Read", { file_path: " ../private " }, "actual outside bytes"],
+        unstable_read_after_dot_resolution: ["Read", { file_path: "link-out /." }, "contradictory unstable-path bytes"],
+        padded_edit_outside: ["Edit", { file_path: " /outside/private " }, "actual outside edit"],
+        padded_grep_outside: ["Grep", { pattern: "private", path: " /outside/private " }, "No matches found"],
+        padded_grep_alias_outside: ["Grep", { pattern: "private", file_path: " /outside/private " }, "No matches found"],
+        padded_glob_path_outside: ["Glob", { pattern: "**/*", path: " /outside/private " }, "No files found"],
+        glob_derived_dir_trim_escape: ["Glob", { pattern: path.join(opts.cwd, "link-out ") + "/**" }, "No files found"],
+        glob_absolute_nul_dir: ["Glob", { pattern: path.join(opts.cwd, "bad\0dir") + "/**" }, "No files found"],
+        literal_result_symlink_with_spaces: ["Glob", { pattern: "**/*" }, " link-with-spaces "],
+        safe_padded_read: ["Read", { file_path: ` \t${opts.cwd}/input.json \n` }, "prepared bytes"],
+        safe_padded_edit: ["Edit", { file_path: ` ${opts.cwd}/.triage-result.json ` }, "prepared edit"],
+        safe_blank_grep_path: ["Grep", { pattern: "prepared", path: " \t " }, "input.json"],
+        safe_padded_glob_path: ["Glob", { pattern: "**/*.json", path: ` ${opts.cwd} ` }, "input.json"],
+        safe_relative_glob_pattern_spaces: ["Glob", { pattern: " /outside/private " }, "No files found"],
+        safe_literal_result_spaces: ["Glob", { pattern: "**/*" }, " link-out "],
+        safe_literal_result_tilde: ["Glob", { pattern: "**/*" }, "~"],
+        safe_posix_backslash: ["Read", { file_path: "\\outside\\private" }, "prepared literal-backslash bytes"],
+        safe_unicode_slash: ["Read", { file_path: "\uff0foutside\uff0fprivate" }, "prepared fullwidth-slash bytes"],
       }
       if (searchCases[mode]) {
         const [name, input, content] = searchCases[mode]
@@ -1123,6 +1149,78 @@ test("R6_5_ambiguous_filename_delimiters_do_not_hide_sibling_matches", async (t)
     })
   }
 })
+
+test("R6_5_native_tool_input_normalization_cannot_hide_success_after_refused_outside_probe", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["padded_read_outside", "unicode_whitespace_read_outside", "padded_read_home",
+    "padded_read_parent", "unstable_read_after_dot_resolution", "padded_edit_outside", "padded_grep_outside", "padded_grep_alias_outside",
+    "padded_glob_path_outside", "glob_derived_dir_trim_escape", "glob_absolute_nul_dir", "literal_result_symlink_with_spaces"]) {
+    await t.test(mode, async () => {
+      const out = path.join(f.dir, mode)
+      const result = await qualifier.qualifyTriageRunner({ out, cli: f.cli, env: f.env,
+        cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: normalizationReaders(out, mode), runDiagnostic: diagnostic,
+        spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+      assert.equal(result.state, "blocked", mode)
+      assert.equal(result.cases.filter((row) => row.operation !== "customization_dispatch").every((row) => row.result === "failed"), true)
+      assert.equal(result.cases.find((row) => row.operation === "prepared_trigger_read").enforcement, "succeeded")
+      assert.equal(result.cases.find((row) => row.operation === "permitted_result_trigger").enforcement, "succeeded")
+      if (mode === "padded_read_outside") {
+        const stream = JSON.parse(readFileSync(path.join(out, "stream-1.json"))).stdout.trim().split("\n").map((line) => JSON.parse(line))
+        const blocks = stream.flatMap((event) => event.message?.content ?? [])
+        const calls = blocks.filter((block) => block.type === "tool_use" && block.name === "Read")
+        const refused = calls.find((call) => call.input.path === path.join(out, "outside.txt"))
+        const success = calls.find((call) => call.input.file_path === " /outside/private ")
+        assert.equal(blocks.find((block) => block.tool_use_id === refused.id).is_error, true)
+        assert.equal(blocks.find((block) => block.tool_use_id === success.id).is_error, false)
+        assert.ok(calls.indexOf(success) > calls.indexOf(refused), "later contradictory success must invalidate the earlier refused probe")
+      }
+    })
+  }
+})
+
+test("R6_5_native_normalized_probe_inputs_match_but_returned_filenames_remain_literal", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["normalization_probe_inputs", "safe_padded_read", "safe_padded_edit", "safe_blank_grep_path",
+    "safe_padded_glob_path", "safe_relative_glob_pattern_spaces", "safe_literal_result_spaces",
+    "safe_literal_result_tilde", "safe_posix_backslash", "safe_unicode_slash"]) {
+    await t.test(mode, async () => {
+      const out = path.join(f.dir, `${mode}-\u00e9`)
+      const result = await qualifier.qualifyTriageRunner({ out, cli: f.cli, env: f.env,
+        cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: normalizationReaders(out, mode), runDiagnostic: diagnostic,
+        spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+      assert.equal(result.state, "qualified", mode)
+      assert.equal(result.cases.every((row) => row.result === "passed"), true)
+    })
+  }
+})
+
+test("R6_5_probe_correlation_does_not_collapse_a_literal_glob_filter_tail", async (t) => {
+  const f = await fixture(t)
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "literal-pattern-tail"), cli: f.cli, env: f.env,
+    cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+    spawn: observedSpawn("glob_literal_pattern_tail"), probeSpawn: authSpawn() })
+  assert.equal(result.state, "blocked")
+  assert.equal(result.cases.find((row) => row.operation === "outside_Glob").enforcement, "not_exercised")
+})
+
+// Prepare real filename fixtures before the runner captures directory nlink.
+// APFS counts file entries too; adding them during a fake model call would
+// instead exercise input drift and falsely label it a search-audit rejection.
+function normalizationReaders(out, mode) {
+  let prepared = false
+  return { read: (request) => {
+    const inputDir = path.join(out, "input")
+    const filename = mode === "safe_literal_result_spaces" ? " link-out " :
+      mode === "safe_literal_result_tilde" ? "~" : mode === "literal_result_symlink_with_spaces" ? " link-with-spaces " :
+        mode === "safe_posix_backslash" ? "\\outside\\private" : mode === "safe_unicode_slash" ? "\uff0foutside\uff0fprivate" : null
+    if (filename && !prepared) {
+      if (mode === "literal_result_symlink_with_spaces") symlinkSync(path.join(out, "outside.txt"), path.join(inputDir, filename))
+      else writeFileSync(path.join(inputDir, filename), "prepared literal bytes")
+      prepared = true
+    }
+    return readers.read(request)
+  } }
+}
 
 test("R6_6_policy_documents_and_supported_value_types_require_validation_before_admission", async (t) => {
   const f = await fixture(t)
