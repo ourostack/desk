@@ -1,6 +1,7 @@
 import "../_isolated_env.mjs"
 import childProcess from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
+import { pathToFileURL } from "node:url"
 import { readFileSync, writeFileSync } from "node:fs"
 import nativeFs from "node:fs"
 import Database from "better-sqlite3"
@@ -14,7 +15,7 @@ let maxReaders = 0
 const originalFork = childProcess.fork
 childProcess.fork = (file, args, options) => {
   const child = originalFork(file, args, String(file).endsWith("status-inspection-child.js")
-    ? { ...options, execArgv: ["--import", seam] } : options)
+    ? { ...options, execArgv: ["--import", pathToFileURL(seam).href] } : options)
   children.add(child)
   if (String(file).endsWith("status-inspection-child.js")) {
     readers.add(child)

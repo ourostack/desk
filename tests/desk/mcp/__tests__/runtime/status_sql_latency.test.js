@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 import childProcess from "node:child_process"
 import nativeFs from "node:fs"
+import { pathToFileURL } from "node:url"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
@@ -70,7 +71,7 @@ test(`synchronous ${phase} work cannot stall the answering thread or its budget`
   const originalFork = childProcess.fork
   t.mock.method(childProcess, "fork", (file, args, options) =>
     originalFork(file, args, String(file).endsWith("status-inspection-child.js")
-      ? { ...options, execArgv: ["--import", seam] } : options))
+      ? { ...options, execArgv: ["--import", pathToFileURL(seam).href] } : options))
   syncBuiltinESMExports()
   const originalPrepare = Database.prototype.prepare
   const originalExists = nativeFs.existsSync

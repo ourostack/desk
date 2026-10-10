@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import nativeChildProcess from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
+import { pathToFileURL } from "node:url"
 import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
@@ -31,7 +32,9 @@ test(`settled natural-close nonexit gates actual ${mode} until that owned proces
   })
   t.mock.method(nativeChildProcess, "fork", (file, args, options) => {
     if (!String(file).endsWith("status-inspection-child.js")) return originalFork(file, args, options)
-    const child = originalFork(file, args, { ...options, execArgv: ["--import", preload] })
+    const execArgv = ["--import", pathToFileURL(preload).href]
+    assert.equal(new URL(execArgv[1]).protocol, "file:", "Node ESM preload must be a file URL, not a Windows drive-path specifier")
+    const child = originalFork(file, args, { ...options, execArgv })
     child.realKill = child.kill.bind(child)
     child.exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })))
     child.signals = []

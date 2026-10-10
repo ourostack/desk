@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { fork } from "node:child_process"
 import { EventEmitter } from "node:events"
+import { pathToFileURL } from "node:url"
 import { writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { createStatusInspection, waitForStatusInspection } from "../../../../../plugins/desk/mcp/src/runtime/status-inspection.js"
@@ -19,7 +20,7 @@ async function responsiveReader(t, { stopped = false } = {}) {
   const reader = createStatusInspection(root, {
     signal: controller.signal,
     spawn: (file, args, options) => {
-      child = fork(file, args, { ...options, execArgv: ["--import", preload] })
+      child = fork(file, args, { ...options, execArgv: ["--import", pathToFileURL(preload).href] })
       return child
     },
   })
