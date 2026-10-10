@@ -189,6 +189,32 @@ function policyHazard(settings, argv) {
   return null
 }
 
+const policyObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value) &&
+  Object.getPrototypeOf(value) === Object.prototype
+function validPolicyDocument(value) {
+  if (!policyObject(value)) return false
+  if ("disableAllHooks" in value && typeof value.disableAllHooks !== "boolean") return false
+  if ("permissions" in value) {
+    if (!policyObject(value.permissions)) return false
+    for (const key of ["allow", "deny"]) {
+      if (key in value.permissions && (!Array.isArray(value.permissions[key]) ||
+          !value.permissions[key].every((rule) => typeof rule === "string"))) return false
+    }
+  }
+  if ("env" in value && (!policyObject(value.env) || !Object.values(value.env).every((item) => typeof item === "string"))) return false
+  if ("mcpServers" in value && (!policyObject(value.mcpServers) || !Object.values(value.mcpServers).every(policyObject))) return false
+  if ("hooks" in value) {
+    if (!policyObject(value.hooks)) return false
+    for (const groups of Object.values(value.hooks)) {
+      if (!Array.isArray(groups) || !groups.every((group) => policyObject(group) &&
+          (!("matcher" in group) || typeof group.matcher === "string") && Array.isArray(group.hooks) &&
+          group.hooks.every((hook) => policyObject(hook) && typeof hook.type === "string" &&
+            (!("command" in hook) || typeof hook.command === "string")))) return false
+    }
+  }
+  return true
+}
+
 function localPolicySources({ cli, env, argv, remote_delivery }) {
   const system = process.platform === "darwin" ? "/Library/Application Support/ClaudeCode" :
     process.platform === "win32" ? "C:\\Program Files\\ClaudeCode" : "/etc/claude-code"
@@ -216,6 +242,7 @@ function localPolicySources({ cli, env, argv, remote_delivery }) {
     const bytes = readFileSync(userSettings)
     if (bytes.length > 2 * 1024 * 1024) throw new Error("oversize user diagnostic settings")
     const parsed = JSON.parse(bytes)
+    if (!validPolicyDocument(parsed)) throw Object.assign(new Error("invalid user settings"), { triageValidation: true })
     const settings = Object.fromEntries(Object.entries(parsed).filter(([key]) =>
       /helper|processWrapper|authRefresh|credentialExport|statusLine|fileSuggestion|^env$/iu.test(key)))
     sources.push({ kind: "user", path: userSettings, revision: digest(bytes), settings })
@@ -223,7 +250,8 @@ function localPolicySources({ cli, env, argv, remote_delivery }) {
     if (error.code !== "ENOENT") throw error
     sources.push({ kind: "user", path: userSettings, revision: digest("absent"), settings: {} })
   }
-  if (process.platform !== "darwin") return { complete: false, controller_invariant: false, sources, validation_errors: [] }
+  const validationErrors = () => sources.every((source) => validPolicyDocument(source.settings)) ? [] : ["invalid_policy_document"]
+  if (process.platform !== "darwin") return { complete: false, controller_invariant: false, sources, validation_errors: validationErrors() }
   // These are the actual MDM paths read by pinned native Rxs() at byte
   // 188330762, per-user before device-level. plutil is a parser, no helper.
   const extra = [
@@ -246,10 +274,11 @@ function localPolicySources({ cli, env, argv, remote_delivery }) {
   const selected = argv.includes("--restricted") && argv.includes("--safe-mode") && argv.includes("--strict-mcp-config")
   const known = digest(readFileSync(cli)) === POLICY_ENGINE_SHA
   if (known) verifyEngine(cli, env)
+  const validation_errors = validationErrors()
   const remoteResolved = ["not_applicable", "no_configuration"].includes(remote_delivery) &&
-    Object.keys(sources.at(-1).settings).length === 0
-  return { complete: Boolean(selected && known && remoteResolved), controller_invariant: true, sources, validation_errors: [],
-    capabilities: selected && known ? { customization_sources_disabled: true, result_is_data_only: true, engine_sha256: POLICY_ENGINE_SHA } : null }
+    validPolicyDocument(sources.at(-1).settings) && Object.keys(sources.at(-1).settings).length === 0
+  return { complete: Boolean(selected && known && remoteResolved && validation_errors.length === 0), controller_invariant: true, sources, validation_errors,
+    capabilities: selected && known && validation_errors.length === 0 ? { customization_sources_disabled: true, result_is_data_only: true, engine_sha256: POLICY_ENGINE_SHA } : null }
 }
 
 /** Readers are authorized NONEXECUTING adapters of the trusted parent:
@@ -275,15 +304,19 @@ export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, po
     // A native diagnostic may initialize managed helpers. Reject known
     // command-bearing sources before allowing even that non-model command.
     for (const source of preflight?.sources ?? []) {
+      if (!validPolicyDocument(source.settings)) return result("scope_unqualified", "effective_policy_unknown", [], ["invalid_policy_document"])
       const hazard = source.settings && policyHazard(source.settings, argv)
       if (["active_hook_or_helper", "billing_unresolved"].includes(hazard)) return result("scope_unqualified", hazard)
     }
+    if (preflight?.validation_errors?.length) return result("scope_unqualified", "effective_policy_unknown", [], ["invalid_effective_settings"])
     const diagnostic = runDiagnostic ?? ((request) => runChild({ ...request, spawn: nodeSpawn }))
     const observed = await diagnostic({ cmd: cli, args: ["doctor"],
       opts: { cwd: "/", env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] }, timeoutMs: 15000, maxBytes: 64 * 1024,
       onChild: policyReaders?.onChild, onChildExit: policyReaders?.onChildExit })
     await policyReaders?.captureDiagnostic?.(observed)
     if (observed.kind !== "closed" || observed.code !== 0 || observed.truncated || typeof observed.stdout !== "string") return result("scope_unqualified", "diagnostic_inadequate")
+    const diagnosticText = observed.stdout.replace(/\u001b\[[0-9;]*m/gu, "")
+    if (/^\s*Invalid settings\s*$/mu.test(diagnosticText)) return result("scope_unqualified", "effective_policy_unknown", [], ["invalid_native_settings"])
     remote_delivery = remoteDelivery(observed.stdout)
     if (remote_delivery === "pending") return result("scope_unqualified", "applicable_delivery_pending")
     if (remote_delivery === "unknown") return result("scope_unqualified", "diagnostic_inadequate")
@@ -294,7 +327,7 @@ export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, po
     const sources = []
     for (const source of evidence.sources) {
       if (!["managed", "remote", "user", "project", "local", "os"].includes(source.kind) ||
-          !/^[a-f0-9]{64}$/u.test(source.revision) || !source.settings || Array.isArray(source.settings)) return result("scope_unqualified", "effective_policy_unknown")
+          !/^[a-f0-9]{64}$/u.test(source.revision) || !validPolicyDocument(source.settings)) return result("scope_unqualified", "effective_policy_unknown", [], ["invalid_policy_document"])
       const hazard = policyHazard(source.settings, argv)
       if (hazard) return result("scope_unqualified", hazard)
       sources.push({ kind: source.kind, revision: source.revision, ...(source.path ? { path: source.path } : {}) })
@@ -303,8 +336,8 @@ export async function collectTriageAdmission({ cli, env, argv, runDiagnostic, po
     if (evidence.complete !== true) return result("scope_unqualified", "diagnostic_inadequate", sources)
     if (evidence.controller_invariant !== true) return result("scope_unqualified", "policy_control_unsupported", sources)
     return result("admitted", null, sources, [], evidence.capabilities ?? null)
-  } catch {
-    return result("scope_unqualified", "effective_policy_unknown")
+  } catch (error) {
+    return result("scope_unqualified", "effective_policy_unknown", [], error instanceof SyntaxError || error.triageValidation ? ["invalid_policy_document"] : [])
   }
 }
 

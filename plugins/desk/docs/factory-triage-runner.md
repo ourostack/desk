@@ -40,6 +40,8 @@ keys, unsigned or source-unverified engine revisions remain concrete holds.
 This works through the default CLI: no external reader injection is needed
 for a compatible inspectable installed host.
 
+Every policy document must be a JSON object with supported types for permissions, hook groups, environment values and MCP entries before admission can be complete. The user diagnostic document is validated before its command-bearing projection. Invalid managed JSON, MDM plist data, remote cache or user settings returns a fixed validation code with no raw policy echo. Native doctor's `Invalid settings` heading, including its ANSI-colored form, also rejects admission before any model-consuming command.
+
 ## Pinned supported CLI controls
 
 The official sources checked for this increment are:
@@ -123,6 +125,8 @@ name and actual tool-use IDs, regardless of argument shape or target. An
 omitted tool in the manifest cannot excuse a successful actual invocation.
 Symlink probes exercise both directions against synthetic paths.
 Unknown effective hook/helper/grant policy holds before a consuming probe.
+
+The global read/search audit checks effective paths and returned filenames, not just named probes. Glob's absolute pattern-derived directory overrides its explicit `path`; relative literal prefixes, parent traversal, default search paths, HOME abbreviations and symlink ancestors must remain in the prepared directory. Successful Glob and Grep results are checked in their native list, count and content formats, including Grep's numbered/context/unnumbered filename prefixes and accepted `-l`/`-c` aliases. Prose returned from a positively identified single admitted file is content, not a filename. Unknown result shapes fail closed. A later outside success invalidates all cases even after an earlier refused probe.
 
 Runtime and policy mutation probes target the **actual admitted** engine and
 policy source, using deliberately nonmatching Edit strings so a broken

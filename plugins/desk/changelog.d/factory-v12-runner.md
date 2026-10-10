@@ -8,3 +8,5 @@ Connect authenticated macOS native/policy admission, reject real-shaped
 excluded-tool successes, recheck prepared identities immediately before
 spawn, and qualify genuine customization triggers and admitted targets
 rather than generic outside sentinels.
+
+Audit native Glob pattern-derived scope and all returned search paths globally, including Grep content/count aliases and symlink traversal. Reject malformed policy documents and native invalid-settings diagnostics with fixed no-echo codes before admission.
