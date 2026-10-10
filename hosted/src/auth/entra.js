@@ -195,6 +195,34 @@ export function createInvites({ key, keys, store, issuer, now = Date.now, log = 
   };
 }
 
+// A binding that can't be read as one this gateway accepts (a hosted binding, say) is no binding; a store that
+// can't answer is an outage, and throws.
+async function bindingOf(store, accountId) {
+  try {
+    return await store.getBinding(accountId);
+  } catch (error) {
+    if (error?.name === "StoreError") throw error;
+    return null;
+  }
+}
+
+// Whether a signed-in account may have a code: its Desk access is on and its binding names this gateway's desk.
+// Returns the page that refuses it, or null. Throws when the store can't answer. Shared by the Ouro tenant's
+// sign-in and the GitHub fallback.
+export async function admissionRefusal({ store, accountId, repo, clientId, log = stderrLog }) {
+  const account = await store.getAccount(accountId);
+  if (!account?.deskAccess) {
+    log(`sign-in refused: access_off account ${accountId} client ${clientId}`);
+    return accessOffPage();
+  }
+  const binding = await bindingOf(store, accountId);
+  if (binding?.kind !== "github" || binding.repo !== repo) {
+    log(`sign-in refused: no_desk account ${accountId} client ${clientId}`);
+    return noDeskPage();
+  }
+  return null;
+}
+
 // `key` or `keys` is the signing-key ring the provider uses. `discovery` is createDiscovery's; `verifier` defaults
 // to an ID-token verifier built from it once it has loaded. `store` is the accounts store (findIdentity,
 // redeemInvite, getAccount, getBinding). `repo` is the one desk this gateway serves (DESK_REPO). `now()` is the
@@ -295,17 +323,6 @@ export function createEntraSignIn({
     return { accountId: result.accountId, redeemed: true };
   }
 
-  // A binding that can't be read as one this gateway accepts (a hosted binding, say) is no binding; a store that
-  // can't answer is an outage.
-  async function bindingOf(accountId) {
-    try {
-      return await store.getBinding(accountId);
-    } catch (error) {
-      if (error?.name === "StoreError") throw error;
-      return null;
-    }
-  }
-
   return {
     // `pending` is the client's approved request (clientId, redirectUri, codeChallenge, state, scopes, aud);
     // `jar` the browser's cookies. Returns `{ redirectTo, setCookies }` or a page.
@@ -374,16 +391,8 @@ export function createEntraSignIn({
         if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
         if (found.refusal) return { ...found.refusal, clearCookies };
         accountId = found.accountId;
-        const account = await store.getAccount(accountId);
-        if (!account?.deskAccess) {
-          log(`sign-in refused: access_off account ${accountId} client ${pending.clientId}`);
-          return { ...accessOffPage(), clearCookies };
-        }
-        const binding = await bindingOf(accountId);
-        if (binding?.kind !== "github" || binding.repo !== repo) {
-          log(`sign-in refused: no_desk account ${accountId} client ${pending.clientId}`);
-          return { ...noDeskPage(), clearCookies };
-        }
+        const refusal = await admissionRefusal({ store, accountId, repo, clientId: pending.clientId, log });
+        if (refusal) return { ...refusal, clearCookies };
       } catch (failure) {
         log(`sign-in failed: store_unavailable (${failure?.name ?? "error"}) client ${pending.clientId}`);
         return { ...signInUnavailablePage(), clearCookies };
