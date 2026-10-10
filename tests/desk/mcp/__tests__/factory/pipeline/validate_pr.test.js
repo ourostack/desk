@@ -16,6 +16,41 @@ const LABELS = JSON.parse(LABELS_BYTES.toString("utf8"))
 const LABEL_PATH = `labels/${LABELS.job}/${LABELS.session}.json`
 const LABEL_FACTS = [{ path: VALID_PATH, bytes: GOLDEN_BYTES }]
 const TOKEN_SENTINEL = "ghp_SENTINEL0123456789abcdefghijklmnopqrstuv"
+const TRIAGE_FIXTURE = JSON.parse(readFileSync(path.join(here, "..", "fixtures", "v12-triage.json")))
+const TRIAGE_BYTES = `${JSON.stringify(TRIAGE_FIXTURE.public)}\n`
+const TRIAGE_PATH = "triage/0123456789abcdef.json"
+
+test("accepted_batch_cannot_be_replaced_removed_or_renamed", () => {
+  assert.deepEqual(validatePr({ trustedMaintainer: true, changes: [{ path: TRIAGE_PATH, status: "added", bytes: TRIAGE_BYTES }] }), { ok: true, errors: [] })
+  for (const status of ["modified","removed","renamed","copied","type_changed","symlink","unknown"]) {
+    const result = validatePr({ trustedMaintainer: true, changes: [{ path: TRIAGE_PATH, status, bytes: TRIAGE_BYTES, previousBytes: "malformed" }] })
+    assert.equal(result.ok, false, status)
+    assert.ok(result.errors.some((e) => e.code === "triage_immutable"), JSON.stringify(result))
+  }
+  for (const previousBytes of [TRIAGE_BYTES, "malformed", null]) {
+    const result = validatePr({ trustedMaintainer: true, changes: [{ path: TRIAGE_PATH, status: "added", bytes: TRIAGE_BYTES, previousBytes }] })
+    assert.ok(result.errors.some((e) => e.code === "triage_immutable"))
+  }
+  const higher = structuredClone(TRIAGE_FIXTURE.public); higher.rows[0].revision = 2
+  assert.equal(validatePr({ trustedMaintainer: true, changes: [{ path: TRIAGE_PATH, status:"modified", bytes: JSON.stringify(higher), previousBytes: TRIAGE_BYTES }] }).ok, false)
+})
+
+test("other_intake_actor_cannot_advance_existing_triage_id", () => {
+  for (const revision of [1, 2]) for (const withIssue of [false, true]) {
+    const value = structuredClone(TRIAGE_FIXTURE.public); value.rows[0].revision = revision
+    if (withIssue) value.rows[0].evidence = [{ kind: "issue", ref: "https://github.com/example/project/issues/1", revision: 1 }]
+    const result = validatePr({ trustedMaintainer: false, changes: [{ path: TRIAGE_PATH, status: "added", bytes: JSON.stringify(value) }] })
+    assert.deepEqual(result, { ok: false, errors: [{ code:"triage_untrusted_producer", path: TRIAGE_PATH }] })
+  }
+  assert.equal(validatePr({ trustedMaintainer: false, changes: [{ path: VALID_PATH, status:"added", bytes: GOLDEN_BYTES }] }).ok, true)
+})
+
+test("unacknowledged_first_assignment_not_current", () => {
+  for (const trustedMaintainer of [undefined, null, "OWNER"]) {
+    const result = validatePr({ trustedMaintainer, changes: [{ path: TRIAGE_PATH, status: "added", bytes: TRIAGE_BYTES }] })
+    assert.deepEqual(result, { ok: false, errors: [{ code: "triage_authority_check_unavailable", path: TRIAGE_PATH }] })
+  }
+})
 
 function bytes(changes = {}) {
   return Buffer.from(`${JSON.stringify({

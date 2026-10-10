@@ -6,6 +6,7 @@
 //   node scripts/factory.js flush --store <owner/repo>
 //   node scripts/factory.js finalize --job <job> [--job <job> ...]
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
+//     Triage data also requires --repo <owner/repo> --pr <number> for trusted API authority.
 //   node scripts/factory.js build --store <directory> --out <directory>
 //   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug> [--this-machine]
 //   node scripts/factory.js evaluate --desk <desk root> --task [desks/<alias>/]<track>/<slug>
@@ -66,6 +67,7 @@ import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
 import { factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
+import { isTriagePath } from "../src/factory/triage-schema.js"
 
 export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
@@ -234,7 +236,62 @@ function labeledSessionFacts({ session, listed, base, tree, cwd, git }) {
   })
 }
 
-export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = runGit }) {
+// Keep legacy facts/labels/capture diff behavior. Triage additionally reads
+// rename/copy status and exact tree modes; never relabel a replacement as add.
+// Similar new correction batches are legitimate additions. Only byte-exact
+// copies count as copied; resemblance is not mutation of a historical path.
+function triageStatuses({ base, tree, cwd, git }) {
+  const fields = git(["diff", "--name-status", "-z", "--find-renames", "-C100%", "--find-copies-harder", base, tree], { cwd }).split("\0").filter(Boolean)
+  const statuses = new Map()
+  for (let i = 0; i < fields.length;) {
+    const code = fields[i++], from = fields[i++]
+    if (from === undefined) throw new Error("factory.js validate-pr: Git change list is malformed")
+    if (/^[RC][0-9]+$/u.test(code)) {
+      const to = fields[i++]
+      if (to === undefined) throw new Error("factory.js validate-pr: Git change list is malformed")
+      const status = code.startsWith("R") ? "renamed" : "copied"
+      if (isTriagePath(from)) statuses.set(from, status)
+      if (isTriagePath(to)) statuses.set(to, status)
+    } else if (isTriagePath(from)) {
+      statuses.set(from, ({ A:"added", M:"modified", D:"removed", T:"type_changed" })[code] ?? "unknown")
+    }
+  }
+  return statuses
+}
+
+function triageTreeEntry({ revision, filePath, cwd, git }) {
+  const output = git(["ls-tree", "-z", revision, "--", filePath], { cwd })
+  if (output === "") return null
+  const match = /^(100644|100755) blob ([0-9a-f]{40})\t([^\0]+)\0$/u.exec(output)
+  return match && match[3] === filePath ? { regular: true } : { regular: false }
+}
+
+// The real PR actor and permission come only from successful trusted API
+// reads. Association, JSON ownership/version, Git author, and random IDs are
+// not authority. A second read pins actor/head across local validation.
+async function readTriageActor({ repo, pr, head, runner, token }) {
+  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo) || !/^[1-9][0-9]{0,9}$/u.test(pr)) return null
+  try {
+    const response = await runner(["api", `repos/${repo}/pulls/${pr}`], { token, timeoutMs: 12000 })
+    if (response?.code !== 0) return null
+    const value = JSON.parse(response.stdout)
+    const actor = value?.user?.login
+    if (value?.head?.sha !== head || typeof actor !== "string" || !/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/u.test(actor)) return null
+    return actor
+  } catch { return null }
+}
+async function triageActorPermission({ repo, actor, runner, token }) {
+  try {
+    const response = await runner(["api", `repos/${repo}/collaborators/${encodeURIComponent(actor)}/permission`], { token, timeoutMs: 12000 })
+    if (response?.code !== 0) return undefined
+    const value = JSON.parse(response.stdout)
+    if (["write", "maintain", "admin"].includes(value?.permission)) return true
+    if (["none", "read", "triage"].includes(value?.permission)) return false
+    return undefined
+  } catch { return undefined }
+}
+
+export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = runGit, runner, env = process.env }) {
   const options = parseOptions(argv)
   const base = options?.get("base")
   const head = options?.get("head")
@@ -242,7 +299,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   if (options === null || !GIT_REF.test(base) || !GIT_REF.test(head) || !AUTHOR_ASSOCIATION.test(association)) {
     throw new Error("Usage: factory.js validate-pr --base <base sha> --head <head sha> --author-association <value>; base and head must be full commit SHAs")
   }
-  if ([...options.keys()].some((key) => !["base", "head", "author-association"].includes(key))) {
+  if ([...options.keys()].some((key) => !["base", "head", "author-association", "repo", "pr"].includes(key))) {
     throw new Error("factory.js validate-pr: unknown option")
   }
 
@@ -261,6 +318,16 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     const result = validatePr({ changes: Array.from({ length: 501 }) })
     return { ...result, maintenance: false }
   }
+  const triageChanges = listed.filter((c) => isTriagePath(c.path))
+  let triageAuthority, actor, api
+  const repo = options.get("repo"), pr = options.get("pr")
+  const token = env.GH_TOKEN ?? env.GITHUB_TOKEN
+  const statuses = triageChanges.length ? triageStatuses({ base, tree, cwd, git }) : new Map()
+  if (triageChanges.length && repo !== undefined && pr !== undefined) {
+    api = runner ?? (await import("../src/factory/flush.js")).ghRunner({ env })
+    actor = await readTriageActor({ repo, pr, head, runner: api, token })
+    if (actor !== null) triageAuthority = await triageActorPermission({ repo, actor, runner: api, token })
+  }
   // Anything but a published facts, labels or capture file, including a non-fact file
   // under `facts/` or `labels/`, is maintenance: the store's merge workflow
   // never merges it. A maintainer's deletion of a facts or labels file is a
@@ -270,6 +337,21 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   const errors = []
   listed.forEach((change, index) => {
     const labels = labelsPathParts(change.path)
+    if (isTriagePath(change.path)) {
+      const status = statuses.get(change.path) ?? "unknown"
+      // No read of symlink/submodule contents or any removed/renamed file.
+      const previous = triageTreeEntry({ revision: base, filePath: change.path, cwd, git })
+      const entry = ["added", "modified"].includes(status) ? triageTreeEntry({ revision: tree, filePath: change.path, cwd, git }) : null
+      const current = {
+        path: change.path, status: status === "added" && entry?.regular !== true ? "type_changed" : status,
+        ...(previous !== null ? { previousBytes: previous.regular
+          ? revisionBytes({ revision: base, filePath: change.path, cwd, git }) : null } : {}),
+        ...(["added", "modified"].includes(status) && entry?.regular === true
+          ? { bytes: revisionBytes({ revision: tree, filePath: change.path, cwd, git }) } : {}),
+      }
+      errors.push(...validatePr({ changes: [current], trustedMaintainer: triageAuthority }).errors)
+      return
+    }
     if (!isFactsPath(change.path) && labels === null && !isCapturePath(change.path)) {
       maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
@@ -295,6 +377,9 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
         }
     errors.push(...validatePr({ changes: [current] }).errors)
   })
+  if (triageChanges.length && actor && await readTriageActor({ repo, pr, head, runner: api, token }) !== actor) {
+    errors.push(...triageChanges.map((c) => ({ code: "triage_authority_check_unavailable", path: c.path })))
+  }
   const result = { ok: errors.length === 0, errors }
   return { ...result, maintenance: result.ok && maintenance && trustedMaintainer }
 }
