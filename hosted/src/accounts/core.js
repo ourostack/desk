@@ -32,10 +32,35 @@ export class PreconditionFailed extends Error {
 
 export const TABLE_NAMES = ["accounts", "identities", "invites", "bindings"];
 
+// A store call that failed for any reason other than the outcomes above: the store is down, slow, misconfigured
+// or refusing. Its message names the operation, table and status only; never a key, URL or the SDK's error object,
+// which would carry the request URL with a tid, oid, accountId or token hash in it.
+export class StoreError extends Error {
+  constructor(operation, table, { statusCode, code } = {}) {
+    super(`the accounts store failed: ${operation} on table ${table}${statusCode ? ` (HTTP ${statusCode}${code ? ` ${code}` : ""})` : code ? ` (${code})` : ""}`);
+    this.name = "StoreError";
+    if (statusCode) this.statusCode = statusCode;
+    if (code) this.code = code;
+  }
+}
+
+// Table names are alphanumeric; `tablePrefix` (tests only) puts a store on its own set of tables.
+export function tableNames(prefix = "") {
+  if (!/^[A-Za-z0-9]*$/.test(prefix)) throw new TypeError("tablePrefix must be alphanumeric");
+  return Object.fromEntries(TABLE_NAMES.map((name) => [name, `${prefix}${name}`]));
+}
+
 // Table Storage keys can't hold / \ # ? or control characters; ours are GUIDs, UUIDs and base64url hashes.
 const KEY = /^[A-Za-z0-9_.-]{1,128}$/;
 const TOKEN_HASH = /^[A-Za-z0-9_-]{43}$/;
-const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+// GitHub's rules: an owner is alphanumeric with inner hyphens; a repository name is letters, digits, `.`, `_` and `-`,
+// and can't be `.` or `..`.
+const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+const validRepo = (repo) => {
+  const parts = typeof repo === "string" ? repo.split("/") : [];
+  return parts.length === 2 && OWNER.test(parts[0]) && REPO_NAME.test(parts[1]) && parts[1] !== "." && parts[1] !== "..";
+};
 
 function key(value, what) {
   if (typeof value !== "string" || !KEY.test(value)) throw new TypeError(`${what} isn't a valid store key`);
@@ -56,7 +81,7 @@ const millis = (time) => {
 function checkBinding(binding) {
   if (binding?.kind === "hosted") throw new Error("hosted bindings are reserved for v1c and refused");
   if (binding?.kind !== "github") throw new Error("a binding's kind must be github");
-  if (typeof binding.repo !== "string" || !REPO.test(binding.repo)) throw new Error("a binding's repo must be owner/name");
+  if (!validRepo(binding.repo)) throw new Error("a binding's repo must be owner/name");
   if (binding.installationId !== undefined && !(Number.isSafeInteger(binding.installationId) && binding.installationId > 0)) {
     throw new Error("a binding's installationId must be a positive integer");
   }
@@ -65,6 +90,12 @@ function checkBinding(binding) {
 }
 
 const noop = async () => {};
+
+// An expiry that isn't a date counts as already expired (fail closed).
+const expiryOf = (text) => {
+  const ms = typeof text === "string" && text ? Date.parse(text) : NaN;
+  return Number.isFinite(ms) ? ms : 0;
+};
 
 // `onStep(name)` is a test seam: it is awaited after each step of a redemption ("invite-read", "claimed",
 // "identity-created"), so tests can line up concurrent redemptions or interrupt one half-way.
@@ -89,9 +120,14 @@ export function storeOn(tables, { onStep = noop } = {}) {
       const mine = claimed && invite.claimTid === tid && invite.claimOid === oid;
       if (claimed && !mine) return { refused: "used" };
       // A claim made before expiry may still be completed afterwards.
-      if (!mine && Date.parse(invite.expiresAt) <= at) return { refused: "expired" };
+      if (!mine && expiryOf(invite.expiresAt) <= at) return { refused: "expired" };
       const existing = await findIdentity(tid, oid);
-      if (existing !== null && !(mine && existing === invite.accountId)) return { refused: "identity_has_account" };
+      if (existing !== null && !(mine && existing === invite.accountId)) {
+        // A claim this identity left behind (it then got an account another way) mustn't burn the invite.
+        if (mine && !invite.redeemedAt) await release(tokenHash, invite, found.etag);
+        return { refused: "identity_has_account" };
+      }
+      if (mine && invite.redeemedAt) return { accountId: invite.accountId, alreadyRedeemed: true };
 
       // 1. Claim the invite for this identity, only if nobody has changed it since the read.
       let current = invite;
@@ -122,12 +158,10 @@ export function storeOn(tables, { onStep = noop } = {}) {
       }
 
       // 3. Mark it redeemed. A lost race here is a concurrent retry by the same identity finishing the same step.
-      if (!current.redeemedAt) {
-        try {
-          await tables.update("invites", { ...current, redeemedAt: new Date(at).toISOString() }, etag);
-        } catch (error) {
-          if (!(error instanceof PreconditionFailed)) throw error;
-        }
+      try {
+        await tables.update("invites", { ...current, redeemedAt: new Date(at).toISOString() }, etag);
+      } catch (error) {
+        if (!(error instanceof PreconditionFailed)) throw error;
       }
       return { accountId: invite.accountId };
     }
@@ -196,7 +230,7 @@ export function storeOn(tables, { onStep = noop } = {}) {
       const found = await tables.get("invites", tokenHashKey(tokenHash), "");
       if (!found) return null;
       const { accountId, expiresAt, redeemedAt } = found.entity;
-      return { accountId, expiresAt: Date.parse(expiresAt), redeemed: Boolean(redeemedAt) };
+      return { accountId, expiresAt: expiryOf(expiresAt), redeemed: Boolean(redeemedAt) };
     },
 
     redeemInvite,

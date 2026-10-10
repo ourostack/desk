@@ -4,9 +4,12 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
+import { inspect } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
+import { AzureNamedKeyCredential } from "@azure/data-tables";
+import { DefaultAzureCredential, ManagedIdentityCredential } from "@azure/identity";
 import { createMemoryStore } from "../src/accounts/memory-store.js";
-import { createTableStore } from "../src/accounts/store.js";
+import { createTableStore, defaultCredential } from "../src/accounts/store.js";
 import { createAccountCache, StoreUnavailable } from "../src/accounts/cache.js";
 import { newInvite, hashToken, seed, issueInvite, INVITE_TTL_MS } from "../src/accounts/invites.js";
 import { azuriteFromEnv } from "./fixtures/azurite.mjs";
@@ -104,7 +107,45 @@ function storeSuite(label, make) {
       const who = identity();
       assert.deepEqual(await store.redeemInvite({ tokenHash, ...who, now: NOW }), { accountId });
       assert.deepEqual(await store.redeemInvite({ tokenHash, ...identity(), now: NOW }), { refused: "used" });
-      assert.deepEqual(await store.redeemInvite({ tokenHash, ...who, now: NOW + INVITE_TTL_MS * 2 }), { accountId });
+      // Its own identity gets the account again, marked as already redeemed so the caller doesn't treat it as new.
+      assert.deepEqual(await store.redeemInvite({ tokenHash, ...who, now: NOW + INVITE_TTL_MS * 2 }), { accountId, alreadyRedeemed: true });
+    });
+
+    test(name("an invite whose expiry isn't a date counts as expired"), async () => {
+      const store = await make();
+      const { accountId, tokenHash } = await seededInvite(store);
+      for (const garbled of ["not a date", "", "2026-13-45T99:99:99Z"]) {
+        await store.tables.upsert("invites", { partitionKey: tokenHash, rowKey: "", accountId, expiresAt: garbled });
+        assert.deepEqual(await store.redeemInvite({ tokenHash, ...identity(), now: NOW }), { refused: "expired" }, JSON.stringify(garbled));
+        const invite = await store.getInvite(tokenHash);
+        assert.ok(Number.isFinite(invite.expiresAt) && invite.expiresAt <= NOW, JSON.stringify(garbled));
+      }
+    });
+
+    test(name("a claim stuck on an identity that got an account elsewhere is released on its retry"), async () => {
+      let interrupt = true;
+      const store = await make({
+        onStep: async (step) => {
+          if (step === "claimed" && interrupt) {
+            interrupt = false;
+            throw new Error("interrupted at claimed");
+          }
+        },
+      });
+      const first = await seededInvite(store);
+      const second = await seededInvite(store);
+      const who = identity();
+      await assert.rejects(store.redeemInvite({ tokenHash: first.tokenHash, ...who, now: NOW }), /interrupted/);
+      assert.deepEqual(await store.redeemInvite({ tokenHash: second.tokenHash, ...who, now: NOW }), { accountId: second.accountId });
+      assert.deepEqual(await store.redeemInvite({ tokenHash: first.tokenHash, ...who, now: NOW }), { refused: "identity_has_account" });
+      assert.deepEqual(await store.redeemInvite({ tokenHash: first.tokenHash, ...identity(), now: NOW }), { accountId: first.accountId }, "the first invite is free again");
+    });
+
+    test(name("a missing table is an error, not a missing row"), async () => {
+      const store = await make({ tablePrefix: `missing${randomUUID().replaceAll("-", "").slice(0, 12)}`, ensure: false });
+      await assert.rejects(store.getAccount(randomUUID()), /table/);
+      await assert.rejects(store.findIdentity(TID, randomUUID()), /table/);
+      await assert.rejects(store.getInvite(newInvite().tokenHash), /table/);
     });
 
     test(name("the invites table holds the token's hash and never the token"), async () => {
@@ -192,7 +233,7 @@ function storeSuite(label, make) {
       // A hosted row written by something else is refused on read too, not treated as a GitHub desk.
       await store.tables.upsert("bindings", { partitionKey: accountId, rowKey: "", kind: "hosted", deskId: "d1" });
       await assert.rejects(store.getBinding(accountId), /hosted/);
-      for (const bad of [{ ...BINDING, repo: "no-owner" }, { ...BINDING, author: { name: "x" } }, { ...BINDING, installationId: -1 }, { ...BINDING, kind: "gitlab" }]) {
+      for (const bad of [{ ...BINDING, repo: "no-owner" }, { ...BINDING, repo: "../.." }, { ...BINDING, repo: "./." }, { ...BINDING, repo: "owner/.." }, { ...BINDING, repo: "-owner/name" }, { ...BINDING, repo: "owner/name/extra" }, { ...BINDING, author: { name: "x" } }, { ...BINDING, installationId: -1 }, { ...BINDING, kind: "gitlab" }]) {
         await assert.rejects(store.putBinding(accountId, bad), undefined, JSON.stringify(bad));
       }
     });
@@ -208,16 +249,103 @@ function storeSuite(label, make) {
   });
 }
 
-storeSuite("[memory]", async (options) => createMemoryStore(options));
+storeSuite("[memory]", async ({ ensure = true, ...options } = {}) => {
+  const store = createMemoryStore(options);
+  if (ensure) await store.ensureTables();
+  return store;
+});
 storeSuite(
   "[azurite]",
   azurite &&
-    (async (options) => {
+    (async ({ ensure = true, ...options } = {}) => {
       const store = createTableStore({ ...azurite, ...options });
-      await store.ensureTables();
+      if (ensure) await store.ensureTables();
       return store;
     }),
 );
+
+// A TCP server that accepts every connection and never answers: a blackholed or hung store.
+async function silentServer() {
+  const sockets = new Set();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+  }).listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  return {
+    endpoint: `http://127.0.0.1:${server.address().port}/devstoreaccount1`,
+    close: () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+const DEV_CREDENTIAL = new AzureNamedKeyCredential("devstoreaccount1", Buffer.from("not-a-real-key").toString("base64"));
+
+describe("Table store deadlines and errors", () => {
+  test("every store call against a silent store fails within its deadline", async () => {
+    const silent = await silentServer();
+    try {
+      const store = createTableStore({ endpoint: silent.endpoint, credential: DEV_CREDENTIAL, timeoutMs: 300 });
+      for (const call of [() => store.getAccount(randomUUID()), () => store.findIdentity(TID, randomUUID()), () => store.getInvite(newInvite().tokenHash), () => store.putAccount({ accountId: randomUUID(), displayName: "x", deskAccess: true })]) {
+        const started = performance.now();
+        await assert.rejects(call(), /accounts store/);
+        assert.ok(performance.now() - started < 2_000, `took ${performance.now() - started} ms`);
+      }
+    } finally {
+      await silent.close();
+    }
+  });
+
+  test("the account cache serves a fresh-enough row or refuses past 60 s when the store never answers", async () => {
+    const silent = await silentServer();
+    try {
+      let clock = NOW;
+      let up = true;
+      const accountId = randomUUID();
+      const memory = createMemoryStore();
+      await memory.ensureTables();
+      await memory.putAccount({ accountId, displayName: "Someone", deskAccess: true });
+      const table = createTableStore({ endpoint: silent.endpoint, credential: DEV_CREDENTIAL, timeoutMs: 300 });
+      const store = { getAccount: (id) => (up ? memory.getAccount(id) : table.getAccount(id)) };
+      const cache = createAccountCache({ store, now: () => clock });
+      await cache.account(accountId);
+      up = false;
+      clock = NOW + 30_000;
+      let started = performance.now();
+      assert.equal((await cache.account(accountId, { fresh: true })).deskAccess, true, "a 30 s old row is served on a sweep");
+      assert.ok(performance.now() - started < 2_000);
+      clock = NOW + 61_000;
+      started = performance.now();
+      await assert.rejects(cache.account(accountId), StoreUnavailable);
+      assert.ok(performance.now() - started < 2_000);
+    } finally {
+      await silent.close();
+    }
+  });
+
+  test("a store error names no key: no tid, oid, accountId or token hash in its message or its inspected form", async () => {
+    const silent = await silentServer();
+    try {
+      const store = createTableStore({ endpoint: silent.endpoint, credential: DEV_CREDENTIAL, timeoutMs: 200 });
+      const oid = randomUUID();
+      const tokenHash = newInvite().tokenHash;
+      for (const call of [() => store.findIdentity(TID, oid), () => store.getInvite(tokenHash)]) {
+        const error = await call().catch((caught) => caught);
+        const text = `${error.message} ${inspect(error, { depth: 10 })} ${JSON.stringify(error)}`;
+        for (const secret of [TID, oid, tokenHash]) assert.ok(!text.includes(secret), `the error carries ${secret === TID ? "tid" : secret === oid ? "oid" : "the token hash"}`);
+      }
+    } finally {
+      await silent.close();
+    }
+  });
+
+  test("the default credential is the managed identity named by clientId, else DefaultAzureCredential", () => {
+    assert.ok(defaultCredential({ clientId: randomUUID() }) instanceof ManagedIdentityCredential);
+    assert.ok(defaultCredential({}) instanceof DefaultAzureCredential);
+  });
+});
 
 describe("Azurite in CI", () => {
   test("the run fails if DESK_AZURITE is set and Azurite isn't reachable", async () => {
@@ -314,27 +442,77 @@ describe("account cache", () => {
     assert.equal((await cache.account("acc-1")).deskAccess, false);
   });
 
-  test("a missing account is null, and a slow older read never replaces a newer one", async () => {
+  test("a missing account is null, and concurrent reads of one account share one store read", async () => {
     let clock = NOW;
     const pending = [];
+    let reads = 0;
     const store = {
       async getAccount(accountId) {
+        reads += 1;
         if (accountId === "nobody") return null;
         return new Promise((resolve) => pending.push(resolve));
       },
     };
     const cache = createAccountCache({ store, now: () => clock });
     assert.equal(await cache.account("nobody"), null);
-    const older = cache.account("acc-1", { fresh: true });
-    clock = NOW + 1;
-    const newer = cache.account("acc-1", { fresh: true });
+    const answers = Promise.all([cache.account("acc-1"), cache.account("acc-1", { fresh: true }), cache.account("acc-1")]);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(pending.length, 2);
-    pending[1](account("acc-1", false));
-    assert.equal((await newer).deskAccess, false);
+    assert.equal(pending.length, 1, "one read in flight for all three");
+    pending[0](account("acc-1", false));
+    assert.deepEqual((await answers).map((row) => row.deskAccess), [false, false, false]);
+    assert.equal(reads, 2);
+  });
+
+  test("a read that started before forget is not cached", async () => {
+    let clock = NOW;
+    const pending = [];
+    const store = { getAccount: () => new Promise((resolve) => pending.push(resolve)) };
+    const cache = createAccountCache({ store, now: () => clock });
+    const before = cache.account("acc-1");
+    await new Promise((resolve) => setImmediate(resolve));
+    cache.forget("acc-1");
+    const after = cache.account("acc-1");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(pending.length, 2, "forget doesn't let a new call join the old read");
     pending[0](account("acc-1", true));
-    assert.equal((await older).deskAccess, false, "the older read answers with the newer row");
-    assert.equal((await cache.account("acc-1")).deskAccess, false, "and the newer row stays cached");
+    await before;
+    pending[1](account("acc-1", false));
+    assert.equal((await after).deskAccess, false);
+    clock = NOW + 1_000;
+    assert.equal((await cache.account("acc-1")).deskAccess, false, "the pre-forget row was never cached");
+    assert.equal(pending.length, 2);
+  });
+
+  test("a store read that never answers is cut off at readTimeoutMs", async () => {
+    let clock = NOW;
+    let hang = false;
+    const store = { getAccount: async (accountId) => (hang ? new Promise(() => {}) : account(accountId)) };
+    const cache = createAccountCache({ store, now: () => clock, readTimeoutMs: 100 });
+    await cache.account("acc-1");
+    hang = true;
+    clock = NOW + 30_000;
+    let started = performance.now();
+    assert.equal((await cache.account("acc-1", { fresh: true })).deskAccess, true);
+    assert.ok(performance.now() - started < 1_000);
+    clock = NOW + 61_000;
+    started = performance.now();
+    await assert.rejects(cache.account("acc-1"), StoreUnavailable);
+    assert.ok(performance.now() - started < 1_000);
+  });
+
+  test("the cache's default clock is monotonic", async (t) => {
+    // Ages come from performance.now, so a wall-clock step back can't keep a row young.
+    let mono = 1_000;
+    t.mock.method(performance, "now", () => mono);
+    t.mock.method(Date, "now", () => NOW - 3_600_000);
+    const store = fakeStore(new Map([["acc-1", account("acc-1")]]));
+    const cache = createAccountCache({ store });
+    await cache.account("acc-1");
+    await cache.account("acc-1");
+    assert.equal(store.reads, 1);
+    mono += 60_000;
+    await cache.account("acc-1");
+    assert.equal(store.reads, 2, "60 s on the monotonic clock forces a read whatever the wall clock says");
   });
 });
 
