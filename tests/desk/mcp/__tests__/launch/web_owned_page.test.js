@@ -29,6 +29,7 @@ function fixture() {
   context.connectionCount = 1
   context.markerValue = null
   context.creationDelta = 0
+  context.groupTitle = "Playwright · " + owner
   let next = 100
   let initializer
   function page(url, id = ++next) {
@@ -72,6 +73,10 @@ function fixture() {
         group: async ({ groupId, tabIds }) => { for (const id of tabIds) tabs.get(id).tab.groupId = groupId },
       },
       runtime: { sendMessage: async () => ({ connections: Array.from({ length: context.connectionCount }, (_, index) => ({ id: index + 1, clientName: context.connectionOwner, connectedTabIds: [...tabs.keys()] })) }) },
+      tabGroups: {
+        update: async (id, { title }) => { events.push({ labelGroup: id, title }); context.groupTitle = title; return { id, title } },
+        get: async id => ({ id, windowId: context.groupWindowId ?? 10, title: context.readGroupTitle ?? context.groupTitle }),
+      },
       debugger: { sendCommand: async ({ tabId }, method, params) => {
         events.push({ tabId, method, params })
         if (method === "Runtime.evaluate") return { result: { value: context.markerValue ?? runInNewContext(params.expression, tabs.get(tabId).sandbox) } }
@@ -99,6 +104,76 @@ function fixture() {
   const root = page("chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/connect.html?mcpRelayUrl=own", 1)
   return { owner, root, context, events, page, initializer, tabs }
 }
+
+test("declared browser work is discoverable on only the owner's group and survives a later task page", async () => {
+  const f = fixture()
+  await f.initializer({ page: f.root })
+  const label = await f.initializer.labelTask(f.root, "Checking synthetic routing")
+  assert.equal(label.owner, f.owner)
+  assert.equal(label.work, "Checking synthetic routing")
+  assert.equal(label.windowId, 10)
+  assert.equal(label.groupId, 20)
+  assert.equal(f.context.groupTitle, "Playwright · " + f.owner + " | Checking synthetic routing")
+  const task = f.page("about:blank")
+  await f.initializer({ page: task })
+  assert.equal(f.context.groupTitle, label.title)
+  const cleared = await f.initializer.labelTask(task, null)
+  assert.equal(cleared.work, null)
+  assert.equal(f.context.groupTitle, "Playwright · " + f.owner)
+  assert.equal(f.events.filter(e => e.create).length, 1)
+})
+
+test("declaring browser work refuses missing state, invalid labels and a changed connection owner", async () => {
+  const f = fixture()
+  await assert.rejects(() => f.initializer.labelTask(f.root, "work"), /browser_owner_control_missing/u)
+  await f.initializer({ page: f.root })
+  for (const label of ["", " ", "\nwork", "x".repeat(161), 1, undefined]) {
+    await assert.rejects(() => f.initializer.labelTask(f.root, label), /browser_owner_work_invalid/u)
+  }
+  f.context.connectionOwner = "Peer"
+  await assert.rejects(() => f.initializer.labelTask(f.root, "work"), /browser_owner_connection_mismatch/u)
+  assert.equal(f.events.filter(e => e.labelGroup).length, 0)
+})
+
+test("the public Page carries a bound purpose helper without Node globals or another control page", async () => {
+  const f = fixture()
+  await f.initializer({ page: f.root })
+  assert.equal(Object.isFrozen(f.root.deskBrowserOwner), true)
+  const label = await runInNewContext("page.deskBrowserOwner.labelTask('Checking ownership')", { page: f.root })
+  assert.equal(label.work, "Checking ownership")
+  const task = f.page("about:blank")
+  await f.initializer({ page: task })
+  assert.equal((await task.deskBrowserOwner.labelTask(null)).work, null)
+  assert.equal(f.events.filter(e => e.create).length, 1)
+})
+
+test("reinitializing an owned Page preserves its helper while a conflicting Page property refuses", async () => {
+  const f = fixture()
+  await f.initializer({ page: f.root })
+  const helper = f.root.deskBrowserOwner
+  await f.initializer({ page: f.root })
+  assert.equal(f.root.deskBrowserOwner, helper)
+  const task = f.page("about:blank")
+  task.deskBrowserOwner = { labelTask() {} }
+  await assert.rejects(() => f.initializer({ page: task }), /browser_owner_page_api_conflict/u)
+})
+
+test("purpose changes fail closed when control scope or label readback cannot be verified", async () => {
+  const f = fixture()
+  await f.initializer({ page: f.root })
+  const control = [...f.tabs.values()].find(p => p.url().includes("#desk-owner-control-"))
+  control.closed = true
+  await assert.rejects(() => f.initializer.labelTask(f.root, "work"), /browser_owner_control_missing/u)
+  control.closed = false
+  control.tab.windowId = 30
+  await assert.rejects(() => f.initializer.labelTask(f.root, "work"), /browser_owner_control_mismatch/u)
+  control.tab.windowId = 10
+  f.context.readGroupTitle = "unexpected"
+  await assert.rejects(() => f.initializer.labelTask(f.root, "work"), /browser_owner_work_unverified/u)
+  delete f.context.readGroupTitle
+  f.context.groupWindowId = 30
+  await assert.rejects(() => f.initializer.labelTask(f.root, "work"), /browser_owner_work_unverified/u)
+})
 
 test("owned page preparation creates one inactive exact-window control page and focuses only the requesting renderer", async () => {
   const f = fixture()

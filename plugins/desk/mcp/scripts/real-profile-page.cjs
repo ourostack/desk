@@ -5,7 +5,8 @@ const BRIDGE = "chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/connect.html
 
 function createPageInitializer(owner) {
   const contexts = new WeakMap();
-  return async function initialize({ page }) {
+  const helpers = new WeakMap();
+  async function initialize({ page }) {
     if (typeof owner !== "string" || !owner) throw new Error("browser_owner_identity_missing");
     const context = page.context();
     let state = contexts.get(context);
@@ -72,6 +73,12 @@ function createPageInitializer(owner) {
     if (page.url() === state.url) return;
     await state.ready;
     if (state.control.isClosed() || state.control.url() !== state.url) throw new Error("browser_owner_control_missing");
+    if (!helpers.has(page)) {
+      if (Object.hasOwn(page, "deskBrowserOwner")) throw new Error("browser_owner_page_api_conflict");
+      const helper = Object.freeze({ labelTask: work => initialize.labelTask(page, work) });
+      Object.defineProperty(page, "deskBrowserOwner", { value: helper });
+      helpers.set(page, helper);
+    }
     const key = "__desk_owner_" + randomBytes(12).toString("hex");
     await page.evaluate(key => Object.defineProperty(globalThis, key, { value: true, configurable: true }), key);
     try {
@@ -97,7 +104,29 @@ function createPageInitializer(owner) {
     } finally {
       if (!page.isClosed()) await page.evaluate(key => { delete globalThis[key]; }, key);
     }
+  }
+  initialize.labelTask = async function labelTask(page, work) {
+    if (work !== null && (typeof work !== "string" || !work.trim() || work.length > 160 || /[\x00-\x1f\x7f]/.test(work))) {
+      throw new Error("browser_owner_work_invalid");
+    }
+    const state = contexts.get(page.context());
+    if (!state) throw new Error("browser_owner_control_missing");
+    await state.ready;
+    if (state.control.isClosed() || state.control.url() !== state.url) throw new Error("browser_owner_control_missing");
+    return state.control.evaluate(async data => {
+      const tab = await chrome.tabs.getCurrent();
+      const status = await chrome.runtime.sendMessage({ type: "getConnectionStatus" });
+      const own = status.connections.filter(c => c.connectedTabIds.includes(tab.id));
+      if (own.length !== 1 || own[0].clientName !== data.owner) throw new Error("browser_owner_connection_mismatch");
+      if (tab.id !== data.created || tab.windowId !== data.scope.windowId || tab.groupId !== data.scope.groupId) throw new Error("browser_owner_control_mismatch");
+      const title = "Playwright · " + data.owner + (data.work === null ? "" : " | " + data.work);
+      await chrome.tabGroups.update(tab.groupId, { title });
+      const group = await chrome.tabGroups.get(tab.groupId);
+      if (group.windowId !== tab.windowId || group.title !== title) throw new Error("browser_owner_work_unverified");
+      return { owner: data.owner, work: data.work, windowId: tab.windowId, groupId: tab.groupId, title: group.title };
+    }, { owner, work, scope: state.scope, created: state.created });
   };
+  return initialize;
 }
 
 module.exports = {
