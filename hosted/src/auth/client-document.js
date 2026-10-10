@@ -5,7 +5,9 @@
 // registration.
 //
 // Fetching a URL a stranger names is a way into the gateway's network, so
-// every fetch is fenced: the id must be a plain https URL; its host must
+// every fetch is fenced: the id must be a plain https URL on port 443, not on
+// the gateway's own host (which would let one request chain into many
+// self-fetches); its host must
 // resolve only to public addresses, and the gateway connects to the address
 // it checked, so a second lookup cannot swap in a private one; no redirect is
 // followed; the whole fetch, lookup included, gets 5 seconds; and at most
@@ -18,8 +20,8 @@
 // a public client, because a document cannot hold a secret we issued.
 //
 // Accepted documents are cached for their Cache-Control max-age, clamped to
-// between 5 minutes and 24 hours, at most 500 of them; refusals are not
-// cached.
+// between 5 minutes and 24 hours, at most 500 of them, the least recently
+// used going first; refusals are not cached.
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { Resolver } from "node:dns/promises";
@@ -49,10 +51,11 @@ const loggableId = (clientId) =>
 const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
 
 // Returns the parsed URL, or throws when the id is not a plain https URL: no
-// fragment, user info or dot segments, a path beyond `/`, and already in the
-// form a URL parser would write it, so the id compared and the URL fetched
-// are the same text.
-function clientIdUrl(clientId) {
+// fragment, user info, port or dot segments, a path beyond `/`, and already
+// in the form a URL parser would write it, so the id compared and the URL
+// fetched are the same text. Only 443, so a hostile DNS name cannot aim the
+// gateway's connections at other ports to probe them.
+function clientIdUrl(clientId, ownHost) {
   if (typeof clientId !== "string" || !URL.canParse(clientId)) throw new Refusal("invalid_client_id_url");
   const url = new URL(clientId);
   const rawPath = clientId.replace(/^https:\/\/[^/?#]*/i, "").split(/[?#]/)[0];
@@ -62,11 +65,13 @@ function clientIdUrl(clientId) {
     url.username ||
     url.password ||
     rawPath.split("/").some((segment) => DOT_SEGMENT.test(segment)) ||
+    url.port ||
     url.pathname === "/" ||
     url.href !== clientId
   ) {
     throw new Refusal("invalid_client_id_url");
   }
+  if (ownHost && url.hostname === ownHost) throw new Refusal("own_host");
   return url;
 }
 
@@ -79,8 +84,9 @@ const ipv4Number = (text) => {
 // Every IPv4 range that is not the public internet: this network (0/8),
 // private (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10), loopback (127/8),
 // link-local (169.254/16), IETF protocol assignments (192.0.0/24),
-// benchmarking (198.18/15), multicast (224/4) and reserved (240/4, which
-// holds the broadcast address).
+// benchmarking (198.18/15), multicast (224/4), reserved (240/4, which holds
+// the broadcast address), and Azure's platform address (168.63.129.16: the
+// host's DNS and agent endpoint, reachable from inside the gateway).
 const IPV4_NOT_PUBLIC = [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
@@ -91,6 +97,7 @@ const IPV4_NOT_PUBLIC = [
   ["192.0.0.0", 24],
   ["192.168.0.0", 16],
   ["198.18.0.0", 15],
+  ["168.63.129.16", 32],
   ["224.0.0.0", 4],
   ["240.0.0.0", 4],
 ].map(([base, bits]) => ({ base: ipv4Number(base), size: 2 ** (32 - bits) }));
@@ -180,11 +187,13 @@ function resolverLookup({ servers, timeoutMs }) {
 }
 
 // `lookup` resolves a host to `[{ address, family }]`, given `{ all, signal }`;
-// by default our own resolver, on `dnsServers` when given. `ca` replaces the
-// trusted roots; `isPublic`, `timeoutMs` and `now` exist for tests. `log` gets one line per refusal: the
+// by default our own resolver, on `dnsServers` when given. `ownHost` is the
+// gateway's own host name, never fetched. `ca` replaces the trusted roots;
+// `isPublic`, `timeoutMs`, `connectPort` and `now` exist for tests. `log` gets one line per refusal: the
 // reason, and the client id once it is known to be a well-formed URL.
 export function createClientDocuments({
   redirects,
+  ownHost,
   dnsServers,
   timeoutMs = 5000,
   lookup = resolverLookup({ servers: dnsServers, timeoutMs }),
@@ -194,29 +203,34 @@ export function createClientDocuments({
   isPublic = isPublicAddress,
   maxBytes = 10 * 1024,
   maxEntries = 500,
+  connectPort = 443,
 }) {
   const cache = new Map(); // client id -> { client, expiresAt }, oldest first
   const inflight = new Map(); // client id -> the one fetch under way
 
   // Reads the document from `address`, which was resolved and checked
   // already, and returns its body and Cache-Control.
-  function fetchFrom(url, { address, family }, signal) {
+  function fetchFrom(url, addresses, signal) {
     return new Promise((resolve, reject) => {
       let settled = false;
       const host = url.hostname.replace(/^\[|\]$/g, "");
       const req = request({
         hostname: host,
-        port: url.port || 443,
+        port: connectPort,
         path: `${url.pathname}${url.search}`,
         method: "GET",
-        headers: { accept: "application/json" },
+        // Some hosts challenge requests that name no client.
+        headers: { accept: "application/json", "user-agent": "ouro-desk-hosted" },
         ca,
         agent: false,
         signal,
         // TLS still checks the certificate against the host's name.
         servername: isIP(host) ? undefined : host,
-        // Connect to the address already checked, never a fresh lookup.
-        lookup: (_hostname, options, callback) => (options?.all ? callback(null, [{ address, family }]) : callback(null, address, family)),
+        // Connect only to addresses already checked, never a fresh lookup.
+        // All of them, so Node can fall back from one it cannot reach (an
+        // IPv6 address on a network with no IPv6 route) to the next.
+        lookup: (_hostname, options, callback) =>
+          options?.all ? callback(null, addresses) : callback(null, addresses[0].address, addresses[0].family),
       });
       const fail = (reason) => {
         if (settled) return;
@@ -267,9 +281,9 @@ export function createClientDocuments({
   async function load(clientId) {
     let url;
     try {
-      url = clientIdUrl(clientId);
+      url = clientIdUrl(clientId, ownHost);
     } catch (refusal) {
-      log(`client refused: ${refusal.reason}`);
+      log(`client refused: ${refusal.reason}${refusal.reason === "own_host" ? loggableId(clientId) : ""}`);
       return undefined;
     }
     const controller = new AbortController();
@@ -286,7 +300,11 @@ export function createClientDocuments({
       // Every address must be public, not just the one used: a host that
       // answers with a public and a private address is refused outright.
       if (!addresses.every(({ address }) => isPublic(address))) throw new Refusal("private_address");
-      const { body, cacheControl } = await fetchFrom(url, addresses[0], controller.signal);
+      const { body, cacheControl } = await fetchFrom(
+        url,
+        addresses.map(({ address, family }) => ({ address, family })),
+        controller.signal,
+      );
       const client = clientFrom(clientId, body);
       cache.delete(clientId);
       cache.set(clientId, { client, expiresAt: now() + cacheSeconds(cacheControl) * 1000 });
@@ -304,8 +322,14 @@ export function createClientDocuments({
     // Never throws: any failure is `undefined`, which the SDK answers as
     // invalid_client.
     async get(clientId) {
+      // Least recently used goes first: a hit moves the entry to the end, so
+      // a flood of fresh documents cannot push out one in steady use.
       const cached = cache.get(clientId);
-      if (cached && cached.expiresAt > now()) return cached.client;
+      if (cached && cached.expiresAt > now()) {
+        cache.delete(clientId);
+        cache.set(clientId, cached);
+        return cached.client;
+      }
       let pending = inflight.get(clientId);
       if (!pending && inflight.size >= MAX_CONCURRENT_LOADS) {
         log(`client refused: busy${loggableId(clientId)}`);

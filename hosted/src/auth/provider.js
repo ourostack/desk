@@ -35,7 +35,7 @@ export function createProvider({
   resource,
   redirects = createRedirectPolicy(),
   log = stderrLog,
-  clientDocuments = createClientDocuments({ redirects, log }),
+  clientDocuments = createClientDocuments({ redirects, log, ownHost: new URL(issuer).hostname }),
 }) {
   if (!key) throw new Error("createProvider needs a signing key");
   if (!resource) throw new Error("createProvider needs the MCP resource URL");

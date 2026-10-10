@@ -18,13 +18,20 @@ const TLS = {
 const HOST = "client.example";
 const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 
+// The port of the latest document server. Client ids carry no port (the
+// gateway allows only 443), so the fetcher is told to connect here instead.
+let serverPort;
+
 // A metadata-document server on 127.0.0.1. `routes` maps a path to a handler;
-// `hits` counts the requests each path received.
+// `hits` counts the requests each path received and `userAgents` the
+// User-Agent each request sent.
 async function documentServer(t, routes) {
   const hits = {};
+  const userAgents = [];
   const server = createServer(TLS, (req, res) => {
     const path = req.url.split("?")[0];
     hits[req.url] = (hits[req.url] ?? 0) + 1;
+    userAgents.push(req.headers["user-agent"]);
     const route = routes[path];
     if (!route) {
       res.writeHead(404).end();
@@ -38,8 +45,8 @@ async function documentServer(t, routes) {
     server.closeAllConnections();
     server.close();
   });
-  const port = server.address().port;
-  return { hits, url: (path) => `https://${HOST}:${port}${path}` };
+  serverPort = server.address().port;
+  return { hits, userAgents, url: (path) => `https://${HOST}${path}` };
 }
 
 const json = (body, headers = {}) => (_req, res) => {
@@ -72,6 +79,7 @@ function makeDocuments(overrides = {}) {
     ca: TLS.cert,
     log: (line) => logs.push(line),
     isPublic: testServerIsPublic,
+    connectPort: serverPort,
     ...overrides,
   });
   return { documents, logs };
@@ -118,6 +126,7 @@ test("a client id that is not a plain https URL is refused before any lookup", a
     "https://client.example",
     "https://CLIENT.example/client.json",
     "https://client.example:443/client.json",
+    "https://client.example:8443/client.json",
     "https://client.example/client json",
     "not a url",
     "",
@@ -165,6 +174,8 @@ test("isPublicAddress refuses private, loopback, link-local, unique-local, CGNAT
     "2002:7f00:1::",
     "::127.0.0.1",
     "fe80::1%en0",
+    "168.63.129.16",
+    "::ffff:168.63.129.16",
     "not an address",
     "",
   ];
@@ -578,4 +589,49 @@ test(`at most ${MAX_CONCURRENT_LOADS} uncached documents load at once; one more 
   await Promise.all([...held, shared]);
   hang = false;
   assert.equal((await documents.get(url))?.client_id, url, "the slots are free again after the deadline");
+});
+
+test("a client id on the gateway's own host is refused before any lookup", async () => {
+  const dns = resolver();
+  const { documents, logs } = makeDocuments({ lookup: dns.lookup, ownHost: "desk.ouro.bot" });
+  const nested = "https://desk.ouro.bot/authorize?response_type=code&client_id=https://desk.ouro.bot/authorize";
+  assert.equal(await documents.get(nested), undefined);
+  assert.equal(await documents.get("https://DESK.ouro.bot/x"), undefined);
+  assert.equal(dns.calls.length, 0);
+  assert.deepEqual(logs, [`client refused: own_host client ${nested}`, "client refused: invalid_client_id_url"]);
+});
+
+test("every checked address is offered to the socket, so an unreachable first address falls back to the next", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  // The server listens on 127.0.0.1 only, so ::1 is refused.
+  const addresses = [{ address: "::1", family: 6 }, { address: "127.0.0.1", family: 4 }];
+  const { documents, logs } = makeDocuments({ lookup: resolver(addresses).lookup, isPublic: (address) => address === "::1" || address === "127.0.0.1" });
+  assert.equal((await documents.get(url))?.client_id, url, logs.join("\n"));
+});
+
+test("document fetches name the gateway in User-Agent", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  assert.ok(await makeDocuments().documents.get(url));
+  assert.deepEqual(server.userAgents, ["ouro-desk-hosted"]);
+});
+
+test("the cache evicts the least recently used document, not merely the oldest", async (t) => {
+  const server = await documentServer(t, {
+    "/client.json": (req, res) => json(documentFor(server.url(req.url)))(req, res),
+  });
+  const { documents } = makeDocuments();
+  const urls = Array.from({ length: 501 }, (_, i) => server.url(`/client.json?n=${i}`));
+  for (const url of urls.slice(0, 500)) assert.ok(await documents.get(url));
+  assert.ok(await documents.get(urls[0]), "a hit makes the first document the most recently used");
+  assert.ok(await documents.get(urls[500]));
+  assert.ok(await documents.get(urls[0]));
+  assert.equal(server.hits["/client.json?n=0"], 1, "the used document stayed");
+  assert.ok(await documents.get(urls[1]));
+  assert.equal(server.hits["/client.json?n=1"], 2, "the least recently used one went");
 });

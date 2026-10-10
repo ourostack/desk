@@ -824,3 +824,9 @@ test("by default the provider reads client documents itself, under the same redi
   assert.equal(await provider.clientsStore.getClient("https://127.0.0.1/client.json"), undefined);
   assert.deepEqual(logs, ["client refused: private_address client https://127.0.0.1/client.json"]);
 });
+
+test("the provider's document fetcher refuses a client id on the gateway's own host", async () => {
+  const provider = makeProvider();
+  assert.equal(await provider.clientsStore.getClient(`${ISSUER}/authorize?client_id=x`), undefined);
+  assert.deepEqual(logs, [`client refused: own_host client ${ISSUER}/authorize?client_id=x`]);
+});
