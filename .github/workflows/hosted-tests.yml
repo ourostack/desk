@@ -98,15 +98,20 @@ jobs:
           DESK_AZURITE: "1"
         run: npm test
 
-      # The Azurite tests are named `[azurite] ...`; a run where none of them passed is a failure, not a quiet skip.
+      # The store suite runs once per store, with tests named `[memory] ...` and `[azurite] ...`. Every one of them must
+      # pass against Azurite too: a skipped, todo or missing Azurite test fails the step instead of passing quietly.
       - name: Count the Azurite tests that ran
         working-directory: hosted
         env:
           DESK_AZURITE: "1"
         run: |
           node --disable-warning=ExperimentalWarning --test --test-reporter=tap test/accounts.test.js > "$RUNNER_TEMP/accounts.tap"
-          # Passing tests only: not the suite's own line, not a skipped one.
-          count=$(grep -E '^\s*ok [0-9]+ - \[azurite\] ' "$RUNNER_TEMP/accounts.tap" | grep -v '# SKIP' | grep -cv ' - \[azurite\] accounts store' || true)
-          echo "Azurite tests run: $count"
-          echo "Azurite tests run: $count" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$count" -lt 1 ]; then echo "No Azurite test ran" >&2; exit 1; fi
+          passed() {
+            # Passing tests only: not the suite's own line, not a skipped or todo one.
+            grep -E "^\s*ok [0-9]+ - \[$1\] " "$RUNNER_TEMP/accounts.tap" | grep -vE '# (SKIP|TODO)' | grep -cv " - \[$1\] accounts store" || true
+          }
+          memory=$(passed memory)
+          count=$(passed azurite)
+          echo "Azurite tests run: $count of $memory"
+          echo "Azurite tests run: $count of $memory" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -lt 1 ] || [ "$count" -ne "$memory" ]; then echo "Every store test must pass against Azurite as well as in memory" >&2; exit 1; fi
