@@ -17,6 +17,9 @@ import { consentPage, page, sendPage } from "./pages.js";
 import { createRedirectPolicy } from "./redirects.js";
 import { createClientDocuments } from "./client-document.js";
 
+// The longest requested resource a refusal log line repeats.
+const MAX_LOGGED_RESOURCE = 200;
+
 const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message}\n`);
 
 // `log` receives one line per refused sign-in or token request. Lines carry
@@ -108,9 +111,14 @@ export function createProvider({
   // only one, so naming it changes nothing and naming any other is refused.
   // The SDK hands it over as a URL already; `href` compares the normalized
   // form, so an upper-case host or an explicit :443 still matches.
+  // The refusal logs the resource asked for, so a client sending an
+  // unexpected form can be diagnosed from the log. It is a public URL, not a
+  // secret; the SDK has parsed it, so it holds no line breaks, and an
+  // overlong one is left out.
   function checkResource(requested, client, step) {
     if (requested !== undefined && new URL(requested).href !== audience) {
-      log(`${step} refused: invalid_target client ${client.client_id}`);
+      const href = new URL(requested).href;
+      log(`${step} refused: invalid_target client ${client.client_id}${href.length <= MAX_LOGGED_RESOURCE ? ` resource ${href}` : ""}`);
       throw new InvalidTargetError(`This server only issues tokens for ${audience}.`);
     }
   }

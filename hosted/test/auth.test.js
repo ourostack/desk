@@ -626,7 +626,8 @@ test("authorize with another resource sends invalid_target back to the client", 
     assert.equal(back.searchParams.get("state"), "claude-state");
   }
   assert.equal(github.calls.length, 0);
-  assert.ok(logs.includes(`authorize refused: invalid_target client ${client.client_id}`));
+  assert.ok(logs.includes(`authorize refused: invalid_target client ${client.client_id} resource https://evil.example/mcp`));
+  assert.ok(logs.includes(`authorize refused: invalid_target client ${client.client_id} resource https://desk.ouro.bot/mcp/`));
 });
 
 test("authorize without a resource gets the default audience in the code and the tokens", async (t) => {
@@ -683,7 +684,7 @@ test("a code exchange or refresh naming another resource gets invalid_target; th
   assert.equal(wrongRefresh.body.error, "invalid_target");
   assert.equal((await refresh(MCP_URL)).status, 200);
   assert.equal((await refresh()).status, 200);
-  assert.ok(logs.includes(`token refused: invalid_target client ${client.client_id}`));
+  assert.ok(logs.includes(`token refused: invalid_target client ${client.client_id} resource https://desk.ouro.bot/other`));
 });
 
 test("an access token for another audience is refused; one with no audience, minted before v1a, is accepted", async (t) => {
@@ -850,4 +851,12 @@ test("VS Code's own registration succeeds with the default redirects", async (t)
   assert.equal(client.client_secret, undefined);
   const { response: consent } = await consentPage(base, client, { redirectUri: "https://vscode.dev/redirect" });
   assert.equal(consent.status, 200);
+});
+
+test("a wrong resource too long to be worth logging is refused without it", async (t) => {
+  const { base } = await start(t);
+  const client = (await register(base)).body;
+  const { response } = await consentPage(base, client, { resource: `https://evil.example/${"x".repeat(300)}` });
+  assert.equal(response.status, 302);
+  assert.ok(logs.includes(`authorize refused: invalid_target client ${client.client_id}`));
 });
