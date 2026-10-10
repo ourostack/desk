@@ -550,6 +550,35 @@ function recordFields(record) {
   return Object.fromEntries(keys.map((key) => [key, record[key]]))
 }
 
+// Native stream identity, not a caller-assigned receipt ordinal. The pinned
+// engine emits one UUID session across init/messages/result and independent
+// event UUIDs. Missing or contradictory identity cannot prove a launch.
+function nativeLaunchProof(stream) {
+  try {
+    const events = stream.stdout.trim().split("\n").map((line) => JSON.parse(line))
+    const starts = events.filter((event) => event.type === "system" && event.subtype === "init")
+    const ends = events.filter((event) => event.type === "result")
+    if (starts.length !== 1 || ends.length !== 1) return null
+    const start = starts[0], end = ends[0]
+    const uuid = (value) => typeof value === "string" &&
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value)
+    const bound = events.filter((event) => event === start ||
+      ["assistant", "user", "result"].includes(event.type))
+    if (!uuid(start.session_id) || !bound.every((event) => event.session_id === start.session_id && uuid(event.uuid)) ||
+        new Set(bound.map((event) => event.uuid)).size !== bound.length ||
+        !Array.isArray(start.tools) || !start.tools.every((tool) => typeof tool === "string")) return null
+    return { session_id: start.session_id, init_uuid: start.uuid, result_uuid: end.uuid, tool_manifest: start.tools }
+  } catch { return null }
+}
+
+function distinctLaunchProof(receipt, previous) {
+  return receipt.native_launch !== null && !previous.some((prior) =>
+    prior.native_launch.session_id === receipt.native_launch.session_id ||
+    prior.stream_sha256 === receipt.stream_sha256 ||
+    prior.native_launch.init_uuid === receipt.native_launch.init_uuid ||
+    prior.native_launch.result_uuid === receipt.native_launch.result_uuid)
+}
+
 export async function runTriageProbe({ session, spawn, onChild, onChildExit }) {
   const data = probeSessions.get(session)
   if (!data || data.invalidated || data.receipts.length >= 2) return { ...outcome("scope_unqualified"),
@@ -564,30 +593,33 @@ export async function runTriageProbe({ session, spawn, onChild, onChildExit }) {
     onChild: (pid) => { guardPids.push(pid); onChild?.(pid) },
     onChildExit: (pid) => { guardExits.push(pid); onChildExit?.(pid) },
   })
-  // The same maintained verifier, resolved only here from a fixed source
-  // module. No caller callback can provide passing observations/receipts.
+  // Fixed maintained verifier; direct CLI orchestration does not await its
+  // own module evaluation. No caller can supply passing observations.
   const { observeTriageProbe } = await import("../../scripts/qualify-triage-runner.js")
   const before = new Map(Object.entries(data.before))
   const operations = [...data.plan.operations, { ...data.plan.operations.find((op) => op.operation === "result_edit"), operation: "permitted_result_trigger" }]
   const cases = observeTriageProbe(operations, stream, before, { indicator: data.plan.indicator,
     resultFile: data.plan.resultFile, home: data.config.env.HOME, capabilities: data.pair.production.admission.capabilities,
     expectedResultBytes: JSON.stringify(data.plan.result) + "\n" })
-  let manifest = null
-  try { manifest = stream.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
-    .find((event) => event.type === "system" && event.subtype === "init")?.tools } catch { /* invalid stream stays blocked */ }
+  const native_launch = nativeLaunchProof(stream)
+  const manifest = native_launch?.tool_manifest ?? null
+  const stream_sha256 = fingerprint(stream)
+  const distinct = distinctLaunchProof({ native_launch, stream_sha256 }, data.receipts)
   const manifestMatches = data.receipts.length === 0 || same(data.receipts[0].tool_manifest, manifest)
   const ownedPid = (ids) => ids.length === 1 && Number.isSafeInteger(ids[0]) && ids[0] > 0
   const passed = run.state === "ran" && cases.every((row) => row.result === "passed") &&
-    ownedPid(pids) && same(pids, exits) && ownedPid(guardPids) && same(guardPids, guardExits) && manifestMatches
-  if (!manifestMatches) for (const row of cases) row.result = "failed"
+    ownedPid(pids) && same(pids, exits) && ownedPid(guardPids) && same(guardPids, guardExits) && manifestMatches && distinct
+  if (!manifestMatches || !distinct) for (const row of cases) row.result = "failed"
   const receipt = { launch: data.receipts.length + 1, ...data.identity, run_state: run.state,
-    stream_sha256: fingerprint(stream), tool_manifest: manifest, cases, pids, exited_pids: exits,
+    stream_sha256, native_launch, tool_manifest: manifest, cases, pids, exited_pids: exits,
     guard_pids: guardPids, guard_exited_pids: guardExits, passed }
   receipt.post_probe_hashes = Object.fromEntries(Object.keys(data.before).map((file) => {
     try { return [file, digest(readFileSync(file))] } catch { return [file, null] }
   }))
   try { receipt.final_result_sha256 = digest(readFileSync(data.plan.resultFile)) } catch { receipt.final_result_sha256 = null }
-  data.receipts.push(receipt)
+  // Returned diagnostics are inspectable, not authority to rewrite the
+  // retained launch history used for distinctness or record completion.
+  data.receipts.push(structuredClone(receipt))
   if (!passed) data.invalidated = true
   return { ...run, stream, cases, receipt }
 }
@@ -667,6 +699,7 @@ export async function loadTriageQualification({ recordFile, ...config }) {
     const operations = [...plan.operations, { ...plan.operations.find((op) => op.operation === "result_edit"), operation: "permitted_result_trigger" }]
     for (const [i, receipt] of record.receipts.entries()) {
       const stream = protectedRead(path.join(out, `stream-${i + 1}.json`), out)
+      const nativeLaunch = nativeLaunchProof(stream)
       const sameIdentity = ["record_version", "envelope_version", "message_catalog_version", "supported_host",
         "production_fingerprint", "probe_fingerprint", "envelope_fingerprint", "production_launch", "probe_launch",
         "source_fingerprint", "message_pairs", "probe_manifest_sha256", "input_payload_sha256",
@@ -674,6 +707,9 @@ export async function loadTriageQualification({ recordFile, ...config }) {
       if (receipt.launch !== i + 1 || receipt.passed !== true || receipt.run_state !== "ran" ||
           stream.kind !== "closed" || stream.code !== 0 || stream.truncated ||
           fingerprint(stream) !== receipt.stream_sha256 ||
+          nativeLaunch === null || !same(nativeLaunch, receipt.native_launch) ||
+          !same(nativeLaunch.tool_manifest, receipt.tool_manifest) ||
+          !distinctLaunchProof(receipt, record.receipts.slice(0, i)) ||
           receipt.production_fingerprint !== record.production_fingerprint || receipt.probe_fingerprint !== record.probe_fingerprint ||
           receipt.envelope_fingerprint !== record.envelope_fingerprint || receipt.source_fingerprint !== record.source_fingerprint ||
           receipt.probe_manifest_sha256 !== plan.probe_manifest_sha256 || receipt.input_payload_sha256 !== plan.input_payload_sha256 ||

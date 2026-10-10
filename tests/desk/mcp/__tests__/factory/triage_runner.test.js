@@ -11,7 +11,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, symlinkSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import cryptoNative from "node:crypto"
 import childProcess from "node:child_process"
 import { EventEmitter } from "node:events"
@@ -36,6 +36,148 @@ const diagnostic = async () => ({ kind: "closed", code: 0, stdout: doctor, trunc
 const brief = { batch: "a".repeat(16), producer_version: "1.2.0", rubric_version: 1, cards: [] }
 const candidate = JSON.stringify({ schema: "desk.factory.triage-result/1", batch: brief.batch,
   producer_version: brief.producer_version, rubric_version: 1, results: [] }) + "\n"
+
+test("M6_1_direct_CLI_entry_completes_first_receipt_second_launch_and_saved_record", async (t) => {
+  const f = await fixture(t)
+  const runnerURL = new URL("../../../../../plugins/desk/mcp/src/factory/triage-runner.js", import.meta.url).href
+  const script = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js", import.meta.url))
+  const wrapper = path.join(f.dir, "direct-entry-fixture.mjs")
+  const preload = path.join(f.dir, "direct-entry-preload.mjs")
+  // Test-only loader replaces native admission/process boundaries, not CLI
+  // orchestration or receipt/verifier APIs. Never launches an installed engine.
+  writeFileSync(wrapper, `
+import * as real from ${JSON.stringify(runnerURL)}
+import fsNative, {readFileSync,writeFileSync} from "node:fs"
+import * as path from "node:path"
+import {createHash,randomUUID} from "node:crypto"
+import {EventEmitter} from "node:events"
+import {PassThrough} from "node:stream"
+import assert from "node:assert/strict"
+import childProcess from "node:child_process"
+import {syncBuiltinESMExports} from "node:module"
+const hash = value => createHash("sha256").update(value).digest("hex")
+const flags = ${JSON.stringify(flags)}, doctor = ${JSON.stringify(doctor)}, source = ${JSON.stringify(source)}
+const env = ${JSON.stringify(f.env)}, cli = ${JSON.stringify(f.cli)}
+const read = ${readers.read.toString()}
+const policyReaders = {read}, runDiagnostic = async () => ({kind:"closed",code:0,stdout:doctor,truncated:false})
+const resolveExec = () => ({cmd:cli,prefix:[],files:[cli,path.join(path.dirname(cli),"runtime")],supported:true})
+${authSpawn.toString()}
+${observedSpawn.toString()}
+const engine = observedSpawn(), auth = authSpawn()
+childProcess.spawn = (cmd,args,opts) => args[0] === "auth" ? auth(cmd,args,opts) : engine(cmd,args,opts)
+syncBuiltinESMExports()
+export const inspectLaunchChain = options => real.inspectLaunchChain({...options,env,resolveExec})
+export const collectTriageAdmission = options => {
+  if (fsNative.existsSync(path.join(path.dirname(cli),"fixture-reject"))) throw new Error("private diagnostic must not echo")
+  return real.collectTriageAdmission({...options,env,policyReaders,runDiagnostic})
+}
+export const beginTriageQualification = options => real.beginTriageQualification({...options,env,resolveExec,policyReaders,runDiagnostic,probeSpawn:auth})
+export const triagePolicy = real.triagePolicy, buildTriageProbePlan = real.buildTriageProbePlan
+export const runTriageProbe = real.runTriageProbe, completeTriageQualification = real.completeTriageQualification
+`)
+  writeFileSync(preload, `
+import {registerHooks} from "node:module"
+registerHooks({resolve(specifier,context,next) {
+  if (context.parentURL?.endsWith("/scripts/qualify-triage-runner.js") && specifier.endsWith("/triage-runner.js"))
+    return {url:${JSON.stringify(new URL(`file://${wrapper}`).href)},shortCircuit:true}
+  return next(specifier,context)
+}})
+`)
+  const out = path.join(f.dir, "direct-entry-evidence")
+  const result = spawnSync(process.execPath, ["--import", preload, script, "--out", out, "--cli", f.cli],
+    { encoding: "utf8", timeout: 20000 })
+  const saved = JSON.parse(readFileSync(path.join(out, "qualification.json")))
+  assert.equal(result.status, 0, `direct entry status ${result.status}: ${result.stderr}\n${result.stdout}\n${JSON.stringify(saved.receipts)}`)
+  assert.equal(JSON.parse(result.stdout).state, "qualified")
+  assert.equal(saved.resources.launches, 2)
+  assert.deepEqual(saved.receipts.map((receipt) => [receipt.launch, receipt.passed]), [[1, true], [2, true]])
+  for (const launch of [1, 2]) assert.equal(JSON.parse(readFileSync(path.join(out, `stream-${launch}.json`))).code, 0)
+  await t.test("async_failure_reports_fixed_exit_without_private_error_or_launch", () => {
+    writeFileSync(path.join(f.dir, "fixture-reject"), "test-only parent failure")
+    const failedOut = path.join(f.dir, "direct-entry-failed")
+    const failed = spawnSync(process.execPath, ["--import", preload, script, "--cli", f.cli, "--out", failedOut],
+      { encoding: "utf8", timeout: 20000 })
+    assert.equal(failed.status, 1, failed.stderr)
+    assert.deepEqual(JSON.parse(failed.stdout), { state: "blocked", reason: "policy_control_unsupported" })
+    assert.equal(failed.stderr, "")
+    assert.equal(fsNative.existsSync(path.join(failedOut, "stream-1.json")), false)
+  })
+})
+
+test("M6_2_two_distinct_native_sessions_pass_even_when_OS_reuses_PID_numbers", async (t) => {
+  const f = await fixture(t), q = await qualification(f)
+  assert.notEqual(q.receipts[0].native_launch?.session_id, q.receipts[1].native_launch?.session_id)
+  assert.deepEqual(q.receipts[0].pids, q.receipts[1].pids)
+  const file = path.join(f.dir, "qualification.json")
+  writeFileSync(file, JSON.stringify(q), { mode: 0o600 })
+  assert.equal((await runner.loadTriageQualification({ ...f, recordFile: file, cliMetadata: metadata,
+    policyReaders: readers, runDiagnostic: diagnostic, probeSpawn: authSpawn() })).state, "qualified")
+})
+
+test("M6_2_restore_rejects_one_raw_launch_relabelled_as_receipt_two", async (t) => {
+  const f = await fixture(t), q = await qualification(f)
+  const duplicate = structuredClone(q.receipts[0])
+  duplicate.launch = 2
+  q.receipts[1] = duplicate
+  writeFileSync(path.join(f.dir, "stream-2.json"), readFileSync(path.join(f.dir, "stream-1.json")))
+  const file = path.join(f.dir, "qualification.json")
+  writeFileSync(file, JSON.stringify(q), { mode: 0o600 })
+  assert.equal((await runner.loadTriageQualification({ ...f, recordFile: file, cliMetadata: metadata,
+    policyReaders: readers, runDiagnostic: diagnostic, probeSpawn: authSpawn() })).state, "scope_unqualified")
+})
+
+test("M6_2_live_issuance_rejects_reused_or_missing_or_inconsistent_native_identity", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["same_session", "missing_session", "invalid_session", "inconsistent_session", "duplicate_event_uuid", "missing_init_uuid", "missing_result_uuid", "orphan_tool_result"]) {
+    await t.test(mode, async () => {
+      const q = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+        cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+        probeSpawn: authSpawn(), spawn: observedSpawn(mode) })
+      assert.equal(q.state, "blocked", mode)
+      assert.equal(q.receipts.at(-1).passed, false, mode)
+    })
+  }
+})
+
+test("M6_2_restore_binds_native_identity_and_manifest_to_raw_stream_not_receipt_claims", async (t) => {
+  const f = await fixture(t), q = await qualification(f)
+  const file = path.join(f.dir, "qualification.json"), second = path.join(f.dir, "stream-2.json")
+  const raw = readFileSync(second)
+  for (const mode of ["claimed-session", "claimed-manifest", "raw-session-reuse", "missing-identity"]) {
+    await t.test(mode, async () => {
+      const value = structuredClone(q), stream = JSON.parse(raw)
+      if (mode === "claimed-session") value.receipts[1].native_launch = { session_id: randomUUID() }
+      if (mode === "missing-identity") delete value.receipts[1].native_launch
+      if (mode === "claimed-manifest") for (const receipt of value.receipts) receipt.tool_manifest = ["Edit", "Read", "Grep", "Glob"]
+      if (mode === "raw-session-reuse") {
+        const firstStream = JSON.parse(readFileSync(path.join(f.dir, "stream-1.json")))
+        const session = JSON.parse(firstStream.stdout.split("\n")[0]).session_id
+        stream.stdout = stream.stdout.split("\n").filter(Boolean).map((line) => {
+          const event = JSON.parse(line); event.session_id = session; return JSON.stringify(event)
+        }).join("\n") + "\n"
+        value.receipts[1].stream_sha256 = hash(JSON.stringify(stream))
+      }
+      writeFileSync(second, JSON.stringify(stream))
+      writeFileSync(file, JSON.stringify(value), { mode: 0o600 })
+      assert.equal((await runner.loadTriageQualification({ ...f, recordFile: file, cliMetadata: metadata,
+        policyReaders: readers, runDiagnostic: diagnostic, probeSpawn: authSpawn() })).state, "scope_unqualified")
+    })
+  }
+})
+
+test("M6_2_returned_receipt_mutation_cannot_relabel_live_session_history", async (t) => {
+  const f = await fixture(t), prepared = await preparedProbe(f), spawn = observedSpawn("same_session")
+  const first = await runner.runTriageProbe({ session: prepared.session, spawn })
+  assert.equal(first.receipt.passed, true)
+  first.receipt.native_launch.session_id = randomUUID()
+  first.receipt.native_launch.init_uuid = randomUUID()
+  first.receipt.native_launch.result_uuid = randomUUID()
+  first.receipt.stream_sha256 = "f".repeat(64)
+  writeFileSync(f.resultFile, "{}")
+  const second = await runner.runTriageProbe({ session: prepared.session, spawn })
+  assert.equal(second.receipt.passed, false)
+  assert.equal((await runner.completeTriageQualification(prepared.session)).state, "scope_unqualified")
+})
 
 function fixture(t) {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "triage-test-")))
@@ -762,6 +904,8 @@ test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async
       }
       writeFileSync(path.join(opts.cwd, ".triage-result.json"), JSON.stringify(input.qualification_result) + "\n")
       events.push({ type: "result", subtype: "success", is_error: false, total_cost_usd: 0.04 })
+      const session = randomUUID()
+      for (const event of events) { event.session_id = session; event.uuid = randomUUID() }
       child.stdout.write(events.map((event) => JSON.stringify(event)).join("\n") + "\n")
       child.emit("close", 0)
     })
@@ -957,6 +1101,7 @@ test("qualifier_CLI_fail_closed_arguments_and_unknown_chain", async (t) => {
 
 function observedSpawn(mode = "normal") {
   let starts = 0
+  const repeatedSession = randomUUID()
   return (_cmd, args, opts) => {
     const child = new EventEmitter()
     child.pid = 892
@@ -1127,6 +1272,19 @@ function observedSpawn(mode = "normal") {
       if (mode === "hook_triggered") events.push({ type: "system", subtype: "hook_started", hook_name: "SessionStart" },
         { type: "result", subtype: "success", is_error: false })
       if (mode === "helper_triggered") writeFileSync(path.join(path.dirname(opts.cwd), "customization-executed"), "executed")
+      const session = mode === "same_session" ? repeatedSession : randomUUID()
+      for (const event of events) {
+        event.session_id = session
+        event.uuid = randomUUID()
+      }
+      if (mode === "missing_session") delete events[0].session_id
+      if (mode === "invalid_session") events[0].session_id = "not-a-native-session"
+      if (mode === "inconsistent_session") events.at(-1).session_id = randomUUID()
+      if (mode === "duplicate_event_uuid") events.at(-1).uuid = events[0].uuid
+      if (mode === "missing_init_uuid") delete events[0].uuid
+      if (mode === "missing_result_uuid") delete events.at(-1).uuid
+      if (mode === "orphan_tool_result") events.splice(events.length - 1, 0, { type: "user", session_id: session, uuid: randomUUID(),
+        message: { content: [{ type: "tool_result", tool_use_id: "unknown", is_error: false, content: "succeeded" }] } })
       child.stdout.write(mode === "bad_stream" ? "malformed" : events.map((event) => JSON.stringify(event)).join("\n") + "\n")
       child.emit("close", 0)
     })
