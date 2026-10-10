@@ -211,7 +211,9 @@ test("late status completion cannot publish ownership from a previous desk", asy
   await session.admission.refresh({ force: true })
   complete()
   assert.notEqual(payload(await oldStatus).root, path.join(base, "a"))
-  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).root, destination)
+  const fresh = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(fresh.root, destination)
+  assert.equal(fresh.status_detail_from, undefined, "A's cached timestamp cannot accompany a fresh B detail")
 })
 
 test("a writer keeps its exact destination while revalidation and another operation wait", async (t) => {
@@ -651,12 +653,47 @@ test("a same-context cached status marks pending destination verification withou
   await session.start()
   await session.callTool({ name: "desk_status", input: { detail: true } })
   blocked = true
+  const computedFrom = new Date().toISOString()
   const current = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.match(current.status_detail, /currently admitted context.*Destination verification is pending/u)
+  assert.ok(Date.parse(current.status_detail_from) >= Date.parse(computedFrom),
+    "pending same-context detail must retain its actual runtime computation timestamp")
+  assert.ok(Date.parse(current.status_detail_from) <= Date.now())
+  assert.equal(current.admission.writes, "refused")
   slowStatus = true
   const cached = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.match(cached.status_detail, /cached:.*Destination verification is pending/u)
+  assert.equal(cached.status_detail_from, current.status_detail_from,
+    "a later caller must retain the original computation timestamp, not stamp cached detail fresh")
   assert.equal(cached.admission.writes, "refused")
+  release()
+  complete()
+  await session.admission.idle()
+})
+
+test("pending destination resolution without completed status proof never invents a cache timestamp", async (t) => {
+  const keepAlive = setTimeout(() => {}, 1000)
+  t.after(() => clearTimeout(keepAlive))
+  let blocked = false
+  let release
+  let complete
+  const { session, base } = await makeSession(t, {
+    resolveInputs: async () => {
+      if (blocked) await new Promise((resolve) => { release = resolve })
+      return inputs({ root: path.join(base, "a") })
+    },
+    runtime: fakeRuntime({ callTool: async ({ deskRoot }) => {
+      await new Promise((resolve) => { complete = resolve })
+      return { content: [{ type: "text", text: JSON.stringify({ root: { path: deskRoot } }) }] }
+    } }),
+  })
+  await session.start()
+  blocked = true
+  const pending = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(pending.detail_pending, true)
+  assert.equal(pending.status_detail_from, undefined)
+  assert.match(pending.status_detail, /^unavailable: no completed same-context/u)
+  assert.equal(pending.admission.writes, "refused")
   release()
   complete()
   await session.admission.idle()

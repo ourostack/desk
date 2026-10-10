@@ -755,6 +755,7 @@ export function createDeskSession(deps) {
     let payload = baseDiagnostic(snapshot)
     // The admission state the payload is stamped with. A detail computed by this very call is read after `snapshot` was taken, so it can describe a controller that was still converging when admission reaches ready a moment later; stamping it with the later state would report ready next to a LEXICAL_CONVERGING controller with nothing to say so. It is stamped with the state it was computed under instead, and the next call reports the newer one.
     let stamped = null
+    let detailFrom = null
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
       // A computation that is still running and not yet stuck is joined; otherwise this call starts a new one. Either way the call waits only for what is left of its own budget.
       const joined = statusRun !== null && Date.now() - statusRun.started < statusRunLimitMs
@@ -768,8 +769,10 @@ export function createDeskSession(deps) {
       } else if (!outcome.timedOut && joined) {
         // The joined computation answered in time, but it started before this call, so its detail is marked with when it started.
         payload = { ...outcome.value.payload, status_detail: `cached: this detail comes from a runtime status computation (index, readiness controller) that was already running when this call arrived; it started at ${run.at}.`, status_detail_from: run.at }
+        detailFrom = run.at
       } else if (!outcome.timedOut) {
         payload = outcome.value.payload
+        detailFrom = run.at
         stamped = snapshot
       } else {
         const why = joined
@@ -778,11 +781,16 @@ export function createDeskSession(deps) {
         payload = lastStatusDetail === null
           ? { ...payload, detail_pending: true, status_detail: `unavailable: ${why}; call desk_status again shortly` }
           : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
+        detailFrom = lastStatusDetail?.at ?? null
       }
     }
     if (admission.running && snapshot.state === "ready" && context.phase?.name === "resolving_inputs" &&
-        !context.resolutionFailed && payload.root) {
-      payload = { ...payload, status_detail: `${payload.status_detail ?? "cached: this detail belongs to the currently admitted context."} Destination verification is pending; this detail is not permission to dispatch an operation.` }
+        !context.resolutionFailed) {
+      payload = detailFrom === null
+        ? { ...payload, detail_pending: true,
+          status_detail: "unavailable: no completed same-context runtime detail; destination verification is pending. Call desk_status again shortly." }
+        : { ...payload, status_detail_from: detailFrom,
+          status_detail: `${payload.status_detail ?? "cached: this detail belongs to the currently admitted context."} Destination verification is pending; this detail is not permission to dispatch an operation.` }
     }
     const full = withAdmission(payload, stamped ?? statusSnapshot())
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".

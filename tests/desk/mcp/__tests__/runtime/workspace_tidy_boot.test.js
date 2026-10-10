@@ -101,17 +101,17 @@ test("boot check queues a detached repair, returns without waiting, and records 
   assert.match(next, /ownership/)
 })
 
-test("a Copilot session folder that is a desk is the desk the check inspects, never another one $DESK names", async () => {
+test("an established DESK association outranks a Copilot session folder in the tidy check", async () => {
   const f = await fixture()
   const other = path.join(f.root, "other")
   await fs.mkdir(path.join(other, "_meta"), { recursive: true })
   await fs.mkdir(path.join(other, "_archive"))
   const launched = []
   const line = await tidy({ host: "copilot", env: f.env, sessionFolder: other, launch: async (...args) => { launched.push(args) } })
-  // The server binds the session folder too, so the check never speaks about, or repairs, the $DESK desk.
+  // The shared resolver binds explicit DESK intent, not weaker folder evidence.
   assert.doesNotMatch(line, /ambiguous/)
-  assert.deepEqual(launched.map(([root]) => root), [await fs.realpath(other)])
-  assert.equal((await fs.readdir(path.join(f.desk, ".git"))).some((name) => name.startsWith("desk-workspace")), false)
+  assert.deepEqual(launched.map(([root]) => root), [await fs.realpath(f.desk)])
+  assert.equal((await fs.readdir(other)).some((name) => name.startsWith("desk-workspace")), false)
 })
 
 test("boot failure degrades in one bounded line and never blocks session start", async () => {
@@ -268,6 +268,9 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   assert.match(await readBootDetails({ host: "claude", env: f.env, launch: async () => { throw new Error("launch failed") } }), /launch failed/)
   const nonGit = path.join(f.root, "nonGit")
   await fs.mkdir(nonGit)
+  // A deliberately invalid repository marker prevents this isolated fixture
+  // from discovering a parent checkout when TMPDIR is inside a worktree.
+  await fs.writeFile(path.join(nonGit, ".git"), "gitdir: absent-fixture-repository\n")
   await assert.rejects(runRepair(nonGit), /not an inspectable/)
   await fs.unlink(file)
   await fs.symlink(path.join(f.desk, "tracked"), file)

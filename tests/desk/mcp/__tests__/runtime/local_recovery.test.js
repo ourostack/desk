@@ -367,7 +367,7 @@ for (const [operation, value, refused] of [
   })
 }
 
-test("the spawned CLI updates a real Git desk through ordinary bootstrap with no test runtime", {
+for (const delayedResolution of [false, true]) test(`the spawned CLI updates a real Git desk through ordinary bootstrap with no test runtime${delayedResolution ? " while destination verification is pending" : ""}`, {
   skip: process.platform === "win32" ? "This native Unix fixture verifies exact PID teardown with ps; protocol and in-process Git coverage remain cross-platform." : false,
 }, async () => {
   const root = fixture()
@@ -380,6 +380,44 @@ test("the spawned CLI updates a real Git desk through ordinary bootstrap with no
   }))
   const file = path.join(root, "input.json")
   writeFileSync(file, JSON.stringify(update))
+  const preload = path.join(root, "delayed-worker.cjs")
+  const statusEvidence = path.join(root, "pending-status.jsonl")
+  const beforeCount = Number(git(root, "rev-list", "--count", "HEAD"))
+  if (delayedResolution) {
+    // Delay only delivery to the real resolver worker. Bootstrap, admission,
+    // runtime, authority, status consumer and mutation all remain production.
+    writeFileSync(preload, `
+const threads = require("node:worker_threads");
+const { syncBuiltinESMExports } = require("node:module");
+const { appendFileSync } = require("node:fs");
+const OriginalWorker = threads.Worker;
+threads.Worker = class extends OriginalWorker {
+  postMessage(job, ...rest) {
+    if (job?.kind === "resolve") {
+      setTimeout(() => super.postMessage(job, ...rest), 150);
+    } else {
+      return super.postMessage(job, ...rest);
+    }
+  }
+};
+syncBuiltinESMExports();
+if (threads.isMainThread) {
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = function(chunk, ...rest) {
+    try {
+      const response = JSON.parse(String(chunk));
+      const status = JSON.parse(response.result?.content?.[0]?.text);
+      if (status.admission) appendFileSync(${JSON.stringify(statusEvidence)}, JSON.stringify({
+        state: status.state, writes: status.admission.writes,
+        detail: status.status_detail, from: status.status_detail_from,
+        pending: status.detail_pending, root: status.root?.path,
+      }) + "\\n");
+    } catch {}
+    return write(chunk, ...rest);
+  };
+}
+`)
+  }
   const script = new URL("../../../../../plugins/desk/mcp/scripts/local-recovery.js", import.meta.url)
   const { fileURLToPath } = await import("node:url")
   const { controllerRecords, waitForProcessesGone } = await import("./_controller_exit.js")
@@ -393,13 +431,27 @@ test("the spawned CLI updates a real Git desk through ordinary bootstrap with no
         XDG_CACHE_HOME: path.join(home, "cache"), XDG_STATE_HOME: path.join(home, "state"),
         XDG_CONFIG_HOME: path.join(home, "config"), XDG_DATA_HOME: path.join(home, "data"),
         XDG_RUNTIME_DIR: path.join(home, "runtime"),
+        ...(delayedResolution ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(preload)}` } : {}),
       },
     })
     assert.equal(result.status, 0, result.stdout)
     const report = JSON.parse(result.stdout)
+    if (delayedResolution) {
+      assert.equal(report.preflight.statusDetail, "cached_in_owned_session")
+      assert.ok(Date.parse(report.preflight.statusDetailFrom) > 0)
+      const observed = readFileSync(statusEvidence, "utf8").trim().split("\n").map(JSON.parse)
+      const pending = observed.find((status) => status.detail?.includes("Destination verification is pending") &&
+        status.detail.startsWith("cached:"))
+      assert.ok(pending, "the actual bootstrap must publish a completed same-context detail while resolution is pending")
+      assert.equal(pending.writes, "refused")
+      assert.equal(pending.root, root)
+      assert.ok(Date.parse(pending.from) > 0)
+      assert.equal(report.preflight.statusDetailFrom, pending.from)
+    }
     assert.equal(report.actualRoot, root)
     assert.equal(report.effects.commit, "observed")
     assert.equal(git(root, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
+    assert.equal(Number(git(root, "rev-list", "--count", "HEAD")), beforeCount + 1, "no mutation replay")
     assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
   } finally {
     // Ordinary runtime controllers are persistent. This fixture owns each
