@@ -188,6 +188,7 @@ export async function main(env = process.env) {
     issuer: config.issuer,
     github: { clientId: config.appClientId ?? "unset", clientSecret: config.appClientSecret ?? "unset" },
     allowedLogins: config.allowedLogins,
+    resource: config.resource,
     redirects: config.redirects,
   });
   const app = createApp({

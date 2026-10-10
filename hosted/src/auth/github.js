@@ -76,6 +76,7 @@ export function createGitHubSignIn({ key, clientId, clientSecret, callbackUrl, a
           login: user.login,
           userId: user.id,
           name: user.name ?? null,
+          aud: pending.aud,
         },
         { key, ttlSec: TTL.code },
       ),

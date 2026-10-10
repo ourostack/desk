@@ -10,7 +10,7 @@
 // refresh token stays usable until it expires. v1 adds a per-login
 // not-before epoch.
 import { randomUUID } from "node:crypto";
-import { CustomOAuthError, InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { CustomOAuthError, InvalidGrantError, InvalidTargetError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { seal, unseal, derive, TTL } from "./seal.js";
 import { createGitHubSignIn } from "./github.js";
 import { consentPage, page, sendPage } from "./pages.js";
@@ -22,10 +22,13 @@ const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message
 // the error code and client id only, never a token, code, secret or GitHub
 // response.
 //
-// `redirects` is the redirect policy (see redirects.js); by default Claude's
-// callbacks and loopback.
-export function createProvider({ key, issuer, github, allowedLogins, redirects = createRedirectPolicy(), log = stderrLog }) {
+// `resource` is the MCP endpoint's URL, the one audience every code and token
+// is sealed for. `redirects` is the redirect policy (see redirects.js); by
+// default Claude's callbacks, ChatGPT's and loopback.
+export function createProvider({ key, issuer, github, allowedLogins, resource, redirects = createRedirectPolicy(), log = stderrLog }) {
   if (!key) throw new Error("createProvider needs a signing key");
+  if (!resource) throw new Error("createProvider needs the MCP resource URL");
+  const audience = new URL(resource).href;
   const signIn = createGitHubSignIn({
     key,
     clientId: github.clientId,
@@ -87,18 +90,36 @@ export function createProvider({ key, issuer, github, allowedLogins, redirects =
     return new InvalidGrantError(message);
   }
 
+  // A client may name the resource it wants a token for (RFC 8707). There is
+  // only one, so naming it changes nothing and naming any other is refused.
+  // The SDK hands it over as a URL already; `href` compares the normalized
+  // form, so an upper-case host or an explicit :443 still matches.
+  function checkResource(requested, client, step) {
+    if (requested !== undefined && new URL(requested).href !== audience) {
+      log(`${step} refused: invalid_target client ${client.client_id}`);
+      throw new InvalidTargetError(`This server only issues tokens for ${audience}.`);
+    }
+  }
+
+  // A code or token sealed before v1a has no audience; it is taken as this
+  // resource's until it expires. One sealed for any other audience (the
+  // gateway's public URL moved) is refused.
+  const forThisResource = (claims) => claims.aud === undefined || claims.aud === audience;
+
   // Unseals a code or refresh token issued to this client, or refuses it.
   function grantFor(kind, client, token) {
     const grant = unseal(kind, token, { key });
-    if (!grant || grant.clientId !== client.client_id || !allowedLogins.includes(grant.login)) {
+    if (!grant || grant.clientId !== client.client_id || !allowedLogins.includes(grant.login) || !forThisResource(grant)) {
       throw refuseGrant(client, `The ${kind === "code" ? "authorization code" : "refresh token"} is not valid.`);
     }
     return grant;
   }
 
   function issueTokens({ clientId, scopes = [], login, userId, name }) {
-    // Each token gets its own id, so a rotation never hands back the same token.
-    const claims = { clientId, scopes, login, userId, name };
+    // Each token gets its own id, so a rotation never hands back the same
+    // token. Every new token carries the audience, whatever the grant it came
+    // from carried.
+    const claims = { clientId, scopes, login, userId, name, aud: audience };
     return {
       access_token: seal("access", { ...claims, jti: randomUUID() }, { key, ttlSec: TTL.access }),
       refresh_token: seal("refresh", { ...claims, jti: randomUUID() }, { key, ttlSec: TTL.refresh }),
@@ -115,8 +136,11 @@ export function createProvider({ key, issuer, github, allowedLogins, redirects =
     // Every client registers itself, so the person approves each sign-in
     // on a page that names the client and where its code will go. The
     // request travels sealed in the Approve form; nothing is stored.
-    async authorize(client, { state, scopes, redirectUri, codeChallenge }, res) {
-      const consent = seal("consent", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes }, { key, ttlSec: TTL.consent });
+    // A wrong `resource` is thrown before the page; the SDK sends it back to
+    // the client's redirect as invalid_target.
+    async authorize(client, { state, scopes, redirectUri, codeChallenge, resource: requested }, res) {
+      checkResource(requested, client, "authorize");
+      const consent = seal("consent", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes, aud: audience }, { key, ttlSec: TTL.consent });
       sendPage(res, consentPage({ clientName: client.client_name, redirectUri, consent }));
     },
 
@@ -136,7 +160,8 @@ export function createProvider({ key, issuer, github, allowedLogins, redirects =
       return grantFor("code", client, code).codeChallenge;
     },
 
-    async exchangeAuthorizationCode(client, code, _codeVerifier, redirectUri) {
+    async exchangeAuthorizationCode(client, code, _codeVerifier, redirectUri, requested) {
+      checkResource(requested, client, "token");
       const grant = grantFor("code", client, code);
       // The SDK always fixes a redirect URI at authorization, so the
       // exchange must name the same one.
@@ -146,13 +171,14 @@ export function createProvider({ key, issuer, github, allowedLogins, redirects =
       return issueTokens(grant);
     },
 
-    async exchangeRefreshToken(client, refreshToken) {
+    async exchangeRefreshToken(client, refreshToken, _scopes, requested) {
+      checkResource(requested, client, "token");
       return issueTokens(grantFor("refresh", client, refreshToken));
     },
 
     async verifyAccessToken(token) {
       const access = unseal("access", token, { key });
-      if (!access || !allowedLogins.includes(access.login)) {
+      if (!access || !allowedLogins.includes(access.login) || !forThisResource(access)) {
         log("access token refused: invalid_token");
         throw new InvalidTokenError("The access token is not valid.");
       }

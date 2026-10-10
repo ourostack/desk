@@ -53,6 +53,7 @@ function makeProvider(github = fakeGitHub(), options = {}) {
     issuer: ISSUER,
     github: { ...GITHUB, fetch: github.fetch },
     allowedLogins: ["arimendelow"],
+    resource: MCP_URL,
     log: (line) => logs.push(line),
     ...options,
   });
@@ -124,7 +125,8 @@ const tokenRequest = (base, params) =>
 
 // Opens the consent page for a fresh authorization request and returns the
 // response and the sealed consent value its Approve form carries.
-async function consentPage(base, client, { challenge = "challenge", redirectUri = client.redirect_uris[0] } = {}) {
+// `resource: null` leaves the resource parameter out.
+async function consentPage(base, client, { challenge = "challenge", redirectUri = client.redirect_uris[0], resource = MCP_URL } = {}) {
   const authorize = new URL(`${base}/authorize`);
   authorize.search = new URLSearchParams({
     response_type: "code",
@@ -133,7 +135,7 @@ async function consentPage(base, client, { challenge = "challenge", redirectUri 
     code_challenge: challenge,
     code_challenge_method: "S256",
     state: "claude-state",
-    resource: MCP_URL,
+    ...(resource === null ? {} : { resource }),
   });
   const response = await fetch(authorize, { redirect: "manual" });
   const html = await response.text();
@@ -154,10 +156,10 @@ const approve = (base, consent, headers = { "sec-fetch-site": "same-origin" }) =
 // Runs Claude's side of sign-in up to the authorization code: register,
 // authorize, approve on the consent page, then GitHub's redirect back to our
 // callback.
-async function signIn(base, { githubCode = "gh-code", metadata } = {}) {
+async function signIn(base, { githubCode = "gh-code", metadata, resource } = {}) {
   const client = (await register(base, metadata)).body;
   const { verifier, challenge } = pkce();
-  const { response, consent } = await consentPage(base, client, { challenge });
+  const { response, consent } = await consentPage(base, client, { challenge, resource });
   assert.equal(response.status, 200);
   const toGitHub = await approve(base, consent);
   assert.equal(toGitHub.status, 303);
@@ -169,8 +171,8 @@ async function signIn(base, { githubCode = "gh-code", metadata } = {}) {
   return { client, verifier, githubUrl, callback };
 }
 
-async function signInForTokens(base) {
-  const { client, verifier, callback } = await signIn(base);
+async function signInForTokens(base, { resource } = {}) {
+  const { client, verifier, callback } = await signIn(base, { resource });
   const code = new URL(callback.headers.get("location")).searchParams.get("code");
   const tokens = await tokenRequest(base, {
     grant_type: "authorization_code",
@@ -598,4 +600,148 @@ test("a client with several redirects is refused when any one of them is no long
   const both = provider.clientsStore.registerClient({ redirect_uris: [CLAUDE_CALLBACK, "https://claude.com/api/mcp/auth_callback"], token_endpoint_auth_method: "none" });
   const narrowed = makeProvider(fakeGitHub(), { redirects: createRedirectPolicy(CLAUDE_CALLBACK) });
   assert.equal(await narrowed.clientsStore.getClient(both.client_id), undefined);
+});
+
+const claimsOf = (token) => JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString());
+
+test("authorize with the MCP resource seals it as the audience, compared by its normalized form", async (t) => {
+  const { base } = await start(t);
+  const client = (await register(base)).body;
+  for (const resource of [MCP_URL, "https://DESK.ouro.bot:443/mcp"]) {
+    const { response, consent } = await consentPage(base, client, { resource });
+    assert.equal(response.status, 200, resource);
+    assert.equal(unseal("consent", consent, { key: KEY }).aud, MCP_URL, resource);
+  }
+});
+
+test("authorize with another resource sends invalid_target back to the client", async (t) => {
+  const { base, github } = await start(t);
+  const client = (await register(base)).body;
+  for (const resource of ["https://desk.ouro.bot/other", "https://evil.example/mcp", "https://desk.ouro.bot/mcp/"]) {
+    const { response } = await consentPage(base, client, { resource });
+    assert.equal(response.status, 302, resource);
+    const back = new URL(response.headers.get("location"));
+    assert.equal(back.origin + back.pathname, CLAUDE_CALLBACK);
+    assert.equal(back.searchParams.get("error"), "invalid_target", resource);
+    assert.equal(back.searchParams.get("state"), "claude-state");
+  }
+  assert.equal(github.calls.length, 0);
+  assert.ok(logs.includes(`authorize refused: invalid_target client ${client.client_id}`));
+});
+
+test("authorize without a resource gets the default audience in the code and the tokens", async (t) => {
+  const { base, provider } = await start(t);
+  const { client, verifier, callback } = await signIn(base, { resource: null });
+  const code = new URL(callback.headers.get("location")).searchParams.get("code");
+  issued.add(code);
+  assert.equal(unseal("code", code, { key: KEY }).aud, MCP_URL);
+  const { status, body } = await tokenRequest(base, {
+    grant_type: "authorization_code",
+    client_id: client.client_id,
+    client_secret: client.client_secret,
+    code,
+    code_verifier: verifier,
+    redirect_uri: CLAUDE_CALLBACK,
+  });
+  assert.equal(status, 200);
+  assert.equal(claimsOf(body.access_token).aud, MCP_URL);
+  assert.equal(claimsOf(body.refresh_token).aud, MCP_URL);
+  assert.equal((await provider.verifyAccessToken(body.access_token)).extra.login, "arimendelow");
+});
+
+test("a code exchange or refresh naming another resource gets invalid_target; the MCP resource is accepted", async (t) => {
+  const { base } = await start(t);
+  const { client, verifier, callback } = await signIn(base);
+  const code = new URL(callback.headers.get("location")).searchParams.get("code");
+  const exchange = (resource) =>
+    tokenRequest(base, {
+      grant_type: "authorization_code",
+      client_id: client.client_id,
+      client_secret: client.client_secret,
+      code,
+      code_verifier: verifier,
+      redirect_uri: CLAUDE_CALLBACK,
+      resource,
+    });
+  const wrong = await exchange("https://evil.example/mcp");
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.body.error, "invalid_target");
+  const right = await exchange(MCP_URL);
+  assert.equal(right.status, 200);
+  assert.equal(claimsOf(right.body.access_token).aud, MCP_URL);
+
+  const refresh = (resource) =>
+    tokenRequest(base, {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      client_secret: client.client_secret,
+      refresh_token: right.body.refresh_token,
+      ...(resource ? { resource } : {}),
+    });
+  const wrongRefresh = await refresh("https://desk.ouro.bot/other");
+  assert.equal(wrongRefresh.status, 400);
+  assert.equal(wrongRefresh.body.error, "invalid_target");
+  assert.equal((await refresh(MCP_URL)).status, 200);
+  assert.equal((await refresh()).status, 200);
+  assert.ok(logs.includes(`token refused: invalid_target client ${client.client_id}`));
+});
+
+test("an access token for another audience is refused; one with no audience, minted before v1a, is accepted", async (t) => {
+  const { base, provider } = await start(t);
+  const claims = { clientId: "c", scopes: ["desk"], login: "arimendelow", userId: 16390116, name: "Ari Mendelow" };
+  const foreign = seal("access", { ...claims, aud: "https://elsewhere.example/mcp" }, { key: KEY, ttlSec: 3600 });
+  const legacy = seal("access", claims, { key: KEY, ttlSec: 3600 });
+  const current = seal("access", { ...claims, aud: MCP_URL }, { key: KEY, ttlSec: 3600 });
+  for (const token of [foreign, legacy, current]) issued.add(token);
+  await assert.rejects(provider.verifyAccessToken(foreign), { errorCode: "invalid_token" });
+  assert.equal((await fetch(`${base}/mcp`, { headers: { authorization: `Bearer ${foreign}` } })).status, 401);
+  assert.equal((await provider.verifyAccessToken(legacy)).extra.login, "arimendelow");
+  assert.equal((await provider.verifyAccessToken(current)).extra.login, "arimendelow");
+  const mcp = await fetch(`${base}/mcp`, { headers: { authorization: `Bearer ${legacy}` } });
+  assert.equal(mcp.status, 200);
+});
+
+test("a refresh token with no audience, minted before v1a, refreshes and the new tokens get the default audience", async (t) => {
+  const { base, provider } = await start(t);
+  const client = (await register(base)).body;
+  const legacy = seal("refresh", { clientId: client.client_id, scopes: [], login: "arimendelow", userId: 16390116, name: "Ari Mendelow" }, { key: KEY, ttlSec: 3600 });
+  const { status, body } = await tokenRequest(base, {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    client_secret: client.client_secret,
+    refresh_token: legacy,
+  });
+  assert.equal(status, 200);
+  assert.equal(claimsOf(body.access_token).aud, MCP_URL);
+  assert.equal(claimsOf(body.refresh_token).aud, MCP_URL);
+  assert.equal((await provider.verifyAccessToken(body.access_token)).extra.login, "arimendelow");
+});
+
+test("a code or refresh token sealed for another audience gets invalid_grant", async (t) => {
+  const { base } = await start(t);
+  const { client, verifier } = await signIn(base);
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const claims = { clientId: client.client_id, login: "arimendelow", userId: 1, name: "A", scopes: [], aud: "https://elsewhere.example/mcp" };
+  const code = await tokenRequest(base, {
+    grant_type: "authorization_code",
+    client_id: client.client_id,
+    client_secret: client.client_secret,
+    code: seal("code", { ...claims, redirectUri: CLAUDE_CALLBACK, codeChallenge: challenge }, { key: KEY, ttlSec: 60 }),
+    code_verifier: verifier,
+    redirect_uri: CLAUDE_CALLBACK,
+  });
+  assert.equal(code.status, 400);
+  assert.equal(code.body.error, "invalid_grant");
+  const refresh = await tokenRequest(base, {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    client_secret: client.client_secret,
+    refresh_token: seal("refresh", claims, { key: KEY, ttlSec: 3600 }),
+  });
+  assert.equal(refresh.status, 400);
+  assert.equal(refresh.body.error, "invalid_grant");
+});
+
+test("createProvider needs the MCP resource", () => {
+  assert.throws(() => makeProvider(fakeGitHub(), { resource: undefined }), /resource/);
 });

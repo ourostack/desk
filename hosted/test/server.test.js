@@ -19,6 +19,7 @@ async function start(t, { unavailable } = {}) {
     issuer: ISSUER,
     github: { clientId: "Iv1.ouro-desk", clientSecret: "secret", fetch: () => assert.fail("no GitHub call expected") },
     allowedLogins: ["arimendelow"],
+    resource: RESOURCE,
     log: () => {},
   });
   const reached = [];
@@ -68,9 +69,13 @@ test("the protected-resource metadata names the resource exactly and the issuer 
   assert.deepEqual(body.scopes_supported, ["desk"]);
 });
 
-test("the authorization-server metadata advertises S256 and registration", async (t) => {
+test("the authorization-server metadata advertises S256, registration and offline_access", async (t) => {
   const { base } = await start(t);
-  const body = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
+  const response = await fetch(`${base}/.well-known/oauth-authorization-server`);
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  const body = await response.json();
+  assert.deepEqual(body.scopes_supported, ["desk", "offline_access"]);
+  assert.equal(body.token_endpoint, `${ISSUER}/token`);
   assert.deepEqual(body.code_challenge_methods_supported, ["S256"]);
   assert.equal(body.registration_endpoint, `${ISSUER}/register`);
   assert.equal(body.issuer, `${ISSUER}/`);
