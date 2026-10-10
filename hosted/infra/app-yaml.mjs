@@ -21,14 +21,16 @@
 //     [--ensure-placeholder <name>]... the value `unset`, only if the app lacks it
 //     [--set-env NAME=value]... [--remove-env NAME]...
 //     [--identity-record <identity-env.json>]   the Ouro tenant settings (identity-record.mjs)
-// It prints only the written file's path.
+// It prints only the written file's path; notes go to stderr.
+//   node hosted/infra/app-yaml.mjs --shown <show.json> --get-env NAME    prints that env var's plain value
+//   node hosted/infra/app-yaml.mjs --mask <file>                         prints a document with every secret value as ***
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { identitySettings, loadRecordFile } from "./identity-record.mjs";
+import { cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
 
 // `az containerapp show -o json`'s output, as text or already parsed.
 export function parseShown(shown) {
@@ -114,6 +116,13 @@ export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRe
   return `${JSON.stringify(app, null, 2)}\n`;
 }
 
+// The document with every secret's value shown as ***, for a dry run.
+export function maskSecrets(text) {
+  const app = parseShown(text);
+  for (const secret of app.properties?.configuration?.secrets ?? []) if ("value" in secret) secret.value = "***";
+  return JSON.stringify(app, null, 2);
+}
+
 // Writes the document to a 0600 file in a new 0700 directory under `parent`.
 export function writeAppYaml(text, { parent = tmpdir() } = {}) {
   const dir = mkdtempSync(join(parent, "app-yaml-"));
@@ -130,7 +139,7 @@ function splitAssignment(text, flag) {
   return [text.slice(0, index), text.slice(index + 1)];
 }
 
-export function cli(argv = process.argv.slice(2), { print = (line) => process.stdout.write(`${line}\n`) } = {}) {
+export function cli(argv = process.argv.slice(2), { print = (line) => process.stdout.write(`${line}\n`), note = (line) => process.stderr.write(`${line}\n`), now = Date.now() } = {}) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -141,8 +150,15 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
       "set-env": { type: "string", multiple: true, default: [] },
       "remove-env": { type: "string", multiple: true, default: [] },
       "identity-record": { type: "string" },
+      "get-env": { type: "string" },
+      mask: { type: "string" },
     },
   });
+  if (values.mask) return print(maskSecrets(readFileSync(values.mask, "utf8")));
+  if (values.shown && values["get-env"]) {
+    const entry = gatewayContainer(parseShown(readFileSync(values.shown, "utf8"))).env?.find((candidate) => candidate.name === values["get-env"]);
+    return print(entry?.value ?? "");
+  }
   if (!values.shown || !values.out) throw new Error("Usage: app-yaml.mjs --shown <show.json> --out <dir> [options]");
   const shown = parseShown(readFileSync(values.shown, "utf8"));
   const held = new Set((shown.properties?.configuration?.secrets ?? []).map((secret) => secret.name));
@@ -151,7 +167,17 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   for (const name of values["ensure-placeholder"]) if (!held.has(name)) setSecrets[name] = "unset";
   const setEnv = Object.fromEntries(values["set-env"].map((text) => splitAssignment(text, "--set-env")));
   let identity = { setEnv: {}, secretRefs: {}, keyVaultSecrets: {}, addIdentities: [] };
-  if (values["identity-record"]) identity = identitySettings(loadRecordFile(values["identity-record"]));
+  if (values["identity-record"]) {
+    const record = loadRecordFile(values["identity-record"]);
+    identity = identitySettings(record);
+    if (identity.missing.length) {
+      note(`identity-${record.env}.json is incomplete (missing ${identity.missing.join(", ")}); the app's Ouro sign-in settings stay as they are.`);
+    } else {
+      note(`Ouro sign-in settings from identity-${record.env}.json: tenant ${record.tenant.id}, mapped account ${record.ari.accountId}, legacy cutoff ${record.legacyCutoff ?? "none"}.`);
+    }
+    const warning = cutoffWarning(record, now);
+    if (warning) note(warning);
+  }
   const text = buildAppYaml({
     shownYaml: shown,
     setSecrets,
