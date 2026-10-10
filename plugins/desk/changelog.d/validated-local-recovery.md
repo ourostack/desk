@@ -1,0 +1,1 @@
+Added a bounded local recovery client for confirmed desk transport mismatches. It uses the ordinary bootstrap and MCP pipeline, verifies its owned session's root/scope before dispatch, preserves authority and card refusals, and reports partial or unknown write/commit/push effects without resending mutations.
