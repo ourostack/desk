@@ -7,8 +7,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runGit } from "../src/clone.js";
-import { fingerprint } from "../src/auth/seal.js";
-import { readConfig, keysStartupLine, redirectStartupLines, deskChildEnv, deskChildArgs, deskPushArgs, pushDesk, stopGateway } from "../src/main.js";
+import { once } from "node:events";
+import { fingerprint, seal } from "../src/auth/seal.js";
+import {
+  readConfig,
+  keysStartupLine,
+  redirectStartupLines,
+  identityStartupLines,
+  deskChildEnv,
+  deskChildArgs,
+  deskPushArgs,
+  pushDesk,
+  stopGateway,
+  startAccountSweep,
+  checkLegacyAccounts,
+  createAuthorLookup,
+  startDiscovery,
+  buildGateway,
+} from "../src/main.js";
+import { createMemoryStore } from "../src/accounts/memory-store.js";
+import { createAccountCache } from "../src/accounts/cache.js";
+import { seed } from "../src/accounts/invites.js";
+
+const BINDING = { kind: "github", repo: "arimendelow/desk", installationId: 12345678, author: { name: "Ari Mendelow", email: "16390116+arimendelow@users.noreply.github.com" } };
 
 const PLUGIN_DIR = fileURLToPath(new URL("../../plugins/desk", import.meta.url));
 
@@ -337,4 +358,246 @@ test("main logs fingerprints and never a key", async (t) => {
     output,
   );
   for (const [name, value] of Object.entries(keys)) assert.ok(!output.includes(value), `${name} appears in the gateway's output`);
+});
+
+// ---- Ouro accounts (spec items 9 to 13) ----
+
+const ARI_ACCOUNT = "0b8e2f4c-1d3a-4e5b-9c7d-6f8a0b1c2d3e";
+const TENANT = "c12edfb6-c5ab-4bf8-b1d5-1f053311d396";
+const IDENTITY = {
+  DESK_ENTRA_TENANT_ID: TENANT,
+  DESK_ENTRA_SUBDOMAIN: "ourobottest",
+  DESK_ENTRA_CLIENT_ID: "7d0f5b52-1c4e-4c7e-9a43-2f6f3d1e8a10",
+  DESK_ENTRA_CLIENT_SECRET: "entra-client-secret",
+  DESK_ACCOUNTS_ENDPOINT: "https://stouroaccounts261e0b.table.core.windows.net",
+  AZURE_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
+  DESK_GITHUB_SIGNIN: "on",
+  DESK_GITHUB_ACCOUNTS: `16390116=${ARI_ACCOUNT}`,
+  DESK_GITHUB_LOGINS: "16390116=arimendelow",
+  DESK_LEGACY_CUTOFF: "2026-11-15T00:00:00Z",
+};
+
+test("readConfig with today's production env has no Ouro accounts and keeps DESK_ALLOWED_LOGINS", () => {
+  const config = readConfig(FULL);
+  assert.equal(config.identity, null);
+  assert.deepEqual(config.allowedLogins, ["arimendelow", "someone"]);
+});
+
+test("readConfig reads the Ouro tenant, the accounts store, the GitHub fallback and the legacy mapping", () => {
+  const { identity } = readConfig({ ...FULL, ...IDENTITY });
+  assert.equal(identity.tenantId, TENANT);
+  assert.equal(identity.subdomain, "ourobottest");
+  assert.equal(identity.clientId, IDENTITY.DESK_ENTRA_CLIENT_ID);
+  assert.equal(identity.clientSecret, "entra-client-secret");
+  assert.equal(identity.callbackUrl, "https://desk-hosted.example.azurecontainerapps.io/oauth/entra/callback");
+  assert.equal(identity.accountsEndpoint, IDENTITY.DESK_ACCOUNTS_ENDPOINT);
+  assert.equal(identity.azureClientId, IDENTITY.AZURE_CLIENT_ID);
+  assert.equal(identity.githubSignIn, true);
+  assert.deepEqual([...identity.legacy.byUserId], [[16390116, { login: "arimendelow", accountId: ARI_ACCOUNT }]]);
+  assert.equal(identity.legacy.cutoff.toISOString(), "2026-11-15T00:00:00.000Z");
+  const minimal = readConfig({ ...FULL, ...IDENTITY, DESK_GITHUB_SIGNIN: "unset", DESK_GITHUB_ACCOUNTS: "unset", DESK_GITHUB_LOGINS: "unset", DESK_LEGACY_CUTOFF: "unset" }).identity;
+  assert.equal(minimal.githubSignIn, false);
+  assert.equal(minimal.legacy.byUserId.size, 0);
+  assert.equal(minimal.legacy.cutoff, null);
+  assert.equal(readConfig({ ...FULL, ...IDENTITY, DESK_GITHUB_SIGNIN: "off" }).identity.githubSignIn, false);
+});
+
+test("readConfig refuses a DESK_LEGACY_CUTOFF that doesn't parse", () => {
+  for (const cutoff of ["soon", "2026-13-45T00:00:00Z", "1764547200", "2026-11-15"]) {
+    assert.throws(() => readConfig({ ...FULL, ...IDENTITY, DESK_LEGACY_CUTOFF: cutoff }), /DESK_LEGACY_CUTOFF/, cutoff);
+  }
+});
+
+test("readConfig refuses a partial Ouro tenant, a bad GitHub mapping or switch, and an Entra secret with whitespace", () => {
+  for (const name of ["DESK_ENTRA_TENANT_ID", "DESK_ENTRA_SUBDOMAIN", "DESK_ENTRA_CLIENT_ID", "DESK_ENTRA_CLIENT_SECRET", "DESK_ACCOUNTS_ENDPOINT"]) {
+    const { [name]: _, ...partial } = IDENTITY;
+    assert.throws(() => readConfig({ ...FULL, ...partial }), new RegExp(name), name);
+  }
+  assert.throws(() => readConfig({ ...FULL, DESK_LEGACY_CUTOFF: IDENTITY.DESK_LEGACY_CUTOFF }), /DESK_ENTRA_TENANT_ID/);
+  assert.throws(() => readConfig({ ...FULL, ...IDENTITY, DESK_GITHUB_SIGNIN: "yes" }), /DESK_GITHUB_SIGNIN/);
+  for (const accounts of ["arimendelow=x", "16390116", `16390116=${ARI_ACCOUNT},16390116=${ARI_ACCOUNT}`, "16390116=a/b"]) {
+    assert.throws(() => readConfig({ ...FULL, ...IDENTITY, DESK_GITHUB_ACCOUNTS: accounts }), /DESK_GITHUB_ACCOUNTS/, accounts);
+  }
+  assert.throws(() => readConfig({ ...FULL, ...IDENTITY, DESK_GITHUB_LOGINS: "1=someone" }), /DESK_GITHUB_LOGINS/);
+  assert.throws(() => readConfig({ ...FULL, ...IDENTITY, DESK_GITHUB_LOGINS: "unset" }), /DESK_GITHUB_LOGINS/);
+  for (const bad of ["entra-client-secret\n", " entra-client-secret", "a b"]) {
+    assert.throws(
+      () => readConfig({ ...FULL, ...IDENTITY, DESK_ENTRA_CLIENT_SECRET: bad }),
+      (error) => /DESK_ENTRA_CLIENT_SECRET/.test(error.message) && /whitespace/.test(error.message) && !error.message.includes("entra-client-secret"),
+    );
+  }
+});
+
+test("the identity startup lines name the tenant, the fallback, the cutoff and the mapped accounts, and that DESK_ALLOWED_LOGINS is ignored", () => {
+  const lines = identityStartupLines(readConfig({ ...FULL, ...IDENTITY }));
+  assert.deepEqual(lines, [
+    `Ouro sign-in: tenant ${TENANT} (ourobottest); GitHub fallback on; legacy cutoff 2026-11-15T00:00:00.000Z; mapped accounts ${ARI_ACCOUNT}`,
+    "DESK_ALLOWED_LOGINS is ignored with Ouro accounts; the legacy mapping and the GitHub fallback admit only DESK_GITHUB_ACCOUNTS",
+  ]);
+  assert.deepEqual(identityStartupLines(readConfig(FULL)), []);
+  for (const line of lines) assert.ok(!line.includes("entra-client-secret") && !line.includes("arimendelow"));
+});
+
+// A stand-in relay with open sessions per account, recording closeAccount.
+function sweepRelay(accountIds) {
+  const open = new Set(accountIds);
+  const closed = [];
+  return {
+    closed,
+    openAccounts: () => new Set(open),
+    closeAccount(accountId) {
+      closed.push(accountId);
+      open.delete(accountId);
+      return 1;
+    },
+  };
+}
+
+test("the sweep closes an idle session within one interval after access is turned off", async (t) => {
+  const store = createMemoryStore();
+  const { accountId } = await seed({ store, displayName: "Ari", binding: BINDING });
+  const accounts = createAccountCache({ store });
+  await accounts.account(accountId);
+  const relay = sweepRelay([accountId]);
+  const lines = [];
+  const sweep = startAccountSweep({ relay, accounts, intervalMs: 50, retryMs: 10, log: (line) => lines.push(line) });
+  t.after(() => sweep.stop());
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.deepEqual(relay.closed, [], "access on: nothing closed");
+  await store.putAccount({ accountId, displayName: "Ari", deskAccess: false });
+  const turnedOff = Date.now();
+  while (relay.closed.length === 0 && Date.now() - turnedOff < 2_000) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(relay.closed, [accountId]);
+  assert.ok(Date.now() - turnedOff < 50 + 40, "within one interval, though the cached row was still young");
+  assert.ok(lines.some((line) => line.includes(`account ${accountId}`) && line.includes("access off")));
+});
+
+test("the sweep retries a failed read once before closing", async () => {
+  const store = createMemoryStore();
+  const { accountId } = await seed({ store, displayName: "Ari", binding: BINDING });
+  let clock = 0;
+  const accounts = createAccountCache({ store, now: () => clock });
+  await accounts.account(accountId);
+  const getAccount = store.getAccount;
+  let failures = 0;
+  let reads = 0;
+  store.getAccount = async (id) => {
+    reads++;
+    if (failures-- > 0) throw Object.assign(new Error("down"), { name: "StoreError" });
+    return getAccount(id);
+  };
+
+  // One failed read, then a good one: nothing closed.
+  clock = 61_000;
+  failures = 1;
+  let relay = sweepRelay([accountId]);
+  await startAccountSweep({ relay, accounts, intervalMs: 60_000, retryMs: 10, log: () => {} }).sweepOnce();
+  assert.equal(reads, 2);
+  assert.deepEqual(relay.closed, []);
+
+  // Two failed reads while the cached row is older than a minute: closed after the retry.
+  clock += 61_000;
+  failures = 2;
+  reads = 0;
+  relay = sweepRelay([accountId]);
+  const lines = [];
+  await startAccountSweep({ relay, accounts, intervalMs: 60_000, retryMs: 10, log: (line) => lines.push(line) }).sweepOnce();
+  assert.equal(reads, 2);
+  assert.deepEqual(relay.closed, [accountId]);
+  assert.ok(lines.some((line) => line.includes(`account ${accountId}`) && line.includes("can't be confirmed")));
+
+  // Two failed reads while the cached row is still young: kept.
+  clock += 1_000;
+  await accounts.account(accountId, { fresh: true }).catch(() => {});
+  failures = 0;
+  await accounts.account(accountId, { fresh: true });
+  failures = 2;
+  relay = sweepRelay([accountId]);
+  clock += 30_000;
+  await startAccountSweep({ relay, accounts, intervalMs: 60_000, retryMs: 10, log: () => {} }).sweepOnce();
+  assert.deepEqual(relay.closed, []);
+});
+
+test("startup logs LEGACY ACCOUNT MISSING for a mapped accountId with no row", async () => {
+  const store = createMemoryStore();
+  const { accountId } = await seed({ store, displayName: "Ari", binding: BINDING });
+  const lines = [];
+  await checkLegacyAccounts({ store, accountIds: [accountId, ARI_ACCOUNT], log: (line) => lines.push(line) });
+  assert.deepEqual(lines, [`LEGACY ACCOUNT MISSING ${ARI_ACCOUNT}`]);
+  const down = { getAccount: async () => Promise.reject(Object.assign(new Error("secret detail"), { name: "StoreError" })) };
+  lines.length = 0;
+  await checkLegacyAccounts({ store: down, accountIds: [ARI_ACCOUNT], log: (line) => lines.push(line) });
+  assert.deepEqual(lines, [`could not check legacy account ${ARI_ACCOUNT} (StoreError)`]);
+});
+
+test("a Desk child's Git author comes from the binding", async () => {
+  const store = createMemoryStore();
+  const author = { name: "Ari Mendelow", email: "16390116+arimendelow@users.noreply.github.com" };
+  const { accountId } = await seed({ store, displayName: "Display Name Not Used", binding: { ...BINDING, author } });
+  const authorFor = createAuthorLookup({ store, repo: "arimendelow/desk" });
+  const env = deskChildEnv({ config: readConfig(FULL), author: await authorFor(accountId), socketPath: "/s", baseEnv: {} });
+  assert.equal(env.GIT_AUTHOR_NAME, author.name);
+  assert.equal(env.GIT_COMMITTER_NAME, author.name);
+  assert.equal(env.GIT_AUTHOR_EMAIL, author.email);
+  assert.equal(env.GIT_COMMITTER_EMAIL, author.email);
+  // An account whose binding names another desk, or none, gets no Desk child.
+  const other = await seed({ store, displayName: "Other", binding: { ...BINDING, repo: "someone/desk" } });
+  await assert.rejects(authorFor(other.accountId), /no desk/);
+  await assert.rejects(createAuthorLookup({ store, repo: "arimendelow/desk" })("9f1e3d5c-7b9a-4c2d-8e0f-1a2b3c4d5e6f"), /no desk/);
+});
+
+test("discovery that never answers holds the start for at most its bound, and an issuer mismatch stops it", async () => {
+  const lines = [];
+  const hanging = { start: () => new Promise(() => {}) };
+  const started = Date.now();
+  await startDiscovery(hanging, { boundMs: 100, log: (line) => lines.push(line) });
+  assert.ok(Date.now() - started < 1_000);
+  assert.ok(lines.some((line) => /still loading/.test(line)));
+  await assert.rejects(startDiscovery({ start: async () => Promise.reject(new Error("issuer mismatch")) }, { boundMs: 1_000, log: () => {} }), /issuer mismatch/);
+  // A mismatch found after the bound is logged, never an unhandled rejection.
+  let reject;
+  lines.length = 0;
+  await startDiscovery({ start: () => new Promise((_, no) => (reject = no)) }, { boundMs: 20, log: (line) => lines.push(line) });
+  reject(new Error("late issuer mismatch"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(lines.some((line) => line.includes("late issuer mismatch")));
+});
+
+// Today's production env (provision.sh's: no Ouro tenant or accounts settings) must give today's gateway.
+test("with today's production env, sign-in, consent, tokens and routes behave exactly as today", async (t) => {
+  const config = readConfig({ ...FULL, DESK_PUBLIC_URL: "https://desk.ouro.bot" });
+  const relay = { handle: (req, res, auth) => res.json({ extra: auth.extra }) };
+  const { app, provider } = buildGateway({ config, relay, log: () => {} });
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const client = provider.clientsStore.registerClient({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"], token_endpoint_auth_method: "client_secret_post" });
+  const authorize = new URL(`${base}/authorize`);
+  authorize.search = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: "https://claude.ai/api/mcp/auth_callback", code_challenge: "c", code_challenge_method: "S256", state: "s" });
+  const html = await (await fetch(authorize)).text();
+  assert.match(html, /After you sign in with GitHub/);
+  assert.ok(!html.includes('name="method"'), "today's consent page has no sign-in choice");
+  const consent = html.match(/name="consent" value="([^"]+)"/)[1];
+  // Even a method=entra field changes nothing: approval goes to GitHub, with no cookie.
+  const approved = await fetch(`${base}/oauth/consent`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": "same-origin" },
+    body: new URLSearchParams({ consent, method: "entra" }),
+    redirect: "manual",
+  });
+  assert.equal(approved.status, 303);
+  assert.ok(approved.headers.get("location").startsWith("https://github.com/login/oauth/authorize?"));
+  assert.deepEqual(approved.headers.getSetCookie(), []);
+  for (const path of ["/oauth/entra/callback?code=x&state=y", "/invite/abc", "/invite"]) {
+    assert.equal((await fetch(`${base}${path}`, { redirect: "manual" })).status, 404, path);
+  }
+  assert.equal((await fetch(`${base}/healthz/deep`)).status, 200);
+  // A v1a token still verifies to its GitHub login, as today.
+  const token = seal("access", { clientId: client.client_id, scopes: [], login: "arimendelow", userId: 16390116, name: "Ari" }, { key: "signing-key", ttlSec: 3600 });
+  const mcp = await fetch(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "{}" });
+  assert.deepEqual((await mcp.json()).extra, { login: "arimendelow", userId: 16390116, name: "Ari" });
 });

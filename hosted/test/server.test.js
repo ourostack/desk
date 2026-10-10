@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { seal } from "../src/auth/seal.js";
 import { createProvider } from "../src/auth/provider.js";
-import { createApp } from "../src/server.js";
+import { createApp, createDeepHealth } from "../src/server.js";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const KEY = "test-key-0123456789abcdef0123456789abcdef";
 const ISSUER = "https://desk.ouro.bot";
@@ -178,4 +183,131 @@ test("when the GitHub App is not set up, /healthz still answers and /authorize a
   assert.equal(mcp.status, 503);
   assert.match((await mcp.json()).error.message, new RegExp(NOT_SET_UP));
   assert.equal(reached.length, 0);
+});
+
+// ---- /healthz/deep (spec items 10 and 13; Review Focus 10 and 12) ----
+
+const MAPPED = "0b8e2f4c-1d3a-4e5b-9c7d-6f8a0b1c2d3e";
+
+// A deep check over stand-ins for discovery and the accounts store, on a fake clock.
+function deepParts({ accountIds = [MAPPED] } = {}) {
+  let clock = 1_000_000;
+  const state = { ready: true, mismatch: false, storeDown: false, rows: new Map([[MAPPED, { accountId: MAPPED, deskAccess: true }]]), reads: 0 };
+  const discovery = { ready: () => state.ready, mismatch: () => state.mismatch };
+  const store = {
+    async getAccount(accountId) {
+      state.reads++;
+      if (state.storeDown) throw Object.assign(new Error(`the accounts store failed: get on table accounts for ${accountId}`), { name: "StoreError" });
+      return state.rows.get(accountId) ?? null;
+    },
+  };
+  const deep = createDeepHealth({ discovery, store, accountIds, now: () => clock });
+  return { deep, state, advance: (ms) => (clock += ms) };
+}
+
+async function startDeep(t, deepHealth) {
+  const provider = createProvider({ key: KEY, issuer: ISSUER, github: { clientId: "x", clientSecret: "y" }, allowedLogins: ["arimendelow"], resource: RESOURCE, log: () => {} });
+  const app = createApp({ provider, relay: {}, githubCallback: provider.githubCallback, issuer: ISSUER, resource: RESOURCE, deepHealth });
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+test("/healthz/deep answers 503 with only the check name when the store, discovery or a mapped account is unavailable, and 200 when all pass", async (t) => {
+  const parts = deepParts();
+  const base = await startDeep(t, parts.deep);
+  const deep = async () => {
+    parts.advance(10_001);
+    const response = await fetch(`${base}/healthz/deep`);
+    return { status: response.status, text: await response.text(), cache: response.headers.get("cache-control") };
+  };
+  assert.deepEqual(await deep(), { status: 200, text: "ok", cache: "no-store" });
+
+  parts.state.storeDown = true;
+  assert.deepEqual(await deep(), { status: 503, text: "failing: store", cache: "no-store" });
+  parts.state.storeDown = false;
+
+  parts.state.ready = false;
+  assert.equal((await deep()).text, "failing: discovery");
+  parts.state.ready = true;
+  parts.state.mismatch = true;
+  assert.equal((await deep()).text, "failing: discovery", "an issuer mismatch found after start fails the check");
+  parts.state.mismatch = false;
+
+  parts.state.rows.delete(MAPPED);
+  const missing = await deep();
+  assert.equal(missing.status, 503);
+  assert.equal(missing.text, "failing: legacy-account");
+  assert.ok(!missing.text.includes(MAPPED), "never the account id or any other data");
+
+  parts.state.ready = false;
+  parts.state.storeDown = true;
+  assert.equal((await deep()).text, "failing: discovery, store");
+});
+
+test("/healthz/deep makes at most one store read per 10 s however often it is called", async (t) => {
+  const parts = deepParts();
+  const base = await startDeep(t, parts.deep);
+  const replies = await Promise.all(Array.from({ length: 20 }, () => fetch(`${base}/healthz/deep`).then((response) => response.status)));
+  assert.deepEqual(new Set(replies), new Set([200]));
+  for (let i = 0; i < 5; i++) {
+    parts.advance(1_900);
+    assert.equal((await fetch(`${base}/healthz/deep`)).status, 200);
+  }
+  assert.equal(parts.state.reads, 1, "one read in the first 10 s");
+  parts.advance(1_000);
+  await fetch(`${base}/healthz/deep`);
+  assert.equal(parts.state.reads, 2, "the next read only after 10 s");
+});
+
+test("/healthz/deep with no mapped accounts still reads the store once", async () => {
+  const parts = deepParts({ accountIds: [] });
+  assert.deepEqual(await parts.deep.check(), { ok: true, failing: [] });
+  assert.equal(parts.state.reads, 1);
+  parts.state.storeDown = true;
+  parts.advance(10_001);
+  assert.deepEqual(await parts.deep.check(), { ok: false, failing: ["store"] });
+});
+
+test("without the Ouro tenant and accounts, /healthz/deep answers ok, as there is nothing deeper to check", async (t) => {
+  const base = await startDeep(t, undefined);
+  const response = await fetch(`${base}/healthz/deep`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "ok");
+});
+
+test("provision.sh's startup and liveness probes stay on /healthz", (t) => {
+  // A fake az and dig on PATH: the app doesn't exist yet, so a dry run prints the spec it would create.
+  const dir = mkdtempSync(join(tmpdir(), "desk-provision-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    join(dir, "az"),
+    `#!/bin/sh
+case "$*" in
+  *"containerapp show"*"--query name"*) echo "ERROR: (ResourceNotFound) The Resource was not found." >&2; exit 3 ;;
+  *"containerapp show"*) exit 3 ;;
+  *"env show"*"--query id"*) echo /subscriptions/s/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/env ;;
+  *"env show"*"defaultDomain"*) echo example.eastus2.azurecontainerapps.io ;;
+  *"env show"*) echo verification-id ;;
+  *"identity show"*"--query id"*) echo /subscriptions/s/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi ;;
+  *"identity show"*) echo 00000000-0000-0000-0000-000000000000 ;;
+  *"acr show"*) echo registry.azurecr.io ;;
+  *"federated-credential show"*) exit 0 ;;
+  *) exit 0 ;;
+esac
+`,
+  );
+  writeFileSync(join(dir, "dig"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(dir, "az"), 0o755);
+  chmodSync(join(dir, "dig"), 0o755);
+  const script = fileURLToPath(new URL("../infra/provision.sh", import.meta.url));
+  const output = execFileSync("bash", [script], { env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, DRY_RUN: "1" }, encoding: "utf8" });
+  const spec = output.split("\n").filter((line) => line.startsWith("    | ")).map((line) => line.slice(6)).join("\n");
+  const probes = [...spec.matchAll(/- type: (\w+)\n\s+httpGet:\n\s+path: (\S+)/g)].map(([, type, path]) => [type, path]);
+  assert.deepEqual(probes, [["Startup", "/healthz"], ["Liveness", "/healthz"]], spec);
+  assert.ok(!spec.includes("/healthz/deep"));
 });
