@@ -1,1 +1,0 @@
-Browser cleanup no longer reports a closed window after a failed, timed-out or incomplete tab cleanup. Failed closes retain the existing connection for exact retry, concurrent closes share one attempt, and shutdown reports unverified cleanup without borrowing or closing another window.

@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.268 — 2026-10-10
+
+Browser cleanup no longer reports a closed window after a failed, timed-out or incomplete tab cleanup. Failed closes retain the existing connection for exact retry, concurrent closes share one attempt, and shutdown reports unverified cleanup without borrowing or closing another window.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.267 — 2026-10-09
 
 Refuse to forward real-profile browser operations when the session's window launch fails. Report the launch error, allow a later call to retry, and preserve a newer opening attempt when an older one fails.
