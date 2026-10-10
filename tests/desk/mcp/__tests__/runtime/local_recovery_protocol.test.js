@@ -44,6 +44,65 @@ function recovery(options = {}) {
   return runRecovery({ argv: base, cwd: root, env: {}, input: stream(), timeoutMs: 1000, ...options })
 }
 
+test("split UTF-8 stdin preserves exact payload bytes before dispatch", async () => {
+  const privateValue = "PRIVATE_caf\u00e9_PAYLOAD"
+  const bytes = Buffer.from(JSON.stringify({ note: privateValue }))
+  const split = bytes.indexOf(Buffer.from("\u00e9")) + 1
+  const input = new PassThrough()
+  input.write(bytes.subarray(0, split))
+  setImmediate(() => input.end(bytes.subarray(split)))
+  const transport = mockTransport(() => ({ status: "nothing_to_commit" }))
+  const result = await recovery({ input, launch: transport.launch })
+  const call = transport.sent.find((request) => request.params?.name === "task_update")
+  assert.equal(call.params.arguments.note, privateValue)
+  assert.equal(result.exitCode, 0)
+})
+
+test("split UTF-8 MCP frames preserve exact private strings for input redaction", async () => {
+  const privateValue = "PRIVATE_caf\u00e9_PAYLOAD"
+  const transport = mockTransport(() => ({ status: "nothing_to_commit", note: privateValue }))
+  const launch = async () => {
+    const connection = await transport.launch()
+    const write = connection.output.write.bind(connection.output)
+    connection.output.write = (chunk) => {
+      const bytes = Buffer.from(chunk)
+      const index = bytes.indexOf(Buffer.from("\u00e9"))
+      if (index === -1) return write(bytes)
+      write(bytes.subarray(0, index + 1))
+      setImmediate(() => write(bytes.subarray(index + 1)))
+      return true
+    }
+    return connection
+  }
+  const result = await recovery({ input: stream(JSON.stringify({ note: privateValue })), launch })
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.report.result.note, "[input redacted]")
+  assert.doesNotMatch(JSON.stringify(result.report), /PRIVATE_/u)
+})
+
+for (const bytes of [Buffer.from([0xff]), Buffer.from([0xc3])]) {
+  test(`invalid or incomplete UTF-8 input refuses before launch: ${bytes.toString("hex")}`, async () => {
+    const input = new PassThrough()
+    input.end(bytes)
+    const result = await recovery({ input, launch: async () => assert.fail("no launch") })
+    assert.equal(result.report.code, "invalid_utf8")
+    assert.equal(result.report.effects.mutation, "not_dispatched")
+  })
+}
+
+for (const bytes of [Buffer.from([0xff]), Buffer.from([0xc3])]) {
+  test(`invalid or incomplete UTF-8 protocol refuses before dispatch: ${bytes.toString("hex")}`, async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+    input.on("data", () => output.end(bytes))
+    const result = await recovery({ launch: async () => ({
+      input, output, close: async () => input.end(),
+    }) })
+    assert.equal(result.report.code, "protocol_parse_error")
+    assert.equal(result.report.effects.mutation, "not_dispatched")
+  })
+}
+
 for (const argv of [
   [], ["--root"], ["--root", root], [...base, "--operation", "task_create"],
   ["--root", root, "--operation", "task_signoff"], [...base, "--override", "yes"],

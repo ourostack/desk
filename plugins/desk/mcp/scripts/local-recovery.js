@@ -30,12 +30,17 @@ function argumentsFor(argv) {
 
 async function readInput(input, deadline) {
   let text = ""
+  let bytes = 0
+  const decoder = new TextDecoder("utf-8", { fatal: true })
   const timer = setTimeout(() => input.destroy(failure("timeout")), Math.max(1, deadline - Date.now()))
   try {
     for await (const chunk of input) {
-      text += chunk.toString("utf8")
-      if (Buffer.byteLength(text) > 1024 * 1024) throw failure("input_too_large")
+      const buffer = Buffer.from(chunk)
+      bytes += buffer.length
+      if (bytes > 1024 * 1024) throw failure("input_too_large")
+      try { text += decoder.decode(buffer, { stream: true }) } catch { throw failure("invalid_utf8") }
     }
+    try { text += decoder.decode() } catch { throw failure("invalid_utf8") }
     return text
   } finally {
     clearTimeout(timer)
@@ -75,6 +80,7 @@ export function launchBootstrap({ argv, env, cwd, spawnChild = spawn, shutdownMs
 function protocol(transport, deadline) {
   let sequence = 0
   let buffered = ""
+  const decoder = new TextDecoder("utf-8", { fatal: true })
   let broken = null
   const pending = new Map()
   const fail = (code) => {
@@ -83,10 +89,13 @@ function protocol(transport, deadline) {
   }
   transport.input.on("error", () => fail("transport_error"))
   transport.output.on("error", () => fail("transport_error"))
-  transport.output.on("end", () => fail("transport_closed"))
+  transport.output.on("end", () => {
+    try { buffered += decoder.decode() } catch { fail("protocol_parse_error"); return }
+    fail("transport_closed")
+  })
   transport.closed?.then(() => fail("transport_closed"))
   transport.output.on("data", (chunk) => {
-    buffered += chunk.toString("utf8")
+    try { buffered += decoder.decode(Buffer.from(chunk), { stream: true }) } catch { fail("protocol_parse_error"); return }
     if (Buffer.byteLength(buffered) > 4 * 1024 * 1024) return fail("protocol_parse_error")
     let newline
     while ((newline = buffered.indexOf("\n")) >= 0) {
