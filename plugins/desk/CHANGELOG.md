@@ -1,5 +1,23 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.270 — 2026-10-10
+
+Added a bounded local recovery client for confirmed desk transport mismatches. It uses the ordinary bootstrap and MCP pipeline, verifies its owned session's root/scope before dispatch, preserves authority and card refusals, and reports partial or unknown write/commit/push effects without resending mutations.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.269 — 2026-10-10
+
+Desk admission now passes its captured launch folder to the shared root resolver. When no known host project context exists, the resolver uses that folder as a weak project hint after validating saved activation and DESK associations, but before guessing a home-folder desk. Boot, tidy and task-status normalization use the same weak-hint policy, so boot's migration detection inspects the desk it binds. A missing saved root or DESK root, or a malformed activation file, still refuses implicit resolution even when the launch folder is a valid desk. Known host context keeps its existing stronger precedence, and non-desk hints fall through to the existing defaults. Tidy retains its root/person mismatch guards, and status normalization retains its explicit CLI-root behavior and read-only plans. This fixes launch-folder propagation, not late-root reconciliation or session recovery.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.268 — 2026-10-10
+
+Browser cleanup no longer reports a closed window after a failed, timed-out or incomplete tab cleanup. Failed closes retain the existing connection for exact retry, concurrent closes share one attempt, and shutdown reports unverified cleanup without borrowing or closing another window.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.267 — 2026-10-09
 
 Refuse to forward real-profile browser operations when the session's window launch fails. Report the launch error, allow a later call to retry, and preserve a newer opening attempt when an older one fails.

@@ -26,7 +26,7 @@ const LOCK_TIMEOUT = /^atomic publication lock timed out: (.+?)(?: \((?:held by 
 export function resolveAdmissionInputs({ args, env, cwd, homeDir, injectedReadinessPolicy }) {
   let root
   try {
-    root = resolveStartupDeskRoot({ args, env, homeDir })
+    root = resolveStartupDeskRoot({ args, env, homeDir, cwd })
   } catch (error) {
     return { rootError: serializeError(error) }
   }

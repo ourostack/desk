@@ -278,24 +278,48 @@ function countTabs(result) {
 }
 
 function noTabs(result) {
-  return result.content.some(function (part) {
-    return typeof part.text === "string" && /No open tabs/.test(part.text);
-  });
+  return Boolean(result && Array.isArray(result.content) && countTabs(result) === 0 && result.content.some(function (part) {
+    return typeof part.text === "string" && /^[ \t]*No open tabs\.?[ \t]*\r?$/m.test(part.text);
+  }));
 }
 
-// Closes every tab this connection controls and resolves when they are closed, a call fails or the limit is reached. It lists the tabs once and then closes that many from the first, and stops at once if a close says no tab is open. It never lists afterwards, because listing makes Playwright MCP create a tab when none is left. `call(name, arguments, ms)` resolves a tool's result; each call gets `callMs` (TAB_CALL_MS by default). Never rejects.
+function cleanupIncomplete(closed, remaining) {
+  return { isError: true, content: [{ type: "text", text: JSON.stringify({
+    status: "degraded",
+    code: "browser_cleanup_incomplete",
+    summary: "Desk could not verify that this connection's browser tabs are closed.",
+    closed: closed,
+    remaining: remaining,
+    fix: "The existing connection is retained. Retry browser_close on this connection before opening a replacement. Do not close another agent's or the operator's window.",
+  }) }] };
+}
+
+// Lists once, then closes no more than that snapshot or MAX_TABS. No final list: Playwright creates a tab when listing an empty connection. Only an explicit no-tabs response proves completion; failures retain the connection for retry.
 function closeOwnTabs(call, callMs) {
   var ms = either(callMs, TAB_CALL_MS);
+  var closed = 0;
+  var remaining = null;
   function close(left) {
-    if (left <= 0) return Promise.resolve();
+    if (left <= 0) return cleanupIncomplete(closed, remaining);
     return call("browser_tabs", { action: "close", index: 0 }, ms).then(function (result) {
-      return result.isError || noTabs(result) ? null : close(left - 1);
+      if (!result || result.isError) return cleanupIncomplete(closed, null);
+      if (noTabs(result)) {
+        closed += 1;
+        return CLOSED;
+      }
+      remaining = countTabs(result) || null;
+      if (remaining === null) return cleanupIncomplete(closed, null);
+      closed += 1;
+      return close(left - 1);
     });
   }
   return call("browser_tabs", { action: "list" }, ms).then(function (listed) {
-    return listed.isError ? null : close(Math.min(countTabs(listed), MAX_TABS));
+    if (!listed || listed.isError) return cleanupIncomplete(closed, null);
+    if (noTabs(listed)) return CLOSED;
+    remaining = countTabs(listed) || null;
+    return remaining === null ? cleanupIncomplete(closed, null) : close(Math.min(remaining, MAX_TABS));
   }).then(null, function () {
-    // The browser is gone or too slow; there is nothing more to close.
+    return cleanupIncomplete(closed, null);
   });
 }
 
@@ -306,17 +330,28 @@ var CLOSED = { content: [{ type: "text", text: "The browser window this session 
 function ownTabs(open, callMs) {
   var used = false;
   var opening = null;
+  var cleaning = null;
   function cleanup(api) {
-    if (!used) return Promise.resolve();
-    used = false;
-    return closeOwnTabs(api.callTool, callMs);
+    if (cleaning !== null) return cleaning;
+    if (!used) return Promise.resolve(CLOSED);
+    cleaning = closeOwnTabs(api.callTool, callMs).then(function (result) {
+      cleaning = null;
+      if (!result.isError) used = false;
+      return result;
+    });
+    return cleaning;
   }
   return {
-    beforeCall: function (params, api) {
+    beforeCall: function beforeCall(params, api) {
       if (params.name === "browser_close") {
-        return cleanup(api).then(function () {
-          opening = null;
-          return CLOSED;
+        return cleanup(api).then(function (result) {
+          if (!result.isError) opening = null;
+          return result;
+        });
+      }
+      if (cleaning !== null) {
+        return cleaning.then(function (result) {
+          return result.isError ? result : beforeCall(params, api);
         });
       }
       if (opening === null) opening = open();

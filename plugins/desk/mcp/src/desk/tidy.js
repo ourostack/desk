@@ -155,14 +155,14 @@ function samePath(a, b) {
 
 function resolveRoot({ env, cwd, homeDir }) {
   try {
+    const hostProjectRoot = hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined
     return resolveDeskRootWithSource({
       activationConfigPath: resolveActivationConfigPath({ env }),
       env,
       cwd,
       homeDir,
-      // An agent's shell has no CLAUDE_PROJECT_DIR; its working folder stands in, and
-      // like the host project it only counts when it is a desk.
-      hostProjectRoot: env.CLAUDE_PROJECT_DIR ?? cwd,
+      hostProjectRoot,
+      projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
     }).root
   } catch {
     return null

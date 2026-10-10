@@ -363,6 +363,7 @@ test("an empty ~/desk is not a desk: with no binding, main serves setup mode ins
   const desk = await startInProcess({
     argv: [],
     env: { HOME: fixture.home },
+    cwd: fixture.root,
     homeDir: fixture.home,
     mcpRoot: "/fixture/mcp",
     runtimeImporter: async () => assert.fail("an empty ~/desk must not be bound"),
@@ -371,7 +372,11 @@ test("an empty ~/desk is not a desk: with no binding, main serves setup mode ins
     const { payload } = await desk.call("desk_status", { detail: true })
     assert.equal(payload.state, "degraded:no_desk_root")
     assert.equal(payload.mode, "setup")
-    assert.deepEqual(payload.paths_tried.map((entry) => entry.path), [path.join(fixture.home, "desk"), path.join(fixture.home, "worker-workspace")])
+    assert.deepEqual(payload.paths_tried.map((entry) => entry.path), [
+      fixture.root,
+      path.join(fixture.home, "desk"),
+      path.join(fixture.home, "worker-workspace"),
+    ])
   } finally {
     await desk.close()
     rmSync(fixture.root, { recursive: true, force: true })

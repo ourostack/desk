@@ -34,13 +34,29 @@ Desk problem: session-sync — git pull --rebase failed
 ## The procedure
 
 1. **Recognize.** A Desk mechanism failed to do its designed job — not the operator's task. If this is a bug in the code the operator asked for help with, or a failing test in their project, this skill does not apply.
-2. **Fix, deterministically first.** Try the mechanism-specific, already-known repair — retry the pull with `--rebase --autostash` once; quarantine an orphaned stray path (never delete); rerun a migration's own printed repair command; retry a lock-contended write after the hold. If that resolves it, say so in the `fix:` field and move on — most of the block's job here is record-keeping, not drama.
+2. **Fix, deterministically first.** For a mutation with partial or unknown effects, read back its actual files, commit and push state before considering a retry; an error or timeout does not establish no effect. Otherwise try the mechanism-specific, already-known repair — retry the pull with `--rebase --autostash` once; quarantine an orphaned stray path (never delete); rerun a migration's own printed repair command; retry a lock-contended write after the hold. If that resolves it, say so in the `fix:` field and move on — most of the block's job here is record-keeping, not drama.
 3. **Never block.** If the deterministic fix doesn't fully resolve it, fall back to ordinary judgment — plain shell, ordinary Desk tools, reasoning about the actual repo state. Work continues either way; the block is informational, not a gate.
 4. **Emit the block locally**, always, regardless of whether step 2 fully worked. This is what the operator sees and what the session transcript carries, independent of whether an issue gets filed.
 5. **Check for a known issue before filing.** This step and the next are what `fileDeskProblem` (`plugins/desk/mcp/src/factory/desk-problem-file.js`) does: it computes the failure fingerprint and searches `ourostack/desk` issues labeled `desk-problem` with `state: "all"` (not just open — a closed-as-shipped or closed-as-wontfix issue is still known, and refiling it is pure noise) for a body containing the matching fingerprint marker.
 6. **File, or mark known.** A match: `file:` says `known: <url>`, nothing new is filed. No match: `fileDeskProblem` opens a new issue via the public-safe template below, embedding the fingerprint marker; `file:` carries the new URL. A held cap, no suitable account, or `gh` unavailable are all `not filed: <reason>` — never a thrown error, and never a reason to hold up step 4's block.
 7. **A filed or known problem has an improvement card.** The loop's route step opens `desk_problem:ourostack/desk#<n>` for every open `desk-problem` issue a consenting account filed, so you do not open the card yourself, and a known issue already has one. An agent that takes the card fixes the cause in the same pull request flow as any card and records its rulings in the countermeasure pull request (`desk:curator`, "The improvement-card routine"). The card closes after 7 days quiet once the fix is released and the issue is closed: `closed_confirmed` when the known-hit reading is measured and shows no hit, `closed_unverified` otherwise.
 8. **Tell the operator**, once, in plain words — the `tell:` line, said in normal conversation, never a form-style prompt.
+
+## Confirmed desk mismatch: validated local recovery
+
+A confirmed requested/actual desk mismatch is a transport failure. A card-not-found result alone is not proof. Refuse the misrouted mutation first and establish the intended existing desk. Permission, validation, containment and genuinely missing-card errors stay refusals; never recommend an override.
+
+Use the maintained local transport from the installed plugin's `mcp` directory:
+
+```sh
+node scripts/local-recovery.js --root "/confirmed/existing/desk" --operation task_update --input-file "/private/recovery-input.json"
+```
+
+The file, or stdin when `--input-file` is omitted, contains the ordinary tool JSON. Never put payloads or secrets in argv. The client starts the ordinary bootstrap and uses MCP, including shared admission, authority, card validation and exact-path commits. It checks its newly owned server's `desk_status` root and scope before dispatch and reports whether detail is current or cached within that owned session; old or undated cached detail refuses. Only `task_update`, `task_create`, `task_archive` and `desk_save` are supported. Carry only the existing authorized `--person`/`--activation-config`; `--state-branch` cannot override its declaration. Do not edit config, restart the host or import raw handlers to recover.
+
+Read the local JSON report, not just its exit code: `1` means not dispatched, `2` means partial or unknown effects, and `0` does not claim a push to a configured remote or project-code delivery. Commit failures may leave writes applied. Pending push is explicit. Never infer unchanged files from `isError` or automatically resend after timeout. Run the report's readback in the confirmed root and inspect the exact card/files from the original JSON before another mutation. See [the MCP recovery reference](../../mcp/README.md#validated-local-recovery-after-a-confirmed-transport-mismatch) for flags, effect classifications and resource lifetime.
+
+Use the same `broke / means / fix / file / tell` block above: `broke` names the operation and signal; `means` identifies requested and actual roots locally, plus verified unchanged, applied or unknown effects; `fix` records refusal, validated recovery and readback outcomes; `file` uses the existing public-safe dedup/cap helper; `tell` relays only what the evidence establishes. No blanket success claim. If this validated path is unavailable, state the bounded manual exception and exactly which validation is absent; do not present manual card edits as equally validated. This transport does not fix underlying workspace selection or late context.
 
 ## The public-safe issue template
 

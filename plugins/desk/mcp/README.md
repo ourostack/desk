@@ -20,6 +20,41 @@ Or via environment:
 DESK=~/<your-workspace> node ./index.js
 ```
 
+## Validated local recovery after a confirmed transport mismatch
+
+Use this command only after the agent has confirmed a requested/actual desk mismatch, refused the misrouted mutation, and established the intended existing desk. A missing-card error alone is not a mismatch. Permission, validation, containment and genuinely missing-card refusals remain refusals; this command is not an override or a machine-binding repair. [Issue #301](https://github.com/ourostack/desk/issues/301) records a motivating observed mismatch, not a selection bug fixed by this transport.
+
+From the installed plugin's `mcp` directory, with Node meeting this package's engines floor:
+
+```sh
+node scripts/local-recovery.js \
+  --root "/confirmed/existing/desk" \
+  --operation task_update \
+  --input-file "/private/recovery-input.json"
+```
+
+The JSON file holds the ordinary tool arguments, for example `{"track":"ops","slug":"example","status":"processing"}`. Omit `--input-file` to read JSON from stdin. Never put the payload or secrets in command arguments. Inputs are limited to 1 MiB. Supported operation names are deliberately limited to `task_update`, `task_create`, `task_archive` and `desk_save`; there is no focus, sign-off, doctor repair or arbitrary-tool escape hatch.
+
+The client starts our ordinary `bootstrap.cjs` as an owned stdio child, then uses standard MCP `initialize`, `tools/list` and `tools/call` requests. The bootstrap retains our existing Node selection and dependency-pack handling. The complete `index.js` front door, shared admission, authority/person/state-branch gates, card validation, journal and exact-path commit/push handlers run unchanged. No global installation, current-session MCP restart, manual binding, alternate validator or raw-handler call is needed.
+
+Pass `--activation-config` and `--person` only for the existing, authorized launch context; the runtime still decides authority. `--state-branch` is accepted only when it matches the branch already declared in that activation context. It cannot replace that declaration. An inherited card-guard commit override is refused. No cwd-derived workspace is substituted. The explicit root must already exist and resolve to a directory; missing or inaccessible roots never fall back or trigger setup.
+
+Before dispatch, the client reads detailed `desk_status` in its newly owned server, compares its actual root to the requested root's resolved real path, and checks the reported write scope. A root mismatch refuses before the operation. Pending status is read again within the shared 60-second budget. Cached detail is usable only when its timestamp belongs to this newly owned server session; older or undated cached detail refuses. A cached pre-admission scope that does not match is read again, never overridden; a current scope mismatch refuses. `preflight` retains the current/cached distinction, timestamp and scope. This does not call old cached detail in the misrouted host fresh. The mutation is sent at most once; its runtime authority gates remain active.
+
+The command writes one local JSON report and exits:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | The tool reported completion, no pending push is claimed, and any expected Git commit was observed through a HEAD change. This is not a project's code-delivery claim. |
+| `1` | No mutation was dispatched: input, root, admission, scope or transport preflight refused. |
+| `2` | Partial or unknown effects: tool/parse/transport failure after dispatch, missing commit evidence, `commit_failed`, `push_pending`, or uncertain child shutdown. |
+
+The report retains `operation`, `requestedRoot`, `actualRoot` when available, `preflight`, `result`, `effects`, local `git.headBefore`/`headAfter`, `transport.pid`/`shutdown`, and concrete `readback` commands. Tool-result string values matching input strings are redacted, and our shared credential scrub also covers runtime error text; the original JSON remains the source for exact card/file identities. Raw parser errors and child stderr are not printed. `effects.mutation: "not_dispatched"` establishes only that this client sent no mutation; admission may still create derived runtime state or perform its already-declared state-branch checks. `reported_applied` is the tool's account, not an independent diff. `reported_complete` covers `nothing_to_commit` and `already_archived` without claiming those responses prove unchanged files. An `isError` response alone never establishes unchanged files. A changed HEAD is an observation, not attribution against a concurrent writer.
+
+Push runs through the existing asynchronous handler. A configured remote is conservatively reported as pending, even if its worker later finishes; the client does not poll for delivery or advertise a successful push. A commit failure can leave the real card write applied. A timeout after dispatch can also occur after application. Read the named card/files and local status, HEAD, last commit paths and upstream in the confirmed desk before considering another mutation. Do not automatically resend, retry a permission/validation refusal elsewhere, or replace this path with unvalidated card edits.
+
+The owned bootstrap is closed on every outcome, with bounded EOF/SIGTERM shutdown; the runtime's shared readiness controller and scheduled push retain their ordinary lifetime. At the agent's reporting boundary, use `desk-problem`'s existing `broke / means / fix / file / tell` fields, keeping private roots local and public filings generic. This JSON transport report does not replace that block or change any published MCP result schema.
+
 ## Factory capture, delivery and store pipeline
 
 Claude and Copilot end/stop hooks write protected local markers; detached derivation credits each session's time to the task its main agent declared with `task_focus` (inferring a task only where nothing is declared) and writes consent-gated local facts. Each session start runs the bounded boot-check registry and starts delivery detached: one sweep, then a flush of every consented store that sends only transformed published facts as one intake pull request per machine per store. Task completion queues finalization, which the end-of-turn hook and the boot check run as `finalize`. The factory CLI exposes `derive`, `status`, `flush` and `finalize`, validates store intake (published facts and waste labels) with `validate-pr`, builds deterministic reports and cross-job waste rollups with `build`, compares a desk's real work in a window with the factory's jobs with `reconcile`, and derives a hashed report URL with `job-link`, which `task_update` and `task_archive` write into the task card as `factory_report` on the transition to `done` when the store has consent and the desk is known to be private (any other desk's card records why in `factory_report_unavailable`, and a later `task_update` fills the link once it can). `desk_status` and `desk_doctor` report the bound desk's store, consent per store, undelivered and quarantined counts and the last flush result code as `factory`, with no path, secret, account or content. `evaluate` prepares bounded briefs for the waste evaluator when a task reaches `done`, and `evaluate-accept` checks the evaluator's labels before they join the local outbox; delivering those labels is not wired yet. The live delivery proof against the public store is separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
