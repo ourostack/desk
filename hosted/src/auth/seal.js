@@ -60,3 +60,13 @@ export const derive = (label, value, { key }) => sign(`${label}\0${value}`, key)
 // A key's fingerprint: safe to log, equal for equal keys, so a script can
 // check which key the running gateway holds without ever reading it out.
 export const fingerprint = (key) => derive("fingerprint", "desk", { key });
+
+// `sealed(kind, payload, ttlSec)` and `unsealed(kind, token)` bound to a signing-key ring and a clock: sealed with
+// the first key, accepted under any key not past its `until`. `key` alone means `[{ key }]`.
+export function sealer({ key, keys = [{ key }], now = Date.now }) {
+  if (!keys[0]?.key) throw new Error("a sealer needs a signing key");
+  return {
+    sealed: (kind, payload, ttlSec) => seal(kind, payload, { key: keys[0].key, ttlSec, now: now() }),
+    unsealed: (kind, token) => unseal(kind, token, { keys, now: now() }),
+  };
+}
