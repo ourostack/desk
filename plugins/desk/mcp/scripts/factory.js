@@ -270,7 +270,7 @@ function triageTreeEntry({ revision, filePath, cwd, git }) {
 // reads. Association, JSON ownership/version, Git author, and random IDs are
 // not authority. A second read pins actor/head across local validation.
 async function readTriageActor({ repo, pr, head, runner, token }) {
-  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo) || !/^[1-9][0-9]{0,9}$/u.test(pr ?? "")) return null
+  if (typeof repo !== "string" || !PATTERNS.prRepo.test(repo) || !/^[1-9][0-9]{0,9}$/u.test(pr)) return null
   try {
     const response = await runner(["api", `repos/${repo}/pulls/${pr}`], { token, timeoutMs: 12000 })
     if (response?.code !== 0) return null

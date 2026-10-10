@@ -224,3 +224,39 @@ test("triage_intake_preserves_old_readers", async () => {
     assert.equal(Object.hasOwn(result.cards[0], "triage"), false)
   } finally { rmSync(root, { recursive:true,force:true }) }
 })
+
+test("public_byte_version_and_pointer_boundaries_refuse_without_echo", () => {
+  const oversized = clone(); oversized.producer_version = "1.4.0-" + "x".repeat(65)
+  assert.deepEqual(triage.validateTriageBytes(bytes(oversized)), { ok:false,errors:[{code:"size",path:"producer_version"}] })
+  const unknownKind = clone(); unknownKind.rows[0].evidence = [{kind:"private",ref:"PRIVATE_POINTER",revision:1}]
+  assert.equal(triage.validateTriageBytes(bytes(unknownKind)).ok,false)
+  assert.ok(triage.validateTriageBytes(bytes(unknownKind)).errors.some((e)=>e.code==="pattern"&&e.path==="rows.0.evidence.0.ref"))
+  assert.equal(JSON.stringify(triage.validateTriageBytes(bytes(unknownKind))).includes("PRIVATE_POINTER"),false)
+  assert.deepEqual(triage.validateTriageBytes("x".repeat(20*16384+4097)), {ok:false,errors:[{code:"size",path:""}]})
+  const primitive = clone(); primitive.rows = [null]
+  assert.deepEqual(triage.validateTriageBytes(bytes(primitive)), {ok:false,errors:[{code:"type",path:"rows.0"}]})
+  const contextual = triage.validateTriageChange()
+  assert.equal(contextual.ok,false)
+  assert.ok(contextual.errors.some((e)=>e.code==="path"&&e.path===""))
+  assert.ok(contextual.errors.some((e)=>e.code==="triage_authority_check_unavailable"))
+  assert.equal(triage.isTriagePath(null),false)
+})
+
+test("protected_candidates_reject_nontext_duplicate_keys_and_unproved_rulings", () => {
+  const nontext = candidate(); nontext.results[0].problem = null
+  const result = triage.validateTriageResultBytes(bytes(nontext),{brief})
+  assert.equal(result.ok,false); assert.equal(result.valid.length,0)
+  assert.deepEqual(result.errors,[{code:"type",path:"results.0.problem"}])
+  const repeated = candidate(); repeated.results.push(structuredClone(repeated.results[0]))
+  const duplicate = triage.validateTriageResultBytes(bytes(repeated),{brief})
+  assert.equal(duplicate.ok,false); assert.equal(duplicate.valid.length,1); assert.equal(duplicate.refused.length,1)
+  assert.deepEqual(duplicate.errors,[{code:"duplicate",path:"results.1"}])
+  const ready = candidate(), row = ready.results[0]
+  row.route="agent_ready"; row.authority={code:"approved_plan",ruling_ids:[]}
+  for(const field of ["decision","gate_reason","recommendation","safe_continuation"])row[field]=null
+  const unproved=triage.validateTriageResultBytes(bytes(ready),{brief})
+  assert.equal(unproved.ok,false); assert.ok(unproved.errors.some((e)=>e.code==="triage_authority_unproved"))
+  assert.equal(triage.validateTriageResultBytes(bytes(candidate())).ok,false)
+  const own = candidate(); own.results[0].related = [key]
+  assert.ok(triage.validateTriageResultBytes(bytes(own),{brief}).errors.some((e)=>e.code==="triage_evidence_unknown"))
+})

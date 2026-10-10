@@ -82,7 +82,7 @@ const rowSpec = {
   rubric_version: positive(),
 }
 const boundedObject = (spec, post) => customField((v, p, e, ctx) => {
-  if (Buffer.byteLength(JSON.stringify(v) ?? "") > TRIAGE_MAX_ROW_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(v)) > TRIAGE_MAX_ROW_BYTES) {
     addError(e, "size", p); return false
   }
   return objectField(spec, post).check(v, p, e, ctx)

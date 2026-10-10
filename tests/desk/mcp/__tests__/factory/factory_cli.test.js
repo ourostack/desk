@@ -211,6 +211,7 @@ test("triage API malformed permission exceptions and changed head stay unavailab
     if (args[0] === "show") return Buffer.from(JSON.stringify(value))
     assert.fail(`unexpected ${args}`)
   })
+
   for (const failure of ["throw","malformed","unknown_permission","changed_head","missing_actor"]) {
     let reads = 0
     const runner = async (args) => {
@@ -226,6 +227,84 @@ test("triage API malformed permission exceptions and changed head stay unavailab
   }
 })
 
+  test("triage supplementary diff refuses malformed entries and unknown normalized status", async () => {
+    const base="a".repeat(40),head="b".repeat(40),rel="triage/0123456789abcdef.json"
+    const argv=["--base",base,"--head",head,"--author-association","OWNER"]
+    for(const malformed of ["A\0",`R100\0${rel}\0`]) {
+      const git=mergeGit((args)=> {
+        if(args[0]==="diff")return args.includes("--no-renames")?`A\0${rel}\0`:malformed
+        assert.fail("malformed diff must stop before blob reads")
+      })
+      await assert.rejects(runValidatePrCommand({argv,git}),/Git change list is malformed/u)
+    }
+    for(const diff of ["",`X\0${rel}\0`,`A\0README.md\0`,`C100\0README.md\0copied.md\0`,`R100\0README.md\0${rel}\0`,`R100\0${rel}\0README.md\0`]) {
+      const git=mergeGit((args)=>{
+        if(args[0]==="diff")return args.includes("--no-renames")?`A\0${rel}\0`:diff
+        if(args[0]==="ls-tree")return ""
+        assert.fail("untrusted unknown/rename paths must not read blobs")
+      })
+      const result=await runValidatePrCommand({argv,git})
+      assert.equal(result.ok,false);assert.equal(result.maintenance,false)
+      assert.ok(result.errors.some((e)=>e.code==="triage_immutable"))
+    }
+  })
+
+  test("triage API missing current permission and invalid request identity are unavailable", async () => {
+    const base="a".repeat(40),head="b".repeat(40),rel="triage/0123456789abcdef.json"
+    const value=JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json",import.meta.url))).public
+    const argv=["--base",base,"--head",head,"--author-association","OWNER","--repo","example/project","--pr","1"]
+    const git=mergeGit((args)=>{
+      if(args[0]==="diff")return `A\0${rel}\0`
+      if(args[0]==="ls-tree")return args[2]===base?"":`100644 blob ${"c".repeat(40)}\t${rel}\0`
+      if(args[0]==="show")return Buffer.from(JSON.stringify(value))
+      assert.fail(`unexpected ${args}`)
+    })
+    for(const failure of ["pr_failed","permission_throw","permission_bad_json","bad_repo","bad_pr","absent_pr"]) {
+      const options=[...argv]
+      if(failure==="bad_repo")options[7]="bad/repo/path"
+      if(failure==="bad_pr")options[9]="0"
+      if(failure==="absent_pr")options[9]=""
+      const runner=async(args)=>{
+        if(!args[1].endsWith("/permission"))return failure==="pr_failed"?{code:1,stdout:"PRIVATE_ERROR"}:{code:0,stdout:JSON.stringify({head:{sha:head},user:{login:"synthetic-actor"}})}
+        if(failure==="permission_throw")throw new Error("PRIVATE_ERROR")
+        return {code:0,stdout:"not JSON"}
+      }
+      const result=await runValidatePrCommand({argv:options,git,runner,env:{}})
+      assert.equal(result.ok,false)
+      assert.ok(result.errors.some((e)=>e.code==="triage_authority_check_unavailable"),failure)
+      assert.equal(JSON.stringify(result).includes("PRIVATE_ERROR"),false)
+    }
+  })
+
+  test("triage existing nonregular prior path cannot be falsely submitted as a new batch", async () => {
+    const base="a".repeat(40),head="b".repeat(40),rel="triage/0123456789abcdef.json"
+    const argv=["--base",base,"--head",head,"--author-association","OWNER"]
+    const git=mergeGit((args)=>{
+      if(args[0]==="diff")return `A\0${rel}\0`
+      if(args[0]==="ls-tree")return `120000 blob ${"c".repeat(40)}\t${rel}\0`
+      assert.fail("must never follow previous or new symlink target")
+    })
+    const result=await runValidatePrCommand({argv,git})
+    assert.equal(result.ok,false)
+    assert.ok(result.errors.some((e)=>e.code==="triage_immutable"))
+  })
+
+  test("triage default trusted API runner uses injected fixture environment rather than association", () => scratch(async(env)=>{
+    const base="a".repeat(40),head="b".repeat(40),rel="triage/0123456789abcdef.json"
+    const value=JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json",import.meta.url))).public
+    const bin=path.join(env.HOME,"bin");await fs.mkdir(bin)
+    const shim=`#!${process.execPath}\nconst endpoint=process.argv[3];process.stdout.write(JSON.stringify(endpoint.endsWith("/permission")?{permission:"write"}:{head:{sha:"${head}"},user:{login:"synthetic-actor"}}));\n`
+    await fs.writeFile(path.join(bin,"gh"),shim,{mode:0o755})
+    if(process.platform==="win32")await fs.writeFile(path.join(bin,"gh.cmd"),`@"${process.execPath}" "%~dp0gh" %*\r\n`)
+    const git=mergeGit((args)=>{
+      if(args[0]==="diff")return `A\0${rel}\0`
+      if(args[0]==="ls-tree")return args[2]===base?"":`100644 blob ${"c".repeat(40)}\t${rel}\0`
+      if(args[0]==="show")return Buffer.from(JSON.stringify(value))
+      assert.fail(`unexpected ${args}`)
+    })
+    const result=await runValidatePrCommand({argv:["--base",base,"--head",head,"--author-association","NONE","--repo","example/project","--pr","1"],git,env:{...env,PATH:`${bin}${path.delimiter}${process.env.PATH}`,GH_TOKEN:"synthetic-test-token"}})
+    assert.deepEqual(result,{ok:true,errors:[],maintenance:false})
+  }))
 test("parseOptions reads --flag value pairs into a map", () => {
   assert.deepEqual([...parseOptions(["--store", "a/b", "--contribute", "yes"]).entries()], [["store", "a/b"], ["contribute", "yes"]])
 })
