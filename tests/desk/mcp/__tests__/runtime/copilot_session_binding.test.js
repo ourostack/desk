@@ -63,6 +63,17 @@ test("a record with no saved binding reads back with none", () => {
   assert.deepEqual(readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "s-2" } }), { folder, activationConfig: null })
 })
 
+test("a recorded binding that disappears stays a known association and fails closed", () => {
+  const env = envFor({ COPILOT_AGENT_SESSION_ID: "missing-binding" })
+  const folder = desk()
+  const binding = fresh("missing.activation.json")
+  assert.equal(recordCopilotSession({ sessionId: "missing-binding", folder, activationConfig: binding, env }), true)
+  assert.equal(readCopilotSession({ env }).activationConfig, binding)
+  const result = resolveAdmissionInputs({ args: {}, env, cwd: env.HOME, homeDir: env.HOME })
+  assert.equal(result.rootError?.code, "ACTIVATION_CONFIG_INVALID")
+  assert.equal(result.activation, undefined)
+})
+
 test("a hook without a usable id or folder records nothing", () => {
   const env = envFor()
   for (const input of [{ sessionId: "", folder: "/x" }, { sessionId: undefined, folder: "/x" }, { sessionId: "s", folder: "" }, { sessionId: "s", folder: "relative/dir" }, { sessionId: "s", folder: undefined }]) {
@@ -166,10 +177,10 @@ test("a stale record falls through to the other bindings: a folder that is no lo
   assert.throws(() => resolveStartupDeskRoot({ env, homeDir: env.HOME }), (error) => error.code === "DESK_ROOT_NOT_FOUND")
   const fallback = desk("fallback")
   assert.equal(resolveStartupDeskRoot({ env: { ...env, DESK: fallback }, homeDir: env.HOME }).source, "env:DESK", "$DESK still binds")
-  // A project folder that is a desk wins over $DESK, as it does on Claude Code.
+  // Folder evidence cannot replace an existing explicit DESK association.
   const other = desk("other")
   recordCopilotSession({ sessionId: "s-stale", folder: other, env })
-  assert.equal(resolveStartupDeskRoot({ env: { ...env, DESK: fallback }, homeDir: env.HOME }).root, path.resolve(other))
+  assert.equal(resolveStartupDeskRoot({ env: { ...env, DESK: fallback }, homeDir: env.HOME }).root, path.resolve(fallback))
 })
 
 test("the Copilot session record, when one exists, wins over an inherited CLAUDE_PROJECT_DIR; without a record CLAUDE_PROJECT_DIR binds", () => {
@@ -203,9 +214,9 @@ test("the saved binding the hook saw is the server's too, because Copilot gives 
   mkdirSync(path.dirname(own), { recursive: true })
   writeFileSync(own, JSON.stringify({ schema_version: 1, desk: { root: desk("own-desk") } }))
   assert.equal(resolveStartupActivationConfigPath({ args: {}, env: { ...env, DESK_ACTIVATION_CONFIG: own } }), own)
-  // A binding file that has gone is not used.
+  // Its absence is diagnosed by the shared resolver, not silently discarded.
   rmSync(binding)
-  assert.equal(resolveStartupActivationConfigPath({ args: {}, env }), null)
+  assert.equal(resolveStartupActivationConfigPath({ args: {}, env }), binding)
 })
 
 test("the record file is plain JSON a person can read, naming only the folder, the binding and when it was written", () => {

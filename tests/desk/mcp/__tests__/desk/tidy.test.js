@@ -235,14 +235,16 @@ for (const association of ["unavailable activation", "unavailable DESK", "malfor
   })
 }
 
-test("launch association: tidy keeps actual host context authoritative and its mismatch guard intact", () => {
+test("launch association: tidy keeps established DESK intent authoritative and its mismatch guard intact", () => {
   const opened = soloDesk()
   const associated = soloDesk()
   const options = { env: { CLAUDE_PROJECT_DIR: opened, DESK: associated }, cwd: associated, homeDir: tempDir(), spawnGh: noGh }
-  assert.equal(tidyStatus({ ...options, now: NOW }).root, opened)
-  assert.equal(cli(["--report", "--root", associated], options).code, 1)
+  assert.equal(tidyStatus({ ...options, now: NOW }).root, associated)
+  assert.equal(cli(["--report", "--root", associated], options).code, 0)
+  assert.equal(cli(["--report", "--root", opened], options).code, 1)
   const invalid = { ...options, env: { CLAUDE_PROJECT_DIR: opened, DESK: path.join(associated, "missing") } }
-  assert.equal(tidyStatus({ ...invalid, now: NOW }).root, opened)
+  assert.equal(tidyStatus({ ...invalid, now: NOW }).root, null)
+  assert.equal(cli(["--report", "--root", opened], invalid).code, 1)
 })
 
 test("launch association: tidy uses an unassociated cwd desk with absent or blank host context", () => {

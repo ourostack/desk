@@ -101,10 +101,10 @@ for (const association of ["unavailable activation", "unavailable DESK", "malfor
   })
 }
 
-test("launch association: status normalization retains actual host context and explicit CLI root precedence", async () => {
+test("launch association: status normalization retains established DESK intent and explicit CLI root precedence", async () => {
   const { opened, associated, home } = await associationDesks()
   const options = { env: { CLAUDE_PROJECT_DIR: opened, DESK: associated }, cwd: associated, homeDir: home }
-  assert.ok(run(["--plan"], options).stdout.includes('"slug":"from-a"'))
+  assert.ok(run(["--plan"], options).stdout.includes('"slug":"from-b"'))
   assert.ok(run(["--plan", "--root", associated], options).stdout.includes('"slug":"from-b"'))
   const invalidAssociation = { ...options, env: { DESK: path.join(home, "missing-desk") } }
   assert.ok(run(["--plan", "--root", opened], invalidAssociation).stdout.includes('"slug":"from-a"'))

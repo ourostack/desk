@@ -4,10 +4,9 @@
 // Resolution order:
 //   1. Explicit --root argument
 //   2. Host/session root
-//   2b. Host project directory, only when it is itself a desk workspace
-//       (Claude Code passes CLAUDE_PROJECT_DIR; opening a desk binds to it)
 //   3. Activation config desk.root (the saved binding)
 //   4. $DESK env var
+//   4a. Host project directory, only when it is itself a desk workspace
 //   4b. Generic project hint, only when it is itself a desk workspace
 //       (captured launch cwd is weaker than an established desk association)
 //   5. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
@@ -126,14 +125,6 @@ export function resolveDeskRootWithSource({
     )
   }
 
-  // A host project that is itself a desk wins over machine-wide defaults: the
-  // operator opened that desk. Any other project falls through silently.
-  if (hasText(hostProjectRoot)) {
-    const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
-    tried.push({ source: "host-project", path: resolved })
-    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
-  }
-
   // The saved binding is explicit too: a folder that is gone never falls
   // through to $DESK or a home folder, which may be a different desk.
   const activationConfig = loadActivationConfig({ configPath: activationConfigPath, cwd, homeDir, read: readActivationConfig })
@@ -165,8 +156,15 @@ export function resolveDeskRootWithSource({
     )
   }
 
-  // Launch-folder evidence is weaker than saved associations, including their
-  // refusal paths. It can replace only the home-folder guesses.
+  // Folder evidence cannot replace a known association or mask its refusal.
+  // Host adapters supply context; the shared resolver owns this precedence.
+  if (hasText(hostProjectRoot)) {
+    const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
+    tried.push({ source: "host-project", path: resolved })
+    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
+  }
+
+  // Captured launch-folder evidence can likewise replace only home guesses.
   if (hasText(projectRootHint)) {
     const resolved = resolveRootPath(projectRootHint, { cwd, homeDir })
     tried.push({ source: "host-project", path: resolved })

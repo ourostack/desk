@@ -80,7 +80,7 @@ for (const scenario of [
   }
 }
 
-test("association: known host project context retains precedence over saved binding and DESK", async () => {
+test("association: invalid saved binding and DESK refuse even with a valid host desk folder", async () => {
   const base = await mkTempRoot("desk-launch-known-association-")
   const known = makeDesk(path.join(base, "known"))
   const cwd = makeDesk(path.join(base, "launch"))
@@ -92,8 +92,8 @@ test("association: known host project context retains precedence over saved bind
   ]) {
     const env = { HOME: base, XDG_STATE_HOME: path.join(base, "state"), CLAUDE_PROJECT_DIR: known, ...extra }
     const input = { args: {}, env, cwd, homeDir: base }
-    assert.equal(resolveBootRoot(input).path, known)
-    assert.equal(resolveAdmissionInputs(input).root.root, known)
+    assert.equal(resolveBootRoot(input).status, "degraded")
+    assert.equal(resolveAdmissionInputs(input).rootError.code, "DESK_ROOT_UNAVAILABLE")
   }
   const project = path.join(base, "ordinary-host-project")
   mkdirSync(project)

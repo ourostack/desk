@@ -4,12 +4,12 @@
 //
 // Ordering. Copilot starts the server before it fires `sessionStart`, so the server's first resolution finds no record and degrades to `no_desk_root`. Desk's admission re-resolves the root on every `desk_status`, before every gated tool call and on its own retry schedule, so the first call after the hook has run binds, with no restart.
 // Concurrent sessions. Each session id has its own file, written to a temporary name and renamed into place, so a reader sees the old record or the new one and one session never reads another's.
-// A stale record. The record is only a hint for `hostProjectRoot`, which binds only a folder that is a desk right now, so a folder that has since moved or lost its desk layout falls through to the saved binding, `$DESK` and the home fallbacks. A saved-binding path that has gone is ignored. Records no session has rewritten for 30 days are pruned the next time any session records one.
+// A stale record. The folder is only a hint for `hostProjectRoot`, which binds only a folder that is a desk right now. A saved binding remains explicit even when its file disappears: the shared resolver reports that failure instead of selecting another desk. Records no session has rewritten for 30 days are pruned the next time any session records one.
 //
 // The hook side never throws: a session must start whether or not the record could be written.
 
 import { createHash } from "node:crypto"
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { resolveDeskStateDir } from "./last-start.js"
@@ -80,7 +80,7 @@ export function recordCopilotSession({ sessionId, folder, activationConfig = nul
 
 /**
  * The server's half: `{ folder, activationConfig }` the hook recorded for the session this server belongs to (COPILOT_AGENT_SESSION_ID), or null when there is no session id, no record or one it cannot trust.
- * `activationConfig` is null unless the hook saw a binding file that still exists.
+ * `activationConfig` retains an absolute saved binding path; the shared resolver validates it.
  */
 export function readCopilotSession({ env = process.env, stateDir = resolveDeskStateDir({ env }) } = {}) {
   const sessionId = env?.[COPILOT_SESSION_ENV]
@@ -94,7 +94,7 @@ export function readCopilotSession({ env = process.env, stateDir = resolveDeskSt
   if (record === null || typeof record !== "object" || record.version !== RECORD_VERSION) return null
   if (!hasText(record.folder) || !path.isAbsolute(record.folder)) return null
   const binding = record.activation_config
-  return { folder: record.folder, activationConfig: hasText(binding) && path.isAbsolute(binding) && existsSync(binding) ? binding : null }
+  return { folder: record.folder, activationConfig: hasText(binding) && path.isAbsolute(binding) ? binding : null }
 }
 
 /**

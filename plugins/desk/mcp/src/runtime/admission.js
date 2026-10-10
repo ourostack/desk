@@ -24,10 +24,12 @@ const defaultTimers = {
 /**
  * `attempt(context)` runs one admission attempt. It may update `context` as it goes, so tools can use what is already admitted (for example the runtime and root) while the rest is still running. It resolves with an outcome: `{ state: "ready", repair? }` or `{ state: "degraded", code, fix, summary, blockers?, diagnostic?, repair? }`. A thrown error becomes `degraded:admission_exception`.
  * `check(context)` (optional) runs every 60 s while ready and resolves with an outcome or null when all is well.
+ * `revalidate(context)` (optional) verifies current destination inputs at ordinary gates and ready status calls. Null keeps the admitted state and retry schedule; a changed destination returns an admission outcome.
  * `onTransition(snapshot)` fires whenever the state, code or repair changes.
  */
 export function createAdmission({
   attempt,
+  revalidate = null,
   check = null,
   onTransition = () => {},
   timers = defaultTimers,
@@ -91,19 +93,19 @@ export function createAdmission({
     return current
   }
 
-  function run() {
-    if (disposed) return Promise.resolve(snapshot())
+  function run(revalidateOnly = false) {
     if (running) return running
-    if (timer !== null) {
+    if (disposed) return Promise.resolve(snapshot())
+    if (!revalidateOnly && timer !== null) {
       timers.clearTimeout(timer)
       timer = null
     }
     running = Promise.resolve()
-      .then(() => attempt(context))
+      .then(() => revalidateOnly ? revalidate(context) : attempt(context))
       .catch((error) => exceptionOutcome(error))
       .then((outcome) => {
         running = null
-        settle(outcome)
+        if (outcome !== null) settle(outcome)
         return snapshot()
       })
     return running
@@ -132,12 +134,14 @@ export function createAdmission({
     return settle({ ...outcome, state: "degraded" }) && snapshot()
   }
 
-  /** Run an attempt now unless one is running (then join it), and wait for it at most `waitMs`. A ready machine answers at once unless `force` asks for a fresh check; a forced refresh during an attempt runs a fresh one after it, because the running attempt may have looked before the change the caller knows about (a doctor repair, a HEAD change). */
+  /** Run or join bounded admission work. Ready sessions revalidate inputs when a resolver is supplied; `revalidateOnly` also checks usable degraded contexts without repeating controller/semantic work. `fresh` samples again after a pre-existing attempt without forcing full admission; `force` requests full admission after a doctor repair or HEAD change. */
   // `joinMs` bounds the wait when an attempt was already running before this call (default: `waitMs`): a caller that must answer at once joins a long attempt without waiting on it.
-  async function refresh({ waitMs = 3000, force = false, joinMs = waitMs } = {}) {
-    if (!force && current.state === "ready" && !running) return snapshot()
+  async function refresh({ waitMs = 3000, force = false, fresh = false, joinMs = waitMs, revalidateOnly = false } = {}) {
+    const ready = !force && current.state === "ready"
+    const validate = !force && revalidate !== null && (ready || revalidateOnly)
+    if (ready && !running && revalidate === null) return snapshot()
     if (running) waitMs = Math.min(waitMs, joinMs)
-    const attemptDone = force && running ? running.then(run) : run()
+    const attemptDone = (force || fresh) && running ? running.then(() => run(validate)) : run(validate)
     if (waitMs <= 0) return snapshot()
     let waitTimer = null
     const timeout = new Promise((resolve) => {
