@@ -28,6 +28,13 @@ import { TOOL_NAMES } from "../tool-names.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
 const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
+// Existing resolver sources, from guesses to explicit intent. Both kinds of
+// host-project evidence share one priority; neither alone proves a replacement
+// explicit association.
+const ROOT_SOURCE_PRIORITY = Object.freeze([
+  "home_fallback", "overlay_home_fallback", "host-project", "env:DESK",
+  "activation-config", "host-session-root", "explicit-root",
+])
 const RECLAIM_REPAIR = "reclaim_controller"
 // Every field desk_doctor reads off `input`: both are read by the
 // `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
@@ -296,17 +303,22 @@ export function createDeskSession(deps) {
       context.resolutionFailed = true
       return rootOutcome(inputs.rootError, deps)
     }
-    // Losing host context is not intent to move to a different home-folder
-    // guess. Keep refusing until the resolver proves the intended destination.
-    if (resolvedInputs && resolvedInputs.root.root !== inputs.root.root &&
-        ["home_fallback", "overlay_home_fallback"].includes(inputs.root.source)) {
-      forgetDesk()
-      context.resolutionFailed = true
-      return rootOutcome({
-        code: "DESK_ROOT_UNAVAILABLE",
-        path: resolvedInputs.root.root,
-        message: "The established desk association is no longer available; Desk will not select a different fallback.",
-      }, deps)
+    // Losing proof of intent is not permission to reselect a launch folder.
+    // Keep the previous resolved intent through refusals, until renewed or
+    // replaced by an association of at least its strength.
+    if (resolvedInputs && resolvedInputs.root.root !== inputs.root.root) {
+      const previousPriority = ROOT_SOURCE_PRIORITY.indexOf(resolvedInputs.root.source)
+      const incomingPriority = ROOT_SOURCE_PRIORITY.indexOf(inputs.root.source)
+      if (incomingPriority <= 1 || incomingPriority < previousPriority ||
+          incomingPriority === 2 && incomingPriority === previousPriority) {
+        forgetDesk()
+        context.resolutionFailed = true
+        return rootOutcome({
+          code: "DESK_ROOT_UNAVAILABLE",
+          path: resolvedInputs.root.root,
+          message: "The established workspace intent is no longer proven; Desk will not select a different destination from weaker context.",
+        }, deps)
+      }
     }
     const ownershipKey = (value) => JSON.stringify({
       root: value.root.root,

@@ -44,13 +44,13 @@ function binding(file, root, extra = {}) {
   }))
 }
 
-async function fixture(t, { explicit = false, person = null } = {}) {
+async function fixture(t, { explicit = false, person = null, capturedFolder = false, sessionRoot = false } = {}) {
   const base = await mkTempRoot("late-workspace-")
   const home = path.join(base, "home")
   const a = desk(path.join(home, "desk"), person)
   const b = desk(path.join(base, "b"), person)
-  const cwd = path.join(base, "code")
-  mkdirSync(cwd)
+  const cwd = capturedFolder ? a : path.join(base, "code")
+  if (!capturedFolder) mkdirSync(cwd)
   const env = {
     ...process.env, HOME: home, XDG_STATE_HOME: path.join(base, "state"),
     XDG_CACHE_HOME: path.join(base, "cache"), XDG_CONFIG_HOME: path.join(base, "config"),
@@ -127,7 +127,7 @@ async function fixture(t, { explicit = false, person = null } = {}) {
     }
   }
   const handle = await main({
-    argv: [...(explicit ? ["--root", a] : []), ...(person ? ["--person", person] : [])],
+    argv: [...(explicit ? ["--root", a] : []), ...(sessionRoot ? ["--host-session-root", a] : []), ...(person ? ["--person", person] : [])],
     env, cwd, homeDir: home, input, output,
     stderr: { write() {} }, admissionKickoffMs: 0,
     stateHome: path.join(base, "session-state"),
@@ -239,6 +239,69 @@ test("removed context does not redirect a bound session back to a fallback", asy
   }
   assert.equal(readFileSync(f.card(f.a), "utf8"), text)
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
+})
+
+for (const failure of ["removed", "untrusted", "unreadable"]) {
+  test(`${failure} saved association cannot reselect the captured launch desk`, async (t) => {
+    const f = await fixture(t, { capturedFolder: true })
+    assert.equal(f.handle.session.context.root.root, f.a)
+    assert.equal(f.handle.session.context.root.source, "host-project")
+    f.associate(f.b)
+    assert.notEqual((await f.call("task_update", update)).isError, true)
+    assert.equal(f.handle.session.context.root.root, f.b)
+    assert.equal(f.handle.session.context.root.source, "activation-config")
+    await f.status()
+    const heads = [f.a, f.b].map((root) => git(root, "rev-parse", "HEAD"))
+    const cards = [f.a, f.b].map((root) => readFileSync(f.card(root), "utf8"))
+    const record = copilotSessionFile(path.join(f.env.XDG_STATE_HOME, "ouroboros-skills", "desk"), f.env.COPILOT_AGENT_SESSION_ID)
+    if (failure === "removed") renameSync(record, `${record}.removed`)
+    else if (failure === "untrusted") writeFileSync(record, "{unreadable JSON")
+    else {
+      renameSync(record, `${record}.saved`)
+      mkdirSync(record)
+      assert.throws(() => readFileSync(record, "utf8"), "the actual record read must fail")
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await f.call("task_update", update)
+      assert.equal(result.isError, true, "lost B association must not dispatch to captured A")
+      assert.equal(payload(result).code, "root_unavailable")
+      assert.doesNotMatch(payload(result).fix, /override|bootstrap|rebind/u)
+    }
+    assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
+    assert.deepEqual([f.a, f.b].map((root) => readFileSync(f.card(root), "utf8")), cards)
+    assert.deepEqual(f.connectedRoots, [f.a, f.b], "no A authority/controller is acquired after losing B")
+    const status = payload(await f.call("desk_status", { detail: true }))
+    assert.equal(status.code, "root_unavailable")
+    assert.equal(status.write_scope, undefined, "no cached B ownership survives failed resolution")
+    if (failure === "unreadable") renameSync(record, `${record}.unreadable-directory`)
+    f.associate(f.b)
+    assert.notEqual((await f.call("task_update", update)).isError, true)
+    assert.equal(f.handle.session.context.root.root, f.b)
+    assert.deepEqual(f.connectedRoots, [f.a, f.b, f.b])
+  })
+}
+
+test("a host/session root retains precedence over a late saved association", async (t) => {
+  const f = await fixture(t, { capturedFolder: true, sessionRoot: true })
+  f.associate(f.b)
+  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assert.equal(f.handle.session.context.root.root, f.a)
+  assert.equal(f.handle.session.context.root.source, "host-session-root")
+  assert.equal(readFileSync(f.card(f.b), "utf8"), text)
+})
+
+test("late recorded folder evidence can upgrade an initial home-folder guess", async (t) => {
+  const f = await fixture(t)
+  assert.equal(f.handle.session.context.root.source, "home_fallback")
+  assert.equal(recordCopilotSession({
+    sessionId: f.env.COPILOT_AGENT_SESSION_ID, folder: f.b, env: f.env,
+  }), true)
+  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assert.equal(f.handle.session.context.root.root, f.b)
+  assert.equal(f.handle.session.context.root.source, "host-project")
+  assert.equal(readFileSync(f.card(f.a), "utf8"), text)
+  assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
+  assert.deepEqual(f.connectedRoots, [f.a, f.b])
 })
 
 test("late person policy cannot reuse fallback workspace authority", async (t) => {

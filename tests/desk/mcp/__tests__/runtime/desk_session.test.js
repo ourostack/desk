@@ -375,6 +375,57 @@ test("losing the established context does not select another fallback on repeate
   assert.equal(payload(await session.callTool({ name: "task_update" })).tool, "task_update")
 })
 
+test("root replacement requires intent at least as strong, not merely another folder", async (t) => {
+  for (const [previous, incoming, allowed] of [
+    ["host-project", "host-project", false],
+    ["activation-config", "env:DESK", false],
+    ["activation-config", "host-session-root", true],
+    ["host-session-root", "explicit-root", true],
+    ["home_fallback", "host-project", true],
+    ["activation-config", "unknown-source", false],
+  ]) {
+    let changed = false
+    const { session, base, runtime } = await makeSession(t, {
+      resolveInputs: async () => ({
+        ...inputs({ root: path.join(base, changed ? "b" : "a") }),
+        root: { root: path.join(base, changed ? "b" : "a"), source: changed ? incoming : previous },
+      }),
+    })
+    await session.start()
+    changed = true
+    const result = await session.callTool({ name: "task_update" })
+    assert.equal(result.isError === true, !allowed, `${previous} -> ${incoming}`)
+    assert.equal(runtime.calls.length, allowed ? 1 : 0)
+    if (allowed) assert.equal(session.context.root.root, path.join(base, "b"))
+    else assert.equal(payload(result).code, "root_unavailable")
+  }
+})
+
+test("same-path stronger intent is retained without repeating authority admission", async (t) => {
+  let source = "home_fallback"
+  let changed = false
+  let connects = 0
+  const { session, base } = await makeSession(t, {
+    resolveInputs: async () => ({
+      ...inputs({ root: path.join(base, changed ? "b" : "a") }),
+      root: { root: path.join(base, changed ? "b" : "a"), source },
+    }),
+    runtime: fakeRuntime({ connectOrStartController: async () => {
+      connects += 1
+      return { accepted: true, close() {} }
+    } }),
+  })
+  await session.start()
+  source = "activation-config"
+  assert.equal((await session.callTool({ name: "desk_search" })).isError, undefined)
+  assert.equal(connects, 1)
+  assert.equal(session.context.root.source, "activation-config")
+  changed = true
+  source = "host-project"
+  assert.equal((await session.callTool({ name: "task_update" })).isError, true)
+  assert.equal(connects, 1, "weaker folder evidence cannot acquire a new controller")
+})
+
 test("a thrown resolver drops authority and old cached detail, retaining the current diagnostic", async (t) => {
   let thrown = false
   const { session, base } = await makeSession(t, {
