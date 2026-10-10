@@ -1,18 +1,20 @@
 // The gateway's HTTP surface: the MCP SDK's OAuth endpoints for Claude, the
 // consent form's target and the GitHub sign-in callback, a health check, and /mcp, which relays each
-// authenticated MCP request to a Desk child unchanged.
+// authenticated MCP request to a Desk child unchanged. With the Ouro tenant configured (`entra` and `invites`),
+// also the tenant's sign-in callback and the invite pages; without it, none of those routes exist.
 import express from "express";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { metadataHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/metadata.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { githubCallbackHandler } from "./auth/github.js";
+import { entraCallbackHandler, inviteHandlers } from "./auth/entra.js";
 import { consentHandler } from "./auth/provider.js";
 import { page, sendPage } from "./auth/pages.js";
 
 // `unavailable`, when set, is the reason the gateway cannot sign anyone in
 // or start Desk yet: /authorize and /mcp answer 503 with it while the rest
 // (health, metadata) keeps working.
-export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable }) {
+export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites }) {
   const app = express();
   // Container Apps terminates TLS one hop in front of the app; the SDK's
   // rate limiters read the client address from X-Forwarded-For.
@@ -46,6 +48,12 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.use(mcpAuthRouter(routerOptions));
   app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider, { issuer }));
   app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback }));
+  if (entra) app.get("/oauth/entra/callback", entraCallbackHandler(entra));
+  if (invites) {
+    const handlers = inviteHandlers(invites);
+    app.get("/invite/:token", handlers.landing);
+    app.get("/invite", handlers.page);
+  }
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));
   app.all(
