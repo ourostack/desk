@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
@@ -8,8 +8,63 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
+const fs = require("node:fs")
+const childProcess = require("node:child_process")
 const native = require(path.join(mcpRoot, "web-native-launch.cjs"))
 const builder = require(path.join(mcpRoot, "scripts", "build-browser-launch-assets.cjs"))
+
+test("an archive-installed mode-0644 binary launches only from a verified private executable copy", { skip: process.platform === "win32" }, async () => {
+  const root = await mkTempRoot("browser-launch-installed-mode-")
+  const install = path.join(root, "install")
+  cpSync(path.join(mcpRoot, "native"), path.join(install, "native"), { recursive: true })
+  cpSync(path.join(mcpRoot, "artifacts", "browser-launch"), path.join(install, "artifacts", "browser-launch"), { recursive: true })
+  const installed = path.join(install, "artifacts", "browser-launch", process.platform + "-" + process.arch, "desk-browser-launch")
+  chmodSync(installed, 0o644)
+  const attempt = native.prepare({ mcpRoot: install, root, executable: process.execPath, profile: "Default", owner: "Desk archive fixture", platform: process.platform, arch: process.arch, env: process.env })
+  assert.notEqual(attempt.file, installed)
+  assert.equal(path.dirname(attempt.file), path.dirname(attempt.env.DESK_BROWSER_RECEIPT))
+  assert.equal(lstatSync(attempt.file).mode & 0o777, 0o700)
+  assert.equal(lstatSync(installed).mode & 0o777, 0o644, "shared installation stays unchanged")
+  assert.deepEqual(readFileSync(attempt.file), readFileSync(installed))
+  attempt.dispose()
+  assert.equal(existsSync(path.dirname(attempt.file)), false)
+})
+
+test("failed or corrupted private copies are refused and their exact attempt directories are removed", async () => {
+  const root = await mkTempRoot("browser-launch-copy-failure-")
+  const base = { mcpRoot, root, executable: process.execPath, profile: "Default", owner: "Desk copy fixture", platform: process.platform, arch: process.arch, env: process.env }
+  const copy = fs.copyFileSync
+  try {
+    fs.copyFileSync = () => { throw new Error("copy refused fixture") }
+    assert.throws(() => native.prepare(base), /copy refused fixture/u)
+    assert.deepEqual(readdirSync(root), [])
+    fs.copyFileSync = (source, destination, flags) => { copy(source, destination, flags); writeFileSync(destination, "corrupt copy") }
+    assert.throws(() => native.prepare(base), /browser_native_launch_integrity/u)
+    assert.deepEqual(readdirSync(root), [])
+  } finally {
+    fs.copyFileSync = copy
+  }
+})
+
+test("the private executable filename follows the requested target without mutating packaged assets", async () => {
+  const root = await mkTempRoot("browser-launch-copy-name-")
+  const spawn = childProcess.spawnSync
+  try {
+    childProcess.spawnSync = (file, args, options) => {
+      assert.equal(args[0], "--check")
+      writeFileSync(options.env.DESK_BROWSER_RECEIPT, JSON.stringify({ version: 1, nonce: options.env.DESK_BROWSER_NONCE, status: "ready" }))
+      return { status: 0 }
+    }
+    for (const platform of ["win32", "darwin"]) {
+      const attempt = native.prepare({ mcpRoot, root, executable: process.execPath, profile: "Default", owner: "Desk copy name", platform, arch: "arm64", env: process.env })
+      assert.equal(path.basename(attempt.file), "desk-browser-launch" + (platform === "win32" ? ".exe" : ""))
+      attempt.dispose()
+    }
+    assert.deepEqual(readdirSync(root), [])
+  } finally {
+    childProcess.spawnSync = spawn
+  }
+})
 
 test("packaged launch assets cover all existing browser architectures and reject modified bytes", async () => {
   const verified = native.verifyAssets(mcpRoot)
@@ -166,7 +221,7 @@ test("a launch receipt cannot authorize a symlink, a malformed payload, or an un
     const copy = path.join(root, "nonexecutable")
     copyFileSync(asset.file, copy)
     chmodSync(copy, 0o600)
-    assert.throws(() => native.checkAsset(copy, asset.sha256, process.platform), /browser_native_launch_integrity/u)
+    assert.doesNotThrow(() => native.checkAsset(copy, asset.sha256), "archive mode is not content corruption")
   }
 })
 

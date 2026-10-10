@@ -28,10 +28,9 @@ function manifest(root) {
   return value;
 }
 
-function checkAsset(file, sha256, platform) {
+function checkAsset(file, sha256) {
   var info = fs.lstatSync(file);
   if (!info.isFile() || !/^[a-f0-9]{64}$/.test(sha256) ||
-      (platform !== "win32" && (info.mode & 73) === 0) ||
       crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== sha256) {
     throw error("browser_native_launch_integrity");
   }
@@ -42,7 +41,7 @@ function selectAsset(root, platform, arch) {
   if (TARGETS.indexOf(target) === -1) throw error("browser_native_launch_unsupported");
   var value = manifest(root);
   var file = path.join(root, "artifacts", "browser-launch", target, "desk-browser-launch" + (platform === "win32" ? ".exe" : ""));
-  checkAsset(file, value.assets[target].sha256, process.platform);
+  checkAsset(file, value.assets[target].sha256);
   return { file: file, sha256: value.assets[target].sha256 };
 }
 
@@ -67,6 +66,7 @@ function prepare(o) {
   var dir = fs.mkdtempSync(path.join(o.root, "launch-"));
   fs.chmodSync(dir, 448);
   var file = path.join(dir, "receipt.json");
+  var executable = path.join(dir, "desk-browser-launch" + (o.platform === "win32" ? ".exe" : ""));
   var nonce = crypto.randomBytes(16).toString("hex");
   var env = {
     DESK_BROWSER_EXECUTABLE: o.executable,
@@ -107,6 +107,7 @@ function prepare(o) {
   }
   function dispose() {
     removeReceipt();
+    if (fs.existsSync(executable)) fs.unlinkSync(executable);
     fs.rmdirSync(dir);
   }
   var checkEnv = {};
@@ -114,8 +115,11 @@ function prepare(o) {
     if (key !== "PLAYWRIGHT_MCP_EXTENSION_TOKEN") checkEnv[key] = o.env[key];
   });
   Object.keys(env).forEach(function (key) { checkEnv[key] = env[key]; });
-  var checked = childProcess.spawnSync(asset.file, ["--check"], { env: checkEnv, encoding: "utf8", timeout: 5000, windowsHide: true, shell: false });
   try {
+    fs.copyFileSync(asset.file, executable, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(executable, 448);
+    checkAsset(executable, asset.sha256);
+    var checked = childProcess.spawnSync(executable, ["--check"], { env: checkEnv, encoding: "utf8", timeout: 5000, windowsHide: true, shell: false });
     if (checked.status !== 0 || checked.error || !read() || read().status !== "ready") throw error("browser_native_launch_refused");
   } catch (failure) {
     dispose();
@@ -123,7 +127,7 @@ function prepare(o) {
   }
   removeReceipt();
   return {
-    file: asset.file,
+    file: executable,
     env: env,
     owner: o.owner,
     read: read,
