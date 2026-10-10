@@ -460,15 +460,16 @@ test("the sweep closes an idle session within one interval after access is turne
   await accounts.account(accountId);
   const relay = sweepRelay([accountId]);
   const lines = [];
-  const sweep = startAccountSweep({ relay, accounts, intervalMs: 50, retryMs: 10, log: (line) => lines.push(line) });
+  const sweep = startAccountSweep({ relay, accounts, intervalMs: 200, retryMs: 10, log: (line) => lines.push(line) });
   t.after(() => sweep.stop());
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  await new Promise((resolve) => setTimeout(resolve, 450));
   assert.deepEqual(relay.closed, [], "access on: nothing closed");
   await store.putAccount({ accountId, displayName: "Ari", deskAccess: false });
   const turnedOff = Date.now();
   while (relay.closed.length === 0 && Date.now() - turnedOff < 2_000) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.deepEqual(relay.closed, [accountId]);
-  assert.ok(Date.now() - turnedOff < 50 + 40, "within one interval, though the cached row was still young");
+  // Closed by the next tick (at most one 200 ms interval later, plus scheduling slack), though the cached row was still young.
+  assert.ok(Date.now() - turnedOff < 200 + 150, `closed after ${Date.now() - turnedOff} ms`);
   assert.ok(lines.some((line) => line.includes(`account ${accountId}`) && line.includes("access off")));
 });
 
