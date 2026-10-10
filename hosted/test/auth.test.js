@@ -780,7 +780,7 @@ test("a client metadata document signs in end to end as a public client", async 
   assert.equal(response.status, 200);
   // The host the client id names comes first, above the name the document
   // gives itself, which anyone could choose.
-  assert.match(html, /<h1>Connect Example App to your desk<\/h1><p class="from">From <strong>client\.example<\/strong><\/p>/);
+  assert.match(html, /<p class="from">From <strong>client\.example<\/strong><\/p><h1>Connect Example App to your desk<\/h1>/);
   const toGitHub = await approve(base, consent);
   const state = new URL(toGitHub.headers.get("location")).searchParams.get("state");
   const callback = await fetch(`${base}/oauth/github/callback?${new URLSearchParams({ code: "gh-code", state })}`, { redirect: "manual" });

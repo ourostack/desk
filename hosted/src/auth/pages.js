@@ -50,7 +50,9 @@ export const page = (status, message) => ({
 // user id and name (auth/github.js). The disconnect line is shown only to
 // claude.ai, where Claude's settings remove the connector.
 // `clientHost`, for a client known by its metadata document's URL, is that
-// URL's host, shown under the heading, above the name the document gives itself.
+// URL's host. It comes first, above the heading with the name the document
+// gives itself: anyone can choose that name, but the host is the part the
+// client had to control.
 export function consentPage({ clientName, clientHost, redirectUri, consent, deskRepo }) {
   const named = typeof clientName === "string" && clientName.trim() !== "";
   const name = escapeHtml(named ? clientName : "an app");
@@ -62,8 +64,8 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, desk
     status: 200,
     html: document(
       "Connect to Hosted Desk",
-      `<h1>Connect ${name} to your desk</h1>` +
-        (clientHost ? `<p class="from">From <strong>${escapeHtml(clientHost)}</strong></p>` : "") +
+      (clientHost ? `<p class="from">From <strong>${escapeHtml(clientHost)}</strong></p>` : "") +
+        `<h1>Connect ${name} to your desk</h1>` +
         `<p class="lede">When you approve, you sign in with GitHub, and then Hosted Desk sends you back to <strong>${host}</strong>.</p>` +
         `<div class="scopes">` +
         `<h2>${Name} will be able to:</h2><ul class="can">` +

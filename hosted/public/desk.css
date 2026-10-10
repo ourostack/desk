@@ -92,6 +92,6 @@ button, .btn {
   background: var(--ink); color: var(--paper); border: 1px solid var(--ink);
 }
 .note { font-size: .86rem; color: var(--muted); }
-.from { margin-top: -8px; font-size: .93rem; color: var(--ink-soft); }
+.from { margin-bottom: -8px; font-size: 1.05rem; color: var(--ink); }
 footer { font-size: .86rem; color: var(--muted); display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
 footer a { color: var(--muted); }
