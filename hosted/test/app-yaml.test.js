@@ -11,7 +11,7 @@ import { keysStartupLine, readConfig } from "../src/main.js";
 
 const shownYaml = readFileSync(new URL("./fixtures/containerapp-shown.json", import.meta.url), "utf8");
 const shown = JSON.parse(shownYaml);
-const KV_IDENTITY = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted";
+const KV_IDENTITY = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging";
 const SECRET = "c".repeat(64);
 
 const built = (options = {}) => JSON.parse(buildAppYaml({ shownYaml, ...options }));
@@ -145,4 +145,45 @@ test("the command line generates a missing secret inside the process and never p
   // An existing secret is never overwritten by --ensure-placeholder.
   assert.ok(!("value" in written.properties.configuration.secrets.find((secret) => secret.name === "desk-app-id")));
   assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+// --- After a write: what az really sent (review C1 and I1) -------------------------------------------------------
+
+import { azUpdateModel } from "./fixtures/az-update-model.mjs";
+import { checkWritten, missingIdentities } from "../infra/app-yaml.mjs";
+
+const secretList = (app) => app.properties.configuration.secrets.map(({ value, ...rest }) => rest);
+
+test("az's update pipeline drops the identity map, so an identity must be attached before the update", () => {
+  const added = "/subscriptions/s/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging";
+  const sent = azUpdateModel(JSON.parse(buildAppYaml({ shownYaml, addIdentities: [added] })), {});
+  assert.deepEqual(sent.identity, { type: "UserAssigned" });
+  assert.deepEqual(missingIdentities(shown, [added]), [added]);
+  // Compared without case: ARM may lower-case resource group names in ids.
+  assert.deepEqual(missingIdentities(shown, [KV_IDENTITY.toLowerCase()]), []);
+});
+
+test("checkWritten passes when every secret, Key Vault reference and identity is still there", () => {
+  checkWritten({ before: shown, after: shown, secretList: secretList(shown) });
+});
+
+test("checkWritten fails when a Key Vault reference came back as a plain value", () => {
+  const list = secretList(shown).map((secret) => (secret.name === "entra-client-secret" ? { name: secret.name } : secret));
+  assert.throws(() => checkWritten({ before: shown, after: shown, secretList: list }), /entra-client-secret is no longer a Key Vault reference/);
+});
+
+test("checkWritten fails when a new Key Vault reference didn't arrive, a secret is gone, or an identity is gone", () => {
+  const without = (name) => secretList(shown).filter((secret) => secret.name !== name);
+  assert.throws(() => checkWritten({ before: shown, after: shown, secretList: without("desk-client-key") }), /desk-client-key is gone/);
+  assert.throws(() => checkWritten({ before: shown, after: shown, secretList: secretList(shown), keyVaultSecrets: { "kv-new": {} } }), /kv-new is no longer a Key Vault reference/);
+  const after = structuredClone(shown);
+  delete after.identity.userAssignedIdentities[KV_IDENTITY];
+  assert.throws(() => checkWritten({ before: shown, after, secretList: secretList(shown) }), /id-ouro-desk-hosted-staging is no longer attached/);
+  assert.throws(() => checkWritten({ before: structuredClone(after), after, secretList: secretList(shown), expectIdentities: [KV_IDENTITY] }), /no longer attached/);
+});
+
+test("a volume that mounts a secret the app doesn't hold is refused", () => {
+  const app = structuredClone(shown);
+  app.properties.configuration.secrets = app.properties.configuration.secrets.filter(({ name }) => name !== "desk-app-key");
+  assert.throws(() => buildAppYaml({ shownYaml: app }), /Volume app-key mounts secret desk-app-key/);
 });

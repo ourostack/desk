@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,35 +13,38 @@ const script = fileURLToPath(new URL("../infra/provision.sh", import.meta.url));
 const fakeAz = fileURLToPath(new URL("./fixtures/fake-az.mjs", import.meta.url));
 const shown = JSON.parse(readFileSync(new URL("./fixtures/containerapp-shown.json", import.meta.url), "utf8"));
 const STAGING_URL = "https://ouro-desk-hosted-staging.blueflower-44af4710.eastus2.azurecontainerapps.io";
-const GATEWAY_IDENTITY = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted";
+const GATEWAY_IDENTITY = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging";
 
 export const completeRecord = (env = "test") => ({
   env,
   tenant: { name: "ourobottest", subdomain: "ourobottest", id: "c12edfb6-c5ab-4bf8-b1d5-1f053311d396", domain: "ourobottest.onmicrosoft.com" },
   gatewayApp: { appId: "55555555-5555-5555-5555-555555555555", objectId: "66666666-6666-6666-6666-666666666666" },
   storage: { account: "stouroacctstest261e0b", endpoint: "https://stouroacctstest261e0b.table.core.windows.net" },
-  gatewayIdentity: { name: "id-ouro-desk-hosted", id: GATEWAY_IDENTITY, clientId: "33333333-3333-3333-3333-333333333333", principalId: "44444444-4444-4444-4444-444444444444" },
+  gatewayIdentity: { name: "id-ouro-desk-hosted-staging", id: GATEWAY_IDENTITY, clientId: "33333333-3333-3333-3333-333333333333", principalId: "44444444-4444-4444-4444-444444444444" },
   ari: { accountId: "acct-ari-test", githubUserId: 16390116, githubLogin: "arimendelow" },
   legacyCutoff: "2026-11-15T00:00:00Z",
   releasedAt: "2026-11-01T00:00:00Z",
 });
 
-function runProvision(t, { app, env = {}, record } = {}) {
+function runProvision(t, { app, env = {}, record, created, expectFailure = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "desk-provision-sh-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  copyFileSync(fakeAz, join(dir, "az"));
+  // A wrapper, so the fake loads its model from the fixtures folder.
+  writeFileSync(join(dir, "az"), `#!/bin/sh\nexec "${process.execPath}" "${fakeAz}" "$@"\n`);
   chmodSync(join(dir, "az"), 0o755);
   writeFileSync(join(dir, "dig"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(dir, "dig"), 0o755);
   if (app) writeFileSync(join(dir, "app.json"), JSON.stringify(app));
+  if (created) writeFileSync(join(dir, "created.json"), JSON.stringify(created));
   const identityDir = join(dir, "identity");
   execFileSync("mkdir", [identityDir]);
   if (record) writeFileSync(join(identityDir, `identity-${record.env}.json`), JSON.stringify(record));
   const result = spawnSync("bash", [script], {
-    env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, FAKE_AZ_DIR: dir, IDENTITY_DIR: identityDir, ...env },
+    env: { PATH: `${dir}:${process.env.PATH}`, HOME: dir, FAKE_AZ_DIR: dir, IDENTITY_DIR: identityDir, ...(created ? { FAKE_CREATED_APP: join(dir, "created.json") } : {}), ...env },
     encoding: "utf8",
   });
-  assert.equal(result.status, 0, result.stderr);
+  if (expectFailure) assert.notEqual(result.status, 0, "provision.sh should have failed");
+  else assert.equal(result.status, 0, result.stderr);
   // Both streams: a secret must appear in neither.
   const output = `${result.stdout}${result.stderr}`;
   const argv = readFileSync(join(dir, "argv.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
@@ -49,7 +52,8 @@ function runProvision(t, { app, env = {}, record } = {}) {
   const documents = existsSync(updatesDir)
     ? readdirSync(updatesDir).sort((a, b) => parseInt(a) - parseInt(b)).map((name) => readFileSync(join(updatesDir, name), "utf8"))
     : [];
-  return { output, argv, documents };
+  const final = existsSync(join(dir, "app.json")) ? JSON.parse(readFileSync(join(dir, "app.json"), "utf8")) : null;
+  return { output, argv, documents, final };
 }
 
 const envOf = (app) => app.properties.template.containers[0].env;
@@ -150,6 +154,44 @@ test("the Entra client secret reference is added to an app that doesn't have it 
   assert.equal(reference.identity, GATEWAY_IDENTITY);
   assert.ok(!("value" in reference));
   assert.ok(GATEWAY_IDENTITY in written.identity.userAssignedIdentities);
+});
+
+test("the gateway identity is attached with az containerapp identity assign before the update that references it, because az drops the identity map from the update", (t) => {
+  const app = structuredClone(shown);
+  app.properties.configuration.secrets = secretsOf(app).filter((secret) => secret.name !== "entra-client-secret");
+  app.properties.template.containers[0].env = envOf(app).filter((entry) => entry.name !== "DESK_ENTRA_CLIENT_SECRET");
+  delete app.identity.userAssignedIdentities[GATEWAY_IDENTITY];
+  const { argv, final } = runProvision(t, { app, env: { STAGE: "staging" }, record: completeRecord("test") });
+  const assign = argv.findIndex((args) => args.slice(0, 3).join(" ") === "containerapp identity assign");
+  const update = argv.findIndex((args) => args.slice(0, 2).join(" ") === "containerapp update");
+  assert.ok(assign !== -1 && assign < update, "assign runs before the update");
+  assert.equal(argv[assign][argv[assign].indexOf("--user-assigned") + 1], GATEWAY_IDENTITY);
+  // What the app holds after az's pipeline and ARM's PATCH: the identity (from the assign) and the reference.
+  assert.ok(GATEWAY_IDENTITY in final.identity.userAssignedIdentities);
+  assert.ok(secretsOf(final).find((secret) => secret.name === "entra-client-secret").keyVaultUrl);
+  // A second run attaches nothing more.
+  const again = runProvision(t, { app: final, env: { STAGE: "staging" }, record: completeRecord("test") });
+  assert.ok(!again.argv.some((args) => args.slice(0, 3).join(" ") === "containerapp identity assign"));
+});
+
+test("every update is checked afterwards: a Key Vault reference that comes back as a plain value stops the script", (t) => {
+  const { output, argv } = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_RESOLVE_REFS: "1" }, expectFailure: true });
+  assert.match(output, /entra-client-secret is no longer a Key Vault reference/);
+  assert.ok(argv.some((args) => args.slice(0, 3).join(" ") === "containerapp secret list"));
+  const clean = runProvision(t, { app: shown, env: { STAGE: "staging" } });
+  assert.match(clean.output, /Checked: every secret, Key Vault reference and identity is still on the app/);
+});
+
+test("a created app gets its Ouro settings through the same assign, update and check", (t) => {
+  const created = structuredClone(shown);
+  created.properties.configuration.secrets = secretsOf(created).filter((secret) => secret.name !== "entra-client-secret");
+  created.properties.template.containers[0].env = envOf(created).filter((entry) => entry.name !== "DESK_ENTRA_CLIENT_SECRET");
+  delete created.identity.userAssignedIdentities[GATEWAY_IDENTITY];
+  const { argv, final, output } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc" }, record: completeRecord("test"), created });
+  const steps = argv.map((args) => args.slice(0, 3).join(" ")).filter((step) => /containerapp (create|identity assign|update)/.test(step) || step.startsWith("containerapp update"));
+  assert.deepEqual(steps.map((step) => step.split(" ").slice(0, 2).join(" ")), ["containerapp create", "containerapp identity", "containerapp update"]);
+  assert.ok(GATEWAY_IDENTITY in final.identity.userAssignedIdentities);
+  assert.match(output, /Checked:/);
 });
 
 test("an incomplete identity record sets no Ouro setting, and says which facts are missing", (t) => {

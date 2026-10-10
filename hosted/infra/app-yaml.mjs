@@ -116,6 +116,37 @@ export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRe
   return `${JSON.stringify(app, null, 2)}\n`;
 }
 
+const identityIds = (app) => Object.keys(app?.identity?.userAssignedIdentities ?? {});
+const lower = (ids) => new Set(ids.map((id) => id.toLowerCase()));
+
+// The user-assigned identities in `ids` that the app doesn't have. az's YAML update drops the identity map before
+// it sends the PATCH (process_loaded_yaml, then clean_null_values), so an identity is attached with
+// `az containerapp identity assign` before any update that needs it, never through the document.
+export function missingIdentities(shown, ids) {
+  const held = lower(identityIds(parseShown(shown)));
+  return ids.filter((id) => !held.has(id.toLowerCase()));
+}
+
+// After a write: az fills every value-less secret from listSecrets before sending (Key Vault references
+// included), and may drop identities, so the app as read back must still hold every secret the document held,
+// every Key Vault reference as a reference, and every identity. `secretList` is `az containerapp secret list -o
+// json` (names, and keyVaultUrl for a reference; no values).
+export function checkWritten({ before, after, secretList, keyVaultSecrets = {}, expectIdentities = [] }) {
+  const shown = parseShown(before);
+  const listed = new Map(secretList.map((secret) => [secret.name, secret]));
+  for (const { name } of shown.properties?.configuration?.secrets ?? []) {
+    if (!listed.has(name)) throw new Error(`Secret ${name} is gone from the app after the write.`);
+  }
+  const references = [...(shown.properties?.configuration?.secrets ?? []).filter((secret) => secret.keyVaultUrl).map(({ name }) => name), ...Object.keys(keyVaultSecrets)];
+  for (const name of references) {
+    if (!listed.get(name)?.keyVaultUrl) throw new Error(`${name} is no longer a Key Vault reference after the write; it must be fixed before the app restarts.`);
+  }
+  const held = lower(identityIds(parseShown(after)));
+  for (const id of [...identityIds(shown), ...expectIdentities]) {
+    if (!held.has(id.toLowerCase())) throw new Error(`Identity ${id.split("/").at(-1)} is no longer attached to the app after the write.`);
+  }
+}
+
 // The document with every secret's value shown as ***, for a dry run.
 export function maskSecrets(text) {
   const app = parseShown(text);
@@ -152,8 +183,29 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
       "identity-record": { type: "string" },
       "get-env": { type: "string" },
       mask: { type: "string" },
+      "missing-identities": { type: "boolean", default: false },
+      verify: { type: "boolean", default: false },
+      before: { type: "string" },
+      after: { type: "string" },
+      "secret-list": { type: "string" },
     },
   });
+  const record = values["identity-record"] ? loadRecordFile(values["identity-record"]) : null;
+  const wanted = record ? identitySettings(record) : { addIdentities: [], keyVaultSecrets: {} };
+  if (values["missing-identities"]) {
+    for (const id of missingIdentities(readFileSync(values.shown, "utf8"), wanted.addIdentities)) print(id);
+    return null;
+  }
+  if (values.verify) {
+    checkWritten({
+      before: readFileSync(values.before, "utf8"),
+      after: readFileSync(values.after, "utf8"),
+      secretList: JSON.parse(readFileSync(values["secret-list"], "utf8")),
+      keyVaultSecrets: wanted.keyVaultSecrets,
+      expectIdentities: wanted.addIdentities,
+    });
+    return print("Checked: every secret, Key Vault reference and identity is still on the app.");
+  }
   if (values.mask) return print(maskSecrets(readFileSync(values.mask, "utf8")));
   if (values.shown && values["get-env"]) {
     const entry = gatewayContainer(parseShown(readFileSync(values.shown, "utf8"))).env?.find((candidate) => candidate.name === values["get-env"]);
@@ -167,8 +219,7 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   for (const name of values["ensure-placeholder"]) if (!held.has(name)) setSecrets[name] = "unset";
   const setEnv = Object.fromEntries(values["set-env"].map((text) => splitAssignment(text, "--set-env")));
   let identity = { setEnv: {}, secretRefs: {}, keyVaultSecrets: {}, addIdentities: [] };
-  if (values["identity-record"]) {
-    const record = loadRecordFile(values["identity-record"]);
+  if (record) {
     identity = identitySettings(record);
     if (identity.missing.length) {
       note(`identity-${record.env}.json is incomplete (missing ${identity.missing.join(", ")}); the app's Ouro sign-in settings stay as they are.`);
