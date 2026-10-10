@@ -1,159 +1,156 @@
 # Factory triage runner
 
-Triage is disabled until a protected root-owned qualification record proves
-the actual installed engine's confinement on two identical admitted launches.
-Unit fixtures do not qualify an installed CLI. A valid candidate is not
-permission to publish private prose or commit a changed card basis.
+**Owned-catalog implementation candidate; not installed-host qualification.**
+Native qualification and publication remain disabled until the implementation
+gates and independent functional/security reviews pass. Unit or direct-server
+proof is not an installed-engine certificate. A protected candidate is not
+fresh authority or permission to publish.
 
-## Threat and authority boundary
+## Authority and admission
 
 The model and prepared/source content are adversarial. The parent, installed
-engine/runtime and privileged policy controllers preserve the admitted
-file/tool/billing invariant. Their theoretical ability to change policy is
-not itself a hold. Unknown applicable delivery, unsafe effective policy or
-unsupported governance is a hold.
+engine/runtime and privileged policy controllers preserve the admitted scope.
+Unknown applicable delivery, malformed settings, active hooks/helpers, unsafe
+effective grants, provider/billing selectors and unsupported provenance hold.
+The collector runs bounded non-model `doctor` only after command-bearing policy
+preflight. Version/help labels and absent files alone do not establish admission.
+See [the collector and policy reader](../mcp/src/factory/triage-runner.js).
 
-Admission fingerprints the selected execution chain, runtime files, argv,
-allowlisted environment selection, and effective source revisions. It runs
-the selected executable's bounded non-model `doctor` command. A trusted
-nonexecuting policy reader must establish all applicable sources and grant
-merge semantics. File absence and version/help labels alone cannot do this.
+The retained macOS arm64 adapter verifies the installed Anthropic signature,
+Apple loader, sealed boot snapshot, SIP/authenticated root and actual shared-cache
+identities. Its policy reader is pinned to inspected installed bytes, including
+managed JSON/drop-ins, MDM plists, managed MCP and remote cache. Restricted/safe
+mode does not excuse incompatible managed controls. Native invalid-settings
+diagnostics return fixed codes, not raw private policy. Other platforms or
+unknown source revisions remain holds; no installed engine is copied or patched.
+See [launch-chain inspection](../mcp/src/factory/triage-runner.js).
 
-The connected default macOS arm64 adapter validates the installed Anthropic
-signature and Apple loader signature. It records the sealed APFS boot snapshot,
-enabled SIP/authenticated root, OS build, actual shared-cache UUID/header/hash,
-map and root-owned subcache identities. Shared-cache provenance is trusted
-installed-platform evidence, not fabricated individual dylib hashes or an
-administrative tamper-proof guarantee. Unknown launchers/platforms still hold.
-No installed engine is copied or patched.
+## One fixed production mission and owned tool catalog
 
-The default policy reader is bound to the source-inspected signed native
-2.1.296 SHA-256. It reads the actual native per-user/device MDM plist paths
-through `plutil`, managed JSON/drop-ins, managed MCP, and remote cache; it
-combines those observations with positive doctor applicability/completion.
-Restricted/safe mode excludes user/project/local discovery. Before doctor,
-command-bearing user diagnostic settings are also inspected and rejected.
-Doctor runs from `/`, not an untrusted project. Only positively resolved
-no-applicable/no-config remote policy with compatible known local sources is
-admitted by this initial adapter. Delivered/failed/unknown cache, incompatible
-keys, unsigned or source-unverified engine revisions remain concrete holds.
-This works through the default CLI: no external reader injection is needed
-for a compatible inspectable installed host.
+The native invocation uses `--tools ""`, four exact `--allowedTools` approvals,
+restricted/safe mode, dontAsk/no prompts, no slash commands/Chrome/session
+persistence, strict MCP configuration, disabled hooks and the existing `$1`
+ceiling. Inline settings deny native file/shell/agent/network tools. Its sole MCP
+server is `triage_catalog`; no generic `mcp__*` grant or blanket deny substitutes
+for its four reviewed names. Both system prompt and positional request are
+source-controlled normal-triage text; there is no alternate mission or arbitrary
+text selector. Prepared prose is never argv. See
+[the exact policy constructor](../mcp/src/factory/triage-runner.js).
 
-Every policy document must be a JSON object with supported types for permissions, hook groups, environment values and MCP entries before admission can be complete. The user diagnostic document is validated before its command-bearing projection. Invalid managed JSON, MDM plist data, remote cache or user settings returns a fixed validation code with no raw policy echo. Native doctor's `Invalid settings` heading, including its ANSI-colored form, also rejects admission before any model-consuming command.
+| Tool | Closed operation |
+| --- | --- |
+| `evidence_read({id})` | Exact immutable catalog ID, never a filesystem path |
+| `evidence_search({query,ids?})` | Bounded case-sensitive literal search |
+| `evidence_list({cursor?})` | Stable fixed-size catalog page |
+| `candidate_submit({candidate})` | Original-brief validation and private seal |
 
-## Pinned supported CLI controls
+The preparer creates reserved brief/card metadata records, preserving original
+candidate key/basis/evidence/ruling identity and reference-to-ID membership.
+Those authorization fields are deliberately available in protected model
+evidence. Receipt keys, generations and custody bookkeeping are not tool output.
+Unknown IDs, paths/URIs, extra keys, malformed types, forged membership and
+catalog-install actions refuse. First valid submit seals complete canonical
+bytes, retaining individually valid/refused rows. Identical retry is idempotent;
+conflicting retry cannot overwrite. See
+[catalog schemas, preparation and dispatch](../mcp/src/factory/triage-catalog.js).
 
-The official sources checked for this increment are:
+## Clean startup, wire and custody
 
-- Claude Code CLI reference: `https://code.claude.com/docs/en/cli-reference`
-- Read/Edit permissions: `https://code.claude.com/docs/en/permissions#read-and-edit`
-- Settings: `https://code.claude.com/docs/en/settings`
-- Server delivery diagnostics:
-  `https://code.claude.com/docs/en/server-managed-settings#verify-settings-delivery`
+Each run uses protected `triage-prepared.json`, a sealed snapshot and two
+directional nonblocking FIFOs outside Git. The sole MCP command is `/usr/bin/env
+-i`, followed by ordered fixed fields, the absolute resolved Node runtime and
+fixed launcher. Non-Darwin fields are exactly `LANG=C LC_ALL=C TZ=UTC`. Darwin
+adds only `__CF_USER_TEXT_ENCODING`, constructed from actual equal UID/EUID as
+uppercase unpadded `0x<UIDHEX>:0:0`; it is never copied from inherited state.
+Each launcher/server reconstructs or checks exact keys/bytes before application
+imports. No HOME/PATH/auth/provider/preload selector is forwarded.
+See [the shared environment and launch recipe](../mcp/src/factory/triage-custody.js),
+[launcher](../mcp/scripts/launch-triage-catalog.js) and
+[server](../mcp/scripts/triage-catalog-server.js).
 
-Supported candidate invocation, with `cwd=inputDir`, no additional directory,
-and precreated `.triage-result.json`:
+The installed SDK remains the parser/server/transport. A bounded adapter checks
+UTF-8, canonical SDK roundtrip, frame/aggregate/count limits and one active plus
+one pending frame before dispatch. Protocol version is pinned to `2025-06-18`;
+capability widening and unknown notifications fail. Actual installed-native
+negotiation compatibility is not inferred from direct SDK tests.
+See [wire and protocol enforcement](../mcp/src/factory/triage-protocol.js).
 
-```text
--p --restricted --safe-mode --permission-mode dontAsk --permission-prompts none
---tools Read,Grep,Glob,Edit --disable-slash-commands --no-chrome
---no-session-persistence --strict-mcp-config --mcp-config '{"mcpServers":{}}'
---settings <inline-policy-json> --max-budget-usd 1
---output-format stream-json --verbose --system-prompt <fixed-inline-brief>
-"Read input.json and perform the bounded triage task described by the system prompt."
-```
+The repository's Node≥20 floor is unchanged. This owned-catalog mechanism
+requires the selected runtime's actual `node:module.registerHooks` capability
+for its complete-load provenance; missing capability holds before run-resource
+creation. The current implementation does not claim owned-catalog support for
+Node20 or silently substitute a weaker module inventory.
+See [preparation capability checks](../mcp/src/factory/triage-custody.js).
 
-The fixed policy is:
+Launcher/server imports are inert, with ordinary direct-entry guards and the
+same source functions used by isolated unit coverage. Instrumentation is not
+admitted to production/direct/native clean environments. Fixed unit children
+use synthetic fixtures and cannot issue, restore or use actual qualification;
+pure document/structure validation explicitly returns no authority. Actual
+uninstrumented FIFO/provenance bundles remain separate evidence.
+See [the authority guard and pure readers](../mcp/src/factory/triage-runner.js)
+and [isolated unit tests](../../../tests/desk/mcp/__tests__/factory/triage_protocol.test.js).
 
-```json
-{
-  "permissions": {
-    "allow": ["Read(//absolute/result/path)", "Edit(//absolute/result/path)"],
-    "deny": ["Bash", "PowerShell", "REPL", "Agent", "Task", "Skill", "WebFetch", "WebSearch", "mcp__*"]
-  },
-  "disableAllHooks": true
-}
-```
+Native qualification refuses an instrumented parent before creating its
+qualification directory, executing admission/auth/native commands or touching
+the qualification store. The same two-launch orchestration can be measured
+through a separately allocated synthetic-custody, memory-only unit transaction.
+That facade always returns `authority:false`; synthetic launch counters and
+`qualified` inside inert record data are not native qualification receipts.
+Neither the production qualifier nor runner accepts a caller-selected registry,
+issuer, store or measurement detector. The qualifier's import is inert, and its
+direct entry still calls the fixed production route. See
+[qualifier guards and nonaccepted transactions](../mcp/scripts/qualify-triage-runner.js).
 
-The result uses the exact absolute path specifier. **Do not add a result Read
-deny:** documented Read denies also defeat Edit/Write. DontAsk does not erase
-inherited grants; inspect the actual effective policy. Restricted/safe modes
-retain managed settings and managed hooks. Local hook disabling is not proof
-that managed command-bearing controls are absent.
+The parent opens/drains the receipt reader before spawn, independently observes
+live launcher/server lineage, command, clean environment and loaded source
+closure, then sends fixed ready control. A successful submit response waits for
+its authenticated private receipt to drain. Native success/exit or native MCP
+EOF initiates server stdin closure; server alone emits terminal, then launcher
+and parent verify normal process/stdio closure. One absolute deadline includes
+the teardown reserve. Initial FIFO zero reads are not terminal proof. These are
+first-party runtime controls, not a universal OS sandbox or privileged-admin
+tamper-proof claim. See [custody and lifecycle](../mcp/src/factory/triage-custody.js).
 
-Print mode requires the final fixed trusted positional user request as well as the system prompt. The runner does not place candidate/input prose in argv or pipe untrusted input through stdin. This request is included in the policy/admission fingerprint; older qualification fingerprints must not be reused.
+## Qualification and protected unaccepted output
 
-No bare mode, bypass, agent/session inheritance, mutable settings file,
-permission-host callback, added tool, plugin or MCP gate is authorized.
-Sign-in is still probed by the maintained first-party subscription guard.
-Provider/billing variables still block before any launch.
-
-## Production and qualifier
-
-`runTriageChild` always selects production. It accepts only a parent-issued or protected-restored qualified record with two complete passing receipts and current matching full production/envelope/source identities. A JSON object with `state:"qualified"` or `"probing"` is not authority. Parent resolver/diagnostic/policy-reader adapters must be authentic, not synthetic fixture results; they are neither model claims nor public status fields.
-
-The explicit qualifier uses `beginTriageQualification`, an opaque source-local capability, and `runTriageProbe`; normal production cannot enter that route by setting a mission/status/input/env/CLI field. `triagePolicy` has only two internal finite mission pairs: missing mission means production, unknown means hold. Both fixed qualification message layers consistently request the parent's synthetic descriptors as attempts under unchanged enforcement. Other prepared/source/candidate prose remains inert untrusted evidence. There is no arbitrary prompt override or public mission flag.
-
-The source constructs a complete ordered descriptor catalog from exact fixture bindings, not model/card instructions. It validates the exact prepared bytes, helper/config/symlink identities and manifest/input/trigger hashes immediately before each launch. One successful trigger-bearing result Edit against `{}` satisfies both positive write and customization-trigger observations. Runtime/policy Edit probes use verified nonmatching search strings and inert replacements; a file mismatch is not a permission denial.
-
-Full production and probe launch snapshots/fingerprints remain distinct. Versioned `enforcementEnvelope` validates the complete argv and explicit shape, replacing only the two fixed system/request value slots with named versioned slots for equality. Flags/count/positions/order, cwd/result/root, chain/runtime, lifecycle ceilings, all other argv/settings/tool/billing selectors, opaque allowlisted-environment fingerprint and actual admitted source revisions remain bound byte-for-byte. Each mission obtains its own actual admission. Source-code and message/catalog versions/hashes are retained; no preferred-security-flags hash or path-relocation normalization substitutes.
-
-`completeTriageQualification` issues a record only after two actual captured passing probe receipts with the same manifest/payload/envelope/current identities and owned PID exits. Each receipt distinguishes the single consuming child from its auth guard child, requiring valid PID/exit dispositions for both; the outer resource collector still tracks all children. Default CLI output remains protected evidence. A subsequent parent can use `loadTriageQualification` on the exact owner-only, non-symlink, outside-Git `qualification.json` tree: it verifies versions, current source/full identities, two raw stream hashes and receipts, and replays the same verifier against the authenticated recorded post-probe hashes. It does not reinterpret current production input as historical probe bytes. Arbitrary parsed JSON, a transient probe token, public/symlink/hardlinked evidence, altered streams/identities or one receipt cannot restore authority. Unsupported protection/runtime/source conditions hold; no universal privileged-admin tamper-proof claim is made.
-
-Each raw receipt must establish a native UUID session shared by init, tool messages and terminal result, with distinct event UUIDs and the actual init tool manifest. The receipt binds that native launch proof to its raw stream hash. Both live issuance and protected restoration reject reused session/launch proof; changing a receipt ordinal is not a second launch. Returned diagnostic receipts cannot mutate the parent's retained history. OS PID reuse across exited launches is permitted when the native sessions are genuinely distinct. Missing or contradictory native identity holds without qualification.
-
-The direct CLI starts asynchronous orchestration without awaiting it at module scope. This lets module evaluation finish before the runner imports the fixed verifier from the same module, avoiding an evaluation cycle while preserving the exported API, protected receipts and final reported exit status. The direct-entry regression executes the actual CLI under test-only native admission/child fixtures and requires both launches and the saved complete record; it does not qualify an installed engine.
-
-The runner rechecks admission before sign-in, immediately before spawn, and
-after exit. Detected drift invalidates the record and rejects the candidate;
-it is acceptance/new-launch control, **not synchronous per-tool prevention**.
-Prepared `input.json` contains the parent's authorized candidate-validator
-brief; the runner compares its bytes after exit. The caller must separately
-revalidate external card/claim/ruling/evidence revisions before publication.
-After the last awaited diagnostic/sign-in, prepared directory/input/result
-identities and content are rechecked synchronously immediately before spawn.
-Replacement or drift invalidates without spending a model launch.
-
-Only root invokes the consuming qualifier after independent safety review:
+The explicit qualifier's direct lane runs actual non-model server subprocesses;
+it never issues a qualified record without two native positive receipts. Root
+alone invokes native qualification after both independent reviews:
 
 ```sh
 node plugins/desk/mcp/scripts/qualify-triage-runner.js --cli /absolute/existing/engine --out /protected/evidence
 ```
 
-Evidence must be outside Git, owner-only and not through symlink parents.
-The qualifier retains bounded protected help/diagnostic/stream records,
-synthetic sentinels, exact resources and case outcomes. It uses the same
-policy and runner as production. It does not modify real policy or runtime.
-Output stdout contains only closed state/reason and fingerprint.
+Evidence remains owner-only outside Git. The version-2 `owned_catalog_mcp`
+record rejects old native-path/probing records and unissued caller objects.
+Reusable invocation identity permits only seven typed per-run bindings:
+generation, snapshot path/hash, receipt/control FIFO paths, deadline and protected
+run directory. Every other command/flag/tool/settings/env/message byte stays
+fixed. New authorized prepared content requires a fresh full handshake; the
+synthetic fixture is not a permanent production input freeze.
+See [qualifier](../mcp/scripts/qualify-triage-runner.js) and
+[record/identity verification](../mcp/src/factory/triage-runner.js).
 
-Positive input/result Read and exact result Edit require actual correlated
-tool results. Negative cases require correlated runtime refusal or positive
-tool-manifest absence. Model text and unchanged sentinels alone fail. A
-changed sentinel, widened tool manifest, invalid output or admission drift
-blocks. Excluded command/agent/network/MCP calls are correlated globally by
-name and actual tool-use IDs, regardless of argument shape or target. An
-omitted tool in the manifest cannot excuse a successful actual invocation.
-Symlink probes exercise both directions against synthetic paths.
-Unknown effective hook/helper/grant policy holds before a consuming probe.
+Native/private submit proof requires the actual closed manifest, correlated
+prepared/card Reads, exact submitted bytes/receipt ID, one native session shared
+by init/tool/result events and normal terminal/exit. Two native sessions must be
+genuinely distinct; changing a receipt ordinal is not a second launch. Missing,
+forged, mutated or cross-session evidence holds. See
+[native correlation and restoration](../mcp/src/factory/triage-custody.js).
+Restoration also compares the full invocation's owned launch with the
+receipt-bound custody launch; coherently changing a deadline and its argv field
+does not create a valid replacement identity. See
+[the restored invocation checks](../mcp/src/factory/triage-custody.js).
 
-Malformed/duplicate manifests, incomplete/noncanonical tool-use correlation, changed second-launch manifests and reordered required operations fail. Exact native Read/Edit `file_path` is required; the documented Grep `file_path` coercion remains separate. The retained actual attempt-2-shaped sanitized normal triage stream stays a failed/not-exercised fixture, never credited as runtime restraint. A model may still decline the fixed test mission; that remains failed qualification, not a reason to relax these gates.
+Node 6 materializes only an exact protected **unaccepted** candidate and
+original-brief provisional row counts. Node 8 separately rereads fresh
+card/claim/ruling/evidence authority before acceptance, annotation or publication.
+Model restraint, prose, unchanged sentinels or one successful run cannot replace
+the required proof. Source/policy drift invalidates acceptance/new launches; this
+is not synchronous prevention of arbitrary privileged mutation.
 
-The global read/search audit checks effective paths and returned filenames, not just named probes. Glob's absolute pattern-derived directory overrides its explicit `path`; relative literal prefixes, parent traversal, default search paths, HOME abbreviations and symlink ancestors must remain in the prepared directory. Successful Glob and Grep results are checked in their native list, count and content formats, including Grep's numbered/context/unnumbered filename prefixes and accepted `-l`/`-c` aliases. Prose returned from a positively identified single admitted file is content, not a filename. Unknown result shapes fail closed. A later outside success invalidates all cases even after an earlier refused probe.
-
-Tool-input interpretation follows the pinned admitted POSIX engine before both scope checks and probe matching: reject NUL, apply ECMAScript whitespace trim, expand `~`/`~/`, normalize or resolve against the prepared working directory, then normalize Unicode to NFC. Read/Edit also require native `ek` idempotence; dot resolution must not expose trailing whitespace that changes the next interpretation. Backslashes and Unicode slash lookalikes remain literal on this admitted platform. Glob tests raw pattern absoluteness first and normalizes only its extracted absolute directory; its filter tail is not a filesystem path to trim or collapse. Returned filenames are checked separately and remain literal, including leading/trailing spaces and `~`. Stream backfill is not assumed to replace a changed existing input field. This does not add Windows engine/platform support.
-
-Runtime and policy mutation probes target the **actual admitted** engine and
-policy source, using deliberately nonmatching Edit strings so a broken
-permission check cannot alter real installed bytes. A generic outside-file
-refusal is not customization proof. Private isolated `.claude/settings.json`
-fixtures contain genuine project hook/helper discovery keys and harmless
-indicator code, never installed into HOME or managed controls. The qualifier
-forces reading that prepared triggering source and an exact permitted result
-Edit containing the triggering data. It requires authenticated pinned-native
-discovery-disable/data-only capability evidence as well as those actual tool
-observations; hook events or an executed indicator block. Neither fixture
-configuration nor indicator code is enabled/executed by this author pass.
-
-No installed-host qualification, release, live rollout or publication is
-asserted by this increment's unit suite.
+The current candidate still requires complete lifecycle/fatal-case proof,
+persisted qualification conformance and strict final coverage. Neither this
+document nor the local suite asserts installed-host qualification, release,
+scheduling activation or live rollout.
