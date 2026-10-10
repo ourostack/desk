@@ -132,6 +132,7 @@ function serve(options) {
     var inflight = {};
     var own = {};
     var calls = {};
+    var preparing = Object.create(null);
     var cleaning = null;
     var forms = [];
     var errorText = "";
@@ -142,6 +143,9 @@ function serve(options) {
     var retryable = false;
     var settled = false;
     var closed = false;
+    var initialized = false;
+    var hostClientInfo = null;
+    var pendingLaunch = null;
     var handlers = {};
 
     function send(message) {
@@ -208,9 +212,19 @@ function serve(options) {
       resolve();
     }
 
+    function cancelPreparing() {
+      Object.keys(preparing).forEach(function (id) {
+        var entry = preparing[id];
+        entry.cancelled = true;
+        if (options.afterCall !== undefined) options.afterCall(entry.params, true, entry);
+      });
+    }
+
     // A stop signal ends the browser when it runs, which then ends this process; with no browser yet it ends the install and then this process.
     FORWARDED_SIGNALS.forEach(function (signal) {
       handlers[signal] = function () {
+        closed = true;
+        cancelPreparing();
         if (child !== null) {
           var running = child;
           cleanup().then(function () {
@@ -243,7 +257,7 @@ function serve(options) {
       nextId += 1;
       entry.childId = childId;
       inflight[childId] = entry.id;
-      calls[childId] = entry.params;
+      calls[childId] = { params: entry.params, operation: entry };
       toChild({ id: childId, method: "tools/call", params: entry.params });
     }
 
@@ -252,7 +266,10 @@ function serve(options) {
         dispatch(entry);
         return;
       }
-      options.beforeCall(entry.params, api).then(function (local) {
+      preparing[entry.id] = entry;
+      options.beforeCall(entry.params, api, entry).then(function (local) {
+        delete preparing[entry.id];
+        if (entry.cancelled) return;
         if (local === null) dispatch(entry);
         else send({ id: entry.id, result: local });
       });
@@ -306,9 +323,9 @@ function serve(options) {
         delete calls[message.id];
         var reply = { id: hostId };
         if (message.error) reply.error = message.error;
-        else reply.result = message.result;
+        else reply.result = options.mapResult === undefined ? message.result : options.mapResult(message.result);
         send(reply);
-        if (options.afterCall !== undefined) options.afterCall(finished, Boolean(message.error) || Boolean(message.result && message.result.isError));
+        if (options.afterCall !== undefined) options.afterCall(finished.params, Boolean(message.error) || Boolean(reply.result && reply.result.isError), finished.operation);
         return;
       }
       if (message.id !== undefined) {
@@ -340,6 +357,7 @@ function serve(options) {
       var payload = options.exitPayload(code, signal);
       Object.keys(inflight).forEach(function (childId) {
         send({ id: inflight[childId], result: callFailure(payload) });
+        if (options.afterCall !== undefined) options.afterCall(calls[childId].params, true, calls[childId].operation);
       });
       inflight = {};
       calls = {};
@@ -382,6 +400,11 @@ function serve(options) {
     }
 
     function start(launch) {
+      if (options.onInitialize !== undefined && !initialized) {
+        pendingLaunch = launch;
+        return;
+      }
+      if (options.onInitialize !== undefined) options.onInitialize(launch, hostClientInfo);
       forms = secretForms(either(launch.secrets, []));
       try {
         child = options.spawn(launch.node, [launch.indexFile].concat(launch.args), { stdio: ["pipe", "pipe", "pipe"], env: launch.env, windowsHide: true });
@@ -412,7 +435,7 @@ function serve(options) {
       toChild({
         id: HANDSHAKE_ID,
         method: "initialize",
-        params: { protocolVersion: DEFAULT_PROTOCOL, capabilities: {}, clientInfo: { name: "desk-web", version: "0.0.0" } }
+        params: { protocolVersion: DEFAULT_PROTOCOL, capabilities: {}, clientInfo: either(launch.clientInfo, { name: "desk-web", version: "0.0.0" }) }
       });
     }
 
@@ -471,6 +494,12 @@ function serve(options) {
 
     function cancel(params) {
       var requestId = params.requestId;
+      if (preparing[requestId]) {
+        var prepared = preparing[requestId];
+        prepared.cancelled = true;
+        if (options.afterCall !== undefined) options.afterCall(prepared.params, true, prepared);
+        return;
+      }
       var waiting = queue.filter(function (entry) {
         return entry.id === requestId;
       })[0];
@@ -506,6 +535,15 @@ function serve(options) {
         return;
       }
       if (message.method === "initialize") {
+        if (!initialized) {
+          initialized = true;
+          hostClientInfo = params.clientInfo;
+          if (pendingLaunch !== null) {
+            var launch = pendingLaunch;
+            pendingLaunch = null;
+            start(launch);
+          }
+        }
         send({ id: message.id, result: {
           protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : DEFAULT_PROTOCOL,
           capabilities: { tools: { listChanged: false } },
@@ -533,6 +571,7 @@ function serve(options) {
       answer(hostLines.text);
       hostLines.text = "";
       closed = true;
+      cancelPreparing();
       if (child !== null) {
         // Playwright MCP exits when its own stdin closes; a child that does not is stopped after a short wait.
         var closing = child;

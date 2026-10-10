@@ -357,54 +357,118 @@ function fakeBrowserProcess(events = []) {
   return child
 }
 
-test("the holding window is opened by starting the browser directly, with no token, and waited for", async () => {
-  const calls = []
-  const stderr = []
-  const started = Date.now()
-  await real.openWindow({
-    spawn: (file, argv, options) => { calls.push({ file, argv, options }); return fakeBrowserProcess(calls) },
-    executable: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", profile: "Profile 4", env: { PATH: "/usr/bin" }, stderr: { write: (text) => stderr.push(text) }, waitMs: 60,
-  })
-  assert.ok(Date.now() - started >= 50, "it waits for the window to exist")
-  const [{ file, argv, options }] = calls
-  assert.equal(file, "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe")
-  assert.deepEqual(argv.slice(0, 2), ["--new-window", "--profile-directory=Profile 4"])
-  assert.equal(argv.length, 3)
-  assert.match(argv[2], /^data:text\/html,/u)
-  const page = decodeURIComponent(argv[2].slice("data:text/html,".length))
-  assert.match(page, /<title>Agent window<\/title>/u)
-  assert.match(page, /visibilitychange/u)
-  assert.match(page, /document\.hidden\)\{document\.title='Agent window \(closing\)';window\.close\(\)\}/u)
-  assert.match(page, /setTimeout\(function\(\)\{window\.close\(\)\},30000\)/u)
-  assert.deepEqual(options, { detached: true, stdio: "ignore", shell: false, windowsHide: true, env: { PATH: "/usr/bin" } })
-  assert.equal(calls.at(-1), "unref", "the browser is left to run on its own")
-  assert.deepEqual(stderr, [])
-})
-
-test("a synchronous window launch failure is reported and refuses opening", async () => {
-  const stderr = []
-  const out = { write: (text) => stderr.push(text) }
-  await assert.rejects(real.openWindow({ spawn: () => { throw new Error("EACCES") }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 1 }), /EACCES/u)
-  assert.match(stderr.join(""), /could not open a new browser window: EACCES/u)
-})
-
-test("an asynchronous window launch failure is reported and refuses opening", async () => {
-  const stderr = []
-  const out = { write: (text) => stderr.push(text) }
-  const child = fakeBrowserProcess()
-  await assert.rejects(real.openWindow({ spawn: () => { setImmediate(() => child.emit("error", new Error("ENOENT"))); return child }, executable: "x", profile: "Default", env: {}, stderr: out, waitMs: 20 }), /ENOENT/u)
-  assert.match(stderr.join(""), /could not open a new browser window: ENOENT/u)
-})
-
-test("a healthy window still uses the default opening wait", async () => {
-  const quick = Date.now()
-  await real.openWindow({ spawn: () => fakeBrowserProcess(), executable: "x", profile: "Default", env: {}, stderr: { write() {} } })
-  assert.ok(Date.now() - quick >= 900, "the default wait is about a second")
-})
-
 // ---- the agent's own tabs ----
 
 const tabsText = (count) => ({ content: [{ type: "text", text: count === 0 ? "### Open tabs\nNo open tabs." : `### Open tabs\n${Array.from({ length: count }, (_, index) => `- ${index}: ${index === 0 ? "(current) " : ""}[Page ${index}](https://example.com/${index})`).join("\n")}` }] })
+
+test("cleanup closes later task and control tabs before the oldest connection tab", async () => {
+  const indexes = []
+  let tabs = 3
+  const response = await real.closeOwnTabs(async (name, args) => {
+    if (args.action === "list") return tabsText(tabs)
+    indexes.push(args.index)
+    assert.equal(args.index, tabs - 1)
+    tabs -= 1
+    return tabsText(tabs)
+  }, 100)
+  assert.deepEqual(indexes, [2, 1, 0])
+  assert.equal(response.isError, undefined)
+})
+
+test("cleanup cannot confirm closure while the first dispatched operation is unresolved", async () => {
+  const tabs = real.ownTabs(async () => {}, 100)
+  const operation = {}
+  const params = { name: "browser_navigate" }
+  const api = { callTool: async (name, args) => tabsText(args.action === "list" ? 1 : 0) }
+  assert.equal(await tabs.beforeCall(params, api, operation), null)
+  let finished = false
+  const closing = tabs.beforeCall({ name: "browser_close" }, api).then(result => { finished = true; return result })
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(finished, false, "an unresolved first operation owns the cleanup interval")
+  tabs.afterCall(params, false, operation)
+  assert.equal((await closing).isError, undefined)
+})
+
+test("a timed-out wait for pending operations retains the connection and never reports closed", async () => {
+  let opens = 0
+  let cleanupCalls = 0
+  const tabs = real.ownTabs(async () => { opens += 1 }, 15)
+  const operation = {}
+  const params = { name: "browser_navigate" }
+  const api = { callTool: async (name, args) => { cleanupCalls += 1; return tabsText(args.action === "list" ? 1 : 0) } }
+  await tabs.beforeCall(params, api, operation)
+  const incomplete = await tabs.beforeCall({ name: "browser_close" }, api)
+  assert.equal(incomplete.isError, true)
+  assert.equal(JSON.parse(incomplete.content[0].text).code, "browser_cleanup_incomplete")
+  assert.equal(cleanupCalls, 0, "cleanup never starts a replacement while an operation is pending")
+  assert.equal(opens, 1)
+  tabs.afterCall(params, false, operation)
+  assert.equal((await tabs.beforeCall({ name: "browser_close" }, api)).isError, undefined)
+  assert.equal(opens, 1)
+})
+
+test("cleanup waits for every concurrent operation, not just the first response", async () => {
+  const tabs = real.ownTabs(async () => {}, 100)
+  const a = {}, b = {}
+  const params = { name: "browser_navigate" }
+  const api = { callTool: async (name, args) => tabsText(args.action === "list" ? 1 : 0) }
+  await Promise.all([tabs.beforeCall(params, api, a), tabs.beforeCall(params, api, b)])
+  let complete = false
+  const closing = tabs.beforeCall({ name: "browser_close" }, api).then(result => { complete = true; return result })
+  tabs.afterCall(params, false, a)
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(complete, false)
+  tabs.afterCall(params, false, b)
+  assert.equal((await closing).isError, undefined)
+})
+
+test("a failed pending operation leaves no browser for cleanup to create", async () => {
+  const tabs = real.ownTabs(async () => {}, 100)
+  const operation = {}
+  const params = { name: "browser_navigate" }
+  const api = { callTool: async () => { assert.fail("cleanup must not initiate a connection"); } }
+  await tabs.beforeCall(params, api, operation)
+  const closing = tabs.beforeCall({ name: "browser_close" }, api)
+  tabs.afterCall(params, true, operation)
+  assert.equal((await closing).isError, undefined)
+})
+
+test("cancellation while waiting behind cleanup never registers a phantom operation or prepares again", async () => {
+  let opens = 0
+  let completeCleanup
+  const tabs = real.ownTabs(async () => { opens += 1 }, 20)
+  const params = { name: "browser_navigate" }
+  const first = {}
+  const api = { callTool: () => new Promise(resolve => { completeCleanup = resolve }) }
+  await tabs.beforeCall(params, api, first)
+  tabs.afterCall(params, false, first)
+  const closing = tabs.beforeCall({ name: "browser_close" }, api)
+  await Promise.resolve()
+  const cancelled = {}
+  const queued = tabs.beforeCall(params, api, cancelled)
+  cancelled.cancelled = true
+  tabs.afterCall(params, true, cancelled)
+  completeCleanup(tabsText(0))
+  await Promise.all([closing, queued])
+  const next = await tabs.beforeCall({ name: "browser_close" }, api)
+  assert.equal(next.isError, undefined, "cancelled work cannot survive as a pending operation")
+  assert.equal(opens, 1, "cancellation cannot clear the receipt through another preparation")
+})
+
+test("real-profile tab selection refuses before window preparation and explains honest action-scoped alternatives", posixOnly, async () => {
+  const machine = await realMachine()
+  const host = session(machine)
+  await host.handshake()
+  const response = await host.ask(2, "tools/call", { name: "browser_tabs", arguments: { action: "select", index: 0 } })
+  assert.equal(response.result.isError, true)
+  const payload = JSON.parse(textOf(response))
+  assert.equal(payload.code, "browser_focus_activation_refused")
+  assert.match(payload.fix, /existing current tab/u)
+  assert.match(payload.fix, /browser_run_code_unsafe/u)
+  assert.equal(machine.opens.length, 0)
+  assert.equal(machine.events.some(event => event === "child:tools/call browser_tabs select"), false)
+  await host.close()
+})
 
 test("tabs are counted from the lines that start with an index", () => {
   assert.equal(real.countTabs(tabsText(0)), 0)
@@ -422,7 +486,7 @@ test("the agent's tabs are closed from the first until none is left, and nothing
     if (args.action === "close") open -= 1
     return tabsText(open)
   })
-  assert.deepEqual(calls.map(([, args]) => args), [{ action: "list" }, { action: "close", index: 0 }, { action: "close", index: 0 }, { action: "close", index: 0 }], "one list, then one close per tab, and no list afterwards")
+  assert.deepEqual(calls.map(([, args]) => args), [{ action: "list" }, { action: "close", index: 2 }, { action: "close", index: 1 }, { action: "close", index: 0 }], "one list, then one close per tab, and no list afterwards")
   assert.ok(calls.every(([name, , ms]) => name === "browser_tabs" && ms > 0))
   assert.equal(calls[0][2], 2500)
   const timed = []
@@ -549,8 +613,8 @@ test("concurrent cleanup requests share one closing attempt", async () => {
     answered = true
     return result
   })
-  assert.equal(lists, 1)
   await Promise.resolve()
+  assert.equal(lists, 1)
   assert.equal(answered, false, "no closed receipt before the shared cleanup finishes")
   finish(tabsText(0))
   assert.equal(await first, await second)
@@ -680,7 +744,10 @@ function browserStub(events, options = {}) {
         events.push(`child:${message.method}${call}`)
         const send = (body) => child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, ...body })}\n`)
         const reply = (result) => send({ result })
-        if (message.method === "initialize") reply({ protocolVersion: message.params.protocolVersion, capabilities: {}, serverInfo: { name: "Playwright", version: "stub" } })
+        if (message.method === "initialize") {
+          child.clientInfo = message.params.clientInfo
+          reply({ protocolVersion: message.params.protocolVersion, capabilities: {}, serverInfo: { name: "Playwright", version: "stub" } })
+        }
         else if (message.method === "tools/list") reply({ tools: [] })
         else if (message.method === "tools/call") answerCall(message, reply, send)
       }
@@ -692,6 +759,10 @@ function browserStub(events, options = {}) {
         if (options.mode === "silenttabs") return
         if (options.mode === "exittabs") { setImmediate(() => child.emit("exit", 9, null)); return }
         if (options.mode === "errortabs") { send({ error: { code: -32000, message: "tabs are unavailable" } }); return }
+        if (options.mode === "holdcleanup" && args.action === "list" && child.completeCleanup === undefined) {
+          child.completeCleanup = () => { child.tabs = 0; reply({ content: [{ type: "text", text: "### Open tabs\nNo open tabs." }] }) }
+          return
+        }
         if (args.action === "close" && child.tabs === 0) { reply({ content: [{ type: "text", text: "### Open tabs\nNo open tabs." }] }); return }
         if (args.action === "close") child.tabs -= 1
         if (args.action === "list" && child.tabs === 0) { child.tabs = 1; child.recreated += 1 }
@@ -699,7 +770,13 @@ function browserStub(events, options = {}) {
         return
       }
       if (options.mode === "failcall") { reply({ isError: true, content: [{ type: "text", text: "navigation failed" }] }); return }
+      if (options.mode === "rpcerror") { send({ error: { code: -32603, message: "owned protocol failure" } }); return }
+      if (options.mode === "emptyresult") { reply(null); return }
       child.tabs = Math.max(child.tabs, options.tabs ?? 1)
+      if (options.mode === "heldfirst" && child.completeFirst === undefined) {
+        child.completeFirst = () => reply({ content: [{ type: "text", text: `ran ${name}` }] })
+        return
+      }
       if (options.mode === "leak") {
         const token = spawnOptions.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN
         child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { data: `connect?token=${encodeURIComponent(token)}` } })}\n`)
@@ -747,6 +824,18 @@ async function realMachine(options = {}) {
     events.push("open:window")
     return fakeBrowserProcess()
   }
+  const nativeLaunch = (settings) => ({
+    file: path.join(root, "desk-browser-launch"),
+    owner: settings.owner,
+    env: { DESK_BROWSER_EXECUTABLE: settings.executable, DESK_BROWSER_OWNER: settings.owner },
+    before: () => {
+      const child = (options.launch?.openSpawn ?? openSpawn)(settings.executable, ["--check"], { env: {} })
+      assert.ok(child)
+      return null
+    },
+    read: () => options.mode === "failcall" ? null : ({ version: 1, status: "spawned", pid: 90001 }),
+    dispose: () => {},
+  })
   const levelEntries = { entries: options.entries ?? [[tokenKey(), latin(TOKEN)]] }
   const launchOptions = {
     env: { PATH: "/usr/bin", DESK_BROWSER_STATE_DIR: state },
@@ -764,6 +853,7 @@ async function realMachine(options = {}) {
     tmpdir: path.join(root, "tmp"),
     spawn: stub.spawn,
     openSpawn,
+    nativeLaunch,
     openWaitMs: 5,
     tabCallMs: 200,
     cleanupMs: 2000,
@@ -786,7 +876,7 @@ function session(machine, extra = {}) {
   const exits = []
   const kills = []
   const signals = new EventEmitter()
-  const running = browser.run({
+  const running = (extra.run ?? browser.run)({
     ...machine.launchOptions,
     stderr: { write: (text) => stderr.push(String(text)) },
     exit: (code) => exits.push(code),
@@ -895,7 +985,7 @@ test("a caller's own connection option keeps the browser as the caller asked, wi
   assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
 })
 
-test("a declaration attaches to the declared profile with the token in the environment only, and opens the holding window first", posixOnly, async () => {
+test("a declaration routes the official connect launch directly to a new window, with a distinct owner and no holding page", posixOnly, async () => {
   const machine = await realMachine()
   const host = session(machine)
   await host.handshake()
@@ -908,17 +998,23 @@ test("a declaration attaches to the declared profile with the token in the envir
   assert.equal(machine.opens.length, 1, "one window per connection")
   const [opened] = machine.opens
   assert.equal(opened.file, EDGE)
-  assert.deepEqual(opened.argv.slice(0, 2), ["--new-window", "--profile-directory=Profile 4"])
+  assert.deepEqual(opened.argv, ["--check"], "the parent preflights but does not launch a holding page")
   assert.equal(JSON.stringify(opened).includes(TOKEN), false, "the token never reaches the window's browser start")
   assert.equal(opened.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
-  assert.equal(opened.options.shell, false)
   assert.ok(machine.events.indexOf("open:window") > machine.events.indexOf("child:initialize"))
   assert.ok(machine.events.indexOf("open:window") < machine.events.indexOf("child:tools/call browser_navigate"))
   const [spawned] = machine.stub.spawns
-  assert.deepEqual(spawned.argv.slice(3), ["--extension", "--browser", "msedge", "--profile-dir-name", "Profile 4"])
+  assert.deepEqual(spawned.argv.slice(3, 8), ["--extension", "--browser", "msedge", "--profile-dir-name", "Profile 4"])
   assert.deepEqual(spawned.argv.slice(1, 3), ["--output-dir", path.join(machine.state, "output")])
   assert.equal(spawned.argv.includes("--headless"), false)
-  assert.equal(spawned.argv.includes("--executable-path"), false, "no wrapper")
+  assert.equal(spawned.argv[8], "--executable-path")
+  assert.equal(spawned.argv[9], path.join(machine.root, "desk-browser-launch"))
+  assert.equal(spawned.argv[10], "--init-page")
+  assert.equal(spawned.argv[11], path.join(mcpRoot, "scripts", "real-profile-page.cjs"))
+  assert.equal(spawned.env.DESK_BROWSER_EXECUTABLE, EDGE)
+  assert.match(spawned.env.DESK_BROWSER_OWNER, /^Desk /u)
+  assert.match(spawned.env.DESK_BROWSER_OWNER, /test-host/u)
+  assert.equal(spawned.child.clientInfo.name, spawned.env.DESK_BROWSER_OWNER)
   assert.equal(spawned.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, TOKEN)
   assert.deepEqual(spawned.stdio, ["pipe", "pipe", "pipe"])
   assert.equal(JSON.stringify([spawned.file, spawned.argv]).includes(TOKEN), false)
@@ -926,6 +1022,185 @@ test("a declaration attaches to the declared profile with the token in the envir
   assert.match(host.stderr.join(""), /driving the Microsoft Edge profile Profile 4 through the Playwright Extension/u)
   assert.equal(JSON.stringify(host.messages).includes(TOKEN), false)
   assert.deepEqual(readdirSync(path.join(machine.root, "tmp")), [])
+})
+
+test("a native launch refusal is returned without exposing receipt data or replaying the operation", posixOnly, async () => {
+  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => null, read: () => ({ status: "refused", code: "browser_spawn_failed" }), dispose: () => {},
+  }) } })
+  const host = session(machine)
+  try {
+    await host.handshake()
+    const response = await host.call(2)
+    assert.equal(response.result.isError, true)
+    assert.equal(JSON.parse(textOf(response)).code, "browser_window_unavailable")
+    assert.equal(machine.events.filter(e => e === "child:tools/call browser_navigate").length, 1)
+  } finally {
+    await host.close()
+  }
+})
+
+test("a missing or invalid native receipt preserves the actual result and forbids replay", posixOnly, async () => {
+  for (const read of [() => null, () => { throw new Error("browser_native_launch_receipt_invalid") }]) {
+    const machine = await realMachine({ launch: { nativeLaunch: settings => ({
+      file: "/fixture/native-launch", owner: settings.owner, env: {},
+      before: () => null, read, dispose: () => {},
+    }) } })
+    const host = session(machine)
+    try {
+      await host.handshake()
+      const response = await host.call(2)
+      assert.equal(response.result.isError, true)
+      assert.equal(response.result.content[0].text, "ran browser_navigate")
+      const payload = JSON.parse(response.result.content[1].text)
+      assert.equal(payload.code, "browser_native_launch_unverified")
+      assert.match(payload.fix, /Do not replay/u)
+      assert.equal(machine.events.filter(e => e === "child:tools/call browser_navigate").length, 1)
+    } finally {
+      await host.close()
+    }
+  }
+})
+
+test("native asset preparation failure refuses before creating an extension client", posixOnly, async () => {
+  const machine = await realMachine({ launch: { nativeLaunch: () => { throw new Error("browser_native_launch_integrity") } } })
+  const host = session(machine)
+  try {
+    await host.handshake()
+    const response = await host.call(2)
+    assert.equal(response.result.isError, true)
+    assert.equal(JSON.parse(textOf(response)).code, "browser_native_launch_unavailable")
+    assert.equal(machine.stub.spawns.length, 0)
+  } finally {
+    await host.close()
+  }
+})
+
+test("a real-profile child waits for the host's identity even when preparation completes first", posixOnly, async () => {
+  const machine = await realMachine()
+  const host = session(machine)
+  await host.wait(() => host.stderr.join("").includes("driving the Microsoft Edge"), "profile preparation")
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(machine.stub.spawns.length, 0)
+  await host.handshake()
+  await host.call(2)
+  assert.match(machine.stub.spawns[0].child.clientInfo.name, /test-host/u)
+  await host.close()
+})
+
+test("a host without client metadata still gets a distinct declared agent label", posixOnly, async () => {
+  const machine = await realMachine()
+  machine.launchOptions.env.DESK_AGENT_NAME = "fixture agent"
+  const host = session(machine)
+  await host.ask(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {} })
+  await host.call(2)
+  assert.match(machine.stub.spawns[0].child.clientInfo.name, /fixture agent/u)
+  await host.close()
+})
+
+test("generic proxy hooks can be cancelled or stopped without an afterCall callback", posixOnly, async () => {
+  const { serve } = require(path.join(mcpRoot, "web-proxy.cjs"))
+  for (const stopping of [false, true]) {
+    let complete
+    const machine = await realMachine()
+    const host = session(machine, { run: o => serve({
+      stdin: o.stdin, stdout: o.stdout, stderr: o.stderr,
+      spawn: o.spawn, signals: o.signals, kill: o.kill, exit: o.exit,
+      catalog: [], catalogVersion: "fixture",
+      ready: Promise.resolve({ launch: { node: process.execPath, indexFile: "fixture", args: [], env: {} } }),
+      beforeCall: () => new Promise(resolve => { complete = resolve }),
+      abort() {}, retry: () => Promise.resolve({ payload: { code: "fixture" } }),
+      timeoutPayload: { code: "fixture" }, spawnPayload: () => ({ code: "fixture" }), exitPayload: () => ({ code: "fixture" }),
+    }) })
+    await host.handshake()
+    host.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+    await host.wait(() => complete, "the generic asynchronous hook")
+    if (stopping) await host.close()
+    else host.send({ method: "notifications/cancelled", params: { requestId: 2 } })
+    complete(null)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    assert.equal(machine.events.some(event => event === "child:tools/call browser_navigate"), false)
+    if (!stopping) await host.close()
+  }
+})
+
+test("unknown cancellation IDs cannot mutate inherited objects or cancel future operations", posixOnly, async () => {
+  let launched = false
+  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => { launched = true; return null },
+    read: () => launched ? { status: "spawned", pid: 42 } : null,
+    dispose: () => {},
+  }) } })
+  const host = session(machine)
+  const previous = Object.getOwnPropertyDescriptor(Object.prototype, "cancelled")
+  try {
+    await host.handshake()
+    await host.wait(() => machine.stub.spawns.length === 1, "the prepared child")
+    host.send({ method: "notifications/cancelled", params: { requestId: "__proto__" } })
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, "cancelled"), previous)
+    assert.equal((await host.call(2)).result.isError, undefined)
+  } finally {
+    if (previous) Object.defineProperty(Object.prototype, "cancelled", previous)
+    else delete Object.prototype.cancelled
+    await host.close()
+  }
+})
+
+test("closing a prepared real-profile connection without host initialize opens no browser", posixOnly, async () => {
+  const machine = await realMachine()
+  const host = session(machine)
+  await host.wait(() => host.stderr.join("").includes("driving the Microsoft Edge"), "profile preparation")
+  await new Promise(resolve => setTimeout(resolve, 20))
+  await host.close()
+  assert.equal(machine.stub.spawns.length, 0)
+  assert.equal(machine.opens.length, 0)
+})
+
+test("an empty browser result with no receipt is retained as an unverified outcome", posixOnly, async () => {
+  const machine = await realMachine({ mode: "emptyresult", launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => null, read: () => null, dispose: () => {},
+  }) } })
+  const host = session(machine)
+  await host.handshake()
+  const response = await host.call(2)
+  assert.equal(response.result.isError, true)
+  assert.equal(JSON.parse(textOf(response)).code, "browser_native_launch_unverified")
+  await host.close()
+})
+
+test("simultaneous real-profile sessions advertise distinct browser owners", posixOnly, async () => {
+  const a = await realMachine()
+  const b = await realMachine()
+  const ha = session(a)
+  const hb = session(b)
+  try {
+    await Promise.all([ha.handshake(), hb.handshake()])
+    await Promise.all([ha.call(2), hb.call(2)])
+    assert.notEqual(a.stub.spawns[0].env.DESK_BROWSER_OWNER, b.stub.spawns[0].env.DESK_BROWSER_OWNER)
+    assert.match(ha.stderr.join(""), /browser owner: Desk /u)
+  } finally {
+    await Promise.all([ha.close(), hb.close()])
+  }
+})
+
+test("a declared profile refuses competing browser paths and profiles before connecting", posixOnly, async () => {
+  for (const args of [["--executable-path", "/different"], ["--profile-dir-name=Other"], ["--user-data-dir", "/different"], ["--browser=chrome"]]) {
+    const machine = await realMachine()
+    const host = session(machine, { args })
+    try {
+      await host.handshake()
+      const response = await host.call(2)
+      assert.equal(response.result.isError, true, "conflicting browser arguments must not reach a page tool")
+      assert.equal(JSON.parse(textOf(response)).code, "browser_configuration_conflict")
+      assert.equal(machine.stub.spawns.length, 0)
+      assert.equal(machine.opens.length, 0)
+    } finally {
+      await host.close()
+    }
+  }
 })
 
 test("a browser that is not installed is one degraded line on the first call", posixOnly, async () => {
@@ -1035,6 +1310,185 @@ test("a first call that fails leaves nothing for the cleanup to connect to", pos
   host.stdin.end()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
   assert.deepEqual(tabEvents(machine), ["child:stdin closed"])
+})
+
+test("a protocol error after native launch still cleans up that owned connection", posixOnly, async () => {
+  const machine = await realMachine({ mode: "rpcerror" })
+  const host = session(machine)
+  await host.handshake()
+  const result = await host.call(2)
+  assert.equal(result.error.code, -32603)
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+  assert.equal(tabEvents(machine).includes("child:tools/call browser_tabs list"), true)
+})
+
+test("a protocol error with an invalid launch receipt retains uncertainty and cleanup ownership", posixOnly, async () => {
+  const machine = await realMachine({ mode: "rpcerror", launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => null, read: () => { throw new Error("browser_native_launch_receipt_invalid") }, dispose: () => {},
+  }) } })
+  const host = session(machine)
+  await host.handshake()
+  const result = await host.call(2)
+  assert.equal(result.error.code, -32603)
+  assert.match(host.stderr.join(""), /ownership remains uncertain/u)
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+  assert.equal(tabEvents(machine).includes("child:tools/call browser_tabs list"), true)
+})
+
+test("the actual proxy waits for a first in-flight response before confirming cleanup or permitting a new attempt", posixOnly, async () => {
+  const machine = await realMachine({ mode: "heldfirst" })
+  const host = session(machine)
+  await host.handshake()
+  const first = host.call(2)
+  await host.wait(() => machine.stub.spawns[0]?.child.completeFirst, "the first dispatched operation")
+  let closed = false
+  const closing = host.call(3, "browser_close").then(result => { closed = true; return result })
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(closed, false)
+  assert.equal(tabEvents(machine).length, 0)
+  assert.equal(machine.opens.length, 1)
+  machine.stub.spawns[0].child.completeFirst()
+  await first
+  assert.equal((await closing).result.isError, undefined)
+  await host.call(4)
+  assert.equal(machine.opens.length, 2)
+  await host.close()
+})
+
+test("a cancelled preparation is never dispatched after its asynchronous hook resolves", posixOnly, async () => {
+  let complete
+  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => new Promise(resolve => { complete = resolve }),
+    read: () => null, dispose: () => {},
+  }) } })
+  const host = session(machine)
+  await host.handshake()
+  host.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await host.wait(() => complete, "the asynchronous preparation hook")
+  host.send({ method: "notifications/cancelled", params: { requestId: 2 } })
+  complete()
+  const closing = await host.call(3, "browser_close")
+  assert.equal(closing.result.isError, undefined)
+  assert.equal(machine.events.some(event => event === "child:tools/call browser_navigate"), false)
+  assert.equal(host.messages.some(message => message.id === 2), false)
+  await host.close()
+})
+
+test("session end cancels a still-preparing operation instead of launching it after shutdown", posixOnly, async () => {
+  let complete
+  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => new Promise(resolve => { complete = resolve }),
+    read: () => null, dispose: () => {},
+  }) } })
+  const host = session(machine)
+  await host.handshake()
+  host.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await host.wait(() => complete, "the asynchronous preparation hook")
+  await host.close()
+  assert.equal(host.stderr.join("").includes("browser_cleanup_incomplete"), false, "a never-dispatched cancelled preparation owns no browser window")
+  complete()
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(machine.events.some(event => event === "child:tools/call browser_navigate"), false)
+})
+
+test("a verified unused native attempt is disposed before the launcher exits", posixOnly, async () => {
+  const events = []
+  const machine = await realMachine({ events, launch: { nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: {},
+    before: () => null, read: () => null, dispose: () => events.push("native:disposed"),
+  }) } })
+  const host = session(machine, { exit: code => events.push(`exit:${code}`) })
+  await host.handshake()
+  await host.close()
+  assert.equal(events.includes("native:disposed"), true)
+  assert.ok(events.indexOf("native:disposed") < events.indexOf("exit:0"), "process.exit must not run before owned attempt disposal")
+})
+
+test("the proxy cancels work queued behind cleanup without poisoning a later browser_close", posixOnly, async () => {
+  const machine = await realMachine({ mode: "holdcleanup" })
+  const host = session(machine)
+  await host.handshake()
+  await host.call(2)
+  const firstClose = host.call(3, "browser_close")
+  await host.wait(() => machine.stub.spawns[0].child.completeCleanup, "the paused cleanup list")
+  host.send({ id: 4, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  host.send({ method: "notifications/cancelled", params: { requestId: 4 } })
+  machine.stub.spawns[0].child.completeCleanup()
+  await firstClose
+  assert.equal((await host.call(5, "browser_close")).result.isError, undefined)
+  assert.equal(machine.opens.length, 1)
+  await host.close()
+})
+
+test("shutdown cancels work queued behind cleanup without restarting preparation", posixOnly, async () => {
+  const machine = await realMachine({ mode: "holdcleanup" })
+  const host = session(machine)
+  await host.handshake()
+  await host.call(2)
+  host.send({ id: 3, method: "tools/call", params: { name: "browser_close", arguments: {} } })
+  await host.wait(() => machine.stub.spawns[0].child.completeCleanup, "the paused cleanup list")
+  host.send({ id: 4, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  const ended = new Promise(resolve => host.stdin.once("end", resolve))
+  const closing = host.close()
+  await ended
+  machine.stub.spawns[0].child.completeCleanup()
+  await closing
+  assert.equal(machine.opens.length, 1)
+  assert.equal(host.stderr.join("").includes("browser_cleanup_incomplete"), false)
+})
+
+test("completed cleanup still resets ownership when its response was cancelled", posixOnly, async () => {
+  const options = { mode: "holdcleanup" }
+  const machine = await realMachine(options)
+  const host = session(machine)
+  await host.handshake()
+  await host.call(2)
+  host.send({ id: 3, method: "tools/call", params: { name: "browser_close", arguments: {} } })
+  await host.wait(() => machine.stub.spawns[0].child.completeCleanup, "the paused cleanup list")
+  host.send({ method: "notifications/cancelled", params: { requestId: 3 } })
+  machine.stub.spawns[0].child.completeCleanup()
+  await new Promise(resolve => setTimeout(resolve, 5))
+  options.mode = "failcall"
+  assert.equal((await host.call(4)).result.isError, true)
+  await host.call(5, "browser_close")
+  assert.equal(machine.stub.spawns[0].child.recreated, 0, "a failed fresh operation cannot retain the already-closed old owner")
+  await host.close()
+})
+
+test("native attempt disposal failure is reported once without stalling session shutdown", posixOnly, async () => {
+  let disposals = 0
+  const machine = await realMachine({ launch: { cleanupMs: 20, nativeLaunch: settings => ({
+    file: "/fixture/native-launch", owner: settings.owner, env: { DESK_BROWSER_RECEIPT: "/fixture/owned-attempt" },
+    before: () => null, read: () => null, dispose: () => { disposals += 1; throw new Error("EACCES") },
+  }) } })
+  const host = session(machine)
+  await host.handshake()
+  host.stdin.end()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.match(host.stderr.join(""), /browser_launch_attempt_cleanup_incomplete/u)
+  assert.equal(disposals, 1)
+  await host.running
+})
+
+test("a failed operation after confirmed cleanup cannot reopen a connection during shutdown", posixOnly, async () => {
+  const options = {}
+  const machine = await realMachine(options)
+  const host = session(machine)
+  await host.handshake()
+  await host.call(2)
+  await host.call(3, "browser_close")
+  options.mode = "failcall"
+  assert.equal((await host.call(4)).result.isError, true)
+  const before = tabEvents(machine)
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+  assert.deepEqual(tabEvents(machine), [...before, "child:stdin closed"])
+  assert.equal(machine.stub.spawns[0].child.recreated, 0)
 })
 
 test("the host closing stdin closes the agent's tabs before the browser is told to stop", posixOnly, async () => {

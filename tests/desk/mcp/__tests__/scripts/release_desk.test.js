@@ -213,7 +213,7 @@ test("the release workflow checks every release surface in a read-only job and p
   for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
     assert.match(checks, new RegExp(check, "u"), check)
   }
-  for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
+  for (const folder of ["release", "activation", "artifacts", "docs", "scripts", "launch"]) {
     assert.match(checks, new RegExp(`^patterns=\\(.*\\b${folder}\\b.*\\)$`, "mu"), folder)
   }
   assert.match(stepNamed(build, "Build and check the release").run, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
@@ -371,7 +371,7 @@ console.log(JSON.stringify({ released: found.length > 0, to: "9.9.9-alpha.1", fr
   put("plugins/desk/changelog.d/README.md", "readme\n")
   put("plugins/desk/mcp/package.json", "{}\n")
   put("tests/desk/mcp/__tests__/_isolated_env.mjs", "")
-  for (const name of ["release", "activation", "artifacts", "docs", "scripts"]) put(`tests/desk/mcp/__tests__/${name}/a.test.js`, tests)
+  for (const name of ["release", "activation", "artifacts", "docs", "scripts", "launch"]) put(`tests/desk/mcp/__tests__/${name}/a.test.js`, tests)
   const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8" })
   git("init", "-q", "-b", "main")
   git("add", "--all")

@@ -1475,7 +1475,7 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-native-launch.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")

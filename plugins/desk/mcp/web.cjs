@@ -20,6 +20,7 @@ var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
 var proxy = require("./web-proxy.cjs");
 var realProfile = require("./web-real-profile.cjs");
+var nativeLaunch = require("./web-native-launch.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
@@ -723,7 +724,26 @@ function start(o, io) {
     return fail(io, "browser_declaration_invalid", declaration.summary, reconnectFix("Fix the desk.browser setting in the plugin"));
   }
   var real = declaration.state === "declared";
-  var holding = null;
+  if (real && hasOption(args, ["--browser", "--executable-path", "--profile-dir-name", "--user-data-dir"])) {
+    return fail(io, "browser_configuration_conflict",
+      "A declared browser profile conflicts with caller-supplied browser, executable, profile or user-data options. No browser operation was forwarded.",
+      "Use the declared profile without those competing options, or configure an explicit connection instead. This is not a permission override.");
+  }
+  var attempt = null;
+  var nativeUsed = false;
+  var cleanupVerified = false;
+  var disposalFailed = false;
+  function disposeAttempt() {
+    if (attempt === null || disposalFailed) return;
+    try {
+      attempt.dispose();
+      attempt = null;
+    } catch (error) {
+      disposalFailed = true;
+      io.stderr.write("[web] browser_launch_attempt_cleanup_incomplete: " + describe(error) +
+        ". The exact native attempt is retained at " + attempt.env.DESK_BROWSER_RECEIPT + "; no cleanup was replayed.\n");
+    }
+  }
   var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
     return failure(io, "node_spawn_failed",
@@ -760,8 +780,22 @@ function start(o, io) {
     }).then(function (connection) {
       if (connection.payload) return { retry: true, payload: failure(io, connection.payload.code, connection.payload.summary, connection.payload.fix) };
       io.stderr.write("[web] driving the " + connection.app + " profile " + connection.profile + " through the Playwright Extension\n");
-      holding = { executable: connection.executable, profile: connection.profile };
-      return launching(connection.args, connection.env, connection.secrets);
+      try {
+        attempt = either(o.nativeLaunch, nativeLaunch.prepare)({
+          mcpRoot: either(o.mcpRoot, __dirname), root: root,
+          executable: connection.executable, profile: connection.profile,
+          platform: platform, arch: either(o.arch, process.arch), env: env,
+          owner: nativeLaunch.ownerName(env, env.DESK_AGENT_NAME)
+        });
+      } catch (error) {
+        return { payload: failure(io, "browser_native_launch_unavailable",
+          "Desk could not prepare this session's direct browser-window launcher (" + describe(error) + "). No browser operation was forwarded.",
+          retryFix("Resolve the launch error, or refresh the Desk plugin if its native asset is missing or damaged. Do not borrow another window")) };
+      }
+      var outcome = launching(connection.args.concat(["--executable-path", attempt.file,
+        "--init-page", path.join(either(o.mcpRoot, __dirname), "scripts", "real-profile-page.cjs")]), Object.assign({}, connection.env, attempt.env), connection.secrets);
+      outcome.launch.clientInfo = { name: attempt.owner, version: "1" };
+      return outcome;
     });
   }
   var spawn = either(o.spawn, childProcess.spawn);
@@ -796,22 +830,84 @@ function start(o, io) {
       return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
     });
   }
-  // In the real profile the agent opens a holding window before its first call, and its own tabs are closed on browser_close and when the session ends (web-real-profile.cjs).
+  // The official relay launches its connect URL through our native executable,
+  // so no holding page or last-active-window delay precedes the connection.
   var own = real ? realProfile.ownTabs(function () {
-    var browserEnv = withNodeFirst(env, node, platform);
-    delete browserEnv.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
-    return realProfile.openWindow({ spawn: either(o.openSpawn, childProcess.spawn), executable: holding.executable, profile: holding.profile, env: browserEnv, stderr: io.stderr, waitMs: o.openWaitMs }).then(null, function (error) {
+    return Promise.resolve().then(function () { return attempt.before(); }).then(null, function (error) {
       var payload = degraded("browser_window_unavailable", "Desk could not open this session's browser window: " + describe(error) + ". The browser operation was not forwarded.", retryFix("Resolve the window-launch error. Do not use another window as a fallback"));
       return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }] };
     });
   }, o.tabCallMs) : {};
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
-    beforeCall: own.beforeCall,
-    afterCall: own.afterCall,
+    onInitialize: !real ? undefined : function (launch, clientInfo) {
+      attempt.owner = nativeLaunch.ownerName(env, clientInfo && clientInfo.name || env.DESK_AGENT_NAME);
+      attempt.env.DESK_BROWSER_OWNER = attempt.owner;
+      launch.env.DESK_BROWSER_OWNER = attempt.owner;
+      launch.clientInfo.name = attempt.owner;
+      io.stderr.write("[web] browser owner: " + attempt.owner + "\n");
+    },
+    beforeCall: !real ? undefined : function (params, api, operation) {
+      if (params.name === "browser_tabs" && params.arguments && params.arguments.action === "select") {
+        return Promise.resolve({ isError: true, content: [{ type: "text", text: JSON.stringify(degraded("browser_focus_activation_refused",
+          "Tab selection was not performed because it activates the browser window.",
+          "Use browser_run_code_unsafe to resolve exactly one task page by a recorded URL or nonce within page.context().pages(), reject missing or ambiguous matches, and perform the action directly on that Page without bringToFront. This is action-scoped: subsequent ordinary tools still use the existing current tab. Do not transfer tab groups or borrow a browser-global tab.")) }] });
+      }
+      return own.beforeCall(params, api, operation).then(function (result) {
+        if (params.name === "browser_close" && !result.isError) {
+          nativeUsed = false;
+          cleanupVerified = true;
+        } else if (operation && operation.cancelled) {
+          return result;
+        } else if (params.name !== "browser_close" && result === null) {
+          cleanupVerified = false;
+        }
+        return result;
+      });
+    },
+    mapResult: !real ? undefined : function (result) {
+      var receipt;
+      try {
+        receipt = attempt.read();
+      } catch (error) {
+        io.stderr.write("[web] browser launch receipt could not be verified: " + describe(error) + "\n");
+      }
+      if (receipt && receipt.status === "spawned") {
+        nativeUsed = true;
+        return result;
+      }
+      if (receipt && receipt.status === "refused") {
+        return { isError: true, content: [{ type: "text", text: JSON.stringify(degraded("browser_window_unavailable",
+          "The native browser launch was refused (" + receipt.code + ").",
+          retryFix("Resolve the launch error, call browser_close on this connection, then retry. Do not borrow another window"))) }] };
+      }
+      if (!receipt && result && result.isError) return result;
+      // Preserve the operation's actual response: a missing launch receipt is
+      // not proof that a completed operation can safely be replayed.
+      nativeUsed = true;
+      return { isError: true, content: (result && result.content || []).concat([{ type: "text", text: JSON.stringify(degraded("browser_native_launch_unverified",
+        "The browser returned an operation result, but Desk could not verify its native launch receipt. The result above is retained.",
+        "Do not replay the operation. Close this connection and reconcile its result before retrying.")) }]) };
+    },
+    afterCall: !real ? undefined : function (params, failed, operation) {
+      if (!nativeUsed && failed) {
+        try {
+          var receipt = attempt.read();
+          nativeUsed = Boolean(receipt && (receipt.status === "spawned" || receipt.status === "starting"));
+        } catch (error) {
+          io.stderr.write("[web] browser ownership remains uncertain after a failed operation: " + describe(error) + "\n");
+          nativeUsed = true;
+        }
+      }
+      own.afterCall(params, nativeUsed ? false : failed, operation);
+    },
     cleanup: own.cleanup === undefined ? undefined : function (api) {
       return own.cleanup(api).then(function (result) {
+        cleanupVerified = !result.isError;
         if (result.isError) io.stderr.write("[web] browser_cleanup_incomplete: this session's tabs may remain open; their closure was not verified. Do not close another owner's window as a fallback.\n");
+        if (!result.isError && attempt !== null) {
+          disposeAttempt();
+        }
       });
     },
     cleanupMs: o.cleanupMs,
@@ -841,6 +937,8 @@ function start(o, io) {
       return degraded("browser_exited", "The browser ended (" + (signal ? "signal " + signal : "exit code " + code) + ")",
         reconnectFix("Call the browser tool again after reconnecting"));
     }
+  }).then(function () {
+    if (!nativeUsed || cleanupVerified) disposeAttempt();
   });
 }
 
