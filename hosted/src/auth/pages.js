@@ -76,7 +76,7 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, desk
         `</ul></div>` +
         `<form method="post" action="/oauth/consent"><input type="hidden" name="consent" value="${escapeHtml(consent)}"><button type="submit">Approve</button></form>` +
         `<p class="note">To cancel, close this page.</p>` +
-        (fromClaude ? `<p class="note">${escapeHtml("You can disconnect at any time in Claude's settings, under Customize > Connectors.")}</p>` : ""),
+        (fromClaude ? `<p class="note">${escapeHtml("You can disconnect at any time from Claude's connector settings.")}</p>` : ""),
     ),
   };
 }

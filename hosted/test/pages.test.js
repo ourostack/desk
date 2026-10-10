@@ -135,7 +135,7 @@ test("the consent page lists what the client can and cannot do, from what the ga
   assert.match(html, /Keep your GitHub sign-in\. Hosted Desk keeps only your GitHub username, user id and name, and discards the GitHub token\./);
   assert.match(html, /<form method="post" action="\/oauth\/consent"><input type="hidden" name="consent" value="sealed"><button type="submit">Approve<\/button><\/form>/);
   assert.match(html, /To cancel, close this page\./);
-  assert.match(html, /You can disconnect at any time in Claude&#39;s settings, under Customize &gt; Connectors\./);
+  assert.match(html, /You can disconnect at any time from Claude&#39;s connector settings\./);
 });
 
 test("the consent page without a desk repository names it generically", () => {
@@ -145,7 +145,7 @@ test("the consent page without a desk repository names it generically", () => {
   assert.match(html, /committed and pushed to your desk repository\./);
   assert.match(html, /Change any repository other than your desk repository\./);
   assert.match(html, /sends you back to <strong>127\.0\.0\.1:33418<\/strong>\./);
-  assert.doesNotMatch(html, /Customize &gt; Connectors/, "the claude.ai disconnect line is only for claude.ai");
+  assert.doesNotMatch(html, /connector settings/, "the claude.ai disconnect line is only for claude.ai");
 });
 
 test("a sign-in error page shares the Desk look, escapes its message and links home", () => {
