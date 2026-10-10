@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.281 — 2026-10-10
+
+### Fixed
+
+- Real-profile browser connections launch their official extension connect page directly in a new window, instead of racing a separate holding window against the browser's last-active window. Each connection has a distinct owner label and keeps the existing bounded, connection-scoped cleanup contract.
+- Native window launch assets are included for the existing browser platform/architecture combinations and verified against their source and content hashes. Missing, modified or conflicting launch configuration refuses browser operations instead of borrowing another window.
+- Exact-owned pages use renderer-only focus emulation through the extension's existing debugger capability, so frames and normal clicks keep working without activating their browser window. An inactive connection-owned control tab preserves this across task-page navigation and closes through the ordinary connection cleanup.
+- Real-profile tab selection explicitly refuses foreground activation and explains the supported action-scoped alternative. Cleanup waits for pending operations, while cancelled preparations cannot dispatch after cancellation or shutdown.
+- A Page-bound owner helper lets callers declare current browser work on their verified tab group, with exact identity and title readback. Peer discovery can use that receipt without scanning unrelated pages or transferring ownership; task focus remains unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.280 — 2026-10-10
 
 Hosted Desk accepts MCP clients beyond claude.ai's registered connector, still for one user. Allowed redirects now come from `DESK_REDIRECTS` (default: Claude's two callbacks and VS Code's two), plus loopback on any port and ChatGPT's per-connector callback, and every client's redirects are checked again on each use, so removing one shuts out clients registered before. A client may use the https URL of its client metadata document as its id, which claude.ai's "Use Claude's published identity" does: the gateway fetches it only from public addresses, follows no redirects, stops after 5 seconds or 10 KB, requires a public client whose redirects `DESK_REDIRECTS` already allows, and caches it for 5 minutes to 24 hours. A `resource` a client sends must be the gateway's `/mcp` URL, and new tokens carry it as their audience; tokens issued before keep working until they expire. The OAuth metadata lists `offline_access`, so ChatGPT asks for refresh tokens, and `client_id_metadata_document_supported`. See [`hosted/README.md`](../../hosted/README.md).
