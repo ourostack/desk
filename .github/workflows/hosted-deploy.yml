@@ -164,7 +164,14 @@ jobs:
           base="${DESK_PUBLIC_URL:-https://$(az containerapp show -n "$APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query properties.configuration.ingress.fqdn -o tsv)}"
           url="${base%/}/healthz/deep"
           deadline=$((SECONDS + 300))
-          until [ "$(curl -s -o "$RUNNER_TEMP/deep.txt" -w '%{http_code}' --max-time 10 "$url")" = "200" ]; do
+          until status="$(curl -s -o "$RUNNER_TEMP/deep.txt" -w '%{http_code}' --max-time 10 "$url")" && [ "$status" = "200" ]; do
+            # The deployed release may predate /healthz/deep (a hand-run deploy after this workflow merged but before
+            # the release that carries the route). /healthz already passed, so that image is healthy as far as it can
+            # say; a 404 is a notice, not a failure.
+            if [ "$status" = "404" ]; then
+              echo "::notice title=No deep health check::$url answers 404: this image predates /healthz/deep."
+              exit 0
+            fi
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "::error title=Hosted Desk deep health check failing::$url did not answer 200 within 5 minutes: $(head -c 200 "$RUNNER_TEMP/deep.txt" 2>/dev/null || true)"
               exit 1

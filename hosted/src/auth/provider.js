@@ -211,7 +211,8 @@ export function createProvider({
   function ownerOf(grant) {
     if (grant.legacy === true || grant.accountId === undefined) {
       const mapped = Number.isSafeInteger(grant.userId) ? legacy.byUserId.get(grant.userId) : undefined;
-      if (!mapped || typeof grant.login !== "string" || mapped.login !== grant.login) return { refused: "legacy_unmapped" };
+      // GitHub logins are case-insensitive, so the mapping's login matches in any case.
+      if (!mapped || typeof grant.login !== "string" || mapped.login.toLowerCase() !== grant.login.toLowerCase()) return { refused: "legacy_unmapped" };
       if (grant.accountId !== undefined && grant.accountId !== mapped.accountId) return { refused: "legacy_unmapped" };
       if (legacy.cutoff && now() >= legacy.cutoff.getTime()) return { refused: "legacy_cutoff" };
       return { accountId: mapped.accountId, legacy: true };
@@ -254,9 +255,13 @@ export function createProvider({
 
   // A grant the client may redeem: sealed for it and, with accounts, for an
   // account that may still use Desk.
+  async function checkOwner(found, client) {
+    if (found.owner) await checkAccount(found.owner.accountId, (reason) => refuseGrant(client, "The account behind this grant can't use Desk.", reason));
+  }
+
   async function usableGrant(kind, client, token) {
     const found = grantFor(kind, client, token);
-    if (found.owner) await checkAccount(found.owner.accountId, (reason) => refuseGrant(client, "The account behind this grant can't use Desk.", reason));
+    await checkOwner(found, client);
     return found;
   }
 
@@ -336,7 +341,8 @@ export function createProvider({
       if (redirectUri !== found.grant.redirectUri) {
         throw refuseGrant(client, "redirect_uri is missing or does not match the authorization request.");
       }
-      return issueTokens(await usableGrant("code", client, code));
+      await checkOwner(found, client);
+      return issueTokens(found);
     },
 
     async exchangeRefreshToken(client, refreshToken, _scopes, requested) {

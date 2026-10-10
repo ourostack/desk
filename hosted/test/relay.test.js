@@ -369,3 +369,15 @@ test("a token with neither an account nor a login can't open a session", async (
   assert.equal(reply.status, 403);
   assert.ok(url);
 });
+
+test("at maxSessions, one account's new session never reaps another account's idle session", async (t) => {
+  const { relay, url } = await start(t, { maxSessions: 1 });
+  const a = await open(url, undefined, { account: ACCOUNT_A });
+  const refused = await post(url, initialize(), { account: ACCOUNT_B });
+  assert.equal(refused.status, 503);
+  assert.equal((await post(url, callTool(2, "echo", { text: "x" }), { sessionId: a, account: ACCOUNT_A })).status, 200);
+  // The same account's own idle session is reaped to make room.
+  const again = await open(url, undefined, { account: ACCOUNT_A });
+  assert.notEqual(again, a);
+  assert.equal(relay.size(), 1);
+});

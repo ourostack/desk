@@ -463,3 +463,55 @@ test("through the gateway, an Ouro sign-in ends in tokens whose access token rea
   assert.equal(mcp.status, 200);
   assert.deepEqual((await mcp.json()).extra, { accountId: ctx.accountId });
 });
+
+// ---- review fix round 1 ----
+
+test("a code minted for an account that is then disabled or removed is refused at exchange", async () => {
+  const ctx = await setup();
+  const disabledCode = await entraCode(ctx);
+  // The cache holds no row yet (sign-in reads the store itself), so the exchange reads the store, within the code's
+  // minute.
+  await ctx.store.putAccount({ accountId: ctx.accountId, displayName: "Ari Mendelow", deskAccess: false });
+  ctx.advance(30_000);
+  await assert.rejects(exchange(ctx, disabledCode), { errorCode: "invalid_grant" });
+  assert.ok(logs.some((line) => line.includes(`(access_off account ${ctx.accountId})`)));
+
+  const ctx2 = await setup();
+  const removedCode = await entraCode(ctx2);
+  ctx2.store.getAccount = async () => null;
+  ctx2.advance(30_000);
+  await assert.rejects(exchange(ctx2, removedCode), { errorCode: "invalid_grant" });
+  assert.ok(logs.some((line) => line.includes(`(no_account account ${ctx2.accountId})`)));
+});
+
+test("a code exchange while the store is down and the cache is stale answers server_error", async () => {
+  const ctx = await setup();
+  const code = await entraCode(ctx);
+  ctx.store.getAccount = async () => {
+    throw Object.assign(new Error("down"), { name: "StoreError" });
+  };
+  ctx.advance(30_000);
+  await assert.rejects(exchange(ctx, code), { errorCode: "server_error" });
+});
+
+test("legacy tokens compare GitHub logins case-insensitively", async () => {
+  const ctx = await setup();
+  // GitHub logins are case-insensitive: a mapping written AriMendelow still maps a token sealed as arimendelow.
+  ctx.provider = createProvider({
+    key: KEY,
+    issuer: GATEWAY,
+    resource: RESOURCE,
+    github: { ...GITHUB, fetch: ctx.github.fetch, signIn: true },
+    entra: ctx.entra,
+    accounts: ctx.accounts,
+    store: ctx.store,
+    repo: REPO,
+    legacy: { byUserId: new Map([[ARI_ID, { login: "AriMendelow", accountId: ctx.accountId }]]), cutoff: CUTOFF },
+    now: ctx.now,
+    log,
+  });
+  const tokens = await refresh(ctx, legacyToken(ctx, "refresh"));
+  assert.equal(claimsOf("refresh", tokens.refresh_token).accountId, ctx.accountId);
+  assert.ok((await refresh(ctx, legacyToken(ctx, "refresh", { login: "ARIMENDELOW" }))).access_token);
+  await assert.rejects(refresh(ctx, legacyToken(ctx, "refresh", { login: "arimendelow2" })), { errorCode: "invalid_grant" });
+});

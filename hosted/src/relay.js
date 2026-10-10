@@ -151,9 +151,12 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
   }
 
   // Frees one slot by closing the least recently used session that is not
-  // waiting on Desk. Returns false when every session is busy.
-  function reapIdle() {
+  // waiting on Desk. Returns false when every session is busy. An Ouro
+  // account's new session reaps only that account's own idle sessions, never
+  // another account's (spec item 20); without accounts, any idle session.
+  function reapIdle(owner) {
     for (const session of sessions.values()) {
+      if (owner.accountId !== undefined && session.owner !== owner.key) continue;
       if (session.pending.size === 0) {
         closeSession(session, "reaped for a new session");
         return true;
@@ -178,7 +181,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     }
     if (!owner) return refuse(res, 403, -32000, "Forbidden: token names no account");
     if (closing) return refuse(res, 503, -32000, "Service Unavailable: the gateway is shutting down; reconnect shortly.");
-    if (sessions.size + starting >= maxSessions && !reapIdle()) {
+    if (sessions.size + starting >= maxSessions && !reapIdle(owner)) {
       return refuse(res, 503, -32000, "Service Unavailable: every session is busy");
     }
     // The Desk child starts before the transport sees the initialize, so it
