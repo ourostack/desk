@@ -21,7 +21,7 @@ async function start(t, { beforeSpawn, childEnv = {}, ...options } = {}) {
     ...options,
     async spawnDesk({ auth, sessionId }) {
       await beforeSpawn?.(auth);
-      const login = auth.extra.login;
+      const login = auth.extra.login ?? auth.extra.accountId;
       const child = spawn(process.execPath, [FIXTURE], { stdio: "pipe", env: { ...process.env, ...childEnv, ECHO_LOGIN: login } });
       const closed = once(child, "close");
       children.push({ child, closed });
@@ -31,8 +31,10 @@ async function start(t, { beforeSpawn, childEnv = {}, ...options } = {}) {
   });
   const app = express();
   app.all("/mcp", express.json(), (req, res) => {
-    const login = req.get("x-test-login") ?? "arimendelow";
-    return relay.handle(req, res, { token: "t", clientId: "c", scopes: [], extra: { login } });
+    // x-test-account makes the token an Ouro account's, with no GitHub login.
+    const account = req.get("x-test-account");
+    const extra = account ? { accountId: account } : { login: req.get("x-test-login") ?? "arimendelow" };
+    return relay.handle(req, res, { token: "t", clientId: "c", scopes: [], extra });
   });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -46,13 +48,14 @@ async function start(t, { beforeSpawn, childEnv = {}, ...options } = {}) {
 }
 
 // POSTs one JSON-RPC message and resolves once the reply's headers arrive.
-function send(url, message, { sessionId, login } = {}) {
+function send(url, message, { sessionId, login, account } = {}) {
   const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
   if (sessionId) {
     headers["mcp-session-id"] = sessionId;
     headers["mcp-protocol-version"] = PROTOCOL;
   }
   if (login) headers["x-test-login"] = login;
+  if (account) headers["x-test-account"] = account;
   return fetch(url, { method: "POST", headers, body: JSON.stringify(message) });
 }
 
@@ -76,10 +79,10 @@ const initialize = (id = 1) => ({
 });
 const callTool = (id, name, args = {}) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
 
-async function open(url, login) {
-  const reply = await post(url, initialize(), { login });
+async function open(url, login, { account } = {}) {
+  const reply = await post(url, initialize(), { login, account });
   assert.equal(reply.status, 200);
-  await post(url, { jsonrpc: "2.0", method: "notifications/initialized" }, { sessionId: reply.sessionId, login });
+  await post(url, { jsonrpc: "2.0", method: "notifications/initialized" }, { sessionId: reply.sessionId, login, account });
   return reply.sessionId;
 }
 
@@ -321,4 +324,48 @@ test("the gateway logs each session's start, with its login, and its end, with t
   const text = lines.join("");
   assert.match(text, new RegExp(`session ${id} started for octocat`));
   assert.match(text, new RegExp(`session ${id} ended \\(gateway closing\\) after \\d+ s`));
+});
+
+// Sessions keyed by Ouro account (spec item 21, pulled into v1b-1): an Apple sign-in has no GitHub login.
+const ACCOUNT_A = "0b8e2f4c-1d3a-4e5b-9c7d-6f8a0b1c2d3e";
+const ACCOUNT_B = "9f1e3d5c-7b9a-4c2d-8e0f-1a2b3c4d5e6f";
+
+test("a session opened by account A refuses account B's token with 403", async (t) => {
+  const { url } = await start(t);
+  const sessionId = await open(url, undefined, { account: ACCOUNT_A });
+  const other = await post(url, callTool(2, "echo", { text: "hi" }), { sessionId, account: ACCOUNT_B });
+  assert.equal(other.status, 403);
+  // A legacy login that happens to equal the account id doesn't pass either.
+  const login = await post(url, callTool(3, "echo", { text: "hi" }), { sessionId, login: ACCOUNT_A });
+  assert.equal(login.status, 403);
+  const owner = await post(url, callTool(4, "echo", { text: "hi" }), { sessionId, account: ACCOUNT_A });
+  assert.equal(owner.status, 200);
+  assert.equal(owner.messages[0].result.content[0].text, `${ACCOUNT_A}:hi`);
+});
+
+test("closeAccount ends every session of that account and none of another's", async (t) => {
+  const { relay, url, children } = await start(t, { maxSessions: 4 });
+  const a1 = await open(url, undefined, { account: ACCOUNT_A });
+  const b = await open(url, undefined, { account: ACCOUNT_B });
+  const a2 = await open(url, undefined, { account: ACCOUNT_A });
+  assert.deepEqual([...relay.openAccounts()].sort(), [ACCOUNT_A, ACCOUNT_B].sort());
+  assert.equal(relay.closeAccount(ACCOUNT_A), 2);
+  for (const index of [0, 2]) assert.equal((await children[index].closed)[1], "SIGTERM");
+  assert.equal(relay.size(), 1);
+  assert.deepEqual([...relay.openAccounts()], [ACCOUNT_B]);
+  for (const sessionId of [a1, a2]) assert.equal((await post(url, callTool(5, "echo", { text: "x" }), { sessionId, account: ACCOUNT_A })).status, 404);
+  assert.equal((await post(url, callTool(6, "echo", { text: "x" }), { sessionId: b, account: ACCOUNT_B })).status, 200);
+  assert.equal(relay.closeAccount(ACCOUNT_A), 0);
+});
+
+test("a token with neither an account nor a login can't open a session", async (t) => {
+  const { url, relay } = await start(t);
+  const app = express();
+  app.all("/mcp", express.json(), (req, res) => relay.handle(req, res, { token: "t", clientId: "c", scopes: [], extra: {} }));
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => server.close());
+  const reply = await post(`http://127.0.0.1:${server.address().port}/mcp`, initialize());
+  assert.equal(reply.status, 403);
+  assert.ok(url);
 });
