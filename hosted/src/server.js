@@ -2,7 +2,8 @@
 // consent form's target and the GitHub sign-in callback, a health check, and /mcp, which relays each
 // authenticated MCP request to a Desk child unchanged.
 import express from "express";
-import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { metadataHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/metadata.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { githubCallbackHandler } from "./auth/github.js";
 import { consentHandler } from "./auth/provider.js";
@@ -23,15 +24,26 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
     app.all(["/authorize", "/oauth/consent"], (_req, res) => sendPage(res, page(503, unavailable)));
   }
 
-  app.use(
-    mcpAuthRouter({
-      provider,
-      issuerUrl: new URL(issuer),
-      resourceServerUrl: new URL(resource),
-      scopesSupported: ["desk"],
-      clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
-    }),
-  );
+  const routerOptions = {
+    provider,
+    issuerUrl: new URL(issuer),
+    resourceServerUrl: new URL(resource),
+    scopesSupported: ["desk"],
+    clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
+  };
+  // The authorization-server metadata is the SDK's plus what the SDK cannot
+  // say, served ahead of its router. `offline_access` is granted like `desk`
+  // (every client already gets a refresh token); ChatGPT asks for refresh
+  // tokens only when the server lists it. The protected-resource metadata
+  // keeps `desk` alone, because offline_access is not a scope of the resource.
+  // Clients may use an https URL to their metadata document as their id.
+  const authorizationServerMetadata = {
+    ...createOAuthMetadata(routerOptions),
+    scopes_supported: ["desk", "offline_access"],
+    client_id_metadata_document_supported: true,
+  };
+  app.use("/.well-known/oauth-authorization-server", metadataHandler(authorizationServerMetadata));
+  app.use(mcpAuthRouter(routerOptions));
   app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider, { issuer }));
   app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback }));
 

@@ -6,10 +6,15 @@
 #   DRY_RUN=1 hosted/infra/provision.sh       # read Azure, print every change instead of making it
 #   DESK_PUBLIC_URL=https://<url> hosted/infra/provision.sh
 #                                             # set the public URL (OAuth issuer, resource and GitHub callback)
+#   DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh
+#                                             # set the OAuth redirect allowlist (hosted/README.md); empty clears it
 #
 # DESK_PUBLIC_URL: a create uses https://desk.ouro.bot unless it is passed. A rerun
 # keeps the app's current value unless it is passed, so a reconcile never moves
 # the live issuer; passing it is the DNS cut-over (hosted/README.md).
+# DESK_REDIRECTS works the same way: a rerun keeps the app's current value unless
+# it is passed, and the app carries it only when it is not empty (the gateway's
+# default allowlist applies otherwise).
 #
 # What it creates or reconciles, all in subscription 261e0bf1-…, resource group
 # rg-ouro-work-substrate:
@@ -52,6 +57,7 @@ DOMAIN=desk.ouro.bot
 FEDERATED_NAME=ourostack-desk-main-ids
 FEDERATED_SUBJECT=repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main
 PUBLIC_URL_PASSED="${DESK_PUBLIC_URL:+1}"
+REDIRECTS_PASSED="${DESK_REDIRECTS+1}"
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -136,6 +142,7 @@ $secrets_yaml
             value: arimendelow/desk
           - name: DESK_ALLOWED_LOGINS
             value: arimendelow
+$redirects_env_yaml
           - name: DESK_SIGNING_KEY
             secretRef: desk-signing-key
           - name: DESK_APP_ID
@@ -192,6 +199,20 @@ fi
 DESK_PUBLIC_URL="${DESK_PUBLIC_URL:-https://$DOMAIN}"
 DESK_PUBLIC_URL="${DESK_PUBLIC_URL%/}"
 say "Public URL: $DESK_PUBLIC_URL"
+
+if ((app_exists)) && [[ -z "$REDIRECTS_PASSED" ]]; then
+  DESK_REDIRECTS="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_REDIRECTS'].value | [0]" -o tsv)"
+fi
+DESK_REDIRECTS="${DESK_REDIRECTS:-}"
+redirects_env_yaml=""
+if [[ -n "$DESK_REDIRECTS" ]]; then
+  quoted="${DESK_REDIRECTS//\\/\\\\}"
+  quoted="${quoted//\"/\\\"}"
+  redirects_env_yaml="$(printf '          - name: DESK_REDIRECTS\n            value: "%s"' "$quoted")"
+  say "Redirect allowlist: $DESK_REDIRECTS"
+else
+  say "Redirect allowlist: the gateway's default"
+fi
 
 existing_secrets=""
 if ((app_exists)); then

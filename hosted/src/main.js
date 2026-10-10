@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProvider } from "./auth/provider.js";
+import { createRedirectPolicy } from "./auth/redirects.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
 import { createRelay } from "./relay.js";
@@ -47,6 +48,8 @@ export function readConfig(env) {
       .split(",")
       .map((login) => login.trim())
       .filter(Boolean),
+    // Built here so a malformed DESK_REDIRECTS stops the gateway at start.
+    redirects: createRedirectPolicy(isSet(env.DESK_REDIRECTS) ? env.DESK_REDIRECTS : undefined),
     cloneDir: env.DESK_CLONE_DIR,
     pluginDir: env.DESK_PLUGIN_DIR,
   };
@@ -54,6 +57,19 @@ export function readConfig(env) {
     for (const name of ["DESK_CLONE_DIR", "DESK_PLUGIN_DIR"]) if (!isSet(env[name])) throw new Error(`${name} must be set.`);
   }
   return config;
+}
+
+const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
+
+// What the gateway logs about its redirect allowlist at start. A
+// DESK_REDIRECTS without claude.ai's callback starts cleanly but shuts out
+// every claude.ai connector, so it gets a warning of its own.
+export function redirectStartupLines(redirects) {
+  const lines = [`redirect allowlist: ${redirects.listed.join(", ")} (plus loopback and ChatGPT connector callbacks)`];
+  if (!redirects.listed.includes(CLAUDE_CALLBACK)) {
+    lines.push(`WARNING: DESK_REDIRECTS leaves out ${CLAUDE_CALLBACK}, so claude.ai connectors cannot sign in or refresh`);
+  }
+  return lines;
 }
 
 export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.js"), "--root", config.cloneDir];
@@ -185,6 +201,8 @@ export async function main(env = process.env) {
     issuer: config.issuer,
     github: { clientId: config.appClientId ?? "unset", clientSecret: config.appClientSecret ?? "unset" },
     allowedLogins: config.allowedLogins,
+    resource: config.resource,
+    redirects: config.redirects,
   });
   const app = createApp({
     provider,
@@ -197,6 +215,7 @@ export async function main(env = process.env) {
   const server = app.listen(config.port);
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);
+  for (const line of redirectStartupLines(config.redirects)) log(line);
 
   let stopping = null;
   const shutdown = () => {

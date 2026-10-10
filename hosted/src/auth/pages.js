@@ -12,13 +12,16 @@ export const page = (status, message) => ({ status, html: document(`<p>${escapeH
 
 // Asks the person whether this client may sign in. Approve posts the sealed
 // request back to the gateway, which only then sends the browser to GitHub.
-export function consentPage({ clientName, redirectUri, consent }) {
+// `clientHost`, for a client known by its metadata document's URL, is that
+// URL's host, shown above the name the document gives itself.
+export function consentPage({ clientName, clientHost, redirectUri, consent }) {
   const name = typeof clientName === "string" && clientName.trim() !== "" ? clientName : "an app";
   const host = new URL(redirectUri).host;
   return {
     status: 200,
     html: document(
-      `<p>Connect ${escapeHtml(name)} to Hosted Desk? After you sign in with GitHub, it will be sent to ${escapeHtml(host)}.</p>` +
+      (clientHost ? `<p>From <strong>${escapeHtml(clientHost)}</strong></p>` : "") +
+        `<p>Connect ${escapeHtml(name)} to Hosted Desk? After you sign in with GitHub, it will be sent to ${escapeHtml(host)}.</p>` +
         `<form method="post" action="/oauth/consent"><input type="hidden" name="consent" value="${escapeHtml(consent)}"><button type="submit">Approve</button></form>`,
     ),
   };

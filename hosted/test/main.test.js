@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runGit } from "../src/clone.js";
-import { readConfig, deskChildEnv, deskChildArgs, deskPushArgs, pushDesk, stopGateway } from "../src/main.js";
+import { readConfig, redirectStartupLines, deskChildEnv, deskChildArgs, deskPushArgs, pushDesk, stopGateway } from "../src/main.js";
 
 const PLUGIN_DIR = fileURLToPath(new URL("../../plugins/desk", import.meta.url));
 
@@ -45,6 +45,19 @@ test("readConfig treats a missing or 'unset' GitHub App setting as not set up", 
   assert.equal(readConfig({ ...FULL, DESK_APP_CLIENT_SECRET: "unset" }).appReady, false);
   const { DESK_APP_ID: _, ...missing } = FULL;
   assert.equal(readConfig(missing).appReady, false);
+});
+
+test("readConfig reads the redirect allowlist from DESK_REDIRECTS, defaulting to Claude's callbacks", () => {
+  const defaults = readConfig(FULL).redirects;
+  assert.equal(defaults.allows("https://claude.ai/api/mcp/auth_callback"), true);
+  assert.equal(defaults.allows("https://vscode.dev/redirect"), true);
+  assert.equal(defaults.allows("https://example.dev/redirect"), false);
+  const configured = readConfig({ ...FULL, DESK_REDIRECTS: "https://example.dev/redirect" }).redirects;
+  assert.equal(configured.allows("https://example.dev/redirect"), true);
+  assert.equal(configured.allows("https://vscode.dev/redirect"), false, "DESK_REDIRECTS replaces every default");
+  assert.equal(configured.allows("https://claude.ai/api/mcp/auth_callback"), false);
+  assert.equal(readConfig({ ...FULL, DESK_REDIRECTS: "unset" }).redirects.allows("https://claude.ai/api/mcp/auth_callback"), true);
+  assert.throws(() => readConfig({ ...FULL, DESK_REDIRECTS: "nope" }), /DESK_REDIRECTS/);
 });
 
 test("readConfig refuses to start without a signing key", () => {
@@ -224,4 +237,14 @@ test("pushDesk does nothing when origin already has every commit", async (t) => 
   execFileSync("git", ["-C", dir, "reset", "-q", "--hard", "@{u}"]);
   const left = await pushDesk({ dir, args: ["-e", "process.exit(9)"], env, git: runGit });
   assert.deepEqual(left, []);
+});
+
+test("the gateway logs its redirect allowlist at start, and warns when Claude's callback is missing from it", () => {
+  assert.deepEqual(redirectStartupLines(readConfig(FULL).redirects), [
+    "redirect allowlist: https://claude.ai/api/mcp/auth_callback, https://claude.com/api/mcp/auth_callback, https://vscode.dev/redirect, https://insiders.vscode.dev/redirect (plus loopback and ChatGPT connector callbacks)",
+  ]);
+  const lines = redirectStartupLines(readConfig({ ...FULL, DESK_REDIRECTS: "https://example.dev/redirect" }).redirects);
+  assert.equal(lines[0], "redirect allowlist: https://example.dev/redirect (plus loopback and ChatGPT connector callbacks)");
+  assert.match(lines[1], /^WARNING: DESK_REDIRECTS leaves out https:\/\/claude\.ai\/api\/mcp\/auth_callback/);
+  assert.equal(redirectStartupLines(readConfig({ ...FULL, DESK_REDIRECTS: "https://claude.ai/api/mcp/auth_callback" }).redirects).length, 1);
 });
