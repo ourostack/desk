@@ -2,8 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:https";
+import { createSocket } from "node:dgram";
 import { once } from "node:events";
-import { createClientDocuments, isPublicAddress } from "../src/auth/client-document.js";
+import { createClientDocuments, isPublicAddress, MAX_CONCURRENT_LOADS } from "../src/auth/client-document.js";
 import { createRedirectPolicy } from "../src/auth/redirects.js";
 
 // A self-signed certificate for client.example, valid until 2126, made for
@@ -483,4 +484,98 @@ test("a certificate the client does not trust is refused", async (t) => {
   const { documents, logs } = makeDocuments({ ca: undefined });
   assert.equal(await documents.get(url), undefined);
   assert.deepEqual(logs, [`client refused: fetch_failed client ${url}`]);
+});
+
+// A DNS server on 127.0.0.1 that answers `answers[name]` (IPv4 addresses) to
+// A queries, answers AAAA queries with no records, and never answers a name
+// it does not know, the way a black-hole nameserver behaves. `queries` lists
+// each name asked.
+async function dnsServer(t, answers) {
+  const queries = [];
+  const socket = createSocket("udp4");
+  socket.on("message", (message, peer) => {
+    const labels = [];
+    let offset = 12;
+    while (message[offset] !== 0) {
+      labels.push(message.subarray(offset + 1, offset + 1 + message[offset]).toString());
+      offset += message[offset] + 1;
+    }
+    const questionEnd = offset + 5;
+    const name = labels.join(".").toLowerCase();
+    const type = message.readUInt16BE(offset + 1);
+    queries.push(name);
+    if (!(name in answers)) return;
+    const records = type === 1 ? answers[name] : [];
+    const header = Buffer.alloc(12);
+    message.copy(header, 0, 0, 2);
+    header.writeUInt16BE(0x8180, 2);
+    header.writeUInt16BE(1, 4);
+    header.writeUInt16BE(records.length, 6);
+    const answerRecords = records.map((address) => {
+      const record = Buffer.alloc(16);
+      record.writeUInt16BE(0xc00c, 0);
+      record.writeUInt16BE(1, 2);
+      record.writeUInt16BE(1, 4);
+      record.writeUInt32BE(60, 6);
+      record.writeUInt16BE(4, 10);
+      address.split(".").forEach((octet, i) => (record[12 + i] = Number(octet)));
+      return record;
+    });
+    socket.send(Buffer.concat([header, message.subarray(12, questionEnd), ...answerRecords]), peer.port, peer.address);
+  });
+  socket.bind(0, "127.0.0.1");
+  await once(socket, "listening");
+  t.after(() => socket.close());
+  return { server: `127.0.0.1:${socket.address().port}`, queries };
+}
+
+test("lookups that never answer do not hold up another client's document, and are cut at the deadline (I1)", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  const dns = await dnsServer(t, { [HOST]: ["127.0.0.1"] });
+  // The real resolver, pointed at the test DNS server; no lookup is injected.
+  const { documents, logs } = makeDocuments({ lookup: undefined, dnsServers: [dns.server], timeoutMs: 1000 });
+  const hung = ["https://hung-1.example/client.json", "https://hung-2.example/client.json"].map((id) => documents.get(id));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const started = Date.now();
+  assert.equal((await documents.get(url))?.client_id, url, "the good document is accepted while two lookups hang");
+  assert.ok(Date.now() - started < 500, `the good document took ${Date.now() - started} ms`);
+  assert.deepEqual(await Promise.all(hung), [undefined, undefined]);
+  assert.deepEqual(logs.sort(), ["client refused: timeout client https://hung-1.example/client.json", "client refused: timeout client https://hung-2.example/client.json"]);
+  assert.ok(dns.queries.includes("hung-1.example") && dns.queries.includes(HOST), "the gateway's own resolver asked the test DNS server");
+  // Cancelled at the deadline: no query goes out for the hung names afterwards.
+  const asked = dns.queries.length;
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  assert.equal(dns.queries.length, asked);
+});
+
+test("the real resolver refuses a name with no addresses as dns_failed", async (t) => {
+  const dns = await dnsServer(t, { "empty.example": [] });
+  const { documents, logs } = makeDocuments({ lookup: undefined, dnsServers: [dns.server], timeoutMs: 1000 });
+  assert.equal(await documents.get("https://empty.example/client.json"), undefined);
+  assert.deepEqual(logs, ["client refused: dns_failed client https://empty.example/client.json"]);
+});
+
+test(`at most ${MAX_CONCURRENT_LOADS} uncached documents load at once; one more is refused at once as busy`, async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  let hang = true;
+  const fallback = resolver();
+  const lookup = (host, options) => (hang ? new Promise(() => {}) : fallback.lookup(host, options));
+  const { documents, logs } = makeDocuments({ lookup, timeoutMs: 100 });
+  const held = Array.from({ length: MAX_CONCURRENT_LOADS }, (_, i) => documents.get(`https://hung-${i}.example/client.json`));
+  const started = Date.now();
+  assert.equal(await documents.get("https://one-more.example/client.json"), undefined);
+  assert.ok(Date.now() - started < 50, "refused without waiting");
+  assert.ok(logs.includes("client refused: busy client https://one-more.example/client.json"));
+  // A second get of an id already loading shares that load, not a new slot.
+  const shared = documents.get("https://hung-0.example/client.json");
+  assert.ok(!logs.includes("client refused: busy client https://hung-0.example/client.json"));
+  await Promise.all([...held, shared]);
+  hang = false;
+  assert.equal((await documents.get(url))?.client_id, url, "the slots are free again after the deadline");
 });

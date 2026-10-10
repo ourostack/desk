@@ -9,7 +9,11 @@
 // resolve only to public addresses, and the gateway connects to the address
 // it checked, so a second lookup cannot swap in a private one; no redirect is
 // followed; the whole fetch, lookup included, gets 5 seconds; and at most
-// 10 KB is read. The document must name its own URL as client_id, every
+// 10 KB is read. Lookups go through our own DNS resolver, not the system's
+// getaddrinfo: getaddrinfo runs on Node's small thread pool and cannot be
+// cancelled, so a few names that never resolve would stall every lookup in
+// the gateway, GitHub sign-in and git tokens included. Ours is cancelled at
+// the deadline. The document must name its own URL as client_id, every
 // redirect it lists must already be allowed by DESK_REDIRECTS, and it must be
 // a public client, because a document cannot hold a secret we issued.
 //
@@ -18,8 +22,13 @@
 // cached.
 import { request } from "node:https";
 import { isIP } from "node:net";
-import { lookup as dnsLookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import { OAuthClientMetadataSchema } from "@modelcontextprotocol/sdk/shared/auth.js";
+
+// Uncached documents loading at once. A load holds a DNS query and a socket
+// for up to 5 seconds; this bounds what a flood of made-up client ids can
+// hold, while leaving room for several real clients signing in together.
+export const MAX_CONCURRENT_LOADS = 16;
 
 const MIN_CACHE_SECONDS = 5 * 60;
 const MAX_CACHE_SECONDS = 24 * 60 * 60;
@@ -30,6 +39,11 @@ class Refusal extends Error {
     this.reason = reason;
   }
 }
+
+// " client <id>" for a log line when the id is a well-formed URL, else
+// nothing: a malformed id is a stranger's text, newlines and all.
+const loggableId = (clientId) =>
+  typeof clientId === "string" && URL.canParse(clientId) && new URL(clientId).href === clientId ? ` client ${clientId}` : "";
 
 // A path segment that is `.` or `..`, written plainly or percent-encoded.
 const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
@@ -141,18 +155,43 @@ const cacheSeconds = (cacheControl) => {
   return Math.min(Math.max(seconds, MIN_CACHE_SECONDS), MAX_CACHE_SECONDS);
 };
 
-// `lookup` resolves a host to `[{ address, family }]` (node:dns/promises's
-// shape with `all: true`); `ca` replaces the trusted roots; `isPublic`,
-// `timeoutMs` and `now` exist for tests. `log` gets one line per refusal: the
+// Resolves a host's A and AAAA records with a resolver of its own, which
+// `signal` cancels. An IP literal is its own answer. A family with no
+// records is fine as long as the other has some.
+function resolverLookup({ servers, timeoutMs }) {
+  return async (host, { signal }) => {
+    const family = isIP(host);
+    if (family) return [{ address: host, family }];
+    const resolver = new Resolver({ timeout: Math.max(1, Math.floor(timeoutMs / 2)), tries: 2 });
+    if (servers) resolver.setServers(servers);
+    const cancel = () => resolver.cancel();
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      const [v4, v6] = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)]);
+      if (v4.status === "rejected" && v6.status === "rejected") throw v4.reason;
+      return [
+        ...(v4.status === "fulfilled" ? v4.value.map((address) => ({ address, family: 4 })) : []),
+        ...(v6.status === "fulfilled" ? v6.value.map((address) => ({ address, family: 6 })) : []),
+      ];
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+    }
+  };
+}
+
+// `lookup` resolves a host to `[{ address, family }]`, given `{ all, signal }`;
+// by default our own resolver, on `dnsServers` when given. `ca` replaces the
+// trusted roots; `isPublic`, `timeoutMs` and `now` exist for tests. `log` gets one line per refusal: the
 // reason, and the client id once it is known to be a well-formed URL.
 export function createClientDocuments({
   redirects,
-  lookup = dnsLookup,
+  dnsServers,
+  timeoutMs = 5000,
+  lookup = resolverLookup({ servers: dnsServers, timeoutMs }),
   ca,
   now = Date.now,
   log = () => {},
   isPublic = isPublicAddress,
-  timeoutMs = 5000,
   maxBytes = 10 * 1024,
   maxEntries = 500,
 }) {
@@ -239,7 +278,7 @@ export function createClientDocuments({
       const host = url.hostname.replace(/^\[|\]$/g, "");
       let addresses;
       try {
-        addresses = await beforeAbort(Promise.resolve().then(() => lookup(host, { all: true, verbatim: true })), controller.signal);
+        addresses = await beforeAbort(Promise.resolve().then(() => lookup(host, { all: true, signal: controller.signal })), controller.signal);
       } catch (error) {
         throw error instanceof Refusal ? error : new Refusal("dns_failed");
       }
@@ -268,6 +307,10 @@ export function createClientDocuments({
       const cached = cache.get(clientId);
       if (cached && cached.expiresAt > now()) return cached.client;
       let pending = inflight.get(clientId);
+      if (!pending && inflight.size >= MAX_CONCURRENT_LOADS) {
+        log(`client refused: busy${loggableId(clientId)}`);
+        return undefined;
+      }
       if (!pending) {
         pending = load(clientId).finally(() => inflight.delete(clientId));
         inflight.set(clientId, pending);
