@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.276 — 2026-10-10
+
+Allow read-only window-ID observation for explicit lease-owned browser targets. Missing, unowned and closed target IDs remain refused; window mutation and window-ID-only inspection remain denied.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.275 — 2026-10-10
 
 Define agent experience (AX) and human experience (HX, formerly UX) together in the shared foundation: handle deterministic work deterministically, make agent tools easy to understand and use, protect human attention and control, and never shift avoidable work between them.
