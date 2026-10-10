@@ -1,0 +1,29 @@
+{
+  "env": "test",
+  "tenant": {
+    "name": "ourobottest",
+    "subdomain": "ourobottest",
+    "id": "c12edfb6-c5ab-4bf8-b1d5-1f053311d396",
+    "domain": "ourobottest.onmicrosoft.com"
+  },
+  "gatewayApp": null,
+  "automationApp": null,
+  "userFlow": null,
+  "apple": {
+    "outcome": null,
+    "developerId": null,
+    "appId": "bot.ouro.identity.testapp",
+    "serviceId": "bot.ouro.identity.test",
+    "keyIds": {
+      "a": null,
+      "b": null
+    }
+  },
+  "gatewayIdentity": null,
+  "checksIdentity": null,
+  "storage": null,
+  "keyVault": null,
+  "ari": null,
+  "legacyCutoff": null,
+  "releasedAt": null
+}

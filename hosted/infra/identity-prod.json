@@ -1,0 +1,29 @@
+{
+  "env": "prod",
+  "tenant": {
+    "name": "ourobot",
+    "subdomain": "ourobot",
+    "id": "de8841c3-7799-4523-bbad-44f8a2426eaa",
+    "domain": "ourobot.onmicrosoft.com"
+  },
+  "gatewayApp": null,
+  "automationApp": null,
+  "userFlow": null,
+  "apple": {
+    "outcome": null,
+    "developerId": null,
+    "appId": "bot.ouro.identity",
+    "serviceId": "bot.ouro.identity.signin",
+    "keyIds": {
+      "a": null,
+      "b": null
+    }
+  },
+  "gatewayIdentity": null,
+  "checksIdentity": null,
+  "storage": null,
+  "keyVault": null,
+  "ari": null,
+  "legacyCutoff": null,
+  "releasedAt": null
+}
