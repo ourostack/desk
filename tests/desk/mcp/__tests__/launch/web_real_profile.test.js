@@ -447,6 +447,139 @@ test("closing tabs stops at an error, a failed close or the limit, and never thr
   await real.closeOwnTabs(async (name, args) => { if (args.action === "close") throw new Error("timed out"); return tabsText(1) })
 })
 
+test("cleanup reports partial or unknown effects instead of claiming that the window closed", async () => {
+  for (const behavior of ["list-error", "close-error", "timeout", "malformed", "limit"]) {
+    let closed = 0
+    const result = await real.closeOwnTabs(async (name, args) => {
+      if (behavior === "timeout") throw new Error("remote endpoint with private details")
+      if (behavior === "malformed") return { content: [] }
+      if (behavior === "list-error") return { isError: true, content: [] }
+      if (behavior === "limit") return tabsText(100)
+      if (args.action === "list") return tabsText(2)
+      if (++closed === 1) return tabsText(1)
+      return { isError: true, content: [] }
+    })
+    assert.equal(result.isError, true, behavior)
+    const payload = JSON.parse(result.content[0].text)
+    assert.equal(payload.code, "browser_cleanup_incomplete")
+    assert.doesNotMatch(payload.summary, /window.*is closed|private details/u)
+    assert.match(payload.fix, /Do not close another.*window/u)
+    assert.equal(payload.closed, behavior === "limit" ? 50 : behavior === "close-error" ? 1 : 0)
+  }
+})
+
+test("cleanup succeeds only after the connection explicitly reports no remaining tabs", async () => {
+  const empty = await real.closeOwnTabs(async () => tabsText(0))
+  assert.equal(empty.isError, undefined)
+  assert.match(empty.content[0].text, /is closed/u)
+  let calls = 0
+  const residual = await real.closeOwnTabs(async () => ++calls === 1 ? tabsText(1) : tabsText(2))
+  assert.equal(residual.isError, true)
+  assert.equal(JSON.parse(residual.content[0].text).remaining, 2)
+  assert.equal(calls, 2, "no extra list that could create a new tab")
+})
+
+test("a tab title containing No open tabs never produces a false empty-connection receipt", async () => {
+  for (const stage of ["list", "close"]) {
+    let calls = 0
+    const answer = await real.closeOwnTabs(async () => {
+      calls += 1
+      if (stage === "list") return calls === 1 ? {
+        content: [{ type: "text", text: "### Open tabs\n- 0: (current) [No open tabs](https://example.com/)" }],
+      } : tabsText(0)
+      if (calls === 1) return tabsText(2)
+      return calls === 2 ? {
+        content: [{ type: "text", text: "### Open tabs\n- 0: [A title\nNo open tabs.\nstill in the title](https://example.com/)" }],
+      } : tabsText(0)
+    })
+    assert.equal(calls, stage === "list" ? 2 : 3, "all indexed tabs must be closed")
+    assert.match(answer.content[0].text, /is closed/u)
+  }
+})
+
+test("empty or missing cleanup responses cannot prove that a close succeeded", async () => {
+  for (const result of [undefined, null, {}, { content: [] }, { content: [{ type: "image" }] }]) {
+    let calls = 0
+    const answer = await real.closeOwnTabs(async () => ++calls === 1 ? tabsText(1) : result)
+    assert.equal(answer.isError, true)
+    const payload = JSON.parse(answer.content[0].text)
+    assert.equal(payload.remaining, null)
+    assert.equal(payload.closed, 0, "malformed responses do not verify a closed tab")
+  }
+  const answer = await real.closeOwnTabs(async () => undefined)
+  assert.equal(answer.isError, true)
+})
+
+test("failed cleanup retains the same connection for exact retry instead of opening another window", async () => {
+  let opens = 0
+  let broken = true
+  const actions = []
+  const tabs = real.ownTabs(async () => { opens += 1 })
+  const api = { callTool: async (name, args) => {
+    actions.push(args.action)
+    return broken ? { isError: true, content: [] } : tabsText(0)
+  } }
+  await tabs.beforeCall({ name: "browser_navigate" }, api)
+  tabs.afterCall({ name: "browser_navigate" }, false)
+  const failed = await tabs.beforeCall({ name: "browser_close" }, api)
+  assert.equal(failed.isError, true)
+  await tabs.beforeCall({ name: "browser_snapshot" }, api)
+  assert.equal(opens, 1, "cleanup failure must not forget the existing window")
+  broken = false
+  const retried = await tabs.beforeCall({ name: "browser_close" }, api)
+  assert.match(retried.content[0].text, /is closed/u)
+  assert.deepEqual(actions, ["list", "list"], "retry remains scoped to the same connection")
+  await tabs.beforeCall({ name: "browser_snapshot" }, api)
+  assert.equal(opens, 2, "only successful cleanup allows a new holding window")
+})
+
+test("concurrent cleanup requests share one closing attempt", async () => {
+  let finish
+  let lists = 0
+  const tabs = real.ownTabs(async () => {})
+  const api = { callTool: () => {
+    lists += 1
+    return new Promise((resolve) => { finish = resolve })
+  } }
+  await tabs.beforeCall({ name: "browser_navigate" }, api)
+  tabs.afterCall({ name: "browser_navigate" }, false)
+  const first = tabs.beforeCall({ name: "browser_close" }, api)
+  let answered = false
+  const second = tabs.beforeCall({ name: "browser_close" }, api).then((result) => {
+    answered = true
+    return result
+  })
+  assert.equal(lists, 1)
+  await Promise.resolve()
+  assert.equal(answered, false, "no closed receipt before the shared cleanup finishes")
+  finish(tabsText(0))
+  assert.equal(await first, await second)
+})
+
+test("browser operations arriving during cleanup wait for its receipt before using or replacing the connection", async () => {
+  for (const failed of [false, true]) {
+    let finish
+    let opens = 0
+    const tabs = real.ownTabs(async () => { opens += 1 })
+    const api = { callTool: () => new Promise((resolve) => { finish = resolve }) }
+    await tabs.beforeCall({ name: "browser_navigate" }, api)
+    tabs.afterCall({ name: "browser_navigate" }, false)
+    const closing = tabs.beforeCall({ name: "browser_close" }, api)
+    let answered = false
+    const next = tabs.beforeCall({ name: "browser_snapshot" }, api).then((result) => {
+      answered = true
+      return result
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(answered, false, "do not forward into a connection being closed")
+    finish(failed ? { isError: true, content: [] } : tabsText(0))
+    await closing
+    const result = await next
+    assert.equal(result === null, !failed)
+    assert.equal(opens, failed ? 1 : 2, "replace only after verified cleanup")
+  }
+})
+
 test("the tabs hooks open the window once per connection, answer browser_close themselves, and mark a connection used only after a success", posixOnly, async () => {
   const calls = []
   let opens = 0
@@ -853,6 +986,20 @@ test("browser_close closes the agent's tabs with one list, is answered without r
   assert.equal(host.messages.filter((message) => message.id === 3).length, 1)
 })
 
+test("the real launcher returns an incomplete cleanup error rather than a false closed-window receipt", posixOnly, async () => {
+  const machine = await realMachine({ mode: "errortabs" })
+  const host = session(machine)
+  await host.handshake()
+  await host.call(2)
+  const answer = await host.call(3, "browser_close")
+  assert.equal(answer.result.isError, true)
+  assert.equal(JSON.parse(textOf(answer)).code, "browser_cleanup_incomplete")
+  assert.equal(machine.opens.length, 1)
+  assert.equal(textOf(await host.call(4)), "ran browser_navigate")
+  assert.equal(machine.opens.length, 1, "the failed close retains ownership of the original connection")
+  await host.close()
+})
+
 test("a browser call after browser_close opens a new window and connects again, and its tabs are closed at the end", posixOnly, async () => {
   const machine = await realMachine({ tabs: 1 })
   const host = session(machine)
@@ -963,6 +1110,7 @@ test("cleanup is cut off when the browser stops answering, and the launcher stil
     await host.call(2)
     host.stdin.end()
     await host.wait(() => host.exits.length > 0, `the launcher to end in mode ${mode}`)
+    assert.match(host.stderr.join(""), /browser_cleanup_incomplete/u, "shutdown must surface unverified cleanup")
   }
   const stuck = await realMachine({ mode: "silenttabs", launch: { tabCallMs: 5000, cleanupMs: 60 } })
   const host = session(stuck)

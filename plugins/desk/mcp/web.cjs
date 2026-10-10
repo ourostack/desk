@@ -809,7 +809,11 @@ function start(o, io) {
   return proxy.serve({
     beforeCall: own.beforeCall,
     afterCall: own.afterCall,
-    cleanup: own.cleanup,
+    cleanup: own.cleanup === undefined ? undefined : function (api) {
+      return own.cleanup(api).then(function (result) {
+        if (result.isError) io.stderr.write("[web] browser_cleanup_incomplete: this session's tabs may remain open; their closure was not verified. Do not close another owner's window as a fallback.\n");
+      });
+    },
     cleanupMs: o.cleanupMs,
     stdin: io.stdin,
     stdout: io.stdout,
