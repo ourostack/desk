@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.283 — 2026-10-10
+
+### Fixed
+
+- Real-profile browser launch works when a plugin installer preserves native executable bytes but not executable mode bits. Desk copies the current-host hash-verified asset into its existing private launch attempt, establishes owner-only execution there, verifies the copy, and preflights it before use. Shared installed assets remain unchanged, and exact attempt cleanup includes the private executable.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.282 — 2026-10-10
 
 `desk_skill` now lists a skill whose `description:` is a YAML block scalar (`>-`, `>`, `|` or `|-` with indented lines) with its text instead of the literal `>-`. A hosted agent such as claude.ai saw seven skills (`content-routing`, `doc-review-rigor`, `evidence-discipline`, `factory-work`, `humanize`, `interaction-style` and `start-task`) listed with no usable description and could not match them. The list now reads the description with the same frontmatter reader the doctor falls back to ([`desk/frontmatter-lite.js`](mcp/src/desk/frontmatter-lite.js)), so quoted and plain one-line descriptions read as before.
