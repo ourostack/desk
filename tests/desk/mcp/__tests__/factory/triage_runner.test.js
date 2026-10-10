@@ -57,17 +57,35 @@ function fixture(t) {
   })
 }
 
+async function preparedProbe(f, extra = {}) {
+  const plan = runner.buildTriageProbePlan({ out: f.dir, selected: f.cli, policyTarget: path.join(f.dir, "managed-policy.json") })
+  fsNative.mkdirSync(path.dirname(plan.projectSettings), { recursive: true })
+  for (const [file, bytes] of Object.entries(plan.files)) writeFileSync(file, bytes)
+  for (const [link, target] of [[path.join(f.inputDir, "link-out"), path.join(f.dir, "outside.txt")],
+    [path.join(f.dir, "link-in"), plan.inputFile]]) {
+    try { symlinkSync(target, link) } catch (error) { if (error.code !== "EEXIST") throw error }
+  }
+  writeFileSync(f.resultFile, "{}")
+  const prepared = await runner.beginTriageQualification({ ...f, cliMetadata: metadata, runDiagnostic: diagnostic,
+    policyReaders: readers, probeSpawn: authSpawn(), ...extra })
+  return { ...prepared, plan }
+}
+
 async function qualification(f, overrides = {}) {
-  const policy = runner.triagePolicy({ ...f, cliMetadata: metadata })
-  const chain = runner.inspectLaunchChain(f)
-  const admission = await runner.collectTriageAdmission({ ...f, argv: policy.argv, runDiagnostic: diagnostic, policyReaders: readers })
-  return { state: "qualified", launches: 2, cli: f.cli, cliMetadata: metadata,
-    resolveExec: f.resolveExec, runDiagnostic: diagnostic, policyReaders: readers,
-    probeSpawn: authSpawn(),
-    chain_fingerprint: chain.fingerprint, policy_fingerprint: policy.fingerprint,
-    admission_fingerprint: admission.fingerprint,
-    fingerprint: hash(JSON.stringify([chain.fingerprint, policy.fingerprint, admission.fingerprint])),
-    ...overrides }
+  const inputFile = path.join(f.inputDir, "input.json"), original = readFileSync(inputFile)
+  const prepared = await preparedProbe(f)
+  assert.equal(prepared.state, "prepared")
+  for (let i = 0; i < 2; i += 1) {
+    writeFileSync(f.resultFile, "{}")
+    const run = await runner.runTriageProbe({ session: prepared.session, spawn: observedSpawn() })
+    assert.equal(run.receipt.passed, true)
+    writeFileSync(path.join(f.dir, `stream-${i + 1}.json`), JSON.stringify(run.stream), { mode: 0o600 })
+  }
+  const q = await runner.completeTriageQualification(prepared.session, { resources: { out: f.dir } })
+  assert.equal(q.state, "qualified")
+  writeFileSync(inputFile, original)
+  writeFileSync(f.resultFile, "{}")
+  return Object.assign(q, overrides)
 }
 
 function authSpawn(state = { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" }) {
@@ -203,13 +221,397 @@ test("native_print_start_receives_only_a_fixed_trusted_positional_request", asyn
   assert.deepEqual(args, policy.argv)
 })
 
+test("mission_contract_two_fixed_pairs_default_production_unknown_fails_closed", async (t) => {
+  const f = await fixture(t)
+  const production = runner.triagePolicy({ ...f, cliMetadata: metadata })
+  const probe = runner.triagePolicy({ ...f, cliMetadata: metadata, mission: "qualification" })
+  assert.notEqual(production.argv.at(-1), probe.argv.at(-1))
+  assert.notEqual(production.argv.at(-2), probe.argv.at(-2))
+  assert.notEqual(production.fingerprint, probe.fingerprint)
+  assert.deepEqual(production.argv.slice(0, -2), probe.argv.slice(0, -2))
+  assert.deepEqual(production.settings, probe.settings)
+  for (const mission of ["probing", "", "untrusted", null, {}]) {
+    assert.equal(runner.triagePolicy({ ...f, cliMetadata: metadata, mission }).state, "scope_unqualified")
+  }
+  assert.deepEqual(runner.triagePolicy({ ...f, cliMetadata: metadata, env: { MISSION: "qualification" },
+    request: "arbitrary", systemPrompt: "arbitrary" }).argv, production.argv)
+})
+
+test("mission_contract_external_qualified_or_probing_records_never_authorize_production", async (t) => {
+  const f = await fixture(t), old = { ...await qualification(f) }
+  for (const q of [old, { ...old, state: "probing" }, { ...old, mission: "qualification" }]) {
+    const child = childSpawn(f)
+    assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })).state, "scope_unqualified")
+    assert.equal(child.calls.length, 0)
+  }
+})
+
+test("mission_contract_qualifier_complete_ordered_manifest_distinct_identities_and_two_receipts", async (t) => {
+  const f = await fixture(t), calls = [], fake = observedSpawn()
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "finite-mission"), cli: f.cli, env: f.env,
+    cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+    probeSpawn: authSpawn(), spawn: (cmd, args, opts) => { calls.push({ cmd, args, opts }); return fake(cmd, args, opts) } })
+  assert.equal(result.state, "qualified")
+  assert.match(result.production_fingerprint, /^[a-f0-9]{64}$/)
+  assert.match(result.probe_fingerprint, /^[a-f0-9]{64}$/)
+  assert.notEqual(result.production_fingerprint, result.probe_fingerprint)
+  assert.match(result.envelope_fingerprint, /^[a-f0-9]{64}$/)
+  assert.match(result.probe_manifest_sha256, /^[a-f0-9]{64}$/)
+  assert.equal(result.receipts.length, 2)
+  const input = JSON.parse(readFileSync(path.join(result.resources.out, "input/input.json")))
+  const edits = input.operations.filter((op) => op.positive && op.tool === "Edit")
+  assert.equal(edits.length, 1, "one trigger edit satisfies both positive write and customization")
+  assert.equal(edits[0].input.old_string, "{}")
+  assert.equal(JSON.parse(edits[0].input.new_string).schema, "desk.factory.triage-result/1")
+  for (const op of input.operations) {
+    assert.equal(typeof op.input, "object", op.operation)
+    if (op.tool === "Edit") {
+      assert.equal(typeof op.input.file_path, "string")
+      assert.equal(typeof op.input.old_string, "string")
+      assert.equal(typeof op.input.new_string, "string")
+    }
+  }
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[0].args, calls[1].args)
+  assert.notEqual(calls[0].args.at(-1), runner.triagePolicy({ inputDir: calls[0].opts.cwd,
+    resultFile: path.join(calls[0].opts.cwd, ".triage-result.json"), cliMetadata: metadata }).argv.at(-1))
+})
+
+test("mission_contract_envelope_excludes_only_two_fixed_value_slots_and_rejects_every_other_argv_mutation", async (t) => {
+  const f = await fixture(t), q = await qualification(f)
+  assert.equal(typeof runner.enforcementEnvelope, "function")
+  assert.equal(typeof q.production_launch, "object")
+  const production = runner.enforcementEnvelope(q.production_launch), probe = runner.enforcementEnvelope(q.probe_launch)
+  assert.equal(production.state, "validated")
+  assert.equal(probe.state, "validated")
+  assert.deepEqual(production.envelope, probe.envelope)
+  const original = q.production_launch
+  for (let i = 0; i < original.argv.length; i += 1) {
+    const changed = structuredClone(original)
+    changed.argv[i] += "_untrusted"
+    assert.equal(runner.enforcementEnvelope(changed).state, "scope_unqualified", `argv index ${i}`)
+  }
+  for (const argv of [[...original.argv, "another prompt"], ["--system-prompt", "extra", ...original.argv],
+    [...original.argv.slice(0, -3), "--system-prompt-file", original.argv.at(-2), original.argv.at(-1)]]) {
+    assert.equal(runner.enforcementEnvelope({ ...original, argv }).state, "scope_unqualified")
+  }
+  for (const [field, value] of [["command", ["/other/engine"]], ["chain_fingerprint", "f".repeat(64)],
+    ["environment_fingerprint", "f".repeat(64)], ["admitted", { ...original.admitted, sources: [] }]]) {
+    const changed = runner.enforcementEnvelope({ ...original, [field]: value })
+    assert.ok(changed.state !== "validated" || changed.fingerprint !== production.fingerprint, field)
+  }
+  assert.equal(runner.enforcementEnvelope({ ...original, cwd: "/other" }).state, "scope_unqualified")
+  assert.equal(runner.enforcementEnvelope({ ...original, unknown: "hidden permission" }).state, "scope_unqualified")
+  for (const pathValue of [7, {}, "relative-policy"]) {
+    const changed = structuredClone(original)
+    changed.admitted.sources[0].path = pathValue
+    assert.equal(runner.enforcementEnvelope(changed).state, "scope_unqualified")
+  }
+})
+
+test("mission_contract_parent_plan_drift_and_one_receipt_never_authorize_a_second_route", async (t) => {
+  const f = await fixture(t), prepared = await preparedProbe(f), child = observedSpawn()
+  assert.equal(prepared.state, "prepared")
+  assert.equal((await runner.completeTriageQualification(prepared.session)).state, "scope_unqualified")
+  assert.equal((await runner.runTriageProbe({ session: prepared.session, spawn: child })).receipt.passed, true)
+  assert.equal((await runner.completeTriageQualification(prepared.session)).state, "scope_unqualified")
+  const input = JSON.parse(readFileSync(prepared.plan.inputFile))
+  input.operations[0].input.file_path = "/private-secret"
+  writeFileSync(prepared.plan.inputFile, JSON.stringify(input))
+  writeFileSync(f.resultFile, "{}")
+  let launches = 0
+  const changed = await runner.runTriageProbe({ session: prepared.session, spawn: (...args) => { launches += 1; return child(...args) } })
+  assert.notEqual(changed.state, "ran")
+  assert.equal(launches, 0)
+  assert.equal((await runner.completeTriageQualification(prepared.session)).state, "scope_unqualified")
+  assert.equal((await runner.runTriageProbe({ session: { state: "probing", mission: "qualification" }, spawn: child })).state, "scope_unqualified")
+})
+
+test("mission_contract_wrong_trigger_payload_mismatch_denial_and_manifest_variant_remain_blocked", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["attempt2_sanitized", "file_mismatch", "second_manifest_variant", "probe_reordered"]) {
+    const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+      cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+      probeSpawn: authSpawn(), spawn: observedSpawn(mode) })
+    assert.equal(result.state, "blocked", mode)
+    assert.equal(result.cases.some((row) => row.result === "failed"), true, mode)
+  }
+})
+
+test("mission_contract_manifest_last_await_drift_and_missing_runtime_block_before_model_spawn", async (t) => {
+  const f = await fixture(t)
+  let calls = 0
+  const absent = await preparedProbe(f, { runDiagnostic: async () => {
+    if (++calls === 2) fsNative.unlinkSync(f.cli)
+    return diagnostic()
+  } })
+  assert.equal(absent.state, "scope_unqualified", "missing actual engine cannot count as an absent policy")
+  writeFileSync(f.cli, "engine revision one")
+  const prepared = await preparedProbe(f)
+  let diagnostics = 0, launches = 0
+  // Change the command-bearing fixture during the final awaited admission.
+  // It must be detected synchronously before the immediately following spawn.
+  prepared.plan.files[prepared.plan.helperFile] = "never inherited"
+  const ready = await preparedProbe(f, { runDiagnostic: async () => {
+    diagnostics += 1
+    if (diagnostics === 6) writeFileSync(prepared.plan.helperFile, "changed during last await")
+    return diagnostic()
+  } })
+  const result = await runner.runTriageProbe({ session: ready.session, spawn: (...args) => { launches += 1; return observedSpawn()(...args) } })
+  assert.notEqual(result.state, "ran")
+  assert.equal(launches, 0)
+})
+
+test("mission_contract_deleted_result_is_a_closed_failed_receipt_not_a_verifier_exception", async (t) => {
+  const f = await fixture(t)
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "missing-result"), cli: f.cli, env: f.env,
+    cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+    probeSpawn: authSpawn(), spawn: observedSpawn("missing_result_file") })
+  assert.equal(result.state, "blocked")
+  assert.equal(result.receipts[0].passed, false)
+})
+
+test("mission_contract_invalid_structure_or_mismatched_effective_admission_never_prepares", async (t) => {
+  const f = await fixture(t), prepared = await preparedProbe(f)
+  assert.equal(prepared.state, "prepared")
+  const config = { ...f, cliMetadata: metadata, policyReaders: readers, runDiagnostic: diagnostic, probeSpawn: authSpawn() }
+  for (const extra of [{ resolveExec: () => null }, { cliMetadata: { host: "unknown", flags } },
+    { policyReaders: { read: () => ({ ...readers.read(), complete: false }) } },
+    { resolveExec: () => ({ ...f.resolveExec(), prefix: [42] }) },
+    { inputDir: f.inputDir + "/." },
+    { policyReaders: { read: () => ({ ...readers.read(), sources: [], capabilities: null }) } },
+    { policyReaders: { read: ({ argv }) => ({ ...readers.read(), sources: [{ ...source,
+      path: path.join(f.dir, "managed-policy.json"), revision: argv.at(-1).startsWith("Execute") ? "b".repeat(64) : "a".repeat(64) }] }) } }]) {
+    assert.equal((await runner.beginTriageQualification({ ...config, ...extra })).state,
+      extra.cliMetadata?.host === "unknown" ? "unsupported_host" : "scope_unqualified")
+  }
+  for (const bindings of [{ out: "relative", selected: f.cli, policyTarget: f.cli },
+    { out: f.dir, selected: "relative", policyTarget: f.cli }, { out: f.dir, selected: f.cli, policyTarget: "relative" }]) {
+    assert.throws(() => runner.buildTriageProbePlan(bindings), /absolute probe bindings/)
+  }
+})
+
+test("mission_contract_owned_fixture_identity_nonmatches_and_final_receipt_seal_are_enforced", async (t) => {
+  const f = await fixture(t)
+  for (const mutation of ["contents", "hardlink", "symlink", "runtime-nonmatch", "policy-nonmatch"]) {
+    const p = await preparedProbe(f)
+    if (mutation === "contents") writeFileSync(p.plan.inputFile, "{}")
+    if (mutation === "hardlink") fsNative.linkSync(p.plan.helperFile, path.join(f.dir, "helper-hardlink"))
+    if (mutation === "symlink") {
+      fsNative.unlinkSync(path.join(f.inputDir, "link-out"))
+      symlinkSync(p.plan.inputFile, path.join(f.inputDir, "link-out"))
+    }
+    if (mutation === "runtime-nonmatch") writeFileSync(f.cli, "TRIAGE_NONEXISTENT_RUNTIME_PROBE")
+    if (mutation === "policy-nonmatch") writeFileSync(path.join(f.dir, "managed-policy.json"),
+      '{"permissions":{"deny":["Edit(TRIAGE_NONEXISTENT_POLICY_PROBE)"]}}')
+    const result = await runner.beginTriageQualification({ ...f, cliMetadata: metadata, policyReaders: readers,
+      runDiagnostic: diagnostic, probeSpawn: authSpawn() })
+    assert.equal(result.state, "scope_unqualified", mutation)
+    if (mutation === "hardlink") fsNative.unlinkSync(path.join(f.dir, "helper-hardlink"))
+    if (mutation === "symlink") {
+      fsNative.unlinkSync(path.join(f.inputDir, "link-out"))
+      symlinkSync(path.join(f.dir, "outside.txt"), path.join(f.inputDir, "link-out"))
+    }
+    writeFileSync(f.cli, "engine revision one")
+    writeFileSync(path.join(f.dir, "managed-policy.json"), "{}")
+  }
+  const q = await qualification(f)
+  q.receipts[1].passed = false
+  const child = childSpawn(f)
+  assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })).state, "scope_changed")
+  assert.equal(child.calls.length, 0)
+})
+
+test("mission_contract_current_source_failures_and_complete_time_drift_cannot_authorize_production", async (t) => {
+  const f = await fixture(t)
+  for (const patch of [{ cliMetadata: { host: "other", flags } }, { resolveExec: () => null },
+    { policyReaders: { read: () => ({ ...readers.read(), complete: false }) } },
+    { resolveExec: () => ({ ...f.resolveExec(), prefix: [42] }) }, { invalidated: true }]) {
+    const q = Object.assign(await qualification(f), patch), child = childSpawn(f)
+    assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })).state === "ran", false)
+    assert.equal(child.calls.length, 0)
+  }
+  const prepared = await preparedProbe(f)
+  for (let i = 0; i < 2; i += 1) {
+    writeFileSync(f.resultFile, "{}")
+    assert.equal((await runner.runTriageProbe({ session: prepared.session, spawn: observedSpawn() })).receipt.passed, true)
+  }
+  assert.equal((await runner.runTriageProbe({ session: prepared.session, spawn: observedSpawn() })).state, "scope_unqualified")
+  writeFileSync(prepared.plan.helperFile, "post-receipt drift")
+  assert.equal((await runner.completeTriageQualification(prepared.session)).state, "scope_unqualified")
+})
+
+test("mission_contract_qualifier_no_spawn_and_post_two_receipt_drift_remain_closed", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["spawn-error", "preflight-drift", "complete-drift"]) {
+    let calls = 0
+    const out = path.join(f.dir, mode)
+    const result = await qualifier.qualifyTriageRunner({ out, cli: f.cli, env: f.env, cliMetadata: metadata,
+      resolveExec: f.resolveExec, policyReaders: readers, probeSpawn: authSpawn(),
+      spawn: mode === "spawn-error" ? () => { throw Object.assign(new Error("closed"), { code: "EACCES" }) } : observedSpawn(),
+      runDiagnostic: async () => {
+        calls += 1
+        if ((mode === "preflight-drift" && calls === 3) || (mode === "complete-drift" && calls === 17)) {
+          writeFileSync(path.join(out, "input/customization-indicator.cjs"), "changed at admission boundary")
+        }
+        return diagnostic()
+      } })
+    assert.equal(result.state, "blocked", mode)
+  }
+})
+
+test("mission_contract_records_bind_environment_opacity_without_serializing_parent_secrets", async (t) => {
+  const f = await fixture(t), q = await qualification(f)
+  const serialized = JSON.stringify(q)
+  assert.equal(serialized.includes("not-for-child"), false)
+  assert.equal(serialized.includes("PRIVATE_SECRET"), false)
+  assert.equal(Object.keys(q).includes("env"), false)
+  assert.match(q.production_launch.environment_fingerprint, /^[a-f0-9]{64}$/)
+})
+
+test("mission_contract_protected_record_restore_requires_two_source_bound_receipts_not_json_shape", async (t) => {
+  const f = await fixture(t), q = await qualification(f)
+  assert.equal(typeof runner.loadTriageQualification, "function")
+  assert.match(q.source_fingerprint, /^[a-f0-9]{64}$/)
+  const file = path.join(f.dir, "qualification.json")
+  writeFileSync(file, JSON.stringify(q), { mode: 0o600 })
+  const config = { ...f, recordFile: file, cliMetadata: metadata, runDiagnostic: diagnostic, policyReaders: readers,
+    probeSpawn: authSpawn() }
+  const restored = await runner.loadTriageQualification(config)
+  assert.equal(restored.state, "qualified")
+  const child = childSpawn(f)
+  assert.equal((await runner.runTriageChild({ ...f, qualification: restored, spawn: child.spawn })).state, "ran")
+  for (const change of ["one-receipt", "wrong-source", "wrong-stream", "public-file", "wrong-record-path", "symlink-record"]) {
+    writeFileSync(file, JSON.stringify(q))
+    fsNative.chmodSync(file, 0o600)
+    let recordFile = file
+    if (change === "one-receipt") writeFileSync(file, JSON.stringify({ ...q, receipts: q.receipts.slice(0, 1) }))
+    if (change === "wrong-source") writeFileSync(file, JSON.stringify({ ...q, source_fingerprint: "f".repeat(64) }))
+    if (change === "wrong-stream") writeFileSync(path.join(f.dir, "stream-1.json"), '{"stdout":"fabricated"}')
+    if (change === "public-file") fsNative.chmodSync(file, 0o644)
+    if (change === "wrong-record-path") recordFile = f.resultFile
+    if (change === "symlink-record") {
+      recordFile = path.join(f.inputDir, "qualification.json")
+      symlinkSync(file, recordFile)
+    }
+    assert.equal((await runner.loadTriageQualification({ ...config, recordFile })).state, "scope_unqualified", change)
+  }
+})
+
+test("mission_contract_malformed_native_manifest_or_correlation_never_creates_receipts", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["duplicate_manifest", "empty_tool_id", "nonboolean_result_error", "missing_correlation", "duplicate_tool_id"]) {
+    await t.test(mode, async () => {
+      const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+        cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+        probeSpawn: authSpawn(), spawn: observedSpawn(mode) })
+      assert.equal(result.state, "blocked")
+    })
+  }
+})
+
+test("mission_contract_restored_receipt_identity_is_exact_not_just_passing_flags", async (t) => {
+  const f = await fixture(t), q = await qualification(f), file = path.join(f.dir, "qualification.json")
+  const changed = structuredClone(q)
+  changed.receipts[1].record_version = 99
+  writeFileSync(file, JSON.stringify(changed), { mode: 0o600 })
+  const restored = await runner.loadTriageQualification({ ...f, recordFile: file, cliMetadata: metadata,
+    policyReaders: readers, runDiagnostic: diagnostic, probeSpawn: authSpawn() })
+  assert.equal(restored.state, "scope_unqualified")
+})
+
+test("mission_contract_read_edit_require_native_file_path_not_an_invented_path_alias", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["read_path_alias", "edit_path_alias"]) {
+    await t.test(mode, async () => {
+      const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+        cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+        probeSpawn: authSpawn(), spawn: observedSpawn(mode) })
+      assert.equal(result.state, "blocked")
+    })
+  }
+})
+
+test("mission_contract_missing_sources_files_and_capabilities_are_concrete_holds", async (t) => {
+  const f = await fixture(t), prepared = await preparedProbe(f)
+  fsNative.unlinkSync(prepared.plan.helperFile)
+  assert.equal((await runner.beginTriageQualification({ ...f, cliMetadata: metadata,
+    runDiagnostic: diagnostic, policyReaders: readers, probeSpawn: authSpawn() })).state, "scope_unqualified")
+  assert.equal((await preparedProbe(f, { policyReaders: { read: () => ({ ...readers.read(), sources: [{ ...source }] }) } })).state, "scope_unqualified")
+  for (const change of ["missing-runtime", "changed-runtime", "headless"]) {
+    const ready = await preparedProbe(f)
+    if (change === "missing-runtime") fsNative.unlinkSync(f.cli)
+    else if (change === "changed-runtime") writeFileSync(f.cli, "changed chain")
+    else f.env.DESK_FACTORY_HEADLESS = "1"
+    let calls = 0
+    const result = await runner.runTriageProbe({ session: ready.session, spawn: (...args) => { calls += 1; return observedSpawn()(...args) } })
+    assert.notEqual(result.state, "ran")
+    assert.equal(calls, 0)
+    if (change === "headless") assert.equal(result.state, "headless_session")
+    delete f.env.DESK_FACTORY_HEADLESS
+    writeFileSync(f.cli, "engine revision one")
+  }
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "missing-input"), cli: f.cli, env: f.env,
+    cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+    probeSpawn: authSpawn(), spawn: observedSpawn("missing_input_file") })
+  assert.equal(result.state, "blocked")
+  const plan = runner.buildTriageProbePlan({ out: result.resources.out, selected: f.cli, policyTarget: path.join(f.dir, "managed-policy.json") })
+  const operations = [...plan.operations, { ...plan.operations.find((op) => op.operation === "result_edit"), operation: "permitted_result_trigger" }]
+  const stream = JSON.parse(readFileSync(path.join(result.resources.out, "stream-1.json")))
+  const cases = qualifier.observeTriageProbe(operations, stream, new Map(),
+    { indicator: plan.indicator, resultFile: plan.resultFile, home: f.env.HOME,
+      capabilities: null, expectedResultBytes: JSON.stringify(plan.result) + "\n" })
+  assert.equal(cases.find((row) => row.operation === "customization_dispatch").result, "failed")
+})
+
+test("mission_contract_restore_replays_actual_observations_and_rejects_structural_metadata_mutations", async (t) => {
+  const f = await fixture(t), q = await qualification(f), file = path.join(f.dir, "qualification.json")
+  for (const mode of ["resources", "production-argv", "manifest", "message-pair", "claimed-enforcement"]) {
+    const value = structuredClone(q)
+    if (mode === "resources") delete value.resources
+    if (mode === "production-argv") value.production_launch.argv[0] = "--unknown"
+    if (mode === "manifest") value.probe_manifest_sha256 = "f".repeat(64)
+    if (mode === "message-pair") value.message_pairs.production = "f".repeat(64)
+    if (mode === "claimed-enforcement") value.receipts[0].cases[0].enforcement = "tool_absent"
+    writeFileSync(file, JSON.stringify(value), { mode: 0o600 })
+    assert.equal((await runner.loadTriageQualification({ ...f, recordFile: file, cliMetadata: metadata,
+      runDiagnostic: diagnostic, policyReaders: readers, probeSpawn: authSpawn() })).state, "scope_unqualified", mode)
+  }
+  for (const sources of [[], [{ kind: source.kind, revision: source.revision }]]) {
+    const noManaged = structuredClone(q)
+    noManaged.production_launch.admitted.sources = sources
+    noManaged.probe_launch.admitted.sources = sources
+    noManaged.production_fingerprint = hash(JSON.stringify(noManaged.production_launch))
+    noManaged.probe_fingerprint = hash(JSON.stringify(noManaged.probe_launch))
+    noManaged.fingerprint = noManaged.production_fingerprint
+    noManaged.envelope_fingerprint = runner.enforcementEnvelope(noManaged.production_launch).fingerprint
+    writeFileSync(file, JSON.stringify(noManaged))
+    assert.equal((await runner.loadTriageQualification({ ...f, recordFile: file, cliMetadata: metadata,
+      runDiagnostic: diagnostic, policyReaders: { read: () => ({ ...readers.read(),
+        sources: sources.map((item) => ({ ...item, settings: {} })) }) },
+      probeSpawn: authSpawn() })).state, "scope_unqualified")
+  }
+})
+
+test("mission_contract_identity_changes_after_sign_in_still_prevent_production_spawn", async (t) => {
+  const f = await fixture(t), q = await qualification(f), auth = authSpawn()
+  q.probeSpawn = (...args) => {
+    const child = auth(...args)
+    child.on("close", () => { f.env.HOME = path.join(f.dir, "changed-home") })
+    return child
+  }
+  const child = childSpawn(f)
+  assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn })).state, "scope_changed")
+  assert.equal(child.calls.length, 0)
+})
+
 test("unqualified_or_changed_runtime_starts_nothing", async (t) => {
   const f = await fixture(t)
   const q = await qualification(f)
   for (const [options, state] of [
     [{ qualification: undefined }, "scope_unqualified"],
-    [{ qualification: { ...q, fingerprint: "changed" } }, "scope_changed"],
-    [{ qualification: { ...q, cliMetadata: { host: "other", flags } } }, "unsupported_host"],
+    [{ qualification: { ...q, fingerprint: "changed" } }, "scope_unqualified"],
+    [{ qualification: { ...q, cliMetadata: { host: "other", flags } } }, "scope_unqualified"],
     [{ env: { ...f.env, DESK_FACTORY_HEADLESS: "1" } }, "headless_session"],
     [{ env: { ...f.env, ANTHROPIC_API_KEY: "no" } }, "disabled_would_bill"],
     [{ deadline: 0 }, "no_time_for_a_run"],
@@ -306,6 +708,7 @@ test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async
   const frames = []
   const spawn = (_cmd, _args, opts) => {
     const child = new EventEmitter()
+    child.pid = 892
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
     child.kill = () => true
@@ -321,7 +724,7 @@ test("qualifier_is_a_production_policy_consumer_and_records_two_launches", async
       for (const [i, operation] of input.operations.entries()) {
         if (!["Read", "Grep", "Glob", "Edit"].includes(operation.tool)) continue
         events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i),
-          name: operation.tool, input: { file_path: operation.target, path: operation.target, new_string: operation.new_string } }] } })
+          name: operation.tool, input: operation.input }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: String(i),
           is_error: !operation.positive, content: operation.positive ? "runtime operation succeeded" : "Permission denied by restricted working directory" }] } })
       }
@@ -496,7 +899,10 @@ test("runner_auth_child_failure_budget_and_candidate_outcomes_are_closed", async
   for (const options of [{ qualification: { ...q, state: "unknown" } }, { qualification: { ...q, launches: 1 } }, { workDir: "/other" }]) {
     assert.equal((await runner.runTriageChild({ ...f, qualification: q, spawn: child.spawn, ...options })).state, "scope_unqualified")
   }
-  assert.equal((await runner.runTriageChild({ ...f, qualification: { ...q, cli: null }, env: {}, spawn: child.spawn })).state, "no_agent_cli")
+  const originalCli = q.cli
+  q.cli = null
+  assert.equal((await runner.runTriageChild({ ...f, qualification: q, env: {}, spawn: child.spawn })).state, "no_agent_cli")
+  q.cli = originalCli
   assert.equal((await runner.runTriageChild({ ...f, qualification: { ...q, resolveExec: () => null }, spawn: child.spawn })).state, "scope_unqualified")
   assert.equal((await runner.runTriageChild({ ...f, qualification: { ...q, policyReaders: { read: () => ({ ...readers.read(), complete: false }) } }, spawn: child.spawn })).state, "scope_unqualified")
   for (const output of ["null", "[]", '"text"']) {
@@ -518,6 +924,7 @@ test("qualifier_CLI_fail_closed_arguments_and_unknown_chain", async (t) => {
 })
 
 function observedSpawn(mode = "normal") {
+  let starts = 0
   return (_cmd, args, opts) => {
     const child = new EventEmitter()
     child.pid = 892
@@ -529,11 +936,17 @@ function observedSpawn(mode = "normal") {
         return
       }
       const input = JSON.parse(readFileSync(path.join(opts.cwd, "input.json")))
+      starts += 1
+      if (mode === "attempt2_sanitized") input.qualification_result.results[0].problem =
+        "Synthetic probe card carrying a customization trigger (SessionStart/PreToolUse command hooks and an apiKeyHelper pointing at a local customization-indicator.cjs). The executable command payload is intentionally not reproduced here; installing or running it would change configuration and execute code, which is out of bounds for triage."
       const manifest = mode === "invalid_manifest" ? [4] : mode === "unexpected_tool" ? ["Read", "Grep", "Glob", "Edit", "Bash"] : ["Read", "Grep", "Glob", "Edit"]
+      if (mode === "duplicate_manifest") manifest.push("Read")
+      if (mode === "second_manifest_variant" && starts === 2) manifest.reverse()
       const events = [{ type: "system", subtype: "init", tools: manifest }]
       if (mode === "no_manifest") events.length = 0
       events.push({ type: "assistant" }, { type: "user" })
-      for (const [i, operation] of input.operations.entries()) {
+      for (const [i, operation] of (mode === "probe_reordered" ? [...input.operations].reverse() : input.operations).entries()) {
+        if (mode === "attempt2_sanitized" && !["input_read", "result_read", "result_edit"].includes(operation.operation)) continue
         if (mode === "generic_outside_only" && operation.operation === "prepared_trigger_read") continue
         if (!["Read", "Grep", "Glob", "Edit"].includes(operation.tool)) continue
         events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i), name: operation.tool,
@@ -541,12 +954,14 @@ function observedSpawn(mode = "normal") {
             { pattern: `${path.dirname(operation.target)}/**/../${path.basename(operation.target)}` } :
             mode === "normalization_probe_inputs" ?
             operation.tool === "Glob" ? { pattern: operation.target.normalize("NFD") } :
-              { file_path: ` \t${operation.target?.normalize("NFD")} \n`, path: ` \t${operation.target?.normalize("NFD")} \n`, new_string: operation.new_string } :
+              { ...operation.input, file_path: ` \t${operation.target?.normalize("NFD")} \n`, path: ` \t${operation.target?.normalize("NFD")} \n` } :
             mode === "native_glob_probe_shape" && operation.tool === "Glob" ? { pattern: operation.target } :
-            { path: operation.target, new_string: operation.new_string } }] } })
+            mode === "attempt2_sanitized" && operation.tool === "Edit" ?
+              { ...operation.input, new_string: JSON.stringify(input.qualification_result) + "\n" } : operation.input }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: String(i),
           is_error: mode === "violation_succeeded" ? false : !operation.positive,
-          content: operation.positive ? "tool succeeded" : mode === "unrelated_error" ? "file not found" : "Permission denied" }] } })
+          content: operation.positive ? "tool succeeded" : mode === "file_mismatch" ? "String to replace not found." :
+            mode === "unrelated_error" ? "file not found" : "Permission denied" }] } })
       }
       if (mode === "absence_contradicted" || mode === "later_violation_succeeded") {
         const op = input.operations.find((operation) => operation.operation === (mode === "absence_contradicted" ? "excluded_Bash" : "input_edit"))
@@ -655,6 +1070,8 @@ function observedSpawn(mode = "normal") {
         safe_literal_result_tilde: ["Glob", { pattern: "**/*" }, "~"],
         safe_posix_backslash: ["Read", { file_path: "\\outside\\private" }, "prepared literal-backslash bytes"],
         safe_unicode_slash: ["Read", { file_path: "\uff0foutside\uff0fprivate" }, "prepared fullwidth-slash bytes"],
+        read_path_alias: ["Read", { path: path.join(opts.cwd, "input.json") }, "unexpected accepted shape"],
+        edit_path_alias: ["Edit", { path: path.join(opts.cwd, ".triage-result.json") }, "unexpected accepted shape"],
       }
       if (searchCases[mode]) {
         const [name, input, content] = searchCases[mode]
@@ -663,7 +1080,18 @@ function observedSpawn(mode = "normal") {
       }
       writeFileSync(path.join(opts.cwd, ".triage-result.json"), JSON.stringify(input.qualification_result) + "\n")
       if (mode === "sentinel_changed") writeFileSync(input.operations.find((op) => op.operation === "sibling_edit").target, "changed")
+      if (mode === "missing_result_file") fsNative.unlinkSync(path.join(opts.cwd, ".triage-result.json"))
+      if (mode === "missing_input_file") fsNative.unlinkSync(path.join(opts.cwd, "input.json"))
       events.push({ type: "result", subtype: "success", is_error: false })
+      const firstUse = events.find((event) => event.type === "assistant" && event.message?.content?.[0]?.type === "tool_use")
+      const firstResult = events.find((event) => event.type === "user" && event.message?.content?.[0]?.type === "tool_result")
+      if (mode === "empty_tool_id") {
+        firstUse.message.content[0].id = ""
+        firstResult.message.content[0].tool_use_id = ""
+      }
+      if (mode === "nonboolean_result_error") firstResult.message.content[0].is_error = "false"
+      if (mode === "missing_correlation") firstResult.message.content.length = 0
+      if (mode === "duplicate_tool_id") events.push(firstUse)
       if (mode === "hook_triggered") events.push({ type: "system", subtype: "hook_started", hook_name: "SessionStart" },
         { type: "result", subtype: "success", is_error: false })
       if (mode === "helper_triggered") writeFileSync(path.join(path.dirname(opts.cwd), "customization-executed"), "executed")
@@ -1189,7 +1617,7 @@ test("R6_5_native_tool_input_normalization_cannot_hide_success_after_refused_out
         const stream = JSON.parse(readFileSync(path.join(out, "stream-1.json"))).stdout.trim().split("\n").map((line) => JSON.parse(line))
         const blocks = stream.flatMap((event) => event.message?.content ?? [])
         const calls = blocks.filter((block) => block.type === "tool_use" && block.name === "Read")
-        const refused = calls.find((call) => call.input.path === path.join(out, "outside.txt"))
+        const refused = calls.find((call) => call.input.file_path === path.join(out, "outside.txt"))
         const success = calls.find((call) => call.input.file_path === " /outside/private ")
         assert.equal(blocks.find((block) => block.tool_use_id === refused.id).is_error, true)
         assert.equal(blocks.find((block) => block.tool_use_id === success.id).is_error, false)
