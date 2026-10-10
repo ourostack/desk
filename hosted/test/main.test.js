@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -23,6 +23,7 @@ import {
   checkLegacyAccounts,
   createAuthorLookup,
   startDiscovery,
+  START_DISCOVERY_BOUND_MS,
   buildGateway,
 } from "../src/main.js";
 import { createMemoryStore } from "../src/accounts/memory-store.js";
@@ -454,22 +455,31 @@ function sweepRelay(accountIds) {
 }
 
 test("the sweep closes an idle session within one interval after access is turned off", async (t) => {
+  // setInterval runs on a mocked clock, so the test counts intervals instead of timing them.
+  mock.timers.enable({ apis: ["setInterval"] });
+  t.after(() => mock.timers.reset());
   const store = createMemoryStore();
   const { accountId } = await seed({ store, displayName: "Ari", binding: BINDING });
   const accounts = createAccountCache({ store });
   await accounts.account(accountId);
   const relay = sweepRelay([accountId]);
   const lines = [];
-  const sweep = startAccountSweep({ relay, accounts, intervalMs: 200, retryMs: 10, log: (line) => lines.push(line) });
+  const sweep = startAccountSweep({ relay, accounts, intervalMs: 60_000, retryMs: 10, log: (line) => lines.push(line) });
   t.after(() => sweep.stop());
-  await new Promise((resolve) => setTimeout(resolve, 450));
+  const settle = async () => {
+    for (let i = 0; i < 50; i++) await new Promise((resolve) => setImmediate(resolve));
+  };
+  mock.timers.tick(60_000);
+  await settle();
   assert.deepEqual(relay.closed, [], "access on: nothing closed");
+  // Turned off just after a sweep, while the cached row is still young: the next interval closes it.
   await store.putAccount({ accountId, displayName: "Ari", deskAccess: false });
-  const turnedOff = Date.now();
-  while (relay.closed.length === 0 && Date.now() - turnedOff < 2_000) await new Promise((resolve) => setTimeout(resolve, 5));
+  mock.timers.tick(59_999);
+  await settle();
+  assert.deepEqual(relay.closed, [], "not before the interval");
+  mock.timers.tick(1);
+  await settle();
   assert.deepEqual(relay.closed, [accountId]);
-  // Closed by the next tick (at most one 200 ms interval later, plus scheduling slack), though the cached row was still young.
-  assert.ok(Date.now() - turnedOff < 200 + 150, `closed after ${Date.now() - turnedOff} ms`);
   assert.ok(lines.some((line) => line.includes(`account ${accountId}`) && line.includes("access off")));
 });
 
@@ -562,6 +572,27 @@ test("discovery that never answers holds the start for at most its bound, and an
   reject(new Error("late issuer mismatch"));
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(lines.some((line) => line.includes("late issuer mismatch")));
+});
+
+test("the start waits for discovery at most 10 s by default", async (t) => {
+  assert.equal(START_DISCOVERY_BOUND_MS, 10_000);
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+  let done = false;
+  const waiting = startDiscovery({ start: () => new Promise(() => {}) }, { log: () => {} }).then(() => (done = true));
+  await new Promise((resolve) => setImmediate(resolve));
+  mock.timers.tick(9_999);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(done, false);
+  mock.timers.tick(1);
+  await waiting;
+  assert.equal(done, true);
+});
+
+test("startup logs LEGACY ACCOUNT MAPPING EMPTY when account mode has no mapped account", async () => {
+  const lines = [];
+  await checkLegacyAccounts({ store: createMemoryStore(), accountIds: [], log: (line) => lines.push(line) });
+  assert.deepEqual(lines, ["LEGACY ACCOUNT MAPPING EMPTY: DESK_GITHUB_ACCOUNTS names no account, so legacy tokens and the GitHub fallback admit nobody"]);
 });
 
 // Today's production env (provision.sh's: no Ouro tenant or accounts settings) must give today's gateway.

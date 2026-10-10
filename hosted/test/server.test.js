@@ -264,13 +264,20 @@ test("/healthz/deep makes at most one store read per 10 s however often it is ca
   assert.equal(parts.state.reads, 2, "the next read only after 10 s");
 });
 
-test("/healthz/deep with no mapped accounts still reads the store once", async () => {
+test("/healthz/deep fails legacy-account when the legacy mapping is missing or empty, still reading the store once", async (t) => {
+  // An empty DESK_GITHUB_ACCOUNTS would refuse Ari's existing connector at deploy, so the deploy's deep check catches it.
   const parts = deepParts({ accountIds: [] });
-  assert.deepEqual(await parts.deep.check(), { ok: true, failing: [] });
+  assert.deepEqual(await parts.deep.check(), { ok: false, failing: ["legacy-account"] });
   assert.equal(parts.state.reads, 1);
   parts.state.storeDown = true;
   parts.advance(10_001);
   assert.deepEqual(await parts.deep.check(), { ok: false, failing: ["store"] });
+  parts.state.storeDown = false;
+  parts.advance(10_001);
+  const base = await startDeep(t, parts.deep);
+  const response = await fetch(`${base}/healthz/deep`);
+  assert.equal(response.status, 503);
+  assert.equal(await response.text(), "failing: legacy-account");
 });
 
 test("without the Ouro tenant and accounts, /healthz/deep answers ok, as there is nothing deeper to check", async (t) => {
