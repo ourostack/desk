@@ -238,8 +238,10 @@ function labeledSessionFacts({ session, listed, base, tree, cwd, git }) {
 
 // Keep legacy facts/labels/capture diff behavior. Triage additionally reads
 // rename/copy status and exact tree modes; never relabel a replacement as add.
+// Similar new correction batches are legitimate additions. Only byte-exact
+// copies count as copied; resemblance is not mutation of a historical path.
 function triageStatuses({ base, tree, cwd, git }) {
-  const fields = git(["diff", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", base, tree], { cwd }).split("\0").filter(Boolean)
+  const fields = git(["diff", "--name-status", "-z", "--find-renames", "-C100%", "--find-copies-harder", base, tree], { cwd }).split("\0").filter(Boolean)
   const statuses = new Map()
   for (let i = 0; i < fields.length;) {
     const code = fields[i++], from = fields[i++]

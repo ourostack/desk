@@ -35,7 +35,9 @@ const positive = () => rangeIntField(1, Number.MAX_SAFE_INTEGER)
 const nullable = (field) => customField((v, p, e, ctx) => v === null || field.check(v, p, e, ctx))
 const version = () => customField((v, p, e) => {
   if (typeof v === "string" && v.length > 64) { addError(e, "size", p); return false }
-  return publicPatternField(PATTERNS.semver).check(v, p, e)
+  if (!publicPatternField(PATTERNS.semver).check(v, p, e)) return false
+  if (isCredentialLike(v)) { addError(e, "credential_like", p); return false }
+  return true
 })
 
 // Current public issue/PR URL spelling and build.js's jobReportUrl spelling;
@@ -115,6 +117,14 @@ export function validateTriageBytes(bytes) {
   return bytesGate(bytes, (v) => {
     const errors = []
     validateObject(v, "", publicSpec, errors)
+    if (Array.isArray(v?.rows) && v.rows.length <= TRIAGE_MAX_ROWS) {
+      const seen = new Set()
+      v.rows.forEach((row, index) => {
+        if (typeof row?.id !== "string" || !HEX32.test(row.id)) return
+        if (seen.has(row.id)) addError(errors, "duplicate", `rows.${index}.id`)
+        seen.add(row.id)
+      })
+    }
     return { ok: errors.length === 0, errors }
   })
 }

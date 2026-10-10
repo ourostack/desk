@@ -7,6 +7,7 @@ import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/fact
 import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
 import { SOURCES, STATES, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import * as triage from "../../../../../plugins/desk/mcp/src/factory/triage-schema.js"
+import { isCredentialLike } from "../../../../../plugins/desk/mcp/src/factory/credential.js"
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json", import.meta.url)))
 const bytes = (value) => `${JSON.stringify(value)}\n`
@@ -53,12 +54,42 @@ test("synthetic_paired_fixture_cases_are_closed_public_rows", () => {
   for (const entry of fixture.cases) {
     const value = clone()
     if (entry.schema) value.schema = entry.schema
+    if (entry.producer_version) value.producer_version = entry.producer_version
     if (entry.rows) value.rows = entry.rows
     if (entry.row) Object.assign(value.rows[0], entry.row)
     if (entry.coverage) Object.assign(value.coverage, entry.coverage)
     if (entry.runner) value.runner = entry.runner
     assert.equal(triage.validateTriageBytes(bytes(value)).ok, entry.valid !== false, entry.name)
   }
+})
+
+test("producer_versions_refuse_credentials_without_echo_at_envelope_and_row", () => {
+  const sentinel = "1.4.0-private2026secretpayload"
+  assert.equal(isCredentialLike(sentinel), true)
+  for (const location of ["envelope", "row"]) {
+    const value = clone()
+    const path = location === "envelope" ? "producer_version" : "rows.0.producer_version"
+    const target = location === "envelope" ? value : value.rows[0]
+    target.producer_version = sentinel
+    assert.deepEqual(triage.validateTriageBytes(bytes(value)), { ok:false,errors:[{code:"credential_like",path}] })
+    const change = triage.validateTriageChange({ path:`triage/${value.batch}.json`,status:"added",bytes:bytes(value),trustedMaintainer:true })
+    assert.deepEqual(change, { ok:false,errors:[{code:"credential_like",path:`triage/${value.batch}.json`}] })
+    assert.equal(JSON.stringify(change).includes(sentinel), false)
+  }
+})
+
+test("batch_rejects_identical_and_conflicting_repeated_annotation_ids_without_echo", () => {
+  for (const conflict of [false, true]) {
+    const value = clone(), second = structuredClone(value.rows[0])
+    if (conflict) { second.route = "investigate"; second.gate = null }
+    value.rows.push(second)
+    const result = triage.validateTriageBytes(bytes(value))
+    assert.deepEqual(result, { ok:false,errors:[{code:"duplicate",path:"rows.1.id"}] })
+    assert.equal(JSON.stringify(result).includes(second.id), false)
+  }
+  const distinct = clone()
+  distinct.rows.push({ ...distinct.rows[0],id:"11111111111111111111111111111111" })
+  assert.deepEqual(triage.validateTriageBytes(bytes(distinct)), {ok:true,errors:[]})
 })
 
 test("public_nulls_bounds_versions_and_canonical_bytes_fail_closed", () => {

@@ -174,6 +174,33 @@ test("triage real Git additions are data but replacement removal rename copy and
   }
 }))
 
+test("similar_new_batch_with_higher_revision_is_added_without_mutating_historical_batch", () => scratch(async (env) => {
+  const repo = path.join(env.HOME, "triage-correction-repo")
+  await fs.mkdir(repo)
+  const git = (...args) => execFileSync("git",args,{cwd:repo,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim()
+  git("init","-b","main"); git("config","user.name","Synthetic Fixture"); git("config","user.email","synthetic@example.invalid")
+  const value = JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json",import.meta.url))).public
+  const oldPath = `triage/${value.batch}.json`, oldBytes = `${JSON.stringify(value)}\n`
+  await fs.mkdir(path.join(repo,"triage"))
+  await fs.writeFile(path.join(repo,oldPath),oldBytes)
+  git("add","triage"); git("commit","-m","historical batch")
+  const base = git("rev-parse","HEAD"), oldBlob = git("rev-parse",`${base}:${oldPath}`)
+  value.batch = "1111111111111111"; value.rows[0].revision = 2
+  const newPath = `triage/${value.batch}.json`
+  await fs.writeFile(path.join(repo,newPath),`${JSON.stringify(value)}\n`)
+  git("add","triage"); git("commit","-m","new immutable correction batch")
+  const head = git("rev-parse","HEAD")
+  // Reproduce the review's default-similarity copy heuristic with actual Git.
+  assert.match(git("diff","--name-status","--find-renames","--find-copies","--find-copies-harder",base,head), /^C\d+\s/u)
+  assert.equal(git("rev-parse",`${head}:${oldPath}`),oldBlob)
+  assert.equal(await fs.readFile(path.join(repo,oldPath),"utf8"),oldBytes)
+  const result = await runValidatePrCommand({
+    cwd:repo,argv:["--base",base,"--head",head,"--author-association","OWNER","--repo","example/project","--pr","1"],
+    runner:async (args) => ({code:0,stdout:JSON.stringify(args[1].endsWith("/permission") ? {permission:"write"} : {head:{sha:head},user:{login:"synthetic-actor"}})}),
+  })
+  assert.deepEqual(result,{ok:true,errors:[],maintenance:false})
+}))
+
 test("triage API malformed permission exceptions and changed head stay unavailable", async () => {
   const base = "a".repeat(40), head = "b".repeat(40), rel = "triage/0123456789abcdef.json"
   const value = JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json",import.meta.url))).public

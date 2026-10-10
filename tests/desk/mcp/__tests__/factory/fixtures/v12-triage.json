@@ -13,6 +13,8 @@
   },
   "cases": [
     {"name":"valid_review"},
+    {"name":"credential_producer_envelope","producer_version":"1.4.0-private2026secretpayload","valid":false},
+    {"name":"credential_producer_row","row":{"producer_version":"1.4.0-private2026secretpayload"},"valid":false},
     {"name":"empty_never_reviewed","rows":[],"coverage":{"reviewed":0,"unreviewed":null,"refused":null,"deferred":null,"more_unreviewed":null},"runner":{"state":"no_agent_cli","last_success_age":"never"}},
     {"name":"stale_source","row":{"state":"stale","age":"stale"}},
     {"name":"withdrawal","row":{"revision":2,"state":"withdrawn","route":null,"gate":null}},
