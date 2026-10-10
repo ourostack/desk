@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.279 — 2026-10-10
+
+A hosted Desk now sends its instructions with every `desk_status` answer, not only the first one in an MCP session. claude.ai reuses one MCP session across chats, so a second chat used to start with no instructions at all. An agent that already has them in its conversation passes the new `has_instructions: true` to [`desk_status`](mcp/src/tool-schemas.js) to leave them out; a local Desk ignores that input. While Desk is still admitting the desk or loading its status detail, every hosted `desk_status` call now waits up to ten seconds for it ([`runtime/hosted.js`](mcp/src/runtime/hosted.js)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.278 — 2026-10-10
 
 A hosted Desk now works fully in claude.ai, which never shows the model a server's MCP instructions and can't load Desk's skills as plugin skills. The first `desk_status` answer in a hosted session carries Desk's instructions, once. It waits up to ten seconds while Desk is still admitting the desk or loading its status detail, so the session doesn't start from an empty root and sync. The new read-only `desk_skill` tool lists Desk's skills, or returns one skill's text to follow; a hosted Desk refuses the skills that need a shell, with the reason.
