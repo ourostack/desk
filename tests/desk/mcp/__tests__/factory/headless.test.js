@@ -15,6 +15,7 @@ import {
   HEADLESS_TIMEOUT_MS,
   MAX_HEADLESS_JOBS_PER_DAY,
   CHILD_ENV_ALLOW,
+  childEnvironment,
   billingVariableBlocks,
   findAgentCli,
   hostSupported,
@@ -22,6 +23,14 @@ import {
   resolveLaunch,
   runHeadless,
 } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
+
+test("the shared triage child environment strips credentials without changing evaluator argv", () => {
+  const before = HEADLESS_ARGV({ briefPaths: ["/brief"], evaluationDir: "/evaluation", logDirs: [] })
+  const env = childEnvironment({ HOME: "/subscription-home", PATH: "/native", ANTHROPIC_API_KEY: "never-child",
+    CMUX_SURFACE_ID: "never-child", NODE_OPTIONS: "--require never-child", LC_ALL: "C" })
+  assert.deepEqual(env, { HOME: "/subscription-home", PATH: "/native", LC_ALL: "C", DESK_FACTORY_HEADLESS: "1" })
+  assert.deepEqual(HEADLESS_ARGV({ briefPaths: ["/brief"], evaluationDir: "/evaluation", logDirs: [] }), before)
+})
 
 // A scripted fake child. `script(child)` runs on the next tick and may emit
 // output, `close` or `error`. `kill` records the signal.
