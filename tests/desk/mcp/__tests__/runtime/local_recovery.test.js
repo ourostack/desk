@@ -17,6 +17,8 @@ function fixture() {
   mkdirSync(path.join(root, "work", "one"), { recursive: true })
   writeFileSync(path.join(root, "work", "one", "task.md"), "---\nname: One\nstatus: drafting\n---\n\n# One\n")
   git(root, "init", "-b", "main")
+  git(root, "config", "user.name", "Fixture")
+  git(root, "config", "user.email", "fixture@example.invalid")
   git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "add", ".")
   git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")
   return root
