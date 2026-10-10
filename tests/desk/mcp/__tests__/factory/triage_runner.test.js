@@ -92,6 +92,7 @@ function authSpawn(state = { loggedIn: true, authMethod: "claude.ai", apiProvide
   return (_cmd, args) => {
     assert.deepEqual(args, ["auth", "status"])
     const child = new EventEmitter()
+    child.pid = 891
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
     child.kill = () => true
@@ -605,6 +606,37 @@ test("mission_contract_identity_changes_after_sign_in_still_prevent_production_s
   assert.equal(child.calls.length, 0)
 })
 
+test("mission_contract_receipts_distinguish_real_shaped_auth_guard_and_model_child_pids", async (t) => {
+  const f = await fixture(t), auth = authSpawn(), recorded = [], exited = []
+  const prepared = await preparedProbe(f, { probeSpawn: (...args) => {
+    const child = auth(...args)
+    child.pid = 891
+    return child
+  } })
+  const result = await runner.runTriageProbe({ session: prepared.session, spawn: observedSpawn(),
+    onChild: (pid) => recorded.push(pid), onChildExit: (pid) => exited.push(pid) })
+  assert.equal(result.receipt.passed, true)
+  assert.deepEqual(recorded, [891, 892])
+  assert.deepEqual(exited, [891, 892])
+  assert.deepEqual(result.receipt.pids, [892])
+  assert.deepEqual(result.receipt.guard_pids, [891])
+  assert.deepEqual(result.receipt.guard_exited_pids, [891])
+})
+
+test("mission_contract_missing_or_invalid_auth_guard_pid_cannot_issue_a_passing_receipt", async (t) => {
+  const f = await fixture(t)
+  for (const pid of [undefined, NaN]) {
+    const auth = authSpawn()
+    const prepared = await preparedProbe(f, { probeSpawn: (...args) => {
+      const child = auth(...args)
+      child.pid = pid
+      return child
+    } })
+    const result = await runner.runTriageProbe({ session: prepared.session, spawn: observedSpawn() })
+    assert.equal(result.receipt.passed, false)
+  }
+})
+
 test("unqualified_or_changed_runtime_starts_nothing", async (t) => {
   const f = await fixture(t)
   const q = await qualification(f)
@@ -674,8 +706,8 @@ test("owned_PID_timeout_cleanup_env_and_malformed_output", async (t) => {
     spawn: child.spawn, onChild: (pid) => started.push(pid), onChildExit: (pid) => exited.push(pid) })
   assert.equal(result.state, "timeout")
   assert.deepEqual(child.killed, ["SIGKILL"])
-  assert.deepEqual(started, [731])
-  assert.deepEqual(exited, [731])
+  assert.deepEqual(started, [891, 731])
+  assert.deepEqual(exited, [891, 731])
   assert.equal(child.calls[0].opts.env.PRIVATE_SECRET, undefined)
   assert.equal(child.calls[0].opts.env.HTTPS_PROXY, "https://proxy")
   assert.equal(child.calls[0].opts.env.DESK_FACTORY_HEADLESS, "1")
