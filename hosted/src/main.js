@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProvider } from "./auth/provider.js";
+import { fingerprint } from "./auth/seal.js";
 import { createRedirectPolicy } from "./auth/redirects.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
@@ -28,8 +29,50 @@ const SHIM_DIR = fileURLToPath(new URL("../bin", import.meta.url));
 const log = (message) => process.stderr.write(`desk-hosted: ${message}\n`);
 const isSet = (value) => typeof value === "string" && value.trim() !== "" && value.trim() !== "unset";
 
+// A key setting's value, or undefined when it is missing or "unset". A key
+// holding any whitespace is refused rather than trimmed: the HMAC uses every
+// byte, so a stray newline would silently be a different key. The message
+// never repeats the value.
+function keySetting(env, name) {
+  if (!isSet(env[name])) return undefined;
+  if (/\s/.test(env[name])) throw new Error(`${name} contains whitespace; set it to the key alone, with no newline or spaces.`);
+  return env[name];
+}
+
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+// The signing-key ring and the client key (spec item 15). Codes and tokens
+// are sealed with DESK_SIGNING_KEY; during a rollover DESK_SIGNING_KEY_PREVIOUS
+// is still accepted until DESK_SIGNING_KEY_PREVIOUS_UNTIL (an ISO time). Client
+// ids are sealed with DESK_CLIENT_KEY, which falls back to DESK_SIGNING_KEY
+// only while there is no previous key: that is how the gateway ran before, and
+// a rotation that silently re-keyed clients would void every registration.
+function readKeys(env) {
+  const signing = keySetting(env, "DESK_SIGNING_KEY");
+  if (!signing) throw new Error("DESK_SIGNING_KEY must be set: it signs every code and token.");
+  const previous = keySetting(env, "DESK_SIGNING_KEY_PREVIOUS");
+  const client = keySetting(env, "DESK_CLIENT_KEY");
+  const signingKeys = [{ key: signing }];
+  if (previous) {
+    const until = env.DESK_SIGNING_KEY_PREVIOUS_UNTIL;
+    if (!ISO_TIME.test(until ?? "") || Number.isNaN(Date.parse(until))) {
+      throw new Error("DESK_SIGNING_KEY_PREVIOUS needs DESK_SIGNING_KEY_PREVIOUS_UNTIL, the ISO time until which it is accepted.");
+    }
+    if (!client) throw new Error("DESK_SIGNING_KEY_PREVIOUS is set but DESK_CLIENT_KEY is not; set DESK_CLIENT_KEY to the key that sealed today's clients.");
+    signingKeys.push({ key: previous, until: Date.parse(until) });
+  }
+  return { signingKeys, clientKey: client ?? signing };
+}
+
+// What the gateway logs about its keys at start: fingerprints only, which
+// key operations compare with their own reads.
+export function keysStartupLine({ signingKeys, clientKey }) {
+  const previous = signingKeys[1] ? fingerprint(signingKeys[1].key) : "none";
+  return `keys: signing ${fingerprint(signingKeys[0].key)} client ${fingerprint(clientKey)} previous ${previous}`;
+}
+
 export function readConfig(env) {
-  if (!isSet(env.DESK_SIGNING_KEY)) throw new Error("DESK_SIGNING_KEY must be set: it signs every client id, code and token.");
+  const { signingKeys, clientKey } = readKeys(env);
   const publicUrl = (env.DESK_PUBLIC_URL || "https://desk.ouro.bot").replace(/\/+$/, "");
   const appReady = APP_SETTINGS.every((name) => isSet(env[name]));
   const config = {
@@ -37,7 +80,8 @@ export function readConfig(env) {
     issuer: publicUrl,
     resource: `${publicUrl}/mcp`,
     githubCallbackUrl: `${publicUrl}/oauth/github/callback`,
-    signingKey: env.DESK_SIGNING_KEY,
+    signingKeys,
+    clientKey,
     appReady,
     appId: env.DESK_APP_ID,
     appKeyFile: env.DESK_APP_KEY_FILE,
@@ -157,6 +201,7 @@ export async function stopGateway({ server, relay, pushDesk: push, closeTokenSoc
 
 export async function main(env = process.env) {
   const config = readConfig(env);
+  log(keysStartupLine(config));
   let relay = null;
   let push;
   let closeTokenSocket;
@@ -197,7 +242,8 @@ export async function main(env = process.env) {
   }
 
   const provider = createProvider({
-    key: config.signingKey,
+    signingKeys: config.signingKeys,
+    clientKey: config.clientKey,
     issuer: config.issuer,
     github: { clientId: config.appClientId ?? "unset", clientSecret: config.appClientSecret ?? "unset" },
     allowedLogins: config.allowedLogins,

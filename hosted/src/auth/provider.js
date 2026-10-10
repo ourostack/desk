@@ -5,7 +5,7 @@
 // GitHub sign-in.
 //
 // Everything is stateless. Two limits follow, accepted for v0 (one user,
-// short-lived codes, 30-day refresh tokens, key rotation revokes everything):
+// short-lived codes, 30-day refresh tokens):
 // a code can be redeemed more than once within its minute, and a rotated
 // refresh token stays usable until it expires. v1 adds a per-login
 // not-before epoch.
@@ -30,8 +30,19 @@ const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message
 // is sealed for. `redirects` is the redirect policy (see redirects.js); by
 // default Claude's callbacks, ChatGPT's and loopback. `clientDocuments`
 // reads clients whose id is an https URL (see client-document.js).
+//
+// `signingKeys` is the signing-key ring, `[{ key, until? }]`: codes and tokens
+// are sealed with the first and accepted under any key not past its `until`
+// (see seal.js). `clientKey` seals client ids and derives client secrets; it
+// is kept apart from the signing keys so a rotation leaves every registered
+// client working. `key` alone means one signing key that is also the client
+// key, which is how the gateway ran before the ring. `now` is the clock, in
+// milliseconds, for tests.
 export function createProvider({
   key,
+  signingKeys = key ? [{ key }] : [],
+  clientKey = key,
+  now = Date.now,
   issuer,
   github,
   allowedLogins,
@@ -40,11 +51,16 @@ export function createProvider({
   log = stderrLog,
   clientDocuments = createClientDocuments({ redirects, log, ownHost: new URL(issuer).hostname }),
 }) {
-  if (!key) throw new Error("createProvider needs a signing key");
+  if (!signingKeys[0]?.key) throw new Error("createProvider needs a signing key");
+  if (!clientKey) throw new Error("createProvider needs a client key");
+  const signing = signingKeys[0].key;
+  const sealed = (kind, payload, ttlSec) => seal(kind, payload, { key: signing, ttlSec, now: now() });
+  const unsealed = (kind, token) => unseal(kind, token, { keys: signingKeys, now: now() });
   if (!resource) throw new Error("createProvider needs the MCP resource URL");
   const audience = new URL(resource).href;
   const signIn = createGitHubSignIn({
-    key,
+    sealed,
+    unsealed,
     clientId: github.clientId,
     clientSecret: github.clientSecret,
     callbackUrl: new URL("/oauth/github/callback", issuer).href,
@@ -53,7 +69,7 @@ export function createProvider({
     log,
   });
 
-  const clientSecret = (clientId) => derive("client_secret", clientId, { key });
+  const clientSecret = (clientId) => derive("client_secret", clientId, { key: clientKey });
 
   const clientsStore = {
     // The SDK generates an id and secret before calling this; both are
@@ -67,7 +83,7 @@ export function createProvider({
         log("registration refused: invalid_redirect_uri");
         throw new CustomOAuthError("invalid_redirect_uri", "Redirect URIs must be a configured callback, ChatGPT's connector callback or a loopback address.");
       }
-      const clientId = seal("client", { redirect_uris: redirectUris, token_endpoint_auth_method, client_name, nonce: randomUUID() }, { key });
+      const clientId = seal("client", { redirect_uris: redirectUris, token_endpoint_auth_method, client_name, nonce: randomUUID() }, { key: clientKey });
       const registered = { ...client, client_id: clientId };
       if (token_endpoint_auth_method === "none") {
         delete registered.client_secret;
@@ -86,7 +102,7 @@ export function createProvider({
     // before. The SDK awaits this.
     getClient(clientId) {
       if (typeof clientId === "string" && clientId.startsWith("https://")) return clientDocuments.get(clientId);
-      const registration = unseal("client", clientId, { key });
+      const registration = unseal("client", clientId, { key: clientKey });
       if (!registration) return undefined;
       if (!registration.redirect_uris?.length || !registration.redirect_uris.every(redirects.allows)) {
         log("client refused: invalid_redirect_uri");
@@ -130,7 +146,7 @@ export function createProvider({
 
   // Unseals a code or refresh token issued to this client, or refuses it.
   function grantFor(kind, client, token) {
-    const grant = unseal(kind, token, { key });
+    const grant = unsealed(kind, token);
     if (!grant || grant.clientId !== client.client_id || !allowedLogins.includes(grant.login) || !forThisResource(grant)) {
       throw refuseGrant(client, `The ${kind === "code" ? "authorization code" : "refresh token"} is not valid.`);
     }
@@ -143,8 +159,8 @@ export function createProvider({
     // from carried.
     const claims = { clientId, scopes, login, userId, name, aud: audience };
     return {
-      access_token: seal("access", { ...claims, jti: randomUUID() }, { key, ttlSec: TTL.access }),
-      refresh_token: seal("refresh", { ...claims, jti: randomUUID() }, { key, ttlSec: TTL.refresh }),
+      access_token: sealed("access", { ...claims, jti: randomUUID() }, TTL.access),
+      refresh_token: sealed("refresh", { ...claims, jti: randomUUID() }, TTL.refresh),
       token_type: "bearer",
       expires_in: TTL.access,
     };
@@ -162,7 +178,7 @@ export function createProvider({
     // the client's redirect as invalid_target.
     async authorize(client, { state, scopes, redirectUri, codeChallenge, resource: requested }, res) {
       checkResource(requested, client, "authorize");
-      const consent = seal("consent", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes, aud: audience }, { key, ttlSec: TTL.consent });
+      const consent = sealed("consent", { clientId: client.client_id, redirectUri, codeChallenge, state, scopes, aud: audience }, TTL.consent);
       // A document's client_name is whatever its author chose; the host of
       // its id is the part they had to control, so the page shows it too.
       const clientHost = client.client_id.startsWith("https://") ? new URL(client.client_id).host : undefined;
@@ -172,13 +188,13 @@ export function createProvider({
     // The Approve form's POST. Returns `{ redirectTo }` (GitHub sign-in,
     // carrying the request as a sealed pending state) or a page to show.
     approve(consent) {
-      const request = unseal("consent", consent, { key });
+      const request = unsealed("consent", consent);
       if (!request) {
         log("consent refused: invalid_consent");
         return page(400, "This sign-in link has expired or is not valid. Start again from Claude.");
       }
       const { exp: _exp, ...pending } = request;
-      return { redirectTo: signIn.authorizeUrl(seal("pending", pending, { key, ttlSec: TTL.pending })) };
+      return { redirectTo: signIn.authorizeUrl(sealed("pending", pending, TTL.pending)) };
     },
 
     async challengeForAuthorizationCode(client, code) {
@@ -202,7 +218,7 @@ export function createProvider({
     },
 
     async verifyAccessToken(token) {
-      const access = unseal("access", token, { key });
+      const access = unsealed("access", token);
       if (!access || !allowedLogins.includes(access.login) || !forThisResource(access)) {
         log("access token refused: invalid_token");
         throw new InvalidTokenError("The access token is not valid.");

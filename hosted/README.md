@@ -25,7 +25,9 @@ Some Desk tools, doctor repairs and skills need a shell, the host machine or a c
 
 | Variable | Meaning |
 | --- | --- |
-| `DESK_SIGNING_KEY` | Required. Signs every OAuth client id, code and token. Changing it signs every client out. |
+| `DESK_SIGNING_KEY` | Required. Signs every OAuth code and token, and, while `DESK_CLIENT_KEY` is unset, every client id. Any whitespace in it stops the gateway at start. The gateway logs each key's fingerprint at start (`keys: signing <fp> client <fp> previous <fp or none>`), never the key. |
+| `DESK_SIGNING_KEY_PREVIOUS`, `DESK_SIGNING_KEY_PREVIOUS_UNTIL` | After a signing-key rotation, the old key and the ISO time until which tokens sealed with it are still accepted (30 days after the rotation), so a rotation signs nobody out. The previous key needs both the time and an explicit `DESK_CLIENT_KEY`, or the gateway refuses to start. |
+| `DESK_CLIENT_KEY` | Seals client ids and derives client secrets, kept apart from the signing key so a signing-key rotation leaves every registered client working. Unset, the gateway uses `DESK_SIGNING_KEY`, which is how client ids were sealed before; set it to a byte-exact copy of that key before the first rotation. Changing it makes every client register again. |
 | `DESK_PUBLIC_URL` | The gateway's public origin, which sets the OAuth issuer, the MCP resource (`<url>/mcp`) and the GitHub callback (`<url>/oauth/github/callback`). Default `https://desk.ouro.bot`; a test deploy uses the Container App's Azure address. |
 | `DESK_APP_ID`, `DESK_APP_CLIENT_ID`, `DESK_APP_CLIENT_SECRET` | The GitHub App's id and OAuth client. |
 | `DESK_APP_KEY_FILE` | Path to the GitHub App's private key (a mounted secret). |
