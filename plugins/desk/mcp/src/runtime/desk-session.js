@@ -151,6 +151,7 @@ export function createDeskSession(deps) {
   let lastStatusDetail = null
   // The one runtime status computation allowed at a time, so repeated desk_status calls on a slow machine never pile up work: `{ promise, at, started, seq }`. One older than statusRunLimitMs is abandoned in favor of a new one.
   let statusRun = null
+  let statusReaderClosed = null
   let statusSeq = 0
   let contextGeneration = 0
   let resolvedInputs = null
@@ -161,8 +162,16 @@ export function createDeskSession(deps) {
 
   function invalidateStatus() {
     contextGeneration += 1
+    retireStatusRun(new Error("runtime status context ended"))
     statusRun = null
     lastStatusDetail = null
+  }
+
+  function retireStatusRun(reason) {
+    if (!statusRun) return
+    statusRun.controller.abort(reason)
+    const closed = context.runtimeServer?.waitForStatusInspection?.(statusRun.signal)
+    if (closed) statusReaderClosed = Promise.all([statusReaderClosed, closed])
   }
 
   function operation(work) {
@@ -812,15 +821,23 @@ export function createDeskSession(deps) {
 
   // Starts a runtime status computation. Its detail is kept even when it arrives after the call that started it has answered, so the next call serves it, marked cached with when it was computed. An abandoned computation that finishes late never replaces a detail from a newer one.
   function startStatusRun(input, signal) {
-    const run = { at: new Date().toISOString(), started: Date.now(), seq: (statusSeq += 1), generation: contextGeneration }
+    retireStatusRun(new Error("runtime status run exceeded its lifetime"))
+    const run = { at: new Date().toISOString(), started: Date.now(), seq: (statusSeq += 1), generation: contextGeneration,
+      controller: new AbortController() }
+    run.signal = signal ? AbortSignal.any([signal, run.controller.signal]) : run.controller.signal
     // Capture before the asynchronous status call yields to a new admission.
     const request = {
       deskRoot: context.root.root, name: "desk_status", input, person: context.person ?? null,
-      statusContext: statusContext({ ...context.admission, controller: readerController() }), signal,
+      statusContext: statusContext({ ...context.admission, controller: readerController() }),
+      signal: run.signal,
     }
     const runtimeServer = context.runtimeServer
     run.promise = Promise.resolve()
-      .then(() => runtimeServer.callTool(request))
+      .then(() => statusReaderClosed)
+      .then(() => {
+        run.signal.throwIfAborted()
+        return runtimeServer.callTool(request)
+      })
       .then((value) => {
         const payload = JSON.parse(value.content[0].text)
         if (!disposed && run.generation === contextGeneration &&
@@ -1016,7 +1033,7 @@ export function createDeskSession(deps) {
       unwatchController = null
       closeHeadWatch()
       if (headTimer !== null) clearTimeout(headTimer)
-      return operationTail.then(forgetController)
+      return Promise.all([operationTail, statusReaderClosed]).then(forgetController)
     },
   }
 }

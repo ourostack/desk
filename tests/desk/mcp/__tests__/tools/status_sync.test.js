@@ -108,6 +108,16 @@ test("desk_status treats a blocked status with no reason or paths recorded as bl
   assert.deepEqual(body.sync, { blocked: true, reason: null, paths: [] })
 })
 
+test("off-thread DB inspection preserves a recorded failed pull even when local counts are clean", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  const lastPull = { state: "unresolved", at: new Date().toISOString(), cause: "merge_conflict", message: "fixture conflict" }
+  seedStatus(cloneA, { blocked: false, last_pull: lastPull })
+  const body = await desk_status({ deskRoot: cloneA, env })
+  assert.deepEqual(body.sync.last_pull, lastPull)
+  assert.equal(body.sync.ahead, 0)
+  assert.equal(body.sync.behind, 0)
+})
+
 test("desk_status's sync section makes no network call: a repo with a remote pointing nowhere resolves fast", async () => {
   const deskRoot = await mkPlainRepo("desk-status-sync-deadremote-")
   git(deskRoot, ["remote", "add", "origin", "https://127.0.0.1:1/does/not/exist.git"])

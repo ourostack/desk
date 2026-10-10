@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs"
 import * as path from "node:path"
-import Database from "better-sqlite3"
-import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "../db/init.js"
+import { unavailableLocalDb } from "../db/status-read.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { deskVersion } from "../package-metadata.js"
@@ -11,6 +10,7 @@ import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
 import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus } from "../runtime/sync-worker.js"
+import { createStatusInspection } from "../runtime/status-inspection.js"
 
 
 // desk_status's one input, `detail`, is read where the answer is shaped for the caller (runtime/desk-session.js, which
@@ -51,7 +51,6 @@ async function syncStatus({ deskRoot, env }) {
   }
 }
 
-const DB_SCHEMA = { id: "desk-index", version: 1 }
 const EMBEDDING_SPEC = {
   id: ACTIVE_EMBEDDING_SPEC.id,
   provider: "ollama",
@@ -74,64 +73,71 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       }
   const root = rootStatus(deskRoot, statusContext.root)
   const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
-  const localDb = root.valid
-    ? inspectLocalDb(root.path)
-    : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
-  const startup = normalizeStartup(statusContext.startup)
-  const readiness = await controllerReadiness(statusContext.admission)
-  const observed = await (queryRouter ?? createDeskQueryRouter({
-    controller: statusContext.admission?.controller,
-  })).snapshot({ deskRoot: root.valid ? root.path : null, signal })
-  const lexical = root.valid ? observed.lexical : { ...observed.lexical, serving_path: "blocked" }
-  const semantic = root.valid ? observed.semantic : {
-    ...observed.semantic,
-    current: false,
-    generation: null,
-    current_automatic_action: null,
-  }
-  const snapshots = snapshotStatus(startup)
-  const vectorPacks = vectorPackStatus(startup)
-  const queryEmbedding = queryEmbeddingStatus(readiness.state === "not_checked" ? startup : {}, readiness)
-  const activation = activationStatus(statusContext.activation)
-  const startupFallback = startupFallbackStatus({
-    startup,
-    documentVectors: localDb.document_vectors,
-    queryEmbedding,
-    lexicalIndex: localDb.lexical_index,
-    readiness,
-  })
-  const degradedModes = degradedModesFor({
-    documentVectors: localDb.document_vectors,
-    queryEmbedding,
-    lexicalIndex: localDb.lexical_index,
-    startupFallback,
-    readiness,
-  })
+  const reader = root.valid ? createStatusInspection(root.path, { signal }) : null
+  try {
+    const localDb = root.valid
+      ? await reader.inspect("local")
+      : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
+    const startup = normalizeStartup(statusContext.startup)
+    const readiness = await controllerReadiness(statusContext.admission)
+    const observed = await (queryRouter ?? createDeskQueryRouter({
+      controller: statusContext.admission?.controller,
+    })).snapshot({ deskRoot: root.valid ? root.path : null, signal }, {
+      readIndex: () => reader ? reader.inspect("index") : null,
+    })
+    const lexical = root.valid ? observed.lexical : { ...observed.lexical, serving_path: "blocked" }
+    const semantic = root.valid ? observed.semantic : {
+      ...observed.semantic,
+      current: false,
+      generation: null,
+      current_automatic_action: null,
+    }
+    const snapshots = snapshotStatus(startup)
+    const vectorPacks = vectorPackStatus(startup)
+    const queryEmbedding = queryEmbeddingStatus(readiness.state === "not_checked" ? startup : {}, readiness)
+    const activation = activationStatus(statusContext.activation)
+    const startupFallback = startupFallbackStatus({
+      startup,
+      documentVectors: localDb.document_vectors,
+      queryEmbedding,
+      lexicalIndex: localDb.lexical_index,
+      readiness,
+    })
+    const degradedModes = degradedModesFor({
+      documentVectors: localDb.document_vectors,
+      queryEmbedding,
+      lexicalIndex: localDb.lexical_index,
+      startupFallback,
+      readiness,
+    })
 
-  return {
-    status: root.valid ? "ok" : "error",
-    root,
-    activation,
-    runtime,
-    readiness: presentReadiness(readiness),
-    lexical,
-    semantic,
-    local_db: localDb.local_db,
-    db_schema: localDb.local_db.schema,
-    active_embedding_spec: EMBEDDING_SPEC,
-    snapshots,
-    vector_packs: vectorPacks,
-    document_vectors: localDb.document_vectors,
-    query_embedding: queryEmbedding,
-    lexical_index: localDb.lexical_index,
-    startup_fallback: startupFallback,
-    degraded_modes: degradedModes,
-    write_scope: writeScope,
-    // The redacted active-task listing session start and status render (./desk/active-tasks.js).
-    active_tasks: root.valid ? activeTasks(root.path) : null,
-    factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
-    sync: root.valid ? await syncStatus({ deskRoot: root.path, env }) : null,
-    summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
+    return {
+      status: root.valid ? "ok" : "error",
+      root,
+      activation,
+      runtime,
+      readiness: presentReadiness(readiness),
+      lexical,
+      semantic,
+      local_db: localDb.local_db,
+      db_schema: localDb.local_db.schema,
+      active_embedding_spec: EMBEDDING_SPEC,
+      snapshots,
+      vector_packs: vectorPacks,
+      document_vectors: localDb.document_vectors,
+      query_embedding: queryEmbedding,
+      lexical_index: localDb.lexical_index,
+      startup_fallback: startupFallback,
+      degraded_modes: degradedModes,
+      write_scope: writeScope,
+      // The redacted active-task listing session start and status render (./desk/active-tasks.js).
+      active_tasks: root.valid ? activeTasks(root.path) : null,
+      factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
+      sync: root.valid ? await syncStatus({ deskRoot: root.path, env }) : null,
+      summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
+    }
+  } finally {
+    await reader?.close()
   }
 }
 
@@ -183,96 +189,6 @@ async function controllerReadiness(admission) {
   }
 }
 
-function inspectLocalDb(deskRoot) {
-  const dbPath = indexDbPath(deskRoot)
-  if (!existsSync(dbPath)) {
-    return unavailableLocalDb(dbPath, "missing")
-  }
-
-  const db = new Database(dbPath, { readonly: true, fileMustExist: true })
-  try {
-    sqliteVec.load(db)
-    tableExists(db, "chunks")
-  } catch {
-    // An unreadable index is reported, never thrown: the readiness controller moves it aside and rebuilds it.
-    db.close()
-    return unavailableLocalDb(dbPath, "corrupt")
-  }
-  try {
-    const chunksTableExists = tableExists(db, "chunks")
-    const vectorsTableExists = tableExists(db, "chunk_vecs")
-    const embeddingFailuresTableExists = tableExists(db, "chunk_embedding_failures")
-    const lexicalAvailable = tableExists(db, "chunks_fts")
-    const chunksTotal = chunksTableExists ? countRows(db, "chunks") : 0
-    const vectorsIndexed = countActiveVectors(db, {
-      chunksTableExists,
-      vectorsTableExists,
-    })
-    const missingVectors = Math.max(0, chunksTotal - vectorsIndexed)
-    const knownUnembeddableVectors = countKnownUnembeddableVectors(db, {
-      chunksTableExists,
-      vectorsTableExists,
-      embeddingFailuresTableExists,
-    })
-    const repairableMissingVectors = Math.max(0, missingVectors - knownUnembeddableVectors)
-    const freshness = inspectFreshness(deskRoot, db)
-    return {
-      local_db: {
-        path: dbPath,
-        exists: true,
-        schema: DB_SCHEMA,
-        state: "available",
-        freshness,
-      },
-      lexical_index: {
-        available: lexicalAvailable,
-        state: ["missing", "available"][Number(lexicalAvailable)],
-      },
-      document_vectors: {
-        state: documentVectorState({
-          chunksTotal,
-          missingVectors,
-          repairableMissingVectors,
-          vectorsIndexed,
-          vectorsTableExists,
-        }),
-        chunks_total: chunksTotal,
-        vectors_indexed: vectorsIndexed,
-        missing_vectors: missingVectors,
-        known_unembeddable_vectors: knownUnembeddableVectors,
-        repairable_missing_vectors: repairableMissingVectors,
-        coverage: vectorsIndexed / Math.max(1, chunksTotal),
-      },
-    }
-  } finally {
-    db.close()
-  }
-}
-
-function unavailableLocalDb(dbPath, state) {
-  return {
-    local_db: {
-      path: dbPath,
-      exists: false,
-      schema: { id: DB_SCHEMA.id, version: null },
-      state,
-      freshness: { state: "unknown", reason: state },
-    },
-    lexical_index: {
-      available: false,
-      state: state === "missing" ? "missing_local_db" : state,
-    },
-    document_vectors: {
-      state: state === "missing" ? "missing_local_db" : state,
-      chunks_total: 0,
-      vectors_indexed: 0,
-      missing_vectors: 0,
-      known_unembeddable_vectors: 0,
-      repairable_missing_vectors: 0,
-      coverage: null,
-    },
-  }
-}
 
 function normalizeStartup(startup) {
   return startup !== null && typeof startup === "object" ? startup : {}
@@ -387,18 +303,6 @@ function snapshotRestoreState(snapshot) {
   return "skipped"
 }
 
-function documentVectorState({
-  chunksTotal,
-  missingVectors,
-  repairableMissingVectors,
-  vectorsIndexed,
-  vectorsTableExists,
-}) {
-  if (!vectorsTableExists) return "missing"
-  if (chunksTotal === 0) return "available"
-  if (vectorsIndexed === 0 && repairableMissingVectors > 0) return "missing"
-  return repairableMissingVectors > 0 ? "partial" : "available"
-}
 
 function inferStartupFallbackMode({ ensure, lexicalIndex }) {
   if (!ensure) return "not_checked"
@@ -518,114 +422,11 @@ function textOrNull(value) {
   return typeof value === "string" && value.trim().length > 0 ? value : null
 }
 
-function inspectFreshness(deskRoot, db) {
-  if (!tableExists(db, "meta")) {
-    return { state: "unknown", reason: "meta_table_missing" }
-  }
-  const lastIndexedAt = metaValue(db, "last_indexed_at")
-  if (lastIndexedAt === null) {
-    return { state: "unknown", reason: "last_indexed_at_missing" }
-  }
-  const indexedMs = Date.parse(lastIndexedAt)
-  if (Number.isNaN(indexedMs)) {
-    return { state: "unknown", reason: "last_indexed_at_invalid", last_indexed_at: lastIndexedAt }
-  }
-  return {
-    state: "unknown",
-    reason: "requires_controller_proof",
-    last_indexed_at: lastIndexedAt,
-  }
-}
 
 function defaultTarget() {
   return `${process.platform}-${process.arch}-node-${process.versions.modules}`
 }
 
-function countRows(db, table) {
-  return db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count
-}
-
-function tableExists(db, table) {
-  return db.prepare("SELECT 1 AS found FROM sqlite_master WHERE name = ?").get(table) !== undefined
-}
-
-function tableHasColumns(db, table, columns) {
-  const names = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name))
-  return columns.every((column) => names.has(column))
-}
-
-function countActiveVectors(db, { chunksTableExists, vectorsTableExists }) {
-  if (!chunksTableExists || !vectorsTableExists) return 0
-  if (!tableHasColumns(db, "chunks", [
-    "embedding_spec_id",
-    "chunker_id",
-    "normalization_id",
-  ])) {
-    return 0
-  }
-  return db.prepare(
-    `SELECT COUNT(*) AS count
-     FROM chunks c
-     JOIN chunk_vecs v ON v.chunk_id = c.id
-     WHERE c.embedding_spec_id = ?
-       AND c.chunker_id = ?
-       AND c.normalization_id = ?`,
-  ).get(
-    ACTIVE_EMBEDDING_SPEC.id,
-    ACTIVE_EMBEDDING_SPEC.chunker_id,
-    ACTIVE_EMBEDDING_SPEC.normalization_id,
-  ).count
-}
-
-function countKnownUnembeddableVectors(db, {
-  chunksTableExists,
-  vectorsTableExists,
-  embeddingFailuresTableExists,
-}) {
-  if (!chunksTableExists || !vectorsTableExists || !embeddingFailuresTableExists) return 0
-  if (!tableHasColumns(db, "chunks", [
-    "chunk_key",
-    "text_hash",
-    "embedding_spec_id",
-    "chunker_id",
-    "normalization_id",
-  ])) {
-    return 0
-  }
-  if (!tableHasColumns(db, "chunk_embedding_failures", [
-    "chunk_key",
-    "text_hash",
-    "embedding_spec_id",
-    "chunker_id",
-    "normalization_id",
-  ])) {
-    return 0
-  }
-  return db.prepare(
-    `SELECT COUNT(*) AS count
-     FROM chunks c
-     LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
-     JOIN chunk_embedding_failures f
-       ON f.chunk_key = c.chunk_key
-      AND f.text_hash = c.text_hash
-      AND f.embedding_spec_id = c.embedding_spec_id
-      AND f.chunker_id = c.chunker_id
-      AND f.normalization_id = c.normalization_id
-     WHERE v.chunk_id IS NULL
-       AND c.embedding_spec_id = ?
-       AND c.chunker_id = ?
-       AND c.normalization_id = ?`,
-  ).get(
-    ACTIVE_EMBEDDING_SPEC.id,
-    ACTIVE_EMBEDDING_SPEC.chunker_id,
-    ACTIVE_EMBEDDING_SPEC.normalization_id,
-  ).count
-}
-
-function metaValue(db, key) {
-  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key)
-  return row?.value ?? null
-}
 
 function isRootAttempt(value) {
   return value !== null

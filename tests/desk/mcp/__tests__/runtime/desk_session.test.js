@@ -1477,6 +1477,36 @@ test("desk_status abandons a stuck computation after its age limit, and the aban
   assert.match(cached.status_detail, /^cached: /u)
 })
 
+test("a replacement status waits for its aborted owned reader to close, and shutdown waits too", async (t) => {
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  const runtime = fakeRuntime()
+  let calls = 0
+  let activeSignal
+  let releaseReader
+  const closed = new Promise((resolve) => { releaseReader = resolve })
+  runtime.callTool = ({ signal }) => {
+    calls += 1
+    activeSignal = signal
+    return calls === 1 ? new Promise(() => {}) :
+      Promise.resolve({ content: [{ type: "text", text: JSON.stringify({ status: "ok" }) }] })
+  }
+  runtime.waitForStatusInspection = () => closed
+  const { session } = await makeSession(t, { runtime, statusRunLimitMs: 0 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  assert.equal(activeSignal.aborted, true, "the old reader must be cancelled")
+  assert.equal(calls, 1, "no second status may dispatch until the exact-owned reader closes")
+  let disposed = false
+  const shutdown = session.dispose().then(() => { disposed = true })
+  await flush()
+  assert.equal(disposed, false, "shutdown must await the retiring reader even after status replacement")
+  releaseReader()
+  await shutdown
+  assert.equal(calls, 1, "a replacement invalidated by shutdown must never start later")
+})
+
 test("desk_status answers while an admission attempt is still running", async (t) => {
   let release
   const { session } = await makeSession(t, { loadRuntime: () => new Promise((resolve) => { release = () => resolve({ runtimeServer: fakeRuntime(), runtimeStatus: {} }) }) })
