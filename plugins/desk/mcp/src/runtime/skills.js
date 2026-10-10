@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
 import { HOSTED_SHELL_SKILLS, isHosted } from "./hosted.js"
 
 /** The plugin's skills folder: `<plugin>/skills`, three levels above this file (`<plugin>/mcp/src/runtime`). */
@@ -25,9 +26,12 @@ function readSkillFile(skillsRoot, name) {
 }
 
 function description(text) {
-  const match = FRONTMATTER.exec(text)
-  const line = match?.[1].split(/\r?\n/u).find((entry) => entry.startsWith("description:"))
-  return line === undefined ? "" : line.slice("description:".length).trim().replace(/^"(.*)"$/u, "$1")
+  try {
+    const value = parseFrontmatterLite(text).data.description
+    return typeof value === "string" ? value.trim() : ""
+  } catch {
+    return ""
+  }
 }
 
 function json(value, isError = false) {

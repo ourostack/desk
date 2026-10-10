@@ -169,3 +169,35 @@ test("a desk_status answer with no content, or no answer at all, still carries t
     assert.match(result.content[0].text, /# Desk instructions for this conversation[\s\S]*RULES/)
   }
 })
+
+async function listWithDescription(frontmatterLines) {
+  const root = await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "desk-skills-"))
+  await fs.mkdir(path.join(root, "demo"))
+  await fs.writeFile(path.join(root, "demo", "SKILL.md"), `---\nname: demo\n${frontmatterLines}\n---\n\nBody\n`)
+  return parse(deskSkill({}, { env: {}, skillsRoot: root })).skills[0].description
+}
+
+test("desk_skill lists a folded >- description as joined text", async () => {
+  assert.equal(await listWithDescription("description: >-\n  First line\n  second line."), "First line second line.")
+})
+
+test("desk_skill lists a folded > description as joined text", async () => {
+  assert.equal(await listWithDescription("description: >\n  First line\n  second line.\nlicense: x"), "First line second line.")
+})
+
+test("desk_skill lists a literal | and |- description as text", async () => {
+  assert.equal(await listWithDescription("description: |\n  First line\n  second line."), "First line\nsecond line.")
+  assert.equal(await listWithDescription("description: |-\n  First line\n  second line."), "First line\nsecond line.")
+})
+
+test("desk_skill lists quoted and plain single-line descriptions", async () => {
+  assert.equal(await listWithDescription('description: "Quoted: text here"'), "Quoted: text here")
+  assert.equal(await listWithDescription("description: Plain text here"), "Plain text here")
+})
+
+test("no real plugin skill is listed with an empty or block-indicator description", () => {
+  for (const skill of parse(deskSkill({}, { env: {} })).skills) {
+    assert.ok(skill.description.length > 0, `${skill.name} has an empty description`)
+    assert.doesNotMatch(skill.description, /^[>|]/u, `${skill.name} description starts with a block indicator`)
+  }
+})
