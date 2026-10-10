@@ -137,7 +137,7 @@ test("pending_applicable_policy_blocks", async (t) => {
 test("effective_hook_helper_or_widening_grant_blocks", async (t) => {
   const f = await fixture(t)
   for (const [settings, reason] of [
-    [{ hooks: { SessionStart: [{ command: "never execute this" }] } }, "active_hook_or_helper"],
+    [{ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "never execute this" }] }] } }, "active_hook_or_helper"],
     [{ policyHelper: "never execute this" }, "active_hook_or_helper"],
     [{ permissions: { allow: ["Edit"] } }, "unsafe_permission_grant"],
     [{ permissions: { additionalDirectories: ["/outside"] } }, "unsafe_permission_grant"],
@@ -516,7 +516,8 @@ function observedSpawn(mode = "normal") {
         if (mode === "generic_outside_only" && operation.operation === "prepared_trigger_read") continue
         if (!["Read", "Grep", "Glob", "Edit"].includes(operation.tool)) continue
         events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: String(i), name: operation.tool,
-          input: { path: operation.target, new_string: operation.new_string } }] } })
+          input: mode === "native_glob_probe_shape" && operation.tool === "Glob" ? { pattern: operation.target } :
+            { path: operation.target, new_string: operation.new_string } }] } })
         events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: String(i),
           is_error: mode === "violation_succeeded" ? false : !operation.positive,
           content: operation.positive ? "tool succeeded" : mode === "unrelated_error" ? "file not found" : "Permission denied" }] } })
@@ -556,6 +557,62 @@ function observedSpawn(mode = "normal") {
         const name = mode === "relative_read" ? "Read" : "Grep"
         events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "scoped", name, input }] } },
           { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "scoped", is_error: false, content: "succeeded" }] } })
+      }
+      const searchCases = {
+        glob_absolute_outside: ["Glob", { pattern: "/outside/**/*" }, "/outside/private.txt"],
+        glob_absolute_override: ["Glob", { pattern: "/outside/**/*", path: opts.cwd }, "/outside/private.txt"],
+        glob_parent_escape: ["Glob", { pattern: "../outside/**/*" }, "../outside/private.txt"],
+        glob_safe_pattern_outside_match: ["Glob", { pattern: "**/*.txt" }, "/outside/private.txt"],
+        glob_symlink_prefix_escape: ["Glob", { pattern: path.join(opts.cwd, "link-out", "**/*") }, "/outside/private.txt"],
+        glob_relative_symlink_match: ["Glob", { pattern: "**/*" }, "link-out"],
+        grep_default_outside_match: ["Grep", { pattern: "private" }, "/outside/private.txt"],
+        grep_count_outside_match: ["Grep", { pattern: "private", output_mode: "count" }, "/outside/private.txt:3"],
+        grep_content_outside_match: ["Grep", { pattern: "private", output_mode: "content" }, "/outside/private.txt:3:bytes"],
+        grep_context_outside_match: ["Grep", { pattern: "private", output_mode: "content", context: 1 }, "/outside/private.txt-3-bytes"],
+        grep_unnumbered_outside_match: ["Grep", { pattern: "private", output_mode: "content", "-n": false }, "/outside/private.txt:bytes"],
+        grep_unnumbered_sibling_match: ["Grep", { pattern: "private", output_mode: "content", "-n": false }, opts.cwd + "-private.txt:bytes"],
+        grep_numbered_sibling_match: ["Grep", { pattern: "private", output_mode: "content" }, opts.cwd + "-3-private.txt:4:bytes"],
+        grep_count_alias_outside_match: ["Grep", { pattern: "private", "-c": true }, "/outside/private.txt:3"],
+        grep_symlink_path_escape: ["Grep", { pattern: "private", path: path.join(opts.cwd, "link-out") }, "/outside/private.txt"],
+        read_parent_escape: ["Read", { file_path: "../private.txt" }, "private bytes"],
+        safe_glob_relative: ["Glob", { pattern: "**/*.json" }, "input.json"],
+        safe_glob_absolute_override: ["Glob", { pattern: path.join(opts.cwd, "**/*.json"), path: "/outside" }, path.join(opts.cwd, "input.json")],
+        safe_glob_parent_normalized: ["Glob", { pattern: "nested/../*.json" }, "input.json"],
+        safe_grep_content: ["Grep", { pattern: "outside", output_mode: "content" }, "input.json:3:/outside/private.txt is just prepared text"],
+        safe_grep_unnumbered: ["Grep", { pattern: "outside", output_mode: "content", "-n": false }, "input.json:/outside/private.txt is just prepared text"],
+        safe_grep_context: ["Grep", { pattern: "outside", output_mode: "content", context: 1 }, "input.json-3-/outside/private.txt is just prepared text\n--\ninput.json:5:match"],
+        safe_grep_file_content: ["Grep", { pattern: "outside", path: path.join(opts.cwd, "input.json"), output_mode: "content" }, "3:/outside/private.txt is just prepared text"],
+        safe_grep_count_alias: ["Grep", { pattern: "outside", "-c": true }, "input.json:3\n\nFound 3 total occurrences across 1 file."],
+        safe_grep_default: ["Grep", { pattern: "prepared" }, "input.json"],
+        read_no_input: ["Read", undefined, "bytes"],
+        read_null_path: ["Read", { file_path: null }, "bytes"],
+        read_nul_path: ["Read", { file_path: "bad\0path" }, "bytes"],
+        read_home_escape: ["Read", { file_path: "~/private.txt" }, "bytes"],
+        read_home_root_escape: ["Read", { file_path: "~" }, "bytes"],
+        read_permission_unknown: ["Read", { file_path: "/permission-unknown" }, "bytes"],
+        read_no_ancestor: ["Read", { file_path: "/no-ancestor" }, "bytes"],
+        glob_empty_pattern: ["Glob", { pattern: "" }, "No files found"],
+        glob_missing_pattern: ["Glob", {}, "No files found"],
+        glob_invalid_search_path: ["Glob", { pattern: "*.json", path: true }, "No files found"],
+        glob_root_pattern: ["Glob", { pattern: "/*" }, "/outside.txt"],
+        glob_invalid_content: ["Glob", { pattern: "*.json" }, 5],
+        glob_untyped_content: ["Glob", { pattern: "*.json" }, [{ type: "image", data: "uninspectable" }]],
+        grep_invalid_mode: ["Grep", { pattern: "prepared", output_mode: "unknown" }, "input.json"],
+        grep_unknown_content: ["Grep", { pattern: "prepared", output_mode: "content" }, "not a native directory result"],
+        grep_empty_filename: ["Grep", { pattern: "prepared", output_mode: "content" }, ":3:bytes"],
+        grep_invalid_count: ["Grep", { pattern: "prepared", output_mode: "count" }, "unknown count"],
+        safe_glob_plain: ["Glob", { pattern: "input.json" }, [{ type: "text", text: "input.json" }]],
+        safe_glob_plain_absolute: ["Glob", { pattern: path.join(opts.cwd, "input.json") }, path.join(opts.cwd, "input.json")],
+        safe_glob_no_match: ["Glob", { pattern: "*.absent" }, "No files found"],
+        safe_grep_list_alias: ["Grep", { pattern: "prepared", "-l": "true" }, "Found 1 file\ninput.json"],
+        safe_grep_count_string_alias: ["Grep", { pattern: "prepared", "-c": "true" }, "input.json:2"],
+        safe_grep_file_alias: ["Grep", { pattern: "prepared", file_path: path.join(opts.cwd, "input.json"), output_mode: "content" }, "3:prepared"],
+        safe_grep_missing_file: ["Grep", { pattern: "prepared", path: path.join(opts.cwd, "not-existing"), output_mode: "content" }, "No matches found"],
+      }
+      if (searchCases[mode]) {
+        const [name, input, content] = searchCases[mode]
+        events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "search-audit", name, input }] } },
+          { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "search-audit", is_error: false, content }] } })
       }
       writeFileSync(path.join(opts.cwd, ".triage-result.json"), JSON.stringify(input.qualification_result) + "\n")
       if (mode === "sentinel_changed") writeFileSync(input.operations.find((op) => op.operation === "sibling_edit").target, "changed")
@@ -930,13 +987,15 @@ test("R6_1_default_policy_adapter_connects_native_source_plists_mcp_and_resolved
     const name = String(file)
     if (name === f.cli) return Buffer.from("PINNED_ENGINE_FIXTURE")
     if (name.endsWith("com.anthropic.claudecode.plist")) return mode === "oversize_os_policy" ? Buffer.alloc(2 * 1024 * 1024 + 1) : Buffer.from("native-plist-fixture")
-    if (name.endsWith("remote-settings.json")) return Buffer.from(mode === "cache_unresolved" ? '{"unknownCache":true}' : "{}")
+    if (name.endsWith("remote-settings.json")) return Buffer.from(mode === "cache_invalid" ? "true" : mode === "cache_unresolved" ? '{"unknownCache":true}' : "{}")
+    if (name.endsWith("managed-settings.json") && mode === "managed_invalid") return Buffer.from("true")
     if (name.endsWith("managed-mcp.json")) return Buffer.from(mode === "mcp_widens" ? '{"mcpServers":{"outside":{"command":"never"}}}' : '{"mcpServers":{}}')
     if (name === path.join(f.env.HOME, ".claude", "settings.json")) {
       if (mode === "oversize_user") return Buffer.alloc(2 * 1024 * 1024 + 1)
       if (mode === "invalid_user") return Buffer.from("invalid-json")
+      if (mode === "malformed_user") return Buffer.from('{"hooks":{"ignored":"not executed"}}')
       return Buffer.from(mode === "user_provider" ? '{"env":{"ANTHROPIC_API_KEY":"do-not-copy"}}' :
-        '{"hooks":{"ignored":"not executed"},"permissions":{"allow":["Edit"]},"theme":"ignored"}')
+        '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"not executed"}]}]},"permissions":{"allow":["Edit"]},"theme":"ignored"}')
     }
     return realRead(file, ...args)
   })
@@ -948,7 +1007,7 @@ test("R6_1_default_policy_adapter_connects_native_source_plists_mcp_and_resolved
     }
     assert.equal(command, "/usr/bin/plutil"); assert.equal(opts.input.toString(), "native-plist-fixture")
     converted += 1
-    return mode === "os_helper" ? '{"policyHelpers":{"darwin":{"command":"never"}}}' : "{}"
+    return mode === "os_invalid" ? "true" : mode === "os_helper" ? '{"policyHelpers":{"darwin":{"command":"never"}}}' : "{}"
   })
   syncBuiltinESMExports()
   Object.defineProperty(process, "platform", { value: "darwin", configurable: true })
@@ -958,6 +1017,16 @@ test("R6_1_default_policy_adapter_connects_native_source_plists_mcp_and_resolved
   assert.equal(admitted.capabilities.result_is_data_only, true)
   assert.equal(admitted.sources.filter((source) => source.kind === "os").length, 2)
   assert.ok(converted >= 4, "actual native-listed OS sources are inspected before and after doctor")
+  for (const next of ["managed_invalid", "cache_invalid", "os_invalid", "malformed_user"]) {
+    mode = next
+    let calls = 0
+    const rejected = await runner.collectTriageAdmission({ ...f, argv: policy.argv,
+      runDiagnostic: async () => { calls += 1; return diagnostic() } })
+    assert.equal(rejected.state, "scope_unqualified", next)
+    assert.deepEqual(rejected.validation_errors, ["invalid_policy_document"], next)
+    assert.equal(rejected.capabilities, null, next)
+    assert.equal(calls, 0, next)
+  }
   for (const [next, reason] of [["oversize_os_policy", "effective_policy_unknown"], ["oversize_user", "effective_policy_unknown"],
     ["invalid_user", "effective_policy_unknown"], ["invalid_signature", "effective_policy_unknown"],
     ["user_provider", "billing_unresolved"], ["os_helper", "active_hook_or_helper"],
@@ -989,4 +1058,112 @@ test("R6_4_refusal_of_an_admitted_absent_policy_source_still_requires_real_trigg
   assert.equal(result.cases.find((row) => row.operation === "policy_mutation").bytes_unchanged, null)
   assert.equal(result.cases.filter((row) => row.operation === "customization_dispatch").every((row) =>
     row.enforcement === "capability_absent" && row.attempted), true)
+})
+
+test("R6_5_actual_search_patterns_paths_and_returned_matches_cannot_escape_globally", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["glob_absolute_outside", "glob_absolute_override", "glob_parent_escape",
+    "glob_safe_pattern_outside_match", "glob_symlink_prefix_escape", "glob_relative_symlink_match",
+    "grep_default_outside_match", "grep_count_outside_match", "grep_symlink_path_escape", "read_parent_escape",
+    "grep_content_outside_match", "grep_context_outside_match", "grep_unnumbered_outside_match", "grep_count_alias_outside_match"]) {
+    const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+      cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+      spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+    assert.equal(result.state, "blocked", mode)
+    assert.equal(result.cases.some((row) => row.result === "failed"), true)
+  }
+})
+
+test("R6_5_genuine_safe_relative_default_absolute_override_and_content_searches_remain_valid", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["safe_glob_relative", "safe_glob_absolute_override", "safe_glob_parent_normalized",
+    "safe_grep_content", "safe_grep_default", "safe_grep_unnumbered", "safe_grep_context",
+    "safe_grep_file_content", "safe_grep_count_alias", "native_glob_probe_shape"]) {
+    const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+      cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+      spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+    assert.equal(result.state, "qualified", mode)
+  }
+})
+
+test("R6_5_unknown_search_shapes_and_unresolvable_paths_fail_closed_without_rejecting_native_safe_results", async (t) => {
+  const f = await fixture(t), real = fsNative.realpathSync
+  t.mock.method(fsNative, "realpathSync", (name, ...args) => {
+    if (name === "/permission-unknown") throw Object.assign(new Error("private error"), { code: "EACCES" })
+    if (name === "/no-ancestor" || name === "/") throw Object.assign(new Error("private error"), { code: "ENOENT" })
+    return real(name, ...args)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  for (const mode of ["read_no_input", "read_null_path", "read_nul_path", "read_home_escape", "read_home_root_escape",
+    "read_permission_unknown", "read_no_ancestor", "glob_empty_pattern", "glob_missing_pattern",
+    "glob_root_pattern", "glob_invalid_search_path", "glob_invalid_content", "glob_untyped_content", "grep_invalid_mode",
+    "grep_unknown_content", "grep_empty_filename", "grep_invalid_count", "safe_glob_plain", "safe_glob_plain_absolute",
+    "safe_glob_no_match", "safe_grep_list_alias", "safe_grep_count_string_alias", "safe_grep_file_alias",
+    "safe_grep_missing_file"]) {
+    const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+      cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+      spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+    assert.equal(result.state, mode.startsWith("safe_") ? "qualified" : "blocked", mode)
+  }
+  const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, "missing-home"), cli: f.cli,
+    env: { ...f.env, HOME: undefined }, cliMetadata: metadata, resolveExec: f.resolveExec,
+    policyReaders: readers, runDiagnostic: diagnostic, spawn: observedSpawn("read_home_escape"), probeSpawn: authSpawn() })
+  assert.equal(result.state, "blocked")
+})
+
+test("R6_5_ambiguous_filename_delimiters_do_not_hide_sibling_matches", async (t) => {
+  const f = await fixture(t)
+  for (const mode of ["grep_unnumbered_sibling_match", "grep_numbered_sibling_match"]) {
+    await t.test(mode, async () => {
+      const result = await qualifier.qualifyTriageRunner({ out: path.join(f.dir, mode), cli: f.cli, env: f.env,
+        cliMetadata: metadata, resolveExec: f.resolveExec, policyReaders: readers, runDiagnostic: diagnostic,
+        spawn: observedSpawn(mode), probeSpawn: authSpawn() })
+      assert.equal(result.state, "blocked")
+    })
+  }
+})
+
+test("R6_6_policy_documents_and_supported_value_types_require_validation_before_admission", async (t) => {
+  const f = await fixture(t)
+  for (const settings of [true, 1, "private malformed prose", [], null,
+    { permissions: true }, { permissions: { allow: "Read" } }, { permissions: { deny: [true] } },
+    { disableAllHooks: "true" }, { hooks: true }, { hooks: { SessionStart: "not an array" } },
+    { hooks: { SessionStart: [{ hooks: "not an array" }] } },
+    { hooks: { SessionStart: [{ matcher: 7, hooks: [] }] } },
+    { env: true }, { env: { SECRET: 7 } }, { mcpServers: true }, { mcpServers: { server: false } }]) {
+    let calls = 0
+    const result = await runner.collectTriageAdmission({ ...f, argv: [],
+      runDiagnostic: async () => { calls += 1; return diagnostic() },
+      policyReaders: { read: () => ({ ...readers.read(), sources: [{ ...source, settings }] }) } })
+    assert.equal(result.state, "scope_unqualified", JSON.stringify(settings))
+    assert.deepEqual(result.validation_errors, ["invalid_policy_document"])
+    assert.equal(calls, 0)
+    assert.equal(JSON.stringify(result).includes("private malformed prose"), false)
+    assert.equal(result.capabilities, null)
+  }
+})
+
+test("R6_6_post_diagnostic_validation_errors_are_fixed_code_and_invalidate_admission", async (t) => {
+  const f = await fixture(t)
+  let calls = 0
+  const result = await runner.collectTriageAdmission({ ...f, argv: [], runDiagnostic: diagnostic,
+    policyReaders: { read: () => ({ ...readers.read(), validation_errors: ++calls === 1 ? [] : ["private error detail"] }) } })
+  assert.equal(calls, 2)
+  assert.equal(result.state, "scope_unqualified")
+  assert.deepEqual(result.validation_errors, ["invalid_effective_settings"])
+  assert.equal(result.capabilities, null)
+  assert.equal(JSON.stringify(result).includes("private error detail"), false)
+})
+
+test("R6_6_native_invalid_settings_diagnostic_never_admits_or_echoes_private_errors", async (t) => {
+  const f = await fixture(t)
+  for (const label of ["Invalid settings", "\u001b[33mInvalid settings\u001b[39m"]) {
+    const result = await runner.collectTriageAdmission({ ...f, argv: [], policyReaders: readers,
+      runDiagnostic: async () => ({ kind: "closed", code: 0, stdout: doctor + `\n${label}\n- private raw policy value\n` }) })
+    assert.equal(result.state, "scope_unqualified")
+    assert.deepEqual(result.validation_errors, ["invalid_native_settings"])
+    assert.equal(JSON.stringify(result).includes("private raw policy"), false)
+    assert.equal(result.capabilities, null)
+  }
 })
