@@ -8,6 +8,32 @@
 #                                             # set the public URL (OAuth issuer, resource and GitHub callback)
 #   DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh
 #                                             # set the OAuth redirect allowlist (hosted/README.md); empty clears it
+#   STAGE=staging [IMAGE=<tag>] hosted/infra/provision.sh
+#                                             # the rehearsal app ouro-desk-hosted-staging (below)
+#
+# STAGE=staging makes or reconciles ouro-desk-hosted-staging instead: it scales to
+# zero (at most 1 replica, 1 vCPU / 2 GiB), its DESK_PUBLIC_URL is always its own
+# Azure address, it serves arimendelow/desk-rehearsal, and it has no custom domain
+# and no deploy credential. A create uses IMAGE (a tag in the registry, or a full
+# image reference) instead of building one, so the rehearsal starts on
+# production's image; a rerun keeps the running image.
+#
+# Every write to an existing app is the whole app as `az containerapp show`
+# printed it, with only the script's own settings changed (app-yaml.mjs): az
+# replaces the app's secret and container lists with the file's, so a rerun built
+# from a template would drop DESK_CLIENT_KEY, the previous signing key and any
+# secret or env var this script doesn't know. Missing secrets are added the same
+# way, with their values made inside app-yaml.mjs, never as arguments.
+#
+# Ouro sign-in: both stages read the Ouro tenant's settings from
+# hosted/infra/identity-<env>.json (prod, or test for staging), which
+# provision-identity.mjs writes: the tenant id and subdomain, the gateway app's
+# client id, the accounts store, the gateway identity (added to the app; it reads
+# the Entra client secret as a Key Vault reference and the store through RBAC),
+# Ari's accountId for DESK_GITHUB_ACCOUNTS and DESK_GITHUB_LOGINS, and the legacy
+# cutoff, which is never recomputed here. Until the record is complete, Ouro
+# sign-in settings are left as they are. DESK_ALLOWED_LOGINS and every existing
+# secret stay until the day-14 check.
 #
 # DESK_PUBLIC_URL: a create uses https://desk.ouro.bot unless it is passed. A rerun
 # keeps the app's current value unless it is passed, so a reconcile never moves
@@ -45,6 +71,8 @@
 # It never resolves anything through Microsoft Graph (no lookups by name of users,
 # groups or service principals), so it works where Graph is blocked.
 set -euo pipefail
+# Every file this script writes (the app document can hold a secret) is for its user only.
+umask 077
 
 SUBSCRIPTION=261e0bf1-934d-41ab-9295-229b0d254418
 RESOURCE_GROUP=rg-ouro-work-substrate
@@ -52,7 +80,18 @@ ENVIRONMENT=ouro-prod-cae
 REGISTRY=ouroworkprodk2aumligevt3e
 PULL_IDENTITY=ouro-prod-services-mi
 DEPLOY_IDENTITY=id-ourowork-github-prod
-APP=ouro-desk-hosted
+STAGE="${STAGE:-prod}"
+case "$STAGE" in
+  prod)
+    APP=ouro-desk-hosted IDENTITY_ENV=prod DESK_REPO=arimendelow/desk
+    MIN_REPLICAS=1 CPU=2.0 MEMORY=4Gi
+    ;;
+  staging)
+    APP=ouro-desk-hosted-staging IDENTITY_ENV=test DESK_REPO=arimendelow/desk-rehearsal
+    MIN_REPLICAS=0 CPU=1.0 MEMORY=2Gi
+    ;;
+  *) printf 'STAGE must be prod or staging, not %s\n' "$STAGE" >&2; exit 1 ;;
+esac
 DOMAIN=desk.ouro.bot
 FEDERATED_NAME=ourostack-desk-main-ids
 FEDERATED_SUBJECT=repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main
@@ -61,6 +100,8 @@ REDIRECTS_PASSED="${DESK_REDIRECTS+1}"
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+APP_YAML="$REPO_ROOT/hosted/infra/app-yaml.mjs"
+IDENTITY_FILE="${IDENTITY_DIR:-$REPO_ROOT/hosted/infra}/identity-$IDENTITY_ENV.json"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -121,7 +162,7 @@ $secrets_yaml
     # push of any unpushed desk writes (up to 60 s) before the gateway exits.
     terminationGracePeriodSeconds: 90
     scale:
-      minReplicas: 1
+      minReplicas: $MIN_REPLICAS
       maxReplicas: 1
     volumes:
       - name: app-key
@@ -133,13 +174,13 @@ $secrets_yaml
       - name: gateway
         image: $image
         resources:
-          cpu: 2.0
-          memory: 4Gi
+          cpu: $CPU
+          memory: $MEMORY
         env:
           - name: DESK_PUBLIC_URL
             value: $DESK_PUBLIC_URL
           - name: DESK_REPO
-            value: arimendelow/desk
+            value: $DESK_REPO
           - name: DESK_ALLOWED_LOGINS
             value: arimendelow
 $redirects_env_yaml
@@ -175,11 +216,31 @@ $redirects_env_yaml
 YAML
 }
 
-# In a dry run, shows the spec a create or update would send, without the signing key.
+# In a dry run, shows the spec a create would send, without the signing key.
 show_spec() {
   if [[ "${DRY_RUN:-0}" == 1 ]]; then
     sed -E 's/^( +value: )"[0-9a-f]{64}"$/\1"***"/; s/^/    | /' "$work/app.yaml"
   fi
+}
+
+# In a dry run, shows the document an update would send, every secret value as ***.
+show_document() {
+  if [[ "${DRY_RUN:-0}" == 1 ]]; then
+    node "$APP_YAML" --mask "$1" | sed 's/^/    | /'
+  fi
+}
+
+# The whole app as shown, with this script's settings applied (app-yaml.mjs). Prints the document's path.
+build_update() {
+  local args=(--shown "$work/shown.json" --out "$work" --ensure-secret desk-signing-key --set-env "DESK_REPO=$DESK_REPO")
+  local name
+  for name in "${APP_SECRETS[@]}"; do args+=(--ensure-placeholder "$name"); done
+  if [[ -n "$PUBLIC_URL_PASSED" ]]; then args+=(--set-env "DESK_PUBLIC_URL=$DESK_PUBLIC_URL"); fi
+  if [[ -n "$REDIRECTS_PASSED" ]]; then
+    if [[ -n "$DESK_REDIRECTS" ]]; then args+=(--set-env "DESK_REDIRECTS=$DESK_REDIRECTS"); else args+=(--remove-env DESK_REDIRECTS); fi
+  fi
+  if [[ -f "$IDENTITY_FILE" ]]; then args+=(--identity-record "$IDENTITY_FILE"); else say "No $(basename "$IDENTITY_FILE") yet; Ouro sign-in settings stay as they are" >&2; fi
+  node "$APP_YAML" "${args[@]}"
 }
 
 # --- 1–4. The Container App, its secrets and volumes ---------------------------
@@ -193,16 +254,20 @@ elif ! grep -qiE "ResourceNotFound|was not found|could not be found" <<<"$show_e
   exit 1
 fi
 
-if ((app_exists)) && [[ -z "$PUBLIC_URL_PASSED" ]]; then
-  DESK_PUBLIC_URL="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_PUBLIC_URL'].value | [0]" -o tsv)"
+if [[ "$STAGE" == staging ]]; then
+  # Staging always answers on its own Azure address.
+  DESK_PUBLIC_URL="https://$fqdn"
+  PUBLIC_URL_PASSED=1
+fi
+if ((app_exists)); then
+  az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
+  if [[ -z "$PUBLIC_URL_PASSED" ]]; then DESK_PUBLIC_URL="$(node "$APP_YAML" --shown "$work/shown.json" --get-env DESK_PUBLIC_URL)"; fi
+  if [[ -z "$REDIRECTS_PASSED" ]]; then DESK_REDIRECTS="$(node "$APP_YAML" --shown "$work/shown.json" --get-env DESK_REDIRECTS)"; fi
 fi
 DESK_PUBLIC_URL="${DESK_PUBLIC_URL:-https://$DOMAIN}"
 DESK_PUBLIC_URL="${DESK_PUBLIC_URL%/}"
 say "Public URL: $DESK_PUBLIC_URL"
 
-if ((app_exists)) && [[ -z "$REDIRECTS_PASSED" ]]; then
-  DESK_REDIRECTS="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='DESK_REDIRECTS'].value | [0]" -o tsv)"
-fi
 DESK_REDIRECTS="${DESK_REDIRECTS:-}"
 redirects_env_yaml=""
 if [[ -n "$DESK_REDIRECTS" ]]; then
@@ -214,32 +279,22 @@ else
   say "Redirect allowlist: the gateway's default"
 fi
 
-existing_secrets=""
 if ((app_exists)); then
-  say "Container App $APP exists; reconciling it"
-  existing_secrets="$(az_read containerapp secret list -n "$APP" -g "$RESOURCE_GROUP" --query "[].name" -o tsv)"
-  missing=()
-  if ! grep -qx desk-signing-key <<<"$existing_secrets"; then missing+=("desk-signing-key=$(openssl rand -hex 32)"); fi
-  for name in "${APP_SECRETS[@]}"; do
-    grep -qx "$name" <<<"$existing_secrets" || missing+=("$name=unset")
-  done
-  if ((${#missing[@]})); then
-    say "Adding missing secrets"
-    write containerapp secret set -n "$APP" -g "$RESOURCE_GROUP" --output none --secrets "${missing[@]}"
-  fi
-  image="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv)"
-  domains="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query "properties.configuration.ingress.customDomains" -o json | tr -d '\n')"
-  [[ -n "$domains" ]] || domains=null
-  secrets_yaml="$(printf '      - name: %s\n' desk-signing-key "${APP_SECRETS[@]}")"
-  render_spec "$image" "$secrets_yaml" "$domains" >"$work/app.yaml"
-  say "Updating $APP to the spec (image stays $image)"
-  show_spec
-  write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$work/app.yaml" --output none
+  say "Container App $APP exists; reconciling it from its current spec"
+  document="$(build_update)"
+  say "Updating $APP: missing secrets added, every existing secret, env var, volume and identity kept"
+  show_document "$document"
+  write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none
 else
-  tag="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-  image="$login_server/$APP:$tag"
-  say "Building the first image $image from $REPO_ROOT"
-  write acr build --registry "$REGISTRY" --image "$APP:$tag" --file hosted/Dockerfile "$REPO_ROOT"
+  if [[ -n "${IMAGE:-}" ]]; then
+    if [[ "$IMAGE" == */* ]]; then image="$IMAGE"; else image="$login_server/ouro-desk-hosted:$IMAGE"; fi
+    say "Using the pinned image $image"
+  else
+    tag="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    image="$login_server/ouro-desk-hosted:$tag"
+    say "Building the first image $image from $REPO_ROOT"
+    write acr build --registry "$REGISTRY" --image "ouro-desk-hosted:$tag" --file hosted/Dockerfile "$REPO_ROOT"
+  fi
   secrets_yaml="$(
     printf '      - name: desk-signing-key\n        value: "%s"\n' "$(openssl rand -hex 32)"
     printf '      - name: %s\n        value: unset\n' "${APP_SECRETS[@]}"
@@ -248,6 +303,19 @@ else
   say "Creating Container App $APP"
   show_spec
   write containerapp create -n "$APP" -g "$RESOURCE_GROUP" --yaml "$work/app.yaml" --output none
+  # The Ouro settings join through the same builder once the app exists.
+  if [[ "${DRY_RUN:-0}" != 1 && -f "$IDENTITY_FILE" ]]; then
+    az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
+    document="$(build_update)"
+    say "Adding the Ouro sign-in settings to $APP"
+    write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none
+  fi
+fi
+
+if [[ "$STAGE" == staging ]]; then
+  [[ "${DRY_RUN:-0}" == 1 ]] && say "Dry run: nothing above was changed."
+  say "Done. Staging app $APP answers at https://$fqdn and serves $DESK_REPO; it has no custom domain and is not deployed by hosted-deploy.yml."
+  exit 0
 fi
 
 # --- 5. Custom domain ---------------------------------------------------------
