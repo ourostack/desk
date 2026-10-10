@@ -143,3 +143,43 @@ test("a JWKS that can't be fetched refuses the token", async () => {
   });
   await refused(verifier.verify(await tenant.idToken(tenant.claimsFor({ oid: OID, nonce: NONCE })), { nonce: NONCE }), "jwks");
 });
+
+// A fetch that never answers until its signal aborts it, as a ciamlogin.com that accepts the connection and hangs.
+const hanging = (seen) => (url, init = {}) => {
+  seen?.push(init.signal);
+  return new Promise((_, reject) => {
+    if (!init.signal) return; // never settles: the test's own timeout would catch it
+    // AbortSignal.timeout's timer doesn't hold the event loop open; a real hanging socket does, and so does this.
+    const socket = setTimeout(() => {}, 60_000);
+    init.signal.addEventListener("abort", () => (clearTimeout(socket), reject(init.signal.reason)), { once: true });
+  });
+};
+
+test("a JWKS fetch that never answers is cut off by its timeout and refuses the token", async () => {
+  const { tenant } = await setup();
+  const signals = [];
+  const verifier = createIdTokenVerifier({
+    issuer: ISSUER,
+    clientId: CLIENT_ID,
+    tenantId: TENANT_ID,
+    jwksUri: DISCOVERY.jwks_uri,
+    fetch: hanging(signals),
+    now: () => START,
+    timeoutMs: 50,
+  });
+  const started = performance.now();
+  await refused(verifier.verify(await tenant.idToken(tenant.claimsFor({ oid: OID, nonce: NONCE })), { nonce: NONCE }), "jwks");
+  assert.ok(performance.now() - started < 2000);
+  assert.ok(signals[0] instanceof AbortSignal);
+});
+
+test("two sign-ins arriving together during a tenant key rollover both wait for the one refetch", async () => {
+  const { tenant, verifier } = await setup();
+  await verifier.verify(await tenant.idToken(tenant.claimsFor({ oid: OID, nonce: NONCE })), { nonce: NONCE });
+  const rolled = await newSigningKey("tenant-key-2");
+  tenant.published.push(rolled.jwk);
+  const token = await tenant.idToken(tenant.claimsFor({ oid: OID, nonce: NONCE }), { key: rolled });
+  const results = await Promise.all([verifier.verify(token, { nonce: NONCE }), verifier.verify(token, { nonce: NONCE }), verifier.verify(token, { nonce: NONCE })]);
+  assert.deepEqual(results.map((result) => result.oid), [OID, OID, OID]);
+  assert.equal(tenant.calls.jwks, 2, "one initial fetch and one shared refetch");
+});

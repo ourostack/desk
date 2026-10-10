@@ -20,6 +20,8 @@ import { timingSafeEqual } from "node:crypto";
 const SKEW_SEC = 300;
 const REFETCH_INTERVAL_MS = 5 * 60_000;
 const MAX_JWKS_AGE_MS = 24 * 3600_000;
+// How long a JWKS fetch may take: a person is waiting at the callback, and the document is a few keys.
+export const JWKS_TIMEOUT_MS = 5_000;
 
 export class IdTokenError extends Error {
   constructor(reason) {
@@ -53,18 +55,20 @@ function reasonOf(error) {
 }
 
 // `now()` is the clock in milliseconds. `fetch` reads the JWKS.
-export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fetch = globalThis.fetch, now = Date.now }) {
+export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fetch = globalThis.fetch, now = Date.now, timeoutMs = JWKS_TIMEOUT_MS }) {
   for (const [name, value] of Object.entries({ issuer, clientId, tenantId, jwksUri })) {
     if (typeof value !== "string" || value === "") throw new Error(`createIdTokenVerifier needs ${name}`);
   }
   let keySet = null;
   let fetchedAt = -Infinity;
   let refetchedAt = -Infinity;
+  // The refetch in flight, so sign-ins arriving together during a tenant key rollover all wait for the same one.
+  let refetching = null;
 
   async function load() {
     let jwks;
     try {
-      const response = await fetch(jwksUri, { headers: { accept: "application/json" } });
+      const response = await fetch(jwksUri, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
       jwks = response.ok ? await response.json() : null;
     } catch {
       jwks = null;
@@ -90,9 +94,15 @@ export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fet
     try {
       return await (await currentKeys())(header, token);
     } catch (error) {
-      if (error?.code !== "ERR_JWKS_NO_MATCHING_KEY" || now() - refetchedAt < REFETCH_INTERVAL_MS) throw error;
-      refetchedAt = now();
-      await load();
+      if (error?.code !== "ERR_JWKS_NO_MATCHING_KEY") throw error;
+      if (!refetching) {
+        if (now() - refetchedAt < REFETCH_INTERVAL_MS) throw error;
+        refetchedAt = now();
+        refetching = load().finally(() => {
+          refetching = null;
+        });
+      }
+      await refetching;
       return keySet(header, token);
     }
   }
