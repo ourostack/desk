@@ -656,6 +656,9 @@ export function createDeskSession(deps) {
       const waitMs = name === "task_focus" ? deps.focusWaitMs ?? FOCUS_WAIT_MS : GATE_WAIT_MS
       await admission.refresh({
         waitMs,
+        // A running status/HEAD attempt may have sampled context before this
+        // operation arrived. Join its completion, then resolve inputs anew.
+        fresh: true,
         revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
       })
       return await operation((release) => {

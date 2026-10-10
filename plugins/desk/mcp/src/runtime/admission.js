@@ -134,14 +134,14 @@ export function createAdmission({
     return settle({ ...outcome, state: "degraded" }) && snapshot()
   }
 
-  /** Run or join bounded admission work. Ready sessions revalidate inputs when a resolver is supplied; `revalidateOnly` also checks usable degraded contexts without repeating controller/semantic work. A forced refresh during an attempt runs a full fresh one after it, because the running attempt may have looked before a doctor repair or HEAD change. */
+  /** Run or join bounded admission work. Ready sessions revalidate inputs when a resolver is supplied; `revalidateOnly` also checks usable degraded contexts without repeating controller/semantic work. `fresh` samples again after a pre-existing attempt without forcing full admission; `force` requests full admission after a doctor repair or HEAD change. */
   // `joinMs` bounds the wait when an attempt was already running before this call (default: `waitMs`): a caller that must answer at once joins a long attempt without waiting on it.
-  async function refresh({ waitMs = 3000, force = false, joinMs = waitMs, revalidateOnly = false } = {}) {
+  async function refresh({ waitMs = 3000, force = false, fresh = false, joinMs = waitMs, revalidateOnly = false } = {}) {
     const ready = !force && current.state === "ready"
     const validate = !force && revalidate !== null && (ready || revalidateOnly)
     if (ready && !running && revalidate === null) return snapshot()
     if (running) waitMs = Math.min(waitMs, joinMs)
-    const attemptDone = force && running ? running.then(() => run()) : run(validate)
+    const attemptDone = (force || fresh) && running ? running.then(() => run(validate)) : run(validate)
     if (waitMs <= 0) return snapshot()
     let waitTimer = null
     const timeout = new Promise((resolve) => {

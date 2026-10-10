@@ -126,6 +126,31 @@ test("a forced refresh during an attempt runs a fresh attempt after it, so a cha
   assert.equal((await joined).repair, "repaired: something")
 })
 
+test("a fresh operation refresh samples again after pre-existing revalidation without repeating full admission", async () => {
+  let admissions = 0
+  let resolves = 0
+  let release
+  const machine = createAdmission({
+    attempt: async () => { admissions += 1; return { state: "ready" } },
+    revalidate: async () => {
+      resolves += 1
+      if (resolves === 1) await new Promise((resolve) => { release = resolve })
+      return null
+    },
+  })
+  await machine.start()
+  const status = machine.refresh({ waitMs: 0 })
+  await flush()
+  const operation = machine.refresh({ fresh: true, waitMs: 1000 })
+  release()
+  await status
+  await operation
+  assert.equal(admissions, 1)
+  assert.equal(resolves, 2, "operation proof is sampled after its request, not before")
+  assert.equal(machine.snapshot().state, "ready")
+  machine.dispose()
+})
+
 test("refresh with joinMs joins an attempt that was already running without waiting, and still waits for one it starts", async () => {
   const timers = fakeTimers()
   const releases = []

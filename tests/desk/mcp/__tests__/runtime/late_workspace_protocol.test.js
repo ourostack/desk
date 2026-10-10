@@ -92,6 +92,12 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   const focuses = []
   const endpoints = []
   const connectedRoots = []
+  const resolutionTrace = []
+  const dispatchTrace = []
+  const statusTrace = []
+  const convergenceTrace = []
+  let hold = false
+  let held = null
   // Only the external transport/election seam is replaced. The real worker,
   // authority, controller protocol, journal, handlers, and Git all run.
   // Test sockets are exact-owned, short paths; production rendezvous is unchanged.
@@ -131,10 +137,32 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     env, cwd, homeDir: home, input, output,
     stderr: { write() {} }, admissionKickoffMs: 0,
     stateHome: path.join(base, "session-state"),
-    offload: runInWorker, runtimeInspector: null,
+    offload: async (job, options) => {
+      const value = await runInWorker(job, options)
+      if (job.kind === "resolve") {
+        resolutionTrace.push({ root: value.root?.root, source: value.root?.source, at: new Date().toISOString() })
+        if (hold) {
+          hold = false
+          await new Promise((resolve) => { held = resolve })
+        }
+      }
+      return value
+    }, runtimeInspector: null,
     runtimeImporter: async () => ({
       ...server, connectOrStartController: connector,
+      beginBackgroundConvergence: async (admitted) => {
+        const trace = { root: admitted.root, started: new Date().toISOString() }
+        convergenceTrace.push(trace)
+        try {
+          return await server.beginBackgroundConvergence(admitted)
+        } finally {
+          trace.finished = new Date().toISOString()
+        }
+      },
       callTool: async (options) => {
+        dispatchTrace.push({ name: options.name, root: options.deskRoot,
+          admissionRoot: options.statusContext.admission?.root,
+          authority: options.statusContext.admission?.authority, person: options.person })
         focuses.push(options.statusContext.focus)
         return server.callTool(options)
       },
@@ -167,14 +195,33 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
       const started = Date.now()
+      const cpu = process.cpuUsage()
+      let eventLoopTurnMs = null
+      const turn = setTimeout(() => { eventLoopTurnMs = Date.now() - started }, 0)
       const value = payload(await call("desk_status", { detail: true }))
-      assert.ok(Date.now() - started < 200, "every status request retains its 200 ms budget")
+      const elapsedMs = Date.now() - started
+      clearTimeout(turn)
+      statusTrace.push({ elapsedMs, eventLoopTurnMs, cpu: process.cpuUsage(cpu),
+        state: value.state, root: value.root?.path, detailFrom: value.status_detail_from,
+        phase: handle.session.context.phase })
+      assert.ok(elapsedMs < 200, JSON.stringify({
+        message: "every status request retains its 200 ms budget", elapsedMs,
+        admission: handle.admission.snapshot(), phase: handle.session.context.phase,
+        resolution: resolutionTrace, dispatch: dispatchTrace, statusTrace, convergenceTrace,
+      }))
       if (value.root?.path) return value
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
     assert.fail("runtime status detail did not arrive")
   }
-  return { a, b, base, cwd, env, handle, call, associate, config, card, connectedRoots, status, focuses }
+  return { a, b, base, cwd, env, handle, call, associate, config, card, connectedRoots, status, focuses,
+    resolutionTrace, dispatchTrace, holdNextResolution: () => { hold = true },
+    waitHeld: async () => {
+      const deadline = Date.now() + 15000
+      while (!held && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
+      assert.ok(held, "the real resolver reply must be retained at the concurrency seam")
+    },
+    releaseResolution: () => { held() } }
 }
 
 test("actual protocol reconciles ready fallback A to late saved B before mutation and clears task focus", async (t) => {
@@ -241,6 +288,30 @@ test("removed context does not redirect a bound session back to a fallback", asy
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
 })
 
+test("a mutation cannot join destination proof sampled before its request", async (t) => {
+  const f = await fixture(t, { capturedFolder: true })
+  f.associate(f.b)
+  assert.notEqual((await f.call("task_update", update)).isError, true)
+  f.holdNextResolution()
+  await f.call("desk_status", { detail: true })
+  await f.waitHeld()
+  assert.equal(f.resolutionTrace.at(-1).root, f.b)
+  assert.equal(f.resolutionTrace.at(-1).source, "activation-config")
+  const record = copilotSessionFile(path.join(f.env.XDG_STATE_HOME, "ouroboros-skills", "desk"), f.env.COPILOT_AGENT_SESSION_ID)
+  renameSync(record, `${record}.removed`)
+  const heads = [f.a, f.b].map((root) => git(root, "rev-parse", "HEAD"))
+  const mutations = f.dispatchTrace.filter((call) => call.name === "task_update").length
+  const pending = f.call("task_update", update)
+  // The request has reached admission before the retained stale reply arrives.
+  await new Promise((resolve) => setImmediate(resolve))
+  f.releaseResolution()
+  const result = await pending
+  assert.equal(result.isError, true, JSON.stringify({ result, resolution: f.resolutionTrace, dispatch: f.dispatchTrace }))
+  assert.equal(payload(result).code, "root_unavailable")
+  assert.equal(f.dispatchTrace.filter((call) => call.name === "task_update").length, mutations)
+  assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
+})
+
 for (const failure of ["removed", "untrusted", "unreadable"]) {
   test(`${failure} saved association cannot reselect the captured launch desk`, async (t) => {
     const f = await fixture(t, { capturedFolder: true })
@@ -263,7 +334,11 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const result = await f.call("task_update", update)
-      assert.equal(result.isError, true, "lost B association must not dispatch to captured A")
+      assert.equal(result.isError, true, JSON.stringify({
+        message: "lost B association must not dispatch", result,
+        resolution: f.resolutionTrace, dispatch: f.dispatchTrace,
+        root: f.handle.session.context.root, phase: f.handle.session.context.phase,
+      }))
       assert.equal(payload(result).code, "root_unavailable")
       assert.doesNotMatch(payload(result).fix, /override|bootstrap|rebind/u)
     }
