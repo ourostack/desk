@@ -19,15 +19,26 @@ the selected executable's bounded non-model `doctor` command. A trusted
 nonexecuting policy reader must establish all applicable sources and grant
 merge semantics. File absence and version/help labels alone cannot do this.
 
-Current default coverage is deliberately narrow: native Mach-O images whose
-absolute dependencies and loader bytes can be inspected. Unknown shell/npm
-launchers, unresolved loader paths and unreadable dyld shared-cache images
-hold as `launch_chain_unknown`. No installed engine is copied or patched.
-The built-in file reader records managed file revisions, but cannot establish
-OS/MDM or effective remote/MCP policy from current doctor text alone. It
-therefore holds as `diagnostic_inadequate`. Trusted parent integration readers
-are not model-accessible tools or new CLI flags; incomplete evidence never
-becomes an unmanaged-host assertion.
+The connected default macOS arm64 adapter validates the installed Anthropic
+signature and Apple loader signature. It records the sealed APFS boot snapshot,
+enabled SIP/authenticated root, OS build, actual shared-cache UUID/header/hash,
+map and root-owned subcache identities. Shared-cache provenance is trusted
+installed-platform evidence, not fabricated individual dylib hashes or an
+administrative tamper-proof guarantee. Unknown launchers/platforms still hold.
+No installed engine is copied or patched.
+
+The default policy reader is bound to the source-inspected signed native
+2.1.296 SHA-256. It reads the actual native per-user/device MDM plist paths
+through `plutil`, managed JSON/drop-ins, managed MCP, and remote cache; it
+combines those observations with positive doctor applicability/completion.
+Restricted/safe mode excludes user/project/local discovery. Before doctor,
+command-bearing user diagnostic settings are also inspected and rejected.
+Doctor runs from `/`, not an untrusted project. Only positively resolved
+no-applicable/no-config remote policy with compatible known local sources is
+admitted by this initial adapter. Delivered/failed/unknown cache, incompatible
+keys, unsigned or source-unverified engine revisions remain concrete holds.
+This works through the default CLI: no external reader injection is needed
+for a compatible inspectable installed host.
 
 ## Pinned supported CLI controls
 
@@ -87,6 +98,9 @@ it is acceptance/new-launch control, **not synchronous per-tool prevention**.
 Prepared `input.json` contains the parent's authorized candidate-validator
 brief; the runner compares its bytes after exit. The caller must separately
 revalidate external card/claim/ruling/evidence revisions before publication.
+After the last awaited diagnostic/sign-in, prepared directory/input/result
+identities and content are rechecked synchronously immediately before spawn.
+Replacement or drift invalidates without spending a model launch.
 
 Only root invokes the consuming qualifier after independent safety review:
 
@@ -104,8 +118,23 @@ Positive input/result Read and exact result Edit require actual correlated
 tool results. Negative cases require correlated runtime refusal or positive
 tool-manifest absence. Model text and unchanged sentinels alone fail. A
 changed sentinel, widened tool manifest, invalid output or admission drift
-blocks. Symlink probes exercise both directions against synthetic paths.
+blocks. Excluded command/agent/network/MCP calls are correlated globally by
+name and actual tool-use IDs, regardless of argument shape or target. An
+omitted tool in the manifest cannot excuse a successful actual invocation.
+Symlink probes exercise both directions against synthetic paths.
 Unknown effective hook/helper/grant policy holds before a consuming probe.
+
+Runtime and policy mutation probes target the **actual admitted** engine and
+policy source, using deliberately nonmatching Edit strings so a broken
+permission check cannot alter real installed bytes. A generic outside-file
+refusal is not customization proof. Private isolated `.claude/settings.json`
+fixtures contain genuine project hook/helper discovery keys and harmless
+indicator code, never installed into HOME or managed controls. The qualifier
+forces reading that prepared triggering source and an exact permitted result
+Edit containing the triggering data. It requires authenticated pinned-native
+discovery-disable/data-only capability evidence as well as those actual tool
+observations; hook events or an executed indicator block. Neither fixture
+configuration nor indicator code is enabled/executed by this author pass.
 
 No installed-host qualification, release, live rollout or publication is
 asserted by this increment's unit suite.
