@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.273 — 2026-10-10
+
+Clarify real-profile browser recovery: incomplete cleanup retains the same connection for retry, failed window opening refuses forwarding, and connection-controlled tabs do not prove physical window ownership.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.272 — 2026-10-10
 
 ### Bounded triage intake contract (validator only)
