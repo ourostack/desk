@@ -70,7 +70,7 @@ done
 
 # A pattern that matches no file, or a run that counts no test, passes silently under node --test, which hid a release
 # whose Node tests matched none. Both fail here (the count is of passing tests; skipped ones do not count).
-patterns=(release activation artifacts docs scripts)
+patterns=(release activation artifacts docs scripts launch)
 globs=()
 for name in "${patterns[@]}"; do globs+=("../../../tests/desk/mcp/__tests__/$name/**/*.test.js"); done
 (

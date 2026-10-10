@@ -74,6 +74,34 @@ function withTrackedFiles() {
   return { status: 0, stdout: "", stderr: "" }
 }
 
+test("generated artifact verification rejects an untracked browser launch executable", async () => {
+  const asset = "plugins/desk/mcp/artifacts/browser-launch/win32-x64/desk-browser-launch.exe"
+  const result = await generatedArtifacts.verifyGeneratedArtifacts({
+    repoRoot, mcpRoot,
+    spawn: (file, args, options) => file === "git" && args[0] === "ls-files" && args.at(-1) === asset
+      ? { status: 1, stdout: "", stderr: "untracked fixture" }
+      : spawnSync(file, args, options),
+    io: { stdout: { write() {} }, stderr: { write() {} } },
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.errors.join("\n"), /Browser launch source or asset is not tracked:.*win32-x64/u)
+})
+
+test("generated artifact verification surfaces native integrity failures without claiming release readiness", async () => {
+  const native = require(path.join(mcpRoot, "web-native-launch.cjs"))
+  const verify = native.verifyAssets
+  try {
+    native.verifyAssets = () => { throw new Error("browser_native_launch_integrity") }
+    const result = await generatedArtifacts.verifyGeneratedArtifacts({
+      repoRoot, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
+    })
+    assert.equal(result.ok, false)
+    assert.match(result.errors.join("\n"), /Browser launch assets could not be verified: browser_native_launch_integrity/u)
+  } finally {
+    native.verifyAssets = verify
+  }
+})
+
 function writeMutatedManifest(expectation, mutate) {
   const manifest = loadJson(expectation.paths.manifestPath)
   mutate(manifest)

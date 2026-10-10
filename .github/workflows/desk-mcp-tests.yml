@@ -426,6 +426,12 @@ jobs:
             platform: win32
             arch: x64
             node_abi: "137"
+          - target: darwin-arm64-node-127
+            runner: macos-14
+            node: "22.23.2"
+            platform: darwin
+            arch: arm64
+            node_abi: "127"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -474,6 +480,23 @@ jobs:
       - name: Install dependencies from the committed lock
         working-directory: plugins/desk/mcp
         run: npm ci
+
+      - name: Set up the native browser launch build toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: false
+
+      - name: Test native browser launch on this operating system
+        working-directory: plugins/desk/mcp/native/browser-launch
+        run: go test -count=1 -race ./...
+
+      - name: Reproduce and verify committed browser launch assets
+        shell: bash
+        run: |
+          node plugins/desk/mcp/scripts/build-browser-launch-assets.cjs
+          git diff --exit-code -- plugins/desk/mcp/artifacts/browser-launch
+          node --test tests/desk/mcp/__tests__/launch/web_native_launch.test.js
 
       - name: Build the native runtime dependency pack
         shell: bash

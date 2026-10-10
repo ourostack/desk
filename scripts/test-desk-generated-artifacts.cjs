@@ -906,6 +906,21 @@ async function verifyGeneratedArtifacts(options = {}) {
     pluginRoot,
   });
   const errors = [];
+  try {
+    const browserLaunch = require(path.join(defaultMcpRoot, "web-native-launch.cjs")).verifyAssets(mcpRoot);
+    const launchFiles = [
+      "native/browser-launch/main.go",
+      "native/browser-launch/go.mod",
+      "artifacts/browser-launch/manifest.json",
+      ...browserLaunch.targets.map((target) => `artifacts/browser-launch/${target}/desk-browser-launch${target.startsWith("win32-") ? ".exe" : ""}`),
+    ];
+    for (const file of launchFiles) {
+      const repoPath = relativeToRepo(repoRoot, path.join(mcpRoot, file));
+      if (!gitTracksFile({ repoRoot, repoPath, spawn })) errors.push(`Browser launch source or asset is not tracked: ${repoPath}`);
+    }
+  } catch (error) {
+    errors.push(`Browser launch assets could not be verified: ${error.message}`);
+  }
   const verifications = expectations.map((expectation) => verifyPublishedRuntimeDependencyPack({
     expectation,
     existsSync: exists,

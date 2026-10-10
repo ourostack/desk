@@ -3,8 +3,8 @@
 // - The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }` in a plugin's `plugin.json`. It is found the way the factory store declaration is found (`src/factory/plugin-sources.cjs` lists the installed plugin folders). When several plugins declare one, the last folder listed wins, so the overlay loaded after Desk decides.
 // - The profile is the one in the browser's own `Local State` profile list whose `user_name` (the signed-in account's address) ends in `@<profileAccountDomain>`.
 // - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once. The token is never printed, stored or put in a command line, and the proxy replaces it in everything it passes on (web-proxy.cjs).
-// - The agent works in a window of its own, on every platform and with no scripting of the browser. Before the first browser call reaches Playwright MCP, the launcher starts the real browser executable itself with `--new-window --profile-directory=<profile>` and a holding page. The running browser opens that as a new, focused window. Playwright MCP then opens the extension's connect page, which the browser puts in the last active window (this one), and the holding tab closes itself within 30 seconds (sooner if it is hidden). The window ends up holding only the connect tab, which the extension turns into the agent's tab.
-// - Cleanup closes the agent's own tabs, never a window: it lists the tabs this connection controls once and closes that many (closing a window's last tab closes the window). It never lists again, because listing tabs makes Playwright MCP create one when none is left. `browser_close` runs that cleanup and is then answered here and not passed on, because Playwright MCP would open a new connect page, in a new window nobody owns, for a connection with no page left. The next call opens a new holding window and connects again. The cleanup also runs when the host closes stdin or stops the launcher, if the connection was used since the last close. It never quits the browser and never touches a tab it did not open.
+// - web-native-launch.cjs supplies the official connect-page executable seam: one direct --new-window launch, not a separate holding page and active-window race.
+// - Cleanup waits for pending operations, then closes only the connection's tabs in reverse order, preserving the seed until last. It never lists again after the snapshot, because listing an empty connection can create a tab. browser_close is answered locally; only confirmed cleanup permits a replacement. A final disconnect can leave closure unverified. Session-end cleanup is bounded, never quits the browser, and never borrows another owner's tabs.
 //
 // Like web.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins (plugin-sources.cjs is loaded only when this mode is on).
 
@@ -241,31 +241,6 @@ function connect(o) {
   });
 }
 
-// ---- the agent's own window ----
-
-// The holding page: it closes itself within 30 seconds (sooner if it is hidden, as the connect page opening in the same window should make it). On a hidden event it changes its title first, so a live run can tell whether the event fires.
-var HOLDING_PAGE = "<title>Agent window</title><p>An agent is using this window and will close it when its task is done.</p><script>document.addEventListener('visibilitychange',function(){if(document.hidden){document.title='Agent window (closing)';window.close()}});setTimeout(function(){window.close()},30000)</script>";
-var OPEN_WAIT_MS = 1000;
-
-// Opens a new, focused window in the running browser, with the declared profile, and resolves when it should exist. The browser is started directly (no shell) with the launcher's own environment, which holds no token, and is left to run on its own. `o.spawn`, `o.executable`, `o.profile`, `o.env`, `o.stderr`, `o.waitMs`.
-function openWindow(o) {
-  return new Promise(function (resolve, reject) {
-    var timer = setTimeout(resolve, either(o.waitMs, OPEN_WAIT_MS));
-    function failed(error) {
-      clearTimeout(timer);
-      o.stderr.write("[web] could not open a new browser window: " + describe(error) + "\n");
-      reject(error);
-    }
-    try {
-      var child = o.spawn(o.executable, ["--new-window", "--profile-directory=" + o.profile, "data:text/html," + encodeURIComponent(HOLDING_PAGE)], { detached: true, stdio: "ignore", shell: false, windowsHide: true, env: o.env });
-      child.on("error", failed);
-      child.unref();
-    } catch (error) {
-      failed(error);
-    }
-  });
-}
-
 // ---- the agent's own tabs ----
 
 // How many tabs a `browser_tabs` list names: the lines that start `- <index>:`.
@@ -301,7 +276,7 @@ function closeOwnTabs(call, callMs) {
   var remaining = null;
   function close(left) {
     if (left <= 0) return cleanupIncomplete(closed, remaining);
-    return call("browser_tabs", { action: "close", index: 0 }, ms).then(function (result) {
+    return call("browser_tabs", { action: "close", index: remaining - 1 }, ms).then(function (result) {
       if (!result || result.isError) return cleanupIncomplete(closed, null);
       if (noTabs(result)) {
         closed += 1;
@@ -326,15 +301,37 @@ function closeOwnTabs(call, callMs) {
 // What `browser_close` answers once the agent's window is closed. The call is not passed on (see the header).
 var CLOSED = { content: [{ type: "text", text: "The browser window this session opened is closed. The next browser call opens a new one." }] };
 
-// The hooks the proxy calls for the agent's window and tabs. `open()` opens the holding window or resolves an error tool result. Before a call (other than `browser_close`) the window is opened once per connection; `afterCall` marks the connection as used only when a call succeeded, so cleanup never starts a connection. `browser_close` closes the tabs and answers itself, and the next call starts a new connection. The cleanup at the end of the session closes the tabs only if the connection was used since the last close.
+// The hooks the proxy calls for the agent's window and tabs. `open()` prepares a
+// connection or resolves an error result. Cleanup never starts a connection.
 function ownTabs(open, callMs) {
   var used = false;
   var opening = null;
   var cleaning = null;
+  var pending = [];
+  function finish(operation) {
+    pending = pending.filter(function (entry) {
+      if (entry.operation !== operation) return true;
+      entry.resolve();
+      return false;
+    });
+  }
+  function waitPending() {
+    if (pending.length === 0) return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      var timer = setTimeout(function () { resolve(false); }, either(callMs, TAB_CALL_MS));
+      Promise.all(pending.map(function (entry) { return entry.done; })).then(function () {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
   function cleanup(api) {
     if (cleaning !== null) return cleaning;
-    if (!used) return Promise.resolve(CLOSED);
-    cleaning = closeOwnTabs(api.callTool, callMs).then(function (result) {
+    if (!used && pending.length === 0) return Promise.resolve(CLOSED);
+    cleaning = waitPending().then(function (settled) {
+      if (!settled) return cleanupIncomplete(0, null);
+      return used ? closeOwnTabs(api.callTool, callMs) : CLOSED;
+    }).then(function (result) {
       cleaning = null;
       if (!result.isError) used = false;
       return result;
@@ -342,7 +339,8 @@ function ownTabs(open, callMs) {
     return cleaning;
   }
   return {
-    beforeCall: function beforeCall(params, api) {
+    beforeCall: function beforeCall(params, api, operation) {
+      if (operation && operation.cancelled) return Promise.resolve(null);
       if (params.name === "browser_close") {
         return cleanup(api).then(function (result) {
           if (!result.isError) opening = null;
@@ -351,21 +349,28 @@ function ownTabs(open, callMs) {
       }
       if (cleaning !== null) {
         return cleaning.then(function (result) {
-          return result.isError ? result : beforeCall(params, api);
+          return result.isError ? result : beforeCall(params, api, operation);
         });
+      }
+      if (operation !== undefined) {
+        var entry = { operation: operation, resolve: null, done: null };
+        entry.done = new Promise(function (resolve) { entry.resolve = resolve; });
+        pending.push(entry);
       }
       if (opening === null) opening = open();
       var attempt = opening;
       return attempt.then(function (result) {
         if (result && result.isError) {
+          finish(operation);
           if (opening === attempt) opening = null;
           return result;
         }
         return null;
       });
     },
-    afterCall: function (params, failed) {
+    afterCall: function (params, failed, operation) {
       if (!failed && params.name !== "browser_close") used = true;
+      finish(operation);
     },
     cleanup: cleanup
   };
@@ -379,7 +384,6 @@ module.exports = {
   connect: connect,
   countTabs: countTabs,
   findProfileDir: findProfileDir,
-  openWindow: openWindow,
   ownTabs: ownTabs,
   pluginDirs: pluginDirs,
   readDeclaration: readDeclaration,
