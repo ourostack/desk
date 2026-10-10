@@ -16,7 +16,9 @@ export const LOCATION = "eastus2";
 export const VAULT = "kv-ouro-identity-261e0b";
 export const GATEWAY_APP_NAME = "ouro-desk-hosted";
 export const AUTOMATION_APP_NAME = "ouro-identity-automation";
-export const GATEWAY_IDENTITY = "id-ouro-desk-hosted";
+// Each stage's gateway has its own identity, so staging can reach neither production's Entra secret nor its
+// accounts tables (ledger ruling on review I2).
+export const GATEWAY_IDENTITIES = { prod: "id-ouro-desk-hosted", test: "id-ouro-desk-hosted-staging" };
 export const CHECKS_IDENTITY = "id-ouro-identity-checks";
 export const IDENTITY_ENVIRONMENT = "identity";
 export const GITHUB_REPO = "ourostack/desk";
@@ -35,6 +37,7 @@ const AZURE_DOMAIN = "blueflower-44af4710.eastus2.azurecontainerapps.io";
 export const ENVIRONMENTS = {
   prod: {
     app: "ouro-desk-hosted",
+    gatewayIdentity: GATEWAY_IDENTITIES.prod,
     storage: "stouroaccounts261e0b",
     tenantCandidates: ["ourobot", "ouroid"],
     tenantDisplayName: "Ouro",
@@ -46,6 +49,7 @@ export const ENVIRONMENTS = {
   },
   test: {
     app: "ouro-desk-hosted-staging",
+    gatewayIdentity: GATEWAY_IDENTITIES.test,
     storage: "stouroacctstest261e0b",
     tenantCandidates: ["ourobottest", "ouroidtest"],
     tenantDisplayName: "Ouro (test)",

@@ -23,7 +23,13 @@
 # replaces the app's secret and container lists with the file's, so a rerun built
 # from a template would drop DESK_CLIENT_KEY, the previous signing key and any
 # secret or env var this script doesn't know. Missing secrets are added the same
-# way, with their values made inside app-yaml.mjs, never as arguments.
+# way, with their values made inside app-yaml.mjs, never as arguments. az drops
+# the identity map from such an update, so the gateway identity is attached
+# first with `az containerapp identity assign`; after each update the script
+# reads the app back and stops unless every secret, Key Vault reference and
+# identity is still there. A rerun keeps the app's probes, scale and resources
+# as they are; only a create applies the template's (fix a hand-made change in
+# the portal or by creating the app again).
 #
 # Ouro sign-in: both stages read the Ouro tenant's settings from
 # hosted/infra/identity-<env>.json (prod, or test for staging), which
@@ -279,12 +285,40 @@ else
   say "Redirect allowlist: the gateway's default"
 fi
 
-if ((app_exists)); then
-  say "Container App $APP exists; reconciling it from its current spec"
+# Reconciles the existing app: attach the gateway identity first (az's YAML update drops the identity map, so it
+# can't arrive through the document), send the whole app with this script's settings, then read the app back and
+# stop unless every secret, Key Vault reference and identity is still there (az fills value-less secrets, Key
+# Vault references included, from listSecrets before it sends).
+reconcile_app() {
+  az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
+  local identity_args=() id attached=0
+  if [[ -f "$IDENTITY_FILE" ]]; then identity_args=(--identity-record "$IDENTITY_FILE"); fi
+  if ((${#identity_args[@]})); then
+    while read -r id; do
+      [[ -n "$id" ]] || continue
+      say "Attaching identity ${id##*/} to $APP"
+      write containerapp identity assign -n "$APP" -g "$RESOURCE_GROUP" --user-assigned "$id" --output none
+      attached=1
+    done < <(node "$APP_YAML" --shown "$work/shown.json" --missing-identities "${identity_args[@]}")
+    if ((attached)) && [[ "${DRY_RUN:-0}" != 1 ]]; then
+      az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
+    fi
+  fi
+  local document
   document="$(build_update)"
   say "Updating $APP: missing secrets added, every existing secret, env var, volume and identity kept"
   show_document "$document"
   write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none
+  if [[ "${DRY_RUN:-0}" != 1 ]]; then
+    az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/after.json"
+    az_read containerapp secret list -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/secrets.json"
+    node "$APP_YAML" --verify --before "$work/shown.json" --after "$work/after.json" --secret-list "$work/secrets.json" ${identity_args[@]+"${identity_args[@]}"}
+  fi
+}
+
+if ((app_exists)); then
+  say "Container App $APP exists; reconciling it from its current spec"
+  reconcile_app
 else
   if [[ -n "${IMAGE:-}" ]]; then
     if [[ "$IMAGE" == */* ]]; then image="$IMAGE"; else image="$login_server/ouro-desk-hosted:$IMAGE"; fi
@@ -303,12 +337,10 @@ else
   say "Creating Container App $APP"
   show_spec
   write containerapp create -n "$APP" -g "$RESOURCE_GROUP" --yaml "$work/app.yaml" --output none
-  # The Ouro settings join through the same builder once the app exists.
+  # The Ouro settings join through the same attach, update and check once the app exists.
   if [[ "${DRY_RUN:-0}" != 1 && -f "$IDENTITY_FILE" ]]; then
-    az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
-    document="$(build_update)"
     say "Adding the Ouro sign-in settings to $APP"
-    write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none
+    reconcile_app
   fi
 fi
 
