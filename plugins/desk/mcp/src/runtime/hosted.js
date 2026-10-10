@@ -71,14 +71,16 @@ export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(TOOL_NAMES.map(
 // A hosted client's own memory (claude.ai's, ChatGPT's) would split durable context between the client and the desk.
 const CLIENT_MEMORY = "Don't use this client's built-in memory. Durable context, preferences and task state live in the desk, written through Desk's tools, and the desk wins over anything the client's memory recalls. Never save to that memory. If the client lets you turn its memory off, do so. If it doesn't and its memory is on, tell the user once that Desk keeps their memory in the desk and that they can turn the client's memory off in its settings."
 const DESK_STATUS_FIRST = "Start by calling desk_status: it is this session's startup status block."
+// The opening of the instructions. Some MCP clients read only the first 512 characters (ChatGPT's MCP guide advises key details there), so this holds the rules that matter most; the quoted rule is the using-desk foundation's own. A test keeps it inside 512 characters.
+const LEAD = "Desk keeps this user's work, memory and task state in their desk. Call desk_status first: it is this session's startup status block. Don't use this client's built-in memory; write what lasts through Desk's tools. Never type a password or paste a secret. Skip session-start and the shell-only skills named under \"Hosted Desk\" below."
 const SKILLS = "Desk's skills are its working procedures. When these instructions or a tool answer name a skill, read it with desk_skill (no name lists them all) and follow it; this client cannot load them any other way."
 
 /**
- * The MCP instructions a hosted Desk sends with its initialize answer, in place of the session-start hook a hosted chat does not have: the using-desk foundation (frontmatter stripped), the desk's AGENTS.md, then what this hosted Desk refuses and why, ending with the desk_status line.
+ * The MCP instructions a hosted Desk sends with its initialize answer, in place of the session-start hook a hosted chat does not have: a short lead with the rules that matter most, the using-desk foundation (frontmatter stripped), the desk's AGENTS.md, then what this hosted Desk refuses and why, ending with the desk_status line.
  * Synchronous and built from file reads only, so the handshake never waits. A file that is missing or unreadable is left out.
  */
 export function hostedInstructions({ root, pluginRoot }) {
-  const sections = []
+  const sections = [LEAD]
   const foundation = typeof pluginRoot === "string" ? readText(path.join(pluginRoot, "skills", "using-desk", "SKILL.md")) : null
   if (foundation !== null) sections.push(foundation.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "").trim())
   const agents = typeof root === "string" ? readOptional(() => readAgentsMd(root)) : null
