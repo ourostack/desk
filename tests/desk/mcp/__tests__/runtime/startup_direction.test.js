@@ -116,9 +116,9 @@ test("Copilot resolves the root with the session folder as the project folder, e
     const copilot = (extra, sessionFolder) => copilotStartupDirection({ env: { ...env, ...extra }, sessionFolder, homeDir: env.HOME })
     // An ordinary folder: one root, the one the server binds.
     assert.equal(copilot({}, codeRepo), deskStartupDirection({ root: fallback, source: "home_fallback" }))
-    // A desk-shaped session folder is the root, as it is on Claude Code, whatever $DESK or the home fallback say.
-    assert.equal(copilot({ DESK: crew }, crew), deskStartupDirection({ root: crew, source: "host-project" }))
-    assert.equal(copilot({ DESK: solo }, crew), deskStartupDirection({ root: crew, source: "host-project" }))
+    // Explicit DESK intent outranks folder evidence on every host.
+    assert.equal(copilot({ DESK: crew }, crew), deskStartupDirection({ root: crew, source: "env:DESK" }))
+    assert.equal(copilot({ DESK: solo }, crew), deskStartupDirection({ root: solo, source: "env:DESK" }))
     assert.equal(copilot({}, crew), deskStartupDirection({ root: crew, source: "host-project" }))
     // An unreadable saved binding is reported as unreadable.
     assert.match(copilot({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), /root configuration could not be read/u)

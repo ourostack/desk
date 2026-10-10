@@ -4,13 +4,43 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { syncBuiltinESMExports } from "node:module"
-import { deskRelativePath, isPathContained, resolveDeskRootWithSource, resolveLocalPath, resolveWriteTarget, toDeskPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
+import { claudeBindingPath, deskRelativePath, expandHome, isPathContained, loadActivationConfig, resolveActivationConfigPath, resolveDeskRoot, resolveDeskRootWithSource, resolveLocalPath, resolveStateHome, resolveWriteTarget, toDeskPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 async function temporaryRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-path-coverage-"))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   return root
 }
+
+test("shared path defaults retain isolated home and explicit-config behavior", async (t) => {
+  const root = await temporaryRoot(t)
+  assert.equal(resolveDeskRoot(root), root)
+  assert.equal(loadActivationConfig(), null)
+  assert.equal(resolveActivationConfigPath({ explicit: root }), root)
+  const oldConfig = process.env.DESK_ACTIVATION_CONFIG
+  process.env.DESK_ACTIVATION_CONFIG = root
+  try {
+    assert.equal(resolveActivationConfigPath(), root)
+  } finally {
+    if (oldConfig === undefined) delete process.env.DESK_ACTIVATION_CONFIG
+    else process.env.DESK_ACTIVATION_CONFIG = oldConfig
+  }
+  const oldData = process.env.CLAUDE_PLUGIN_DATA
+  process.env.CLAUDE_PLUGIN_DATA = root
+  try {
+    assert.equal(claudeBindingPath(), path.join(root, "desk.activation.json"))
+  } finally {
+    if (oldData === undefined) delete process.env.CLAUDE_PLUGIN_DATA
+    else process.env.CLAUDE_PLUGIN_DATA = oldData
+  }
+  assert.equal(expandHome("~"), os.homedir())
+  assert.equal(expandHome("leaf"), "leaf")
+  assert.equal(resolveStateHome({}), path.join(os.homedir(), ".local", "state"))
+  for (const value of [undefined, "", "  ", 7]) {
+    assert.equal(resolveStateHome({ HOME: root, XDG_STATE_HOME: value }), path.join(root, ".local", "state"))
+  }
+  assert.equal(resolveStateHome({ HOME: root, XDG_STATE_HOME: "~/state" }), path.join(root, "state"))
+})
 
 test("root resolution with omitted options uses isolated home defaults without provisioning", async (t) => {
   const home = await temporaryRoot(t)

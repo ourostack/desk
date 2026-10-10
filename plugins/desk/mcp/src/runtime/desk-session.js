@@ -93,6 +93,7 @@ export function toolRequirement(name) {
 
 /** Whether the admitted context meets a requirement. */
 export function requirementMet(requirement, context) {
+  if (context.resolutionFailed) return false
   if (context.launcher?.mode === "refuse") return false
   const readable = Boolean(context.runtimeServer && context.root)
   if (requirement === "read" || requirement === "focus") return readable
@@ -144,10 +145,31 @@ export function createDeskSession(deps) {
   // The one runtime status computation allowed at a time, so repeated desk_status calls on a slow machine never pile up work: `{ promise, at, started, seq }`. One older than statusRunLimitMs is abandoned in favor of a new one.
   let statusRun = null
   let statusSeq = 0
+  let contextGeneration = 0
+  let resolvedInputs = null
+  let resolvedOwnershipKey = null
+  // Admission may resolve in parallel, but never replaces a destination while
+  // an operation is using its authority, controller, or write branch.
+  let operationTail = Promise.resolve()
+
+  function invalidateStatus() {
+    contextGeneration += 1
+    statusRun = null
+    lastStatusDetail = null
+  }
+
+  function operation(work) {
+    let release
+    const done = new Promise((resolve) => { release = resolve })
+    const previous = operationTail
+    operationTail = previous.then(() => done)
+    return previous.then(() => work(release)).finally(release)
+  }
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
 
   function recordLastStart(snapshot) {
+    if (disposed) return
     try {
       writeLastStart({ stateDir: deskStateDir, snapshot, root: context.root?.root ?? null })
     } catch (error) {
@@ -158,7 +180,8 @@ export function createDeskSession(deps) {
   const admission = createAdmission({
     context,
     timers,
-    attempt: admitOnce,
+    attempt: () => admitOnce(),
+    revalidate: () => admitOnce(true),
     check: checkController,
     onTransition(snapshot) {
       log(snapshot.state === "ready"
@@ -201,6 +224,7 @@ export function createDeskSession(deps) {
   }
 
   function forgetAuthority() {
+    invalidateStatus()
     forgetController()
     context.admission = null
     context.authority = null
@@ -211,21 +235,45 @@ export function createDeskSession(deps) {
 
   function forgetDesk() {
     forgetAuthority()
+    closeHeadWatch()
+    if (headTimer !== null) clearTimeout(headTimer)
+    headTimer = null
     context.root = null
     context.stateBranch = null
     context.policyKey = null
+    context.activation = null
+    context.stateBranchName = null
     context.hung = { misses: 0 }
     hungOwner = null
   }
 
   // The automatic state-branch switch belongs to the session's first admission attempt only, whatever that attempt ends in (ready, any degraded state, or a throw). After it, only desk_doctor's switch_state_branch repair switches.
-  async function admitOnce() {
+  async function admitOnce(revalidateOnly = false) {
+    let outcome
     try {
-      return await admitAttempt()
+      outcome = await admitAttempt(revalidateOnly)
+    } catch (error) {
+      await operationTail
+      forgetDesk()
+      context.resolutionFailed = true
+      outcome = exceptionOutcome(error)
     } finally {
       context.startupDone = true
       context.phase = null
     }
+    // A new root can finish in the same state as the previous root, without a
+    // state transition. Its own start record must still receive the outcome.
+    if (outcome !== null) {
+      const ready = outcome.state === "ready"
+      recordLastStart({
+        ...admission.snapshot(),
+        state: ready ? "ready" : `degraded:${outcome.code}`,
+        code: ready ? null : outcome.code,
+        fix: ready ? null : outcome.fix ?? null,
+        repair: outcome.repair ?? admission.snapshot().repair,
+      })
+    }
+    return outcome
   }
 
   // Where the running admission attempt is, for desk_status: a stuck start names its step instead of only "admitting".
@@ -233,7 +281,7 @@ export function createDeskSession(deps) {
     context.phase = { name, since: new Date().toISOString() }
   }
 
-  async function admitAttempt() {
+  async function admitAttempt(revalidateOnly) {
     const repairs = context.pendingRepairs.splice(0)
     const headTriggered = context.headTriggered === true
     context.headTriggered = false
@@ -241,28 +289,67 @@ export function createDeskSession(deps) {
 
     setPhase("resolving_inputs")
     const inputs = await deps.resolveInputs()
+    await operationTail
+    if (disposed) return null
     if (inputs.rootError) {
       forgetDesk()
+      context.resolutionFailed = true
       return rootOutcome(inputs.rootError, deps)
     }
+    // Losing host context is not intent to move to a different home-folder
+    // guess. Keep refusing until the resolver proves the intended destination.
+    if (resolvedInputs && resolvedInputs.root.root !== inputs.root.root &&
+        ["home_fallback", "overlay_home_fallback"].includes(inputs.root.source)) {
+      forgetDesk()
+      context.resolutionFailed = true
+      return rootOutcome({
+        code: "DESK_ROOT_UNAVAILABLE",
+        path: resolvedInputs.root.root,
+        message: "The established desk association is no longer available; Desk will not select a different fallback.",
+      }, deps)
+    }
+    const ownershipKey = (value) => JSON.stringify({
+      root: value.root.root,
+      activation: value.activation,
+      person: args.person ?? null,
+    })
+    const key = ownershipKey(inputs)
+    const unchanged = !context.resolutionFailed && resolvedOwnershipKey === key
+    if (revalidateOnly && unchanged) {
+      context.root = inputs.root
+      resolvedInputs = inputs
+      return null
+    }
+    if (!unchanged) invalidateStatus()
+    context.resolutionFailed = false
     const newRoot = context.root?.root !== inputs.root.root
+    if (newRoot && resolvedInputs !== null && resolvedInputs.root.root !== inputs.root.root) focus.set(null)
     if (newRoot) forgetDesk()
     context.root = inputs.root
     // The root's own start record begins with the state it is in now (admitting, on the first attempt), not only with the next change.
-    if (newRoot) recordLastStart(admission.snapshot())
+    if (newRoot) recordLastStart({ ...admission.snapshot(), state: "admitting", code: null, fix: null })
     const deskRoot = inputs.root.root
-    if (inputs.activationError) return activationOutcome(inputs.activationError)
+    if (inputs.activationError) {
+      forgetAuthority()
+      context.activation = null
+      context.resolutionFailed = true
+      return activationOutcome(inputs.activationError)
+    }
     const activation = inputs.activation
     const policyKey = JSON.stringify(activation.readinessPolicy)
-    if (context.policyKey !== policyKey) forgetAuthority()
+    if (context.policyKey !== policyKey || context.personInput !== (args.person ?? null)) forgetAuthority()
     context.policyKey = policyKey
+    context.personInput = args.person ?? null
     context.activation = activation.activationStatus
     context.stateBranchName = activation.stateBranch
+    resolvedInputs = inputs
+    resolvedOwnershipKey = key
     const policy = activation.readinessPolicy
 
     if (!context.runtimeServer) {
       setPhase("loading_runtime")
       const loaded = await deps.loadRuntime(activation, { onPhase: setPhase })
+      if (disposed) return null
       if (loaded.outcome) return loaded.outcome
       context.runtimeServer = loaded.runtimeServer
       context.runtime = loaded.runtimeStatus
@@ -273,6 +360,7 @@ export function createDeskSession(deps) {
     let branchProblem = null
     setPhase("inspecting_state_branch")
     let inspection = await inspectStateBranch({ root: deskRoot, branch: activation.stateBranch, git })
+    if (disposed) return null
     if (!inspection.ok && inspection.automatic && startup) {
       const repaired = await repairStateBranch({ inspection, git })
       if (repaired.repaired) {
@@ -291,6 +379,7 @@ export function createDeskSession(deps) {
     setPhase("admitting_authority")
     if (!context.authorityAdmitted) {
       const admitted = await admitAuthority({ deskRoot, policy, onRepair })
+      if (disposed) return null
       if (admitted.outcome) return { ...admitted.outcome, repair: repairs.at(-1) }
       controllerProblem = admitted.controllerProblem
     } else if (context.controllerLost) {
@@ -360,6 +449,10 @@ export function createDeskSession(deps) {
       admitted = { state: "CONTROL_READY", root: deskRoot, authority: verified, runtime: context.runtime, controller: null, automatic_actions: [] }
       controllerFailure = { error }
     }
+    if (disposed) {
+      await admitted?.controller?.close?.()
+      return { outcome: null }
+    }
     try {
       context.person = validateAdmissionAuthority({ authority: admitted?.authority, person: args.person, policy })
     } catch (error) {
@@ -384,6 +477,10 @@ export function createDeskSession(deps) {
     try {
       const connector = context.runtimeServer.connectOrStartController
       const controller = await connector({ deskRoot, policy, stateHome: readinessStateHome, onRepair })
+      if (disposed) {
+        await controller?.close?.()
+        return null
+      }
       if (!controller?.accepted) throw Object.assign(new Error("The readiness controller could not accept ownership."), { code: "controller_start_failed" })
       context.admission = { ...context.admission, controller }
       context.controllerLost = false
@@ -426,9 +523,13 @@ export function createDeskSession(deps) {
   }
 
   function startBackgroundConvergence(admitted) {
+    const runtimeServer = context.runtimeServer
+    const generation = contextGeneration
     // Started on a later turn of the event loop, so its first synchronous stretch (opening the index database) never joins the transition to ready in one block; inside a promise, so a synchronous throw is reported like a rejection.
     new Promise((resolve) => setImmediate(resolve))
-      .then(() => context.runtimeServer.beginBackgroundConvergence?.(admitted))
+      .then(() => {
+        if (!disposed && generation === contextGeneration) return runtimeServer.beginBackgroundConvergence?.(admitted)
+      })
       .catch((error) => log(`background convergence failed: ${error?.message ?? String(error)}`))
   }
 
@@ -537,24 +638,37 @@ export function createDeskSession(deps) {
     const hostedRefused = hostedRefusal(name, input, env)
     if (hostedRefused !== null) return { content: [{ type: "text", text: JSON.stringify(hostedRefused) }], isError: true }
     try {
-      return await dispatch(name, input, signal)
+      if (disposed) return pendingRefusal(name)
+      if (name === "desk_status") return await deskStatus(input, signal)
+      if (name === "desk_doctor" && !context.root) return await deskDoctor(input, signal)
+      const waitMs = name === "task_focus" ? deps.focusWaitMs ?? FOCUS_WAIT_MS : GATE_WAIT_MS
+      await admission.refresh({
+        waitMs,
+        revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
+      })
+      return await operation((release) => {
+        if (disposed || admission.running) return pendingRefusal(name)
+        return dispatch(name, input, signal, release)
+      })
     } catch (error) {
       return toolException(name, error)
     }
   }
 
-  async function dispatch(name, input, signal) {
+  function pendingRefusal(name) {
+    return degradedResult(name, {
+      state: admission.snapshot().state,
+      code: "admitting",
+      fix: "Desk is still admitting or verifying this session's destination in the background. Call desk_status, then retry; no operation was dispatched.",
+    }, REQUIREMENT_TEXT[toolRequirement(name)] ?? "a verified desk destination")
+  }
+
+  async function dispatch(name, input, signal, release) {
     const requirement = toolRequirement(name)
-    if (requirement === "status") return deskStatus(input, signal)
-    if (requirement === "doctor") return deskDoctor(input, signal)
+    if (requirement === "doctor") return deskDoctor(input, signal, release)
     // A focus call needs the runtime and a root, never a write: while Desk is still admitting it waits a short, bounded time, like the read tools, then refuses.
     if (requirement === "focus") {
-      if (!requirementMet(requirement, context)) await admission.refresh({ waitMs: deps.focusWaitMs ?? FOCUS_WAIT_MS })
       return requirementMet(requirement, context) ? runtimeCall(name, input, signal, null) : refusal(name, requirement)
-    }
-    if (!requirementMet(requirement, context)) {
-      // A Desk that is still admitting, or one a retry could fix now, gets one bounded chance before the tool is refused.
-      await admission.refresh({ waitMs: GATE_WAIT_MS })
     }
     if (!requirementMet(requirement, context)) return refusal(name, requirement)
     if (SEMANTIC_TOOLS.has(name) && context.admission?.controller?.embeddingOverride) {
@@ -600,10 +714,7 @@ export function createDeskSession(deps) {
   function refusal(name, requirement) {
     const snapshot = admission.snapshot()
     let { code, fix, blockers } = snapshot
-    if (snapshot.state === "admitting") {
-      code = "admitting"
-      fix = "Desk is still admitting this session in the background. Call desk_status, then retry."
-    } else if (launcher?.mode !== "refuse" && requirement === "write" && context.stateBranch?.ok === false) {
+    if (launcher?.mode !== "refuse" && requirement === "write" && context.stateBranch?.ok === false) {
       ({ code, fix, blockers } = stateBranchProblem(context.stateBranch, { automatic: !context.startupDone }))
     } else if (launcher?.blocksWrites && requirement === "write" && requirementMet("authority", context)) {
       ({ code, fix } = launcherReadOnlyOutcome(launcher))
@@ -626,17 +737,20 @@ export function createDeskSession(deps) {
     // desk_status must answer at once whatever admission is doing: it starts or joins an attempt but waits only briefly for it, and the whole answer shares one time budget. A ready session also checks its controller in the background, so a lost one is re-elected without waiting for the 60 s check.
     const deadline = Date.now() + STATUS_BUDGET_MS
     // An attempt that was already running (a slow restore, the import of the runtime, the controller election) is joined, not waited on.
-    const snapshot = await admission.refresh({ waitMs: STATUS_WAIT_MS, joinMs: 0 })
+    await admission.refresh({ waitMs: STATUS_WAIT_MS, joinMs: 0 })
+    const snapshot = statusSnapshot()
     if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
     // The admission state the payload is stamped with. A detail computed by this very call is read after `snapshot` was taken, so it can describe a controller that was still converging when admission reaches ready a moment later; stamping it with the later state would report ready next to a LEXICAL_CONVERGING controller with nothing to say so. It is stamped with the state it was computed under instead, and the next call reports the newer one.
     let stamped = null
-    if (context.runtimeServer && context.root && launcher?.mode !== "refuse") {
+    if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
       // A computation that is still running and not yet stuck is joined; otherwise this call starts a new one. Either way the call waits only for what is left of its own budget.
       const joined = statusRun !== null && Date.now() - statusRun.started < statusRunLimitMs
       const run = joined ? statusRun : startStatusRun(input, signal)
       const outcome = await raceWithTimer(run.promise, Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
-      if (!outcome.timedOut && outcome.value.error !== undefined) {
+      if (run.generation !== contextGeneration) {
+        payload = baseDiagnostic(statusSnapshot())
+      } else if (!outcome.timedOut && outcome.value.error !== undefined) {
         const error = outcome.value.error
         payload = { ...payload, status_error: error instanceof Error ? error.message : String(error) }
       } else if (!outcome.timedOut && joined) {
@@ -654,19 +768,40 @@ export function createDeskSession(deps) {
           : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
       }
     }
-    const full = withAdmission(payload, stamped ?? admission.snapshot())
+    if (admission.running && snapshot.state === "ready" && context.phase?.name === "resolving_inputs" &&
+        !context.resolutionFailed && payload.root) {
+      payload = { ...payload, status_detail: `${payload.status_detail ?? "cached: this detail belongs to the currently admitted context."} Destination verification is pending; this detail is not permission to dispatch an operation.` }
+    }
+    const full = withAdmission(payload, stamped ?? statusSnapshot())
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
     return jsonResult(input?.detail === true ? full : compactStatus(full))
   }
 
+  function statusSnapshot() {
+    const snapshot = admission.snapshot()
+    return admission.running && snapshot.state === "ready" &&
+      (context.phase?.name !== "resolving_inputs" || context.resolutionFailed)
+      ? { ...snapshot, state: "admitting", code: null, diagnostic: null,
+        summary: "Desk is verifying this session's destination; operations wait for resolution.",
+        fix: "Call desk_status, then retry once destination verification completes." }
+      : snapshot
+  }
+
   // Starts a runtime status computation. Its detail is kept even when it arrives after the call that started it has answered, so the next call serves it, marked cached with when it was computed. An abandoned computation that finishes late never replaces a detail from a newer one.
   function startStatusRun(input, signal) {
-    const run = { at: new Date().toISOString(), started: Date.now(), seq: (statusSeq += 1) }
+    const run = { at: new Date().toISOString(), started: Date.now(), seq: (statusSeq += 1), generation: contextGeneration }
+    // Capture before the asynchronous status call yields to a new admission.
+    const request = {
+      deskRoot: context.root.root, name: "desk_status", input, person: context.person ?? null,
+      statusContext: statusContext({ ...context.admission, controller: readerController() }), signal,
+    }
+    const runtimeServer = context.runtimeServer
     run.promise = Promise.resolve()
-      .then(() => runtimeCall("desk_status", input, signal))
+      .then(() => runtimeServer.callTool(request))
       .then((value) => {
         const payload = JSON.parse(value.content[0].text)
-        if (lastStatusDetail === null || lastStatusDetail.seq < run.seq) lastStatusDetail = { payload, at: run.at, seq: run.seq }
+        if (!disposed && run.generation === contextGeneration &&
+            (lastStatusDetail === null || lastStatusDetail.seq < run.seq)) lastStatusDetail = { payload, at: run.at, seq: run.seq }
         return { payload }
       })
       .catch((error) => ({ error }))
@@ -691,7 +826,7 @@ export function createDeskSession(deps) {
     ]).finally(() => clearTimeout(timer))
   }
 
-  async function deskDoctor(input, signal) {
+  async function deskDoctor(input, signal, release) {
     let format
     try {
       format = diagnosticFormat(input)
@@ -706,8 +841,8 @@ export function createDeskSession(deps) {
     if (format === "preview") {
       return jsonResult(previewRuntimeSnapshot(admission.snapshot().state === "ready" ? "ready" : "diagnostic"))
     }
-    if (input.repair === STATE_BRANCH_REPAIR) return switchStateBranch()
-    if (input.repair === RECLAIM_REPAIR) return reclaimController()
+    if (input.repair === STATE_BRANCH_REPAIR) return switchStateBranch(release)
+    if (input.repair === RECLAIM_REPAIR) return reclaimController(release)
     if (input.repair === "prune_readiness_state") {
       const result = await pruneReadinessLeftovers({ stateHome: readinessStateHome })
       return jsonResult({
@@ -719,7 +854,7 @@ export function createDeskSession(deps) {
     }
     const snapshot = admission.snapshot()
     let payload = baseDiagnostic(snapshot)
-    if (context.runtimeServer && context.root && launcher?.mode !== "refuse") {
+    if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
       payload = JSON.parse((await runtimeCall("desk_doctor", { format }, signal)).content[0].text)
     }
     return jsonResult({
@@ -728,7 +863,7 @@ export function createDeskSession(deps) {
     })
   }
 
-  async function switchStateBranch() {
+  async function switchStateBranch(release) {
     const branch = context.stateBranchName
     if (!context.root || typeof branch !== "string") {
       return jsonResult({
@@ -748,12 +883,13 @@ export function createDeskSession(deps) {
       return jsonResult({ status: "refused", repair: STATE_BRANCH_REPAIR, code: problem.code, blockers: problem.blockers, fix: problem.fix }, true)
     }
     context.pendingRepairs.push(recordRepair(repaired.line))
+    release()
     const snapshot = await admission.refresh({ force: true, waitMs: GATE_WAIT_MS })
     return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix })
   }
 
   // Legacy/unverified owners remain report-only. A supervisor may stop only its retained controller child.
-  async function reclaimController() {
+  async function reclaimController(release) {
     if (!context.root || !context.policyKey) {
       return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: "not_admitted", fix: "Desk has not resolved a desk root and policy yet; call desk_status, then retry." }, true)
     }
@@ -768,6 +904,7 @@ export function createDeskSession(deps) {
         hungOwner = null
         const line = recordRepair(`repaired: stopped hung readiness controller child ${report.owner_pid}; MCP sessions remain connected`)
         context.pendingRepairs.push(line)
+        release()
         const snapshot = await admission.refresh({ force: true, waitMs: GATE_WAIT_MS })
         return jsonResult({ status: "ok", repair: RECLAIM_REPAIR, ...result, controller: report, state: snapshot.state })
       }
@@ -832,7 +969,7 @@ export function createDeskSession(deps) {
         state_branch: branchSummary(context.stateBranch),
         controller: context.admission?.controller ? "connected" : "absent",
         hung_controller: context.hung.misses > 0 ? { ...context.hung } : null,
-        writes: requirementMet("write", context) ? "available" : "refused",
+        writes: !disposed && !admission.running && requirementMet("write", context) ? "available" : "refused",
         exceptions: context.exceptions,
         launcher: launcher === null ? null : { code: launcher.code, reason: launcher.reason, mode: launcher.mode },
         last_start: lastStartPath({ stateDir: deskStateDir, root: context.root?.root ?? null }),
@@ -850,10 +987,13 @@ export function createDeskSession(deps) {
     start: () => admission.start(),
     dispose() {
       disposed = true
+      invalidateStatus()
       admission.dispose()
+      unwatchController?.()
+      unwatchController = null
       closeHeadWatch()
       if (headTimer !== null) clearTimeout(headTimer)
-      return forgetController()
+      return operationTail.then(forgetController)
     },
   }
 }
@@ -961,12 +1101,12 @@ function rootUnavailableFix(error) {
   const missing = typeof error?.path === "string" ? error.path : "the desk root"
   const recheck = "then call desk_status: Desk rechecks the root in place, with no restart."
   if (error?.source === "activation-config") {
-    return `The saved desk binding ${error.activation_config} names ${missing}. Restore or clone the desk at ${missing}, or rebind: run desk:first-run-bootstrap, which finds an existing desk or creates one and rewrites the binding; ${recheck}`
+    return `The saved desk binding ${error.activation_config} names ${missing}, which could not be validated. Restore access to that existing desk or correct the saved association through its authorized configuration; ${recheck}`
   }
   if (error?.source === "env:DESK") {
-    return `The DESK environment variable names ${missing}. Restore or clone the desk there, or correct or unset DESK in the environment that launches Desk and reconnect the Desk MCP server; ${recheck}`
+    return `The DESK environment variable names ${missing}. Restore access to that existing desk or correct the explicit destination in the environment that launches Desk and reconnect the Desk MCP server; ${recheck}`
   }
-  return `Create or clone the desk at ${missing} (or correct the root the host passes), ${recheck}`
+  return `Restore access to the intended desk at ${missing} or correct the explicit destination the host passes; ${recheck}`
 }
 
 function activationOutcome(error) {

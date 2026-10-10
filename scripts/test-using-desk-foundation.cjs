@@ -174,11 +174,11 @@ function checkStartupHooks(skill) {
       assert.ok(!line.includes(fallback), `${host} must not name the home fallback when the session folder is a desk`);
     }
 
-    // The session folder wins over DESK on Copilot, as the project folder does on Claude.
+    // Explicit DESK intent wins over folder evidence on every host.
     const other = runCopilotHook({ env: { ...env, DESK: solo }, cwd: crew, sessionCwd: crew });
-    assert.ok(startupLine(other).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), startupLine(other));
+    assert.ok(startupLine(other).startsWith(`Desk startup: $DESK is ${solo} (the DESK environment variable)`), startupLine(other));
     const same = runCopilotHook({ env: { ...env, DESK: crew }, cwd: crew, sessionCwd: crew });
-    assert.ok(startupLine(same).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), startupLine(same));
+    assert.ok(startupLine(same).startsWith(`Desk startup: $DESK is ${crew} (the DESK environment variable)`), startupLine(same));
 
     // An unreadable saved binding is reported as unreadable on both hosts, never as "no desk is bound yet".
     const unreadable = {

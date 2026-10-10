@@ -67,7 +67,7 @@ test("isDeskWorkspace recognizes solo desks and crew workspaces but not ordinary
   }
 })
 
-test("a host project that is itself a desk binds before activation config, DESK and home fallbacks", () => {
+test("saved associations outrank a host project even when that folder is a desk", () => {
   const fixture = makeFixture()
   try {
     const configPath = path.join(fixture.pluginData, "desk.activation.json")
@@ -79,8 +79,8 @@ test("a host project that is itself a desk binds before activation config, DESK 
       homeDir: fixture.home,
       hostProjectRoot: fixture.project,
     })
-    assert.equal(result.root, fixture.project)
-    assert.equal(result.source, "host-project")
+    assert.equal(result.root, fixture.bound)
+    assert.equal(result.source, "activation-config")
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
@@ -116,7 +116,7 @@ test("a host project that is not a desk is recorded and falls through without fa
     })
     assert.equal(result.root, fixture.envRoot)
     assert.equal(result.source, "env:DESK")
-    assert.deepEqual(result.tried.map((entry) => entry.source), ["host-project", "env:DESK"])
+    assert.deepEqual(result.tried.map((entry) => entry.source), ["env:DESK"])
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
@@ -159,8 +159,8 @@ test("startup root resolution uses CLAUDE_PROJECT_DIR and the plugin data bindin
       env: { CLAUDE_PROJECT_DIR: fixture.project, CLAUDE_PLUGIN_DATA: fixture.pluginData },
       homeDir: fixture.home,
     })
-    assert.equal(fromProject.root, fixture.project)
-    assert.equal(fromProject.source, "host-project")
+    assert.equal(fromProject.root, fixture.bound)
+    assert.equal(fromProject.source, "activation-config")
     const fromBinding = entrypoint.resolveStartupDeskRoot({
       args: {},
       env: { CLAUDE_PROJECT_DIR: fixture.codeRepo, CLAUDE_PLUGIN_DATA: fixture.pluginData },
@@ -308,7 +308,8 @@ test("a saved binding to a missing folder degrades to root_unavailable, binds no
     assert.deepEqual(degraded.root, { path: moved, source: "activation-config", problem: "does not exist", activation_config: bindingPath })
     assert.match(degraded.admission.summary, /does not fall back to another desk/u)
     assert.match(degraded.fix, new RegExp(`names ${moved.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`, "u"))
-    assert.match(degraded.fix, /desk:first-run-bootstrap/u)
+    assert.match(degraded.fix, /Restore access/u)
+    assert.doesNotMatch(degraded.fix, /bootstrap|override/u)
     assert.match(degraded.fix, /call desk_status/u)
     const read = await desk.call("desk_search", { query: "anything" })
     assert.equal(read.isError, true)
@@ -350,7 +351,7 @@ test("a $DESK naming a missing folder degrades to root_unavailable with a DESK f
     assert.equal(started.snapshot.state, "degraded:root_unavailable")
     assert.deepEqual(started.snapshot.diagnostic.root, { path: missing, source: "env:DESK", problem: "does not exist", activation_config: null })
     assert.match(started.snapshot.fix, /The DESK environment variable names/u)
-    assert.match(started.snapshot.fix, /unset DESK/u)
+    assert.match(started.snapshot.fix, /correct the explicit destination/u)
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }

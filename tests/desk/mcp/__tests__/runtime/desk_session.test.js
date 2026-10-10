@@ -133,6 +133,484 @@ test("a changed policy or root drops the old authority and controller", async (t
   assert.equal(session.context.root.root, path.join(base, "b"))
 })
 
+test("ordinary gates reconcile a late destination without repeating unchanged admission", async (t) => {
+  let destination
+  let connects = 0
+  let loads = 0
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => {
+      connects += 1
+      return { accepted: true, close() {} }
+    },
+    callTool: async ({ deskRoot, statusContext }) => ({
+      content: [{ type: "text", text: JSON.stringify({ root: deskRoot, focus: statusContext.focus.get() }) }],
+    }),
+  })
+  const { session, base } = await makeSession(t, {
+    runtime,
+    resolveInputs: async () => inputs({ root: destination ?? path.join(base, "a") }),
+    loadRuntime: async () => {
+      loads += 1
+      return { runtimeServer: runtime, runtimeStatus: {} }
+    },
+  })
+  await session.start()
+  assert.equal(payload(await session.callTool({ name: "task_update" })).root, path.join(base, "a"))
+  assert.equal(connects, 1, "unchanged destination needs no controller election")
+  destination = path.join(base, "b")
+  assert.equal(payload(await session.callTool({ name: "task_update" })).root, destination)
+  assert.equal(connects, 2, "new destination must acquire its own authority/controller")
+  assert.equal(loads, 1, "the runtime pack is not reloaded")
+})
+
+test("a failed late association invalidates writes and cached ownership", async (t) => {
+  let invalid = false
+  const runtime = fakeRuntime({
+    callTool: async ({ deskRoot }) => ({ content: [{ type: "text", text: JSON.stringify({ root: deskRoot, old_ownership: true }) }] }),
+  })
+  const { session, base } = await makeSession(t, {
+    runtime,
+    resolveInputs: async () => invalid
+      ? { rootError: { code: "DESK_ROOT_UNAVAILABLE", message: "saved association missing", path: "/missing" } }
+      : inputs({ root: path.join(base, "a") }),
+  })
+  await session.start()
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).old_ownership, true)
+  invalid = true
+  const result = await session.callTool({ name: "task_update" })
+  assert.equal(result.isError, true)
+  assert.equal(payload(result).code, "root_unavailable")
+  assert.doesNotMatch(payload(result).fix, /override/u)
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(status.code, "root_unavailable")
+  assert.equal(status.old_ownership, undefined)
+  assert.equal(session.context.root, null)
+})
+
+test("late status completion cannot publish ownership from a previous desk", async (t) => {
+  let destination
+  let complete
+  let entered = false
+  const runtime = fakeRuntime({
+    callTool: async ({ deskRoot }) => {
+      if (deskRoot.endsWith("a")) {
+        entered = true
+        await new Promise((resolve) => { complete = resolve })
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ root: deskRoot }) }] }
+    },
+  })
+  const { session, base } = await makeSession(t, {
+    runtime,
+    resolveInputs: async () => inputs({ root: destination ?? path.join(base, "a") }),
+  })
+  await session.start()
+  const oldStatus = session.callTool({ name: "desk_status", input: { detail: true } })
+  await waitUntil(() => entered)
+  destination = path.join(base, "b")
+  await session.admission.refresh({ force: true })
+  complete()
+  assert.notEqual(payload(await oldStatus).root, path.join(base, "a"))
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).root, destination)
+})
+
+test("a writer keeps its exact destination while revalidation and another operation wait", async (t) => {
+  let destination
+  let releaseWrite
+  let entered = false
+  const requests = []
+  const runtime = fakeRuntime({
+    callTool: async (request) => {
+      requests.push(request)
+      if (request.name === "task_update" && request.input.first) {
+        entered = true
+        await new Promise((resolve) => { releaseWrite = resolve })
+        assert.equal(request.deskRoot, request.statusContext.admission.root)
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ root: request.deskRoot }) }] }
+    },
+  })
+  const { session, base } = await makeSession(t, {
+    runtime, resolveInputs: async () => inputs({ root: destination ?? path.join(base, "a") }),
+  })
+  await session.start()
+  const first = session.callTool({ name: "task_update", input: { first: true } })
+  await waitUntil(() => entered)
+  destination = path.join(base, "b")
+  const second = session.callTool({ name: "task_update" })
+  await flush()
+  assert.equal(requests.length, 1, "no B write before the A writer completes")
+  assert.equal(session.context.root.root, path.join(base, "a"))
+  releaseWrite()
+  assert.equal(payload(await first).root, path.join(base, "a"))
+  assert.equal(payload(await second).root, destination)
+  assert.equal(requests[1].statusContext.admission.root, destination)
+})
+
+test("revalidation during an asynchronous write-branch check cannot mix roots", async (t) => {
+  let destination
+  let block = false
+  let entered = false
+  let release
+  const seen = []
+  const runtime = fakeRuntime({ callTool: async (request) => {
+    seen.push(request)
+    return { content: [{ type: "text", text: JSON.stringify({ root: request.deskRoot }) }] }
+  } })
+  const { session, base } = await makeSession(t, {
+    runtime, resolveInputs: async () => inputs({ root: destination ?? path.join(base, "a") }),
+    git: async () => {
+      if (block && !entered) {
+        entered = true
+        await new Promise((resolve) => { release = resolve })
+      }
+      return { ok: false, stdout: "" }
+    },
+  })
+  await session.start()
+  block = true
+  const first = session.callTool({ name: "task_update" })
+  await waitUntil(() => entered)
+  destination = path.join(base, "b")
+  const second = session.callTool({ name: "task_update" })
+  await flush()
+  assert.equal(session.context.root.root, path.join(base, "a"))
+  release()
+  assert.equal(payload(await first).root, path.join(base, "a"))
+  assert.equal(payload(await second).root, destination)
+  assert.ok(seen.every((request) => request.deskRoot === request.statusContext.admission.root))
+})
+
+test("status stays bounded while destination resolution is blocked, and disposal prevents late acquisition", async (t) => {
+  const keepAlive = setTimeout(() => {}, 1000)
+  t.after(() => clearTimeout(keepAlive))
+  let blocked = false
+  let entered = false
+  let release
+  let connects = 0
+  const runtime = fakeRuntime({ connectOrStartController: async () => {
+    connects += 1
+    return { accepted: true, close() {} }
+  } })
+  const { session, base } = await makeSession(t, {
+    runtime,
+    resolveInputs: async () => {
+      if (blocked) {
+        entered = true
+        await new Promise((resolve) => { release = resolve })
+      }
+      return inputs({ root: path.join(base, blocked ? "b" : "a") })
+    },
+  })
+  await session.start()
+  blocked = true
+  const started = Date.now()
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.ok(Date.now() - started < 200)
+  assert.equal(entered, true)
+  assert.equal(status.state, "ready", "the previous admitted context is not yet replaced")
+  assert.equal(status.admission.writes, "refused", "pending resolution is not dispatch authority")
+  await session.dispose()
+  release()
+  await session.admission.idle()
+  assert.equal(connects, 1, "no controller can arrive after resolver disposal")
+  assert.equal(session.context.admission.controller, null)
+})
+
+test("same-path activation and person changes invalidate cached ownership", async (t) => {
+  const keepAlive = setTimeout(() => {}, 1000)
+  t.after(() => clearTimeout(keepAlive))
+  let activationStatus = { owner: "before" }
+  let person = null
+  let slow = false
+  let release
+  const args = { person }
+  const runtime = fakeRuntime({
+    callTool: async ({ person, statusContext }) => {
+      if (slow) await new Promise((resolve) => { release = resolve })
+      return { content: [{ type: "text", text: JSON.stringify({ person, activation: statusContext.activation }) }] }
+    },
+    admitControlPlane: async ({ deskRoot, person }) => ({
+      root: deskRoot, authority: { mode: "workspace" }, controller: { accepted: true, close() {} },
+    }),
+  })
+  const { session, base } = await makeSession(t, {
+    args, runtime, resolveInputs: async () => inputs({ root: path.join(base, "a"), activationStatus }),
+  })
+  await session.start()
+  const before = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(before.activation.owner, "before")
+  activationStatus = { owner: "after" }
+  slow = true
+  const next = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(next.activation?.owner, undefined, "no cached previous activation")
+  assert.equal(next.detail_pending, true)
+  release()
+  await flush()
+  slow = false
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).activation.owner, "after")
+  args.person = "other"
+  const refused = await session.callTool({ name: "task_update" })
+  assert.equal(refused.isError, true, "old workspace authority cannot authorize a new person")
+  assert.equal(session.context.person, null)
+})
+
+test("losing the established context does not select another fallback on repeated gates", async (t) => {
+  let lost = false
+  const { session, base } = await makeSession(t, {
+    resolveInputs: async () => ({
+      ...inputs({ root: path.join(base, lost ? "fallback" : "intended") }),
+      root: { root: path.join(base, lost ? "fallback" : "intended"), source: lost ? "home_fallback" : "activation-config" },
+    }),
+  })
+  await session.start()
+  lost = true
+  for (let i = 0; i < 2; i += 1) {
+    const refusal = await session.callTool({ name: "task_update" })
+    assert.equal(refusal.isError, true)
+    assert.equal(payload(refusal).code, "root_unavailable")
+    assert.equal(session.context.root, null)
+  }
+  lost = false
+  assert.equal(payload(await session.callTool({ name: "task_update" })).tool, "task_update")
+})
+
+test("a thrown resolver drops authority and old cached detail, retaining the current diagnostic", async (t) => {
+  let thrown = false
+  const { session, base } = await makeSession(t, {
+    resolveInputs: async () => {
+      if (thrown) throw new Error("current resolver failure")
+      return inputs({ root: path.join(base, "a") })
+    },
+  })
+  await session.start()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  thrown = true
+  const result = await session.callTool({ name: "task_update" })
+  assert.equal(result.isError, true)
+  assert.equal(payload(result).code, "admission_exception")
+  assert.equal(session.context.authorityAdmitted, false)
+  assert.equal(session.context.root, null)
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).observed.message, "current resolver failure")
+})
+
+test("disposal while acquiring or reconnecting a controller closes the late controller", async (t) => {
+  for (const reconnect of [false, true]) {
+    let block = false
+    let entered = false
+    let release
+    let closed = 0
+    const { session } = await makeSession(t, {
+      runtime: fakeRuntime({ connectOrStartController: async () => {
+        if (block) {
+          entered = true
+          await new Promise((resolve) => { release = resolve })
+        }
+        return { accepted: true, close() { closed += 1 } }
+      } }),
+    })
+    if (reconnect) {
+      await session.start()
+      session.context.controllerLost = true
+    }
+    block = true
+    const pending = reconnect ? session.admission.refresh({ force: true }) : session.start()
+    await waitUntil(() => entered)
+    await session.dispose()
+    release()
+    await pending
+    assert.ok(closed >= 1)
+    assert.equal(session.context.admission?.controller ?? null, null)
+    assert.equal((await session.callTool({ name: "desk_doctor" })).isError, true)
+    assert.equal((await session.callTool({ name: "task_update" })).isError, true)
+    session.recordException("late_failure", new Error("disposed exception"))
+  }
+})
+
+test("disposal during branch inspection cannot start a controller", async (t) => {
+  let entered = false
+  let release
+  let connects = 0
+  const { session } = await makeSession(t, {
+    inputs: { stateBranch: "main" },
+    git: async () => {
+      entered = true
+      await new Promise((resolve) => { release = resolve })
+      return { ok: false, stdout: "" }
+    },
+    runtime: fakeRuntime({ connectOrStartController: async () => {
+      connects += 1
+      return { accepted: true }
+    } }),
+  })
+  const pending = session.start()
+  await waitUntil(() => entered)
+  await session.dispose()
+  release()
+  await pending
+  assert.equal(connects, 0)
+})
+
+test("missing configured destinations never recommend bootstrap, clone, rebind or override", async (t) => {
+  let error
+  const { session } = await makeSession(t, { resolveInputs: async () => ({ rootError: error }) })
+  for (const source of ["activation-config", "env:DESK"]) {
+    error = { code: "DESK_ROOT_UNAVAILABLE", message: "configured root cannot be read",
+      source, path: "/known", problem: "cannot be read", activation_config: "/binding" }
+    const result = payload(await session.callTool({ name: "task_update" }))
+    assert.equal(result.code, "root_unavailable")
+    assert.doesNotMatch(result.fix, /bootstrap|clone|rebind|override/u)
+    assert.match(result.fix, /Restore access/u)
+  }
+})
+
+test("hosted refusals run before revalidation, and a named provider is still enforced", async (t) => {
+  const hosted = await makeSession(t, { env: { DESK_HOSTED: "1" } })
+  assert.equal(payload(await hosted.session.callTool({ name: "desk_recall" })).code, "hosted_unavailable")
+  let calls = 0
+  const provider = await makeSession(t, {
+    inputs: { policy: { ...unsupported, authority_provider: "fixture" } },
+    authorityProviders: { fixture: async () => {
+      calls += 1
+      return { mode: "workspace" }
+    } },
+  })
+  await provider.session.start()
+  assert.equal((await provider.session.callTool({ name: "task_update" })).isError, undefined)
+  assert.equal(calls, 1)
+})
+
+test("null semantic barrier diagnostics and missing controllers remain usable for direct writes", async (t) => {
+  const semantic = await makeSession(t, {
+    inputs: { policy: { ...unsupported, semantic: "required" } },
+    runtime: fakeRuntime({ connectOrStartController: async () => ({
+      accepted: true, beginConvergence: async () => {}, barrier: async () => null,
+    }) }),
+  })
+  assert.equal((await semantic.session.start()).diagnostic.observed.barrier, null)
+  const direct = await makeSession(t)
+  await direct.session.start()
+  direct.session.context.admission = { ...direct.session.context.admission, controller: null }
+  assert.equal((await direct.session.admission.refresh({ force: true })).state, "ready")
+  assert.equal((await direct.session.callTool({ name: "task_update" })).isError, undefined)
+})
+
+test("focus refuses a settled root-resolution failure without invoking the runtime", async (t) => {
+  const { session, runtime } = await makeSession(t, {
+    resolveInputs: async () => ({ rootError: { code: "DESK_ROOT_UNAVAILABLE", path: "/missing" } }),
+  })
+  const result = await session.callTool({ name: "task_focus" })
+  assert.equal(result.isError, true)
+  assert.equal(payload(result).code, "root_unavailable")
+  assert.deepEqual(runtime.calls, [])
+})
+
+test("a resolver rejection after disposal cannot publish a new last-start record", async (t) => {
+  let reject
+  const { session, base } = await makeSession(t, {
+    resolveInputs: () => new Promise((resolve, fail) => { reject = fail }),
+  })
+  const pending = session.start()
+  await flush()
+  const file = path.join(base, "state", "last-start.json")
+  const before = readFileSync(file, "utf8")
+  await session.dispose()
+  reject(new Error("late resolver rejection"))
+  await pending
+  assert.equal(readFileSync(file, "utf8"), before)
+})
+
+test("a bare runtime failure records null remediation without inventing an override", async (t) => {
+  const { session, base } = await makeSession(t, {
+    loadRuntime: async () => ({ outcome: { state: "degraded", code: "fixture_failure" } }),
+  })
+  assert.equal((await session.start()).fix, null)
+  const record = JSON.parse(readFileSync(path.join(base, "state", "last-start.json"), "utf8"))
+  assert.equal(record.state, "degraded:fixture_failure")
+  assert.equal(record.fix, null)
+})
+
+test("replacing a root cancels its queued HEAD revalidation", async (t) => {
+  let destination
+  let callback
+  let resolutions = 0
+  const { session, base } = await makeSession(t, {
+    inputs: { stateBranch: "main" },
+    git: scriptedGit({ branch: "main", onRemote: true }),
+    watch: (dir, options, onChange) => { callback = onChange; return quietWatch() },
+    resolveInputs: async () => {
+      resolutions += 1
+      return inputs({ root: destination ?? path.join(base, "a"), stateBranch: "main" })
+    },
+  })
+  await session.start()
+  callback("change", "HEAD")
+  destination = path.join(base, "b")
+  await session.admission.refresh({ force: true })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(resolutions, 2)
+})
+
+test("status cannot stamp ownership ready while replacement authority is still being acquired", async (t) => {
+  const keepAlive = setTimeout(() => {}, 1000)
+  t.after(() => clearTimeout(keepAlive))
+  let destination
+  let entered = false
+  let release
+  let block = false
+  const { session, base } = await makeSession(t, {
+    resolveInputs: async () => inputs({ root: destination ?? path.join(base, "a") }),
+    runtime: fakeRuntime({ connectOrStartController: async () => {
+      if (block) {
+        entered = true
+        await new Promise((resolve) => { release = resolve })
+      }
+      return { accepted: true, close() {} }
+    } }),
+  })
+  await session.start()
+  destination = path.join(base, "b")
+  block = true
+  const update = session.callTool({ name: "task_update" })
+  await waitUntil(() => entered)
+  const status = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(status.state, "admitting")
+  assert.equal(status.admission.writes, "refused")
+  release()
+  assert.equal((await update).isError, undefined)
+})
+
+test("a same-context cached status marks pending destination verification without claiming write availability", async (t) => {
+  const keepAlive = setTimeout(() => {}, 1000)
+  t.after(() => clearTimeout(keepAlive))
+  let blocked = false
+  let slowStatus = false
+  let release
+  let complete
+  const { session, base } = await makeSession(t, {
+    resolveInputs: async () => {
+      if (blocked) await new Promise((resolve) => { release = resolve })
+      return inputs({ root: path.join(base, "a") })
+    },
+    runtime: fakeRuntime({ callTool: async ({ deskRoot }) => {
+      if (slowStatus) await new Promise((resolve) => { complete = resolve })
+      return { content: [{ type: "text", text: JSON.stringify({ root: { path: deskRoot } }) }] }
+    } }),
+  })
+  await session.start()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  blocked = true
+  const current = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.match(current.status_detail, /currently admitted context.*Destination verification is pending/u)
+  slowStatus = true
+  const cached = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.match(cached.status_detail, /cached:.*Destination verification is pending/u)
+  assert.equal(cached.admission.writes, "refused")
+  release()
+  complete()
+  await session.admission.idle()
+})
+
 test("runtime failures stop admission and the runtime is loaded only once", async (t) => {
   let loads = 0
   const { session } = await makeSession(t, {
