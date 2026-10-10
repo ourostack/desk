@@ -57,8 +57,36 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
-      - name: Run the gateway tests, end to end included
+      # The accounts store's tests also run against Azurite's Table service, whose ETag conditional updates are the
+      # real ones the invite race relies on. With DESK_AZURITE=1 the suite fails, rather than skips, if Azurite is down.
+      - name: Start Azurite's Table service
+        working-directory: hosted
+        run: |
+          nohup npx azurite-table --inMemoryPersistence --tableHost 127.0.0.1 --tablePort 10002 > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:10002/; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/azurite.log"
+          echo "Azurite didn't start within 60 seconds" >&2
+          exit 1
+
+      - name: Run the gateway tests, end to end and Azurite included
         working-directory: hosted
         env:
           DESK_E2E: "1"
+          DESK_AZURITE: "1"
         run: npm test
+
+      # The Azurite tests are named `[azurite] ...`; a run where none of them passed is a failure, not a quiet skip.
+      - name: Count the Azurite tests that ran
+        working-directory: hosted
+        env:
+          DESK_AZURITE: "1"
+        run: |
+          node --disable-warning=ExperimentalWarning --test --test-reporter=tap test/accounts.test.js > "$RUNNER_TEMP/accounts.tap"
+          # Passing tests only: not the suite's own line, not a skipped one.
+          count=$(grep -E '^\s*ok [0-9]+ - \[azurite\] ' "$RUNNER_TEMP/accounts.tap" | grep -v '# SKIP' | grep -cv ' - \[azurite\] accounts store' || true)
+          echo "Azurite tests run: $count"
+          echo "Azurite tests run: $count" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -lt 1 ]; then echo "No Azurite test ran" >&2; exit 1; fi
