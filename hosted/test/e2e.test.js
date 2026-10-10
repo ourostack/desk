@@ -21,11 +21,15 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { seal, TTL } from "../src/auth/seal.js";
+import { codeFor, CLIENT_ID as TENANT_CLIENT_ID, CLIENT_SECRET as TENANT_CLIENT_SECRET, SUBDOMAIN, TENANT_ID } from "./fixtures/stub-tenant.mjs";
 
 const ENABLED = process.env.DESK_E2E === "1";
 const MAIN = fileURLToPath(new URL("../src/main.js", import.meta.url));
 const STUB_GITHUB = fileURLToPath(new URL("./fixtures/stub-github.mjs", import.meta.url));
+const OURO_GATEWAY = fileURLToPath(new URL("./fixtures/ouro-gateway.mjs", import.meta.url));
 const PLUGIN_DIR = fileURLToPath(new URL("../../plugins/desk", import.meta.url));
 const DESK_MCP = pathToFileURL(join(PLUGIN_DIR, "mcp", "/")).href;
 const REPO = "arimendelow/desk";
@@ -107,17 +111,121 @@ function pushFromElsewhere({ scratch, origin, file }) {
 
 const parse = (result) => JSON.parse(result.content.find((item) => item.type === "text").text);
 
+// Seeds a scratch desk and its bare origin, and starts the gateway on it: `entry` (src/main.js by default) with the
+// stub GitHub preloaded, the hermetic Git config and `env` (or `env(scratch)`) added to the common settings. Returns the scratch paths,
+// the gateway process, its base URL, its signing key and `log()`, the gateway's stderr so far.
+async function launch({ entry = MAIN, env: extra = {} } = {}) {
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "desk-hosted-e2e-")));
+  const origin = join(scratch, "origin.git");
+  const cloneDir = join(scratch, "clone");
+  const home = join(scratch, "home");
+  const bin = join(scratch, "bin");
+  mkdirSync(home);
+  mkdirSync(bin);
+
+  // Desk's in-process task_create below writes its state under this
+  // process's HOME and XDG folders and runs Git with this process's
+  // environment; point all of it into the scratch folder while it runs.
+  const seedEnv = join(scratch, "seed-env");
+  const testEnv = {
+    HOME: join(seedEnv, "home"),
+    XDG_STATE_HOME: join(seedEnv, "state"),
+    XDG_CONFIG_HOME: join(seedEnv, "config"),
+    XDG_CACHE_HOME: join(seedEnv, "cache"),
+    XDG_DATA_HOME: join(seedEnv, "data"),
+    ...HERMETIC_GIT,
+  };
+  mkdirSync(testEnv.HOME, { recursive: true });
+  const savedEnv = {};
+  for (const [name, value] of Object.entries(testEnv)) {
+    savedEnv[name] = process.env[name];
+    process.env[name] = value;
+  }
+  try {
+    await seedDesk({ scratch, origin });
+  } finally {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+
+  // The gateway clones https://github.com/<repo>.git; Git, reading only
+  // this config, fetches and pushes the bare origin instead.
+  const gitConfig = join(home, ".gitconfig");
+  writeFileSync(
+    gitConfig,
+    `[url "${pathToFileURL(origin).href}"]\n\tinsteadOf = https://github.com/${REPO}.git\n[init]\n\tdefaultBranch = main\n`,
+  );
+  // The gh the shim runs: refuses, so nothing reaches GitHub.
+  writeFileSync(join(bin, "gh"), "#!/bin/sh\necho 'gh is not available in the end-to-end test' >&2\nexit 1\n");
+  chmodSync(join(bin, "gh"), 0o755);
+  const keyFile = join(scratch, "app-key.pem");
+  writeFileSync(keyFile, generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }));
+
+  const signingKey = randomBytes(32).toString("base64url");
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const gateway = spawn(process.execPath, ["--import", pathToFileURL(STUB_GITHUB).href, entry], {
+    stdio: ["ignore", "inherit", "pipe"],
+    env: {
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+      GIT_CONFIG_GLOBAL: gitConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+      TMPDIR: process.env.TMPDIR ?? tmpdir(),
+      PORT: String(port),
+      DESK_PUBLIC_URL: baseUrl,
+      DESK_SIGNING_KEY: signingKey,
+      DESK_APP_ID: "1",
+      DESK_APP_KEY_FILE: keyFile,
+      DESK_APP_CLIENT_ID: "Iv1.e2e",
+      DESK_APP_CLIENT_SECRET: "e2e-client-secret",
+      DESK_REPO: REPO,
+      DESK_CLONE_DIR: cloneDir,
+      DESK_PLUGIN_DIR: PLUGIN_DIR,
+      ...(typeof extra === "function" ? extra(scratch) : extra),
+    },
+  });
+  let gatewayLog = "";
+  gateway.stderr.setEncoding("utf8");
+  gateway.stderr.on("data", (chunk) => (gatewayLog += chunk));
+  const exited = new Promise((resolve) => gateway.once("exit", (code) => resolve(code)));
+  await Promise.race([
+    until("the gateway's /healthz", async () => (await fetch(new URL("/healthz", baseUrl)).catch(() => null))?.ok),
+    exited.then((code) => {
+      throw new Error(`the gateway exited (${code}) before it was ready:\n${gatewayLog}`);
+    }),
+  ]);
+  return { scratch, origin, cloneDir, gateway, baseUrl, signingKey, log: () => gatewayLog };
+}
+
+// Stops the gateway (its shutdown pushes the desk; one that hangs is killed so the suite still ends) and removes the
+// scratch folder, unless DESK_E2E_KEEP=1 keeps it, with the gateway's log, for a look afterwards.
+async function stop({ gateway, scratch, log }) {
+  if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
+    const exited = new Promise((resolve) => gateway.once("exit", resolve));
+    gateway.kill("SIGTERM");
+    const kill = setTimeout(() => gateway.kill("SIGKILL"), 15_000);
+    await exited;
+    clearTimeout(kill);
+  }
+  if (!scratch) return;
+  if (process.env.DESK_E2E_KEEP === "1") writeFileSync(join(scratch, "gateway.log"), log());
+  else rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}
+
 describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (needs npm ci in plugins/desk/mcp)" }, () => {
   let scratch;
   let origin;
   let cloneDir;
   let gateway;
-  let gatewayLog = "";
+  let logOf = () => "";
   let baseUrl;
+  let signingKey;
   let token;
   let client;
   const openClients = new Set();
-  const savedEnv = {};
 
   async function connect() {
     const transport = new StreamableHTTPClientTransport(new URL("/mcp", baseUrl), {
@@ -135,80 +243,7 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
   }
 
   before(async () => {
-    scratch = realpathSync(mkdtempSync(join(tmpdir(), "desk-hosted-e2e-")));
-    origin = join(scratch, "origin.git");
-    cloneDir = join(scratch, "clone");
-    const home = join(scratch, "home");
-    const bin = join(scratch, "bin");
-    mkdirSync(home);
-    mkdirSync(bin);
-
-    // Desk's in-process task_create below writes its state under this
-    // process's HOME and XDG folders and runs Git with this process's
-    // environment; point all of it into the scratch folder first.
-    const seedEnv = join(scratch, "seed-env");
-    const testEnv = {
-      HOME: join(seedEnv, "home"),
-      XDG_STATE_HOME: join(seedEnv, "state"),
-      XDG_CONFIG_HOME: join(seedEnv, "config"),
-      XDG_CACHE_HOME: join(seedEnv, "cache"),
-      XDG_DATA_HOME: join(seedEnv, "data"),
-      ...HERMETIC_GIT,
-    };
-    mkdirSync(testEnv.HOME, { recursive: true });
-    for (const [name, value] of Object.entries(testEnv)) {
-      savedEnv[name] = process.env[name];
-      process.env[name] = value;
-    }
-    await seedDesk({ scratch, origin });
-
-    // The gateway clones https://github.com/<repo>.git; Git, reading only
-    // this config, fetches and pushes the bare origin instead.
-    const gitConfig = join(home, ".gitconfig");
-    writeFileSync(
-      gitConfig,
-      `[url "${pathToFileURL(origin).href}"]\n\tinsteadOf = https://github.com/${REPO}.git\n[init]\n\tdefaultBranch = main\n`,
-    );
-    // The gh the shim runs: refuses, so nothing reaches GitHub.
-    writeFileSync(join(bin, "gh"), "#!/bin/sh\necho 'gh is not available in the end-to-end test' >&2\nexit 1\n");
-    chmodSync(join(bin, "gh"), 0o755);
-    const keyFile = join(scratch, "app-key.pem");
-    writeFileSync(keyFile, generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }));
-
-    const signingKey = randomBytes(32).toString("base64url");
-    const port = await freePort();
-    baseUrl = `http://127.0.0.1:${port}`;
-    gateway = spawn(process.execPath, ["--import", pathToFileURL(STUB_GITHUB).href, MAIN], {
-      stdio: ["ignore", "inherit", "pipe"],
-      env: {
-        PATH: `${bin}:${process.env.PATH}`,
-        HOME: home,
-        GIT_CONFIG_GLOBAL: gitConfig,
-        GIT_CONFIG_NOSYSTEM: "1",
-        TMPDIR: process.env.TMPDIR ?? tmpdir(),
-        PORT: String(port),
-        DESK_PUBLIC_URL: baseUrl,
-        DESK_SIGNING_KEY: signingKey,
-        DESK_APP_ID: "1",
-        DESK_APP_KEY_FILE: keyFile,
-        DESK_APP_CLIENT_ID: "Iv1.e2e",
-        DESK_APP_CLIENT_SECRET: "e2e-client-secret",
-        DESK_REPO: REPO,
-        DESK_ALLOWED_LOGINS: LOGIN,
-        DESK_CLONE_DIR: cloneDir,
-        DESK_PLUGIN_DIR: PLUGIN_DIR,
-      },
-    });
-    gateway.stderr.setEncoding("utf8");
-    gateway.stderr.on("data", (chunk) => (gatewayLog += chunk));
-    const exited = new Promise((resolve) => gateway.once("exit", (code) => resolve(code)));
-    await Promise.race([
-      until("the gateway's /healthz", async () => (await fetch(new URL("/healthz", baseUrl)).catch(() => null))?.ok),
-      exited.then((code) => {
-        throw new Error(`the gateway exited (${code}) before it was ready:\n${gatewayLog}`);
-      }),
-    ]);
-
+    ({ scratch, origin, cloneDir, gateway, baseUrl, signingKey, log: logOf } = await launch({ env: { DESK_ALLOWED_LOGINS: LOGIN } }));
     token = seal(
       "access",
       { clientId: "e2e-client", scopes: ["desk"], login: LOGIN, userId: 4242, name: "E2E User", jti: randomUUID() },
@@ -219,22 +254,7 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
 
   after(async () => {
     await Promise.all([...openClients].map((open) => open.close().catch(() => {})));
-    if (gateway && gateway.exitCode === null && gateway.signalCode === null) {
-      const exited = new Promise((resolve) => gateway.once("exit", resolve));
-      gateway.kill("SIGTERM");
-      // The gateway's shutdown pushes the desk; one that hangs is killed so the suite still ends.
-      const kill = setTimeout(() => gateway.kill("SIGKILL"), 15_000);
-      await exited;
-      clearTimeout(kill);
-    }
-    for (const [name, value] of Object.entries(savedEnv)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-    if (!scratch) return;
-    // DESK_E2E_KEEP=1 keeps the scratch folder, with the gateway's log, for a look afterwards.
-    if (process.env.DESK_E2E_KEEP === "1") writeFileSync(join(scratch, "gateway.log"), gatewayLog);
-    else rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await stop({ gateway, scratch, log: logOf });
   });
 
   it("refuses /mcp without a bearer token", async () => {
@@ -244,7 +264,7 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
 
   it("answers initialize with Desk's hosted instructions", () => {
     const instructions = client.getInstructions();
-    assert.equal(typeof instructions, "string", gatewayLog);
+    assert.equal(typeof instructions, "string", logOf());
     assert.match(instructions, /# Hosted Desk/);
     assert.match(instructions, /call desk_status first/);
   });
@@ -342,5 +362,120 @@ describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (n
     assert.equal(body.status, "committed");
     await until("the desk_save commit on origin", () => gitSucceeds(["--git-dir", origin, "cat-file", "-e", `main:${rel}`]));
     assert.equal(git(["--git-dir", origin, "show", `main:${rel}`]) + "\n", content);
+  });
+});
+
+// The same gateway with Ouro sign-in configured (spec items 9 to 13): the stub tenant and the in-memory accounts store
+// stand in for ciamlogin.com and Azure Table Storage (fixtures/ouro-gateway.mjs). A person opens their invite link,
+// a client registers and signs in through the tenant in that browser, and the tokens it gets reach Desk as the
+// invited account, whose binding sets the Git author.
+describe("hosted Desk end to end with Ouro sign-in", { skip: !ENABLED && "set DESK_E2E=1 to run (needs npm ci in plugins/desk/mcp)" }, () => {
+  const ACCOUNT = randomUUID();
+  const AUTHOR = { name: "Ouro E2E Author", email: "ouro-e2e@users.noreply.github.com" };
+  const CALLBACK = "https://claude.ai/api/mcp/auth_callback";
+  let launched;
+  let client;
+
+  before(async () => {
+    let inviteFile;
+    launched = await launch({
+      entry: OURO_GATEWAY,
+      env: (scratch) => ({
+        DESK_ENTRA_TENANT_ID: TENANT_ID,
+        DESK_ENTRA_SUBDOMAIN: SUBDOMAIN,
+        DESK_ENTRA_CLIENT_ID: TENANT_CLIENT_ID,
+        DESK_ENTRA_CLIENT_SECRET: TENANT_CLIENT_SECRET,
+        DESK_ACCOUNTS_ENDPOINT: "https://accounts.invalid.example",
+        DESK_E2E_ACCOUNT_ID: ACCOUNT,
+        DESK_E2E_AUTHOR_NAME: AUTHOR.name,
+        DESK_E2E_AUTHOR_EMAIL: AUTHOR.email,
+        DESK_E2E_INVITE_FILE: (inviteFile = join(scratch, "invite-token")),
+      }),
+    });
+    launched.invite = readFileSync(inviteFile, "utf8");
+  });
+
+  after(async () => {
+    await client?.close().catch(() => {});
+    if (launched) await stop(launched);
+  });
+
+  it("signs in through the stub tenant, redeems an invite, and commits a task_update that reaches origin", async () => {
+    const { baseUrl, origin, cloneDir } = launched;
+    const cookies = new Map();
+    const keep = (response) => {
+      for (const header of response.headers.getSetCookie()) {
+        const [pair] = header.split(";");
+        const name = pair.slice(0, pair.indexOf("="));
+        if (/Max-Age=0(;|$)/.test(header)) cookies.delete(name);
+        else cookies.set(name, pair.slice(name.length + 1));
+      }
+    };
+    const cookieHeader = () => [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+
+    // The invite link sets its cookie and sends the browser to the token-free page.
+    const invite = await fetch(new URL(`/invite/${launched.invite}`, baseUrl), { redirect: "manual" });
+    assert.equal(invite.status, 303, launched.log());
+    keep(invite);
+
+    const registration = await (await fetch(new URL("/register", baseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "Claude", redirect_uris: [CALLBACK], token_endpoint_auth_method: "client_secret_post" }),
+    })).json();
+    const verifier = randomBytes(32).toString("base64url");
+    const authorize = new URL("/authorize", baseUrl);
+    authorize.search = new URLSearchParams({
+      response_type: "code",
+      client_id: registration.client_id,
+      redirect_uri: CALLBACK,
+      code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+      code_challenge_method: "S256",
+      state: "claude-state",
+      resource: new URL("/mcp", baseUrl).href,
+    });
+    const consentPage = await (await fetch(authorize)).text();
+    assert.match(consentPage, /Continue with Apple or email/);
+    const consent = consentPage.match(/name="consent" value="([^"]+)"/)[1];
+    const approved = await fetch(new URL("/oauth/consent", baseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": "same-origin", cookie: cookieHeader() },
+      body: new URLSearchParams({ consent, method: "entra" }),
+      redirect: "manual",
+    });
+    assert.equal(approved.status, 303, launched.log());
+    keep(approved);
+    const toTenant = new URL(approved.headers.get("location"));
+    assert.equal(toTenant.host, `${SUBDOMAIN}.ciamlogin.com`);
+
+    // The tenant signs a new identity in and sends the browser back with a code.
+    const callback = await fetch(
+      new URL(`/oauth/entra/callback?${new URLSearchParams({ code: codeFor(toTenant, { oid: randomUUID() }), state: toTenant.searchParams.get("state") })}`, baseUrl),
+      { redirect: "manual", headers: { cookie: cookieHeader() } },
+    );
+    assert.equal(callback.status, 302, `${await callback.text()}\n${launched.log()}`);
+    const code = new URL(callback.headers.get("location")).searchParams.get("code");
+    assert.ok(launched.log().includes(`invite redeemed: account ${ACCOUNT}`), launched.log());
+
+    const tokens = await (await fetch(new URL("/token", baseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", client_id: registration.client_id, client_secret: registration.client_secret, code, code_verifier: verifier, redirect_uri: CALLBACK }),
+    })).json();
+    assert.ok(tokens.access_token, JSON.stringify(Object.keys(tokens)));
+
+    const transport = new StreamableHTTPClientTransport(new URL("/mcp", baseUrl), { requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } } });
+    client = new Client({ name: "desk-e2e-ouro", version: "0.0.0" });
+    await client.connect(transport);
+    assert.ok(launched.log().includes(`started for account ${ACCOUNT}`), launched.log());
+    await until("desk_status to report ready", async () => parse(await client.callTool({ name: "desk_status", arguments: {} })).state === "ready");
+    const result = await client.callTool({ name: "task_update", arguments: { track: TRACK, slug: SLUG, note: "Written after an Ouro sign-in." } });
+    assert.notEqual(result.isError, true, JSON.stringify(parse(result)));
+    const head = git(["-C", cloneDir, "rev-parse", "HEAD"]);
+    await until("the task_update commit on origin", () => git(["--git-dir", origin, "rev-parse", "main"]) === head);
+    assert.equal(git(["--git-dir", origin, "log", "-1", "--format=%an <%ae>", "main"]), `${AUTHOR.name} <${AUTHOR.email}>`, "the author comes from the binding");
+    for (const secret of [TENANT_CLIENT_SECRET, launched.invite, tokens.access_token, tokens.refresh_token]) {
+      assert.ok(!launched.log().includes(secret), "the gateway's log carries no secret, invite or token");
+    }
   });
 });

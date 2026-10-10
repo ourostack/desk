@@ -14,6 +14,29 @@ export const DISCOVERY_URL = `https://${SUBDOMAIN}.ciamlogin.com/${TENANT_ID}/v2
 export const CLIENT_ID = "7d0f5b52-1c4e-4c7e-9a43-2f6f3d1e8a10";
 export const CLIENT_SECRET = "entra-client-secret-for-tests";
 
+// A code that carries its own grant, for a tenant running in another process (the end-to-end test's gateway): the test
+// makes it from the authorize URL the gateway built, and that process's stub tenant redeems it without shared state.
+export function codeFor(authorizeUrl, { oid, claims = {} }) {
+  const url = new URL(authorizeUrl);
+  const grant = {
+    clientId: url.searchParams.get("client_id"),
+    redirectUri: url.searchParams.get("redirect_uri"),
+    challenge: url.searchParams.get("code_challenge"),
+    nonce: url.searchParams.get("nonce"),
+    oid,
+    claims,
+  };
+  return `stub.${Buffer.from(JSON.stringify(grant)).toString("base64url")}`;
+}
+
+const grantOf = (code) => {
+  try {
+    return JSON.parse(Buffer.from(code.slice("stub.".length), "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+};
+
 export async function newSigningKey(kid) {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   const jwk = { ...(await exportJWK(publicKey)), kid, use: "sig", alg: "RS256" };
@@ -80,8 +103,9 @@ export async function stubTenant({ now = Date.now, clientId = CLIENT_ID, clientS
     if (url === DISCOVERY.token_endpoint) {
       const body = new URLSearchParams(String(init.body));
       calls.token.push({ method: init.method, headers: { ...(init.headers ?? {}) }, body });
-      const grant = codes.get(body.get("code"));
-      codes.delete(body.get("code"));
+      const code = body.get("code") ?? "";
+      const grant = code.startsWith("stub.") ? grantOf(code) : codes.get(code);
+      codes.delete(code);
       const verifier = body.get("code_verifier") ?? "";
       const challenge = createHash("sha256").update(verifier).digest("base64url");
       if (
