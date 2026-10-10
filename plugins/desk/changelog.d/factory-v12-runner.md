@@ -14,3 +14,5 @@ Audit native Glob pattern-derived scope and all returned search paths globally, 
 Match pinned native tool-input whitespace, HOME, relative-path and NFC interpretation before scope checks and probe correlation, while preserving literal returned filenames and Glob filter tails. Reject unstable Read/Edit inputs rather than relying on stream backfill.
 
 Supply the fixed trusted positional request required by native print mode; keep untrusted candidate prose out of argv and include the request in the existing admission fingerprint.
+
+Separate two finite parent-selected production/qualification message pairs while retaining exact full identities and versioned two-value-slot enforcement equality. Bind a complete ordered synthetic catalog and single trigger Edit, require two matching actual receipts, and restore only authenticated protected records with raw-stream replay/current source checks. Unknown missions, probe-shaped records, sanitized non-attempts and mismatch “denials” stay blocked.
