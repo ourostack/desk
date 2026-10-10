@@ -22,6 +22,17 @@ function refuse(res, status, code, message) {
   res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
+// Whose a session is: the Ouro account of the token that opened it
+// (`auth.extra.accountId`), or, on a gateway without accounts, its GitHub
+// login. The two never mix in one gateway; the prefix keeps them apart anyway.
+// Returns `{ key, accountId, label }`, or null when the token names neither.
+function ownerOf(auth) {
+  const { accountId, login } = auth?.extra ?? {};
+  if (typeof accountId === "string" && accountId !== "") return { key: `account:${accountId}`, accountId, label: `account ${accountId}` };
+  if (typeof login === "string" && login !== "") return { key: `github:${login}`, label: login };
+  return null;
+}
+
 // `spawnDesk({ auth, sessionId })` returns the Desk child for a new session,
 // or a promise of it; `auth` is the SDK AuthInfo of the initializing request.
 // `close()` stops every child: SIGTERM first, then SIGKILL for any child still
@@ -108,14 +119,14 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     return timer;
   }
 
-  function openSession(id, login, child) {
-    const session = { id, login, pending: new Map(), closed: false, initialized: false, child: null, exited: Promise.resolve() };
+  function openSession(id, owner, child) {
+    const session = { id, owner: owner.key, accountId: owner.accountId, label: owner.label, pending: new Map(), closed: false, initialized: false, child: null, exited: Promise.resolve() };
     session.transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => session.id,
       onsessioninitialized: () => {
         session.initialized = true;
         session.startedAt = Date.now();
-        log(`session ${session.id} started for ${session.login}`);
+        log(`session ${session.id} started for ${session.label}`);
       },
     });
     attachDesk(session, child);
@@ -153,19 +164,19 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
 
   async function handle(req, res, auth) {
     req.auth = auth;
-    const login = auth?.extra?.login;
+    const owner = ownerOf(auth);
     const sessionId = req.headers["mcp-session-id"];
     if (sessionId !== undefined) {
       const session = sessions.get(sessionId);
       if (!session) return refuse(res, 404, -32001, "Session not found");
-      if (session.login !== login) return refuse(res, 403, -32000, "Forbidden: session belongs to another user");
+      if (session.owner !== owner?.key) return refuse(res, 403, -32000, "Forbidden: session belongs to another user");
       touch(session);
       return session.transport.handleRequest(req, res, req.body);
     }
     if (req.method !== "POST" || !isInitializeRequest(req.body)) {
       return refuse(res, 400, -32000, "Bad Request: No valid session ID provided");
     }
-    if (typeof login !== "string" || login === "") return refuse(res, 403, -32000, "Forbidden: token has no login");
+    if (!owner) return refuse(res, 403, -32000, "Forbidden: token names no account");
     if (closing) return refuse(res, 503, -32000, "Service Unavailable: the gateway is shutting down; reconnect shortly.");
     if (sessions.size + starting >= maxSessions && !reapIdle()) {
       return refuse(res, 503, -32000, "Service Unavailable: every session is busy");
@@ -190,7 +201,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
       child.kill("SIGKILL");
       return refuse(res, 503, -32000, "Service Unavailable: the gateway is shutting down; reconnect shortly.");
     }
-    const session = openSession(id, login, child);
+    const session = openSession(id, owner, child);
     await session.transport.handleRequest(req, res, req.body);
     // The transport refused the initialize (a bad header, say) without starting a session.
     if (!session.initialized) closeSession(session, "initialize refused");
@@ -214,5 +225,16 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     );
   }
 
-  return { handle, close, size: () => sessions.size };
+  // Ends every session of one account at once (its Desk access was turned
+  // off), idle or busy. Returns how many it ended.
+  function closeAccount(accountId) {
+    const owned = [...sessions.values()].filter((session) => session.accountId === accountId);
+    for (const session of owned) closeSession(session, "account access off");
+    return owned.length;
+  }
+
+  // The accounts with at least one open session.
+  const openAccounts = () => new Set([...sessions.values()].map((session) => session.accountId).filter(Boolean));
+
+  return { handle, close, closeAccount, openAccounts, size: () => sessions.size };
 }
