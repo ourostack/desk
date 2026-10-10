@@ -8,10 +8,16 @@
     "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\""
   },
   "dependencies": {
+    "@azure/data-tables": "13.3.2",
+    "@azure/identity": "4.13.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "jose": "6.2.12"
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "azurite": "3.37.0"
   }
 }
