@@ -101,7 +101,7 @@ export function billingVariableBlocks(env) {
 
 const isHeadlessSession = isHeadlessFactorySession
 
-function childEnvironment(env) {
+export function childEnvironment(env) {
   const out = {}
   for (const [name, value] of Object.entries(env)) {
     if (typeof value !== "string") {
@@ -255,7 +255,7 @@ const noop = () => {}
 // decided when the child exits, after a short bounded wait for the rest of its
 // output; the pipes are released on every path. Output beyond `maxBytes` is
 // discarded, never buffered, and reported as `truncated`.
-function runChild({ spawn, cmd, args, opts, timeoutMs, maxBytes, graceMs = EXIT_GRACE_MS, onChild, onChildExit }) {
+export function runChild({ spawn, cmd, args, opts, timeoutMs, maxBytes, graceMs = EXIT_GRACE_MS, onChild, onChildExit }) {
   return new Promise((resolve) => {
     let child
     try {
