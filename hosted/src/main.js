@@ -59,6 +59,19 @@ export function readConfig(env) {
   return config;
 }
 
+const CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback";
+
+// What the gateway logs about its redirect allowlist at start. A
+// DESK_REDIRECTS without claude.ai's callback starts cleanly but shuts out
+// every claude.ai connector, so it gets a warning of its own.
+export function redirectStartupLines(redirects) {
+  const lines = [`redirect allowlist: ${redirects.listed.join(", ")} (plus loopback and ChatGPT connector callbacks)`];
+  if (!redirects.listed.includes(CLAUDE_CALLBACK)) {
+    lines.push(`WARNING: DESK_REDIRECTS leaves out ${CLAUDE_CALLBACK}, so claude.ai connectors cannot sign in or refresh`);
+  }
+  return lines;
+}
+
 export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.js"), "--root", config.cloneDir];
 
 const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((name) => baseEnv[name] !== undefined).map((name) => [name, baseEnv[name]]));
@@ -202,6 +215,7 @@ export async function main(env = process.env) {
   const server = app.listen(config.port);
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);
+  for (const line of redirectStartupLines(config.redirects)) log(line);
 
   let stopping = null;
   const shutdown = () => {

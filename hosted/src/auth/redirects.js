@@ -2,13 +2,20 @@
 // redirect, so this list decides where a code can ever be sent.
 //
 // `configured` is DESK_REDIRECTS: comma-separated exact URLs. Unset or blank,
-// it is Claude's two callbacks. Two kinds of redirect are allowed whatever it
+// it is DEFAULT_REDIRECTS; set, it replaces all of them. Two kinds of redirect are allowed whatever it
 // says: loopback over http on any port (native and command-line clients pick
 // a free port each time), and ChatGPT's per-connector callback, whose last
 // segment differs for every ChatGPT connector, so listing them would need a
 // redeploy for each one.
 
-const DEFAULT_REDIRECTS = ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback"];
+// Claude's callbacks, and VS Code's web relays, which VS Code registers
+// alongside its loopback redirects; it is refused unless every one is allowed.
+export const DEFAULT_REDIRECTS = Object.freeze([
+  "https://claude.ai/api/mcp/auth_callback",
+  "https://claude.com/api/mcp/auth_callback",
+  "https://vscode.dev/redirect",
+  "https://insiders.vscode.dev/redirect",
+]);
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1"]);
 // Matched on the raw string, so nothing a URL parser would normalize (a dot
 // segment, an encoded character, a default port) can slip through.
@@ -40,9 +47,12 @@ export function createRedirectPolicy(configured) {
       throw new Error(`DESK_REDIRECTS holds an entry that is not a canonical https or loopback URL without a fragment or user info: ${entry}`);
     }
   }
-  const exact = new Set(listed.length ? listed : DEFAULT_REDIRECTS);
+  const effective = listed.length ? listed : [...DEFAULT_REDIRECTS];
+  const exact = new Set(effective);
 
   return {
+    // The exact URLs in force, for the start-up log.
+    listed: effective,
     allows(uri) {
       if (typeof uri !== "string") return false;
       return exact.has(uri) || CHATGPT_CALLBACK.test(uri) || isLoopback(uri);

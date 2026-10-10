@@ -830,3 +830,24 @@ test("the provider's document fetcher refuses a client id on the gateway's own h
   assert.equal(await provider.clientsStore.getClient(`${ISSUER}/authorize?client_id=x`), undefined);
   assert.deepEqual(logs, [`client refused: own_host client ${ISSUER}/authorize?client_id=x`]);
 });
+
+test("VS Code's own registration succeeds with the default redirects", async (t) => {
+  const { base } = await start(t);
+  // VS Code's fetchDynamicRegistration body (microsoft/vscode
+  // src/vs/base/common/oauth.ts, main, read 2026-10-10).
+  const body = {
+    client_name: "Visual Studio Code",
+    client_uri: "https://code.visualstudio.com",
+    grant_types: ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
+    response_types: ["code"],
+    redirect_uris: ["https://insiders.vscode.dev/redirect", "https://vscode.dev/redirect", "http://127.0.0.1/", "http://127.0.0.1:33418/"],
+    token_endpoint_auth_method: "none",
+  };
+  const response = await fetch(`${base}/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal(response.status, 201);
+  const client = await response.json();
+  assert.deepEqual(client.redirect_uris, body.redirect_uris);
+  assert.equal(client.client_secret, undefined);
+  const { response: consent } = await consentPage(base, client, { redirectUri: "https://vscode.dev/redirect" });
+  assert.equal(consent.status, 200);
+});

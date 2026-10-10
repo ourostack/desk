@@ -1,9 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRedirectPolicy } from "../src/auth/redirects.js";
+import { createRedirectPolicy, DEFAULT_REDIRECTS } from "../src/auth/redirects.js";
 
 const CLAUDE_AI = "https://claude.ai/api/mcp/auth_callback";
 const CLAUDE_COM = "https://claude.com/api/mcp/auth_callback";
+
+test("the defaults are exactly Claude's two callbacks and VS Code's two", () => {
+  assert.deepEqual(DEFAULT_REDIRECTS, [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+    "https://vscode.dev/redirect",
+    "https://insiders.vscode.dev/redirect",
+  ]);
+  const policy = createRedirectPolicy(undefined);
+  for (const uri of DEFAULT_REDIRECTS) assert.equal(policy.allows(uri), true, uri);
+  assert.deepEqual(policy.listed, DEFAULT_REDIRECTS);
+  for (const near of ["https://vscode.dev/redirect/", "https://vscode.dev/other", "https://insiders.vscode.dev/redirect?x=1", "http://vscode.dev/redirect"]) {
+    assert.equal(policy.allows(near), false, near);
+  }
+});
 
 test("unset, the policy allows Claude's two callbacks and nothing else of theirs", () => {
   const policy = createRedirectPolicy(undefined);
@@ -23,6 +38,8 @@ test("configured URLs are allowed exactly, and replace the defaults", () => {
   assert.equal(policy.allows("https://vscode.dev/redirect"), true);
   assert.equal(policy.allows(CLAUDE_AI), true);
   assert.equal(policy.allows(CLAUDE_COM), false, "a default left out of the list is no longer allowed");
+  assert.equal(policy.allows("https://insiders.vscode.dev/redirect"), false, "VS Code Insiders' default too");
+  assert.deepEqual(policy.listed, ["https://vscode.dev/redirect", CLAUDE_AI]);
   for (const near of [
     "https://vscode.dev/redirect/",
     `${CLAUDE_AI}/`,
