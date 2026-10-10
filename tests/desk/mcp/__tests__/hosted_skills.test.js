@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs"
 import { deskSkill, SKILLS_ROOT } from "../../../../plugins/desk/mcp/src/runtime/skills.js"
 import { HAS_INSTRUCTIONS, HOSTED_SHELL_SKILLS, withHostedStartup } from "../../../../plugins/desk/mcp/src/runtime/hosted.js"
 import { mkTempDeskRoot } from "./tools/_helpers.js"
+import { DESK_STATUS_FIELDS } from "../../../../plugins/desk/mcp/src/tools/status.js"
 
 const HOSTED = { DESK_HOSTED: "1" }
 const parse = (result) => JSON.parse(result.content[0].text)
@@ -76,6 +77,7 @@ test("every hosted desk_status answer carries the instructions, so a new chat on
 
 test("has_instructions: true leaves the instructions out; any other value keeps them", async () => {
   assert.equal(HAS_INSTRUCTIONS, "has_instructions")
+  assert.ok(DESK_STATUS_FIELDS.includes(HAS_INSTRUCTIONS), "the schema parity test covers the input the wrapper reads")
   const callTool = withHostedStartup({ callTool: async () => answer({ state: "ready" }), instructions: "RULES", sleep: async () => {} })
   assert.equal((await callTool({ name: "desk_status", input: { has_instructions: true } })).content.length, 1)
   assert.equal((await callTool({ name: "desk_status", input: { has_instructions: "true" } })).content.length, 2)
@@ -118,6 +120,12 @@ test("a cancelled desk_status stops waiting and carries no instructions", async 
   const cancelled = await callTool({ name: "desk_status", signal: controller.signal })
   assert.equal(cancelled.content.length, 1)
   assert.equal(asked, 2)
+
+  const settled = new AbortController()
+  settled.abort()
+  const ready = withHostedStartup({ callTool: async () => answer({ state: "ready" }), instructions: "RULES", sleep: async () => {} })
+  assert.equal((await ready({ name: "desk_status", signal: settled.signal })).content.length, 1, "an aborted call that already has a ready answer still carries none")
+  assert.equal((await ready({ name: "desk_status", signal: settled.signal, input: { has_instructions: true } })).content.length, 1)
 })
 
 test("a desk_status that throws while waiting passes the error on", async () => {

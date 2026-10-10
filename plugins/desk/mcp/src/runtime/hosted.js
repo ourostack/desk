@@ -145,7 +145,7 @@ export function withHostedStartup({ callTool, instructions, waitMs = STARTUP_DET
       result = await callTool(call)
     }
     if (result?.isError || call?.signal?.aborted || call?.input?.[HAS_INSTRUCTIONS] === true) return result
-    const text = `# Desk instructions for this conversation\n\nThis client does not show Desk's server instructions, so they come with desk_status. Follow them for the rest of this conversation, and pass ${HAS_INSTRUCTIONS}: true on later desk_status calls in it so they are not repeated.\n\n${instructions}`
+    const text = `# Desk instructions for this conversation\n\nThis client does not show Desk's server instructions, so they come with desk_status. Follow them for the rest of this conversation, and on later desk_status calls in it pass ${HAS_INSTRUCTIONS}: true, but only while these instructions are still in your context.\n\n${instructions}`
     return { ...result, content: [...(result?.content ?? []), { type: "text", text }] }
   }
 }
