@@ -61,6 +61,7 @@ and precreated `.triage-result.json`:
 --no-session-persistence --strict-mcp-config --mcp-config '{"mcpServers":{}}'
 --settings <inline-policy-json> --max-budget-usd 1
 --output-format stream-json --verbose --system-prompt <fixed-inline-brief>
+"Read input.json and perform the bounded triage task described by the system prompt."
 ```
 
 The fixed policy is:
@@ -80,6 +81,8 @@ deny:** documented Read denies also defeat Edit/Write. DontAsk does not erase
 inherited grants; inspect the actual effective policy. Restricted/safe modes
 retain managed settings and managed hooks. Local hook disabling is not proof
 that managed command-bearing controls are absent.
+
+Print mode requires the final fixed trusted positional user request as well as the system prompt. The runner does not place candidate/input prose in argv or pipe untrusted input through stdin. This request is included in the policy/admission fingerprint; older qualification fingerprints must not be reused.
 
 No bare mode, bypass, agent/session inheritance, mutable settings file,
 permission-host callback, added tool, plugin or MCP gate is authorized.
