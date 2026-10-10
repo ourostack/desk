@@ -43,7 +43,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { fingerprint } from "../src/auth/seal.js";
 import { issueInvite, seed } from "../src/accounts/invites.js";
-import { buildAppYaml, writeAppYaml } from "./app-yaml.mjs";
+import { buildAppYaml, checkWritten, writeAppYaml } from "./app-yaml.mjs";
 import {
   APPS_RESOURCE_GROUP,
   ARI,
@@ -53,7 +53,6 @@ import {
   ENVIRONMENTS,
   FEDERATED_AUDIENCE,
   GATEWAY_APP_NAME,
-  GATEWAY_IDENTITY,
   GITHUB_ISSUER,
   GITHUB_REPO,
   IDENTITY_ENVIRONMENT,
@@ -97,6 +96,12 @@ const PROD_APP = ENVIRONMENTS.prod.app;
 const STAGING_APP = ENVIRONMENTS.test.app;
 const CHECKS_FEDERATED_NAME = "github-identity-environment";
 const POLL_MS = 15_000;
+// Graph's directory reads lag its writes by seconds.
+const GRAPH_LAG_TRIES = 12;
+const GRAPH_LAG_MS = 5_000;
+// A role assignment takes minutes to reach a data plane (Key Vault, Table Storage).
+const PROPAGATION_TRIES = 20;
+const FORBIDDEN = /Forbidden|AuthorizationFailed|AuthorizationPermissionMismatch|HTTP 403|\(403\)/i;
 
 // Ends a run on purpose, with what the operator does next.
 export class Stop extends Error {}
@@ -156,12 +161,76 @@ async function findTenant(ctx) {
   return { missing: true, candidates };
 }
 
+// A read that misses something this run created waits for Graph to show it, and never lets the plan create it
+// again (review I5). `expected` is true when this run created it.
+async function untilVisible(ctx, read, expected, what) {
+  let found = await read();
+  for (let attempt = 0; !found && expected && attempt < GRAPH_LAG_TRIES; attempt += 1) {
+    await ctx.sleep(GRAPH_LAG_MS);
+    found = await read();
+  }
+  if (!found && expected) throw new Error(`${what} was created by this run, but Graph doesn't show it yet; run this again in a few minutes.`);
+  return found;
+}
+
 async function readApp(ctx, displayName) {
-  const [app] =
-    (await azJson(ctx, ["ad", "app", "list", "--display-name", displayName, "--query", "[].{appId: appId, id: id, redirects: web.redirectUris, tokenVersion: api.requestedAccessTokenVersion, passwords: length(passwordCredentials), access: requiredResourceAccess}", "-o", "json"])) ?? [];
+  const list = async () => {
+    const apps = (await azJson(ctx, ["ad", "app", "list", "--display-name", displayName, "--query", "[].{appId: appId, id: id, redirects: web.redirectUris, tokenVersion: api.requestedAccessTokenVersion, passwords: length(passwordCredentials), access: requiredResourceAccess}", "-o", "json"])) ?? [];
+    if (apps.length > 1) throw new Error(`There are ${apps.length} app registrations named ${displayName}; keep one, delete the others, and run this again.`);
+    return apps[0] ?? null;
+  };
+  const app = await untilVisible(ctx, list, Boolean(ctx.created.apps[displayName]), `App registration ${displayName}`);
   if (!app) return null;
-  const [servicePrincipalId] = lines(await out(ctx, "az", ["ad", "sp", "list", "--filter", `appId eq '${app.appId}'`, "--query", "[].id", "-o", "tsv"]));
-  return { ...app, servicePrincipalId: servicePrincipalId ?? null };
+  const readSp = async () => lines(await out(ctx, "az", ["ad", "sp", "list", "--filter", `appId eq '${app.appId}'`, "--query", "[].id", "-o", "tsv"]))[0] ?? null;
+  const servicePrincipalId = await untilVisible(ctx, readSp, ctx.created.servicePrincipals.has(app.appId), `The service principal of ${displayName}`);
+  return { ...app, servicePrincipalId };
+}
+
+// The signed-in operator's object id in the Azure tenant that holds the subscription, from the oid claim of an
+// ARM token az issues for it. Graph can't be used: az's current account is the Ouro tenant during a run, and the
+// workforce tenant may block Graph. The token stays in memory and is never logged.
+async function operator(ctx) {
+  if (ctx.operator) return ctx.operator;
+  const token = (await out(ctx, "az", ["account", "get-access-token", ...SUB, "--query", "accessToken", "-o", "tsv"])).trim();
+  let claims = null;
+  try {
+    claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"));
+  } catch {
+    claims = null;
+  }
+  if (!claims?.oid) throw new Error("Could not read the signed-in operator's object id from az's token for the subscription; sign az in to it (az login) and run this again.");
+  ctx.operator = { oid: claims.oid };
+  return ctx.operator;
+}
+
+// Gives the signed-in operator a data role the run needs (review I3): Key Vault Secrets Officer on the vault, and
+// Storage Table Data Contributor on this env's accounts storage for seeding. Returns false in a dry run when the
+// role is missing, so the caller knows it can't read that data plane yet.
+async function ensureOperatorRole(ctx, role, scope) {
+  const { oid } = await operator(ctx);
+  if (hasRole(await rolesAt(ctx, scope), oid, role)) return true;
+  const args = ["role", "assignment", "create", "--assignee-object-id", oid, "--assignee-principal-type", "User", "--role", role, "--scope", scope, "--output", "none", ...SUB];
+  if (ctx.dryRun) {
+    ctx.log(`==> operator access: ${role} on ${scope.split("/").at(-1)}`);
+    ctx.log(`    would run: az ${args.join(" ")}`);
+    return false;
+  }
+  ctx.log(`Granting the signed-in operator ${role} on ${scope.split("/").at(-1)}.`);
+  await out(ctx, "az", args);
+  return true;
+}
+
+// Runs `action`, retrying while a new role assignment hasn't reached the data plane yet.
+async function propagated(ctx, action, what) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await action();
+    } catch (error) {
+      if (!FORBIDDEN.test(`${error?.stderr ?? ""} ${error?.message ?? ""}`) || attempt >= PROPAGATION_TRIES) throw error;
+      if (attempt === 0) ctx.log(`${what} is refused while a new role assignment takes effect; retrying for up to ${(PROPAGATION_TRIES * POLL_MS) / 60_000} minutes.`);
+      await ctx.sleep(POLL_MS);
+    }
+  }
 }
 
 async function readIdentity(ctx, name) {
@@ -178,14 +247,20 @@ export async function readState(ctx) {
   const { env, settings } = ctx;
   const state = {};
   state.tenant = await findTenant(ctx);
-  state.vaultId = (await out(ctx, "az", ["keyvault", "show", "-n", VAULT, "--query", "id", "-o", "tsv", ...SUB])).trim();
-  state.vaultSecrets = lines(await out(ctx, "az", ["keyvault", "secret", "list", "--vault-name", VAULT, "--query", "[].name", "-o", "tsv", ...SUB]));
+  state.vaultId = ctx.vaultId ?? (await vaultId(ctx));
+  if (ctx.vaultReadable === false) {
+    // A dry run before the operator holds a Key Vault data role: every vault secret is planned as missing.
+    state.vaultSecrets = [];
+  } else {
+    state.vaultSecrets = lines(await propagated(ctx, () => out(ctx, "az", ["keyvault", "secret", "list", "--vault-name", VAULT, "--query", "[].name", "-o", "tsv", ...SUB]), "Reading Key Vault"));
+  }
   const storage = await maybe(() => azJson(ctx, ["storage", "account", "show", "-n", settings.storage, "-g", IDENTITY_RESOURCE_GROUP, "--query", "{id: id, endpoint: primaryEndpoints.table, sharedKey: allowSharedKeyAccess, tls: minimumTlsVersion}", "-o", "json", ...SUB]));
   state.storage = storage ? { account: settings.storage, id: storage.id, endpoint: storage.endpoint.replace(/\/+$/, ""), sharedKey: storage.sharedKey, tls: storage.tls } : null;
-  state.gatewayIdentity = await readIdentity(ctx, GATEWAY_IDENTITY);
+  state.gatewayIdentity = await readIdentity(ctx, settings.gatewayIdentity);
   state.checksIdentity = await readIdentity(ctx, CHECKS_IDENTITY);
   state.containerApps = {};
-  for (const app of [PROD_APP, STAGING_APP]) {
+  // The checks identity reads this env's app only, so a test run writes nothing on production's app (review m2).
+  for (const app of [settings.app]) {
     state.containerApps[app] = (await maybe(() => out(ctx, "az", ["containerapp", "show", "-n", app, "-g", APPS_RESOURCE_GROUP, "--query", "id", "-o", "tsv", ...SUB])))?.trim() || null;
   }
   state.entraSecretScope = `${state.vaultId}/secrets/${entraSecretName(env)}`;
@@ -202,7 +277,8 @@ export async function readState(ctx) {
   // GitHub's environment, its branch policy and variables.
   state.github = { environment: Boolean(await maybe(() => out(ctx, "gh", ["api", `repos/${GITHUB_REPO}/environments/${IDENTITY_ENVIRONMENT}`]))) };
   state.github.branches = state.github.environment ? JSON.parse((await out(ctx, "gh", ["api", `repos/${GITHUB_REPO}/environments/${IDENTITY_ENVIRONMENT}/deployment-branch-policies`, "--jq", "[.branch_policies[].name]"])) || "[]") : [];
-  state.github.variables = Object.fromEntries(((await azJsonGh(ctx, ["variable", "list", "--env", IDENTITY_ENVIRONMENT, "-R", GITHUB_REPO, "--json", "name,value"])) ?? []).map(({ name, value }) => [name, value]));
+  // Listing variables of an environment that doesn't exist answers 404 (review I4).
+  state.github.variables = !state.github.environment ? {} : Object.fromEntries(((await azJsonGh(ctx, ["variable", "list", "--env", IDENTITY_ENVIRONMENT, "-R", GITHUB_REPO, "--json", "name,value"])) ?? []).map(({ name, value }) => [name, value]));
 
   // Graph, in the env's tenant only.
   if (!state.tenant.id) return state;
@@ -222,8 +298,12 @@ export async function readState(ctx) {
       ? ((await graphGet(ctx, `servicePrincipals/${state.automationApp.servicePrincipalId}/appRoleAssignments`))?.value ?? []).map(({ appRoleId }) => appRoleId)
       : [];
   }
-  const flows = (await graphGet(ctx, "identity/authenticationEventsFlows"))?.value ?? [];
-  const flow = flows.find(({ displayName }) => displayName === USER_FLOW_NAME);
+  const readFlow = async () => {
+    const flows = ((await graphGet(ctx, "identity/authenticationEventsFlows"))?.value ?? []).filter(({ displayName }) => displayName === USER_FLOW_NAME);
+    if (flows.length > 1) throw new Error(`There are ${flows.length} user flows named ${USER_FLOW_NAME}; keep one, delete the others, and run this again.`);
+    return flows[0] ?? null;
+  };
+  const flow = await untilVisible(ctx, readFlow, ctx.created.flow, `User flow ${USER_FLOW_NAME}`);
   state.userFlow = flow
     ? {
         id: flow.id,
@@ -285,7 +365,7 @@ export function plan({ env, state, record = {} }) {
   }
 
   // The two managed identities.
-  for (const [key, name] of [["gatewayIdentity", GATEWAY_IDENTITY], ["checksIdentity", CHECKS_IDENTITY]]) {
+  for (const [key, name] of [["gatewayIdentity", settings.gatewayIdentity], ["checksIdentity", CHECKS_IDENTITY]]) {
     if (!state[key]) steps.push({ name: `identity ${name}`, reread: true, calls: [az("identity", "create", "-n", name, "-g", IDENTITY_RESOURCE_GROUP, "-l", LOCATION, "--output", "none", SUB)] });
   }
 
@@ -294,12 +374,12 @@ export function plan({ env, state, record = {} }) {
     steps.push({ name: "checks identity federated credential", calls: [az("identity", "federated-credential", "create", "--name", CHECKS_FEDERATED_NAME, "--identity-name", CHECKS_IDENTITY, "-g", IDENTITY_RESOURCE_GROUP, "--issuer", GITHUB_ISSUER, "--subject", CHECKS_SUBJECT, "--audiences", FEDERATED_AUDIENCE, "--output", "none", SUB)] });
   }
   steps.push(...roleStep("checks identity: Key Vault Secrets Officer", state.checksIdentity, CHECKS_IDENTITY, "Key Vault Secrets Officer", state.vaultId, state.roles?.vault));
-  for (const app of [PROD_APP, STAGING_APP]) {
+  for (const app of [settings.app]) {
     const id = state.containerApps?.[app];
     if (id) steps.push(...roleStep(`checks identity: Reader on ${app}`, state.checksIdentity, CHECKS_IDENTITY, "Reader", id, state.roles?.apps?.[app]));
   }
   // The gateway identity reads the accounts tables.
-  steps.push(...roleStep("gateway identity: Storage Table Data Contributor", state.gatewayIdentity, GATEWAY_IDENTITY, "Storage Table Data Contributor", state.storage?.id ?? placeholder(`${settings.storage} id`), state.roles?.storage));
+  steps.push(...roleStep("gateway identity: Storage Table Data Contributor", state.gatewayIdentity, settings.gatewayIdentity, "Storage Table Data Contributor", state.storage?.id ?? placeholder(`${settings.storage} id`), state.roles?.storage));
 
   // Everything below is in the tenant, through Graph.
   if (tenant.id && state.graph !== false) {
@@ -307,12 +387,12 @@ export function plan({ env, state, record = {} }) {
     const gatewayAppId = gateway?.appId ?? placeholder(`${GATEWAY_APP_NAME} appId`);
     const redirects = settings.publicUrls.map((url) => `${url}/oauth/entra/callback`);
     if (!gateway) {
-      steps.push({ name: "gateway app registration", reread: true, calls: [az("ad", "app", "create", "--display-name", GATEWAY_APP_NAME, "--sign-in-audience", "AzureADMyOrg", "--web-redirect-uris", ...redirects, "--query", "{appId: appId, id: id}", "-o", "json")] });
+      steps.push({ name: "gateway app registration", reread: true, creates: { app: GATEWAY_APP_NAME }, calls: [az("ad", "app", "create", "--display-name", GATEWAY_APP_NAME, "--sign-in-audience", "AzureADMyOrg", "--web-redirect-uris", ...redirects, "--query", "{appId: appId, id: id}", "-o", "json")] });
     } else if (!sameSet(gateway.redirects, redirects)) {
       steps.push({ name: "gateway app redirects", calls: [az("ad", "app", "update", "--id", gatewayAppId, "--web-redirect-uris", ...redirects)] });
     }
     if (gateway?.tokenVersion !== 2) steps.push({ name: "gateway app v2 tokens", calls: [az("ad", "app", "update", "--id", gatewayAppId, "--set", "api.requestedAccessTokenVersion=2")] });
-    if (!gateway?.servicePrincipalId) steps.push({ name: "gateway service principal", calls: [az("ad", "sp", "create", "--id", gatewayAppId, "--output", "none")] });
+    if (!gateway?.servicePrincipalId) steps.push({ name: "gateway service principal", creates: { servicePrincipal: gatewayAppId }, calls: [az("ad", "sp", "create", "--id", gatewayAppId, "--output", "none")] });
     if (!hasAccess(gateway, GRAPH_APP, OPENID, "Scope") || !hasAccess(gateway, GRAPH_APP, PROFILE, "Scope")) {
       steps.push({ name: "gateway app openid and profile", calls: [az("ad", "app", "permission", "add", "--id", gatewayAppId, "--api", GRAPH_APP, "--api-permissions", `${OPENID}=Scope`, `${PROFILE}=Scope`), az("ad", "app", "permission", "admin-consent", "--id", gatewayAppId)] });
     }
@@ -327,13 +407,13 @@ export function plan({ env, state, record = {} }) {
         ],
       });
     }
-    steps.push(...roleStep("gateway identity: Key Vault Secrets User on its Entra secret", state.gatewayIdentity, GATEWAY_IDENTITY, "Key Vault Secrets User", state.entraSecretScope ?? `${state.vaultId}/secrets/${entraSecretName(env)}`, state.roles?.entraSecret));
+    steps.push(...roleStep("gateway identity: Key Vault Secrets User on its Entra secret", state.gatewayIdentity, settings.gatewayIdentity, "Key Vault Secrets User", state.entraSecretScope ?? `${state.vaultId}/secrets/${entraSecretName(env)}`, state.roles?.entraSecret));
 
     // The automation app the identity-checks workflow signs in to the tenant as.
     const automation = state.automationApp;
     const automationAppId = automation?.appId ?? placeholder(`${AUTOMATION_APP_NAME} appId`);
-    if (!automation) steps.push({ name: "automation app registration", reread: true, calls: [az("ad", "app", "create", "--display-name", AUTOMATION_APP_NAME, "--sign-in-audience", "AzureADMyOrg", "--query", "{appId: appId, id: id}", "-o", "json")] });
-    if (!automation?.servicePrincipalId) steps.push({ name: "automation service principal", reread: true, calls: [az("ad", "sp", "create", "--id", automationAppId, "--output", "none")] });
+    if (!automation) steps.push({ name: "automation app registration", reread: true, creates: { app: AUTOMATION_APP_NAME }, calls: [az("ad", "app", "create", "--display-name", AUTOMATION_APP_NAME, "--sign-in-audience", "AzureADMyOrg", "--query", "{appId: appId, id: id}", "-o", "json")] });
+    if (!automation?.servicePrincipalId) steps.push({ name: "automation service principal", reread: true, creates: { servicePrincipal: automationAppId }, calls: [az("ad", "sp", "create", "--id", automationAppId, "--output", "none")] });
     if (!(automation?.subjects ?? []).includes(CHECKS_SUBJECT)) {
       steps.push({ name: "automation federated credential", calls: [call("az", ["ad", "app", "federated-credential", "create", "--id", automationAppId, "--parameters", "@/dev/stdin"], { input: JSON.stringify({ name: CHECKS_FEDERATED_NAME, issuer: GITHUB_ISSUER, subject: CHECKS_SUBJECT, audiences: [FEDERATED_AUDIENCE] }) })] });
     }
@@ -373,6 +453,7 @@ export function plan({ env, state, record = {} }) {
       steps.push({
         name: "user flow",
         reread: true,
+        creates: { flow: true },
         calls: [
           graphCall("post", "identity/authenticationEventsFlows", {
             "@odata.type": "#microsoft.graph.externalUsersSelfServiceSignUpEventsFlow",
@@ -438,9 +519,21 @@ async function execCall(ctx, stepCall, input = stepCall.input) {
 
 async function execStep(ctx, step) {
   if (step.gatewaySecret) {
-    // The new password goes from az's stdout into Key Vault's stdin and nowhere else.
+    // The new password goes from az's stdout into Key Vault's stdin and nowhere else. If Key Vault refuses it,
+    // the credential just added is deleted again, so reruns don't pile up credentials nobody holds (review m1).
+    const appId = step.calls[0].args[step.calls[0].args.indexOf("--id") + 1];
+    const keyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", "[].keyId", "-o", "tsv"]));
+    const before = new Set(await keyIds());
     const password = secretFromAz(await execCall(ctx, step.calls[0]), "The gateway's new client secret");
-    await execCall(ctx, step.calls[1], password);
+    try {
+      await propagated(ctx, () => execCall(ctx, step.calls[1], password), "Writing to Key Vault");
+    } catch (error) {
+      for (const keyId of (await keyIds()).filter((id) => !before.has(id))) {
+        await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", keyId]);
+        ctx.log(`    removed the unsaved credential ${keyId} from ${GATEWAY_APP_NAME}`);
+      }
+      throw error;
+    }
     ctx.log(`    wrote ${entraSecretName(ctx.env)} to Key Vault (fingerprint ${fingerprint(password)})`);
     return;
   }
@@ -453,7 +546,11 @@ async function execStep(ctx, step) {
     ctx.log(`    created the Apple provider with key slot ${slot}`);
     return;
   }
-  for (const stepCall of step.calls) await execCall(ctx, stepCall);
+  let last = "";
+  for (const stepCall of step.calls) last = await execCall(ctx, stepCall);
+  if (step.creates?.app) ctx.created.apps[step.creates.app] = JSON.parse(last || "{}");
+  if (step.creates?.servicePrincipal) ctx.created.servicePrincipals.add(step.creates.servicePrincipal);
+  if (step.creates?.flow) ctx.created.flow = true;
 }
 
 // The key slot to send: a, unless it is tagged revoked.
@@ -482,7 +579,14 @@ function updateRecord(record, state) {
   return next;
 }
 
+async function vaultId(ctx) {
+  return (await out(ctx, "az", ["keyvault", "show", "-n", VAULT, "--query", "id", "-o", "tsv", ...SUB])).trim();
+}
+
 async function reconcile(ctx) {
+  ctx.vaultId = await vaultId(ctx);
+  ctx.vaultReadable = await ensureOperatorRole(ctx, "Key Vault Secrets Officer", ctx.vaultId);
+  if (!ctx.vaultReadable) ctx.log("The operator can't read Key Vault until that role exists, so this dry run plans every vault secret as missing.");
   let previous = null;
   for (let pass = 0; pass < 30; pass += 1) {
     const state = await readState(ctx);
@@ -531,12 +635,14 @@ async function importAppleKey(ctx, { file, slot, keepFile }) {
   if (!key.includes("PRIVATE KEY")) throw new Error(`${file} is not a .p8 private key.`);
   const setArgs = ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", name, "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `imported-at=${new Date(ctx.now()).toISOString()}`, "--query", "id", "-o", "tsv", ...SUB];
   if (ctx.dryRun) {
+    await ensureOperatorRole(ctx, "Key Vault Secrets Officer", await vaultId(ctx));
     ctx.log(`    would run: az ${setArgs.join(" ")} (stdin: ***)`);
     ctx.log(`    would delete ${file} once Key Vault returns the same key${keepFile ? " (no: --keep-file)" : ""}`);
     return;
   }
+  await ensureOperatorRole(ctx, "Key Vault Secrets Officer", await vaultId(ctx));
   // A new version carries only the tags given here, so a `revoked` tag on the slot's old key is cleared.
-  await out(ctx, "az", setArgs, { input: key });
+  await propagated(ctx, () => out(ctx, "az", setArgs, { input: key }), "Writing to Key Vault");
   const stored = trimOneNewline(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "value", "-o", "tsv", ...SUB]));
   if (fingerprint(stored) !== fingerprint(key)) throw new Error(`${name} as read back does not match ${file}; the file was kept.`);
   const tags = (await azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "tags", "-o", "json", ...SUB])) ?? {};
@@ -552,9 +658,13 @@ async function importAppleKey(ctx, { file, slot, keepFile }) {
 
 // --- Seeding and invites -----------------------------------------------------------------------------------------
 
+// The accounts store, as the signed-in operator, who first gets Storage Table Data Contributor on this env's
+// accounts storage account (review I3).
 async function storeFor(ctx) {
   const endpoint = ctx.record.storage?.endpoint;
-  if (!endpoint) throw new Error(`identity-${ctx.env}.json has no accounts store yet; run provision-identity.mjs --env ${ctx.env} first.`);
+  const id = ctx.record.storage?.id;
+  if (!endpoint || !id) throw new Error(`identity-${ctx.env}.json has no accounts store yet; run provision-identity.mjs --env ${ctx.env} first.`);
+  await ensureOperatorRole(ctx, "Storage Table Data Contributor", id);
   return ctx.openStore({ endpoint, record: ctx.record });
 }
 
@@ -565,11 +675,13 @@ async function seedAri(ctx) {
   }
   const store = await storeFor(ctx);
   const known = ctx.record.ari?.accountId;
-  if (known && (await store.getAccount(known))) {
+  // An existing account is never seeded again: seed() writes deskAccess true and the binding, which would undo a
+  // deliberate "access off" or binding change.
+  if (known && (await propagated(ctx, () => store.getAccount(known), "Reading the accounts store"))) {
     ctx.log(`Ari's account ${known} exists; left as it is.`);
   } else {
     const binding = { kind: "github", repo: ctx.settings.repo, author: { name: ARI.displayName, email: ARI.authorEmail } };
-    const { accountId } = await seed({ store, displayName: ARI.displayName, binding, ...(known ? { accountId: known } : {}) });
+    const { accountId } = await propagated(ctx, () => seed({ store, displayName: ARI.displayName, binding, ...(known ? { accountId: known } : {}) }), "Writing to the accounts store");
     ctx.record = { ...ctx.record, ari: { accountId, githubUserId: ARI.githubUserId, githubLogin: ARI.githubLogin } };
     saveRecord(ctx.record, ctx.recordDir);
     ctx.log(`Seeded Ari's account ${accountId}, bound to ${ctx.settings.repo}; recorded in identity-${ctx.env}.json.`);
@@ -585,7 +697,7 @@ async function inviteAri(ctx) {
     return;
   }
   const store = await storeFor(ctx);
-  const { token } = await issueInvite({ store, accountId, ttlMs, now: ctx.now() });
+  const { token } = await propagated(ctx, () => issueInvite({ store, accountId, ttlMs, now: ctx.now() }), "Writing to the accounts store");
   const link = `${ctx.settings.publicUrl}/invite/${token}`;
   if (ctx.env !== "prod") {
     ctx.log(`Invite link for ${accountId} (test tenant, ${ttlMs / 3600_000} hours): ${link}`);
@@ -628,6 +740,12 @@ async function updateApp(ctx, app, shown, changes, summary) {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+  // az rewrites the document before sending it (it fills value-less secrets, Key Vault references included, and
+  // drops the identity map), so every write is checked against the app as it now is (review C1 and I1).
+  const after = await showApp(ctx, app);
+  const secretList = (await azJson(ctx, ["containerapp", "secret", "list", ...appArgs(app), "-o", "json", ...SUB])) ?? [];
+  checkWritten({ before: shown, after, secretList, keyVaultSecrets: changes.keyVaultSecrets ?? {} });
+  ctx.log(`Checked ${app}: every secret, Key Vault reference and identity is still there.`);
   return true;
 }
 
@@ -745,12 +863,6 @@ async function rotate(ctx) {
   ctx.log(`Rotating: signing ${fingerprint(signingKey)} -> ${fingerprint(newKey)}; previous ${fingerprint(signingKey)} until ${changes.setEnv.DESK_SIGNING_KEY_PREVIOUS_UNTIL}; client ${before.client} unchanged.`);
   if (!(await updateApp(ctx, app, shown, changes, "new desk-signing-key, desk-signing-key-previous, DESK_SIGNING_KEY_PREVIOUS_UNTIL"))) return;
   const restarted = await newRevision(ctx, app, revision);
-  const hadReference = shown.properties.configuration.secrets.some(({ name, keyVaultUrl }) => name === "entra-client-secret" && keyVaultUrl);
-  if (hadReference) {
-    const url = (await out(ctx, "az", ["containerapp", "secret", "list", ...appArgs(app), "--query", "[?name=='entra-client-secret'].keyVaultUrl", "-o", "tsv", ...SUB])).trim();
-    if (!url) throw new Error("entra-client-secret is no longer a Key Vault reference after the rotation.");
-    ctx.log("entra-client-secret is still a Key Vault reference.");
-  }
   const after = await newKeysLine(ctx, app, restarted);
   checkRotatedLine({ before, after });
   ctx.log(`Revision ${restarted} logs signing ${after.signing}, previous ${after.previous} until ${after.until}, client ${after.client} from DESK_CLIENT_KEY: rotation confirmed.`);
@@ -777,6 +889,8 @@ export function parseFlags(argv) {
     },
   });
   environment(values.env);
+  const actions = ["apple-key-file", "seed-ari", "invite-ari", "copy-app-secrets", "clear-app-secrets", "migrate", "rotate"].filter((name) => values[name] !== undefined && values[name] !== false);
+  if (actions.length > 1) throw new Error(`Run one action at a time; got ${actions.map((name) => `--${name}`).join(", ")}.`);
   if (values.migrate !== undefined && values.migrate !== "client-key") throw new Error("Only --migrate client-key exists.");
   if (values.rotate !== undefined && values.rotate !== "signing-key") throw new Error("Only --rotate signing-key exists.");
   if (values["apple-key-file"] && !["a", "b"].includes(values["apple-key-slot"])) throw new Error("--apple-key-file needs --apple-key-slot a or b.");
@@ -818,7 +932,7 @@ export async function run({
   openerCommand = process.env.DESK_CDP_OPENER ? { cmd: process.execPath, args: [process.env.DESK_CDP_OPENER] } : null,
 }) {
   const settings = environment(env);
-  const ctx = { env, settings, record: loadRecord(env, recordDir), runner, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
+  const ctx = { env, settings, record: loadRecord(env, recordDir), created: { apps: {}, servicePrincipals: new Set(), flow: false }, runner, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
   if (ctx.dryRun) log(`Dry run for ${env}: reads only; every write is printed instead, secret input as ***.`);
   if (flags.appleKeyFile) return importAppleKey(ctx, { file: flags.appleKeyFile, slot: flags.appleKeySlot, keepFile: flags.keepFile });
   if (flags.inviteAri) return inviteAri(ctx);
@@ -826,7 +940,13 @@ export async function run({
   if (flags.clearAppSecrets) return clearAppSecrets(ctx);
   if (flags.migrate === "client-key") return migrateClientKey(ctx);
   if (flags.rotate === "signing-key") return rotate(ctx);
-  await reconcile(ctx);
+  try {
+    await reconcile(ctx);
+  } catch (error) {
+    // Seeding needs only the accounts store, so a stop on a later step (Apple under outcome B) doesn't block it.
+    if (flags.seedAri && error instanceof Stop && ctx.record.storage?.id) await seedAri(ctx);
+    throw error;
+  }
   if (flags.seedAri) await seedAri(ctx);
 }
 
