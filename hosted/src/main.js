@@ -61,18 +61,24 @@ function readKeys(env) {
     if (!client) throw new Error("DESK_SIGNING_KEY_PREVIOUS is set but DESK_CLIENT_KEY is not; set DESK_CLIENT_KEY to the key that sealed today's clients.");
     signingKeys.push({ key: previous, until: Date.parse(until) });
   }
-  return { signingKeys, clientKey: client ?? signing };
+  return { signingKeys, clientKey: client ?? signing, clientKeyFrom: client ? "DESK_CLIENT_KEY" : "DESK_SIGNING_KEY" };
 }
 
-// What the gateway logs about its keys at start: fingerprints only, which
-// key operations compare with their own reads.
-export function keysStartupLine({ signingKeys, clientKey }) {
-  const previous = signingKeys[1] ? fingerprint(signingKeys[1].key) : "none";
-  return `keys: signing ${fingerprint(signingKeys[0].key)} client ${fingerprint(clientKey)} previous ${previous}`;
+// What the gateway logs about its keys at start, which key operations compare
+// with their own reads: fingerprints only, never a key. `client-from` names
+// where the client key came from, because before a rotation an explicit
+// DESK_CLIENT_KEY and the fallback have the same fingerprint. `until` shows
+// how long the previous key stays accepted. `revision` is the Container App
+// revision (Azure sets CONTAINER_APP_REVISION), so a script reads the line of
+// the revision it restarted, not an older one.
+export function keysStartupLine({ signingKeys, clientKey, clientKeyFrom, revision }) {
+  const [current, previous] = signingKeys;
+  const previousPart = previous ? `${fingerprint(previous.key)} until ${new Date(previous.until).toISOString()}` : "none";
+  return `keys: signing ${fingerprint(current.key)} client ${fingerprint(clientKey)} client-from ${clientKeyFrom} previous ${previousPart} revision ${revision ?? "unknown"}`;
 }
 
 export function readConfig(env) {
-  const { signingKeys, clientKey } = readKeys(env);
+  const { signingKeys, clientKey, clientKeyFrom } = readKeys(env);
   const publicUrl = (env.DESK_PUBLIC_URL || "https://desk.ouro.bot").replace(/\/+$/, "");
   const appReady = APP_SETTINGS.every((name) => isSet(env[name]));
   const config = {
@@ -82,6 +88,8 @@ export function readConfig(env) {
     githubCallbackUrl: `${publicUrl}/oauth/github/callback`,
     signingKeys,
     clientKey,
+    clientKeyFrom,
+    revision: isSet(env.CONTAINER_APP_REVISION) && /^\S+$/.test(env.CONTAINER_APP_REVISION) ? env.CONTAINER_APP_REVISION : undefined,
     appReady,
     appId: env.DESK_APP_ID,
     appKeyFile: env.DESK_APP_KEY_FILE,
