@@ -159,7 +159,8 @@ export function triagePolicy({ inputDir, resultFile, cliMetadata, settings }) {
     "--permission-prompts", "none", "--tools", "Read,Grep,Glob,Edit",
     "--disable-slash-commands", "--no-chrome", "--no-session-persistence",
     "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--settings", JSON.stringify(selected),
-    "--max-budget-usd", "1", "--output-format", "stream-json", "--verbose", "--system-prompt", BRIEF]
+    "--max-budget-usd", "1", "--output-format", "stream-json", "--verbose", "--system-prompt", BRIEF,
+    "Read input.json and perform the bounded triage task described by the system prompt."]
   return { state: "prepared", argv, env: {}, settings: selected, fingerprint: fingerprint({ inputDir, argv }) }
 }
 
