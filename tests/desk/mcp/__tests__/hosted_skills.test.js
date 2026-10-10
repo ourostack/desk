@@ -99,3 +99,39 @@ test("an error answer or an unparseable one never carries the instructions, and 
   assert.equal((await flaky({ name: "desk_status" })).isError, true)
   assert.equal((await flaky({ name: "desk_status" })).content.length, 2)
 })
+
+test("two first desk_status calls at the same time: only one carries the instructions", async () => {
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const replies = [answer({ detail_pending: true }), answer({ state: "ready" }), answer({ state: "ready" })]
+  const callTool = withHostedStartup({ callTool: async () => replies.shift(), instructions: "RULES", sleep: () => gate })
+  const first = callTool({ name: "desk_status" })
+  await new Promise((resolve) => setImmediate(resolve))
+  const second = await callTool({ name: "desk_status" })
+  release()
+  assert.equal(second.content.length, 1)
+  assert.equal((await first).content.length, 2)
+})
+
+test("a cancelled first desk_status stops waiting and leaves the instructions for the next call", async () => {
+  const controller = new AbortController()
+  let asked = 0
+  const callTool = withHostedStartup({ callTool: async () => { asked += 1; return answer({ detail_pending: asked < 3 }) }, instructions: "RULES", sleep: async () => { controller.abort() } })
+  const cancelled = await callTool({ name: "desk_status", signal: controller.signal })
+  assert.equal(cancelled.content.length, 1)
+  assert.equal(asked, 2)
+  assert.equal((await callTool({ name: "desk_status" })).content.length, 2)
+})
+
+test("a desk_status that throws while waiting leaves the instructions for the next call", async () => {
+  const replies = [async () => answer({ detail_pending: true }), async () => { throw new Error("boom") }, async () => answer({ state: "ready" })]
+  const callTool = withHostedStartup({ callTool: () => replies.shift()(), instructions: "RULES", sleep: async () => {} })
+  await assert.rejects(callTool({ name: "desk_status" }), /boom/u)
+  assert.equal((await callTool({ name: "desk_status" })).content.length, 2)
+})
+
+test("the runtime server answers desk_skill itself", async () => {
+  const { callTool } = await import("../../../../plugins/desk/mcp/src/server.js")
+  const result = await callTool({ deskRoot: "/nonexistent", name: "desk_skill", input: { name: "task-lifecycle" }, statusContext: {} })
+  assert.match(result.content[0].text, /^# Desk skill: task-lifecycle/u)
+})

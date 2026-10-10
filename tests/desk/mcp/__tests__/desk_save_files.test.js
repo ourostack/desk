@@ -50,7 +50,8 @@ test("desk_save reports its commit as desk_commit with desk_pushed false and a n
   assert.equal(result.status, "committed")
   assert.equal(result.desk_commit, git(root, ["rev-parse", "--short", "HEAD"]).trim())
   assert.equal(result.desk_pushed, false)
-  assert.match(result.desk_note, /new hash on the remote/u)
+  assert.match(result.desk_note, /pushing them in the background/u)
+  assert.match(result.desk_commit_note, /new hash/u)
 })
 
 test("desk_save leaves desk_commit out when Git cannot name the commit", async () => {
@@ -59,6 +60,7 @@ test("desk_save leaves desk_commit out when Git cannot name the commit", async (
   const result = await save(root, { files: [{ path: "track/task/notes/c.md", content: "C.\n" }], message: "save c" }, { spawnGit })
   assert.equal(result.status, "committed")
   assert.equal(result.desk_commit, undefined)
+  assert.equal(result.desk_commit_note, undefined)
   assert.equal(result.desk_pushed, false)
 })
 

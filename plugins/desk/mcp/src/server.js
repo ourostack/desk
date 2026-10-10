@@ -48,6 +48,7 @@ import {
   desk_timeline,
 } from "./tools/search.js"
 import { desk_thread } from "./tools/thread.js"
+import { deskSkill } from "./runtime/skills.js"
 import { desk_reindex } from "./tools/reindex.js"
 import { desk_status } from "./tools/status.js"
 export { waitForStatusInspection } from "./runtime/status-inspection.js"
@@ -262,6 +263,8 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   const refused = headlessRefusal(name, env)
   if (refused) return { content: [{ type: "text", text: JSON.stringify(refused) }], isError: true }
+  // desk_skill reads the plugin's skills, not the desk, and answers with the skill's own text.
+  if (name === "desk_skill") return deskSkill(input ?? {})
   const impl = TOOL_IMPLS[name]
   if (!impl) {
     // Every tool wired; this branch only fires if a name exists in

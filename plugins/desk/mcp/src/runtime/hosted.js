@@ -131,16 +131,23 @@ function detailPending(result) {
  * That first answer also waits, up to six seconds in all, for a status detail that is still loading, so a hosted chat does not start from an answer with an empty root and sync.
  */
 export function withHostedStartup({ callTool, instructions, waitMs = STARTUP_DETAIL_WAIT_MS, pollMs = STARTUP_DETAIL_POLL_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
-  let delivered = false
+  // "claimed" while one desk_status call is preparing the instructions, so a second call at the same time answers plainly; "delivered" once they are sent.
+  let state = "pending"
   return async (call) => {
     let result = await callTool(call)
-    if (call?.name !== "desk_status" || delivered || result?.isError) return result
-    for (let waited = 0; detailPending(result) && waited < waitMs; waited += pollMs) {
-      await sleep(pollMs)
-      result = await callTool(call)
+    if (call?.name !== "desk_status" || state !== "pending" || result?.isError) return result
+    state = "claimed"
+    try {
+      for (let waited = 0; detailPending(result) && waited < waitMs && !call?.signal?.aborted; waited += pollMs) {
+        await sleep(pollMs)
+        result = await callTool(call)
+      }
+    } catch (error) {
+      state = "pending"
+      throw error
     }
-    if (result?.isError) return result
-    delivered = true
+    state = result?.isError || call?.signal?.aborted ? "pending" : "delivered"
+    if (state !== "delivered") return result
     const text = `# Desk instructions for this session\n\nThis client does not show Desk's server instructions, so they come here, once. Follow them for the rest of this conversation.\n\n${instructions}`
     return { ...result, content: [...(result?.content ?? []), { type: "text", text }] }
   }

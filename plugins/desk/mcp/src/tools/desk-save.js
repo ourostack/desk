@@ -22,7 +22,7 @@ import { existsSync, statSync, lstatSync, realpathSync, constants as fsConstants
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
-import { headSha } from "./task.js"
+import { DESK_COMMIT_HASH_NOTE, headSha } from "./task.js"
 import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
@@ -245,13 +245,15 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   if (!committed.ok) {
     return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
   }
-  schedulePush({ root: deskRoot })
+  // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = headSha(deskRoot, spawnGit)
-  return deskCommit === null ? { status: "committed", desk_pushed: false, desk_note: DESK_SAVE_NOTE } : { status: "committed", desk_commit: deskCommit, desk_pushed: false, desk_note: DESK_SAVE_NOTE }
+  schedulePush({ root: deskRoot })
+  const answer = { status: "committed", desk_note: DESK_SAVE_NOTE, desk_pushed: false }
+  return deskCommit === null ? answer : { ...answer, desk_commit: deskCommit, desk_commit_note: DESK_COMMIT_HASH_NOTE }
 }
 
 // Said in the answer so no agent pushes by hand or reads `desk_pushed: false` as a failure.
-const DESK_SAVE_NOTE = "Desk committed these files and is pushing them in the background, so run no git for them. desk_commit is the local commit: if the push has to rebase onto newer desk commits, the commit gets a new hash on the remote, so find it there by its message."
+const DESK_SAVE_NOTE = "Desk committed these files and is pushing them in the background, so run no git for them."
 
 // The tidy commit. Task cards must already be staged as pure renames or deletions; every other path is staged here when it holds unstaged work.
 // What is committed is what was judged: the index at `paths`, through a temporary index (commitIndexPaths), never the working tree. `_archive/**` is not a live
