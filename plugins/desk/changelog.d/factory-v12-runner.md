@@ -1,20 +1,24 @@
-Add bounded factory triage admission, inline exact-result policy and a
-protected two-launch qualifier. Preserve subscription guards, evaluator argv
-and owned-child limits. Unknown effective policy or native execution chains
-hold without launching a model; qualification remains a separate root-owned
-runtime gate, never inferred from model restraint or unit fixtures.
+Add the bounded immutable-ID factory triage catalog and correlated parent
+custody. Four closed MCP tools read/search/list prepared records and seal a
+candidate; native file/shell/agent tools remain excluded. One fixed production
+mission keeps untrusted prose out of argv. This supersedes the unreleased
+native-path/dual-mission probe mechanism, without changing evaluator behavior,
+subscription/billing guards or accepted annotation authority.
 
-Connect authenticated macOS native/policy admission, reject real-shaped
-excluded-tool successes, recheck prepared identities immediately before
-spawn, and qualify genuine customization triggers and admitted targets
-rather than generic outside sentinels.
+Start the fixed launcher/server through an exact clean environment before Node
+startup. On Darwin construct the sole CF encoding field from actual equal
+UID/EUID, never inherited profile state. Keep bounded SDK wire/receipt channels,
+independent process/module/source provenance, teardown and fail-closed admission.
+Unsupported runtime capability or unknown policy remains a hold.
 
-Audit native Glob pattern-derived scope and all returned search paths globally, including Grep content/count aliases and symlink traversal. Reject malformed policy documents and native invalid-settings diagnostics with fixed no-echo codes before admission.
+Require two complete actual direct-server bundles and two genuinely distinct
+native session/receipt histories for installed-host qualification. Restore
+only full source/argv/catalog/provenance-bound proof. Materialize protected
+unaccepted candidate bytes only; fresh Node8 acceptance is separate.
 
-Match pinned native tool-input whitespace, HOME, relative-path and NFC interpretation before scope checks and probe correlation, while preserving literal returned filenames and Glob filter tails. Reject unstable Read/Edit inputs rather than relying on stream backfill.
-
-Supply the fixed trusted positional request required by native print mode; keep untrusted candidate prose out of argv and include the request in the existing admission fingerprint.
-
-Separate two finite parent-selected production/qualification message pairs while retaining exact full identities and versioned two-value-slot enforcement equality. Bind a complete ordered synthetic catalog and single trigger Edit, require two matching actual receipts, and restore only authenticated protected records with raw-stream replay/current source checks. Unknown missions, probe-shaped records, sanitized non-attempts and mismatch “denials” stay blocked.
-
-Decouple direct qualifier CLI orchestration from module evaluation so first-receipt verification can complete. Require two distinct raw-stream-bound native sessions and event identities in live issuance and restoration; reject duplicated/relabelled proof, mutable returned receipt history and orphan tool results without forbidding legitimate OS PID reuse.
+Keep isolated same-source unit transactions explicitly nonaccepted and
+memory-only, with private real registries and production measurement refusal
+before native qualification store or child effects. Reap only owned positive
+PID handles, close failed startup/transaction resources, and do not count
+corrupted driver failures as runtime refusal proof. Unit coverage and direct
+server tests never substitute for root-owned native qualification and review.
