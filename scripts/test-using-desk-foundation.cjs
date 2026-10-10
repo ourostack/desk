@@ -301,6 +301,9 @@ function main() {
     /The human supplies intent.*authority.*endpoint/u,
     /The agent owns execution.*sequencing.*verification.*cleanup/u,
     /never hands the human a step it could do itself/u,
+    /AX \(agent experience\).*deterministically.*easy to understand and use/u,
+    /HX \(human experience, formerly UX\).*attention.*understanding.*control.*trust/u,
+    /Never improve one by shifting avoidable work onto the other/u,
   ]);
 
   assertSectionConcepts(section(skill, "Alignment, then ownership"), [

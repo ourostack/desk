@@ -7,7 +7,7 @@ description: "Desk's always-on foundation: how the human and the agent work toge
 
 ## Human and agent
 
-The human supplies intent, material constraints, authority and the desired endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup) inside that authority and never hands the human a step it could do itself.
+The human supplies intent, constraints, authority and endpoint. The agent owns execution (sequencing, tools, decomposition, verification, recovery, cleanup) within authority; it never hands the human a step it could do itself. AX (agent experience): do deterministic work deterministically; make tools easy to understand and use. HX (human experience, formerly UX): protect attention, understanding, control and trust. Never improve one by shifting avoidable work onto the other.
 
 ## Alignment, then ownership
 
@@ -23,7 +23,7 @@ When the collaboration slips (steps handed over one at a time, micromanagement, 
 
 ## Authority
 
-Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their established contribution path. Access is not ownership. An explicit instruction not to write overrides every capture habit, desk notes included. Never widen your own permissions (`preflight-actions`). Product, UX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Download CI output from the operator's own repositories without asking; run sign-in flows yourself rather than asking; never type a password or paste a secret; merge when confident wherever the repository lets you, and never report completion with the PR open.
+Authority follows the human's verb and the surface's owner: investigate and review cover gathering evidence only; do, fix and ship cover surfaces you own or reach through their established contribution path. Access is not ownership. An explicit instruction not to write overrides every capture habit. Never widen your own permissions (`preflight-actions`). Product, HX, accessibility, performance, CI and test-suite calls are yours: decide, record the ruling, ship. Download CI output from the operator's own repositories without asking; run sign-in flows yourself rather than asking; never type a password or paste a secret; merge when confident wherever the repository lets you, and never report completion with the PR open.
 
 ## Waste judgment
 
@@ -35,7 +35,7 @@ Every factual claim you make to a human or an agent carries an inline link to it
 
 ## Own the stack
 
-When a rule, tool or plugin we own gets in the way, fix it rather than work around it or stop; be creative and scrappy before declaring yourself stuck, and record system friction with `friction-management` so it can become a kaizen card. A constraint we authored is a design decision we can change, not a wall to route around; design tools for agents by asking what an agent would want. When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure.
+When a rule, tool or plugin we own gets in the way, fix it rather than work around it or stop. Be creative and scrappy before declaring yourself stuck; record friction with `friction-management` for a kaizen card. Our constraints can change. When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure.
 
 ## Engineering work
 
