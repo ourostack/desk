@@ -293,17 +293,27 @@ test("triage API malformed permission exceptions and changed head stay unavailab
     const base="a".repeat(40),head="b".repeat(40),rel="triage/0123456789abcdef.json"
     const value=JSON.parse(readFileSync(new URL("./fixtures/v12-triage.json",import.meta.url))).public
     const bin=path.join(env.HOME,"bin");await fs.mkdir(bin)
-    const shim=`#!${process.execPath}\nconst endpoint=process.argv[3];process.stdout.write(JSON.stringify(endpoint.endsWith("/permission")?{permission:"write"}:{head:{sha:"${head}"},user:{login:"synthetic-actor"}}));\n`
-    await fs.writeFile(path.join(bin,"gh"),shim,{mode:0o755})
-    if(process.platform==="win32")await fs.writeFile(path.join(bin,"gh.cmd"),`@"${process.execPath}" "%~dp0gh" %*\r\n`)
+    const calls=path.join(bin,"calls.jsonl")
+    // ghRunner deliberately spawns without a shell: Windows needs a native
+    // executable, not a shebang or .cmd. Only the stand-in gh process preloads
+    // this API fixture; the default production runner is not replaced.
+    cpSync(process.execPath,path.join(bin,process.platform==="win32"?"gh.exe":"gh"))
+    const preload=path.join(bin,"gh-fixture.cjs")
+    await fs.writeFile(preload,`const endpoint=process.argv[2];require("node:fs").appendFileSync(${JSON.stringify(calls)},JSON.stringify({endpoint,token:process.env.GH_TOKEN})+"\\n");process.stdout.write(JSON.stringify(endpoint.endsWith("/permission")?{permission:"write"}:{head:{sha:"${head}"},user:{login:"synthetic-actor"}}));process.exit(0);\n`)
     const git=mergeGit((args)=>{
       if(args[0]==="diff")return `A\0${rel}\0`
       if(args[0]==="ls-tree")return args[2]===base?"":`100644 blob ${"c".repeat(40)}\t${rel}\0`
       if(args[0]==="show")return Buffer.from(JSON.stringify(value))
       assert.fail(`unexpected ${args}`)
     })
-    const result=await runValidatePrCommand({argv:["--base",base,"--head",head,"--author-association","NONE","--repo","example/project","--pr","1"],git,env:{...env,PATH:`${bin}${path.delimiter}${process.env.PATH}`,GH_TOKEN:"synthetic-test-token"}})
+    const result=await runValidatePrCommand({argv:["--base",base,"--head",head,"--author-association","NONE","--repo","example/project","--pr","1"],git,env:{...env,PATH:`${bin}${path.delimiter}${process.env.PATH}`,GH_TOKEN:"synthetic-test-token",NODE_OPTIONS:`${process.env.NODE_OPTIONS??""} --require ${JSON.stringify(preload)}`.trim()}})
     assert.deepEqual(result,{ok:true,errors:[],maintenance:false})
+    assert.equal(existsSync(calls),true,"the real default runner must reach the fixture executable")
+    assert.deepEqual(readFileSync(calls,"utf8").trim().split("\n").map((line)=>JSON.parse(line)),[
+      {endpoint:"repos/example/project/pulls/1",token:"synthetic-test-token"},
+      {endpoint:"repos/example/project/collaborators/synthetic-actor/permission",token:"synthetic-test-token"},
+      {endpoint:"repos/example/project/pulls/1",token:"synthetic-test-token"},
+    ])
   }))
 test("parseOptions reads --flag value pairs into a map", () => {
   assert.deepEqual([...parseOptions(["--store", "a/b", "--contribute", "yes"]).entries()], [["store", "a/b"], ["contribute", "yes"]])
