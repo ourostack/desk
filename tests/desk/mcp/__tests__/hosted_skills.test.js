@@ -195,6 +195,10 @@ test("desk_skill lists quoted and plain single-line descriptions", async () => {
   assert.equal(await listWithDescription("description: Plain text here"), "Plain text here")
 })
 
+test("desk_skill lists a skill whose frontmatter cannot be read with an empty description", async () => {
+  assert.equal(await listWithDescription("description: First\ndescription: Second"), "")
+})
+
 test("no real plugin skill is listed with an empty or block-indicator description", () => {
   for (const skill of parse(deskSkill({}, { env: {} })).skills) {
     assert.ok(skill.description.length > 0, `${skill.name} has an empty description`)
