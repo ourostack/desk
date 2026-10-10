@@ -171,7 +171,9 @@ export function createDeskSession(deps) {
     if (!statusRun) return
     statusRun.controller.abort(reason)
     const closed = context.runtimeServer?.waitForStatusInspection?.(statusRun.signal)
-    if (closed) statusReaderClosed = Promise.all([statusReaderClosed, closed])
+    if (closed) statusReaderClosed = Promise.all([
+      statusReaderClosed, closed.then(() => null, (error) => error),
+    ]).then((outcomes) => outcomes.find((error) => error !== null) ?? null)
   }
 
   function operation(work) {
@@ -834,7 +836,8 @@ export function createDeskSession(deps) {
     const runtimeServer = context.runtimeServer
     run.promise = Promise.resolve()
       .then(() => statusReaderClosed)
-      .then(() => {
+      .then((retirementError) => {
+        if (retirementError) throw retirementError
         run.signal.throwIfAborted()
         return runtimeServer.callTool(request)
       })
@@ -1033,7 +1036,10 @@ export function createDeskSession(deps) {
       unwatchController = null
       closeHeadWatch()
       if (headTimer !== null) clearTimeout(headTimer)
-      return Promise.all([operationTail, statusReaderClosed]).then(forgetController)
+      return Promise.all([operationTail, statusReaderClosed]).then(async ([, retirementError]) => {
+        await forgetController()
+        if (retirementError) throw retirementError
+      })
     },
   }
 }

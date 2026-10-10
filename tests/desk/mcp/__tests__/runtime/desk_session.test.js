@@ -1507,6 +1507,29 @@ test("a replacement status waits for its aborted owned reader to close, and shut
   assert.equal(calls, 1, "a replacement invalidated by shutdown must never start later")
 })
 
+test("nonexit of a retired reader refuses replacement and fails shutdown while closing the controller", async (t) => {
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  const runtime = fakeRuntime()
+  let calls = 0
+  let controllerClosed = false
+  runtime.callTool = () => { calls += 1; return new Promise(() => {}) }
+  runtime.connectOrStartController = async () => ({
+    accepted: true, async status() { return { state: "READY" } },
+    async close() { controllerClosed = true },
+  })
+  const error = Object.assign(new Error("reader did not exit"), { code: "status_reader_not_exited", pid: 123 })
+  runtime.waitForStatusInspection = () => Promise.reject(error)
+  const { session } = await makeSession(t, { runtime, statusRunLimitMs: 0 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status", input: { detail: true } })
+  const result = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.match(result.status_error, /reader did not exit/u)
+  assert.equal(calls, 1)
+  await assert.rejects(session.dispose(), { code: "status_reader_not_exited", pid: 123 })
+  assert.equal(controllerClosed, true, "a reader failure must not skip controller cleanup")
+  session.dispose = () => Promise.resolve()
+})
 test("desk_status answers while an admission attempt is still running", async (t) => {
   let release
   const { session } = await makeSession(t, { loadRuntime: () => new Promise((resolve) => { release = () => resolve({ runtimeServer: fakeRuntime(), runtimeStatus: {} }) }) })

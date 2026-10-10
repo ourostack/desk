@@ -2,11 +2,12 @@ import "../_isolated_env.mjs"
 import childProcess from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
 import { readFileSync, writeFileSync } from "node:fs"
+import nativeFs from "node:fs"
 import Database from "better-sqlite3"
 import { main } from "../../../../../plugins/desk/mcp/index.js"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 
-const [seam, marker] = process.argv.slice(2)
+const [seam, marker, phase = "inspectLocalDb"] = process.argv.slice(2)
 const children = new Set()
 const readers = new Set()
 let maxReaders = 0
@@ -26,10 +27,19 @@ childProcess.fork = (file, args, options) => {
 syncBuiltinESMExports()
 const originalPrepare = Database.prototype.prepare
 Database.prototype.prepare = function(...args) {
-  if (new Error().stack.includes("inspectLocalDb")) {
+  if (phase !== "rootStatus" && new Error().stack.includes(phase)) {
     writeFileSync(marker, JSON.stringify({ pid: process.pid, root: "main-thread" }))
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350)
   }
+  const exists = nativeFs.existsSync
+  nativeFs.existsSync = function(...args) {
+    if (phase === "rootStatus" && new Error().stack.includes(phase)) {
+      writeFileSync(marker, JSON.stringify({ pid: process.pid, root: "main-thread" }))
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350)
+    }
+    return exists.apply(this, args)
+  }
+  syncBuiltinESMExports()
   return originalPrepare.apply(this, args)
 }
 const handle = await main({

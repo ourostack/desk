@@ -10,7 +10,8 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 
-test("actual MCP and controller processes retain 200 ms status/list/ping caps through blocked SQLite and late destination", async (t) => {
+for (const phase of ["rootStatus", "inspectLocalDb", "openSnapshot"]) {
+test(`actual MCP and controller processes retain 200 ms status/list/ping caps through blocked ${phase} and late destination`, async (t) => {
   const base = await mkTempRoot("status-process-")
   const home = path.join(base, "home")
   const a = path.join(home, "desk")
@@ -35,17 +36,29 @@ test("actual MCP and controller processes retain 200 ms status/list/ping caps th
   writeFileSync(seam, `
     import { createRequire } from "node:module";
     import { writeFileSync } from "node:fs";
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
     const Database = createRequire(${JSON.stringify(from)})("better-sqlite3");
     const original = Database.prototype.prepare;
     let blocked = false;
     Database.prototype.prepare = function(...args) {
-      if (!blocked && new Error().stack.includes("inspectLocalDb")) {
+      if (!blocked && ${JSON.stringify(phase)} !== "rootStatus" && new Error().stack.includes(${JSON.stringify(phase)})) {
         blocked = true;
         writeFileSync(${JSON.stringify(marker)}, JSON.stringify({pid: process.pid, root: this.name}));
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
       }
       return original.apply(this, args);
     };
+    const exists = fs.existsSync;
+    fs.existsSync = function(...args) {
+      if (!blocked && ${JSON.stringify(phase)} === "rootStatus" && new Error().stack.includes("rootStatus")) {
+        blocked = true;
+        writeFileSync(${JSON.stringify(marker)}, JSON.stringify({pid: process.pid, root: args[0]}));
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
+      }
+      return exists.apply(this, args);
+    };
+    syncBuiltinESMExports();
   `)
   const config = path.join(base, "binding.json")
   writeFileSync(config, JSON.stringify({ schema_version: 1, desk: { root: a, state_branch: "main" },
@@ -58,7 +71,7 @@ test("actual MCP and controller processes retain 200 ms status/list/ping caps th
   }
   for (const name of ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CODEX_HOME"]) delete env[name]
   assert.equal(recordCopilotSession({ sessionId: env.COPILOT_AGENT_SESSION_ID, folder: cwd, activationConfig: config, env }), true)
-  const child = fork(fileURLToPath(new URL("./_status_process.js", import.meta.url)), [seam, marker], {
+  const child = fork(fileURLToPath(new URL("./_status_process.js", import.meta.url)), [seam, marker, phase], {
     cwd, env, execArgv: [], stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true,
   })
   let stderr = ""
@@ -110,7 +123,7 @@ test("actual MCP and controller processes retain 200 ms status/list/ping caps th
   assert.ok(existsSync(marker), "qualification must traverse the real SQLite seam")
   const inspection = JSON.parse(readFileSync(marker, "utf8"))
   assert.notEqual(inspection.pid, child.pid, "SQLite must run outside the MCP answering process")
-  assert.equal(inspection.root, indexDbPath(a))
+  assert.equal(inspection.root, phase === "rootStatus" ? a : indexDbPath(a))
   // Start a new blocked computation and qualify protocol control traffic on
   // another process, not on a stream with an in-process controller.
   await status()
@@ -125,7 +138,8 @@ test("actual MCP and controller processes retain 200 ms status/list/ping caps th
   assert.equal(second.local_db.path, indexDbPath(b))
   assert.equal(second.write_scope.mode, "workspace")
   assert.notEqual(second.status_detail_from, first.status_detail_from)
-  t.diagnostic(JSON.stringify({ maxStatusMs: Math.max(...statusTimes), statusCalls: statusTimes.length,
+  t.diagnostic(JSON.stringify({ phase, maxStatusMs: Math.max(...statusTimes), statusCalls: statusTimes.length,
     controlMs, capMs: 200, currentDestinationAfterReplacement: true,
     fields: ["state", "root.path", "local_db.path", "write_scope.mode", "status_detail_from"] }))
 })
+}

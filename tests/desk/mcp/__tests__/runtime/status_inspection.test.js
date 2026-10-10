@@ -75,10 +75,14 @@ test("inspection child attaches only to an IPC port and reports success and exce
     const port = new EventEmitter()
     const replies = []
     port.send = (reply) => { replies.push(reply) }
+    let exitCode = null
+    port.exit = (code) => { exitCode = code }
     assert.equal(attachStatusInspectionChild(port), true)
     port.emit("message", input)
     assert.equal(replies[0].ok, input !== null)
     if (input === null) assert.equal(replies[0].error.name, "TypeError")
+    port.emit("disconnect")
+    assert.equal(exitCode, 0)
   }
 })
 
@@ -132,7 +136,7 @@ test("cancelled status inspection kills only its owned child and waits for that 
   const closed = waitForStatusInspection(controller.signal)
   controller.abort(new Error("context replaced"))
   let finished = false
-  closed.then(() => { finished = true })
+  closed.then(() => { finished = true }, () => { finished = true })
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(finished, false)
   assert.equal(killCalls, 1)

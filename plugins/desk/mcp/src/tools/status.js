@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs"
 import * as path from "node:path"
 import { indexDbPath } from "../db/init.js"
 import { unavailableLocalDb } from "../db/status-read.js"
@@ -71,10 +70,10 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
         person: path.basename(effectiveRoot),
         relative_path: path.posix.join("desks", path.basename(effectiveRoot)),
       }
-  const root = rootStatus(deskRoot, statusContext.root)
-  const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
-  const reader = root.valid ? createStatusInspection(root.path, { signal }) : null
+  const reader = createStatusInspection(deskRoot, { signal })
   try {
+    const root = await reader.inspect("root", statusContext.root)
+    const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const localDb = root.valid
       ? await reader.inspect("local")
       : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
@@ -83,7 +82,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     const observed = await (queryRouter ?? createDeskQueryRouter({
       controller: statusContext.admission?.controller,
     })).snapshot({ deskRoot: root.valid ? root.path : null, signal }, {
-      readIndex: () => reader ? reader.inspect("index") : null,
+      readIndex: () => root.valid ? reader.inspect("index") : null,
     })
     const lexical = root.valid ? observed.lexical : { ...observed.lexical, serving_path: "blocked" }
     const semantic = root.valid ? observed.semantic : {
@@ -137,7 +136,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
     }
   } finally {
-    await reader?.close()
+    await reader.close()
   }
 }
 
@@ -335,32 +334,6 @@ function compactObject(value) {
   )
 }
 
-function rootStatus(deskRoot, rootContext = {}) {
-  const pathValue = typeof deskRoot === "string" && deskRoot.trim().length > 0
-    ? deskRoot
-    : null
-  const source = typeof rootContext?.source === "string" && rootContext.source.trim().length > 0
-    ? rootContext.source
-    : "unknown"
-  const tried = Array.isArray(rootContext?.tried)
-    ? rootContext.tried.filter(isRootAttempt)
-    : []
-  const exists = pathValue === null ? false : existsSync(pathValue)
-  const malformed_context = rootContext !== null
-    && typeof rootContext === "object"
-    && (rootContext.source !== undefined && source === "unknown"
-      || rootContext.tried !== undefined && !Array.isArray(rootContext.tried))
-
-  return {
-    path: pathValue,
-    source,
-    tried,
-    exists,
-    valid: exists,
-    diagnostic: exists ? null : rootDiagnostic(pathValue),
-    malformed_context,
-  }
-}
 
 function runtimeStatus(runtime, env) {
   const sourceMirrorPath = runtime.source_mirror_path ?? runtime.sourceMirrorPath ?? null
@@ -428,16 +401,6 @@ function defaultTarget() {
 }
 
 
-function isRootAttempt(value) {
-  return value !== null
-    && typeof value === "object"
-    && typeof value.source === "string"
-    && typeof value.path === "string"
-}
-
-function rootDiagnostic(pathValue) {
-  return pathValue === null ? "missing_desk_root" : "desk_root_not_found"
-}
 
 function summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }) {
   const startupSummary = startupFallback.mode === "not_checked"
