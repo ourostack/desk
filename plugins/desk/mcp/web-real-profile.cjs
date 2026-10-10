@@ -278,8 +278,8 @@ function countTabs(result) {
 }
 
 function noTabs(result) {
-  return Boolean(result && Array.isArray(result.content) && result.content.some(function (part) {
-    return typeof part.text === "string" && /No open tabs/.test(part.text);
+  return Boolean(result && Array.isArray(result.content) && countTabs(result) === 0 && result.content.some(function (part) {
+    return typeof part.text === "string" && /^[ \t]*No open tabs\.?[ \t]*\r?$/m.test(part.text);
   }));
 }
 

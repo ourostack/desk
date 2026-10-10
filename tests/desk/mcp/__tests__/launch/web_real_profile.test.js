@@ -479,6 +479,24 @@ test("cleanup succeeds only after the connection explicitly reports no remaining
   assert.equal(calls, 2, "no extra list that could create a new tab")
 })
 
+test("a tab title containing No open tabs never produces a false empty-connection receipt", async () => {
+  for (const stage of ["list", "close"]) {
+    let calls = 0
+    const answer = await real.closeOwnTabs(async () => {
+      calls += 1
+      if (stage === "list") return calls === 1 ? {
+        content: [{ type: "text", text: "### Open tabs\n- 0: (current) [No open tabs](https://example.com/)" }],
+      } : tabsText(0)
+      if (calls === 1) return tabsText(2)
+      return calls === 2 ? {
+        content: [{ type: "text", text: "### Open tabs\n- 0: [A title\nNo open tabs.\nstill in the title](https://example.com/)" }],
+      } : tabsText(0)
+    })
+    assert.equal(calls, stage === "list" ? 2 : 3, "all indexed tabs must be closed")
+    assert.match(answer.content[0].text, /is closed/u)
+  }
+})
+
 test("empty or missing cleanup responses cannot prove that a close succeeded", async () => {
   for (const result of [undefined, null, {}, { content: [] }, { content: [{ type: "image" }] }]) {
     let calls = 0
