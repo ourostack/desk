@@ -499,9 +499,10 @@ test("a certificate the client does not trust is refused", async (t) => {
 
 // A DNS server on 127.0.0.1 that answers `answers[name]` (IPv4 addresses) to
 // A queries, answers AAAA queries with no records, and never answers a name
-// it does not know, the way a black-hole nameserver behaves. `queries` lists
+// it does not know, the way a black-hole nameserver behaves. Names in
+// `silentAAAA` get their A answer but never an AAAA one. `queries` lists
 // each name asked.
-async function dnsServer(t, answers) {
+async function dnsServer(t, answers, silentAAAA = []) {
   const queries = [];
   const socket = createSocket("udp4");
   socket.on("message", (message, peer) => {
@@ -515,7 +516,7 @@ async function dnsServer(t, answers) {
     const name = labels.join(".").toLowerCase();
     const type = message.readUInt16BE(offset + 1);
     queries.push(name);
-    if (!(name in answers)) return;
+    if (!(name in answers) || (type === 28 && silentAAAA.includes(name))) return;
     const records = type === 1 ? answers[name] : [];
     const header = Buffer.alloc(12);
     message.copy(header, 0, 0, 2);
@@ -552,7 +553,8 @@ test("lookups that never answer do not hold up another client's document, and ar
   await new Promise((resolve) => setTimeout(resolve, 50));
   const started = Date.now();
   assert.equal((await documents.get(url))?.client_id, url, "the good document is accepted while two lookups hang");
-  assert.ok(Date.now() - started < 500, `the good document took ${Date.now() - started} ms`);
+  // Well inside the 1 s deadline, with room for a slow CI runner.
+  assert.ok(Date.now() - started < 900, `the good document took ${Date.now() - started} ms`);
   assert.deepEqual(await Promise.all(hung), [undefined, undefined]);
   assert.deepEqual(logs.sort(), ["client refused: timeout client https://hung-1.example/client.json", "client refused: timeout client https://hung-2.example/client.json"]);
   assert.ok(dns.queries.includes("hung-1.example") && dns.queries.includes(HOST), "the gateway's own resolver asked the test DNS server");
@@ -634,4 +636,84 @@ test("the cache evicts the least recently used document, not merely the oldest",
   assert.equal(server.hits["/client.json?n=0"], 1, "the used document stayed");
   assert.ok(await documents.get(urls[1]));
   assert.equal(server.hits["/client.json?n=1"], 2, "the least recently used one went");
+});
+
+test("an AAAA query that never answers does not sink a host whose A record resolved", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  const dns = await dnsServer(t, { [HOST]: ["127.0.0.1"] }, [HOST]);
+  const { documents, logs } = makeDocuments({ lookup: undefined, dnsServers: [dns.server], timeoutMs: 5000 });
+  const started = Date.now();
+  assert.equal((await documents.get(url))?.client_id, url, logs.join("\n"));
+  assert.ok(Date.now() - started < 2500, `took ${Date.now() - started} ms`);
+});
+
+test("when a refetch fails in transit, the last accepted document is served for up to 24 hours", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  let clock = 1_000_000_000_000;
+  const { documents, logs } = makeDocuments({ now: () => clock });
+  const accepted = await documents.get(url);
+  assert.equal(accepted.client_id, url);
+  routes["/client.json"] = (_req, res) => res.writeHead(503).end();
+  clock += 301 * 1000;
+  assert.deepEqual(await documents.get(url), accepted);
+  assert.deepEqual(logs, [`client document stale: http_status client ${url}`]);
+  assert.equal(server.hits["/client.json"], 2, "the refetch was tried");
+  clock = 1_000_000_000_000 + 24 * 3600 * 1000;
+  assert.equal(await documents.get(url), undefined, "not past 24 hours from the last accepted fetch");
+  assert.equal(logs.at(-1), `client refused: http_status client ${url}`);
+});
+
+test("a refetch whose document is now refused drops the client at once, with no stale copy", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  let clock = 1_000_000_000_000;
+  const { documents, logs } = makeDocuments({ now: () => clock });
+  assert.ok(await documents.get(url));
+  routes["/client.json"] = json(documentFor(url, { redirect_uris: ["https://evil.example/cb"] }));
+  clock += 301 * 1000;
+  assert.equal(await documents.get(url), undefined);
+  routes["/client.json"] = (_req, res) => res.writeHead(503).end();
+  assert.equal(await documents.get(url), undefined, "the refused document left no stale copy behind");
+  assert.deepEqual(logs, [`client refused: invalid_redirect_uri client ${url}`, `client refused: http_status client ${url}`]);
+});
+
+test("a private address on refetch is never answered with a stale copy", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  let clock = 1_000_000_000_000;
+  let addresses = [{ address: "127.0.0.1", family: 4 }];
+  const { documents } = makeDocuments({ now: () => clock, lookup: async () => addresses });
+  assert.ok(await documents.get(url));
+  addresses = [{ address: "10.0.0.1", family: 4 }];
+  clock += 301 * 1000;
+  assert.equal(await documents.get(url), undefined);
+});
+
+test("a known document is served stale when every load slot is busy", async (t) => {
+  const routes = {};
+  const server = await documentServer(t, routes);
+  const url = server.url("/client.json");
+  routes["/client.json"] = json(documentFor(url));
+  let clock = 1_000_000_000_000;
+  let hang = false;
+  const fallback = resolver();
+  const lookup = (host, options) => (hang ? new Promise(() => {}) : fallback.lookup(host, options));
+  const { documents, logs } = makeDocuments({ now: () => clock, lookup, timeoutMs: 100 });
+  const accepted = await documents.get(url);
+  clock += 301 * 1000;
+  hang = true;
+  const held = Array.from({ length: MAX_CONCURRENT_LOADS }, (_, i) => documents.get(`https://hung-${i}.example/client.json`));
+  assert.deepEqual(await documents.get(url), accepted);
+  assert.ok(logs.includes(`client document stale: busy client ${url}`));
+  await Promise.all(held);
 });

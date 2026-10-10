@@ -7,11 +7,10 @@
 // Fetching a URL a stranger names is a way into the gateway's network, so
 // every fetch is fenced: the id must be a plain https URL on port 443, not on
 // the gateway's own host (which would let one request chain into many
-// self-fetches); its host must
-// resolve only to public addresses, and the gateway connects to the address
-// it checked, so a second lookup cannot swap in a private one; no redirect is
-// followed; the whole fetch, lookup included, gets 5 seconds; and at most
-// 10 KB is read. Lookups go through our own DNS resolver, not the system's
+// self-fetches); its host must resolve only to public addresses, and the
+// gateway connects only to the addresses it checked, so a second lookup
+// cannot swap in a private one; no redirect is followed; the whole fetch,
+// lookup included, gets 5 seconds; and at most 10 KB is read. Lookups go through our own DNS resolver, not the system's
 // getaddrinfo: getaddrinfo runs on Node's small thread pool and cannot be
 // cancelled, so a few names that never resolve would stall every lookup in
 // the gateway, GitHub sign-in and git tokens included. Ours is cancelled at
@@ -21,7 +20,11 @@
 //
 // Accepted documents are cached for their Cache-Control max-age, clamped to
 // between 5 minutes and 24 hours, at most 500 of them, the least recently
-// used going first; refusals are not cached.
+// used going first; refusals are not cached. When a refetch fails in transit
+// (busy, timeout, DNS, connection, HTTP status), the last accepted document
+// keeps being served for up to 24 hours after it was fetched, so a client in
+// use is not signed out by a brief outage or by someone filling the load
+// slots. A document that is fetched and refused is dropped at once.
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { Resolver } from "node:dns/promises";
@@ -33,6 +36,9 @@ import { OAuthClientMetadataSchema } from "@modelcontextprotocol/sdk/shared/auth
 export const MAX_CONCURRENT_LOADS = 16;
 
 const MIN_CACHE_SECONDS = 5 * 60;
+// Failures of transport, not of the document, after which the last accepted
+// document may still be served.
+const TRANSIENT = new Set(["busy", "timeout", "dns_failed", "fetch_failed", "http_status"]);
 const MAX_CACHE_SECONDS = 24 * 60 * 60;
 
 class Refusal extends Error {
@@ -162,6 +168,10 @@ const cacheSeconds = (cacheControl) => {
   return Math.min(Math.max(seconds, MIN_CACHE_SECONDS), MAX_CACHE_SECONDS);
 };
 
+// How long the other address family may still take once one has answered:
+// a server that drops AAAA queries must not sink a host whose A answered.
+const SECOND_FAMILY_GRACE_MS = 500;
+
 // Resolves a host's A and AAAA records with a resolver of its own, which
 // `signal` cancels. An IP literal is its own answer. A family with no
 // records is fine as long as the other has some.
@@ -173,14 +183,21 @@ function resolverLookup({ servers, timeoutMs }) {
     if (servers) resolver.setServers(servers);
     const cancel = () => resolver.cancel();
     signal?.addEventListener("abort", cancel, { once: true });
+    let grace;
     try {
-      const [v4, v6] = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)]);
+      const queries = [resolver.resolve4(host), resolver.resolve6(host)];
+      const answered = () => {
+        grace ??= setTimeout(cancel, SECOND_FAMILY_GRACE_MS);
+      };
+      for (const query of queries) query.then(answered, () => {});
+      const [v4, v6] = await Promise.allSettled(queries);
       if (v4.status === "rejected" && v6.status === "rejected") throw v4.reason;
       return [
         ...(v4.status === "fulfilled" ? v4.value.map((address) => ({ address, family: 4 })) : []),
         ...(v6.status === "fulfilled" ? v6.value.map((address) => ({ address, family: 6 })) : []),
       ];
     } finally {
+      clearTimeout(grace);
       signal?.removeEventListener("abort", cancel);
     }
   };
@@ -189,8 +206,9 @@ function resolverLookup({ servers, timeoutMs }) {
 // `lookup` resolves a host to `[{ address, family }]`, given `{ all, signal }`;
 // by default our own resolver, on `dnsServers` when given. `ownHost` is the
 // gateway's own host name, never fetched. `ca` replaces the trusted roots;
-// `isPublic`, `timeoutMs`, `connectPort` and `now` exist for tests. `log` gets one line per refusal: the
-// reason, and the client id once it is known to be a well-formed URL.
+// `isPublic`, `timeoutMs`, `connectPort` and `now` exist for tests. `log`
+// gets one line per refusal or stale answer: the reason, and the client id
+// once it is known to be a well-formed URL.
 export function createClientDocuments({
   redirects,
   ownHost,
@@ -205,10 +223,10 @@ export function createClientDocuments({
   maxEntries = 500,
   connectPort = 443,
 }) {
-  const cache = new Map(); // client id -> { client, expiresAt }, oldest first
+  const cache = new Map(); // client id -> { client, expiresAt, staleUntil }, least recently used first
   const inflight = new Map(); // client id -> the one fetch under way
 
-  // Reads the document from `address`, which was resolved and checked
+  // Reads the document from `addresses`, which were resolved and checked
   // already, and returns its body and Cache-Control.
   function fetchFrom(url, addresses, signal) {
     return new Promise((resolve, reject) => {
@@ -278,6 +296,20 @@ export function createClientDocuments({
     return { ...metadata, client_id: clientId, token_endpoint_auth_method: "none" };
   }
 
+  // The answer when loading `clientId` failed for `reason`: the last accepted
+  // document if the failure was in transit and it is not too old, else
+  // nothing, and the old copy goes.
+  function failed(clientId, reason) {
+    const stale = cache.get(clientId);
+    if (stale && TRANSIENT.has(reason) && stale.staleUntil > now()) {
+      log(`client document stale: ${reason} client ${clientId}`);
+      return stale.client;
+    }
+    cache.delete(clientId);
+    log(`client refused: ${reason}${loggableId(clientId)}`);
+    return undefined;
+  }
+
   async function load(clientId) {
     let url;
     try {
@@ -306,13 +338,13 @@ export function createClientDocuments({
         controller.signal,
       );
       const client = clientFrom(clientId, body);
+      const fetchedAt = now();
       cache.delete(clientId);
-      cache.set(clientId, { client, expiresAt: now() + cacheSeconds(cacheControl) * 1000 });
+      cache.set(clientId, { client, expiresAt: fetchedAt + cacheSeconds(cacheControl) * 1000, staleUntil: fetchedAt + MAX_CACHE_SECONDS * 1000 });
       while (cache.size > maxEntries) cache.delete(cache.keys().next().value);
       return client;
     } catch (error) {
-      log(`client refused: ${error instanceof Refusal ? error.reason : "fetch_failed"} client ${clientId}`);
-      return undefined;
+      return failed(clientId, error instanceof Refusal ? error.reason : "fetch_failed");
     } finally {
       clearTimeout(timer);
     }
@@ -331,10 +363,7 @@ export function createClientDocuments({
         return cached.client;
       }
       let pending = inflight.get(clientId);
-      if (!pending && inflight.size >= MAX_CONCURRENT_LOADS) {
-        log(`client refused: busy${loggableId(clientId)}`);
-        return undefined;
-      }
+      if (!pending && inflight.size >= MAX_CONCURRENT_LOADS) return failed(clientId, "busy");
       if (!pending) {
         pending = load(clientId).finally(() => inflight.delete(clientId));
         inflight.set(clientId, pending);
