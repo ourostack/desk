@@ -36,7 +36,7 @@ import { runInWorker } from "./src/runtime/admission-worker.js"
 import { importInChunks } from "./src/runtime/chunked-import.js"
 import { createDeskSession, LAUNCHER_READ_ONLY_CODES } from "./src/runtime/desk-session.js"
 import { startFrontDoor } from "./src/runtime/front-door.js"
-import { hostedInstructions, isHosted } from "./src/runtime/hosted.js"
+import { hostedInstructions, isHosted, withHostedStartup } from "./src/runtime/hosted.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "./src/runtime/last-start.js"
 import {
   createRuntimeDiagnostic,
@@ -277,12 +277,13 @@ export async function main({
       failed(error)
     }
   }
+  const hostedInstructionsText = hosted ? hostedInstructions({ root: hostedRoot, pluginRoot: env.DESK_PLUGIN_ROOT }) : undefined
   frontDoor = startFrontDoor({
     input,
     output,
     serverVersion,
-    instructions: hosted ? hostedInstructions({ root: hostedRoot, pluginRoot: env.DESK_PLUGIN_ROOT }) : undefined,
-    callTool: (call) => session.callTool(call),
+    instructions: hostedInstructionsText,
+    callTool: hosted ? withHostedStartup({ callTool: (call) => session.callTool(call), instructions: hostedInstructionsText }) : (call) => session.callTool(call),
     onHandshake: () => {
       kick()
       startHostedSync()

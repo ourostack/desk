@@ -277,6 +277,9 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
   desk_status: schema({
     detail: flag("Pass true for the full payload (index, snapshots, vector packs, embedding spec, admission internals; tens of KB). Omit it for the compact answer: one `state` word, why it is not `ready`, what to do, and pointers."),
   }),
+  desk_skill: schema({
+    name: text("The skill to read, such as task-lifecycle; omit it to list every skill."),
+  }),
   desk_doctor: schema({
     format: { type: "string", enum: ["full", "preview"], description: "preview returns only the local package/process snapshot." },
     repair: { type: "string", enum: [...DOCTOR_REPAIRS], description: "A named repair to run." },

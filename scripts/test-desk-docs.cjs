@@ -213,6 +213,7 @@ const WORKFLOW_REQUIREMENTS = Object.freeze([
 const MCP_TOOL_NAMES = Object.freeze([
   "desk_status",
   "desk_doctor",
+  "desk_skill",
   "task_create",
   "task_update",
   "task_archive",

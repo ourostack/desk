@@ -413,7 +413,7 @@ test("the live server advertises neither retired private tool", async () => {
 
     assert.equal(listed.tools.some((tool) => tool.name === "desk_feedback"), false)
     assert.equal(listed.tools.some((tool) => tool.name === "desk_work_ledger"), false)
-    const expected = [...SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => !RETIRED_PRIVATE_TOOLS.includes(name)), "improvement_open", "improvement_next", "improvement_update"]
+    const expected = [...SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => !RETIRED_PRIVATE_TOOLS.includes(name)), "desk_skill", "improvement_open", "improvement_next", "improvement_update"]
     assert.equal(
       listed.tools.length,
       expected.length,

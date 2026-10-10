@@ -190,7 +190,7 @@ test("a task_update that commits the card says so: the sha, not yet pushed, and 
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "s", note: "did it" }, schedulePush: (options) => pushes.push(options) })
   assert.equal(result.desk_commit, head(root))
   assert.equal(result.desk_pushed, false)
-  assert.equal(result.desk_note, "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded.")
+  assert.equal(result.desk_note, "Desk card only: Desk committed it (a rebasing push may change desk_commit) and pushes in the background; run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded.")
   // Round P, V and W (Copilot): the model read the note as its own project commit having been pushed. The note leads with "card only", denies pushing the project's code, and ties any such claim to the agent's own push.
   assert.match(result.desk_note, /^Desk card only: /u)
   assert.match(result.desk_note, /Desk did not push your project's code/u)

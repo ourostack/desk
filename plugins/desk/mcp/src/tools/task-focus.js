@@ -13,6 +13,7 @@
 import { readMarkdown, pathExists } from "../util/fm.js"
 import { EFFECTIVE_ROOT_MISSING, resolveWriteTarget, validateWriteSegment } from "../util/paths.js"
 import { recentProgress } from "./task-body.js"
+import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 
 export const TASK_FOCUS_FIELDS = ["track", "slug", "clear"]
@@ -58,7 +59,7 @@ export async function findCard({ deskRoot, person, track, slug }) {
  *
  * Input: { track, slug } or { clear: true }
  *
- * Returns: { status: "focused", track, slug, task_status, recent_progress: [string], archived?: true } or
+ * Returns: { status: "focused", track, slug, task_status, recent_progress: [string], next_step: string | null, archived?: true } or
  * { status: "cleared" }. A card found only under `_archive/` is still focused (a session may be wrapping up or
  * reopening finished work) and the answer says `archived: true`. `recent_progress` is the last PROGRESS_ENTRIES entries
  * of the card's `## Progress log`, each cut to PROGRESS_ENTRY_CHARS characters, and is empty when the card has none.
@@ -88,6 +89,7 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
     slug,
     task_status: typeof card.data.status === "string" ? card.data.status : null,
     recent_progress: recentProgress(card.content, PROGRESS_ENTRIES, PROGRESS_ENTRY_CHARS).map(redactCredentialLikeText),
+    next_step: nextStepOf(card.content),
   }
   if (found.archived) result.archived = true
   return result

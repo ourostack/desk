@@ -58,7 +58,7 @@ export function hostedRefusal(name, input, env) {
   return reason === undefined ? null : { status: "refused", code: "hosted_unavailable", tool: name, reason }
 }
 
-const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_status"])
+const READ_ONLY = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_status", "desk_skill"])
 // Tools that can remove or overwrite what was there: archive and move relocate a task, rename a track rewrites its path, and desk_save replaces files.
 const DESTRUCTIVE = new Set(["task_archive", "task_move", "track_rename", "desk_save"])
 
@@ -71,6 +71,7 @@ export const TOOL_ANNOTATIONS = Object.freeze(Object.fromEntries(TOOL_NAMES.map(
 // A hosted client's own memory (claude.ai's, ChatGPT's) would split durable context between the client and the desk.
 const CLIENT_MEMORY = "Don't use this client's built-in memory. Durable context, preferences and task state live in the desk, written through Desk's tools, and the desk wins over anything the client's memory recalls. Never save to that memory. If the client lets you turn its memory off, do so. If it doesn't and its memory is on, tell the user once that Desk keeps their memory in the desk and that they can turn the client's memory off in its settings."
 const DESK_STATUS_FIRST = "Start by calling desk_status: it is this session's startup status block."
+const SKILLS = "Desk's skills are its working procedures. When these instructions or a tool answer name a skill, read it with desk_skill (no name lists them all) and follow it; this client cannot load them any other way."
 
 /**
  * The MCP instructions a hosted Desk sends with its initialize answer, in place of the session-start hook a hosted chat does not have: the using-desk foundation (frontmatter stripped), the desk's AGENTS.md, then what this hosted Desk refuses and why, ending with the desk_status line.
@@ -90,6 +91,7 @@ export function hostedInstructions({ root, pluginRoot }) {
     "# Hosted Desk",
     "This Desk runs as a hosted service: there is no shell, git or plugin script here, so the session-start hook has not run. These instructions carry the startup the foundation above asks for. Skip session-start (session boot) and the skills listed below, call desk_status first, and work through the Desk tools.",
     CLIENT_MEMORY,
+    SKILLS,
     `Tools Desk refuses here:\n${list(HOSTED_UNAVAILABLE)}`,
     `desk_doctor repairs Desk refuses here:\n${list(HOSTED_UNAVAILABLE_REPAIRS)}`,
     `Skills to skip, because they need a shell:\n${list(HOSTED_SHELL_SKILLS)}`,
@@ -108,5 +110,38 @@ function readOptional(read) {
     return read()
   } catch {
     return null
+  }
+}
+
+// How long the first desk_status waits, in total, for a status detail that is still loading, and how often it asks again.
+const STARTUP_DETAIL_WAIT_MS = 6_000
+const STARTUP_DETAIL_POLL_MS = 1_000
+
+function detailPending(result) {
+  if (result?.isError) return false
+  try {
+    return JSON.parse(result?.content?.[0]?.text ?? "null")?.detail_pending === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Wraps a hosted Desk's `callTool` so its first successful desk_status answer carries `instructions` as a second text item. A client such as claude.ai never shows the model a server's MCP instructions, but every client shows a tool's answer, and Desk's instructions tell the agent to call desk_status first.
+ * That first answer also waits, up to six seconds in all, for a status detail that is still loading, so a hosted chat does not start from an answer with an empty root and sync.
+ */
+export function withHostedStartup({ callTool, instructions, waitMs = STARTUP_DETAIL_WAIT_MS, pollMs = STARTUP_DETAIL_POLL_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  let delivered = false
+  return async (call) => {
+    let result = await callTool(call)
+    if (call?.name !== "desk_status" || delivered || result?.isError) return result
+    for (let waited = 0; detailPending(result) && waited < waitMs; waited += pollMs) {
+      await sleep(pollMs)
+      result = await callTool(call)
+    }
+    if (result?.isError) return result
+    delivered = true
+    const text = `# Desk instructions for this session\n\nThis client does not show Desk's server instructions, so they come here, once. Follow them for the rest of this conversation.\n\n${instructions}`
+    return { ...result, content: [...(result?.content ?? []), { type: "text", text }] }
   }
 }

@@ -22,6 +22,7 @@ import { existsSync, statSync, lstatSync, realpathSync, constants as fsConstants
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { isLiveCardPath } from "../desk/card-commit-guard.js"
+import { headSha } from "./task.js"
 import { isGitRepository, hasUnstagedWork, stagedChanges, indexEntries, stagePaths, commitPaths, commitIndexPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
@@ -182,7 +183,8 @@ async function writeFiles(checked) {
  * non-Git desk, or when the desk root isn't a Git repository, there is
  * nothing desk_save can do, so it reports `nothing_to_commit` too.
  *
- * Returns: { status: "committed" | "nothing_to_commit", commit? }
+ * Returns: { status: "committed" | "nothing_to_commit", commit?, desk_commit?, desk_pushed?, desk_note? }: a commit made here reports
+ * its short sha as `desk_commit` (left out when Git cannot say) and `desk_pushed: false`, because the push is scheduled, not yet done.
  */
 function tidyTrailer(message) {
   const trimmed = message.replace(/\s+$/u, "")
@@ -244,8 +246,12 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
   }
   schedulePush({ root: deskRoot })
-  return { status: "committed" }
+  const deskCommit = headSha(deskRoot, spawnGit)
+  return deskCommit === null ? { status: "committed", desk_pushed: false, desk_note: DESK_SAVE_NOTE } : { status: "committed", desk_commit: deskCommit, desk_pushed: false, desk_note: DESK_SAVE_NOTE }
 }
+
+// Said in the answer so no agent pushes by hand or reads `desk_pushed: false` as a failure.
+const DESK_SAVE_NOTE = "Desk committed these files and is pushing them in the background, so run no git for them. desk_commit is the local commit: if the push has to rebase onto newer desk commits, the commit gets a new hash on the remote, so find it there by its message."
 
 // The tidy commit. Task cards must already be staged as pure renames or deletions; every other path is staged here when it holds unstaged work.
 // What is committed is what was judged: the index at `paths`, through a temporary index (commitIndexPaths), never the working tree. `_archive/**` is not a live

@@ -44,6 +44,24 @@ test("desk_save writes and commits a new file from `files` with its exact conten
   assert.equal(git(root, ["status", "--short"]), "")
 })
 
+test("desk_save reports its commit as desk_commit with desk_pushed false and a note", async () => {
+  const root = await gitDesk()
+  const result = await save(root, { files: [{ path: "track/task/notes/b.md", content: "B.\n" }], message: "save b" })
+  assert.equal(result.status, "committed")
+  assert.equal(result.desk_commit, git(root, ["rev-parse", "--short", "HEAD"]).trim())
+  assert.equal(result.desk_pushed, false)
+  assert.match(result.desk_note, /new hash on the remote/u)
+})
+
+test("desk_save leaves desk_commit out when Git cannot name the commit", async () => {
+  const root = await gitDesk()
+  const spawnGit = (cmd, args, opts) => args.includes("rev-parse") && args.includes("--short") ? { status: 1, stdout: "" } : spawnSync(cmd, args, opts)
+  const result = await save(root, { files: [{ path: "track/task/notes/c.md", content: "C.\n" }], message: "save c" }, { spawnGit })
+  assert.equal(result.status, "committed")
+  assert.equal(result.desk_commit, undefined)
+  assert.equal(result.desk_pushed, false)
+})
+
 test("desk_save overwrites an existing non-card file from `files`", async () => {
   const root = await gitDesk()
   await fs.mkdir(path.join(root, "track/task"), { recursive: true })

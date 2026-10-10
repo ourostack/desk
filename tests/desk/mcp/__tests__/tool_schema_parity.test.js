@@ -31,6 +31,7 @@
 // desk_status takes no input at all (NO_INPUT_TOOLS, per tool_schemas.test.js)
 // and is included here with an empty field list for the same reason.
 
+import { DESK_SKILL_FIELDS } from "../../../../plugins/desk/mcp/src/runtime/skills.js"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { TOOL_NAMES } from "../../../../plugins/desk/mcp/src/tool-names.js"
@@ -78,6 +79,7 @@ const HANDLER_FIELDS = {
   desk_thread: DESK_THREAD_FIELDS,
   desk_reindex: DESK_REINDEX_FIELDS,
   desk_status: DESK_STATUS_FIELDS,
+  desk_skill: DESK_SKILL_FIELDS,
   desk_doctor: DESK_DOCTOR_FIELDS,
   improvement_open: IMPROVEMENT_OPEN_FIELDS,
   improvement_next: IMPROVEMENT_NEXT_FIELDS,
