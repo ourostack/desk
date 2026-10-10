@@ -21,12 +21,30 @@ async function protectedWrite(file, value) {
   await protectLeafFile(file, process.platform, naming)
 }
 
-function scopedSearchPath(target, base, root, home) {
-  if (typeof target !== "string" || target.includes("\0")) return false
-  if (target === "~" || target.startsWith("~/")) {
-    if (typeof home !== "string") return false
-    target = path.join(home, target.slice(2))
+// Pinned et/On on the admitted POSIX host: reject NUL before ECMAScript
+// trim, expand only ~ or ~/, normalize/resolve, then NFC. Backslashes and
+// Unicode slash lookalikes remain literal on this platform. This is INPUT
+// interpretation, never a transformation of returned filesystem names.
+function toolInputPath(target, base, home) {
+  if (typeof target !== "string" || target.includes("\0")) return null
+  const value = target.trim()
+  if (value === "~" || value.startsWith("~/")) {
+    if (typeof home !== "string") return null
+    return path.normalize(path.join(home, value.slice(2))).normalize("NFC")
   }
+  return (value === "" ? path.normalize(base) : path.isAbsolute(value) ?
+    path.normalize(value) : path.resolve(base, value)).normalize("NFC")
+}
+
+// Read/Edit use ek rather than et: a path whose dot resolution exposes
+// trailing whitespace must not be silently reinterpreted on its next use.
+function stableToolInputPath(target, base, home) {
+  const normalized = toolInputPath(target, base, home)
+  return normalized !== null && toolInputPath(normalized, base, home) === normalized ? normalized : null
+}
+
+function scopedSearchPath(target, base, root) {
+  if (typeof target !== "string" || target.includes("\0")) return false
   const lexical = path.resolve(base, target)
   let cursor = lexical
   const suffix = []
@@ -44,24 +62,34 @@ function scopedSearchPath(target, base, root, home) {
   }
 }
 
+// Glob does NOT trim/NFC-normalize the whole pattern. Xno/LFe test raw
+// absoluteness first; only the extracted absolute directory goes through et.
+function globPatternParts(pattern) {
+  if (typeof pattern !== "string" || pattern === "") return null
+  const magic = pattern.search(/[*?[{]/u)
+  if (magic < 0) return { directory: path.dirname(pattern), relative: path.basename(pattern) }
+  const prefix = pattern.slice(0, magic)
+  const separator = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf(path.sep))
+  return { directory: separator < 0 ? "" : prefix.slice(0, separator) || path.sep,
+    relative: pattern.slice(separator + 1) }
+}
+
 // Mirrors the pinned Glob Xno/LFe/getPath boundary: an absolute pattern's
 // nonmagic directory overrides path; relative patterns remain filters under
 // path/cwd. Audit relative literal prefixes too, and every returned filename.
 function searchUseIsScoped(use, outcomes, controls) {
   const root = path.dirname(controls.resultFile), input = use.input ?? {}
-  if (use.name === "Edit") return input.file_path === controls.resultFile || input.path === controls.resultFile
-  let searchRoot = input.path ?? input.file_path ?? root
-  if (use.name === "Read") return scopedSearchPath(input.file_path ?? input.path, root, root, controls.home)
+  if (use.name === "Edit") return stableToolInputPath(input.file_path ?? input.path, root, controls.home) ===
+    toolInputPath(controls.resultFile, root, controls.home)
+  let searchRoot = toolInputPath(input.path ?? input.file_path ?? root, root, controls.home)
+  if (use.name === "Read") return scopedSearchPath(stableToolInputPath(input.file_path ?? input.path, root, controls.home), root, root)
   if (use.name === "Glob") {
-    if (typeof input.pattern !== "string" || input.pattern === "") return false
-    const magic = input.pattern.search(/[*?[{]/u)
-    const prefix = magic < 0 ? input.pattern : input.pattern.slice(0, magic)
-    const separator = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf(path.sep))
-    const directory = separator < 0 ? "" : prefix.slice(0, separator) || path.sep
-    if (path.isAbsolute(input.pattern)) searchRoot = directory
-    else if (typeof searchRoot !== "string" || !scopedSearchPath(directory, path.resolve(root, searchRoot), root, controls.home)) return false
+    const parts = globPatternParts(input.pattern)
+    if (!parts) return false
+    if (path.isAbsolute(input.pattern)) searchRoot = toolInputPath(parts.directory, root, controls.home)
+    else if (typeof searchRoot !== "string" || !scopedSearchPath(parts.directory, searchRoot, root)) return false
   }
-  if (!scopedSearchPath(searchRoot, root, root, controls.home)) return false
+  if (!scopedSearchPath(searchRoot, root, root)) return false
   // Pinned FAt accepts -l/-c boolean (or "true") aliases before validation.
   // Content from a single admitted file has no filename prefix; directory
   // results carry filename:line:text / filename-line-context, or no numbers.
@@ -91,7 +119,7 @@ function searchUseIsScoped(use, outcomes, controls) {
         // the prepared root. Every plausible filename prefix must be scoped.
         const matches = [...line.matchAll(unnumbered ? /[:-]/gu : /(?=[:-]\d+[:-])/gu)]
         if (matches.length === 0 || !matches.every((match) => match.index > 0 &&
-            scopedSearchPath(line.slice(0, match.index), root, root, controls.home))) return false
+            scopedSearchPath(line.slice(0, match.index), root, root))) return false
         continue
       }
       if (use.name === "Grep" && mode === "count") {
@@ -99,7 +127,7 @@ function searchUseIsScoped(use, outcomes, controls) {
         if (!match) return false
         filename = match[1]
       }
-      if (!scopedSearchPath(filename, root, root, controls.home)) return false
+      if (!scopedSearchPath(filename, root, root)) return false
     }
   }
   return true
@@ -130,12 +158,21 @@ function observe(operations, run, before, controls) {
       if (!(operation.tool.startsWith("mcp__") ? block.name.startsWith("mcp__") : block.name === operation.tool)) return false
       if (!fileTool) return true
       const pattern = block.input?.pattern
+      const root = path.dirname(controls.resultFile)
+      const target = toolInputPath(operation.target, root, controls.home)
       // Native Glob may enumerate the exact outside file using only an
       // absolute pattern. Such a pattern overrides any explicit path.
       if (operation.tool === "Glob" && typeof pattern === "string" && path.isAbsolute(pattern)) {
-        return pattern === operation.target || pattern.startsWith(`${operation.target}/`)
+        const parts = globPatternParts(pattern)
+        const directory = toolInputPath(parts.directory, root, controls.home)
+        if (directory === null) return false
+        const effective = `${directory}${directory.endsWith(path.sep) ? "" : path.sep}${parts.relative}`
+        return effective === target || effective.startsWith(`${target}/`)
       }
-      return block.input?.file_path === operation.target || block.input?.path === operation.target
+      const value = ["Read", "Edit"].includes(operation.tool) ? block.input?.file_path ?? block.input?.path :
+        block.input?.path ?? block.input?.file_path ?? root
+      return (["Read", "Edit"].includes(operation.tool) ? stableToolInputPath(value, root, controls.home) :
+        toolInputPath(value, root, controls.home)) === target
     })
     const outcomes = matchingUses.map((use) => results.find((block) => block.tool_use_id === use.id))
     const tool_available = manifest ? manifest.includes(operation.tool) : null
