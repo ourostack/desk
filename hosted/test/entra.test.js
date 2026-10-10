@@ -225,7 +225,7 @@ test("the authorize URL carries response_mode=query and scope openid profile", a
   assert.match(params.get("code_challenge"), /^[A-Za-z0-9_-]{43}$/);
   assert.match(params.get("nonce"), /^[A-Za-z0-9_-]{22,}$/);
   // The state carries only the sealed pending request and the stateId: no verifier, no nonce.
-  const pending = unseal("pending", params.get("state"), { key: KEY, now: START });
+  const pending = unseal("entra-pending", params.get("state"), { key: KEY, now: START });
   assert.equal(pending.clientId, PENDING.clientId);
   assert.ok(who.cookies()[`${SIGNIN_COOKIE_PREFIX}${pending.stateId}`]);
   const stateText = Buffer.from(params.get("state").split(".")[0], "base64url").toString();
@@ -386,7 +386,7 @@ test("the token request sends the verifier and client_secret_post and never logs
   await identityFor(ctx, OID);
   const who = browser();
   const url = beginIn(ctx, who);
-  const pending = unseal("pending", url.searchParams.get("state"), { key: KEY, now: START });
+  const pending = unseal("entra-pending", url.searchParams.get("state"), { key: KEY, now: START });
   const { verifier } = createSigninCookies({ key: KEY, now: () => START }).take(pending.stateId, who.cookies());
   const code = ctx.tenant.authorize(url, { oid: OID });
   secrets.add(code);
@@ -561,4 +561,128 @@ test("sealed values of one kind are never accepted as another", () => {
   const pending = seal("pending", { stateId: "x" }, { key: KEY, ttlSec: 600, now: START });
   assert.equal(unseal("signin", pending, { key: KEY, now: START }), null);
   assert.equal(unseal("invite", pending, { key: KEY, now: START }), null);
+});
+
+// ---- fix round 1: timeouts, the invite cookie, the state's kind, a later mismatch, unexpected errors ----
+
+// A fetch that never answers until its signal aborts it, as a ciamlogin.com that accepts the connection and hangs.
+const hanging = (seen) => (url, init = {}) => {
+  seen?.push({ url: String(url), signal: init.signal });
+  return new Promise((_, reject) => {
+    if (!init.signal) return;
+    // AbortSignal.timeout's timer doesn't hold the event loop open; a real hanging socket does, and so does this.
+    const socket = setTimeout(() => {}, 60_000);
+    init.signal.addEventListener("abort", () => (clearTimeout(socket), reject(init.signal.reason)), { once: true });
+  });
+};
+
+test("a discovery fetch that never answers is cut off, so start resolves and retries in the background", async () => {
+  const seen = [];
+  const discovery = createDiscovery({ subdomain: SUBDOMAIN, tenantId: TENANT_ID, fetch: hanging(seen), retryMs: 60_000, timeoutMs: 50, log });
+  const started = performance.now();
+  await discovery.start();
+  discovery.stop();
+  assert.ok(performance.now() - started < 2000, "start must not wait on a hanging tenant");
+  assert.equal(discovery.ready(), false);
+  assert.ok(seen[0].signal instanceof AbortSignal);
+  assert.ok(logs.some((line) => /Entra discovery could not be loaded/.test(line)));
+});
+
+test("a token exchange that never answers is cut off and shows a page", async () => {
+  const ctx = await setup();
+  await identityFor(ctx, OID);
+  const seen = [];
+  const hang = hanging(seen);
+  const entra = createEntraSignIn({
+    key: KEY,
+    discovery: ctx.discovery,
+    tenantId: TENANT_ID,
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+    callbackUrl: CALLBACK,
+    store: ctx.store,
+    repo: REPO,
+    fetch: (url, init) => (String(url) === DISCOVERY.token_endpoint ? hang(url, init) : ctx.tenant.fetch(url, init)),
+    timeoutMs: 50,
+    now: ctx.now,
+    log,
+  });
+  const who = browser();
+  const begun = entra.begin(PENDING, who.cookies());
+  who.apply(begun.setCookies);
+  const url = new URL(begun.redirectTo);
+  const started = performance.now();
+  const outcome = await entra.callback({ code: ctx.tenant.authorize(url, { oid: OID }), state: url.searchParams.get("state"), cookies: who.cookies() });
+  assert.ok(performance.now() - started < 2000);
+  assert.equal(outcome.status, 502);
+  assert.equal(outcome.redirectTo, undefined);
+  assert.ok(seen[0].signal instanceof AbortSignal);
+  assert.ok(logs.some((line) => /entra_token_exchange \(TimeoutError\)/.test(line)));
+});
+
+test("a known identity's sign-in clears an invite cookie it didn't need", async () => {
+  const ctx = await setup();
+  await identityFor(ctx, OID);
+  const { token } = await issueInvite({ store: ctx.store, accountId: ctx.accountId, now: START });
+  secrets.add(token);
+  const who = browser();
+  who.apply((await ctx.invites.land(token)).setCookies);
+  codeIn(await signIn(ctx, who, { oid: OID }));
+  assert.equal(who.cookies()["__Host-desk-invite"], undefined);
+  // The invite is still unused.
+  assert.equal((await ctx.invites.land(token)).redirectTo, "/invite");
+});
+
+test("the state sent to the tenant is never accepted as GitHub's pending state", async () => {
+  const ctx = await setup();
+  const url = beginIn(ctx, browser());
+  assert.equal(unseal("pending", url.searchParams.get("state"), { key: KEY, now: START }), null);
+  // And a GitHub pending state, even with a stateId, is not accepted at the Entra callback.
+  const who = browser();
+  const githubState = seal("pending", { ...PENDING, stateId: "x".repeat(22) }, { key: KEY, ttlSec: 600, now: START });
+  assert.equal((await ctx.entra.callback({ code: "c", state: githubState, cookies: who.cookies() })).status, 400);
+});
+
+test("an issuer mismatch found by a background retry is reported by mismatch()", async () => {
+  const tenant = await stubTenant();
+  tenant.state.discoveryDown = true;
+  const discovery = createDiscovery({ subdomain: SUBDOMAIN, tenantId: TENANT_ID, fetch: tenant.fetch, retryMs: 5, log });
+  try {
+    await discovery.start();
+    assert.equal(discovery.mismatch(), false);
+    tenant.state.discovery = { ...DISCOVERY, issuer: `https://${SUBDOMAIN}.ciamlogin.com/${TENANT_ID}/v2.0` };
+    tenant.state.discoveryDown = false;
+    for (let i = 0; i < 200 && !discovery.mismatch(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(discovery.mismatch(), true);
+    assert.equal(discovery.ready(), false);
+  } finally {
+    discovery.stop();
+  }
+});
+
+test("an unexpected error in the Entra callback route is logged by name only", async (t) => {
+  const provider = createProvider({
+    key: KEY,
+    issuer: GATEWAY,
+    github: { clientId: "Iv1.ouro-desk", clientSecret: "secret", fetch: () => assert.fail("no GitHub call expected") },
+    allowedLogins: ["arimendelow"],
+    resource: RESOURCE,
+    log,
+  });
+  const entra = {
+    callback: async () => {
+      throw new TypeError("details-that-must-not-be-logged");
+    },
+  };
+  const app = createApp({ provider, relay: {}, githubCallback: provider.githubCallback, issuer: GATEWAY, resource: RESOURCE, entra, log });
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/oauth/entra/callback?code=c&state=s`, { redirect: "manual" });
+  assert.equal(response.status, 502);
+  assert.ok(logs.some((line) => line === "sign-in failed: entra_callback_error (TypeError)"), logs.join("\n"));
+  assert.ok(!logs.some((line) => line.includes("details-that-must-not-be-logged")));
 });

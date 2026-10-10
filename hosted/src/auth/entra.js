@@ -45,6 +45,17 @@ const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 export const entraIssuer = (tenantId) => `https://${tenantId}.ciamlogin.com/${tenantId}/v2.0`;
 
+// How long a discovery fetch may take before it counts as failed and is retried in the background: short, so
+// starting the gateway never waits long on ciamlogin.com.
+export const DISCOVERY_TIMEOUT_MS = 10_000;
+// How long the code exchange may take: a person is waiting at the callback, and a slow tenant should give them the
+// "start again" page rather than a request held open for minutes.
+export const TOKEN_EXCHANGE_TIMEOUT_MS = 10_000;
+
+// The seal kind of the state sent to the tenant. Its own kind, so it is never accepted as the GitHub sign-in's
+// `pending` state, nor a GitHub state here.
+const STATE_KIND = "entra-pending";
+
 const httpsUrl = (value) => {
   try {
     return typeof value === "string" && new URL(value).protocol === "https:" ? value : null;
@@ -60,22 +71,33 @@ class IssuerMismatch extends Error {
   }
 }
 
-// The tenant's OpenID Connect discovery document. `start()` fetches it once: it rejects only when the document
-// loads and names another issuer; when it can't be fetched (or is malformed), it resolves and keeps fetching every
-// `retryMs` in the background until it loads. `ready()` says whether it has; `get()` returns its endpoints.
-export function createDiscovery({ subdomain, tenantId, expectedIssuer = entraIssuer(tenantId), fetch = globalThis.fetch, retryMs = 30_000, log = stderrLog }) {
+// The tenant's OpenID Connect discovery document. `start()` fetches it once, waiting at most `timeoutMs`: it rejects
+// only when the document loads and names another issuer; when it can't be fetched in time (or is malformed), it
+// resolves and keeps fetching every `retryMs` in the background until it loads. `ready()` says whether it has;
+// `get()` returns its endpoints; `mismatch()` says whether the last document fetched named another issuer, which a
+// background retry can only log.
+export function createDiscovery({
+  subdomain,
+  tenantId,
+  expectedIssuer = entraIssuer(tenantId),
+  fetch = globalThis.fetch,
+  retryMs = 30_000,
+  timeoutMs = DISCOVERY_TIMEOUT_MS,
+  log = stderrLog,
+}) {
   if (!SUBDOMAIN.test(subdomain ?? "")) throw new Error("the Ouro tenant's subdomain must be a DNS label, such as ourobot");
   if (!GUID.test(tenantId ?? "")) throw new Error("the Ouro tenant's id must be a GUID");
   const url = `https://${subdomain}.ciamlogin.com/${tenantId}/v2.0/.well-known/openid-configuration`;
   let loaded = null;
   let timer = null;
   let stopped = false;
+  let mismatched = false;
 
   // Resolves true when loaded, false when it can't be used yet; throws IssuerMismatch.
   async function attempt() {
     let document;
     try {
-      const response = await fetch(url, { headers: { accept: "application/json" } });
+      const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) {
         log(`Entra discovery could not be loaded (HTTP ${response.status}); retrying in ${retryMs / 1000} s`);
         return false;
@@ -85,7 +107,8 @@ export function createDiscovery({ subdomain, tenantId, expectedIssuer = entraIss
       log(`Entra discovery could not be loaded (${error?.name ?? "error"}); retrying in ${retryMs / 1000} s`);
       return false;
     }
-    if (document?.issuer !== expectedIssuer) throw new IssuerMismatch(typeof document?.issuer === "string" ? document.issuer.slice(0, 200) : "none", expectedIssuer);
+    mismatched = document?.issuer !== expectedIssuer;
+    if (mismatched) throw new IssuerMismatch(typeof document?.issuer === "string" ? document.issuer.slice(0, 200) : "none", expectedIssuer);
     const endpoints = {
       issuer: document.issuer,
       authorizationEndpoint: httpsUrl(document.authorization_endpoint),
@@ -120,6 +143,7 @@ export function createDiscovery({ subdomain, tenantId, expectedIssuer = entraIss
       if (!(await attempt())) retryLater();
     },
     ready: () => loaded !== null,
+    mismatch: () => mismatched,
     get() {
       if (!loaded) throw new Error("the Ouro tenant's discovery document has not loaded yet");
       return loaded;
@@ -188,6 +212,7 @@ export function createEntraSignIn({
   store,
   repo,
   fetch = globalThis.fetch,
+  timeoutMs = TOKEN_EXCHANGE_TIMEOUT_MS,
   now = Date.now,
   log = stderrLog,
 }) {
@@ -212,6 +237,7 @@ export function createEntraSignIn({
       response = await fetch(discovery.get().tokenEndpoint, {
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+        signal: AbortSignal.timeout(timeoutMs),
         body: new URLSearchParams({
           client_id: clientId,
           client_secret: clientSecret,
@@ -226,9 +252,18 @@ export function createEntraSignIn({
       log(`sign-in failed: entra_token_exchange (${error?.name ?? "error"}) client ${clientIdForLog}`);
       return null;
     }
-    const grant = response.ok ? await response.json().catch(() => ({})) : {};
+    // The body is read under the same deadline; a body cut off counts as no ID token.
+    let grant = {};
+    let failure = `HTTP ${response.status}`;
+    if (response.ok) {
+      try {
+        grant = await response.json();
+      } catch (error) {
+        failure = error?.name ?? "error";
+      }
+    }
     if (typeof grant?.id_token !== "string") {
-      log(`sign-in failed: entra_token_exchange (HTTP ${response.status}) client ${clientIdForLog}`);
+      log(`sign-in failed: entra_token_exchange (${failure}) client ${clientIdForLog}`);
       return null;
     }
     return grant.id_token;
@@ -238,7 +273,9 @@ export function createEntraSignIn({
   // or `{ refusal }` (a page).
   async function accountFor({ tid, oid }, jar, clientIdForLog) {
     const known = await store.findIdentity(tid, oid);
-    if (known !== null) return { accountId: known, redeemed: false };
+    // An invite cookie left in a browser whose identity already has an account is dropped, so nobody signing in
+    // later in that browser as a new identity can redeem it.
+    if (known !== null) return { accountId: known, redeemed: false, clearInvite: inviteFrom(jar) !== null };
     const tokenHash = inviteFrom(jar);
     if (!tokenHash) {
       log(`sign-in refused: not_invited client ${clientIdForLog}`);
@@ -248,7 +285,7 @@ export function createEntraSignIn({
     if (result.refused === "identity_has_account") {
       // Mapped by a concurrent sign-in of the same identity.
       const mapped = await store.findIdentity(tid, oid);
-      if (mapped !== null) return { accountId: mapped, redeemed: false };
+      if (mapped !== null) return { accountId: mapped, redeemed: false, clearInvite: true };
     }
     if (result.refused) {
       log(`sign-in refused: invite_${result.refused} client ${clientIdForLog}`);
@@ -286,7 +323,7 @@ export function createEntraSignIn({
         redirect_uri: callbackUrl,
         response_mode: "query",
         scope: "openid profile",
-        state: sealed("pending", { ...request, stateId }, TTL.pending),
+        state: sealed(STATE_KIND, { ...request, stateId }, TTL.pending),
         nonce,
         code_challenge: challenge,
         code_challenge_method: "S256",
@@ -297,7 +334,7 @@ export function createEntraSignIn({
     // Returns `{ redirectTo, clearCookies }` to send the browser back to the client, or `{ status, html,
     // clearCookies }` for a page shown instead.
     async callback({ code, state, error, cookies: jar = {} }) {
-      const pending = unsealed("pending", state);
+      const pending = unsealed(STATE_KIND, state);
       if (!pending || typeof pending.stateId !== "string") {
         log("sign-in refused: invalid_state");
         return { ...startAgainPage(), clearCookies: [] };
@@ -334,10 +371,9 @@ export function createEntraSignIn({
       let accountId;
       try {
         const found = await accountFor(identity, jar, pending.clientId);
-        if (found.clearInvite) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
+        if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
         if (found.refusal) return { ...found.refusal, clearCookies };
         accountId = found.accountId;
-        if (found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
         const account = await store.getAccount(accountId);
         if (!account?.deskAccess) {
           log(`sign-in refused: access_off account ${accountId} client ${pending.clientId}`);
@@ -377,8 +413,9 @@ export function createEntraSignIn({
 
 const text = (value) => (typeof value === "string" ? value : undefined);
 
-// The Express route for the tenant's redirect back to the gateway.
-export function entraCallbackHandler(entra) {
+// The Express route for the tenant's redirect back to the gateway. An unexpected error is logged by its name
+// only: its message could carry a value from the request.
+export function entraCallbackHandler(entra, { log = stderrLog } = {}) {
   return async (req, res) => {
     res.setHeader("cache-control", "no-store");
     try {
@@ -391,7 +428,8 @@ export function entraCallbackHandler(entra) {
       for (const header of outcome.clearCookies ?? []) res.append("set-cookie", header);
       if (outcome.redirectTo) return res.redirect(302, outcome.redirectTo);
       sendPage(res, outcome);
-    } catch {
+    } catch (error) {
+      log(`sign-in failed: entra_callback_error (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
       sendPage(res, page(502, "Sign-in failed while talking to Ouro sign-in. Start again from Claude."));
     }
   };
