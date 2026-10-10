@@ -9,12 +9,12 @@ import {
 import { publicPatternField } from "./published-schema.js"
 import { isCredentialLike } from "./credential.js"
 
-export const TRIAGE_SCHEMA = "desk.factory.triage/1"
-export const TRIAGE_RESULT_SCHEMA = "desk.factory.triage-result/1"
+const TRIAGE_SCHEMA = "desk.factory.triage/1"
+const TRIAGE_RESULT_SCHEMA = "desk.factory.triage-result/1"
 export const TRIAGE_PATH = /^triage\/[0-9a-f]{16}\.json$/u
-export const TRIAGE_ROUTES = Object.freeze(["agent_ready", "investigate", "human_decision"])
-export const TRIAGE_GATES = Object.freeze(["intent", "scope", "approval", "voice", "spend", "account", "irreversible"])
-export const TRIAGE_AUTHORITY_CODES = Object.freeze(["existing_scope", "approved_plan", "investigation_only", "human_gate"])
+const TRIAGE_ROUTES = Object.freeze(["agent_ready", "investigate", "human_decision"])
+const TRIAGE_GATES = Object.freeze(["intent", "scope", "approval", "voice", "spend", "account", "irreversible"])
+const TRIAGE_AUTHORITY_CODES = Object.freeze(["existing_scope", "approved_plan", "investigation_only", "human_gate"])
 // Shared with the future Task 6 runner, not its local qualified/blocked record.
 export const TRIAGE_RUNNER_STATES = Object.freeze([
   "ran", "no_agent_cli", "unsupported_host", "no_credentials", "disabled_would_bill",
@@ -25,8 +25,8 @@ export const TRIAGE_RUNNER_STATES = Object.freeze([
 // canonical exports, as with other existing factory schema vocabularies.
 export const TRIAGE_SOURCES = Object.freeze(["andon", "friction_candidate", "reconcile_class", "desk_problem", "store_build", "evaluator", "loop_alarm", "flush_health"])
 export const TRIAGE_LIFECYCLES = Object.freeze(["open", "claimed", "shipped", "verifying", "closed_confirmed", "closed_unverified"])
-export const TRIAGE_MAX_ROWS = 20
-export const TRIAGE_MAX_ROW_BYTES = 16 * 1024
+const TRIAGE_MAX_ROWS = 20
+const TRIAGE_MAX_ROW_BYTES = 16 * 1024
 const MAX_BYTES = TRIAGE_MAX_ROWS * TRIAGE_MAX_ROW_BYTES + 4096
 const AGE = ["recent", "aging", "stale", "never", "unknown"]
 const HEX32 = /^[0-9a-f]{32}$/u

@@ -23,6 +23,37 @@ const reject = (value, code) => {
   for (const sentinel of fixture.privacy_sentinels) assert.equal(JSON.stringify(result).includes(sentinel), false)
 }
 
+test("incidental_triage_constants_are_not_public_interfaces", () => {
+  for (const name of ["TRIAGE_SCHEMA", "TRIAGE_RESULT_SCHEMA", "TRIAGE_ROUTES", "TRIAGE_GATES", "TRIAGE_AUTHORITY_CODES", "TRIAGE_MAX_ROWS", "TRIAGE_MAX_ROW_BYTES"]) {
+    assert.equal(Object.hasOwn(triage, name), false, `${name} must remain an implementation detail`)
+  }
+})
+
+test("exported_triage_path_matches_the_named_contract_and_intake_classifier", () => {
+  assert.equal(triage.TRIAGE_PATH.source, "^triage\\/[0-9a-f]{16}\\.json$")
+  assert.equal(triage.TRIAGE_PATH.flags, "u")
+  for (const [path, accepted] of [
+    ["triage/0123456789abcdef.json", true],
+    ["triage/0000000000000000.json", true],
+    ["triage/ffffffffffffffff.json", true],
+    ["triage/0123456789abcde.json", false],
+    ["triage/0123456789abcdef0.json", false],
+    ["triage/0123456789abcdeF.json", false],
+    ["triage/0123456789abcdeg.json", false],
+    ["triage/0123456789abcdef.JSON", false],
+    ["other/0123456789abcdef.json", false],
+    ["../triage/0123456789abcdef.json", false],
+    ["triage/0123456789abcdef.json/extra", false],
+    ["triage/0123456789abcdef.json\n", false],
+    ["", false],
+    [null, false],
+    [undefined, false],
+  ]) {
+    assert.equal(triage.TRIAGE_PATH.test(path), accepted, `named pattern: ${path}`)
+    assert.equal(triage.isTriagePath(path), accepted, `intake classifier: ${path}`)
+  }
+})
+
 test("triage_closed_contract", () => {
   requireContract()
   assert.deepEqual(triage.validateTriageBytes(bytes(clone())), { ok: true, errors: [] })
@@ -98,9 +129,10 @@ test("public_nulls_bounds_versions_and_canonical_bytes_fail_closed", () => {
   assert.equal(triage.validateTriageBytes(undefined).ok, false)
   assert.equal(triage.validateTriageBytes('{"schema":"private","schema":"desk.factory.triage/1"}').ok, false)
   assert.equal(triage.validateTriageBytes(Buffer.from([0xff])).ok, false)
-  for (const state of ["ran","no_agent_cli","unsupported_host","no_credentials","disabled_would_bill","sign_in_unknown","scope_unqualified","scope_changed","timeout","budget_exceeded","failed","headless_session","no_time_for_a_run"]) {
+  assert.deepEqual([...triage.TRIAGE_RUNNER_STATES], ["ran","no_agent_cli","unsupported_host","no_credentials","disabled_would_bill","sign_in_unknown","scope_unqualified","scope_changed","timeout","budget_exceeded","failed","headless_session","no_time_for_a_run"])
+  for (const state of triage.TRIAGE_RUNNER_STATES) {
     const v = clone(); v.runner.state = state
-    assert.equal(triage.validateTriageBytes(bytes(v)).ok, true, state)
+    assert.deepEqual(triage.validateTriageBytes(bytes(v)), { ok:true,errors:[] }, state)
   }
   for (const state of ["qualified", "blocked", "unknown"]) { const v = clone(); v.runner.state = state; reject(v, "enum") }
   const v = clone(); v.rows[0].revision = Number.MAX_SAFE_INTEGER
