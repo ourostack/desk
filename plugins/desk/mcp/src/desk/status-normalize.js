@@ -74,12 +74,14 @@ function hasText(value) {
 function deskRootFor({ root, env, cwd, homeDir }) {
   if (hasText(root)) return path.resolve(root)
   try {
+    const hostProjectRoot = hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined
     return resolveDeskRootWithSource({
       activationConfigPath: resolveActivationConfigPath({ env }),
       env,
       cwd,
       homeDir,
-      hostProjectRoot: env.CLAUDE_PROJECT_DIR ?? cwd,
+      hostProjectRoot,
+      projectRootHint: hostProjectRoot === undefined ? cwd : undefined,
     }).root
   } catch {
     return null

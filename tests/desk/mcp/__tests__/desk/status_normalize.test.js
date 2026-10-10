@@ -44,6 +44,80 @@ function run(argv, opts = {}) {
   return { code, stdout, stderr }
 }
 
+async function associationDesks() {
+  const opened = await mkTempRoot("desk-status-launch-")
+  const associated = await mkTempRoot("desk-status-associated-")
+  for (const root of [opened, associated]) {
+    mkdirSync(path.join(root, "_meta"))
+    mkdirSync(path.join(root, "_archive"))
+  }
+  card(opened, "opened/from-a", "active")
+  card(associated, "associated/from-b", "doing")
+  return { opened, associated, home: await mkTempRoot("desk-status-home-") }
+}
+
+for (const association of ["activation", "DESK"]) {
+  for (const context of [undefined, "", "   "]) {
+    test(`launch association: status plan inspects saved ${association} desk rather than cwd with host context ${JSON.stringify(context)}`, async () => {
+      const { opened, associated, home } = await associationDesks()
+      const env = { HOME: home, ...(context === undefined ? {} : { CLAUDE_PROJECT_DIR: context }) }
+      if (association === "activation") {
+        const config = path.join(home, "activation.json")
+        writeFileSync(config, JSON.stringify({ schema_version: 1, desk: { root: associated } }))
+        env.DESK_ACTIVATION_CONFIG = config
+      } else {
+        env.DESK = associated
+      }
+      const options = { env, cwd: opened, homeDir: home }
+      const plan = run(["--plan"], options)
+      assert.equal(plan.code, 0)
+      assert.ok(plan.stdout.startsWith(`Desk: ${associated}\n`))
+      assert.ok(plan.stdout.includes('"slug":"from-b"'))
+      assert.ok(!plan.stdout.includes('"slug":"from-a"'))
+      assert.deepEqual(statusFindings(opened).map((finding) => finding.value), ["active"])
+      assert.deepEqual(statusFindings(associated).map((finding) => finding.value), ["doing"], "plan does not repair cards itself")
+    })
+  }
+}
+
+for (const association of ["unavailable activation", "unavailable DESK", "malformed activation"]) {
+  test(`launch association: status normalization refuses ${association} despite a valid cwd desk`, async () => {
+    const { opened, home } = await associationDesks()
+    const env = { HOME: home }
+    if (association === "unavailable DESK") env.DESK = path.join(home, "missing-desk")
+    else {
+      const config = path.join(home, "activation.json")
+      writeFileSync(config, association === "malformed activation" ? "{" : JSON.stringify({ schema_version: 1, desk: { root: path.join(home, "missing-desk") } }))
+      env.DESK_ACTIVATION_CONFIG = config
+    }
+    for (const context of [undefined, "", "   "]) {
+      const options = { env: { ...env, ...(context === undefined ? {} : { CLAUDE_PROJECT_DIR: context }) }, cwd: opened, homeDir: home }
+      assert.equal(run(["--detect"], options).code, 1)
+      const plan = run(["--plan"], options)
+      assert.equal(plan.code, 0)
+      assert.match(plan.stdout, /No desk is bound/u)
+      assert.ok(!plan.stdout.includes("task_update"))
+    }
+  })
+}
+
+test("launch association: status normalization retains actual host context and explicit CLI root precedence", async () => {
+  const { opened, associated, home } = await associationDesks()
+  const options = { env: { CLAUDE_PROJECT_DIR: opened, DESK: associated }, cwd: associated, homeDir: home }
+  assert.ok(run(["--plan"], options).stdout.includes('"slug":"from-a"'))
+  assert.ok(run(["--plan", "--root", associated], options).stdout.includes('"slug":"from-b"'))
+  const invalidAssociation = { ...options, env: { DESK: path.join(home, "missing-desk") } }
+  assert.ok(run(["--plan", "--root", opened], invalidAssociation).stdout.includes('"slug":"from-a"'))
+})
+
+test("launch association: status normalization uses unassociated cwd with absent or blank host context", async () => {
+  const { opened, home } = await associationDesks()
+  for (const context of [undefined, "", "   "]) {
+    const env = { HOME: home, ...(context === undefined ? {} : { CLAUDE_PROJECT_DIR: context }) }
+    assert.ok(run(["--plan"], { env, cwd: opened, homeDir: home }).stdout.startsWith(`Desk: ${opened}\n`))
+  }
+})
+
 test("statusFindings reads live and archived cards and skips valid, missing and unreadable ones", async () => {
   const root = await desk()
   const found = statusFindings(root, { skipDesks: true }).map((f) => `${f.archived ? "_archive/" : ""}${f.track}/${f.slug}=${f.value}->${f.mapped}`)
