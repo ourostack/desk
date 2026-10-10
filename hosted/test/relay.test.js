@@ -271,7 +271,7 @@ test("close() stops every child, and one that ignores SIGTERM gets SIGKILL after
   await relay.close();
   stderr.mock.restore();
   assert.ok(Date.now() - started >= 250, "SIGTERM came first and was given its time");
-  assert.match(String(stderr.mock.calls[0]?.arguments[0]), /Desk process ignored SIGTERM for 0\.3 s; sending SIGKILL/);
+  assert.match(stderr.mock.calls.map((call) => String(call.arguments[0])).join(""), /Desk process ignored SIGTERM for 0\.3 s; sending SIGKILL/);
   const [, signal] = await children[0].closed;
   assert.equal(signal, "SIGKILL");
   assert.equal(relay.size(), 0);
@@ -309,4 +309,16 @@ test("a session still starting when close() runs is refused with 503 and its chi
   const [, signal] = await children[0].closed;
   assert.equal(signal, "SIGKILL");
   assert.equal(relay.size(), 0);
+});
+
+test("the gateway logs each session's start, with its login, and its end, with the reason", async (t) => {
+  const lines = [];
+  const stderr = t.mock.method(process.stderr, "write", (text) => { lines.push(String(text)); return true; });
+  const { relay, url } = await start(t);
+  const id = await open(url, "octocat");
+  await relay.close();
+  stderr.mock.restore();
+  const text = lines.join("");
+  assert.match(text, new RegExp(`session ${id} started for octocat`));
+  assert.match(text, new RegExp(`session ${id} ended \\(gateway closing\\) after \\d+ s`));
 });

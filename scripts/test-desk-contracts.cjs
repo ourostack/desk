@@ -1465,7 +1465,7 @@ contract("the improvement-loop bounds in the doc are the constants in the code",
 requires(
   "plugins/desk/mcp/README.md",
   "the MCP readme lists the three improvement tools",
-  /## Tools exposed \(23\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 23 tools are wired/u,
+  /## Tools exposed \(24\)[\s\S]+`improvement_open`[\s\S]+`improvement_next`[\s\S]+`improvement_update`[\s\S]+All 24 tools are wired/u,
 );
 contract("the changelog text for the loop has no heading and says what changed for the reader", () => {
   // Before a release the text is the fragment. The release folds the fragment into the changelog and deletes it, and

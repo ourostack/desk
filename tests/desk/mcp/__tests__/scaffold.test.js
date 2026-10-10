@@ -39,6 +39,7 @@ const EXPECTED_TOOLS = [
   // Health/status
   "desk_status",
   "desk_doctor",
+  "desk_skill",
   // Improvement cards
   "improvement_open",
   "improvement_next",

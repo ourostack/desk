@@ -191,6 +191,9 @@ test("a task_update that commits the card says so: the sha, not yet pushed, and 
   assert.equal(result.desk_commit, head(root))
   assert.equal(result.desk_pushed, false)
   assert.equal(result.desk_note, "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded.")
+  assert.match(result.desk_commit_note, /^desk_commit is the local commit; .*new hash/u)
+  // evals/boot-acceptance/claims.mjs backs a "card pushed" sentence on this exact phrase.
+  assert.match(result.desk_note, /\bis pushing it in the background\b/iu)
   // Round P, V and W (Copilot): the model read the note as its own project commit having been pushed. The note leads with "card only", denies pushing the project's code, and ties any such claim to the agent's own push.
   assert.match(result.desk_note, /^Desk card only: /u)
   assert.match(result.desk_note, /Desk did not push your project's code/u)

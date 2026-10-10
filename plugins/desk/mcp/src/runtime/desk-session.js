@@ -18,6 +18,7 @@ import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority
 import { createAdmission, exceptionOutcome } from "./admission.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
 import { hostedRefusal } from "./hosted.js"
+import { deskSkill } from "./skills.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
@@ -679,6 +680,7 @@ export function createDeskSession(deps) {
     try {
       if (disposed) return pendingRefusal(name)
       if (name === "desk_status") return await deskStatus(input, signal)
+      if (name === "desk_skill") return deskSkill(input, { env })
       if (name === "desk_doctor" && !context.root) return await deskDoctor(input, signal)
       const waitMs = name === "task_focus" ? deps.focusWaitMs ?? FOCUS_WAIT_MS : GATE_WAIT_MS
       await admission.refresh({

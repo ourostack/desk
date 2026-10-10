@@ -55,6 +55,15 @@ test("focus then status returns focused, with status and recent progress", async
   assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
 })
 
+test("task_focus reads the card's next step, and null when the card has none", async () => {
+  const root = await mkTempDeskRoot()
+  await card(root, "tr", "stepped-work")
+  const { statusContext } = ctx()
+  assert.equal((await taskFocus({ deskRoot: root, input: { track: "tr", slug: "stepped-work" }, statusContext })).next_step, null)
+  await task_update({ deskRoot: root, input: { track: "tr", slug: "stepped-work", next_step: "Ship the skill reader." } })
+  assert.equal((await taskFocus({ deskRoot: root, input: { track: "tr", slug: "stepped-work" }, statusContext })).next_step, "Ship the skill reader.")
+})
+
 test("recent_progress is empty for a card with no progress section, and a status-less card reads null", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")

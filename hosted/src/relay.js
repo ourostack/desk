@@ -49,6 +49,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     session.closed = true;
     sessions.delete(session.id);
     clearTimeout(session.idleTimer);
+    if (session.initialized) log(`session ${session.id} ended (${reason}) after ${Math.round((Date.now() - session.startedAt) / 1000)} s`);
     const answers = [...session.pending.keys()].map((id) => {
       clearTimeout(session.pending.get(id));
       const error = errors.get(id) ?? { code: -32603, message: `Desk session ended before answering (${reason})` };
@@ -113,6 +114,8 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
       sessionIdGenerator: () => session.id,
       onsessioninitialized: () => {
         session.initialized = true;
+        session.startedAt = Date.now();
+        log(`session ${session.id} started for ${session.login}`);
       },
     });
     attachDesk(session, child);

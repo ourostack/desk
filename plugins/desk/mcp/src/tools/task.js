@@ -52,6 +52,8 @@ import { recordArchivedDisposition } from "./task-archived-resource.js"
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
 const DESK_COMMIT_NOTE = "Desk card only: Desk committed this card and is pushing it in the background, so run no git for it. Desk did not push your project's code; say code was pushed only if your own git push succeeded."
+// desk_commit is read before the push. A push that has to rebase onto newer desk commits gives the commit a new hash on the remote; a claude.ai run reported a hash GitHub never had.
+const DESK_COMMIT_HASH_NOTE = "desk_commit is the local commit; if the push rebases onto newer desk commits, the remote has it under a new hash, so find it there by its message."
 
 const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code", "steps"])
@@ -1065,8 +1067,9 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
-  if (stage && !commit) schedulePush({ root: deskRoot })
+  // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
+  if (stage && !commit) schedulePush({ root: deskRoot })
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
@@ -1095,6 +1098,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     result.desk_commit = deskCommit
     result.desk_pushed = false
     result.desk_note = DESK_COMMIT_NOTE
+    result.desk_commit_note = DESK_COMMIT_HASH_NOTE
   }
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
   // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show
@@ -1399,4 +1403,4 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
 }
 
 // The write, stage, commit and finalize helpers `task_signoff` uses, so a sign-off goes through the same path as `task_update`.
-export { DESK_COMMIT_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize }
+export { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize }

@@ -120,3 +120,11 @@ test("a session without the flag still reaches the implementation", async (t) =>
   await session.callTool({ name: "improvement_next" })
   assert.deepEqual(calls, ["improvement_next"])
 })
+
+test("a session answers desk_skill itself, before admission and without the runtime", async (t) => {
+  const { session, calls } = await sessionWith(t, hosted)
+  const result = await session.callTool({ name: "desk_skill", input: { name: "task-lifecycle" } })
+  assert.match(result.content[0].text, /^# Desk skill: task-lifecycle/u)
+  assert.equal(JSON.parse((await session.callTool({ name: "desk_skill", input: { name: "git-hygiene" } })).content[0].text).code, "hosted_unavailable")
+  assert.deepEqual(calls, [])
+})

@@ -17,7 +17,7 @@ import { recordCanonicalChanges } from "../readiness/journal.js"
 import { findCard } from "./task-focus.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
 import { task_move } from "./move.js"
-import { DESK_COMMIT_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize } from "./task.js"
+import { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize } from "./task.js"
 
 export const TASK_SIGNOFF_FIELDS = ["track", "slug", "outcome", "reason", "return_reason"]
 
@@ -127,5 +127,5 @@ export async function taskSignoff({
   }
   if (deskCommit === null) return result
   // Said outright, and first, so no agent runs git for a card Desk has committed and is pushing.
-  return { status: result.status, desk_note: DESK_COMMIT_NOTE, ...result, desk_commit: deskCommit, desk_pushed: false }
+  return { status: result.status, desk_note: DESK_COMMIT_NOTE, ...result, desk_commit: deskCommit, desk_pushed: false, desk_commit_note: DESK_COMMIT_HASH_NOTE }
 }
