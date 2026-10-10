@@ -1,12 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runGit } from "../src/clone.js";
-import { readConfig, redirectStartupLines, deskChildEnv, deskChildArgs, deskPushArgs, pushDesk, stopGateway } from "../src/main.js";
+import { fingerprint } from "../src/auth/seal.js";
+import { readConfig, keysStartupLine, redirectStartupLines, deskChildEnv, deskChildArgs, deskPushArgs, pushDesk, stopGateway } from "../src/main.js";
 
 const PLUGIN_DIR = fileURLToPath(new URL("../../plugins/desk", import.meta.url));
 
@@ -247,4 +249,81 @@ test("the gateway logs its redirect allowlist at start, and warns when Claude's 
   assert.equal(lines[0], "redirect allowlist: https://example.dev/redirect (plus loopback and ChatGPT connector callbacks)");
   assert.match(lines[1], /^WARNING: DESK_REDIRECTS leaves out https:\/\/claude\.ai\/api\/mcp\/auth_callback/);
   assert.equal(redirectStartupLines(readConfig({ ...FULL, DESK_REDIRECTS: "https://claude.ai/api/mcp/auth_callback" }).redirects).length, 1);
+});
+
+// Signing-key ring (spec item 15). Today's production sets only
+// DESK_SIGNING_KEY; that must keep meaning what it means today.
+const UNTIL = "2026-12-01T00:00:00Z";
+
+test("readConfig with only DESK_SIGNING_KEY signs and seals clients with it, as today", () => {
+  const config = readConfig(FULL);
+  assert.deepEqual(config.signingKeys, [{ key: "signing-key" }]);
+  assert.equal(config.clientKey, "signing-key");
+});
+
+test("readConfig reads the previous signing key, its until-time and an explicit client key", () => {
+  const config = readConfig({ ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, DESK_CLIENT_KEY: "client-key" });
+  assert.deepEqual(config.signingKeys, [{ key: "signing-key" }, { key: "old-key", until: Date.parse(UNTIL) }]);
+  assert.equal(config.clientKey, "client-key");
+  assert.equal(readConfig({ ...FULL, DESK_CLIENT_KEY: "client-key" }).clientKey, "client-key");
+  // provision.sh writes "unset" for a setting it has no value for.
+  const unset = readConfig({ ...FULL, DESK_SIGNING_KEY_PREVIOUS: "unset", DESK_SIGNING_KEY_PREVIOUS_UNTIL: "unset", DESK_CLIENT_KEY: "unset" });
+  assert.deepEqual(unset.signingKeys, [{ key: "signing-key" }]);
+  assert.equal(unset.clientKey, "signing-key");
+});
+
+test("readConfig refuses a signing, previous or client key with a trailing newline or space", () => {
+  const rotated = { ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, DESK_CLIENT_KEY: "client-key" };
+  for (const name of ["DESK_SIGNING_KEY", "DESK_SIGNING_KEY_PREVIOUS", "DESK_CLIENT_KEY"]) {
+    for (const bad of [`${rotated[name]}\n`, `${rotated[name]} `, ` ${rotated[name]}`, `${rotated[name]}\r\n`, "a b"]) {
+      assert.throws(
+        () => readConfig({ ...rotated, [name]: bad }),
+        (error) => error.message.includes(name) && /whitespace/.test(error.message) && !error.message.includes(bad.trim()),
+        `${name} ${JSON.stringify(bad)}`,
+      );
+    }
+  }
+});
+
+test("readConfig refuses DESK_SIGNING_KEY_PREVIOUS without a valid UNTIL time", () => {
+  const base = { ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_CLIENT_KEY: "client-key" };
+  for (const until of [undefined, "", "unset", "soon", "2026-13-45T00:00:00Z", "1764547200"]) {
+    assert.throws(() => readConfig({ ...base, DESK_SIGNING_KEY_PREVIOUS_UNTIL: until }), /DESK_SIGNING_KEY_PREVIOUS_UNTIL/, String(until));
+  }
+});
+
+test("readConfig refuses a previous signing key while DESK_CLIENT_KEY is unset, so a rotation never re-keys clients", () => {
+  assert.throws(
+    () => readConfig({ ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL }),
+    /DESK_CLIENT_KEY/,
+  );
+});
+
+test("the key startup line carries fingerprints and never a key", () => {
+  const line = keysStartupLine(readConfig({ ...FULL, DESK_SIGNING_KEY_PREVIOUS: "old-key", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, DESK_CLIENT_KEY: "client-key" }));
+  assert.equal(line, `keys: signing ${fingerprint("signing-key")} client ${fingerprint("client-key")} previous ${fingerprint("old-key")}`);
+  assert.equal(keysStartupLine(readConfig(FULL)), `keys: signing ${fingerprint("signing-key")} client ${fingerprint("signing-key")} previous none`);
+});
+
+test("main logs fingerprints and never a key", async (t) => {
+  const keys = { DESK_SIGNING_KEY: randomBytes(32).toString("hex"), DESK_SIGNING_KEY_PREVIOUS: randomBytes(32).toString("hex"), DESK_CLIENT_KEY: randomBytes(32).toString("hex") };
+  const gateway = spawn(process.execPath, [fileURLToPath(new URL("../src/main.js", import.meta.url))], {
+    env: { PATH: process.env.PATH, PORT: "0", DESK_PUBLIC_URL: "http://127.0.0.1", DESK_SIGNING_KEY_PREVIOUS_UNTIL: UNTIL, ...keys },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => gateway.kill("SIGKILL"));
+  let output = "";
+  gateway.stdout.on("data", (chunk) => (output += chunk));
+  gateway.stderr.on("data", (chunk) => (output += chunk));
+  const started = await new Promise((resolve) => {
+    const check = () => output.includes("listening on") && resolve(true);
+    gateway.stderr.on("data", check);
+    gateway.once("exit", () => resolve(false));
+  });
+  assert.ok(started, output);
+  assert.ok(
+    output.includes(`desk-hosted: keys: signing ${fingerprint(keys.DESK_SIGNING_KEY)} client ${fingerprint(keys.DESK_CLIENT_KEY)} previous ${fingerprint(keys.DESK_SIGNING_KEY_PREVIOUS)}\n`),
+    output,
+  );
+  for (const [name, value] of Object.entries(keys)) assert.ok(!output.includes(value), `${name} appears in the gateway's output`);
 });

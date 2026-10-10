@@ -1,7 +1,7 @@
 // GitHub sign-in: the gateway learns who is signing in from the "Ouro Desk"
 // GitHub App's user authorization. The GitHub user token is used once, to read
 // the login, and then dropped; it is never stored or handed to anyone.
-import { seal, unseal, TTL } from "./seal.js";
+import { TTL } from "./seal.js";
 import { page, sendPage } from "./pages.js";
 
 const AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
@@ -9,8 +9,9 @@ const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
 
 // `log` receives one line per refused or failed sign-in: the error code and
-// client id only.
-export function createGitHubSignIn({ key, clientId, clientSecret, callbackUrl, allowedLogins, fetch = globalThis.fetch, log = () => {} }) {
+// client id only. `sealed(kind, payload, ttlSec)` and `unsealed(kind, token)`
+// are the provider's, so this signs and checks with its signing-key ring.
+export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, callbackUrl, allowedLogins, fetch = globalThis.fetch, log = () => {} }) {
   // The browser goes to GitHub carrying the client's sign-in request as a
   // sealed `pending` state, and comes back with it to githubCallback.
   function authorizeUrl(pendingState) {
@@ -38,7 +39,7 @@ export function createGitHubSignIn({ key, clientId, clientSecret, callbackUrl, a
   // Returns `{ redirectTo }` to send the browser back to the client, or
   // `{ status, html }` for a page the gateway shows instead.
   async function githubCallback({ code, state, error }) {
-    const pending = unseal("pending", state, { key });
+    const pending = unsealed("pending", state);
     if (!pending) {
       log("sign-in refused: invalid_state");
       return page(400, "This sign-in link has expired or is not valid. Start again from Claude.");
@@ -66,7 +67,7 @@ export function createGitHubSignIn({ key, clientId, clientSecret, callbackUrl, a
     }
     back.searchParams.set(
       "code",
-      seal(
+      sealed(
         "code",
         {
           clientId: pending.clientId,
@@ -78,7 +79,7 @@ export function createGitHubSignIn({ key, clientId, clientSecret, callbackUrl, a
           name: user.name ?? null,
           aud: pending.aud,
         },
-        { key, ttlSec: TTL.code },
+        TTL.code,
       ),
     );
     return { redirectTo: back.href };
