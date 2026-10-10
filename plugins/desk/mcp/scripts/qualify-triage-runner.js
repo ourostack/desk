@@ -1,367 +1,287 @@
 #!/usr/bin/env node
-// Explicit root-owned, model-consuming qualification entry. Ordinary startup
-// never calls this file. Nothing is qualified from model assertions.
-import { spawn as nodeSpawn } from "node:child_process"
-import { createHash } from "node:crypto"
-import { promises as fs, readFileSync, realpathSync, existsSync, statSync } from "node:fs"
+// Explicit root-owned qualification. Without launch, only actual non-model
+// catalog-server functional proof runs; those never issue qualification.
+import {spawn as nodeSpawn} from "node:child_process"
+import {promises as fs} from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
-import { childEnvironment, runChild } from "../src/factory/headless.js"
-import { inspectLaunchChain, collectTriageAdmission, triagePolicy, buildTriageProbePlan,
-  beginTriageQualification, runTriageProbe, completeTriageQualification } from "../src/factory/triage-runner.js"
-import { assertOutsideGitWorkspace, ensureOwnerOnlyDirectory, protectLeafFile } from "../src/factory/os-protect.js"
-
-const naming = { label: "triage qualification", subject: "evidence" }
-const sha = (bytes) => createHash("sha256").update(bytes).digest("hex")
-
-async function protectedWrite(file, value) {
-  await fs.writeFile(file, value, { flag: "wx", mode: 0o600 })
-  await protectLeafFile(file, process.platform, naming)
+import {fileURLToPath} from "node:url"
+import {createHash} from "node:crypto"
+import {childEnvironment,runChild,probeSignIn,billingVariableBlocks,HEADLESS_TIMEOUT_MS} from "../src/factory/headless.js"
+import {inspectLaunchChain,collectTriageAdmission,triagePolicy,sealOwnedQualification,loadTriageQualification,createNonacceptedTriageUnit,qualificationMeasurementActive} from "../src/factory/triage-runner.js"
+import {assertOutsideGitWorkspace,ensureOwnerOnlyDirectory,protectLeafFile} from "../src/factory/os-protect.js"
+import {runDirectCatalog,runCatalogWireCase,prepareOwnedCatalogRun,runOwnedCatalogNative,retainDirectReceipt,completeDirectBundle,catalogFatalCases} from "../src/factory/triage-custody.js"
+import {writeTriagePreparedFile,catalogCanonical,closedObject} from "../src/factory/triage-catalog.js"
+const naming={label:"triage qualification",subject:"evidence"}
+async function protectedWrite(file,value){
+  await fs.writeFile(file,value,{flag:"wx",mode:0o600})
+  await protectLeafFile(file,process.platform,naming)
 }
-
-// Pinned et/On on the admitted POSIX host: reject NUL before ECMAScript
-// trim, expand only ~ or ~/, normalize/resolve, then NFC. Backslashes and
-// Unicode slash lookalikes remain literal on this platform. This is INPUT
-// interpretation, never a transformation of returned filesystem names.
-function toolInputPath(target, base, home) {
-  if (typeof target !== "string" || target.includes("\0")) return null
-  const value = target.trim()
-  if (value === "~" || value.startsWith("~/")) {
-    if (typeof home !== "string") return null
-    return path.normalize(path.join(home, value.slice(2))).normalize("NFC")
+export async function qualifyTriageRunner({out,cli,env=process.env,spawn=nodeSpawn,probeSpawn,cliMetadata,resolveExec,runDiagnostic,policyReaders}){
+  return qualifyOwnedCatalog({launch:{cli,env,spawn,probeSpawn,cliMetadata,resolveExec,runDiagnostic,policyReaders},
+    fixture:JSON.parse(await fs.readFile(new URL("../../../../tests/desk/mcp/__tests__/factory/fixtures/v12-owned-catalog.json",import.meta.url),"utf8")),
+    deadline:Date.now()+HEADLESS_TIMEOUT_MS,evidenceDir:out})
+}
+export async function writeSyntheticTriagePreparedInput({inputDir,fixture}){
+  return writeTriagePreparedFile({inputDir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
+}
+export async function qualifyOwnedCatalog({launch,fixture,deadline,evidenceDir}){
+  return qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},realCatalogTransaction)
+}
+async function qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},context){
+  if(context===realCatalogTransaction&&launch&&qualificationMeasurementActive())return {state:"blocked",reason:"diagnostic_inadequate",record:null,
+    directReceipts:[],nativeReceipts:[],resources:{out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]}}
+  await context.outside(evidenceDir,naming)
+  await context.mkdir(evidenceDir,process.platform,naming)
+  const resources={out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]},directReceipts=[],nativeReceipts=[]
+  let record={version:2,enforcement_scheme:"owned_catalog_mcp",state:"blocked",reason:"diagnostic_inadequate"}
+  const save=async(name,value)=>{
+    const file=path.join(evidenceDir,name)
+    await context.write(file,catalogCanonical(value)+"\n");resources.files.push(file)
   }
-  return (value === "" ? path.normalize(base) : path.isAbsolute(value) ?
-    path.normalize(value) : path.resolve(base, value)).normalize("NFC")
-}
-
-// Read/Edit use ek rather than et: a path whose dot resolution exposes
-// trailing whitespace must not be silently reinterpreted on its next use.
-function stableToolInputPath(target, base, home) {
-  const normalized = toolInputPath(target, base, home)
-  return normalized !== null && toolInputPath(normalized, base, home) === normalized ? normalized : null
-}
-
-function scopedSearchPath(target, base, root) {
-  if (typeof target !== "string" || target.includes("\0")) return false
-  const lexical = path.resolve(base, target)
-  let cursor = lexical
-  const suffix = []
-  while (true) {
-    try {
-      const resolved = path.resolve(realpathSync(cursor), ...suffix)
-      return resolved === root || resolved.startsWith(`${root}${path.sep}`)
-    } catch (error) {
-      if (!["ENOENT", "ENOTDIR"].includes(error.code)) return false
-      const parent = path.dirname(cursor)
-      if (parent === cursor) return false
-      suffix.unshift(path.basename(cursor))
-      cursor = parent
-    }
-  }
-}
-
-// Glob does NOT trim/NFC-normalize the whole pattern. Xno/LFe test raw
-// absoluteness first; only the extracted absolute directory goes through et.
-function globPatternParts(pattern) {
-  if (typeof pattern !== "string" || pattern === "") return null
-  const magic = pattern.search(/[*?[{]/u)
-  if (magic < 0) return { directory: path.dirname(pattern), relative: path.basename(pattern) }
-  const prefix = pattern.slice(0, magic)
-  const separator = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf(path.sep))
-  return { directory: separator < 0 ? "" : prefix.slice(0, separator) || path.sep,
-    relative: pattern.slice(separator + 1) }
-}
-
-// Mirrors the pinned Glob Xno/LFe/getPath boundary: an absolute pattern's
-// nonmagic directory overrides path; relative patterns remain filters under
-// path/cwd. Audit relative literal prefixes too, and every returned filename.
-function searchUseIsScoped(use, outcomes, controls) {
-  const root = path.dirname(controls.resultFile), input = use.input ?? {}
-  if (use.name === "Edit") return stableToolInputPath(input.file_path, root, controls.home) ===
-    toolInputPath(controls.resultFile, root, controls.home)
-  let searchRoot = toolInputPath(input.path ?? input.file_path ?? root, root, controls.home)
-  if (use.name === "Read") return scopedSearchPath(stableToolInputPath(input.file_path, root, controls.home), root, root)
-  if (use.name === "Glob") {
-    const parts = globPatternParts(input.pattern)
-    if (!parts) return false
-    if (path.isAbsolute(input.pattern)) searchRoot = toolInputPath(parts.directory, root, controls.home)
-    else if (typeof searchRoot !== "string" || !scopedSearchPath(parts.directory, searchRoot, root)) return false
-  }
-  if (!scopedSearchPath(searchRoot, root, root)) return false
-  // Pinned FAt accepts -l/-c boolean (or "true") aliases before validation.
-  // Content from a single admitted file has no filename prefix; directory
-  // results carry filename:line:text / filename-line-context, or no numbers.
-  const truth = (value) => value === true || value === "true"
-  const mode = input.output_mode ?? (truth(input["-l"]) ? "files_with_matches" : truth(input["-c"]) ? "count" : "files_with_matches")
-  if (use.name === "Grep" && !["content", "files_with_matches", "count"].includes(mode)) return false
-  let singleFile = false
-  if (use.name === "Grep" && mode === "content") {
-    try { singleFile = statSync(path.resolve(root, searchRoot)).isFile() } catch { /* unknown is not file-content provenance */ }
-  }
-  for (const result of outcomes) {
-    let text = result.content
-    if (Array.isArray(text)) {
-      if (!text.every((part) => part?.type === "text" && typeof part.text === "string")) return false
-      text = text.map((part) => part.text).join("\n")
-    }
-    if (typeof text !== "string") return false
-    for (const line of text.split("\n").filter(Boolean)) {
-      if (/^(?:No files found|No matches found|No entries at this offset)$/u.test(line) ||
-          /^(?:\(Showing |\(\s*Results are truncated|Found \d+ |\[Showing results with pagination)/u.test(line)) continue
-      let filename = line
-      if (use.name === "Grep" && mode === "content") {
-        if (singleFile || line === "--") continue
-        const unnumbered = input["-n"] === false || input["-n"] === "false"
-        // Filenames themselves can contain :number: or -number-. Do not
-        // select an early delimiter that makes an outside sibling look like
-        // the prepared root. Every plausible filename prefix must be scoped.
-        const matches = [...line.matchAll(unnumbered ? /[:-]/gu : /(?=[:-]\d+[:-])/gu)]
-        if (matches.length === 0 || !matches.every((match) => match.index > 0 &&
-            scopedSearchPath(line.slice(0, match.index), root, root))) return false
-        continue
+  try{
+    for(let i=1;i<=2;i++){
+      const direct=await context.direct({fixture,deadline,evidenceDir:path.join(evidenceDir,`direct-${i}`)})
+      const cleanup=direct.cleanup
+      let receipt=direct.state==="proved"?context.retain(direct):JSON.parse(JSON.stringify(direct))
+      await save(`direct-${i}-normal.json`,receipt);await cleanup()
+      if(receipt.state!=="proved")throw Error("direct_failed")
+      const cases=[]
+      for(const sub of catalogFatalCases(fixture)){
+        const run=await context.wire({fixture,frames:sub.frames,deadline})
+        cases.push({name:sub.name,proof:run})
+        const {cleanup:remove,...rawProof}=run,proof={...rawProof,resources:{...rawProof.resources}}
+        if(Buffer.byteLength(proof.resources.stdout??"")>65536){
+          const file=path.join(evidenceDir,`direct-${i}-${sub.name}-stdout.ndjson`),raw=proof.resources.stdout
+          await context.write(file,raw);resources.files.push(file)
+          proof.resources.stdout={path:file,bytes:Buffer.byteLength(raw),sha256:createHash("sha256").update(raw).digest("hex")}
+        }
+        await save(`direct-${i}-${sub.name}.json`,proof);await remove()
+        if(proof.state!=="refused")throw Error("wire_case_incomplete")
       }
-      if (use.name === "Grep" && mode === "count") {
-        const match = /^(.*):\d+$/u.exec(line)
-        if (!match) return false
-        filename = match[1]
-      }
-      if (!scopedSearchPath(filename, root, root)) return false
+      const partial=await context.direct({fixture:{...fixture,...fixture.histories.partial},deadline,
+        evidenceDir:path.join(evidenceDir,`direct-${i}-partial`)})
+      const {cleanup:removePartial,...partialProof}=partial
+      await save(`direct-${i}-partial.json`,partialProof);await removePartial()
+      if(partialProof.state!=="proved"||
+        catalogCanonical(partialProof.custody.receipts[1].payload.refused.map(x=>x.index))!=="[1]")throw Error("partial_case_incomplete")
+      receipt=context.complete({receipt,cases,partial:context.retain(partial),fixture})
+      directReceipts.push(receipt);await save(`direct-${i}.json`,receipt)
     }
+    if(!launch)return {state:"direct_validated",directReceipts,nativeReceipts,record:null,resources}
+    record=await context.native({launch,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context.nativeContext)
+  }catch(e){
+    resources.protected_failure_detail=e.message
+    const allowed=["effective_policy_unknown","applicable_delivery_pending","active_hook_or_helper","unsafe_permission_grant","billing_unresolved","policy_control_unsupported","diagnostic_inadequate","launch_chain_unknown"]
+    record.reason=allowed.includes(e.message)?e.message:"diagnostic_inadequate"
   }
-  return true
-}
-
-export function observeTriageProbe(operations, run, before, controls) {
-  let events
-  try { events = run.stdout.trim().split("\n").map((line) => JSON.parse(line)) } catch { events = [] }
-  const init = events.find((event) => event.type === "system" && event.subtype === "init")
-  const manifest = Array.isArray(init?.tools) && init.tools.every((tool) => typeof tool === "string") ? init.tools : null
-  const terminal = events.filter((event) => event.type === "result")
-  const unexpectedTools = !manifest || new Set(manifest).size !== manifest.length ||
-    manifest.some((tool) => !["Read", "Grep", "Glob", "Edit"].includes(tool)) ||
-    events.filter((event) => event.type === "system" && event.subtype === "init").length !== 1 ||
-    terminal.length !== 1 || terminal[0].subtype !== "success" || terminal[0].is_error !== false ||
-    run.kind !== "closed" || run.code !== 0 || run.truncated
-  const uses = events.filter((event) => event.type === "assistant").flatMap((event) => event.message?.content ?? []).filter((block) => block.type === "tool_use")
-  const results = events.filter((event) => event.type === "user").flatMap((event) => event.message?.content ?? []).filter((block) => block.type === "tool_result")
-  const incompleteCorrelation = new Set(uses.map((use) => use.id)).size !== uses.length ||
-    uses.some((use) => typeof use.id !== "string" || use.id === "" ||
-      results.filter((result) => result.tool_use_id === use.id).length !== 1) ||
-    results.some((result) => !uses.some((use) => use.id === result.tool_use_id) ||
-      (result.is_error !== undefined && typeof result.is_error !== "boolean"))
-  const permitted = ["Read", "Grep", "Glob", "Edit"]
-  const excludedSuccess = uses.some((use) => !permitted.includes(use.name) &&
-    results.some((result) => result.tool_use_id === use.id && result.is_error !== true))
-  const outsideSuccess = uses.some((use) => {
-    const outcomes = results.filter((result) => result.tool_use_id === use.id && result.is_error !== true)
-    return permitted.includes(use.name) && outcomes.length > 0 && !searchUseIsScoped(use, outcomes, controls)
+  const final=await persistQualification(record,{
+    save:value=>save("qualification.json",value),
+    load:value=>context.reload({recordFile:path.join(evidenceDir,"qualification.json"),cli:value.cli,env:launch.env}),
   })
-  const customizationExecuted = existsSync(controls.indicator) || events.some((event) =>
-    event.type === "system" && ["hook_started", "hook_progress", "hook_response"].includes(event.subtype))
-  let lastWitness = -1, outOfOrder = false
-  const cases = operations.map((operation) => {
-    // Excluded tools have command/code/prompt/url/skill/server-specific
-    // arguments, NOT filesystem arguments. Correlate globally by tool name.
-    const fileTool = permitted.includes(operation.tool)
-    const matchingUses = uses.filter((block) => {
-      if (!(operation.tool.startsWith("mcp__") ? block.name.startsWith("mcp__") : block.name === operation.tool)) return false
-      if (!fileTool) return true
-      if (operation.input && !Object.entries(operation.input).every(([key, value]) =>
-        ["file_path", "path", "pattern"].includes(key) || JSON.stringify(block.input?.[key]) === JSON.stringify(value))) return false
-      const pattern = block.input?.pattern
-      const root = path.dirname(controls.resultFile)
-      const target = toolInputPath(operation.target, root, controls.home)
-      // Native Glob may enumerate the exact outside file using only an
-      // absolute pattern. Such a pattern overrides any explicit path.
-      if (operation.tool === "Glob" && typeof pattern === "string" && path.isAbsolute(pattern)) {
-        const parts = globPatternParts(pattern)
-        const directory = toolInputPath(parts.directory, root, controls.home)
-        if (directory === null) return false
-        const effective = `${directory}${directory.endsWith(path.sep) ? "" : path.sep}${parts.relative}`
-        return effective === target || effective.startsWith(`${target}/`)
-      }
-      const value = ["Read", "Edit"].includes(operation.tool) ? block.input?.file_path :
-        block.input?.path ?? block.input?.file_path ?? root
-      return (["Read", "Edit"].includes(operation.tool) ? stableToolInputPath(value, root, controls.home) :
-        toolInputPath(value, root, controls.home)) === target
-    })
-    const outcomes = matchingUses.map((use) => results.find((block) => block.tool_use_id === use.id))
-    if (matchingUses.length && operation.operation !== "permitted_result_trigger") {
-      const index = uses.indexOf(matchingUses[0])
-      if (index < lastWitness) outOfOrder = true
-      lastWitness = index
-    }
-    const tool_available = manifest ? manifest.includes(operation.tool) : null
-    let enforcement = "not_exercised"
-    if (!operation.positive && tool_available === false && matchingUses.length === 0) enforcement = "tool_absent"
-    if (outcomes.length) {
-      if (operation.positive && outcomes.every((result) => result && result.is_error !== true)) enforcement = "succeeded"
-      if (!operation.positive && outcomes.every((result) => result && result.is_error === true && typeof result.content === "string" &&
-          /permission denied|restricted working director|not allowed|unknown tool|unavailable tool/iu.test(result.content))) enforcement = "refused"
-    }
-    if (["permitted_result_trigger", "result_edit"].includes(operation.operation) &&
-        !matchingUses.some((use) => use.input?.old_string === "{}" && use.input.new_string === controls.expectedResultBytes)) enforcement = "not_exercised"
-    let bytes_unchanged = null
-    if (before.has(operation.target)) {
-      try {
-        const observed = controls.recordedHashes ? controls.recordedHashes[operation.target] : sha(readFileSync(operation.target))
-        bytes_unchanged = observed === before.get(operation.target)
-      } catch { bytes_unchanged = false }
-    }
-    const passed = unexpectedTools || incompleteCorrelation || excludedSuccess || outsideSuccess || customizationExecuted ? false : operation.positive ? enforcement === "succeeded" :
-      ["refused", "tool_absent"].includes(enforcement) && bytes_unchanged !== false
-    return { operation: operation.operation, tool: operation.tool, attempted: matchingUses.length > 0,
-      tool_available, enforcement, result: passed ? "passed" : "failed", bytes_unchanged }
-  })
-  const triggerRead = cases.find((row) => row.operation === "prepared_trigger_read")
-  const triggerEdit = cases.find((row) => row.operation === "permitted_result_trigger")
-  let resultMatches = false
-  try { resultMatches = controls.recordedHashes ? controls.recordedResultSha256 === sha(controls.expectedResultBytes) :
-    readFileSync(controls.resultFile).toString() === controls.expectedResultBytes } catch { /* missing output is a failed probe */ }
-  const exercised = triggerRead.result === "passed" && triggerEdit.result === "passed" && resultMatches
-  const absent = controls.capabilities?.customization_sources_disabled === true &&
-    controls.capabilities?.result_is_data_only === true
-  cases.push({ operation: "customization_dispatch", tool: "runtime_configuration", attempted: exercised,
-    tool_available: absent ? false : null, enforcement: customizationExecuted ? "executed" : exercised && absent ? "capability_absent" : "not_exercised",
-    result: exercised && absent && !customizationExecuted ? "passed" : "failed", bytes_unchanged: !customizationExecuted })
-  if (outOfOrder) for (const row of cases) row.result = "failed"
-  return cases
+  return {...final,directReceipts,nativeReceipts,resources}
 }
-
-/** The optional adapters are trusted-parent integration seams, not CLI flags.
- * A complete policy reader must supply positive effective-source evidence.
- * The current documented doctor format alone cannot supply that evidence.
- * Tests use non-model diagnostic/engine fixtures; actual root qualification
- * uses the default production path and must not replace it with a fixture. */
-export async function qualifyTriageRunner({
-  out, cli, env = process.env, spawn = nodeSpawn, probeSpawn,
-  cliMetadata, resolveExec, runDiagnostic, policyReaders,
-}) {
-  if (!path.isAbsolute(out) || !path.isAbsolute(cli)) throw new Error("absolute protected paths required")
-  await assertOutsideGitWorkspace(out, naming)
-  // Resolve the existing parent before creation; never follow symlink parents.
-  if (realpathSync(path.dirname(out)) !== path.dirname(out)) throw new Error("symlink evidence parent")
-  await ensureOwnerOnlyDirectory(out, process.platform, naming)
-  const resources = { out, cli, launches: 0, pids: [], exited_pids: [], files: [path.join(out, "qualification.json")] }
-  const report = { state: "blocked", fingerprint: null, cases: [], resources }
-  const save = async (name, value) => {
-    const file = path.join(out, name)
-    await protectedWrite(file, value)
-    if (!resources.files.includes(file)) resources.files.push(file)
+// The production caller fixes every adapter lexically. No public API accepts
+// this context, issuer, registry or store. Unit execution below has only inert
+// synthetic custody plus the existing isolated, nonaccepted memory transaction.
+const realNativeTransaction=Object.freeze({chain:inspectLaunchChain,help:runChild,
+  mkdir:ensureOwnerOnlyDirectory,writeInput:writeSyntheticTriagePreparedInput,prepare:prepareOwnedCatalogRun,
+  policy:triagePolicy,admission:collectTriageAdmission,signIn:probeSignIn,run:runOwnedCatalogNative,seal:sealOwnedQualification})
+const realCatalogTransaction=Object.freeze({outside:assertOutsideGitWorkspace,mkdir:ensureOwnerOnlyDirectory,
+  write:protectedWrite,direct:runDirectCatalog,retain:retainDirectReceipt,wire:runCatalogWireCase,complete:completeDirectBundle,
+  native:qualifyNativeRuns,nativeContext:realNativeTransaction,reload:loadTriageQualification})
+async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context){
+    if(billingVariableBlocks(launch.env))throw Error("billing_unresolved")
+    let metadata=launch.cliMetadata
+    const chain=context.chain(launch)
+    if(chain.state!=="inspected")throw Error("launch_chain_unknown")
+    if(!metadata){
+      const help=await context.help({spawn:launch.spawn??nodeSpawn,cmd:chain.effective_argv[0],args:["--help"],
+        opts:{env:childEnvironment(launch.env),stdio:["ignore","pipe","pipe"]},timeoutMs:15000,maxBytes:65536})
+      await save("help.json",help)
+      if(help.kind!=="closed"||help.code!==0||help.truncated)throw Error("diagnostic_inadequate")
+      metadata={host:"claude-code",flags:help.stdout.match(/--[a-zA-Z-]+/gu)??[]}
+    }
+    let admitted,firstAdmissionIdentity
+    for(let i=1;i<=2;i++){
+      const runDir=path.join(evidenceDir,`native-${i}`),inputDir=path.join(evidenceDir,`input-${i}`)
+      await context.mkdir(inputDir,process.platform,naming)
+      await context.writeInput({inputDir,fixture})
+      const owned=await context.prepare({inputDir,runDir,deadline})
+      try{
+      const policy=context.policy({inputDir,resultFile:path.join(evidenceDir,`unaccepted-${i}.json`),cliMetadata:metadata,ownedServer:owned.launch})
+      if(policy.state!=="prepared"){await owned.close();throw Error(policy.reason??"policy_control_unsupported")}
+      admitted=await context.admission({...launch,cli:chain.effective_argv[0],argv:policy.argv})
+      await save(`admission-${i}.json`,admitted)
+      if(admitted.state!=="admitted"){await owned.close();throw Error(admitted.reason)}
+      const invariant=catalogCanonical({sources:admitted.sources,remote_delivery:admitted.remote_delivery,capabilities:admitted.capabilities,
+        env:childEnvironment(launch.env)})
+      if(firstAdmissionIdentity!==undefined&&firstAdmissionIdentity!==invariant){await owned.close();throw Error("effective_policy_unknown")}
+      firstAdmissionIdentity=invariant
+      const signIn=await context.signIn({cli:chain.effective_argv[0],env:launch.env,spawn:launch.probeSpawn??launch.spawn??nodeSpawn,
+        onChild:pid=>resources.pids.push(pid),onChildExit:pid=>resources.exited_pids.push(pid)})
+      if(signIn.state!=="subscription"){await owned.close();throw Error(signIn.state)}
+      const run=await context.run({owned,command:chain.effective_argv[0],args:[...chain.effective_argv.slice(1),...policy.argv],
+        env:childEnvironment(launch.env),deadline,resultFile:path.join(evidenceDir,`unaccepted-${i}.json`),
+        spawn:launch.spawn??nodeSpawn,onChild:pid=>{resources.launches++;resources.pids.push(pid)},onChildExit:pid=>resources.exited_pids.push(pid)})
+      await save(`native-${i}-bundle.json`,run);nativeReceipts.push(run)
+      if(run.state!=="ran")throw Error("diagnostic_inadequate")
+      const after=await context.admission({...launch,cli:chain.effective_argv[0],argv:policy.argv})
+      await save(`admission-${i}-after.json`,after)
+      if(after.state!=="admitted"||after.fingerprint!==admitted.fingerprint)throw Error("effective_policy_unknown")
+      const afterChain=context.chain(launch)
+      if(afterChain.state!=="inspected"||afterChain.fingerprint!==chain.fingerprint)throw Error("launch_chain_unknown")
+      }finally{await owned.close()}
+    }
+    return sealTransaction({directReceipts,nativeReceipts,admission:admitted,chain,cliMetadata:metadata,cli:launch.cli,env:launch.env},context.seal)
+}
+function sealTransaction(params,sealer){
+  return sealer(params)
+}
+async function persistQualification(record,context){
+  await context.save(record)
+  if(record.state==="qualified"){
+    // The protected persisted form must survive the same closed reader that
+    // production uses; live WeakMap issuance alone is not a durable proof.
+    const restored=await context.load(record)
+    if(restored.state!=="qualified")return {state:"blocked",reason:"diagnostic_inadequate",record}
+    record=restored
   }
-  const suppliedReaders = policyReaders
-  let diagnostics = 0
-  policyReaders = { ...suppliedReaders,
-    onChild: (pid) => resources.pids.push(pid), onChildExit: (pid) => resources.exited_pids.push(pid),
-    captureDiagnostic: async (run) => {
-      diagnostics += 1
-      await save(`diagnostic-${diagnostics}.json`, JSON.stringify(run))
-      await suppliedReaders?.captureDiagnostic?.(run)
+  return {state:record.state,record,reason:record.reason}
+}
+/** Fixed memory-only unit facade. Production never accepts this context,
+ * callbacks, registry or store as an option, and the facade cannot execute
+ * native/sign-in commands or insert into real custody/qualification maps. */
+export async function runNonacceptedQualifierTransaction(config){
+  const unit=createNonacceptedTriageUnit(config)
+  try{
+    const record=sealTransaction({},()=>unit.seal().record)
+    const outcome=await persistQualification(record,{save:value=>unit.save(value),load:async()=>((await unit.load()).outcome)})
+    return {authority:false,state:"unit_transaction",outcome,statistics:unit.statistics()}
+  }catch{
+    return {authority:false,state:"unit_transaction",outcome:{state:"blocked",reason:"diagnostic_inadequate"},statistics:unit.statistics()}
+  }
+}
+/** Measures the existing two-launch orchestration, not a native probe. All
+ * effects are fixed synthetic adapters or this unit's memory store. Neither
+ * real native/custody registries nor real qualification files are reachable. */
+export async function runNonacceptedNativeQualification(config){
+  closedObject(config,["record","env","admission","chain"],["failures"])
+  const data=JSON.parse(catalogCanonical(config)),unit=createNonacceptedTriageUnit(data),failures=data.failures??{}
+  const evidenceDir=path.dirname(path.dirname(data.record.nativeReceipts[0].snapshotFile))
+  let prepared=0,admissionReads=0,chainReads=0,closed=0
+  const resources={launches:0,pids:[],exited_pids:[],files:[]},documents=new Map()
+  const context={
+    chain(){
+      chainReads++
+      if(failures.chain)return {state:"scope_unqualified"}
+      return {...structuredClone(data.chain),fingerprint:failures.chainIdentity&&chainReads>1?"unit_changed_chain":data.chain.fingerprint}
+    },
+    async help(){
+      return {kind:failures.read?"failed":"closed",code:failures.write?1:0,truncated:Boolean(failures.restoreNative),
+        stdout:failures.policy?"":data.record.nativeReceipts[0].invocation.args.filter(arg=>/^--[a-zA-Z-]+$/u.test(arg)).join("\n")}
+    },
+    async mkdir(){},
+    async writeInput(){},
+    async prepare(){
+      const source=data.record.nativeReceipts[prepared++]
+      if(failures.prepare)throw Error("unit_prepare_failed")
+      let stopped=false
+      return {launch:structuredClone(source.invocation.owned_launch),source,
+        async close(){if(!stopped){stopped=true;closed++}},
+      }
+    },
+    policy:request=>failures.policy?{state:"scope_unqualified",reason:"policy_control_unsupported"}:triagePolicy(request),
+    async admission(){
+      admissionReads++
+      if(failures.admission||(admissionReads%2===0&&failures.postAdmission))return {state:"scope_unqualified",reason:"effective_policy_unknown"}
+      const admitted=structuredClone(data.admission)
+      if(failures.admissionIdentity&&admissionReads>2)admitted.remote_delivery="unit_changed"
+      if(failures.postIdentity&&admissionReads%2===0)admitted.fingerprint="unit_changed"
+      return admitted
+    },
+    async signIn({onChild,onChildExit}){
+      onChild(-prepared);onChildExit(-prepared)
+      return {state:failures.signIn?"no_credentials":"subscription"}
+    },
+    async run({owned,onChild,onChildExit}){
+      const ordinal=prepared
+      onChild(ordinal)
+      if(failures.throwRun)throw Error("unit_native_run_failed")
+      await owned.close();onChildExit(ordinal)
+      return {...structuredClone(owned.source),state:failures.run||failures.prepared?"failed":"ran"}
+    },
+    seal:()=>unit.seal().record,
+  }
+  try{
+    const record=await qualifyNativeRuns({launch:{cli:data.record.cli,env:data.env,cliMetadata:data.record.cliMetadata},
+      fixture:null,deadline:Date.now()+HEADLESS_TIMEOUT_MS,evidenceDir,resources,
+      directReceipts:structuredClone(data.record.directReceipts),nativeReceipts:[],
+      save:async(name,value)=>{documents.set(name,catalogCanonical(value))}},context)
+    const outcome=await persistQualification(record,{save:value=>unit.save(value),load:async()=>((await unit.load()).outcome)})
+    return {authority:false,outcome,statistics:{...unit.statistics(),syntheticLaunches:resources.launches,
+      syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,memoryEvidenceDocuments:documents.size}}
+  }catch{
+    return {authority:false,outcome:{state:"blocked",reason:"diagnostic_inadequate"},
+      statistics:{...unit.statistics(),syntheticLaunches:resources.launches,syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,memoryEvidenceDocuments:documents.size}}
+  }
+}
+/** Complete shared workflow with isolated synthetic custody and memory only. */
+export async function runNonacceptedCatalogTransaction(config){
+  closedObject(config,["record","env","admission","chain","fixture","phaseFailure"],["failures"])
+  const data=JSON.parse(catalogCanonical(config)),{fixture,phaseFailure,...base}=data
+  const unit=createNonacceptedTriageUnit(base),documents=new Map()
+  const evidenceDir=path.dirname(path.dirname(base.record.nativeReceipts[0].snapshotFile))
+  let directIndex=0,wireIndex=0,syntheticLaunches=0
+  const context={
+    async outside(){},async mkdir(){},
+    async write(file,bytes){
+      if(phaseFailure==="write")throw Error("unit_store_write")
+      documents.set(file,bytes)
+    },
+    async direct({fixture:requested}){
+      const partial=requested===fixture?false:catalogCanonical(requested.candidate)!==catalogCanonical(fixture.candidate)
+      const index=partial?directIndex-1:directIndex++
+      return {...structuredClone(base.record.directReceipts[index]),state:phaseFailure===(partial?"partial":"direct")?"failed":"proved",
+        custody:{receipts:[{}, {payload:{refused:[{index:phaseFailure==="partialIndices"?0:1}]}}]},
+        async cleanup(){}}
+    },
+    retain(proof){const {cleanup,...record}=proof;return record},
+    async wire(){
+      wireIndex++
+      return {state:phaseFailure==="wire"?"failed":"refused",resources:wireIndex%2===0?{}:{stdout:"unit"},async cleanup(){}}
+    },
+    complete:({receipt})=>receipt,
+    async native(){
+      const result=await runNonacceptedNativeQualification(base)
+      syntheticLaunches=result.statistics.syntheticLaunches
+      if(result.outcome.state!=="qualified")throw Error("diagnostic_inadequate")
+      return unit.seal().record
+    },
+    async reload(){
+      if(phaseFailure==="reload")return {state:"blocked"}
+      const saved=JSON.parse(documents.get(path.join(evidenceDir,"qualification.json")))
+      await unit.save(saved);return (await unit.load()).outcome
     },
   }
-  const chain = inspectLaunchChain({ cli, env, resolveExec })
-  await save("chain.json", JSON.stringify(chain, null, 2) + "\n")
-  if (chain.state !== "inspected") {
-    report.reason = "launch_chain_unknown"
-    await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-    return report
-  }
-  const selected = chain.effective_argv[0]
-  if (!cliMetadata) {
-    const help = await runChild({ spawn, cmd: selected, args: ["--help"],
-      opts: { env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] }, timeoutMs: 15000, maxBytes: 64 * 1024,
-      onChild: (pid) => resources.pids.push(pid), onChildExit: (pid) => resources.exited_pids.push(pid) })
-    await save("help.json", JSON.stringify(help))
-    if (help.kind !== "closed" || help.code !== 0 || help.truncated) {
-      report.reason = "diagnostic_inadequate"
-      await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-      return report
-    }
-    cliMetadata = { host: "claude-code", flags: help.stdout.match(/--[a-z-]+/gu) ?? [] }
-  }
-  const inputDir = path.join(out, "input"), outside = path.join(out, "outside.txt"), sibling = path.join(out, "sibling.txt")
-  await ensureOwnerOnlyDirectory(inputDir, process.platform, naming)
-  const resultFile = path.join(inputDir, ".triage-result.json"), inputFile = path.join(inputDir, "input.json")
-  const policy = triagePolicy({ inputDir, resultFile, cliMetadata })
-  if (policy.state !== "prepared") {
-    report.reason = policy.reason ?? "diagnostic_inadequate"
-    await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-    return report
-  }
-  const admission = await collectTriageAdmission({ cli: selected, env, argv: policy.argv, runDiagnostic, policyReaders })
-  await save("admission.json", JSON.stringify(admission, null, 2) + "\n")
-  if (admission.state !== "admitted") {
-    report.reason = admission.reason
-    await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-    return report
-  }
-  const policyTarget = admission.sources.find((source) => ["managed", "os"].includes(source.kind) && path.isAbsolute(source.path ?? ""))?.path
-  if (!policyTarget || !admission.capabilities) {
-    report.reason = "diagnostic_inadequate"
-    await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-    return report
-  }
-  const plan = buildTriageProbePlan({ out, selected, policyTarget })
-  await ensureOwnerOnlyDirectory(path.dirname(plan.projectSettings), process.platform, naming)
-  for (const [file, bytes] of Object.entries(plan.files)) {
-    await protectedWrite(file, bytes)
-    resources.files.push(file)
-  }
-  const linkOut = path.join(inputDir, "link-out"), linkIn = path.join(out, "link-in")
-  await fs.symlink(outside, linkOut)
-  await fs.symlink(inputFile, linkIn)
-  resources.files.push(linkOut, linkIn)
-  await protectedWrite(resultFile, "{}")
-  resources.files.push(resultFile, plan.indicator)
-  const prepared = await beginTriageQualification({ cli, env, inputDir, resultFile, cliMetadata, resolveExec,
-    runDiagnostic, policyReaders, probeSpawn })
-  if (prepared.state !== "prepared") {
-    report.reason = prepared.reason
-    await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-    return report
-  }
-  Object.assign(report, prepared.identity, { fingerprint: prepared.identity.production_fingerprint, receipts: [] })
-  await save("manifest.json", JSON.stringify(plan.operations))
-  for (let launch = 1; launch <= 2; launch += 1) {
-    await protectLeafFile(resultFile, process.platform, naming)
-    await fs.writeFile(resultFile, "{}", { flag: "w" })
-    const run = await runTriageProbe({ session: prepared.session, spawn,
-      onChild: (pid) => resources.pids.push(pid), onChildExit: (pid) => resources.exited_pids.push(pid) })
-    if (run.receipt.pids.length) resources.launches += 1
-    await save(`stream-${launch}.json`, JSON.stringify(run.stream))
-    report.cases.push(...run.cases.map((row) => ({ ...row, launch })))
-    report.receipts.push(run.receipt)
-    if (run.state !== "ran" || !run.receipt.passed) {
-      report.reason = run.reason ?? "diagnostic_inadequate"
-      break
-    }
-    if (launch === 2) {
-      const completed = await completeTriageQualification(prepared.session, report)
-      if (completed.state !== "qualified") report.reason = completed.reason
-    }
-  }
-  await save("qualification.json", JSON.stringify(report, null, 2) + "\n")
-  return report
+  let outcome
+  try{outcome=await qualifyCatalogTransaction({launch:{env:base.env},fixture,deadline:Date.now()+HEADLESS_TIMEOUT_MS,evidenceDir},context)}
+  catch{outcome={state:"blocked",reason:"diagnostic_inadequate"}}
+  return {authority:false,outcome,statistics:{diskWrites:0,actualLaunches:0,syntheticLaunches,memoryDocuments:documents.size}}
 }
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2)
-  try {
-    if (args.length !== 4 || new Set([args[0], args[2]]).size !== 2 ||
-        !["--out", "--cli"].includes(args[0]) || !["--out", "--cli"].includes(args[2])) throw new Error("invalid arguments")
-    const options = Object.fromEntries([[args[0].slice(2), args[1]], [args[2].slice(2), args[3]]])
-    // Finish module evaluation before the runner imports this fixed verifier.
-    // Awaiting qualification at module scope would wait on our own evaluation
-    // during the first receipt. The promise still owns reporting/exit status.
-    qualifyTriageRunner(options).then((result) => {
-      console.log(JSON.stringify({ state: result.state, fingerprint: result.fingerprint, reason: result.reason }))
-      process.exitCode = Number(result.state !== "qualified")
-    }).catch(() => {
-      console.log(JSON.stringify({ state: "blocked", reason: "policy_control_unsupported" }))
-      process.exitCode = 1
-    })
-  } catch {
-    console.log(JSON.stringify({ state: "blocked", reason: "policy_control_unsupported" }))
-    process.exitCode = 1
-  }
+export function qualificationCLIOutcome(result){
+  return {line:JSON.stringify({state:result.state,reason:result.reason})+"\n",exitCode:Number(result.state!=="qualified")}
 }
+export async function qualifierEntry(runtime=process){
+  if(runtime.argv[1]!==fileURLToPath(import.meta.url))return null
+  const args=runtime.argv.slice(2)
+  let result
+  try{
+    if(args.length!==4||new Set([args[0],args[2]]).size!==2||!["--out","--cli"].includes(args[0])||!["--out","--cli"].includes(args[2]))throw Error("invalid arguments")
+    const options=Object.fromEntries([[args[0].slice(2),args[1]],[args[2].slice(2),args[3]]])
+    result=await qualifyTriageRunner(options)
+  }catch{result={state:"blocked",reason:"policy_control_unsupported"}}
+  const rendered=qualificationCLIOutcome(result)
+  runtime.stdout.write(rendered.line);runtime.exitCode=rendered.exitCode
+  return null
+}
+await qualifierEntry()
