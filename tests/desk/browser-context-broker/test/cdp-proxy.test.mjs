@@ -1006,6 +1006,45 @@ test('proxy denies browser termination and browser-global mutation commands', as
   assert.ok(!fake.methods.some(({ method }) => method === 'Security.setIgnoreCertificateErrors'));
 });
 
+test('proxy exposes window identity only for an explicitly owned target', async () => {
+  const { fake, lease, cdp } = await setup();
+  const targetId = lease.targetIds[0];
+  const observed = await cdp.send('Browser.getWindowForTarget', { targetId });
+  assert.deepEqual(observed.result, {
+    windowId: 1001,
+    bounds: { left: 20, top: 30, width: 800, height: 600, windowState: 'normal' },
+  });
+  const attached = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+  const sessionObserved = await cdp.send('Browser.getWindowForTarget', { targetId }, attached.result.sessionId);
+  assert.deepEqual(sessionObserved.result, observed.result);
+  for (const sessionId of [undefined, attached.result.sessionId]) {
+    for (const params of [{}, { targetId: null }, { targetId: '' }, { targetId: 'unowned-existing' }]) {
+      const denied = await cdp.send('Browser.getWindowForTarget', params, sessionId);
+      assert.equal(denied.error.code, -32002);
+      assert.equal(denied.result, undefined);
+    }
+  }
+  assert.equal(fake.methods.filter(({ method }) => method === 'Browser.getWindowForTarget').length, 2);
+  await cdp.send('Target.closeTarget', { targetId });
+  const closed = await cdp.send('Browser.getWindowForTarget', { targetId });
+  assert.equal(closed.error.code, -32002);
+  assert.equal(fake.methods.filter(({ method }) => method === 'Browser.getWindowForTarget').length, 2);
+});
+
+test('owned window diagnostics never permit window mutation or observation by window ID', async () => {
+  const { fake, lease, cdp } = await setup();
+  const targetId = lease.targetIds[0];
+  const attached = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+  for (const sessionId of [undefined, attached.result.sessionId]) {
+    for (const method of ['Browser.getWindowBounds', 'Browser.setWindowBounds']) {
+      const response = await cdp.send(method, { windowId: 1001, bounds: { windowState: 'minimized' } }, sessionId);
+      assert.equal(response.error.code, -32004);
+      assert.equal(response.result, undefined);
+    }
+  }
+  assert.ok(!fake.methods.some(({ method }) => ['Browser.getWindowBounds', 'Browser.setWindowBounds'].includes(method)));
+});
+
 test('proxy denies browser-global mutations through an owned session without disconnecting upstream', async () => {
   const { fake, lease, cdp } = await setup();
   const attached = await cdp.send('Target.attachToTarget', {
