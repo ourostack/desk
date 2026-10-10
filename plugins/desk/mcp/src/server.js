@@ -233,6 +233,7 @@ export const TOOL_IMPLS = {
   desk_reindex,
   desk_status,
   desk_doctor: doctorRuntime,
+  desk_skill: ({ input }) => deskSkill(input),
   improvement_open,
   improvement_next,
   improvement_update,
@@ -263,8 +264,6 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   const refused = headlessRefusal(name, env)
   if (refused) return { content: [{ type: "text", text: JSON.stringify(refused) }], isError: true }
-  // desk_skill reads the plugin's skills, not the desk, and answers with the skill's own text.
-  if (name === "desk_skill") return deskSkill(input ?? {})
   const impl = TOOL_IMPLS[name]
   if (!impl) {
     // Every tool wired; this branch only fires if a name exists in
@@ -289,6 +288,8 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
       deskRoot, input: input ?? {}, person, statusContext, readiness,
       queryRouter: routerFor(readiness), signal,
     })
+    // desk_skill answers with the skill's own text: its result is already an MCP answer.
+    if (name === "desk_skill" && Array.isArray(result?.content)) return result
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
