@@ -16,6 +16,31 @@ import { beginBackgroundConvergence, callTool, connectOrStartController, startCo
 
 const CUSTOM_MODEL = "other-768-dimensional-model"
 
+function fixtureMarkerRelative(root, file, paths = path) {
+  if (typeof file !== "string" || !paths.isAbsolute(file)) return null
+  const relative = paths.relative(root, file)
+  const comparison = relative.split(paths.sep).join("/")
+  return /^\.state\/readiness-fences\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.fence$/u.test(comparison) ? relative : null
+}
+
+test("controlled marker filter preserves platform spelling and rejects other roots or malformed names", () => {
+  const id = "12345678-1234-1234-1234-123456789abc"
+  const relative = `.state/readiness-fences/${id}.fence`
+  assert.equal(fixtureMarkerRelative("/fixture", `/fixture/${relative}`, path.posix), relative)
+  const windowsRelative = `.state\\readiness-fences\\${id}.fence`
+  assert.equal(fixtureMarkerRelative("C:\\fixture", `C:\\fixture\\${windowsRelative}`, path.win32), windowsRelative)
+  for (const [paths, root, files] of [
+    [path.posix, "/fixture", ["/fixture-other/" + relative, "/outside/" + relative,
+      "/fixture/.state/readiness-fences/invalid.fence", "/fixture/" + relative + ".extra",
+      "/fixture/" + windowsRelative, relative, null]],
+    [path.win32, "C:\\fixture", ["C:\\fixture-other\\" + windowsRelative, "D:\\fixture\\" + windowsRelative,
+      "C:\\fixture\\.state\\readiness-fences\\invalid.fence", "C:\\fixture\\" + windowsRelative + ".extra",
+      windowsRelative, null]],
+  ]) {
+    for (const file of files) assert.equal(fixtureMarkerRelative(root, file, paths), null)
+  }
+})
+
 function fixture(t, models, { uncertainFence = null } = {}) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-model-admission-"))
   const stateHome = path.join(root, "controller-state")
@@ -50,13 +75,13 @@ function fixture(t, models, { uncertainFence = null } = {}) {
   restores.push(() => watchMock.mock.restore())
   const writeMock = t.mock.method(fsPromises, "writeFile", async function (file, ...args) {
     const result = await Reflect.apply(writeNative, this, [file, ...args])
-    if (typeof file !== "string" ||
-        !/^\.state\/readiness-fences\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.fence$/u.test(path.relative(root, file))) return result
+    const markerRelative = fixtureMarkerRelative(root, file)
+    if (markerRelative === null) return result
     assert.ok(registration && !registration.handle.closed, "exact fixture watcher must be registered before marker delivery")
     assert.equal(readFileSync(file, "utf8"), path.basename(file), "deliver only a completed actual marker write")
     markerWrites.push(file)
     if (markerWrites.length === uncertainFence) registration.handle.emit("error", new Error("controlled watcher failure"))
-    registration.callback("rename", path.relative(root, file))
+    registration.callback("rename", markerRelative)
     return result
   })
   restores.push(() => writeMock.mock.restore())
