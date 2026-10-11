@@ -548,16 +548,27 @@ test("lookups that never answer do not hold up another client's document, and ar
   routes["/client.json"] = json(documentFor(url));
   const dns = await dnsServer(t, { [HOST]: ["127.0.0.1"] });
   // The real resolver, pointed at the test DNS server; no lookup is injected.
-  const { documents, logs } = makeDocuments({ lookup: undefined, dnsServers: [dns.server], timeoutMs: 1000 });
+  // The deadline is 3 s, not less, so the resolver's one retry falls well
+  // inside it, as it does at the 5 s production deadline. Node checks DNS
+  // timeouts on a timer that ticks every per-try timeout (half the deadline),
+  // capped at 1 s, so a retry goes out on the second tick after its try: at
+  // 1 s for a 1 s deadline, the same moment the deadline cancels the lookup,
+  // and on a slow runner the retry sometimes went out first. At 3 s the retry
+  // goes out at about 2 s.
+  const { documents, logs } = makeDocuments({ lookup: undefined, dnsServers: [dns.server], timeoutMs: 3000 });
   const hung = ["https://hung-1.example/client.json", "https://hung-2.example/client.json"].map((id) => documents.get(id));
   await new Promise((resolve) => setTimeout(resolve, 50));
   const started = Date.now();
   assert.equal((await documents.get(url))?.client_id, url, "the good document is accepted while two lookups hang");
-  // Well inside the 1 s deadline, with room for a slow CI runner.
+  // Well inside the 3 s deadline, and inside the first try of the hung lookups.
   assert.ok(Date.now() - started < 900, `the good document took ${Date.now() - started} ms`);
   assert.deepEqual(await Promise.all(hung), [undefined, undefined]);
   assert.deepEqual(logs.sort(), ["client refused: timeout client https://hung-1.example/client.json", "client refused: timeout client https://hung-2.example/client.json"]);
-  assert.ok(dns.queries.includes("hung-1.example") && dns.queries.includes(HOST), "the gateway's own resolver asked the test DNS server");
+  assert.ok(dns.queries.includes(HOST), "the gateway's own resolver asked the test DNS server");
+  // Each hung name was tried twice, A and AAAA, before the deadline.
+  for (const name of ["hung-1.example", "hung-2.example"]) {
+    assert.equal(dns.queries.filter((query) => query === name).length, 4, `${name} was retried before the deadline`);
+  }
   // Cancelled at the deadline: no query goes out for the hung names afterwards.
   const asked = dns.queries.length;
   await new Promise((resolve) => setTimeout(resolve, 700));
