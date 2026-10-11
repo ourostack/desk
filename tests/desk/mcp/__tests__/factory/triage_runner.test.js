@@ -201,6 +201,27 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   const successful=await unit.run(sealed.record)
   assert.equal(successful.authority,false);assert.equal(successful.outcome.state,"ran")
   assert.equal(unit.statistics().runs,1)
+  // Shared native IO -> registered-runner public state projection, not a fake
+  // transaction returning predetermined timeout/budget states.
+  for(const [mode,state,cost]of [["softTimeout","timeout",null],["budget","budget_exceeded",1.25]]){
+    const native=runner.createNonacceptedTriageUnit({...unitConfig,failures:{nativeMode:mode}})
+    const result=await native.run(native.seal().record)
+    assert.equal(result.outcome.state,state,mode)
+    assert.equal(result.outcome.cost_usd,cost,mode)
+    assert.equal(result.authority,false)
+  }
+  // Removing the fresh chain checks would launch after sign-in drift or
+  // return a fresh candidate after run-time drift. Only unit-owned state moves.
+  for(const [failure,runs]of [
+    ["signInChainDrift",0],["signInChainUnknown",0],["runChainDrift",1],["runChainUnknown",1],
+    ["signInArgvDrift",0],["runArgvDrift",1],["postExitAdmission",1],["postExitIdentity",1],
+  ]){
+    const changed=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
+    const result=await changed.run(changed.seal().record)
+    assert.equal(result.outcome.state,"scope_changed",failure)
+    assert.equal(changed.statistics().runs,runs,failure)
+    assert.equal(changed.statistics().closed,1,failure)
+  }
   assert.equal((await runner.runTriageChild({...f,qualification:sealed.record,spawn:()=>{throw Error("real spawn forbidden")}})).state,"scope_unqualified")
   await unit.save(sealed.record)
   const loaded=await unit.load()
