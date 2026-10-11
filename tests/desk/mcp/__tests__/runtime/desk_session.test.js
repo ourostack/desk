@@ -1163,6 +1163,25 @@ test("a call joins at most three late background attempts before it refuses as a
   assert.deepEqual(runtime.calls, [])
 })
 
+test("a call whose wait budget is spent refuses as admitting instead of rejoining", async (t) => {
+  const runtime = fakeRuntime()
+  const { session } = await makeSession(t, { runtime, focusWaitMs: 0 })
+  await session.admission.refresh()
+  const refresh = session.admission.refresh
+  let gates = 0
+  session.admission.refresh = async (options) => {
+    gates += 1
+    return refresh(options)
+  }
+  // With no wait budget, the call's own revalidation is still running at dispatch.
+  const refused = await session.callTool({ name: "task_focus", input: { track: "ops", slug: "one" } })
+  assert.equal(refused.isError, true)
+  assert.equal(payload(refused).code, "admitting")
+  assert.equal(gates, 1, "no rejoin once the budget is spent")
+  assert.deepEqual(runtime.calls, [])
+  await session.admission.idle()
+})
+
 test("a tool that throws answers a structured degraded result", async (t) => {
   const runtime = fakeRuntime()
   const { session, log } = await makeSession(t, { runtime })

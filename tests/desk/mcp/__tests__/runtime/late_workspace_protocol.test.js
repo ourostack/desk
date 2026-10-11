@@ -464,6 +464,7 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
       mkdirSync(record)
       assert.throws(() => readFileSync(record, "utf8"), "the actual record read must fail")
     }
+    const connectionsWhileLost = f.connectedRoots.length
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const result = await f.call("task_update", update)
       assert.equal(result.isError, true, JSON.stringify({
@@ -477,7 +478,7 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
     assert.deepEqual([f.a, f.b].map((root) => readFileSync(f.card(root), "utf8")), cards)
     assertAThenOnlyB(f, "no A authority/controller is acquired after losing B")
-    const connectionsWhileLost = f.connectedRoots.length
+    assert.equal(f.connectedRoots.length, connectionsWhileLost, "no controller is acquired while B's association is lost")
     const status = payload(await f.call("desk_status", { detail: true }))
     assert.equal(status.code, "root_unavailable")
     assert.equal(status.write_scope, undefined, "no cached B ownership survives failed resolution")
