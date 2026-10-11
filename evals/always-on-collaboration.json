@@ -3,7 +3,7 @@
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/using-desk/SKILL.md"],
-  "reviewedSourceFingerprint": "28c4d261b845fc672ced5071aead14bc3ed321d791ed218e99938956de5abded",
+  "reviewedSourceFingerprint": "6501204e02a9c1adc1fd9b741d010a4d782414ef611719e89a03d0b0ca08cb68",
   "requirements": [
     {"id": "plain-human-input", "description": "Use normal conversation, never structured-question tools or forms; forms disrupt conversation (HX) and obscure whether judgment, permission or execution is needed (AX). Explain plain meaning, recommendation and concrete consequence before irreducible human input."},
     {"id": "owned-continuation", "description": "Continue authorized research and routine implementation after corrections without jargon menus, repeated permission requests or imagined future gates."},

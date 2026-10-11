@@ -290,13 +290,16 @@ function main() {
 
   // The foundation says done is a delivery, tells the agent what to do at delivery, and tells a child never to record the answer.
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation says done is a delivery and names task_signoff", [
-    "Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. Raise older unsigned deliveries once, together, after you have done what the operator asked.",
+    "Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered.",
   ]);
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation tells a child agent never to call task_signoff", [
     "A child agent never calls task_signoff.",
   ]);
 
   const owned = (name) => fs.readFileSync(path.join(pluginRoot, "skills", name, "SKILL.md"), "utf8");
+  // Raising older unsigned deliveries moved to interaction-style, which owns it, to make room for the RFC reading trigger (SessionStart size budget).
+  assert.doesNotMatch(skill, /older unsigned deliveries/iu, "raising older unsigned deliveries belongs to interaction-style");
+  assert.ok(owned("interaction-style").includes("Older unsigned deliveries are raised once, together, after you have done what the operator asked"), "interaction-style must carry the rule for older unsigned deliveries");
   assertSectionConcepts(section(skill, "Human and agent"), [
     /The human supplies intent.*authority.*endpoint/u,
     /The agent owns execution.*sequencing.*verification.*cleanup/u,
@@ -498,7 +501,9 @@ function main() {
     "Agentic Engineering V2 RFC",
     "`Desk RFC:` line",
     "from any repository",
-    "on demand",
+    "before you explain Desk or its method to people",
+    "or write or review its docs, sites, pitches or onboarding",
+    "not at every startup",
   ]);
   assert.doesNotMatch(
     section(skill, "The RFC"),
