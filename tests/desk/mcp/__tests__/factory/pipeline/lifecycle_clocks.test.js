@@ -103,10 +103,35 @@ test("an open episode runs only to the latest supported observation and says so 
   assert.deepEqual(clocks.production_periods.items, [{ start_ms: 5, end_ms: 50, start_basis: "recorded_activity", end_basis: "latest_observation", so_far: true }])
   assert.deepEqual(clocks.production_ms, { class: "measured", state: "partial", value: 45, reasons: ["censored"], basis: ["recorded_activity", "latest_observation", "lifecycle_history"], bound: "lower", so_far: true })
   assert.equal(clocks.active_in_production_ms.so_far, true)
-  // Reopened and not yet worked on: the delivered episode stays, the job is open, so production is at least that.
-  const reopened = derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [], [[10, 20]], allWhole(), [{ offset_ms: 0, end_ms: 40 }, { offset_ms: 100, end_ms: 105 }])
-  assert.deepEqual(reopened.production_periods, { state: "partial", reasons: ["censored"], items: [{ start_ms: 10, end_ms: 30, start_basis: "recorded_activity", end_basis: "done_transition", so_far: false }] })
+  // Reopened and worked on again, still open: the delivered episode stays and the open one runs so far.
+  const reopened = derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [], [[10, 20], [102, 104]], allWhole(), [{ offset_ms: 0, end_ms: 40 }, { offset_ms: 100, end_ms: 105 }])
+  assert.deepEqual(reopened.production_periods, { state: "partial", reasons: ["censored"], items: [{ start_ms: 10, end_ms: 30, start_basis: "recorded_activity", end_basis: "done_transition", so_far: false }, { start_ms: 102, end_ms: 105, start_basis: "recorded_activity", end_basis: "latest_observation", so_far: true }] })
   assert.equal(reopened.production_ms.bound, "lower")
+})
+
+test("a move away from done that the history cannot support is not read as a reopen: the new measures are unavailable, not open so far", () => {
+  const contradictory = (clocks, label) => {
+    for (const key of ["production_ms", "active_in_production_ms", "production_remainder_ms"]) {
+      assert.equal(clocks[key].state, "unavailable", `${label} ${key}`)
+      assert.deepEqual(clocks[key].reasons, ["episode_boundary_not_recorded"], `${label} ${key}`)
+      assert.equal(clocks[key].so_far, false, `${label} ${key}`)
+    }
+    assert.deepEqual(clocks.production_periods, { state: "unavailable", reasons: ["episode_boundary_not_recorded"], items: [] })
+  }
+  // A timed move away from a done with no later done and no recorded work after it.
+  contradictory(derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [], [[10, 20]], allWhole(), [{ offset_ms: 0, end_ms: 40 }, { offset_ms: 100, end_ms: 105 }]), "no work after the move")
+  // The real shape (job 346c8d5): the card's last update says done, and a session's move to processing 115 ms later is followed by
+  // its work. The card's latest timed state is still that done, which a real reopen would have changed, so no reopen is invented.
+  contradictory(derive([{ to: "processing", offset_ms: 2_844_115 }], [{ status: "done", offset_ms: 2_844_000 }], [[2_844_115, 5_707_615]], allWhole(), [{ offset_ms: -10_776_945, end_ms: 84_337_419 }]), "card still done")
+  // A later timed observation that is not done supports the reopen: open, so far.
+  const supported = derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [{ status: "done", offset_ms: 30 }, { status: "processing", offset_ms: 120 }], [[10, 20], [110, 115]])
+  assert.deepEqual([supported.production_ms.state, supported.production_ms.so_far, supported.production_ms.reasons], ["partial", true, ["censored"]])
+})
+
+test("an untimed done observation closes a reopened job only when nothing timed and not terminal follows the reopen", () => {
+  // Done at 30 minutes, reopened at 100, an untimed done, then the card seen processing at 150: open, not done.
+  const stale = derive([{ to: "done", offset_ms: 30 * MIN }, { to: "processing", offset_ms: 100 * MIN }], [{ status: "done", offset_ms: null }, { status: "processing", offset_ms: 150 * MIN }], [[10 * MIN, 20 * MIN], [110 * MIN, 120 * MIN]])
+  assert.deepEqual([stale.production_ms.so_far, stale.production_ms.reasons, stale.production_periods.items.at(-1).end_basis], [true, ["censored"], "latest_observation"])
 })
 
 test("the delivering turn's tail is not late work, and work under way at a reopen starts the new episode at the reopen", () => {

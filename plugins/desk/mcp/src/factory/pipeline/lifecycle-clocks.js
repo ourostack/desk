@@ -20,7 +20,10 @@
 //     raw active intervals' starts. Only the delivering turn's tail, work already under way at the `done` that ends within the walk's
 //     15-minute short-gap threshold of it, is clipped at the delivery; a longer stretch, or any work starting after that tail, is late.
 //   - A delivered episode with no recorded work leaves production a lower bound (`no_active_intervals`): its time is not known. A job
-//     whose final `done` has no time is done, its last episode running to the end of its recorded work (`finish_time_not_known`). A transition with no time (`episode_boundary_not_recorded`), a reopen seen only in
+//     whose final `done` has no time, with nothing timed and not terminal after its last reopen, is done, its last episode running to the end
+//     of its recorded work (`finish_time_not_known`). A timed move away from a `done` with no later `done` is a reopen only when recorded
+//     work follows it and the card's latest timed observation is not still that `done`; otherwise the history contradicts itself and the
+//     clocks are unavailable, not open (`episode_boundary_not_recorded`). A transition with no time (`episode_boundary_not_recorded`), a reopen seen only in
 //     a later open observation (the same), lost or capped lifecycle history (`episode_history_incomplete`), a cancelled job, an unread
 //     status, unplaced sessions, unread activity or no recorded work at all each leave them unavailable with that reason: never a zero.
 //   - `active_in_production_ms` is the corrected working union (every worker of the task once, ask-tool and labeled waits out except where
@@ -166,6 +169,7 @@ function lifecycle(timeline, working) {
   const closed = []
   let open = true
   let since = null
+  let reopenTimed = false
   let known = events.length > 0
   for (const event of events) {
     if (event.status === "cancelled") {
@@ -181,6 +185,7 @@ function lifecycle(timeline, working) {
       if (!event.transition) stops.push("episode_boundary_not_recorded")
       open = true
       since = event.at
+      reopenTimed = event.transition
     }
   }
   let untimedDone = false
@@ -193,10 +198,23 @@ function lifecycle(timeline, working) {
       untimedDone = true
       open = false
     }
-  } else if (open && timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null)) {
-    // Open by its timed lifecycle, but seen done with no time: done, its final delivery not dated.
+  } else if (open && timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null)
+    && !events.some((event) => since !== null && event.at > since && !TERMINAL.has(event.status))) {
+    // Open by its timed lifecycle, but seen done with no time, and nothing timed and not terminal after its last reopen: done, its final
+    // delivery not dated.
     untimedDone = true
     open = false
+  }
+  if (open && reopenTimed) {
+    // A timed move away from a done, with no later done, is a reopen only when recorded work follows it and the card's latest timed state
+    // is not still that done (a real reopen updates the card). Otherwise the history contradicts itself: no reopen is invented and the job
+    // is not called open.
+    const lastObserved = events.filter((event) => !event.transition).at(-1)
+    const cardStillDone = lastObserved?.status === "done" && lastObserved.at <= since
+    if (cardStillDone || !working.some(([, end]) => end > since)) {
+      stops.push("episode_boundary_not_recorded")
+      open = false
+    }
   }
   if (!known) stops.push("status_unavailable")
   return { closed, open, since, untimedDone, stops, lastWorkEnd: working.length === 0 ? null : Math.max(...working.map(([, end]) => end)) }
