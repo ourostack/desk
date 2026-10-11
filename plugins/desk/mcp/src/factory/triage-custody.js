@@ -26,6 +26,12 @@ const launcher=fileURLToPath(new URL("../../scripts/launch-triage-catalog.js",im
 const clean=Object.freeze({LANG:"C",LC_ALL:"C",TZ:"UTC"})
 const fail=code=>{throw new Error(code)}
 const hex=/^[a-f0-9]{64}$/u
+// The pinned Claude Code 2.1.296 engine. A real native run is accepted only
+// when ps shows that exact executable, started by this process with our argv.
+// The qualification fixture ships beside this module and is part of the
+// owned source identity, so a changed fixture is a changed source.
+export const QUALIFICATION_FIXTURE=fileURLToPath(new URL("./v12-owned-catalog.json",import.meta.url))
+export const NATIVE_ENGINE_SHA256="c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
 export const ownedPidLive=pid=>{try{process.kill(pid,0);return true}catch(e){if(e.code==="ESRCH")return false;throw e}}
 export async function reapOwnedChild(child,deadline){
   if(!child||child.exitCode!==null||child.signalCode!==null||!Number.isSafeInteger(child.pid)||child.pid<=0)return
@@ -348,6 +354,11 @@ export async function observeOwnedServer({nativePid,launcherPid,serverPid,genera
       server.command!==`${expected.runtime} ${expected.entry}`||
       launch.command!==`${expected.runtime} ${expected.launcher} ${expected.launchArgs.join(" ")}`||
       (startIdentity&&catalogCanonical(startIdentity)!==catalogCanonical({server,launch})))fail("provenance_mismatch")
+    // The native process must be the pinned engine, started by this process
+    // with exactly our argv. An imitation fails here and never runs as real.
+    const native=nativePid===undefined?{}:{native:psIdentity(await osCapture("/bin/ps",["-ww","-p",String(nativePid),"-o","pid=,ppid=,lstart=,command="],expected.deadline),nativePid)}
+    if(nativePid!==undefined&&(native.native.ppid!==process.pid||native.native.command!==[expected.native.command,...expected.native.args].join(" ")||
+      catalogHash(await fs.readFile(expected.native.command))!==expected.native.engine))fail("native_identity")
     const environment=await osCapture("/bin/ps",["eww","-p",String(serverPid),"-o","command="],expected.deadline)
     const allowed=`${expected.runtime} ${expected.entry} ${Object.entries(expected.cleanEnv).map(([k,v])=>`${k}=${v}`).join(" ")}`
     // Darwin may emit environment fields in lexical rather than insertion
@@ -355,12 +366,12 @@ export async function observeOwnedServer({nativePid,launcherPid,serverPid,genera
     const prefix=`${expected.runtime} ${expected.entry} `
     const fields=environment.trim().startsWith(prefix)?environment.trim().slice(prefix.length).split(" ").sort():[]
     if(catalogCanonical(fields)!==catalogCanonical(Object.entries(expected.cleanEnv).map(([k,v])=>`${k}=${v}`).sort()))fail("environment_unknown")
-    return {ok:true,identity:{server,launch,generation,environment_sha256:catalogHash(allowed)}}
+    return {ok:true,identity:{server,launch,...native,generation,environment_sha256:catalogHash(allowed)}}
   }catch(e){return {ok:false,reason:e.message}}
 }
 export async function ownedSourceIdentity() {
   const exact=ownedCatalogEntries(),files=[exact.runtime,"/usr/bin/env",exact.entry,exact.launcher,
-    ...["triage-catalog","triage-protocol","triage-custody","triage-runner"].map(x=>fileURLToPath(new URL(`./${x}.js`,import.meta.url)))]
+    ...["triage-catalog","triage-protocol","triage-custody","triage-runner"].map(x=>fileURLToPath(new URL(`./${x}.js`,import.meta.url))),QUALIFICATION_FIXTURE]
   const hashes={}
   for(const file of files)hashes[file]=catalogHash(await fs.readFile(file))
   // The loaded SDK dependency closure must be independently observed by the
@@ -490,7 +501,8 @@ async function restoredCustody(custody,snapshotFile,context) {
     observed.server.command!==`${identity.runtime} ${identity.entry}`||
     observed.launch.command!==`${identity.runtime} ${identity.launcher} ${launch.args.slice(launch.args.indexOf("--entry")).join(" ")}`||
     (nativePid!==undefined&&observed.launch.ppid!==nativePid)||
-    ![observed.server.start,observed.launch.start].every(value=>/^\w{3} \w{3}\s+\d+ \d\d:\d\d:\d\d \d{4}$/u.test(value))||
+    (nativePid!==undefined&&observed.native?.pid!==nativePid)||
+    ![observed.server,observed.launch,...(nativePid===undefined?[]:[observed.native])].every(value=>/^\w{3} \w{3}\s+\d+ \d\d:\d\d:\d\d \d{4}$/u.test(value.start))||
     // A facade bundle carries the observer double's epoch start; real custody never restores it.
     (context.refusesObserverDouble&&[observed.server.start,observed.launch.start].includes(NONACCEPTED_OBSERVER_START))||
     observed.environment_sha256!==catalogHash(`${identity.runtime} ${identity.entry} ${Object.entries(identity.cleanEnv).map(([key,value])=>`${key}=${value}`).join(" ")}`))fail("restored_process_identity")
@@ -513,7 +525,8 @@ async function restoreNative(bundle,context) {
     invocation.record_refs_sha256!==catalogHash(catalogCanonical(snapshot.record_refs))||
     b.expectedSha256!==bundle.custody.snapshotSha256||b.generation!==snapshot.generation||b.snapshotFile!==bundle.snapshotFile||
     invocation.owned_launch.nativePid!==bundle.resources.pids[0]||
-    bundle.custody.observation.identity.launch.ppid!==bundle.resources.pids[0])fail("restored_invocation")
+    bundle.custody.observation.identity.launch.ppid!==bundle.resources.pids[0]||
+    bundle.custody.observation.identity.native.command!==[invocation.command,...invocation.args].join(" "))fail("restored_invocation")
   const {encoded}=validatedNativeSubmission({custody:bundle.custody,nativeStream:bundle.stream,brief},context)
   await safeCatalogPath(bundle.resultFile)
   if((await fs.readFile(bundle.resultFile,"utf8"))!==encoded)fail("restored_result")
@@ -573,7 +586,7 @@ export async function restoreDirectReceipt(bundle) {
   return restoreDirect(bundle,realOwnedCustody)
 }
 async function restoreDirect(bundle,context) {
-  const fixture=JSON.parse(await fs.readFile(new URL("../../../../../tests/desk/mcp/__tests__/factory/fixtures/v12-owned-catalog.json",import.meta.url)))
+  const fixture=JSON.parse(await fs.readFile(QUALIFICATION_FIXTURE))
   await restoreDirectHistory(bundle,fixture,context)
   if(bundle.bundle){
     closedObject(bundle.bundle,["version","cases","partial"])
@@ -612,7 +625,7 @@ const realLifecycle=Object.freeze({readBytes:file=>fs.readFile(file),source:owne
 // builds a different one, and its registries never reach these maps.
 const realOwnedCustody=Object.freeze({refusal:hostRefusal,lifecycle:realLifecycle,custody:trustedCustody,native:nativeRuns,direct:realDirectRegistry,
   refusesObserverDouble:true})
-async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHandle,controlPath,deadline,clock=Date.now},context) {
+async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,receiptHandle,controlPath,deadline,clock=Date.now},context) {
   // The direct client and native path share this receipt/provenance controller.
   const receipts=[],observations=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
   const sourceBefore=await context.source()
@@ -653,7 +666,7 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
         bootWork=(async()=>{
           moduleClosure=await context.verifyModules(frame.payload.module_closure)
           observation=await context.observe({launcherPid:frame.payload.launcher_pid,serverPid:frame.server_pid,
-            nativePid:launch.nativePid,generation:snapshot.generation,expected:{...launch.identity,launchArgs:launch.args.slice(launch.args.indexOf("--entry"))}})
+            nativePid:launch.nativePid,generation:snapshot.generation,expected:{...launch.identity,launchArgs:launch.args.slice(launch.args.indexOf("--entry")),native}})
           if(!observation.ok)fail(observation.reason)
           if(error||resources.fdsClosed)fail("lifecycle_aborted")
           const acquired=await context.openControl(controlPath,"fifo",C.O_WRONLY|C.O_NONBLOCK,deadline)
@@ -837,9 +850,11 @@ export async function prepareOwnedCatalogRun({inputDir,runDir,deadline}) {
 }
 const ownedLifecycle=context=>value=>runOwnedCatalogLifecycle(value,context)
 const realNativeRun=Object.freeze({lifecycle:ownedLifecycle(realLifecycle),stat:fsNative.lstatSync,bytes:fsNative.readFileSync,
-  materialize:materializeTriageSubmission,registry:nativeRuns})
-export async function runOwnedCatalogNative(options) {
-  return runOwnedNative(options,realOwnedCustody,realNativeRun)
+  materialize:materializeTriageSubmission,registry:nativeRuns,engine:NATIVE_ENGINE_SHA256})
+// The production export takes no launcher: the native engine always starts
+// through node:child_process spawn. Only the nonaccepted facade accepts one.
+export async function runOwnedCatalogNative({owned,command,args,env,deadline,resultFile,onChild,onChildExit}) {
+  return runOwnedNative({owned,command,args,env,deadline,resultFile,onChild,onChildExit},realOwnedCustody,realNativeRun)
 }
 async function runOwnedNative(options,owner,native) {
   const refused=owner.refusal()
@@ -898,7 +913,7 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       if(!await owned.verifyPrepared())fail("prepared_changed")
       stage("prepared_verification","present")
       if(Buffer.byteLength(argumentText)>65536||[configText,settingsText].some(v=>typeof v==="string"&&Buffer.byteLength(v)>65536))fail("native_capture_limit")
-      lifecycle=await context.lifecycle({launch:owned.launch,receiptFd:owned.reader.handle.fd,receiptHandle:owned.reader.handle,
+      lifecycle=await context.lifecycle({launch:owned.launch,native:{command,args,engine:context.engine},receiptFd:owned.reader.handle.fd,receiptHandle:owned.reader.handle,
         controlPath:owned.launch.identity.bootstrap.readyFifo,deadline})
       stage("lifecycle","present")
       // Last prepared check is synchronous, with no yield before spawning.
@@ -1289,8 +1304,11 @@ async function runDirect({fixture,deadline,evidenceDir},context) {
     resources.trace={version:2,generation:owned.generation,events:[],bytes:0,truncated:false}
     await client.connect(boundClient(child,resources.wire,resources.trace))
     const tools=(await client.listTools()).tools,history=[],responses=[]
+    // The native client's tools/call shape: Claude Code's tool-use id in
+    // _meta, plus the progress token the SDK adds for an onprogress handler.
+    let toolUse=0
     const call=async(name,args,expectedError=false)=>{
-      const response=await client.callTool({name,arguments:args})
+      const response=await client.callTool({name,arguments:args,_meta:{"claudecode/toolUseId":`toolu_direct_${++toolUse}`}},undefined,{onprogress:Function.prototype})
       history.push({name,args});responses.push({name,ok:expectedError?response.isError===true:response.isError!==true})
       return response
     }
@@ -1336,8 +1354,11 @@ async function observeOwnedServerDouble({nativePid,launcherPid,serverPid,generat
   const server={pid:serverPid,ppid:launcherPid,start:NONACCEPTED_OBSERVER_START,command:`${expected.runtime} ${expected.entry}`}
   const launch={pid:launcherPid,ppid:nativePid??process.pid,start:NONACCEPTED_OBSERVER_START,
     command:`${expected.runtime} ${expected.launcher} ${expected.launchArgs.join(" ")}`}
+  // The double reports our own launch as the native identity; it never
+  // checks the engine pin, so its bundles stay nonaccepted.
+  const native=nativePid===undefined?{}:{native:{pid:nativePid,ppid:process.pid,start:NONACCEPTED_OBSERVER_START,command:[expected.native.command,...expected.native.args].join(" ")}}
   const allowed=`${expected.runtime} ${expected.entry} ${Object.entries(expected.cleanEnv).map(([k,v])=>`${k}=${v}`).join(" ")}`
-  return {ok:true,identity:{server,launch,generation,environment_sha256:catalogHash(allowed)}}
+  return {ok:true,identity:{server,launch,...native,generation,environment_sha256:catalogHash(allowed)}}
 }
 /** Test-owned NONACCEPTED owned-catalog facade. The same direct, wire, native,
  * restore and materialize code runs against the actual launcher, server, FIFOs

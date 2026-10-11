@@ -1,5 +1,5 @@
 import "../_isolated_env.mjs"
-import {ownedHostTest,ownedCatalogTest} from "./_owned_catalog_host.mjs"
+import {ownedHostTest,ownedCatalogTest,observerDoubleCustody} from "./_owned_catalog_host.mjs"
 import {test} from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
@@ -15,7 +15,7 @@ import {Client} from "@modelcontextprotocol/sdk/client/index.js"
 import {ReadBuffer,serializeMessage,deserializeMessage} from "@modelcontextprotocol/sdk/shared/stdio.js"
 const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js").catch(()=>({}))
 const realCustody=custody
-const fixture=JSON.parse(fs.readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+const fixture=JSON.parse(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
 test("owned_custody_discovery",()=>{
   for(const key of ["openCatalogBootstrap","loadCatalogSnapshot","ownedServerLaunch","materializeTriageSubmission","runDirectCatalog",
     "observeOwnedServer","verifyModuleClosure","readProtectedBytes","reapOwnedChild","validateNativeSubmissionEvidence"])
@@ -108,6 +108,10 @@ test("owned_child_reaping_and_liveness_are_bounded_to_exact_handles",async(t)=>{
 test("owned_observation_finite_os_errors_and_identity_mismatches",async(t)=>{
   const spawnOriginal=childProcess.spawn,platform=Object.getOwnPropertyDescriptor(process,"platform")
   let mode="valid",calls=0
+  const engineDir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-engine-"))),engineFile=path.join(engineDir,"claude")
+  fs.writeFileSync(engineFile,"unit engine bytes",{mode:0o600})
+  t.after(()=>fs.rmSync(engineDir,{recursive:true,force:true}))
+  const engineSha=createHash("sha256").update("unit engine bytes").digest("hex")
   childProcess.spawn=(command,args)=>{
     assert.equal(command,"/bin/ps")
     const child=new EventEmitter();Object.assign(child,{stdout:new PassThrough(),stderr:new PassThrough()})
@@ -120,9 +124,10 @@ test("owned_observation_finite_os_errors_and_identity_mismatches",async(t)=>{
       if(mode==="stderr_limit"){child.stderr.write(Buffer.alloc(65537));return}
       if(mode==="stderr_small")child.stderr.write("unit-small")
       if(mode==="nonzero"){child.emit("close",1);return}
-      const start="Sat Oct 10 13:00:00 2026"
-      const row=call===1?`500001 ${mode==="server_parent"?9:500002} ${start} /unit/node ${mode==="server_command"?"/wrong":"/unit/server"}`:
-        call===2?`500002 ${mode==="native_parent"?9:500003} ${start} /unit/node /unit/launcher ${mode==="launcher_command"?"--wrong":"--fixed"}`:
+      const start="Sat Oct 10 13:00:00 2026",pid=args[0]==="eww"?"env":args[2]
+      const row=pid==="500001"?`500001 ${mode==="server_parent"?9:500002} ${start} /unit/node ${mode==="server_command"?"/wrong":"/unit/server"}`:
+        pid==="500002"?`500002 ${mode==="native_parent"?9:500003} ${start} /unit/node /unit/launcher ${mode==="launcher_command"?"--wrong":"--fixed"}`:
+        pid==="500003"?`500003 ${mode==="native_launch_parent"?9:process.pid} ${start} ${engineFile} -p ${mode==="native_command"?"--other":"--fixed-native"}  --tools`:
         mode==="env_prefix"?"/wrong-prefix LANG=C":`/unit/node /unit/server LANG=C LC_ALL=C TZ=UTC${mode==="env_unknown"?" UNKNOWN=unit":""}`
       child.stdout.write(mode==="pid_shape"?"unparsed":mode==="pid_value"?row.replace("500001","500009"):row)
       child.emit("close",0)
@@ -133,15 +138,21 @@ test("owned_observation_finite_os_errors_and_identity_mismatches",async(t)=>{
   t.after(()=>{childProcess.spawn=spawnOriginal;syncBuiltinESMExports();Object.defineProperty(process,"platform",platform)})
   const base=()=>({nativePid:500003,launcherPid:500002,serverPid:500001,generation:"a".repeat(64),
     expected:{deadline:Date.now()+1250,runtime:"/unit/node",entry:"/unit/server",launcher:"/unit/launcher",
-      launchArgs:["--fixed"],cleanEnv:{LANG:"C",LC_ALL:"C",TZ:"UTC"}}})
+      launchArgs:["--fixed"],cleanEnv:{LANG:"C",LC_ALL:"C",TZ:"UTC"},native:{command:engineFile,args:["-p","--fixed-native","","--tools"],engine:engineSha}}})
   Object.defineProperty(process,"platform",{...platform,value:"darwin"})
   const valid=await custody.observeOwnedServer(base());assert.equal(valid.ok,true)
+  assert.deepEqual(valid.identity.native,{pid:500003,ppid:process.pid,start:"Sat Oct 10 13:00:00 2026",command:`${engineFile} -p --fixed-native  --tools`})
+  calls=0;assert.equal((await custody.observeOwnedServer({...base(),nativePid:undefined})).identity.native,undefined,"the direct lane has no native process")
+  for(const native of [{engine:"a".repeat(64)},{command:path.join(engineDir,"missing")}]){
+    calls=0;const refused=await custody.observeOwnedServer({...base(),expected:{...base().expected,native:{...base().expected.native,...native}}})
+    assert.equal(refused.ok,false,JSON.stringify(native))
+  }
   calls=0;assert.equal((await custody.observeOwnedServer({...base(),nativePid:undefined,startIdentity:valid.identity})).ok,false)
   calls=0
   const identities={server:valid.identity.server,launch:valid.identity.launch}
   assert.equal((await custody.observeOwnedServer({...base(),nativePid:undefined,startIdentity:identities})).ok,true)
   calls=0;mode="stderr_small";assert.equal((await custody.observeOwnedServer(base())).ok,true)
-  for(const item of ["timeout","error","output_limit","stderr_limit","nonzero","server_parent","native_parent","server_command","launcher_command","env_prefix","env_unknown","pid_shape","pid_value"]){
+  for(const item of ["timeout","error","output_limit","stderr_limit","nonzero","server_parent","native_parent","server_command","launcher_command","env_prefix","env_unknown","pid_shape","pid_value","native_launch_parent","native_command"]){
     mode=item;calls=0
     const result=await custody.observeOwnedServer(base())
     assert.equal(result.ok,false,item)
@@ -627,9 +638,15 @@ ownedCatalogTest("actual_nonmodel_missing_executable_is_closed_without_unhandled
   const result=await custody.runOwnedCatalogNative({owned,command:path.join(dir,"never-created-executable"),args:[],
     env:{LANG:"C",LC_ALL:"C",TZ:"UTC"},deadline,resultFile:path.join(dir,"unaccepted.json"),spawn:observedSpawn})
   assert.equal(result.state,"scope_unqualified")
-  assert.equal(errors[0].code,"ENOENT")
-  assert.equal(unknownKillAttempts,0,"never signal a failed spawn handle whose PID is unowned/zero")
-  assert.ok(errors[0].coreErrorListeners>0,"the shared source must register its error observer before inspecting pid")
+  if(custody.authority!==false){
+    // The production export takes no launcher: its own spawn failed closed.
+    assert.deepEqual(errors,[],"the caller launcher was never used")
+    assert.equal(result.detail,"spawn "+path.join(dir,"never-created-executable")+" ENOENT")
+  }else{
+    assert.equal(errors[0].code,"ENOENT")
+    assert.equal(unknownKillAttempts,0,"never signal a failed spawn handle whose PID is unowned/zero")
+    assert.ok(errors[0].coreErrorListeners>0,"the shared source must register its error observer before inspecting pid")
+  }
   assert.equal(result.resources.native_exit.stdio_closed,true)
   assert.deepEqual(result.resources.pids,[])
   assert.deepEqual(result.resources.exited_pids,[])
@@ -1211,7 +1228,9 @@ ownedCatalogTest("bounded_native_stdout_preserves_split_utf8",async(t,custody)=>
   assert.equal(run.stream.stdout,'{"type":"result","is_error":true,"text":"🙂"}\n')
   assert.equal(fs.existsSync(path.join(dir,"unaccepted.json")),false)
 })
-ownedCatalogTest("failed_bootstrap_closes_late_acquired_control_handle",async(t,custody)=>{
+// A caller launcher reaches only the nonaccepted facade.
+ownedHostTest("failed_bootstrap_closes_late_acquired_control_handle [observer double]","posix",async(t)=>{
+  const custody=observerDoubleCustody()
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"late-control-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -1434,9 +1453,12 @@ await ended;await client.close()
   assert.equal(authLaunches,0)
   assert.equal(diagnostics,0,"production measurement refuses before any admission or auth execution")
   assert.equal(result.nativeReceipts.length,0)
-  assert.equal(result.state,"blocked","instrumented/imported test cannot issue accepted qualification")
-  assert.equal(result.reason,"diagnostic_inadequate")
+  assert.equal(result.state,"blocked","a launch carrying a launcher, sign-in, doctor or resolver is refused")
+  assert.equal(result.reason,"policy_control_unsupported")
   assert.equal(result.record,null)
+  assert.equal(fs.existsSync(path.join(dir,"synthetic-evidence")),false)
+  const measured=await q.qualifyOwnedCatalog({launch:{cli:launch.cli,env:launch.env},fixture,deadline:Date.now()+90000,evidenceDir:path.join(dir,"synthetic-evidence")})
+  assert.deepEqual([measured.state,measured.reason,measured.record],["blocked","diagnostic_inadequate",null],"instrumented/imported test cannot issue accepted qualification")
   assert.equal(fs.existsSync(path.join(dir,"synthetic-evidence")),false)
   nativeLaunches=0;authLaunches=0;diagnostics=0
   let policyReads=0
@@ -1445,7 +1467,7 @@ await ended;await client.close()
   const changed=await q.qualifyOwnedCatalog({launch:driftLaunch,fixture,deadline:Date.now()+90000,evidenceDir:path.join(dir,"synthetic-drift-evidence")})
   assert.equal(changed.state,"blocked")
   assert.equal(nativeLaunches,0)
-  assert.equal(changed.reason,"diagnostic_inadequate")
+  assert.equal(changed.reason,"policy_control_unsupported")
   assert.equal(fs.existsSync(path.join(dir,"synthetic-drift-evidence")),false)
 })
 ownedCatalogTest("native_completion_terminates_server_and_receipt",async(t,custody)=>{
@@ -1498,7 +1520,16 @@ await client.close()
   const resultFile=path.join(dir,"unaccepted.json"),config={mcpServers:{triage_catalog:{type:"stdio",command:owned.launch.command,args:owned.launch.args,env:{},cwd:owned.runDir}}}
   const run=await custody.runOwnedCatalogNative({owned,command:process.execPath,args:[script,JSON.stringify(config)],
     env:{LANG:"C",LC_ALL:"C",TZ:"UTC"},deadline,resultFile})
+  if(custody.authority!==false){
+    // A Node imitation is not the pinned engine: ps shows node, so the real
+    // export refuses it and nothing is materialized.
+    assert.notEqual(run.state,"ran")
+    assert.equal(run.detail,"native_identity")
+    assert.equal(fs.existsSync(resultFile),false)
+    return
+  }
   assert.equal(run.state,"ran",JSON.stringify({reason:run.reason,detail:run.detail,resources:run.resources}))
+  assert.equal(run.custody.observation.identity.native.command,[process.execPath,script,JSON.stringify(config)].join(" "))
   assert.deepEqual(JSON.parse(fs.readFileSync(resultFile)),fixture.candidate)
   assert.equal(run.provisionalValid,1)
   assert.equal(run.resources.native_exit.stdio_closed,true)

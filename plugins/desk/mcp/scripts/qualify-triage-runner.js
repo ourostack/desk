@@ -9,22 +9,28 @@ import {createHash} from "node:crypto"
 import {childEnvironment,runChild,probeSignIn,billingVariableBlocks,HEADLESS_TIMEOUT_MS} from "../src/factory/headless.js"
 import {inspectLaunchChain,collectTriageAdmission,hasCollectedTriageControls,validateTriageControls,triagePolicy,sealOwnedQualification,loadTriageQualification,createNonacceptedTriageUnit,qualificationMeasurementActive} from "../src/factory/triage-runner.js"
 import {assertOutsideGitWorkspace,ensureOwnerOnlyDirectory,protectLeafFile} from "../src/factory/os-protect.js"
-import {runDirectCatalog,runCatalogWireCase,prepareOwnedCatalogRun,runOwnedCatalogNative,runNonacceptedNativeTransaction,retainDirectReceipt,completeDirectBundle,catalogFatalCases} from "../src/factory/triage-custody.js"
+import {runDirectCatalog,runCatalogWireCase,prepareOwnedCatalogRun,runOwnedCatalogNative,runNonacceptedNativeTransaction,retainDirectReceipt,completeDirectBundle,catalogFatalCases,QUALIFICATION_FIXTURE} from "../src/factory/triage-custody.js"
 import {writeTriagePreparedFile,catalogCanonical,closedObject} from "../src/factory/triage-catalog.js"
 const naming={label:"triage qualification",subject:"evidence"}
 async function protectedWrite(file,value){
   await fs.writeFile(file,value,{flag:"wx",mode:0o600})
   await protectLeafFile(file,process.platform,naming)
 }
-export async function qualifyTriageRunner({out,cli,env=process.env,spawn=nodeSpawn,probeSpawn,cliMetadata,resolveExec,runDiagnostic,policyReaders}){
-  return qualifyOwnedCatalog({launch:{cli,env,spawn,probeSpawn,cliMetadata,resolveExec,runDiagnostic,policyReaders},
-    fixture:JSON.parse(await fs.readFile(new URL("../../../../tests/desk/mcp/__tests__/factory/fixtures/v12-owned-catalog.json",import.meta.url),"utf8")),
+// The real qualifier takes the engine path and environment only. It starts the
+// engine, sign-in probe and doctor through node:child_process itself; no caller
+// can substitute a launcher, sign-in, doctor, chain resolver or policy reader.
+export async function qualifyTriageRunner({out,cli,env=process.env}){
+  return qualifyOwnedCatalog({launch:{cli,env},
+    fixture:JSON.parse(await fs.readFile(QUALIFICATION_FIXTURE,"utf8")),
     deadline:Date.now()+HEADLESS_TIMEOUT_MS,evidenceDir:out})
 }
 export async function writeSyntheticTriagePreparedInput({inputDir,fixture}){
   return writeTriagePreparedFile({inputDir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
 }
 export async function qualifyOwnedCatalog({launch,fixture,deadline,evidenceDir}){
+  try{if(launch!==undefined)closedObject(launch,["cli","env"])}
+  catch{return {state:"blocked",reason:"policy_control_unsupported",record:null,directReceipts:[],nativeReceipts:[],
+    resources:{out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]}}}
   return qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},realCatalogTransaction)
 }
 async function qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},context){
@@ -118,7 +124,7 @@ async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,
     const chain=context.chain(launch)
     if(chain.state!=="inspected")throw Error("launch_chain_unknown")
     if(!metadata){
-      const help=await context.help({spawn:launch.spawn??nodeSpawn,cmd:chain.effective_argv[0],args:["--help"],
+      const help=await context.help({spawn:nodeSpawn,cmd:chain.effective_argv[0],args:["--help"],
         opts:{env:childEnvironment(launch.env),stdio:["ignore","pipe","pipe"]},timeoutMs:15000,maxBytes:65536})
       await save("help.json",help)
       if(help.kind!=="closed"||help.code!==0||help.truncated)throw Error("diagnostic_inadequate")
@@ -153,7 +159,7 @@ async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,
         env:childEnvironment(launch.env)})
       if(firstAdmissionIdentity!==undefined&&firstAdmissionIdentity!==invariant){await owned.close();throw Error("effective_policy_unknown")}
       firstAdmissionIdentity=invariant
-      const signIn=await context.signIn({cli:chain.effective_argv[0],env:launch.env,spawn:launch.probeSpawn??launch.spawn??nodeSpawn,
+      const signIn=await context.signIn({cli:chain.effective_argv[0],env:launch.env,spawn:nodeSpawn,
         onChild:pid=>resources.pids.push(pid),onChildExit:pid=>resources.exited_pids.push(pid)})
       if(signIn.state!=="subscription"){await owned.close();throw Error(signIn.state)}
       step("subscription")
@@ -165,7 +171,7 @@ async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,
       step("fresh_prelaunch_admission")
       const run=await context.run({owned,command:chain.effective_argv[0],args:[...chain.effective_argv.slice(1),...policy.argv],
         env:childEnvironment(launch.env),deadline,resultFile:path.join(evidenceDir,`unaccepted-${i}.json`),
-        spawn:launch.spawn??nodeSpawn,onChild:pid=>{resources.launches++;resources.pids.push(pid)},onChildExit:pid=>resources.exited_pids.push(pid)})
+        onChild:pid=>{resources.launches++;resources.pids.push(pid)},onChildExit:pid=>resources.exited_pids.push(pid)})
       await save(`native-${i}-bundle.json`,run);nativeReceipts.push(run)
       capture.channels.native={observation:run.evidence?.spawned?"present":"unobserved",truncated:false}
       capture.channels.native_bundle={observation:"present",truncated:false}

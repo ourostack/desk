@@ -11,7 +11,7 @@ import {isHeadlessFactorySession} from "./headless-flag.js"
 import {TRIAGE_RUNNER_STATES} from "./triage-schema.js"
 import {assertOutsideGitWorkspace} from "./os-protect.js"
 import {ownedServerLaunch,prepareOwnedCatalogRun,runOwnedCatalogNative,ownedSourceIdentity,authenticatedNativeRuns,
-  authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction} from "./triage-custody.js"
+  authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction,NATIVE_ENGINE_SHA256} from "./triage-custody.js"
 import {catalogCanonical,closedObject,safeCatalogPath,catalogToolSchemas} from "./triage-catalog.js"
 import {catalogProtocolIdentity} from "./triage-protocol.js"
 
@@ -33,7 +33,8 @@ const DENY=["Read","Edit","Write","Grep","Glob","Bash","PowerShell","REPL","Agen
 
 // Finite native/policy source adapter, retained from the independently reviewed
 // admission implementation. A new binary revision is not admitted by its label.
-const POLICY_ENGINE_SHA="c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+// One engine pin: control collection and native process identity share it.
+const POLICY_ENGINE_SHA=NATIVE_ENGINE_SHA256
 const SIGNED_ENGINE='=identifier "com.anthropic.claude-code" and anchor apple generic and certificate leaf[subject.OU] = "Q6L2SF6YDW"'
 // E296/1: reviewed byte ranges, not model/config-selected expressions.
 const CONTROL_FRAGMENTS=[
@@ -538,6 +539,9 @@ const controlContextFor=(host,registry)=>Object.freeze({host,registry,
 })
 const realControlContext=controlContextFor(REAL_CONTROL_HOST,controlCollections)
 export async function collectTriageControls(options){
+  try{closedObject(options,["cli","env","argv"],["deadline"])}
+  catch{return {...held("policy_control_unsupported"),detail:"caller_adapter",evidence:null,fingerprint:null,
+    capture:protectedControlCapture([{name:"recipe",observation:"unobserved",reason:"caller_adapter"}],null)}}
   return collectControls(options,realControlContext)
 }
 async function collectControls(options,context){
@@ -558,20 +562,23 @@ async function collectControls(options,context){
     capture:protectedControlCapture([{name:"recipe",observation:"unobserved",reason:"invalid_recipe"}],null)}}
   return collectControlsTransaction(options,context)
 }
-/** Test-owned NONACCEPTED control host. The same control collection and local
- * admission readers run against a caller-built engine pin (file SHA-256 plus
- * [offset, length, SHA-256] spans) and managed roots, instead of the installed
- * engine and /Library. Every collection lives in this facade's own registry,
- * so hasCollectedTriageControls, admission and qualification never accept it.
+/** Test-owned NONACCEPTED control host. The same control collection, local
+ * admission readers and launch-chain inspection run against a caller-built
+ * engine pin (file SHA-256 plus [offset, length, SHA-256] spans) and managed
+ * roots, or the real pins when config is omitted. It alone accepts a caller
+ * doctor (runDiagnostic), policy readers, chain resolver or file reader. Every
+ * collection lives in this facade's own registry, so the production
+ * hasCollectedTriageControls, admission and qualification never accept it.
  * Production never calls it; no option, environment variable or file selects
  * it. Platform and OS commands stay real: a caller off Darwin sets them up. */
-export function createNonacceptedControlHost(config){
+export function createNonacceptedControlHost(config=REAL_CONTROL_HOST){
   closedObject(config,["engine","system","preferences"]);closedObject(config.engine,["sha256","spans"])
   const {engine,system,preferences}=JSON.parse(catalogCanonical(config))
   const registry=new WeakMap(),context=controlContextFor(Object.freeze({engine:Object.freeze(engine),system,preferences}),registry)
   return Object.freeze({authority:false,
     collectTriageControls:options=>collectControls(options,context),
     collectTriageAdmission:options=>collectAdmission(options,context),
+    inspectLaunchChain:options=>inspectChain(options),
     hasCollectedTriageControls:e=>collectedIn(e,registry)})
 }
 /** Same algorithm, fixed memory-only readers/registry; never authenticates in
@@ -663,7 +670,12 @@ function nativeResolution(cli,env){
   const dependencies=cached.filter(file=>file!=="/usr/lib/dyld")
   return {cmd,prefix:[],files,supported:true,platform:cached.length?macRuntime(cmd,env,dependencies):null}
 }
-export function inspectLaunchChain({cli,env,readFile=readFileSync,resolveExec=nativeResolution}){
+// The real export resolves the chain from the filesystem itself; a caller
+// resolver or reader belongs only to createNonacceptedControlHost.
+export function inspectLaunchChain({cli,env}){
+  return inspectChain({cli,env,readFile:readFileSync,resolveExec:nativeResolution})
+}
+function inspectChain({cli,env,readFile=readFileSync,resolveExec=nativeResolution}){
   const empty={chain:[],effective_argv:[],fingerprint:null}
   try{
     if(!path.isAbsolute(cli))return {...held("launch_chain_unknown"),...empty}
@@ -765,7 +777,10 @@ function localPolicySources({cli,env,argv,remote_delivery},host){
   return {complete:Boolean(selected&&known&&remoteResolved&&validation_errors.length===0),controller_invariant:true,sources,validation_errors,
     capabilities:selected&&known&&!validation_errors.length?{result_is_data_only:true,engine_sha256:host.engine.sha256}:null}
 }
+// The real export reads policy and runs doctor itself. A caller doctor or
+// policy reader belongs only to createNonacceptedControlHost.
 export async function collectTriageAdmission(options){
+  try{closedObject(options,["cli","env","argv"])}catch{return held("policy_control_unsupported")}
   return collectAdmission(options,realControlContext)
 }
 async function collectAdmission({cli,env,argv,runDiagnostic,policyReaders},control){
@@ -961,14 +976,14 @@ async function restoreQualification({recordFile,...config},context){
 }
 export async function runTriageChild({
   env,inputDir,resultFile,workDir,qualification,deadline=Date.now()+HEADLESS_TIMEOUT_MS,
-  onChild,onChildExit,spawn=nodeSpawn,clock=Date.now,
+  onChild,onChildExit,clock=Date.now,
 }){
   if(isHeadlessFactorySession(env))return outcome("headless_session")
   if(billingVariableBlocks(env))return outcome("disabled_would_bill")
   if(deadline<=clock())return outcome("no_time_for_a_run")
-  return runRegisteredTriage({env,inputDir,resultFile,workDir,qualification,deadline,onChild,onChildExit,spawn,clock},realTransaction)
+  return runRegisteredTriage({env,inputDir,resultFile,workDir,qualification,deadline,onChild,onChildExit,clock},realTransaction)
 }
-async function runRegisteredTriage({env,inputDir,resultFile,workDir,qualification,deadline,onChild,onChildExit,spawn,clock},context){
+async function runRegisteredTriage({env,inputDir,resultFile,workDir,qualification,deadline,onChild,onChildExit,clock},context){
   if(context===realTransaction&&qualificationMeasurementActive())return held("diagnostic_inadequate")
   const seal=context.records.get(qualification)
   if(!seal||qualification.version!==6||qualification.protocol_envelope_version!==2||
@@ -1004,7 +1019,7 @@ async function runRegisteredTriage({env,inputDir,resultFile,workDir,qualificatio
       cwd:owned.runDir,parent_env_sha256:fingerprint(childEnvironment(env)),owned_launch:owned.launch,prepared_sha256:owned.prepared.sha256,
       catalog_sha256:owned.catalog.catalogSha256,brief_sha256:owned.catalog.briefSha256,record_refs_sha256:owned.catalog.recordRefsSha256},chain:currentChain,cliMetadata:qualification.cliMetadata,env})
     if(currentIdentity.template_sha256!==qualification.invocationIdentities[0].template_sha256){await owned.close();return outcome("scope_changed")}
-    const run=await context.run({owned,command:currentChain.effective_argv[0],args:[...currentChain.effective_argv.slice(1),...policy.argv],env:childEnvironment(env),deadline,resultFile,onChild,onChildExit,spawn})
+    const run=await context.run({owned,command:currentChain.effective_argv[0],args:[...currentChain.effective_argv.slice(1),...policy.argv],env:childEnvironment(env),deadline,resultFile,onChild,onChildExit})
     const after=await context.admission({cli:currentChain.effective_argv[0],env,argv:policy.argv})
     const afterChain=context.chain({cli,env})
     if(after.state!=="admitted"||after.fingerprint!==currentAdmission.fingerprint||

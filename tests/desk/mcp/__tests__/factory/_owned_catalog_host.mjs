@@ -11,7 +11,7 @@ import * as path from "node:path"
 
 const custody = await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
 const catalog = await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-const fixture = JSON.parse(fs.readFileSync(new URL("./fixtures/v12-owned-catalog.json", import.meta.url)))
+const fixture = JSON.parse(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
 
 export const ownedHost = custody.ownedCatalogHostSupport()
 const NEEDS = { provenance: "provenance", posix: "posixCustody" }
@@ -40,7 +40,7 @@ export async function assertOwnedHostRefusal(host = ownedHost) {
   const native = await custody.runOwnedCatalogNative({
     owned: { runDir: "unsupported-host", async close() { closed += 1 } },
     command: "must-not-launch", args: [], env: {}, deadline: Date.now() + 15000, resultFile: "unsupported-host",
-    onChild() { spawned += 1 }, onChildExit() {}, spawn() { spawned += 1; throw new Error("forbidden") },
+    onChild() { spawned += 1 }, onChildExit() {},
   })
   assert.equal(native.state, "scope_unqualified")
   assert.equal(native.reason, "provenance_unsupported")

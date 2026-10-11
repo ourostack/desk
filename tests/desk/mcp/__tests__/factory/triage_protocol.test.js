@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream"
 import fs from "node:fs"
 import {spawnSync,spawn} from "node:child_process"
 import os from "node:os"
+import {createHash} from "node:crypto"
 import * as path from "node:path"
 import {serializeMessage,deserializeMessage} from "@modelcontextprotocol/sdk/shared/stdio.js"
 import moduleBuiltin,{syncBuiltinESMExports} from "node:module"
@@ -13,7 +14,7 @@ import childProcess from "node:child_process"
 import {EventEmitter} from "node:events"
 const protocol=await import("../../../../../plugins/desk/mcp/src/factory/triage-protocol.js").catch(()=>({}))
 const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js").catch(()=>({}))
-const fixture=JSON.parse(fs.readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+const fixture=JSON.parse(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
 // Only these synthetic unit children inherit the maintained ESM measurement
 // import. Actual env-i launcher/server bundles never use this helper.
 function unitMeasurementArgs(){
@@ -70,21 +71,29 @@ test("same_source_first_js_guards_refuse_unknown_or_drifted_identity",async()=>{
 ownedHostTest("same_source_module_custody_is_bounded_and_nonselectable","posix",async(t)=>{
   const {catalogModuleLoad}=await import("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js")
   const root=new URL("../../../../../plugins/desk/mcp/",import.meta.url)
-  const file=new URL("src/factory/triage-catalog.js",root),records=new Map()
-  assert.equal(catalogModuleLoad(records,root.pathname,file.href,{},()=>({format:"module"})).format,"module")
+  const file=new URL("src/factory/triage-catalog.js",root),records=new Map(),bytes=fs.readFileSync(file)
+  const loaded=source=>()=>({format:"module",source})
+  assert.equal(catalogModuleLoad(records,root.pathname,file.href,{},loaded(bytes)).format,"module")
   assert.equal(records.size,1)
   assert.equal(records.get(file.pathname).bytes,fs.statSync(file).size)
+  // The record is the hash of the bytes Node evaluates, even when the file on
+  // disk differs from what the loader returned.
+  const evaluated=new Map()
+  catalogModuleLoad(evaluated,root.pathname,file.href,{},loaded("export const replaced=1\n"))
+  assert.equal(evaluated.get(file.pathname).sha256,createHash("sha256").update("export const replaced=1\n").digest("hex"))
   assert.equal(catalogModuleLoad(records,root.pathname,"node:fs",{},()=>42),42)
-  assert.throws(()=>catalogModuleLoad(records,"/not-owned/",file.href,{},()=>{}),{message:"module_custody"})
+  assert.throws(()=>catalogModuleLoad(records,"/not-owned/",file.href,{},loaded(bytes)),{message:"module_custody"})
   const full=new Map(Array.from({length:512},(_,i)=>[String(i),{}]))
-  assert.throws(()=>catalogModuleLoad(full,root.pathname,file.href,{},()=>{}),{message:"module_custody"})
-  const read=fs.readFileSync,realpath=fs.realpathSync
+  assert.throws(()=>catalogModuleLoad(full,root.pathname,file.href,{},loaded(bytes)),{message:"module_custody"})
+  assert.throws(()=>catalogModuleLoad(new Map(),root.pathname,file.href,{},loaded(Buffer.alloc(16777217))),{message:"module_custody"})
+  // CommonJS left to Node's own reader: the hook hashes the file it reads.
+  const unread=new Map();catalogModuleLoad(unread,root.pathname,file.href,{},()=>({format:"commonjs",source:null}))
+  assert.equal(unread.get(file.pathname).sha256,createHash("sha256").update(bytes).digest("hex"))
+  const realpath=fs.realpathSync
   try{
-    fs.readFileSync=()=>Buffer.alloc(16777217)
-    assert.throws(()=>catalogModuleLoad(new Map(),root.pathname,file.href,{},()=>{}),{message:"module_custody"})
-    fs.readFileSync=read;fs.realpathSync=()=>"/synthetic/alias"
-    assert.throws(()=>catalogModuleLoad(new Map(),root.pathname,file.href,{},()=>{}),{message:"module_custody"})
-  }finally{fs.readFileSync=read;fs.realpathSync=realpath}
+    fs.realpathSync=()=>"/synthetic/alias"
+    assert.throws(()=>catalogModuleLoad(new Map(),root.pathname,file.href,{},loaded(bytes)),{message:"module_custody"})
+  }finally{fs.realpathSync=realpath}
 })
 ownedHostTest("same_source_entry_failures_do_not_bootstrap_or_touch_profile","posix",async()=>{
   const server=await import("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js")
@@ -460,16 +469,23 @@ test("queued_request_release_and_failed_output_remain_closed",async()=>{
   const guard=protocol.guardedCatalogTransport({input,output,onMessage:m=>received.push(m.id)})
   guard.transport.onmessage=()=>{}
   await guard.transport.start()
-  const frame=id=>serializeMessage(deserializeMessage(JSON.stringify({jsonrpc:"2.0",id,method:"ping"})))
-  input.write(frame(1)+frame(2))
-  assert.deepEqual(received,[1])
+  const frame=(id,method="ping",params)=>serializeMessage(deserializeMessage(JSON.stringify({jsonrpc:"2.0",id,method,params})))
+  const submit=id=>frame(id,"tools/call",{name:"candidate_submit",arguments:{candidate:{}}})
+  input.write(frame(1)+frame(2)+submit(3)+frame(4))
+  assert.deepEqual(received,[1,2],"reads run concurrently; candidate_submit waits for them")
   await guard.transport.send({jsonrpc:"2.0",id:1,result:{}})
   callbacks.shift()()
-  assert.deepEqual(received,[1,2],"release must forward the single bounded pending request")
+  assert.deepEqual(received,[1,2])
   await guard.transport.send({jsonrpc:"2.0",id:2,result:{}})
   callbacks.shift()()
+  assert.deepEqual(received,[1,2,3],"candidate_submit runs alone")
+  await guard.transport.send({jsonrpc:"2.0",id:3,result:{}})
+  callbacks.shift()()
+  assert.deepEqual(received,[1,2,3,4],"requests behind candidate_submit wait for its response")
+  await guard.transport.send({jsonrpc:"2.0",id:4,result:{}})
+  callbacks.shift()()
   await guard.waitIdle()
-  assert.equal(guard.counters().framesIn,2)
+  assert.equal(guard.counters().framesIn,4)
   input.emit("error",Error("synthetic_input_failure"))
   assert.equal(guard.failed(),true)
   // Exercise the adapter's own output guard against a late SDK write; never
@@ -478,11 +494,103 @@ test("queued_request_release_and_failed_output_remain_closed",async()=>{
   assert.equal((await late).message,"wire_closed")
   await guard.close()
 })
+test("in_flight_limit_answers_one_busy_error_without_closing",async()=>{
+  const input=new PassThrough(),output=new PassThrough(),callbacks=[],received=[],written=[];let failure
+  output.write=(bytes,callback)=>{written.push(String(bytes));callbacks.push(callback);return true}
+  const guard=protocol.guardedCatalogTransport({input,output,onMessage:m=>received.push(m.id),onFailure:e=>{failure=e}})
+  guard.transport.onmessage=()=>{}
+  await guard.transport.start()
+  const frame=id=>serializeMessage(deserializeMessage(JSON.stringify({jsonrpc:"2.0",id,method:"ping"})))
+  input.write([1,2,3,4,5,6,7,8,9].map(frame).join(""))
+  assert.deepEqual(received,[1,2,3,4,5,6,7,8])
+  assert.deepEqual(JSON.parse(written[0]),{jsonrpc:"2.0",id:9,error:{code:-32000,message:"catalog_busy"}})
+  let idle=false;const waiting=guard.waitIdle().then(()=>{idle=true})
+  callbacks.shift()()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(idle,false,"a busy reply does not release an in-flight request")
+  for(let id=1;id<=8;id++){await guard.transport.send({jsonrpc:"2.0",id,result:{}});callbacks.shift()()}
+  await waiting
+  input.write(frame(10))
+  assert.deepEqual(received.at(-1),10,"the session stays open after a busy reply")
+  await guard.transport.send({jsonrpc:"2.0",id:10,result:{}});callbacks.shift()()
+  assert.equal(failure,undefined)
+  // A failed busy write closes the session like any failed output write.
+  input.write([11,12,13,14,15,16,17,18,19].map(frame).join(""))
+  callbacks.at(-1)(Error("synthetic_busy_write"))
+  assert.equal(failure.message,"synthetic_busy_write")
+  await guard.close()
+  const limitedInput=new PassThrough(),limitedOutput=new PassThrough();let limited
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const bounded=protocol.guardedCatalogTransport({input:limitedInput,output:limitedOutput,limits:{...catalog.CATALOG_LIMITS,outgoingFrames:0},onFailure:e=>{limited=e}})
+  limitedInput.write([1,2,3,4,5,6,7,8,9].map(frame).join(""))
+  assert.equal(limited.message,"wire_output_limit","busy replies count against the output bounds")
+  await bounded.close()
+})
+test("native_tools_call_meta_and_progress_shape_is_served",async()=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const {Client}=await import("@modelcontextprotocol/sdk/client/index.js")
+  const {ReadBuffer}=await import("@modelcontextprotocol/sdk/shared/stdio.js")
+  const state=catalog.createCatalogState(JSON.parse(catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"a".repeat(64)}).snapshotBytes))
+  const toServer=new PassThrough(),fromServer=new PassThrough(),sent=[];let failure
+  const service=await protocol.serveCatalog({state,input:toServer,output:fromServer,writeReceipt:async()=>{throw Error("unexpected_receipt")},onFailure:e=>{failure=e}})
+  const buffer=new ReadBuffer()
+  const transport={async start(){fromServer.on("data",chunk=>{buffer.append(chunk);let value;while((value=buffer.readMessage())!==null)this.onmessage?.(value)})},
+    async send(value){sent.push(value);toServer.write(serializeMessage(value))},async close(){}}
+  const client=new Client({name:"claude-code",title:"Claude Code",version:"2.1.296",description:"Anthropic's agentic coding tool",websiteUrl:"https://code.claude.com"},
+    {capabilities:{roots:{listChanged:true},elicitation:{}}})
+  await client.connect(transport)
+  const reply=await client.callTool({name:"evidence_read",arguments:{id:"r000002"},_meta:{"claudecode/toolUseId":"toolu_01NativeShape"}},undefined,{onprogress(){}})
+  assert.equal(reply.isError,undefined)
+  assert.equal(reply.structuredContent.id,"r000002")
+  const call=sent.find(value=>value.method==="tools/call")
+  assert.deepEqual(Object.keys(call.params).sort(),["_meta","arguments","name"])
+  assert.equal(call.params._meta["claudecode/toolUseId"],"toolu_01NativeShape")
+  assert.equal(Number.isSafeInteger(call.params._meta.progressToken),true,"onprogress makes the SDK send a progress token")
+  assert.equal(failure,undefined)
+  await client.close();await service.close()
+})
+test("cancellation_is_advisory_never_partial_and_drops_only_queued_reads",async()=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const fresh=()=>catalog.createCatalogState(JSON.parse(catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"a".repeat(64)}).snapshotBytes))
+  const write=(input,value)=>input.write(serializeMessage(deserializeMessage(JSON.stringify(value))))
+  const tick=()=>new Promise(resolve=>setTimeout(resolve,10))
+  const initialize={jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"isolated_unit",version:"1"}}}
+  const cancel=requestId=>({jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId,reason:"user interrupted"}})
+  {
+    const state=fresh(),input=new PassThrough(),output=new PassThrough();output.resume();let failure
+    const service=await protocol.serveCatalog({state,input,output,writeReceipt:async()=>{},onFailure:e=>{failure=e}})
+    write(input,cancel(1));await tick()
+    assert.equal(failure?.message,"protocol_state","cancellation is accepted only after initialize")
+    await service.close()
+  }
+  const state=fresh(),input=new PassThrough(),output=new PassThrough();let text="",failure,unblock
+  output.on("data",chunk=>{text+=chunk})
+  const receipts=[]
+  const service=await protocol.serveCatalog({state,input,output,onFailure:e=>{failure=e},
+    writeReceipt:async(kind,value)=>{receipts.push(kind);await new Promise(resolve=>{unblock=resolve})}})
+  write(input,initialize);await tick()
+  write(input,cancel(1))
+  write(input,{jsonrpc:"2.0",method:"notifications/initialized"});await tick()
+  write(input,{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"candidate_submit",arguments:{candidate:fixture.candidate}}});await tick()
+  write(input,{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"evidence_read",arguments:{id:"r000002"}}})
+  write(input,{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"evidence_read",arguments:{id:"r000002"}}})
+  write(input,cancel(2));write(input,cancel(3));write(input,cancel(99));await tick()
+  assert.deepEqual(receipts,["submit"],"the in-flight submission is not interrupted")
+  unblock();await tick()
+  const replies=text.trim().split("\n").map(line=>JSON.parse(line))
+  assert.equal(replies.find(value=>value.id===2).result.structuredContent.receipt_id.length>0,true,"a sealed submission stays sealed")
+  assert.equal(replies.some(value=>value.id===3),false,"a queued read may be dropped")
+  assert.equal(replies.find(value=>value.id===4).result.structuredContent.id,"r000002")
+  assert.equal(state.phase,"submitted")
+  assert.equal(failure,undefined)
+  await service.close()
+})
 test("wire_incoming_limits_and_onmessage_errors_close_without_dispatch",async()=>{
   for(const [data,limits,want]of [
     ['{"jsonrpc":"2.0","id":1,"method":"ping"}\n',{incomingBytes:1},"wire_input_limit"],
     ['{"jsonrpc":"2.0","id":1,"method":"ping"}\n',{incomingFrames:0},"wire_frame_count"],
-    ['{"jsonrpc":"2.0","id":1,"method":"ping"}\n'.repeat(3),{},"wire_queue_limit"],
+    ['{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"u","version":"1"}}}\n'+
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}\n'.repeat(17),{},"wire_queue_limit"],
     ['{"jsonrpc":"2.0","id":1,"method":"ping"}\n',{},"synthetic_onmessage"],
     ['{"jsonrpc":"2.0"',{},"wire_incomplete"],
   ]){
@@ -530,8 +638,16 @@ test("raw_sdk_order_and_whitespace_compatible",()=>{
   })
   test("original_unknown_keys_rejected_before_sdk",()=>{
     assert.equal(typeof protocol.validateCatalogWireFrame,"function")
-    const request={jsonrpc:"2.0",id:0,method:"tools/call",params:{name:"evidence_list",arguments:{},_meta:{}}}
-    assert.throws(()=>protocol.validateCatalogWireFrame(Buffer.from(JSON.stringify(request))),{message:"catalog_invalid"})
+    const request=_meta=>({jsonrpc:"2.0",id:0,method:"tools/call",params:{name:"evidence_list",arguments:{},_meta}})
+    for(const meta of [{},{progressToken:7},{progressToken:"p"},{"claudecode/toolUseId":"toolu_01"},{progressToken:0,"claudecode/toolUseId":"toolu_01"}])
+      assert.deepEqual(protocol.validateCatalogWireFrame(Buffer.from(JSON.stringify(request(meta)))).originalMessage.params._meta,meta)
+    for(const meta of [null,[],{other:1},{progressToken:1.5},{progressToken:""},{progressToken:"p".repeat(129)},{progressToken:true},
+      {"claudecode/toolUseId":1},{"claudecode/toolUseId":""},{"claudecode/toolUseId":"t".repeat(129)},{"claudecode/toolUseId":"a\nb"}])
+      assert.throws(()=>protocol.validateCatalogWireFrame(Buffer.from(JSON.stringify(request(meta)))),{message:"catalog_invalid"},JSON.stringify(meta))
+    const cancel=value=>protocol.validateCatalogWireFrame(Buffer.from(JSON.stringify({jsonrpc:"2.0",method:"notifications/cancelled",...value})))
+    for(const params of [{requestId:3},{requestId:"r",reason:"user interrupted"}])assert.deepEqual(cancel({params}).originalMessage.params,params)
+    for(const value of [{},{params:{}},{params:{requestId:null}},{params:{requestId:-1}},{params:{requestId:""}},{params:{requestId:1,reason:1}},
+      {params:{requestId:1,reason:"r".repeat(1025)}},{params:{requestId:1,extra:true}},{id:1,params:{requestId:1}}])assert.throws(()=>cancel(value),undefined,JSON.stringify(value))
     assert.throws(()=>protocol.validateCatalogWireFrame(Buffer.from('{"jsonrpc":"2.0","id":0,"method":"ping","params":{},"extension":true}')),{message:"catalog_invalid"})
   })
   test("bounded_lexical_grammar_unicode_and_numeric_guards",()=>{
@@ -560,6 +676,10 @@ test("raw_sdk_order_and_whitespace_compatible",()=>{
       '{"jsonrpc":"2.0","id":0,"method":"unknown","params":[1;2]}',
       '{"jsonrpc":"2.0","id":0,"method":"unknown","params":{"a":tru}}',
     ])assert.throws(()=>raw===null?protocol.validateCatalogWireFrame(null):validate(raw),undefined,String(raw))
+    for(const raw of ["1.0000000000000001","9007199254740993.0","0.30000000000000000001","1e-400","123456789012345678901234567890"])
+      assert.throws(()=>validate(`{"jsonrpc":"2.0","id":0,"method":"unknown","params":{"a":${raw}}}`),{message:"wire_noncanonical"},raw)
+    for(const [raw,value] of [["1e2",100],["0.1",0.1],["1.50",1.5],["-2.5E-3",-0.0025],["0.0",0],["1.5e-300",1.5e-300],["5e-324",5e-324],["100",100],["0.000",0]])
+      assert.equal(validate(`{"jsonrpc":"2.0","id":0,"method":"unknown","params":{"a":${raw}}}`).originalMessage.params.a,value,raw)
     for(const params of [
       {a:null,b:false,c:true,d:[],e:{},number:1.25e2},
       {a:'quotes " slash / backslash \\ \t\r\n',unicode:"😀"},
@@ -709,6 +829,13 @@ ownedCatalogTest("real_unmodified_sdk_stdio_handshake",async(t,custody)=>{
   assert.equal(initialize.params.clientInfo.name,"claude-code")
   assert.equal(initialize.params.clientInfo.title,"Claude Code")
   assert.deepEqual(initialize.params.capabilities.roots,{listChanged:true})
+  const calls=result.resources.wire.filter(x=>x.method==="tools/call")
+  assert.equal(calls.length>0,true)
+  for(const call of calls){
+    assert.deepEqual(Object.keys(call.params._meta).sort(),["claudecode/toolUseId","progressToken"],"direct lane sends the native tools/call shape")
+    assert.match(call.params._meta["claudecode/toolUseId"],/^toolu_/u)
+  }
+  assert.equal(new Set(calls.map(x=>x.params._meta["claudecode/toolUseId"])).size,calls.length)
   assert.equal(result.resources.trace.version,2)
   const first=result.resources.trace.events.find(x=>x.direction==="client_to_server")
   const raw=Buffer.from(first.base64,"base64").toString()

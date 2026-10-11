@@ -16,6 +16,9 @@ import {runInNewContext} from "node:vm"
 import {different} from "../_file_identity.js"
 import * as runner from "../../../../../plugins/desk/mcp/src/factory/triage-runner.js"
 const realRunner=runner
+// A caller doctor, policy reader or chain resolver reaches only this
+// nonaccepted control host over the real pins, never the production exports.
+const adapterRunner=Object.freeze({...runner,...runner.createNonacceptedControlHost()})
 const hash=value=>createHash("sha256").update(value).digest("hex")
 const flags=["--restricted","--safe-mode","--permission-mode","--permission-prompts","--tools","--disable-slash-commands","--no-chrome","--no-session-persistence","--strict-mcp-config","--mcp-config","--settings","--max-budget-usd","--output-format","--verbose","--system-prompt","--allowedTools"]
 const metadata={host:"claude-code",flags}
@@ -33,7 +36,7 @@ const fixedOff=()=>Object.fromEntries(["cc-plugin-responsive-mode","cc-plugin-di
 ownedHostTest("all_eleven_registered_ids_accounted","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"fixed-set"),deadline:Date.now()+15000})
   t.after(()=>owned.close())
@@ -138,7 +141,7 @@ realCliTest("fixed_set_recipe_source_drift_rejects_old_records","posix",async(t)
     {message:"qualification_structure"})
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"fixed-source"),deadline:Date.now()+15000})
   t.after(()=>owned.close())
@@ -149,7 +152,7 @@ realCliTest("fixed_set_recipe_source_drift_rejects_old_records","posix",async(t)
   for(const offset of [222737738,222747175,222811837,222877373,222899700,222951399,222969807,223001881,223047021,223060107,
     190345930,199366501,199358867,187450707,186845095,205416120]){
     selected=offset;let diagnostics=0
-    const result=await runner.collectTriageControls({cli:actual,env:{HOME:f.dir},argv:policy.argv,
+    const result=await adapterRunner.collectTriageControls({cli:actual,env:{HOME:f.dir},argv:policy.argv,
       runDiagnostic:()=>{diagnostics++}})
     assert.equal(result.detail,"predicate_revision");assert.equal(diagnostics,0)
     assert.equal(result.evidence,null);assert.equal(result.state,"scope_unqualified")
@@ -185,7 +188,7 @@ function pinnedSourceMemoryFD(t,cli,alter=()=>{}){
 // by the test. Its collections live only in that facade's registry.
 const REAL_ENGINE=path.join(process.env.DESK_TEST_REAL_HOME??"/unset",".local/share/claude/versions/2.1.296")
 function controlHostTest(name,fn){
-  realCliTest(name,"posix",t=>fn(t,{runner,cli:REAL_ENGINE,system:"/Library/Application Support/ClaudeCode",
+  realCliTest(name,"posix",t=>fn(t,{runner:adapterRunner,cli:REAL_ENGINE,system:"/Library/Application Support/ClaudeCode",
     preferences:"/Library/Managed Preferences",fragment:200633045,synthetic:false}))
   ownedHostTest(`${name} [synthetic engine]`,"posix",async t=>{
     const dir=realpathSync(mkdtempSync(path.join(tmpdir(),"control-host-")));fsNative.chmodSync(dir,0o700)
@@ -210,7 +213,7 @@ ownedHostTest("restricted_recipe_exact_three_effective_off_values","posix",async
   const f=await fixture(t)
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"recipe"),deadline:Date.now()+15000})
   t.after(()=>owned.close())
@@ -278,7 +281,7 @@ test("json_admission_assertion_never_authority",async()=>{
 })
 test("invalid_control_recipe_never_runs_diagnostic",async()=>{
   let diagnostics=0
-  const r=await runner.collectTriageControls({cli:"/synthetic/missing",env:{},argv:["--settings","{}"],runDiagnostic:()=>{diagnostics++}})
+  const r=await adapterRunner.collectTriageControls({cli:"/synthetic/missing",env:{},argv:["--settings","{}"],runDiagnostic:()=>{diagnostics++}})
   assert.equal(r.reason,"policy_control_unsupported")
   assert.equal(diagnostics,0)
 })
@@ -289,7 +292,7 @@ test("legacy_adapter_requires_measurement_metadata_before_reader_effects",async(
   try{
     process.execArgv=[];delete process.env.DESK_COVERAGE_RUNNER_CHILD;delete process.env.NODE_OPTIONS
     let reads=0
-    const r=await runner.collectTriageAdmission({cli:"/unit/not-an-engine",env:{},argv:[],
+    const r=await adapterRunner.collectTriageAdmission({cli:"/unit/not-an-engine",env:{},argv:[],
       policyReaders:{read:()=>{reads++;throw Error("must not execute")}}})
     assert.equal(r.reason,"policy_control_unsupported");assert.equal(reads,0)
   }finally{
@@ -455,14 +458,14 @@ realCliTest("controller_absent_present_preserves_closed_authority","posix",async
 realCliTest("tips_interactive_reuse_or_changed_closure_blocks","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"variant-argv"),deadline:Date.now()+15000})
   t.after(()=>owned.close())
   const p=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
   for(const argv of [p.argv.filter(v=>v!=="-p"),...["--resume","--continue","--remote-control","--interactive"].map(v=>[...p.argv,v])]){
     let calls=0
-    const r=await runner.collectTriageControls({cli:f.cli,env:{},argv,runDiagnostic:()=>{calls++}})
+    const r=await adapterRunner.collectTriageControls({cli:f.cli,env:{},argv,runDiagnostic:()=>{calls++}})
     assert.equal(r.detail,"control_recipe");assert.equal(calls,0);assert.equal(r.evidence,null)
   }
   const actual=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")
@@ -474,7 +477,7 @@ realCliTest("tips_interactive_reuse_or_changed_closure_blocks","posix",async(t)=
     223038175,223032624,195219863,195218970]){
     selected=offset
     let calls=0
-    const r=await runner.collectTriageControls({cli:actual,env:{HOME:f.dir},argv:p.argv,runDiagnostic:()=>{calls++}})
+    const r=await adapterRunner.collectTriageControls({cli:actual,env:{HOME:f.dir},argv:p.argv,runDiagnostic:()=>{calls++}})
     assert.equal(r.detail,"predicate_revision");assert.equal(calls,0)
     assert.equal(r.evidence,null);assert.equal(r.state,"scope_unqualified")
   }
@@ -586,7 +589,7 @@ test("old_safe_mode_record_rejected",()=>{
 controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory",async(t,{runner,cli:actual,synthetic})=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"actual-control"),deadline:Date.now()+20000})
   t.after(()=>owned.close())
@@ -678,7 +681,7 @@ test("control_structure_limits_path_identity_and_state_pairs",async()=>{
 controlHostTest("source_bound_control_reader_safe_file_failure_matrix",async(t,{runner,cli,system:managedRoot,preferences,fragment})=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"control-files"),deadline:Date.now()+30000})
   t.after(()=>owned.close())
@@ -873,6 +876,21 @@ async function fixture(t){
   const resolveExec=()=>({cmd:cli,prefix:[],files:[cli,path.join(dir,"runtime")],supported:true})
   return {dir,inputDir,resultFile,cli,resolveExec,env:{HOME:dir,PATH:"/fixture",PRIVATE_SECRET:"not-for-child",HTTPS_PROXY:"https://proxy"}}
 }
+test("real_exports_refuse_caller_doctor_policy_reader_and_chain_resolver",async(t)=>{
+  const f=await fixture(t);let called=0
+  const count=async()=>{called++;return diagnostic()}
+  for(const extra of [{runDiagnostic:count},{policyReaders:{read:()=>{called++;return readers.read()}}},{resolveExec:f.resolveExec}]){
+    assert.equal((await runner.collectTriageAdmission({cli:f.cli,env:f.env,argv:[],...extra})).reason,"policy_control_unsupported")
+    const controls=await runner.collectTriageControls({cli:f.cli,env:f.env,argv:[],...extra})
+    assert.deepEqual([controls.reason,controls.detail,controls.evidence],["policy_control_unsupported","caller_adapter",null])
+  }
+  const resolver=()=>{called++;return f.resolveExec()}
+  assert.equal(runner.inspectLaunchChain({cli:f.cli,env:f.env,resolveExec:resolver,readFile:()=>{called++;return Buffer.alloc(0)}}).state,"scope_unqualified",
+    "the real export resolves the fixture engine itself and finds no supported chain")
+  assert.equal(called,0,"no caller adapter ran")
+  assert.equal(adapterRunner.inspectLaunchChain({cli:f.cli,env:f.env,resolveExec:resolver}).state,"inspected")
+  assert.equal(called,1,"the nonaccepted control host alone accepts a resolver")
+})
 test("new_Node6_test_discovery_executes_real_exports",()=>{
   for(const name of ["runTriageChild","inspectLaunchChain","collectTriageAdmission","triagePolicy"])assert.equal(typeof runner[name],"function")
 })
@@ -895,7 +913,7 @@ ownedHostTest("owned_only_actual_manifest_required","posix",async(t)=>{
   const f=await fixture(t)
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const run=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"owned-run"),deadline:Date.now()+15000})
   t.after(()=>run.close())
@@ -938,10 +956,16 @@ test("instrumented_native_qualifier_refuses_before_store_or_child_effects",async
   let launches=0
   const out=path.join(f.dir,"must-not-be-created")
   try{
-    const result=await qualifier.qualifyOwnedCatalog({launch:{cli:f.cli,env:f.env,spawn:()=>{launches++;throw Error("forbidden")}},
+    const result=await qualifier.qualifyOwnedCatalog({launch:{cli:f.cli,env:f.env},
       fixture:null,deadline:Date.now()+2000,evidenceDir:out})
     assert.equal(result.state,"blocked")
     assert.equal(result.reason,"diagnostic_inadequate")
+    // The real qualifier takes no launcher, sign-in, doctor or resolver.
+    for(const adapter of [{spawn:()=>{launches++;throw Error("forbidden")}},{probeSpawn:()=>{launches++}},{cliMetadata:metadata},
+      {resolveExec:f.resolveExec},{runDiagnostic:diagnostic},{policyReaders:readers}]){
+      const refused=await qualifier.qualifyOwnedCatalog({launch:{cli:f.cli,env:f.env,...adapter},fixture:null,deadline:Date.now()+2000,evidenceDir:out})
+      assert.deepEqual([refused.state,refused.reason,refused.record],["blocked","policy_control_unsupported",null],Object.keys(adapter)[0])
+    }
     assert.equal(launches,0)
     assert.equal(fsNative.existsSync(out),false,"measurement must not create or persist a real qualification store")
   }finally{
@@ -968,7 +992,7 @@ test("qualifier_direct_entry_guards_are_measured_without_native_or_store_authori
 ownedHostTest("qualified_format_full_per_run_identity","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const identities=[]
   for(let i=0;i<2;i++){
@@ -1008,7 +1032,7 @@ ownedHostTest("qualified_format_full_per_run_identity","posix",async(t)=>{
 ownedHostTest("synthetic_record_structure_validation_never_issues_authority","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
-  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
   await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
   const sourceIdentity=await custody.ownedSourceIdentity(),out=f.dir,env={HOME:f.dir},nativeReceipts=[],directReceipts=[],invocationIdentities=[]
   for(let i=1;i<=2;i++){
@@ -1311,17 +1335,17 @@ test("owned_runner_guards_precede_record_or_discovery",async(t)=>{
   assert.equal((await runner.runTriageChild({...f,deadline:0,spawn})).state,"no_time_for_a_run")
 })
 test("compatible_trusted_policy_is_admissible_without_admin_tamper_proof",async(t)=>{
-  const f=await fixture(t),r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:readers})
+  const f=await fixture(t),r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:readers})
   assert.equal(r.state,"admitted");assert.equal(r.remote_delivery,"not_applicable");assert.match(r.fingerprint,/^[a-f0-9]{64}$/)
 })
 test("pending_applicable_policy_blocks",async(t)=>{
   const f=await fixture(t)
   for(const [stdout,reason]of [["Managed settings (remote): checking… (fetch in progress; re-run in a moment)","applicable_delivery_pending"],["Managed settings (remote): unfamiliar future message","diagnostic_inadequate"],["Managed settings (remote): fetch failed (cached policy applies)","effective_policy_unknown"]]){
-    const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>({kind:"closed",code:0,stdout}),policyReaders:readers})
+    const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>({kind:"closed",code:0,stdout}),policyReaders:readers})
     assert.equal(r.state,"scope_unqualified");assert.equal(r.reason,reason)
   }
   for(const stdout of ["Managed settings (remote): no server-managed settings configured","Managed settings (remote): delivered settings loaded"]){
-    const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>({kind:"closed",code:0,stdout}),policyReaders:readers})
+    const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>({kind:"closed",code:0,stdout}),policyReaders:readers})
     assert.equal(r.state,"admitted")
     assert.equal(r.remote_delivery,stdout.includes("loaded")?"delivered":"no_configuration")
   }
@@ -1329,15 +1353,15 @@ test("pending_applicable_policy_blocks",async(t)=>{
 test("effective_hook_helper_or_widening_grant_blocks",async(t)=>{
   const f=await fixture(t)
   for(const [settings,reason]of [[{hooks:{SessionStart:[{hooks:[{type:"command",command:"never execute this"}]}]}},"active_hook_or_helper"],[{policyHelper:"never execute this"},"active_hook_or_helper"],[{permissions:{allow:["Edit"]}},"unsafe_permission_grant"],[{permissions:{additionalDirectories:["/outside"]}},"unsafe_permission_grant"],[{env:{ANTHROPIC_API_KEY:"secret"}},"billing_unresolved"],[{mcpServers:{unsafe:{}}},"unsafe_permission_grant"]]){
-    const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({complete:true,controller_invariant:true,sources:[{...source,settings}],validation_errors:[]})}})
+    const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({complete:true,controller_invariant:true,sources:[{...source,settings}],validation_errors:[]})}})
     assert.equal(r.reason,reason);assert.equal(JSON.stringify(r).includes("secret"),false);assert.equal(JSON.stringify(r).includes("never execute"),false)
   }
 })
 test("launcher_or_engine_change_invalidates_qualification",async(t)=>{
-  const f=await fixture(t),before=runner.inspectLaunchChain(f)
-  writeFileSync(path.join(f.dir,"runtime"),"runtime revision two");assert.notEqual(runner.inspectLaunchChain(f).fingerprint,before.fingerprint)
-  writeFileSync(f.cli,"engine revision two");assert.notEqual(runner.inspectLaunchChain(f).fingerprint,before.fingerprint)
-  assert.equal(runner.inspectLaunchChain({...f,resolveExec:()=>null}).state,"scope_unqualified")
+  const f=await fixture(t),before=adapterRunner.inspectLaunchChain(f)
+  writeFileSync(path.join(f.dir,"runtime"),"runtime revision two");assert.notEqual(adapterRunner.inspectLaunchChain(f).fingerprint,before.fingerprint)
+  writeFileSync(f.cli,"engine revision two");assert.notEqual(adapterRunner.inspectLaunchChain(f).fingerprint,before.fingerprint)
+  assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:()=>null}).state,"scope_unqualified")
 })
 controlHostTest("default_local_policy_matrix_reads_synthetic_documents_without_command_execution",async(t,{runner,cli})=>{
   const f=await fixture(t),realRead=fsNative.readFileSync,realList=fsNative.readdirSync
@@ -1388,10 +1412,10 @@ controlHostTest("default_local_policy_matrix_reads_synthetic_documents_without_c
 })
 test("chain_relative_files_and_selected_permissions_fail_closed",async(t)=>{
   const f=await fixture(t)
-  assert.equal(runner.inspectLaunchChain({...f,cli:"relative"}).reason,"launch_chain_unknown")
-  assert.equal(runner.inspectLaunchChain({...f,resolveExec:()=>({supported:true,cmd:f.cli,files:[f.cli,"relative"],prefix:[]})}).reason,"launch_chain_unknown")
+  assert.equal(adapterRunner.inspectLaunchChain({...f,cli:"relative"}).reason,"launch_chain_unknown")
+  assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:()=>({supported:true,cmd:f.cli,files:[f.cli,"relative"],prefix:[]})}).reason,"launch_chain_unknown")
   const settings={permissions:{allow:["mcp__triage_catalog__evidence_read"],deny:[]}}
-  const result=await runner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
+  const result=await adapterRunner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
     runDiagnostic:diagnostic,policyReaders:{read:()=>({complete:true,controller_invariant:true,validation_errors:[],sources:[{...source,settings}]})}})
   assert.equal(result.state,"admitted")
   assert.equal(result.capabilities,null)
@@ -1399,13 +1423,13 @@ test("chain_relative_files_and_selected_permissions_fail_closed",async(t)=>{
 test("fixed_optional_map_legacy_hazard_checks_accept_only_exact_off_controls",async(t)=>{
   const f=await fixture(t),settings={...controlInput().settings,permissions:{allow:[],deny:[]}}
   const read=value=>({complete:true,controller_invariant:true,validation_errors:[],sources:[{...source,settings:value}]})
-  const accepted=await runner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
+  const accepted=await adapterRunner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
     runDiagnostic:diagnostic,policyReaders:{read:()=>read(settings)}})
   assert.equal(accepted.state,"admitted");assert.equal(accepted.authority,false)
   for(const changed of [{...settings,enabledPlugins:{}},{...settings,enabledPlugins:{...fixedOff(),"extra@builtin":false}},
     {...settings,enabledPlugins:{...fixedOff(),"cc-plugin-diff@builtin":true}},{...settings,disableWorkflows:false},
     {...settings,disableSkillShellExecution:"true"}]){
-    const result=await runner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
+    const result=await adapterRunner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
       runDiagnostic:diagnostic,policyReaders:{read:()=>read(changed)}})
     assert.equal(result.state,"scope_unqualified")
   }
@@ -1420,14 +1444,14 @@ test("admission_missing_invalid_and_incompatible_evidence_never_becomes_none",as
     [null,{...readers.read(),validation_errors:["private raw settings error"]},"effective_policy_unknown"],
     ...[{kind:"future"},{revision:"unknown"},{settings:null},{settings:[]},{settings:{futurePolicy:true}},{settings:{permissions:{deny:["Read"]}}}].map(x=>[null,{...readers.read(),sources:[{...source,...x}]},x.settings?.permissions?"unsafe_permission_grant":"effective_policy_unknown"]),
   ]){
-    const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:observed?async()=>observed:diagnostic,policyReaders:{read:()=>evidence}})
+    const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:observed?async()=>observed:diagnostic,policyReaders:{read:()=>evidence}})
     assert.equal(r.state,"scope_unqualified");assert.equal(r.reason,reason);assert.equal(JSON.stringify(r).includes("private raw"),false)
   }
-  for(const env of [{...f.env,DESK_FACTORY_HEADLESS:"1"},{...f.env,ANTHROPIC_API_KEY:"private"}])assert.equal((await runner.collectTriageAdmission({...f,env,argv:[],runDiagnostic:()=>{throw Error("must not run")}})).state,"scope_unqualified")
-  assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:()=>{throw Error("failed diagnostic")}})).reason,"effective_policy_unknown")
-  assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{...readers,captureDiagnostic:()=>{throw Error("private capture failed")}}})).reason,"effective_policy_unknown")
-  assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,"diagnostic_inadequate")
-  assert.equal((await runner.collectTriageAdmission({...f,cli:process.execPath,argv:[]})).reason,"policy_control_unsupported")
+  for(const env of [{...f.env,DESK_FACTORY_HEADLESS:"1"},{...f.env,ANTHROPIC_API_KEY:"private"}])assert.equal((await adapterRunner.collectTriageAdmission({...f,env,argv:[],runDiagnostic:()=>{throw Error("must not run")}})).state,"scope_unqualified")
+  assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:()=>{throw Error("failed diagnostic")}})).reason,"effective_policy_unknown")
+  assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{...readers,captureDiagnostic:()=>{throw Error("private capture failed")}}})).reason,"effective_policy_unknown")
+  assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,"diagnostic_inadequate")
+  assert.equal((await adapterRunner.collectTriageAdmission({...f,cli:process.execPath,argv:[]})).reason,"policy_control_unsupported")
 })
 test("native_loader_inspection_refuses_unknown_or_unreadable_images",async(t)=>{
   const f={...await fixture(t),resolveExec:undefined},realRead=fsNative.readFileSync,realPath=fsNative.realpathSync
@@ -1440,19 +1464,19 @@ test("native_loader_inspection_refuses_unknown_or_unreadable_images",async(t)=>{
     dependencies.forEach((dep,i)=>{const o=32+i*160;b.writeUInt32LE(0xc,o);b.writeUInt32LE(160,o+4);b.writeUInt32LE(24,o+8);b.write(dep,o+24)});return b
   }
   files=new Map([[f.cli,image(["/fixture/dependency"])],["/fixture/dependency",image()],["/usr/lib/dyld",image()]])
-  assert.equal(runner.inspectLaunchChain(f).state,"inspected")
-  files.set("/fixture/dependency",image([f.cli]));assert.equal(runner.inspectLaunchChain(f).state,"inspected")
-  const non=image(["not a dependency"]);non.writeUInt32LE(0xd,32);files.set(f.cli,non);assert.equal(runner.inspectLaunchChain(f).state,"inspected")
-  for(const b of [Buffer.alloc(3),Buffer.alloc(32),image(["@rpath/libunknown"])]){files.set(f.cli,b);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")}
-  const many=image();many.writeUInt32LE(4097,16);files.set(f.cli,many);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")
-  const bad=image(["/fixture/dependency"]);bad.writeUInt32LE(4,36);files.set(f.cli,bad);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")
-  bad.writeUInt32LE(999999,36);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")
-  for(const offset of [0,160]){const b=image(["/fixture/dependency"]);b.writeUInt32LE(offset,40);files.set(f.cli,b);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")}
-  const noEnd=image(["/fixture/dependency"]);noEnd.fill(65,56);files.set(f.cli,noEnd);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")
-  const outside=image(["unknown","/fixture/dependency"]);outside.fill(65,56,192);files.set(f.cli,outside);assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")
+  assert.equal(adapterRunner.inspectLaunchChain(f).state,"inspected")
+  files.set("/fixture/dependency",image([f.cli]));assert.equal(adapterRunner.inspectLaunchChain(f).state,"inspected")
+  const non=image(["not a dependency"]);non.writeUInt32LE(0xd,32);files.set(f.cli,non);assert.equal(adapterRunner.inspectLaunchChain(f).state,"inspected")
+  for(const b of [Buffer.alloc(3),Buffer.alloc(32),image(["@rpath/libunknown"])]){files.set(f.cli,b);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")}
+  const many=image();many.writeUInt32LE(4097,16);files.set(f.cli,many);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
+  const bad=image(["/fixture/dependency"]);bad.writeUInt32LE(4,36);files.set(f.cli,bad);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
+  bad.writeUInt32LE(999999,36);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
+  for(const offset of [0,160]){const b=image(["/fixture/dependency"]);b.writeUInt32LE(offset,40);files.set(f.cli,b);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")}
+  const noEnd=image(["/fixture/dependency"]);noEnd.fill(65,56);files.set(f.cli,noEnd);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
+  const outside=image(["unknown","/fixture/dependency"]);outside.fill(65,56,192);files.set(f.cli,outside);assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
   files=new Map([[f.cli,image(["/fixture/0"])],["/usr/lib/dyld",image()]])
   for(let i=0;i<65;i++)files.set(`/fixture/${i}`,image([`/fixture/${i+1}`]))
-  assert.equal(runner.inspectLaunchChain(f).state,"scope_unqualified")
+  assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
 })
 test("local_policy_reader_never_executes_command_bearing_settings",async(t)=>{
   const f=await fixture(t),platform=Object.getOwnPropertyDescriptor(process,"platform"),realRead=fsNative.readFileSync,realList=fsNative.readdirSync
@@ -1471,16 +1495,16 @@ test("local_policy_reader_never_executes_command_bearing_settings",async(t)=>{
   t.after(()=>{Object.defineProperty(process,"platform",platform);t.mock.restoreAll();syncBuiltinESMExports()})
   for(const p of ["darwin","linux","win32"]){
     Object.defineProperty(process,"platform",{value:p,configurable:true})
-    const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})
+    const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})
     assert.equal(r.reason,"diagnostic_inadequate");assert.equal(r.sources.filter(s=>s.path.endsWith(".json")&&s.kind==="managed").length>=3,true)
   }
   for(const [next,reason]of [["hook","active_hook_or_helper"],["oversize","effective_policy_unknown"],["unreadable","effective_policy_unknown"]]){
-    mode=next;assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,reason)
+    mode=next;assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,reason)
   }
 })
 test("configured_helper_is_rejected_before_native_diagnostic_start",async(t)=>{
   const f=await fixture(t);let called=0
-  const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{called++;return diagnostic()},policyReaders:{read:()=>({...readers.read(),sources:[{...source,settings:{policyHelper:"forbidden"}}]})}})
+  const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{called++;return diagnostic()},policyReaders:{read:()=>({...readers.read(),sources:[{...source,settings:{policyHelper:"forbidden"}}]})}})
   assert.equal(r.reason,"active_hook_or_helper");assert.equal(called,0)
 })
 test("R6_1_default_platform_provenance_connects_signed_installed_runtime_without_engine_copy",t=>{
@@ -1507,7 +1531,7 @@ test("R6_1_default_reader_rejects_user_helpers_before_any_diagnostic",async(t)=>
   const f=await fixture(t),dir=path.join(f.env.HOME,".claude");fsNative.mkdirSync(dir)
   writeFileSync(path.join(dir,"settings.json"),JSON.stringify({apiKeyHelper:"must never execute",permissions:{allow:["Edit"]}}))
   let calls=0
-  assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()}})).reason,"active_hook_or_helper")
+  assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()}})).reason,"active_hook_or_helper")
   assert.equal(calls,0)
 })
 ownedHostTest("R6_1_native_platform_adapter_rejects_each_unverified_platform_dimension","posix",async(t)=>{
@@ -1541,30 +1565,30 @@ ownedHostTest("R6_1_native_platform_adapter_rejects_each_unverified_platform_dim
   });syncBuiltinESMExports()
   t.after(()=>{Object.defineProperty(process,"platform",platform);Object.defineProperty(process,"arch",arch);t.mock.restoreAll();syncBuiltinESMExports()})
   Object.defineProperty(process,"platform",{value:"darwin",configurable:true});Object.defineProperty(process,"arch",{value:"arm64",configurable:true})
-  assert.equal(runner.inspectLaunchChain({...f,resolveExec:undefined}).state,"inspected")
+  assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:undefined}).state,"inspected")
   for(const next of ["bad_signature","unsealed","writable_root","wrong_root","unknown_snapshot","sip_disabled","root_auth_disabled","unknown_build","bad_magic","missing_loader","missing_dependency","oversize_inventory","not_cache_file","wrong_owner","writable_cache","unreadable_dependency"]){
-    mode=next;assert.equal(runner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified",next)
+    mode=next;assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified",next)
   }
-  mode="valid";Object.defineProperty(process,"platform",{value:"linux",configurable:true});assert.equal(runner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified")
-  Object.defineProperty(process,"platform",{value:"darwin",configurable:true});Object.defineProperty(process,"arch",{value:"x64",configurable:true});assert.equal(runner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified")
+  mode="valid";Object.defineProperty(process,"platform",{value:"linux",configurable:true});assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified")
+  Object.defineProperty(process,"platform",{value:"darwin",configurable:true});Object.defineProperty(process,"arch",{value:"x64",configurable:true});assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified")
 })
 test("R6_6_policy_documents_and_supported_value_types_require_validation_before_admission",async(t)=>{
   const f=await fixture(t)
   for(const settings of [true,1,"private malformed prose",[],null,{permissions:true},{permissions:{allow:"Read"}},{permissions:{deny:[true]}},{disableAllHooks:"true"},{hooks:true},{hooks:{SessionStart:"not an array"}},{hooks:{SessionStart:[{hooks:"not an array"}]}},{hooks:{SessionStart:[{matcher:7,hooks:[]}]}},{env:true},{env:{SECRET:7}},{mcpServers:true},{mcpServers:{server:false}}]){
-    let calls=0;const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()},policyReaders:{read:()=>({...readers.read(),sources:[{...source,settings}]})}})
+    let calls=0;const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()},policyReaders:{read:()=>({...readers.read(),sources:[{...source,settings}]})}})
     assert.equal(r.state,"scope_unqualified",JSON.stringify(settings));assert.deepEqual(r.validation_errors,["invalid_policy_document"]);assert.equal(calls,0)
     assert.equal(JSON.stringify(r).includes("private malformed prose"),false);assert.equal(r.capabilities,null)
   }
 })
 test("R6_6_post_diagnostic_validation_errors_are_fixed_code_and_invalidate_admission",async(t)=>{
   const f=await fixture(t);let calls=0
-  const r=await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({...readers.read(),validation_errors:++calls===1?[]:["private error detail"]})}})
+  const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({...readers.read(),validation_errors:++calls===1?[]:["private error detail"]})}})
   assert.equal(calls,2);assert.equal(r.state,"scope_unqualified");assert.deepEqual(r.validation_errors,["invalid_effective_settings"]);assert.equal(r.capabilities,null);assert.equal(JSON.stringify(r).includes("private error detail"),false)
 })
 test("R6_6_native_invalid_settings_diagnostic_never_admits_or_echoes_private_errors",async(t)=>{
   const f=await fixture(t)
   for(const label of ["Invalid settings","\u001b[33mInvalid settings\u001b[39m"]){
-    const r=await runner.collectTriageAdmission({...f,argv:[],policyReaders:readers,runDiagnostic:async()=>({kind:"closed",code:0,stdout:doctor+`\n${label}\n- private raw policy value\n`})})
+    const r=await adapterRunner.collectTriageAdmission({...f,argv:[],policyReaders:readers,runDiagnostic:async()=>({kind:"closed",code:0,stdout:doctor+`\n${label}\n- private raw policy value\n`})})
     assert.equal(r.state,"scope_unqualified");assert.deepEqual(r.validation_errors,["invalid_native_settings"]);assert.equal(JSON.stringify(r).includes("private raw policy"),false);assert.equal(r.capabilities,null)
   }
 })

@@ -6,7 +6,7 @@ import fs from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
 const catalog = await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js").catch(() => ({}))
-const fixture = JSON.parse(fs.readFileSync(new URL("./fixtures/v12-owned-catalog.json", import.meta.url)))
+const fixture = JSON.parse(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
 function prepared() {
   return catalog.prepareTriageCatalog({ brief: fixture.brief, records: fixture.record_inputs,
     recordRefs: fixture.record_refs, generation: "a".repeat(64) })

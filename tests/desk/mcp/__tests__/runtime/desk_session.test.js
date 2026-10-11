@@ -156,8 +156,26 @@ async function makeSession(t, overrides = {}) {
       await session.start()
       assert.notEqual(session.admission.snapshot().state, "ready", mode)
       await session.dispose()
-      assert.equal(h.state.opens - (mode === "open_error" ? h.state.opens : 0), h.state.closes, mode)
+      // A failed close is not retried: the descriptor is forgotten so later
+      // samples are not stuck behind it.
+      assert.equal(h.state.opens - (mode === "open_error" ? h.state.opens : 0) - (mode === "close_error" ? 1 : 0), h.state.closes, mode)
     }
+  })
+
+  test("head_close_failure_clears_descriptor_and_dispose_releases_controller", async (t) => {
+    const h = headMemory()
+    h.state.mode = "close_error"
+    let controllerCloses = 0
+    const runtime = fakeRuntime({ connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } }, async close() { controllerCloses += 1 } }) })
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch, runtime,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    // The close failure resets the double; the next sample must not report
+    // head_sample_pending for the descriptor whose close failed.
+    await waitUntil(() => session.admission.snapshot().state === "ready")
+    await session.dispose()
+    assert.equal(controllerCloses, 1, "dispose releases the controller")
+    assert.equal(h.state.opens, h.state.closes + 1, "only the failed close is not counted")
   })
 
   test("head_sample_timeout_no_overlap", async (t) => {

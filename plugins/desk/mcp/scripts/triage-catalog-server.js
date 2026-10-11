@@ -14,15 +14,20 @@ export function serverFirstEnvironment(runtime){
     JSON.stringify(Object.keys(runtime.env).sort())===JSON.stringify(Object.keys(expected).sort())&&
     Object.entries(expected).every(([key,value])=>runtime.env[key]===value)
 }
+// Records the exact bytes Node evaluates: the hash is taken over the source
+// the default loader returns, so no second read of the file can differ. Only
+// when a loader leaves CommonJS source to Node's own reader (an extra async
+// loader, never the clean production server) is the file read here instead.
 export function catalogModuleLoad(loadedModules,root,url,context,next){
+  const loaded=next(url,context)
   if(url.startsWith("file:")){
     const file=fileURLToPath(url),resolved=fs.realpathSync(file)
     if(resolved!==file||!file.startsWith(root)||loadedModules.size>=512)throw Error("module_custody")
-    const data=fs.readFileSync(file)
+    const data=loaded.source==null?fs.readFileSync(file):Buffer.from(loaded.source)
     if(data.length>16*1024*1024)throw Error("module_custody")
     loadedModules.set(file,{path:file,sha256:createHash("sha256").update(data).digest("hex"),bytes:data.length})
   }
-  return next(url,context)
+  return loaded
 }
 export async function startCatalogServer(runtime=process){
   if(!serverFirstEnvironment(runtime)){

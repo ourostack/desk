@@ -736,9 +736,11 @@ export function createDeskSession(deps) {
       return { certain: false, reason: error.code ?? error.message }
     } finally {
       if (descriptor !== null) {
+        // Forget the descriptor even when close fails, so one failed close
+        // degrades this sample only and never leaves later samples pending.
+        headDescriptors.delete(descriptor)
         try {
           await descriptor.handle.close()
-          headDescriptors.delete(descriptor)
         } catch {
           return { certain: false, reason: "head_close_failed" }
         }
@@ -1337,12 +1339,9 @@ export function createDeskSession(deps) {
       ]).finally(() => clearTimeout(attemptTimer))
       // The controller closes as soon as operations, the pending HEAD sample and status readers are done, alongside the
       // attempt wait, so the front door's shutdown limit is never spent waiting for admission first. A late attempt that
-      // acquires a controller after disposal closes it itself.
+      // acquires a controller after disposal closes it itself. The retained HEAD sample closes and forgets its own
+      // descriptor in its finally, so after it settles nothing can throw before the controller is released.
       const retired = Promise.all([operationTail, headSample, statusReaderOutcome()]).then(async ([, , retirementError]) => {
-        for (const descriptor of headDescriptors) {
-          await descriptor.handle.close()
-          headDescriptors.delete(descriptor)
-        }
         forgetController()
         await controllerClosesSettled()
         return retirementError

@@ -126,7 +126,13 @@ walk checks decoded duplicate keys at every depth, prototype keys, Unicode,
 numbers and raw limits before JSON.parse; the original closed request is checked
 before SDK field stripping. IDs stay control-free, nonempty strings of at most
 64 bytes or nonnegative safe integers. Depth 32, 1024 keys and the existing raw
-frame/aggregate/count and one-active/one-pending limits remain enforced.
+frame/aggregate/count limits remain enforced. A number token must name exactly the value JSON.parse produces: overflow, underflow, unsafe integers and lost precision such as `1.0000000000000001` refuse, while `1e2`, `0.1` and `1.50` stay accepted.
+
+`tools/call` params take the native client's shape: `name`, `arguments` and an optional closed `_meta` holding only a `progressToken` (a string of at most 128 bytes or a safe integer) and `claudecode/toolUseId` (a string of at most 128 bytes). Both are validated and then ignored; any other `_meta` key refuses. Argument objects reach `dispatchCatalogTool` unstripped, where each tool's closed schema applies.
+
+`notifications/cancelled` with a `requestId` and an optional `reason` of at most 1024 bytes is accepted after initialize and is advisory. The transport never forwards it to the SDK: an in-flight request still completes, a sealed submission stays sealed and nothing is partially sealed. A read that is still queued with that ID is dropped without a response.
+
+Up to 8 requests may be in flight or queued at once. `initialize` and `candidate_submit` run alone: each waits for in-flight requests to finish, and everything behind it waits for its response, so the receipt chain stays ordered. A request over the limit gets a JSON-RPC error (`-32000`, `catalog_busy`) for that request alone and the session stays open.
 
 Client offers `2025-06-18` or `2025-11-25` negotiate only `2025-06-18`.
 Bounded name/version and optional title/description/websiteUrl are inert data.
@@ -166,7 +172,7 @@ through a separately allocated synthetic-custody, memory-only unit transaction.
 That facade always returns `authority:false`; synthetic launch counters and
 `qualified` inside inert record data are not native qualification receipts.
 Neither the production qualifier nor runner accepts a caller-selected registry,
-issuer, store or measurement detector. The qualifier's import is inert, and its
+issuer, store or measurement detector, and neither accepts a caller launcher, sign-in probe, doctor, chain resolver, file reader or policy reader. The real qualifier takes only the engine path and environment and refuses a launch that carries anything else; `runOwnedCatalogNative`, `collectTriageAdmission`, `collectTriageControls` and `inspectLaunchChain` start or read everything themselves. Those substitutions live only in the nonaccepted facades. The qualifier's import is inert, and its
 direct entry still calls the fixed production route. See
 [qualifier guards and nonaccepted transactions](../mcp/scripts/qualify-triage-runner.js).
 
@@ -181,6 +187,12 @@ and parent verify normal process/stdio closure. One absolute deadline includes
 the teardown reserve. Initial FIFO zero reads are not terminal proof. These are
 first-party runtime controls, not a universal OS sandbox or privileged-admin
 tamper-proof claim. See [custody and lifecycle](../mcp/src/factory/triage-custody.js).
+
+A native run also observes the native process itself with `ps`. Its parent must be this process, its command line must be exactly our launch (the resolved engine path and argv), and the executable must hash to the pinned Claude Code 2.1.296 engine. The observation is part of the restored custody: real restore checks that the native identity names the run's PID and recorded invocation. A Node imitation of the engine fails this check, so the real export never accepts it as a native run.
+
+Two timing windows remain and are documented rather than closed. First, between the native init event and the SIGTERM that ends a rejected run, the native process keeps running; the deadline and reaping bound it, but a watcher is not synchronous prevention. Second, the server's module inventory is taken inside Node's load hook over the exact source bytes Node evaluates, so the hash and the load cannot differ; the parent's later re-hash of each file only confirms the files on disk still match.
+
+These checks prove runtime confinement against the model child. They are not tamper-resistance against code running as the operator's own uid, which can modify Desk itself. Each real run therefore re-checks the launch chain, controls, sign-in, tool list and live receipts instead of trusting an earlier result.
 
 Fixed authenticated `observation` frames on the same private receipt FIFO retain
 first input/output bytes before parsing, refusal codes, write/backpressure and
@@ -218,7 +230,7 @@ Reusable invocation identity permits only seven typed per-run bindings:
 generation, snapshot path/hash, receipt/control FIFO paths, deadline and protected
 run directory. Every other command/flag/tool/settings/env/message byte stays
 fixed. New authorized prepared content requires a fresh full handshake; the
-synthetic fixture is not a permanent production input freeze.
+synthetic fixture is not a permanent production input freeze. That fixture ships beside the custody module as `v12-owned-catalog.json` and is part of the owned source identity, so tests read it there and a changed fixture is a changed source.
 See [qualifier](../mcp/scripts/qualify-triage-runner.js) and
 [record/identity verification](../mcp/src/factory/triage-runner.js).
 
