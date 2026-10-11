@@ -8,12 +8,17 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProvider } from "./auth/provider.js";
+import { fingerprint } from "./auth/seal.js";
 import { createRedirectPolicy } from "./auth/redirects.js";
+import { createDiscovery, createEntraSignIn, createInvites, DISCOVERY_TIMEOUT_MS } from "./auth/entra.js";
+import { createTableStore } from "./accounts/store.js";
+import { createAccountCache } from "./accounts/cache.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
 import { createRelay } from "./relay.js";
-import { createApp } from "./server.js";
+import { createApp, createDeepHealth } from "./server.js";
 import { serveTokens } from "./token-socket.js";
+import { ISO_TIME, isSet, keySetting, readIdentity } from "./identity-config.js";
 
 export const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is missing.";
 const APP_SETTINGS = ["DESK_APP_ID", "DESK_APP_KEY_FILE", "DESK_APP_CLIENT_ID", "DESK_APP_CLIENT_SECRET"];
@@ -26,10 +31,62 @@ const PASSED_THROUGH = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "TMPDIR"
 const SHIM_DIR = fileURLToPath(new URL("../bin", import.meta.url));
 
 const log = (message) => process.stderr.write(`desk-hosted: ${message}\n`);
-const isSet = (value) => typeof value === "string" && value.trim() !== "" && value.trim() !== "unset";
+
+// The signing-key ring and the client key (spec item 15). Codes and tokens
+// are sealed with DESK_SIGNING_KEY; during a rollover DESK_SIGNING_KEY_PREVIOUS
+// is still accepted until DESK_SIGNING_KEY_PREVIOUS_UNTIL (an ISO time). Client
+// ids are sealed with DESK_CLIENT_KEY, which falls back to DESK_SIGNING_KEY
+// only while there is no previous key: that is how the gateway ran before, and
+// a rotation that silently re-keyed clients would void every registration.
+function readKeys(env) {
+  const signing = keySetting(env, "DESK_SIGNING_KEY");
+  if (!signing) throw new Error("DESK_SIGNING_KEY must be set: it signs every code and token.");
+  const previous = keySetting(env, "DESK_SIGNING_KEY_PREVIOUS");
+  const client = keySetting(env, "DESK_CLIENT_KEY");
+  const signingKeys = [{ key: signing }];
+  if (previous) {
+    const until = env.DESK_SIGNING_KEY_PREVIOUS_UNTIL;
+    if (!ISO_TIME.test(until ?? "") || Number.isNaN(Date.parse(until))) {
+      throw new Error("DESK_SIGNING_KEY_PREVIOUS needs DESK_SIGNING_KEY_PREVIOUS_UNTIL, the ISO time until which it is accepted.");
+    }
+    if (!client) throw new Error("DESK_SIGNING_KEY_PREVIOUS is set but DESK_CLIENT_KEY is not; set DESK_CLIENT_KEY to the key that sealed today's clients.");
+    signingKeys.push({ key: previous, until: Date.parse(until) });
+  }
+  return { signingKeys, clientKey: client ?? signing, clientKeyFrom: client ? "DESK_CLIENT_KEY" : "DESK_SIGNING_KEY" };
+}
+
+// What the gateway logs about its keys at start, which key operations compare
+// with their own reads: fingerprints only, never a key. `client-from` names
+// where the client key came from, because before a rotation an explicit
+// DESK_CLIENT_KEY and the fallback have the same fingerprint. `until` shows
+// how long the previous key stays accepted. `revision` is the Container App
+// revision (Azure sets CONTAINER_APP_REVISION), so a script reads the line of
+// the revision it restarted, not an older one. With the Ouro tenant, `entra` is the fingerprint of the Entra client
+// secret this revision read, so a secret rotation can tell the new secret from the old before deleting the old one.
+export function keysStartupLine({ signingKeys, clientKey, clientKeyFrom, revision, identity }) {
+  const [current, previous] = signingKeys;
+  const previousPart = previous ? `${fingerprint(previous.key)} until ${new Date(previous.until).toISOString()}` : "none";
+  const entraPart = identity?.clientSecret ? ` entra ${fingerprint(identity.clientSecret)}` : "";
+  return `keys: signing ${fingerprint(current.key)} client ${fingerprint(clientKey)} client-from ${clientKeyFrom} previous ${previousPart} revision ${revision ?? "unknown"}${entraPart}`;
+}
+
+
+// What the gateway logs about Ouro sign-in at start: account ids and the tenant id only, never a login or secret.
+// Nothing without the Ouro tenant.
+export function identityStartupLines({ identity }) {
+  if (!identity) return [];
+  const mapped = [...identity.legacy.byUserId.values()].map(({ accountId }) => accountId);
+  const lines = [
+    `Ouro sign-in: tenant ${identity.tenantId} (${identity.subdomain}); GitHub fallback ${identity.githubSignIn ? "on" : "off"}; legacy cutoff ${identity.legacy.cutoff ? identity.legacy.cutoff.toISOString() : "none"}; mapped accounts ${mapped.length ? mapped.join(", ") : "none"}`,
+  ];
+  if (identity.allowedLoginsIgnored) {
+    lines.push("DESK_ALLOWED_LOGINS is ignored with Ouro accounts; the legacy mapping and the GitHub fallback admit only DESK_GITHUB_ACCOUNTS");
+  }
+  return lines;
+}
 
 export function readConfig(env) {
-  if (!isSet(env.DESK_SIGNING_KEY)) throw new Error("DESK_SIGNING_KEY must be set: it signs every client id, code and token.");
+  const { signingKeys, clientKey, clientKeyFrom } = readKeys(env);
   const publicUrl = (env.DESK_PUBLIC_URL || "https://desk.ouro.bot").replace(/\/+$/, "");
   const appReady = APP_SETTINGS.every((name) => isSet(env[name]));
   const config = {
@@ -37,7 +94,10 @@ export function readConfig(env) {
     issuer: publicUrl,
     resource: `${publicUrl}/mcp`,
     githubCallbackUrl: `${publicUrl}/oauth/github/callback`,
-    signingKey: env.DESK_SIGNING_KEY,
+    signingKeys,
+    clientKey,
+    clientKeyFrom,
+    revision: isSet(env.CONTAINER_APP_REVISION) && /^\S+$/.test(env.CONTAINER_APP_REVISION) ? env.CONTAINER_APP_REVISION : undefined,
     appReady,
     appId: env.DESK_APP_ID,
     appKeyFile: env.DESK_APP_KEY_FILE,
@@ -52,6 +112,7 @@ export function readConfig(env) {
     redirects: createRedirectPolicy(isSet(env.DESK_REDIRECTS) ? env.DESK_REDIRECTS : undefined),
     cloneDir: env.DESK_CLONE_DIR,
     pluginDir: env.DESK_PLUGIN_DIR,
+    identity: readIdentity(env, publicUrl),
   };
   if (appReady) {
     for (const name of ["DESK_CLONE_DIR", "DESK_PLUGIN_DIR"]) if (!isSet(env[name])) throw new Error(`${name} must be set.`);
@@ -72,6 +133,150 @@ export function redirectStartupLines(redirects) {
   return lines;
 }
 
+// A GitHub user's Git author: their name (or login) and their noreply address.
+export function authorOf(user) {
+  const name = user.name || user.login;
+  const email = user.userId ? `${user.userId}+${user.login}@users.noreply.github.com` : `${user.login}@users.noreply.github.com`;
+  return { name, email };
+}
+
+// With Ouro accounts, a Desk child's Git author comes from the account's binding (Ari's is seeded with his GitHub
+// noreply author), never from token claims. An account whose binding doesn't name this gateway's desk gets no child.
+export function createAuthorLookup({ store, repo }) {
+  return async (accountId) => {
+    const binding = await store.getBinding(accountId);
+    if (binding?.kind !== "github" || binding.repo !== repo || !binding.author) throw new Error(`account ${accountId} has no desk on this gateway`);
+    return binding.author;
+  };
+}
+
+// Reads each account the legacy mapping and the GitHub fallback name, once, and logs any that is missing: a typo or
+// another tenant's id would otherwise refuse Ari's old connector at deploy. /healthz/deep fails on the same condition.
+export async function checkLegacyAccounts({ store, accountIds, log: write = log }) {
+  if (accountIds.length === 0) write("LEGACY ACCOUNT MAPPING EMPTY: DESK_GITHUB_ACCOUNTS names no account, so legacy tokens and the GitHub fallback admit nobody");
+  for (const accountId of accountIds) {
+    try {
+      if ((await store.getAccount(accountId)) === null) write(`LEGACY ACCOUNT MISSING ${accountId}`);
+    } catch (error) {
+      write(`could not check legacy account ${accountId} (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
+    }
+  }
+}
+
+// How long the start waits for the tenant's discovery document: the same 10 s as one discovery fetch may take.
+export const START_DISCOVERY_BOUND_MS = DISCOVERY_TIMEOUT_MS;
+
+// Fetches the Ouro tenant's discovery document before the gateway listens, waiting at most `boundMs`: a document
+// naming another issuer stops the start (the returned promise rejects), and one that can't be fetched in time leaves
+// the document loading in the background while the legacy and GitHub paths serve. A mismatch found after the bound
+// is logged (and fails /healthz/deep), never an unhandled rejection.
+export async function startDiscovery(discovery, { boundMs = START_DISCOVERY_BOUND_MS, log: write = log } = {}) {
+  const started = discovery.start();
+  started.catch((error) => write(error?.message ?? "Entra discovery failed"));
+  let timer;
+  const bound = new Promise((resolve) => {
+    timer = setTimeout(() => resolve("bound"), boundMs);
+  });
+  try {
+    if ((await Promise.race([started.then(() => "started"), bound])) === "bound") {
+      write(`Entra discovery is still loading after ${boundMs / 1000} s; starting without it, and Ouro sign-in waits for it`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Every 60 s, re-reads each account with an open session and closes all of that account's sessions, idle ones too,
+// when its Desk access is off or it is gone (spec item 11). A read that fails is retried once after `retryMs`; the
+// sessions close only if the cache then can't vouch for the account either (its row is older than 60 s).
+export function startAccountSweep({ relay, accounts, intervalMs = 60_000, retryMs = 2_000, log: write = log }) {
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function read(accountId) {
+    try {
+      return { row: await accounts.account(accountId, { fresh: true }) };
+    } catch {
+      await pause(retryMs);
+      try {
+        return { row: await accounts.account(accountId, { fresh: true }) };
+      } catch {
+        return { unconfirmed: true };
+      }
+    }
+  }
+  async function sweepOnce() {
+    for (const accountId of relay.openAccounts()) {
+      const { row, unconfirmed } = await read(accountId);
+      if (unconfirmed) write(`sweep: account ${accountId} can't be confirmed; closed ${relay.closeAccount(accountId)} session(s)`);
+      else if (!row?.deskAccess) write(`sweep: account ${accountId} has Desk access off; closed ${relay.closeAccount(accountId)} session(s)`);
+    }
+  }
+  let running = null;
+  const timer = setInterval(() => {
+    running ??= sweepOnce()
+      .catch((error) => write(`sweep failed (${error?.name ?? "error"})`))
+      .finally(() => {
+        running = null;
+      });
+  }, intervalMs);
+  timer.unref?.();
+  return { sweepOnce, stop: () => clearInterval(timer) };
+}
+
+// The Ouro tenant's parts, built from config.identity: the accounts store and its cache, discovery (fetched, within
+// its bound, before the gateway listens), the tenant's sign-in, invites and the deep health check. `deps.store` and
+// `deps.fetch` stand in for the Table store and the network in tests.
+export async function startIdentity(config, deps = {}) {
+  const { identity } = config;
+  const fetch = deps.fetch ?? globalThis.fetch;
+  const store = deps.store ?? createTableStore({ endpoint: identity.accountsEndpoint, clientId: identity.azureClientId });
+  const accounts = createAccountCache({ store });
+  const discovery = createDiscovery({ subdomain: identity.subdomain, tenantId: identity.tenantId, fetch });
+  await startDiscovery(discovery, deps.discoveryBoundMs ? { boundMs: deps.discoveryBoundMs } : {});
+  const entra = createEntraSignIn({
+    keys: config.signingKeys,
+    discovery,
+    tenantId: identity.tenantId,
+    clientId: identity.clientId,
+    clientSecret: identity.clientSecret,
+    callbackUrl: identity.callbackUrl,
+    store,
+    repo: config.repo,
+    fetch,
+  });
+  const invites = createInvites({ keys: config.signingKeys, store, issuer: config.issuer });
+  const accountIds = [...identity.legacy.byUserId.values()].map(({ accountId }) => accountId);
+  const deepHealth = createDeepHealth({ discovery, store, accountIds });
+  return { store, accounts, discovery, entra, invites, deepHealth, accountIds };
+}
+
+// The provider and the Express app. `parts` is startIdentity's, or absent on a gateway without the Ouro tenant, which
+// then serves exactly what it always has.
+export function buildGateway({ config, relay, parts, log: write }) {
+  const provider = createProvider({
+    signingKeys: config.signingKeys,
+    clientKey: config.clientKey,
+    issuer: config.issuer,
+    github: { clientId: config.appClientId ?? "unset", clientSecret: config.appClientSecret ?? "unset", signIn: config.identity?.githubSignIn === true },
+    allowedLogins: config.allowedLogins,
+    resource: config.resource,
+    redirects: config.redirects,
+    ...(write ? { log: write } : {}),
+    ...(parts ? { accounts: parts.accounts, store: parts.store, repo: config.repo, entra: parts.entra, legacy: config.identity.legacy } : {}),
+  });
+  const app = createApp({
+    provider,
+    relay,
+    githubCallback: provider.githubCallback,
+    issuer: config.issuer,
+    resource: config.resource,
+    unavailable: config.appReady ? undefined : NOT_SET_UP,
+    entra: parts?.entra,
+    invites: parts?.invites,
+    deepHealth: parts?.deepHealth,
+  });
+  return { provider, app };
+}
+
 export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.js"), "--root", config.cloneDir];
 
 const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((name) => baseEnv[name] !== undefined).map((name) => [name, baseEnv[name]]));
@@ -80,9 +285,11 @@ const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((nam
 // it carries the token socket; it never carries a token, the App's key or its
 // secrets. Git gets tokens through the credential helper and gh through the
 // shim first on PATH, each fresh from the socket.
-export function deskChildEnv({ config, user, socketPath, baseEnv }) {
-  const name = user.name || user.login;
-  const email = user.userId ? `${user.userId}+${user.login}@users.noreply.github.com` : `${user.login}@users.noreply.github.com`;
+//
+// `author` is the Git author: with Ouro accounts, the account's binding's
+// (createAuthorLookup); without, the GitHub user of the token (`user`).
+export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv }) {
+  const { name, email } = author;
   return {
     ...passedThrough(baseEnv),
     PATH: [SHIM_DIR, baseEnv.PATH].filter(Boolean).join(delimiter),
@@ -155,11 +362,17 @@ export async function stopGateway({ server, relay, pushDesk: push, closeTokenSoc
   server.closeAllConnections();
 }
 
-export async function main(env = process.env) {
+export async function main(env = process.env, deps = {}) {
   const config = readConfig(env);
+  log(keysStartupLine(config));
+  for (const line of identityStartupLines(config)) log(line);
   let relay = null;
   let push;
   let closeTokenSocket;
+  // The Ouro tenant comes first, so a tenant naming another issuer stops the start before the clone.
+  const parts = config.identity ? await startIdentity(config, deps) : null;
+  if (parts) checkLegacyAccounts({ store: parts.store, accountIds: parts.accountIds });
+  const authorFor = parts ? createAuthorLookup({ store: parts.store, repo: config.repo }) : null;
 
   if (config.appReady) {
     const runtimeDir = mkdtempSync(join(tmpdir(), "desk-hosted-")); // mode 0700
@@ -178,47 +391,41 @@ export async function main(env = process.env) {
     await ensureClone({ dir: config.cloneDir, repo: config.repo, git });
     log(`desk clone ready at ${config.cloneDir}`);
 
-    // The shutdown push commits a rebase under the last signed-in user, or
-    // the first allowed login if nobody has signed in since this start.
-    let lastUser = { login: config.allowedLogins[0] };
+    // The shutdown push commits a rebase under the last signed-in user's
+    // author. If nobody has signed in since this start, that is the first
+    // allowed login's or, with Ouro accounts, the first mapped account's
+    // binding's (or a neutral one when it can't be read).
+    let lastAuthor = parts ? null : authorOf({ login: config.allowedLogins[0] });
     relay = createRelay({
-      spawnDesk: ({ auth }) => {
-        lastUser = auth.extra;
+      spawnDesk: async ({ auth }) => {
+        const author = authorFor ? await authorFor(auth.extra.accountId) : authorOf(auth.extra);
+        lastAuthor = author;
         return spawn(process.execPath, deskChildArgs(config), {
           stdio: "pipe",
-          env: deskChildEnv({ config, user: auth.extra, socketPath, baseEnv: env }),
+          env: deskChildEnv({ config, author, socketPath, baseEnv: env }),
         });
       },
     });
-    push = () =>
-      pushDesk({ dir: config.cloneDir, args: deskPushArgs(config), env: deskChildEnv({ config, user: lastUser, socketPath, baseEnv: env }), git });
+    const shutdownAuthor = async () =>
+      lastAuthor ??
+      (parts.accountIds.length ? await authorFor(parts.accountIds[0]).catch(() => null) : null) ?? { name: "Hosted Desk", email: "hosted-desk@users.noreply.desk.ouro.bot" };
+    push = async () =>
+      pushDesk({ dir: config.cloneDir, args: deskPushArgs(config), env: deskChildEnv({ config, author: await shutdownAuthor(), socketPath, baseEnv: env }), git });
   } else {
     log(NOT_SET_UP);
   }
 
-  const provider = createProvider({
-    key: config.signingKey,
-    issuer: config.issuer,
-    github: { clientId: config.appClientId ?? "unset", clientSecret: config.appClientSecret ?? "unset" },
-    allowedLogins: config.allowedLogins,
-    resource: config.resource,
-    redirects: config.redirects,
-  });
-  const app = createApp({
-    provider,
-    relay,
-    githubCallback: provider.githubCallback,
-    issuer: config.issuer,
-    resource: config.resource,
-    unavailable: config.appReady ? undefined : NOT_SET_UP,
-  });
+  const { app } = buildGateway({ config, relay, parts });
   const server = app.listen(config.port);
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);
   for (const line of redirectStartupLines(config.redirects)) log(line);
+  const sweep = parts && relay ? startAccountSweep({ relay, accounts: parts.accounts }) : null;
 
   let stopping = null;
   const shutdown = () => {
+    sweep?.stop();
+    parts?.discovery.stop();
     stopping ??= stopGateway({ server, relay, pushDesk: push, closeTokenSocket }).then(
       () => process.exit(0),
       (error) => {

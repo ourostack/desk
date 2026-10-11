@@ -5,7 +5,7 @@ import { once } from "node:events";
 import express from "express";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import { seal, unseal } from "../src/auth/seal.js";
+import { seal, unseal, fingerprint, TTL } from "../src/auth/seal.js";
 import { createProvider, consentHandler } from "../src/auth/provider.js";
 import { githubCallbackHandler } from "../src/auth/github.js";
 import { createRedirectPolicy } from "../src/auth/redirects.js";
@@ -859,4 +859,98 @@ test("a wrong resource too long to be worth logging is refused without it", asyn
   const { response } = await consentPage(base, client, { resource: `https://evil.example/${"x".repeat(300)}` });
   assert.equal(response.status, 302);
   assert.ok(logs.includes(`authorize refused: invalid_target client ${client.client_id}`));
+});
+
+// Signing-key rollover (spec item 15): the gateway signs with its current key
+// and still accepts the previous one until DESK_SIGNING_KEY_PREVIOUS_UNTIL.
+const OLD_KEY = "old-key-0123456789abcdef0123456789abcdef";
+const NEW_KEY = "new-key-0123456789abcdef0123456789abcdef";
+const ROTATED_AT = Date.parse("2026-11-01T00:00:00Z");
+const PREVIOUS_UNTIL = ROTATED_AT + 30 * 24 * 3600 * 1000;
+const RING = [{ key: NEW_KEY }, { key: OLD_KEY, until: PREVIOUS_UNTIL }];
+
+test("seal and unseal accept a token sealed with the previous key until its until-time and refuse it one second after", () => {
+  const old = seal("refresh", { login: "arimendelow" }, { key: OLD_KEY, ttlSec: 40 * 24 * 3600, now: ROTATED_AT - 1000 });
+  assert.equal(unseal("refresh", old, { keys: RING, now: ROTATED_AT })?.login, "arimendelow");
+  assert.equal(unseal("refresh", old, { keys: RING, now: PREVIOUS_UNTIL })?.login, "arimendelow");
+  assert.equal(unseal("refresh", old, { keys: RING, now: PREVIOUS_UNTIL + 1000 }), null);
+  const current = seal("refresh", { login: "arimendelow" }, { key: NEW_KEY, ttlSec: 40 * 24 * 3600, now: ROTATED_AT });
+  assert.equal(unseal("refresh", current, { keys: RING, now: PREVIOUS_UNTIL + 1000 })?.login, "arimendelow");
+  assert.equal(unseal("refresh", current, { keys: [{ key: OLD_KEY }], now: ROTATED_AT }), null, "a key outside the ring never unseals");
+});
+
+test("seal and unseal honour an injected clock for expiry", () => {
+  const token = seal("code", { login: "arimendelow" }, { key: KEY, ttlSec: 60, now: ROTATED_AT });
+  assert.equal(claimsOf(token).exp, ROTATED_AT / 1000 + 60);
+  assert.ok(unseal("code", token, { key: KEY, now: ROTATED_AT + 59_000 }));
+  assert.equal(unseal("code", token, { key: KEY, now: ROTATED_AT + 60_000 }), null);
+});
+
+test("fingerprint is stable per key, differs between keys and contains no key", () => {
+  assert.equal(fingerprint(KEY), fingerprint(KEY));
+  assert.notEqual(fingerprint(KEY), fingerprint(`${KEY}x`));
+  assert.ok(!fingerprint(KEY).includes(KEY));
+  assert.match(fingerprint(KEY), /^[A-Za-z0-9_-]{43}$/);
+});
+
+// Today's gateway (one key, which also seals clients) and the same gateway
+// after a rotation, whose client key is a byte copy of today's signing key.
+const beforeRotation = () => makeProvider(fakeGitHub(), { key: OLD_KEY, now: () => ROTATED_AT - 1000 });
+const afterRotation = (now = ROTATED_AT) => makeProvider(fakeGitHub(), { key: undefined, signingKeys: RING, clientKey: OLD_KEY, now: () => now });
+
+test("new tokens are sealed with the current key only", async () => {
+  const provider = afterRotation();
+  const client = await provider.clientsStore.registerClient({ redirect_uris: [CLAUDE_CALLBACK], token_endpoint_auth_method: "client_secret_post" });
+  const old = seal("refresh", { clientId: client.client_id, scopes: [], login: "arimendelow", userId: 16390116, name: "Ari", aud: MCP_URL }, { key: OLD_KEY, ttlSec: 3600, now: ROTATED_AT });
+  const tokens = await provider.exchangeRefreshToken(client, old);
+  for (const [kind, token] of [["access", tokens.access_token], ["refresh", tokens.refresh_token]]) {
+    assert.ok(unseal(kind, token, { key: NEW_KEY, now: ROTATED_AT }), kind);
+    assert.equal(unseal(kind, token, { key: OLD_KEY, now: ROTATED_AT }), null, kind);
+  }
+  const url = new URL(provider.approve(seal("consent", { clientId: client.client_id, redirectUri: CLAUDE_CALLBACK, codeChallenge: "c", aud: MCP_URL }, { key: OLD_KEY, ttlSec: 600, now: ROTATED_AT })).redirectTo);
+  assert.ok(unseal("pending", url.searchParams.get("state"), { key: NEW_KEY, now: ROTATED_AT }), "a consent sealed with the previous key is approved and resealed with the current one");
+});
+
+test("a client id registered before a rotation still resolves, with the same derived secret", async () => {
+  const registered = await beforeRotation().clientsStore.registerClient({ client_name: "Claude", redirect_uris: [CLAUDE_CALLBACK], token_endpoint_auth_method: "client_secret_post" });
+  const refresh = (await beforeRotation().exchangeRefreshToken(registered, seal("refresh", { clientId: registered.client_id, scopes: [], login: "arimendelow", userId: 16390116, name: "Ari", aud: MCP_URL }, { key: OLD_KEY, ttlSec: TTL.refresh, now: ROTATED_AT - 1000 }))).refresh_token;
+  for (const now of [ROTATED_AT, PREVIOUS_UNTIL + 1000]) {
+    const resolved = await afterRotation(now).clientsStore.getClient(registered.client_id);
+    assert.equal(resolved.client_secret, registered.client_secret, `at ${new Date(now).toISOString()}`);
+    assert.equal(resolved.client_name, "Claude");
+  }
+  // The refresh token from before the rotation refreshes during the 30 days
+  // and is refused after them.
+  assert.ok((await afterRotation(ROTATED_AT + 1000).exchangeRefreshToken(registered, refresh)).access_token);
+  await assert.rejects(afterRotation(PREVIOUS_UNTIL + 1000).exchangeRefreshToken(registered, refresh), { name: "InvalidGrantError" });
+  // A client id is never sealed with a signing key, so a new key changes nothing for clients.
+  const fresh = await afterRotation().clientsStore.registerClient({ redirect_uris: [CLAUDE_CALLBACK], token_endpoint_auth_method: "none" });
+  assert.ok(unseal("client", fresh.client_id, { key: OLD_KEY }));
+  assert.equal(unseal("client", fresh.client_id, { key: NEW_KEY }), null);
+});
+
+test("an access token sealed with the previous key is accepted until its until-time", async () => {
+  const claims = { clientId: "c", scopes: [], login: "arimendelow", userId: 16390116, name: "Ari", aud: MCP_URL };
+  const old = seal("access", claims, { key: OLD_KEY, ttlSec: 3600, now: PREVIOUS_UNTIL - 60_000 });
+  assert.equal((await afterRotation(PREVIOUS_UNTIL).verifyAccessToken(old)).extra.login, "arimendelow");
+  await assert.rejects(afterRotation(PREVIOUS_UNTIL + 1000).verifyAccessToken(old), { name: "InvalidTokenError" });
+});
+
+test("a GitHub sign-in that started before a rotation finishes after it", async () => {
+  const provider = afterRotation();
+  const pending = seal("pending", { clientId: "c", redirectUri: CLAUDE_CALLBACK, codeChallenge: "c", aud: MCP_URL }, { key: OLD_KEY, ttlSec: 600, now: ROTATED_AT - 1000 });
+  const outcome = await provider.githubCallback({ code: "gh-code", state: pending });
+  const code = new URL(outcome.redirectTo).searchParams.get("code");
+  assert.ok(unseal("code", code, { key: NEW_KEY, now: ROTATED_AT }));
+});
+
+test("without accounts, a refresh or access token for a login outside DESK_ALLOWED_LOGINS is refused", async (t) => {
+  const { base, provider } = await start(t);
+  const client = (await register(base)).body;
+  const claims = { clientId: client.client_id, login: "mallory", userId: 1, name: "Mallory", scopes: [] };
+  const refresh_token = seal("refresh", claims, { key: KEY, ttlSec: 600 });
+  const reply = await tokenRequest(base, { grant_type: "refresh_token", client_id: client.client_id, client_secret: client.client_secret, refresh_token });
+  assert.equal(reply.status, 400);
+  assert.equal(reply.body.error, "invalid_grant");
+  await assert.rejects(provider.verifyAccessToken(seal("access", claims, { key: KEY, ttlSec: 600 })), { errorCode: "invalid_token" });
 });

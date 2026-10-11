@@ -10,7 +10,7 @@ name: Hosted Desk deploy
 # DESK_PUBLIC_URL for the health check (the app's Azure address when unset).
 #
 # Steps: refuse a commit whose Desk is not released (a pending changelog fragment); build the image in the registry with `az acr build`, tagged with the commit SHA; point the app at it; wait for
-# the new revision to be ready; then poll /healthz until it answers 200, or fail.
+# the new revision to be ready; then poll /healthz until it answers 200, and then /healthz/deep for up to 5 minutes, or fail.
 
 on:
   workflow_run:
@@ -102,6 +102,8 @@ jobs:
           else
             echo "current=false" >> "$GITHUB_OUTPUT"
             echo "$APP runs $current; deploying $image."
+            # The rollback target for this deploy (hosted/README.md, Rollback), kept on the run's summary page.
+            echo "Rollback target, the image before this deploy: \`$current\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Build the image
@@ -151,3 +153,31 @@ jobs:
             sleep 10
           done
           echo "$url answers 200; $APP runs $IMAGE."
+
+      # /healthz passes even when the accounts store, Ouro sign-in (ciamlogin.com) or a mapped legacy account is
+      # broken. /healthz/deep checks them, answering 503 with only the failing check names, and caches its result for
+      # 10 s. It is never the app's startup or liveness probe, so this step fails the workflow but rolls nothing back;
+      # rollback stays manual (hosted/README.md).
+      - name: Wait for the deep health check
+        env:
+          DESK_PUBLIC_URL: ${{ vars.DESK_PUBLIC_URL }}
+        run: |
+          set -euo pipefail
+          base="${DESK_PUBLIC_URL:-https://$(az containerapp show -n "$APP" -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --query properties.configuration.ingress.fqdn -o tsv)}"
+          url="${base%/}/healthz/deep"
+          deadline=$((SECONDS + 300))
+          until status="$(curl -s -o "$RUNNER_TEMP/deep.txt" -w '%{http_code}' --max-time 10 "$url")" && [ "$status" = "200" ]; do
+            # The deployed release may predate /healthz/deep (a hand-run deploy after this workflow merged but before
+            # the release that carries the route). /healthz already passed, so that image is healthy as far as it can
+            # say; a 404 is a notice, not a failure.
+            if [ "$status" = "404" ]; then
+              echo "::notice title=No deep health check::$url answers 404: this image predates /healthz/deep."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=Hosted Desk deep health check failing::$url did not answer 200 within 5 minutes: $(head -c 200 "$RUNNER_TEMP/deep.txt" 2>/dev/null || true)"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "$url answers 200."
