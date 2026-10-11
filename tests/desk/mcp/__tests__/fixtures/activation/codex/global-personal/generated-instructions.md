@@ -16,7 +16,7 @@ Align proportionately: state assumptions, gather human input for the whole task 
 
 ## Delivery and sign-off
 
-Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. Raise older unsigned deliveries once, together, after you have done what the operator asked. A child agent never calls task_signoff.
+Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. A child agent never calls task_signoff.
 
 ## Coaching the collaboration
 
@@ -68,7 +68,7 @@ Children are not assumed to rerun startup hooks, so every brief carries the outc
 
 ## The RFC
 
-The why is the Agentic Engineering V2 RFC, on the `Desk RFC:` line after this foundation; open it from any repository, on demand, not at every startup.
+The why is the Agentic Engineering V2 RFC, on the `Desk RFC:` line after this foundation; open it from any repository before you write, review or explain anything about Desk or its method (docs, sites, pitches, onboarding), not at every startup.
 
 Desk RFC: plugins/desk/docs/agentic-engineering-v2-rfc.md
 
