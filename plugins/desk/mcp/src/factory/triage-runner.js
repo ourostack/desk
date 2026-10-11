@@ -304,7 +304,7 @@ function requiredSelector(env,name){
   return /^(?:1|true|yes|on)$/iu.test(env[name])?true:"unknown"
 }
 function collectManagedControlData(host){
-  const managedData=path.join(host.system,".claude")
+  const managedData=path.join(host.system,".claude") // System-rooted managed data, never relocated by CLAUDE_CONFIG_DIR.
   const sources=[],instructions=[],visiting=new Set(),seen=new Set()
   let total=0,members=0
   const retain=(file,kind,observation,names)=>{
