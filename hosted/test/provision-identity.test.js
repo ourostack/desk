@@ -922,3 +922,49 @@ test("I3: the gateway's client secret in Key Vault is tagged with the keyId of t
   assert.equal(app.passwordCredentials.length, 1);
   assert.equal(context.cloud.vault.secrets["entra-client-secret-test"].tags["key-id"], app.passwordCredentials[0].keyId);
 });
+
+// --- Task 7 re-review Minor 3 (Task 8) ---------------------------------------------------------------------------
+
+test("Minor 3: re-importing a slot with a replacement key records the new Key ID, so the renewal can send it", async (t) => {
+  // The plan's N2 path: test-a is revoked, a replacement is made in the Apple portal and imported into slot a.
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.vault.secrets["apple-siwa-key-a-test"].tags = { revoked: "true" };
+  const context = setup(t, { cloud });
+  await context.go({ appleKeyFile: appleFile(context.dir, "KEYIDREPLA"), appleKeySlot: "a" });
+  const tags = cloud.vault.secrets["apple-siwa-key-a-test"].tags;
+  assert.equal(tags["key-id"], "KEYIDREPLA");
+  assert.equal(tags.fingerprint, fingerprint(APPLE_KEY));
+  assert.ok(!Object.hasOwn(tags, "revoked"));
+  assert.equal(context.readRecord().apple.keyIds.a, "KEYIDREPLA");
+  assert.equal(context.readRecord().apple.keyIds.b, "KEYIDBBBBB");
+  assert.match(context.logs.join("\n"), /apple\.keyIds\.a from KEYIDAAAAA to KEYIDREPLA; commit it to main/);
+});
+
+test("Minor 3: when the reset adds more than one credential, the Entra secret is written untagged and says so", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  const context = setup(t, { cloud });
+  const runner = context.fake.runner;
+  // Someone appends a second credential while the run's reset happens: the run can't tell which one it holds.
+  const racing = async (cmd, args, options) => {
+    const result = await runner(cmd, args, options);
+    if (args.slice(0, 4).join(" ") === "ad app credential reset") {
+      cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted").passwordCredentials.push({ keyId: "0d0d0d0d-0000-4000-8000-0000000000aa" });
+    }
+    return result;
+  };
+  await context.go({}, { runner: racing });
+  const secret = cloud.vault.secrets["entra-client-secret-test"];
+  assert.ok(secret, "the secret is still written");
+  assert.ok(!Object.hasOwn(secret.tags ?? {}, "key-id"), "no guessed key-id tag");
+  assert.match(context.logs.join("\n"), /could not tell which credential reset added \(2 new\); entra-client-secret-test is written untagged/);
+});
+
+test("Minor 3: a file name whose Key ID isn't 10 capital letters or digits isn't read as one", async (t) => {
+  for (const name of ["AuthKey_keyidaaaaa.p8", "AuthKey_KEYID.p8", "AuthKey_KEYIDAAAAAA.p8", "AuthKey_KEYID-AAAA.p8"]) {
+    const context = setup(t);
+    const file = join(context.dir, name);
+    writeFileSync(file, APPLE_KEY, { mode: 0o600 });
+    await assert.rejects(context.go({ appleKeyFile: file, appleKeySlot: "a" }), /--apple-key-id/, name);
+    assert.ok(!context.fake.calls.some(({ args }) => args[0] === "keyvault" && args[2] === "set"), name);
+  }
+});

@@ -41,8 +41,9 @@ const WARN_DAYS = 30;
 // Entra's Apple client secret, generated from the key, lasts six months.
 const APPLE_SECRET_MONTHS = 6;
 const SLOTS = ["a", "b"];
-// A renewal date this far past now is clock skew; further is a wrong tag.
-const SKEW_MS = 3600 * 1000;
+// A renewal date up to this far past now is clock skew between the machine that wrote it and this one; further is a
+// wrong tag. Five minutes, the same skew the gateway allows an ID token (Task 7 re-review Minor 2).
+const SKEW_MS = 5 * 60 * 1000;
 // Container Apps through plain ARM (Reader is enough), so the workflow needs no az extension.
 const APP_API_VERSION = "2024-03-01";
 
@@ -56,9 +57,9 @@ export const ALERT_PHRASES = {
     unreadable: "az's current account could not be read; nothing else was checked",
   },
   "entra-client-secret": {
-    ok: "the newest client secret ends {date}",
-    "ends-soon": "the newest client secret ends {date}, within 30 days",
-    ended: "the newest client secret ended {date}",
+    ok: "the client secret Key Vault holds (its key-id tag) ends {date}",
+    "ends-soon": "the client secret Key Vault holds (its key-id tag) ends {date}, within 30 days",
+    ended: "the client secret Key Vault holds (its key-id tag) ended {date}",
     none: "the gateway app has no client secret",
     unidentified: "the credential Key Vault holds can't be identified on the gateway app",
     unrecorded: "identity-<env>.json records no gateway app",
@@ -156,7 +157,8 @@ async function checkTenant(ctx) {
 }
 
 // Judges the credential the gateway uses: the one whose keyId provision-identity.mjs tagged on the Key Vault secret
-// when it wrote it, never simply the newest (Task 7 review I3). Only the secret's tags are read, never its value.
+// when it wrote it, never simply the newest (Task 7 review I3). Only the secret's tags leave az: `--query tags` filters
+// the output, though az itself still fetches the whole secret, value included, to apply the query.
 async function checkEntraSecret(ctx) {
   const objectId = ctx.record.gatewayApp?.objectId;
   if (!objectId) return result("entra-client-secret", "unrecorded");
@@ -243,7 +245,8 @@ async function liveSlot(ctx) {
 
 // A slot's key, proven to be the key whose Key ID the record holds: { status: "ok", value }, or "missing" (never
 // imported), "revoked" (plan ruling N2), or "unverified" (review C1: no recorded Key ID, a Key ID tag that differs,
-// or key material that doesn't match the fingerprint taken at import). A revoked or unverified key is never read.
+// or key material that doesn't match the fingerprint taken at import). The value of a revoked slot, or of one whose
+// Key ID tag doesn't match the record, is never asked for; az still fetches it to read the tags, and never prints it.
 async function slotKey(ctx, slot) {
   const name = appleKeySecretName(slot, ctx.env);
   let tags;
