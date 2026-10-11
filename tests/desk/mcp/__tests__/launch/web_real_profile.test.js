@@ -754,6 +754,17 @@ function browserStub(events, options = {}) {
     })
     const answerCall = (message, reply, send) => {
       const { name, arguments: args } = message.params
+      if (name === "browser_close") {
+        if (options.mode === "holdcleanup" && child.completeCleanup === undefined) {
+          child.completeCleanup = () => reply({ content: [{ type: "text", text: "detached" }] })
+          return
+        }
+        if (options.mode === "silenttabs") return
+        if (options.mode === "errortabs") { reply({ isError: true, content: [] }); return }
+        if (options.mode === "exittabs") { setImmediate(() => child.emit("exit", 9, null)); return }
+        reply({ content: [{ type: "text", text: "detached" }] })
+        return
+      }
       if (options.mode === "silent") return
       if (name === "browser_tabs") {
         if (options.mode === "silenttabs") return
@@ -778,7 +789,7 @@ function browserStub(events, options = {}) {
         return
       }
       if (options.mode === "leak") {
-        const token = spawnOptions.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN
+        const token = options.outputToken ?? TOKEN
         child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { data: `connect?token=${encodeURIComponent(token)}` } })}\n`)
         child.stderr.write(`opening http://x/connect?client=a&token=${token.slice(0, 8)}`)
         child.stderr.write(`${token.slice(8)}&more\nnext line\n`)
@@ -809,6 +820,7 @@ async function realMachine(options = {}) {
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version: "0.0.81", bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), "")
   if (options.reader !== false) touch(path.join(modules, "classic-level", "package.json"), JSON.stringify({ name: "classic-level" }))
+  if (options.nativeTransport !== false) touch(path.join(modules, "ws", "package.json"), '{"version":"8.21.3"}')
   touch(path.join(state, "current.json"), JSON.stringify({ version: "0.0.81", dir: id, previous: null }))
   const accounts = options.accounts ?? { Default: "me@gmail.com", "Profile 4": "me@microsoft.com" }
   const base = localState(home, accounts)
@@ -837,6 +849,47 @@ async function realMachine(options = {}) {
     dispose: () => {},
   })
   const levelEntries = { entries: options.entries ?? [[tokenKey(), latin(TOKEN)]] }
+  const nativeSession = require(path.join(mcpRoot, "web-native-messaging.cjs"))
+  const nativeState = { windows: 0, owner: null, calls: [], created: false, released: false }
+  const nativeMessagingPrepare = async ({ installed }) => {
+    if (options.edge === false) return { payload: { code: "browser_missing", summary: "Declared browser is missing", fix: "Install the declared browser" } }
+    if (!Object.values(accounts).some(account => account.endsWith("@microsoft.com"))) {
+      return { payload: { code: "browser_profile_missing", summary: "Declared @microsoft.com profile is missing", fix: "Sign in" } }
+    }
+    if (levelEntries.entries.length === 0) return { payload: {
+      code: "browser_native_messaging_setup_required", summary: "Native setup unavailable", fix: "Normal Load Unpacked",
+    } }
+    if (!existsSync(path.join(installed.dir, "node_modules/classic-level/package.json"))) {
+      return { payload: { code: "browser_native_messaging_unavailable", summary: "Native profile reader unavailable", fix: "Restore maintained dependencies" } }
+    }
+    const connection = {
+      app: "Microsoft Edge", profile: "Profile 4", args: ["--init-page", path.join(mcpRoot, "scripts/native-owned-page.cjs")],
+      env: {}, secrets: [options.outputToken ?? TOKEN],
+      session: nativeSession.createNativeSession({
+        endpoint: "http://127.0.0.1:1234/provider/" + "a".repeat(64),
+        request: async (operation, payload) => {
+          nativeState.calls.push(operation)
+          if (operation === "acquire") {
+            nativeState.owner = payload.owner
+            return { leaseId: "native-fixture-lease", owner: payload.owner, endpoint: "http://127.0.0.1:1234/owned" }
+          }
+          if (operation === "ensureWindow") {
+            if (options.launch?.nativeBefore) await options.launch.nativeBefore()
+            if (!nativeState.created) { nativeState.windows++; nativeState.created = true }
+            return { targetId: "native-fixture-lease:101" }
+          }
+          if (operation === "clear") {
+            nativeState.created = false
+            for (const value of stub.spawns) value.child.tabs = 0
+            return { cleared: true }
+          }
+          if (operation === "release") { nativeState.released = true; return { released: true } }
+          throw new Error("unexpected native fixture operation")
+        },
+      }),
+    }
+    return connection
+  }
   const launchOptions = {
     env: { PATH: "/usr/bin", DESK_BROWSER_STATE_DIR: state },
     platform: "darwin",
@@ -854,12 +907,13 @@ async function realMachine(options = {}) {
     spawn: stub.spawn,
     openSpawn,
     nativeLaunch,
+    nativeMessagingPrepare: options.native === false ? undefined : nativeMessagingPrepare,
     openWaitMs: 5,
     tabCallMs: 200,
     cleanupMs: 2000,
     ...options.launch,
   }
-  return { root, state, events, stub, opens, launchOptions, levelEntries, dirs }
+  return { root, state, events, stub, opens, launchOptions, levelEntries, dirs, nativeState }
 }
 
 /** Run the launcher against a host over streams, recording stderr, exits and kills. */
@@ -913,36 +967,155 @@ function session(machine, extra = {}) {
 const textOf = (message) => message.result.content[0].text
 const tabEvents = (machine) => machine.events.filter((event) => event.startsWith("child:tools/call browser_tabs") || event.startsWith("child:tools/call browser_close") || event.startsWith("child:stdin") || event.startsWith("child:killed") || event.startsWith("kill:"))
 
-test("a window launch error never forwards the operation and a later call retries", posixOnly, async () => {
-  let opens = 0
-  const machine = await realMachine({
-    launch: {
-      openSpawn: () => {
-        opens += 1
-        if (opens === 1) throw new Error("EACCES")
-        return fakeBrowserProcess()
-      },
+test("actual native preparation resumes the same lease and replaces only MCP transport on a new call", posixOnly, async t => {
+  const fs = await import("node:fs/promises")
+  const { startNativeProvider } = await import("../../../../../plugins/desk/browser-context-broker/src/native-provider.mjs")
+  const machine = await realMachine({ native: false })
+  await fs.cp(path.resolve(mcpRoot, "../browser-context-broker/node_modules/ws"),
+    path.join(machine.state, "installs/1-1-a/node_modules/ws"), { recursive: true })
+  const userDataRoot = real.userDataDir("msedge", "darwin", {}, path.join(machine.root, "home"))
+  const profileRoot = path.join(userDataRoot, "Profile 4")
+  const processIdentity = { pid: 700, startIdentity: "test-browser", owner: "operator", executable: EDGE, profileRoot }
+  const entry = { pid: 701, parentPid: 700, startIdentity: "test-entry", owner: "operator", executable: "/fixture/entry", profileRoot: "/fixture/runtime" }
+  const runtime = { pid: 702, parentPid: 701, startIdentity: "test-runtime", owner: "operator", executable: process.execPath, profileRoot: "/fixture/runtime" }
+  const digestText = await fs.readFile(path.resolve(mcpRoot, "../browser-extension/source-digest.js"), "utf8")
+  const extensionSourceDigest = digestText.match(/"([a-f0-9]{64})"/u)[1]
+  const transport = new EventEmitter()
+  const leases = new Map()
+  let next = 100
+  let creates = 0
+  transport.request = async ({ leaseId, method, params }) => {
+    if (method === "lease.bind") { leases.set(leaseId, { tabs: [], windowId: ++next }); return { bound: true } }
+    const lease = leases.get(leaseId)
+    if (method === "lease.restore") return { restored: true }
+    if (method === "target.readback") return { ...lease, windows: [] }
+    if (method === "target.create") {
+      creates++
+      if (!lease.controlTabId) {
+        lease.controlTabId = ++next
+        lease.controlMarker = params.marker
+        lease.tabs.push({ tabId: lease.controlTabId, windowId: lease.windowId, control: true, url: "control" })
+      }
+      const tab = { tabId: ++next, windowId: lease.windowId, url: params.markerUrl }
+      lease.tabs.push(tab)
+      return { ...tab, controlTabId: lease.controlTabId, controlMarker: lease.controlMarker }
+    }
+    if (method === "target.attach") return {}
+    if (method === "target.command") {
+      if (params.method === "Page.getFrameTree") return { frameTree: { frame: { id: "root-" + params.tabId } } }
+      if (params.method === "Runtime.evaluate") return { result: { value: true } }
+      return {}
+    }
+    if (method === "target.close") {
+      lease.tabs = lease.tabs.filter(tab => tab.tabId !== params.tabId)
+      return { closed: true }
+    }
+    if (method === "lease.unbind") return { unbound: true }
+    throw new Error("unexpected native fixture method")
+  }
+  const start = generation => startNativeProvider({
+    stateDir: path.join(machine.state, "native-owned/state"), transport,
+    contextIdentity: {
+      processIdentity, mediationChain: [entry, runtime], endpointProcessIdentity: runtime,
+      profileToken: "a".repeat(64), transportGeneration: generation, extensionSourceDigest,
+      browserVersion: "Chrome/155.0.0.0",
     },
+    processReader: async pid => [processIdentity, entry, runtime].find(identity => identity.pid === pid),
   })
+  let provider = await start("first-host")
+  const host = session(machine)
+  try {
+    await host.handshake()
+    await host.ask(5, "tools/list", {})
+    assert.equal(creates, 0)
+    const firstResponse = await host.call(2, "browser_navigate")
+    assert.equal(firstResponse.result.isError, undefined, textOf(firstResponse) + host.stderr.join(""))
+    const initialLease = machine.stub.spawns[0].env.DESK_NATIVE_LEASE_ID
+    const initialEndpoint = machine.stub.spawns[0].argv.at(-1)
+    await provider.close()
+    provider = await start("replacement-host")
+    assert.equal((await host.call(3, "browser_snapshot")).result.isError, undefined)
+    assert.equal(machine.stub.spawns.length, 2)
+    assert.equal(machine.stub.spawns[1].env.DESK_NATIVE_LEASE_ID, initialLease)
+    assert.notEqual(machine.stub.spawns[1].argv.at(-1), initialEndpoint)
+    assert.equal(creates, 1, "transport restoration cannot replace browser-side ownership or replay creation")
+    assert.equal(machine.events.filter(event => event === "child:tools/call browser_navigate").length, 1)
+    assert.equal(machine.opens.length, 0, "native default must never invoke the legacy official-window launcher")
+  } finally {
+    await host.close()
+    await provider.close()
+  }
+})
+
+test("native setup refusal never launches an official connect window or forwards user calls", posixOnly, async () => {
+  const machine = await realMachine({ launch: {
+    nativeMessagingPrepare: async () => ({ payload: {
+      status: "degraded", code: "browser_native_messaging_setup_required",
+      summary: "One-time native setup is required", fix: "Use normal Load Unpacked",
+    } }),
+  } })
   const host = session(machine)
   try {
     await host.handshake()
     const failed = await host.call(10)
     assert.equal(failed.result.isError, true)
-    const payload = JSON.parse(textOf(failed))
-    assert.equal(payload.code, "browser_window_unavailable")
-    assert.match(payload.summary, /EACCES/u)
-    assert.match(payload.fix, /Do not use another window/u)
-    assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
-    assert.deepEqual(tabEvents(machine), [])
-    const retried = await host.call(11)
-    assert.equal(retried.result.isError, undefined)
-    assert.equal(opens, 2)
-    assert.equal(machine.events.filter((event) => event === "child:tools/call browser_navigate").length, 1)
+    assert.equal(JSON.parse(textOf(failed)).code, "browser_native_messaging_setup_required")
+    assert.deepEqual(machine.opens, [])
+    assert.equal(machine.events.some(event => event.startsWith("child:tools/call")), false)
   } finally {
     await host.close()
   }
 })
+
+test("deliberate native update is a one-shot command and never initializes an MCP browser client", posixOnly, async () => {
+  let requested = false
+  const machine = await realMachine({ launch: {
+    nativeMessagingPrepare: async options => {
+      requested = options.update === true
+      return { updated: true, reconciliationRequired: true, profile: "Profile 4" }
+    },
+  } })
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  let output = ""
+  const exits = []
+  stdout.on("data", bytes => { output += String(bytes) })
+  let terminal = false
+  const running = browser.run({
+    ...machine.launchOptions, nativeUpdate: true, stdin, stdout,
+    stderr: { write() {} }, exit: code => exits.push(code), signals: new EventEmitter(),
+  }).then(() => { terminal = true })
+  await Promise.race([running, new Promise(resolve => setTimeout(resolve, 100))])
+  stdin.end()
+  await running
+  assert.equal(requested, true)
+  assert.equal(terminal, true)
+  assert.equal(JSON.parse(output).updated, true)
+  assert.equal(JSON.parse(output).reconciliationRequired, true)
+  assert.deepEqual(exits, [0])
+  assert.equal(machine.stub.spawns.length, 0)
+  assert.equal(machine.opens.length, 0)
+})
+
+test("native declaration installs missing ws through the maintained browser install path", posixOnly, async () => {
+  const calls = []
+  const machine = await realMachine({ nativeTransport: false, launch: {
+    nativeMessagingPrepare: async () => ({ payload: {
+      status: "degraded", code: "browser_native_messaging_setup_required", summary: "setup", fix: "Load Unpacked",
+    } }),
+  } })
+  const host = session(machine, { npmSpawn: installNpm(calls) })
+  try {
+    await host.handshake()
+    await host.call(2)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].includes("ws@8.21.3"), true)
+    assert.equal(machine.opens.length, 0)
+  } finally {
+    await host.close()
+  }
+})
+
 
 /** The launcher with a browser that ends at once, for the launches that hand stdio straight to Playwright MCP. */
 async function direct(machine, extra = {}) {
@@ -985,102 +1158,14 @@ test("a caller's own connection option keeps the browser as the caller asked, wi
   assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
 })
 
-test("a declaration routes the official connect launch directly to a new window, with a distinct owner and no holding page", posixOnly, async () => {
-  const machine = await realMachine()
-  const host = session(machine)
-  await host.handshake()
-  await host.ask(5, "tools/list", {})
-  await new Promise((resolve) => setTimeout(resolve, 50))
-  assert.equal(machine.opens.length, 0, "nothing opens before a browser call")
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
-  await host.call(3, "browser_snapshot")
-  await host.close()
-  assert.equal(machine.opens.length, 1, "one window per connection")
-  const [opened] = machine.opens
-  assert.equal(opened.file, EDGE)
-  assert.deepEqual(opened.argv, ["--check"], "the parent preflights but does not launch a holding page")
-  assert.equal(JSON.stringify(opened).includes(TOKEN), false, "the token never reaches the window's browser start")
-  assert.equal(opened.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
-  assert.ok(machine.events.indexOf("open:window") > machine.events.indexOf("child:initialize"))
-  assert.ok(machine.events.indexOf("open:window") < machine.events.indexOf("child:tools/call browser_navigate"))
-  const [spawned] = machine.stub.spawns
-  assert.deepEqual(spawned.argv.slice(3, 8), ["--extension", "--browser", "msedge", "--profile-dir-name", "Profile 4"])
-  assert.deepEqual(spawned.argv.slice(1, 3), ["--output-dir", path.join(machine.state, "output")])
-  assert.equal(spawned.argv.includes("--headless"), false)
-  assert.equal(spawned.argv[8], "--executable-path")
-  assert.equal(spawned.argv[9], path.join(machine.root, "desk-browser-launch"))
-  assert.equal(spawned.argv[10], "--init-page")
-  assert.equal(spawned.argv[11], path.join(mcpRoot, "scripts", "real-profile-page.cjs"))
-  assert.equal(spawned.env.DESK_BROWSER_EXECUTABLE, EDGE)
-  assert.match(spawned.env.DESK_BROWSER_OWNER, /^Desk /u)
-  assert.match(spawned.env.DESK_BROWSER_OWNER, /test-host/u)
-  assert.equal(spawned.child.clientInfo.name, spawned.env.DESK_BROWSER_OWNER)
-  assert.equal(spawned.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, TOKEN)
-  assert.deepEqual(spawned.stdio, ["pipe", "pipe", "pipe"])
-  assert.equal(JSON.stringify([spawned.file, spawned.argv]).includes(TOKEN), false)
-  assert.equal(host.stderr.join("").includes(TOKEN), false)
-  assert.match(host.stderr.join(""), /driving the Microsoft Edge profile Profile 4 through the Playwright Extension/u)
-  assert.equal(JSON.stringify(host.messages).includes(TOKEN), false)
-  assert.deepEqual(readdirSync(path.join(machine.root, "tmp")), [])
-})
 
-test("a native launch refusal is returned without exposing receipt data or replaying the operation", posixOnly, async () => {
-  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: {},
-    before: () => null, read: () => ({ status: "refused", code: "browser_spawn_failed" }), dispose: () => {},
-  }) } })
-  const host = session(machine)
-  try {
-    await host.handshake()
-    const response = await host.call(2)
-    assert.equal(response.result.isError, true)
-    assert.equal(JSON.parse(textOf(response)).code, "browser_window_unavailable")
-    assert.equal(machine.events.filter(e => e === "child:tools/call browser_navigate").length, 1)
-  } finally {
-    await host.close()
-  }
-})
 
-test("a missing or invalid native receipt preserves the actual result and forbids replay", posixOnly, async () => {
-  for (const read of [() => null, () => { throw new Error("browser_native_launch_receipt_invalid") }]) {
-    const machine = await realMachine({ launch: { nativeLaunch: settings => ({
-      file: "/fixture/native-launch", owner: settings.owner, env: {},
-      before: () => null, read, dispose: () => {},
-    }) } })
-    const host = session(machine)
-    try {
-      await host.handshake()
-      const response = await host.call(2)
-      assert.equal(response.result.isError, true)
-      assert.equal(response.result.content[0].text, "ran browser_navigate")
-      const payload = JSON.parse(response.result.content[1].text)
-      assert.equal(payload.code, "browser_native_launch_unverified")
-      assert.match(payload.fix, /Do not replay/u)
-      assert.equal(machine.events.filter(e => e === "child:tools/call browser_navigate").length, 1)
-    } finally {
-      await host.close()
-    }
-  }
-})
 
-test("native asset preparation failure refuses before creating an extension client", posixOnly, async () => {
-  const machine = await realMachine({ launch: { nativeLaunch: () => { throw new Error("browser_native_launch_integrity") } } })
-  const host = session(machine)
-  try {
-    await host.handshake()
-    const response = await host.call(2)
-    assert.equal(response.result.isError, true)
-    assert.equal(JSON.parse(textOf(response)).code, "browser_native_launch_unavailable")
-    assert.equal(machine.stub.spawns.length, 0)
-  } finally {
-    await host.close()
-  }
-})
 
 test("a real-profile child waits for the host's identity even when preparation completes first", posixOnly, async () => {
   const machine = await realMachine()
   const host = session(machine)
-  await host.wait(() => host.stderr.join("").includes("driving the Microsoft Edge"), "profile preparation")
+  await host.wait(() => host.stderr.join("").includes("driving the declared Microsoft Edge"), "profile preparation")
   await new Promise(resolve => setTimeout(resolve, 20))
   assert.equal(machine.stub.spawns.length, 0)
   await host.handshake()
@@ -1151,25 +1236,13 @@ test("unknown cancellation IDs cannot mutate inherited objects or cancel future 
 test("closing a prepared real-profile connection without host initialize opens no browser", posixOnly, async () => {
   const machine = await realMachine()
   const host = session(machine)
-  await host.wait(() => host.stderr.join("").includes("driving the Microsoft Edge"), "profile preparation")
+  await host.wait(() => host.stderr.join("").includes("driving the declared Microsoft Edge"), "profile preparation")
   await new Promise(resolve => setTimeout(resolve, 20))
   await host.close()
   assert.equal(machine.stub.spawns.length, 0)
   assert.equal(machine.opens.length, 0)
 })
 
-test("an empty browser result with no receipt is retained as an unverified outcome", posixOnly, async () => {
-  const machine = await realMachine({ mode: "emptyresult", launch: { nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: {},
-    before: () => null, read: () => null, dispose: () => {},
-  }) } })
-  const host = session(machine)
-  await host.handshake()
-  const response = await host.call(2)
-  assert.equal(response.result.isError, true)
-  assert.equal(JSON.parse(textOf(response)).code, "browser_native_launch_unverified")
-  await host.close()
-})
 
 test("simultaneous real-profile sessions advertise distinct browser owners", posixOnly, async () => {
   const a = await realMachine()
@@ -1207,7 +1280,7 @@ test("a browser that is not installed is one degraded line on the first call", p
   const machine = await realMachine({ edge: false })
   const host = session(machine)
   await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_not_installed")
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_missing")
   assert.equal(machine.stub.spawns.length, 0)
   await host.close()
 })
@@ -1232,7 +1305,7 @@ test("the token is replaced wherever the browser's output would carry it to the 
 
 test("the token is replaced in a JSON-escaped form too", posixOnly, async () => {
   const odd = 'to"k\\en/+'
-  const machine = await realMachine({ entries: [[tokenKey(), latin(odd)]], mode: "leak" })
+  const machine = await realMachine({ entries: [[tokenKey(), latin(odd)]], mode: "leak", outputToken: odd })
   const host = session(machine)
   await host.handshake()
   const answer = await host.call(2)
@@ -1248,8 +1321,8 @@ test("browser_close closes the agent's tabs with one list, is answered without r
   await host.handshake()
   await host.call(2)
   const answer = await host.call(3, "browser_close")
-  assert.match(textOf(answer), /is closed/u)
-  const expected = ["child:tools/call browser_tabs list", "child:tools/call browser_tabs close", "child:tools/call browser_tabs close"]
+  assert.match(textOf(answer), /exact browser targets/u)
+  const expected = ["child:tools/call browser_close"]
   assert.deepEqual(tabEvents(machine), expected)
   const child = machine.stub.spawns[0].child
   assert.equal(child.tabs, 0)
@@ -1268,10 +1341,10 @@ test("the real launcher returns an incomplete cleanup error rather than a false 
   await host.call(2)
   const answer = await host.call(3, "browser_close")
   assert.equal(answer.result.isError, true)
-  assert.equal(JSON.parse(textOf(answer)).code, "browser_cleanup_incomplete")
-  assert.equal(machine.opens.length, 1)
+  assert.equal(JSON.parse(textOf(answer)).code, "browser_native_detach_unconfirmed")
+  assert.equal(machine.nativeState.windows, 1)
   assert.equal(textOf(await host.call(4)), "ran browser_navigate")
-  assert.equal(machine.opens.length, 1, "the failed close retains ownership of the original connection")
+  assert.equal(machine.nativeState.windows, 1, "the failed close retains ownership of the original connection")
   await host.close()
 })
 
@@ -1281,13 +1354,13 @@ test("a browser call after browser_close opens a new window and connects again, 
   await host.handshake()
   await host.call(2)
   await host.call(3, "browser_close")
-  assert.equal(machine.opens.length, 1)
+  assert.equal(machine.nativeState.windows, 1)
   assert.equal(textOf(await host.call(4)), "ran browser_navigate")
-  assert.equal(machine.opens.length, 2)
+  assert.equal(machine.nativeState.windows, 2)
   host.stdin.end()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
   assert.equal(machine.events.filter((event) => event === "child:tools/call browser_navigate").length, 2)
-  assert.equal(machine.events.filter((event) => event === "child:tools/call browser_close").length, 0)
+  assert.equal(machine.events.filter((event) => event === "child:tools/call browser_close").length, 2)
   assert.equal(machine.stub.spawns[0].child.tabs, 0)
 })
 
@@ -1295,7 +1368,7 @@ test("browser_close in a session that never used the browser opens and closes no
   const machine = await realMachine()
   const host = session(machine)
   await host.handshake()
-  assert.match(textOf(await host.call(2, "browser_close")), /is closed/u)
+  assert.match(textOf(await host.call(2, "browser_close")), /exact browser targets/u)
   assert.equal(machine.opens.length, 0)
   assert.equal(machine.events.some((event) => event.startsWith("child:tools/call")), false)
   await host.close()
@@ -1309,7 +1382,7 @@ test("a first call that fails leaves nothing for the cleanup to connect to", pos
   assert.equal(answer.result.isError, true)
   host.stdin.end()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.deepEqual(tabEvents(machine), ["child:stdin closed"])
+  assert.deepEqual(tabEvents(machine), ["child:tools/call browser_close", "child:stdin closed"])
 })
 
 test("a protocol error after native launch still cleans up that owned connection", posixOnly, async () => {
@@ -1320,23 +1393,9 @@ test("a protocol error after native launch still cleans up that owned connection
   assert.equal(result.error.code, -32603)
   await host.close()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.equal(tabEvents(machine).includes("child:tools/call browser_tabs list"), true)
+  assert.equal(tabEvents(machine).includes("child:tools/call browser_close"), true)
 })
 
-test("a protocol error with an invalid launch receipt retains uncertainty and cleanup ownership", posixOnly, async () => {
-  const machine = await realMachine({ mode: "rpcerror", launch: { nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: {},
-    before: () => null, read: () => { throw new Error("browser_native_launch_receipt_invalid") }, dispose: () => {},
-  }) } })
-  const host = session(machine)
-  await host.handshake()
-  const result = await host.call(2)
-  assert.equal(result.error.code, -32603)
-  assert.match(host.stderr.join(""), /ownership remains uncertain/u)
-  await host.close()
-  await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.equal(tabEvents(machine).includes("child:tools/call browser_tabs list"), true)
-})
 
 test("the actual proxy waits for a first in-flight response before confirming cleanup or permitting a new attempt", posixOnly, async () => {
   const machine = await realMachine({ mode: "heldfirst" })
@@ -1349,22 +1408,20 @@ test("the actual proxy waits for a first in-flight response before confirming cl
   await new Promise(resolve => setTimeout(resolve, 5))
   assert.equal(closed, false)
   assert.equal(tabEvents(machine).length, 0)
-  assert.equal(machine.opens.length, 1)
+  assert.equal(machine.nativeState.windows, 1)
   machine.stub.spawns[0].child.completeFirst()
   await first
   assert.equal((await closing).result.isError, undefined)
   await host.call(4)
-  assert.equal(machine.opens.length, 2)
+  assert.equal(machine.nativeState.windows, 2)
   await host.close()
 })
 
 test("a cancelled preparation is never dispatched after its asynchronous hook resolves", posixOnly, async () => {
   let complete
-  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: {},
-    before: () => new Promise(resolve => { complete = resolve }),
-    read: () => null, dispose: () => {},
-  }) } })
+  const machine = await realMachine({ launch: {
+    nativeBefore: () => new Promise(resolve => { complete = resolve }),
+  } })
   const host = session(machine)
   await host.handshake()
   host.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
@@ -1380,11 +1437,9 @@ test("a cancelled preparation is never dispatched after its asynchronous hook re
 
 test("session end cancels a still-preparing operation instead of launching it after shutdown", posixOnly, async () => {
   let complete
-  const machine = await realMachine({ launch: { nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: {},
-    before: () => new Promise(resolve => { complete = resolve }),
-    read: () => null, dispose: () => {},
-  }) } })
+  const machine = await realMachine({ launch: {
+    nativeBefore: () => new Promise(resolve => { complete = resolve }),
+  } })
   const host = session(machine)
   await host.handshake()
   host.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
@@ -1396,18 +1451,6 @@ test("session end cancels a still-preparing operation instead of launching it af
   assert.equal(machine.events.some(event => event === "child:tools/call browser_navigate"), false)
 })
 
-test("a verified unused native attempt is disposed before the launcher exits", posixOnly, async () => {
-  const events = []
-  const machine = await realMachine({ events, launch: { nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: {},
-    before: () => null, read: () => null, dispose: () => events.push("native:disposed"),
-  }) } })
-  const host = session(machine, { exit: code => events.push(`exit:${code}`) })
-  await host.handshake()
-  await host.close()
-  assert.equal(events.includes("native:disposed"), true)
-  assert.ok(events.indexOf("native:disposed") < events.indexOf("exit:0"), "process.exit must not run before owned attempt disposal")
-})
 
 test("the proxy cancels work queued behind cleanup without poisoning a later browser_close", posixOnly, async () => {
   const machine = await realMachine({ mode: "holdcleanup" })
@@ -1421,7 +1464,7 @@ test("the proxy cancels work queued behind cleanup without poisoning a later bro
   machine.stub.spawns[0].child.completeCleanup()
   await firstClose
   assert.equal((await host.call(5, "browser_close")).result.isError, undefined)
-  assert.equal(machine.opens.length, 1)
+  assert.equal(machine.nativeState.windows, 1)
   await host.close()
 })
 
@@ -1438,7 +1481,7 @@ test("shutdown cancels work queued behind cleanup without restarting preparation
   await ended
   machine.stub.spawns[0].child.completeCleanup()
   await closing
-  assert.equal(machine.opens.length, 1)
+  assert.equal(machine.nativeState.windows, 1)
   assert.equal(host.stderr.join("").includes("browser_cleanup_incomplete"), false)
 })
 
@@ -1460,20 +1503,6 @@ test("completed cleanup still resets ownership when its response was cancelled",
   await host.close()
 })
 
-test("native attempt disposal failure is reported once without stalling session shutdown", posixOnly, async () => {
-  let disposals = 0
-  const machine = await realMachine({ launch: { cleanupMs: 20, nativeLaunch: settings => ({
-    file: "/fixture/native-launch", owner: settings.owner, env: { DESK_BROWSER_RECEIPT: "/fixture/owned-attempt" },
-    before: () => null, read: () => null, dispose: () => { disposals += 1; throw new Error("EACCES") },
-  }) } })
-  const host = session(machine)
-  await host.handshake()
-  host.stdin.end()
-  await new Promise(resolve => setTimeout(resolve, 50))
-  assert.match(host.stderr.join(""), /browser_launch_attempt_cleanup_incomplete/u)
-  assert.equal(disposals, 1)
-  await host.running
-})
 
 test("a failed operation after confirmed cleanup cannot reopen a connection during shutdown", posixOnly, async () => {
   const options = {}
@@ -1487,7 +1516,7 @@ test("a failed operation after confirmed cleanup cannot reopen a connection duri
   const before = tabEvents(machine)
   await host.close()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.deepEqual(tabEvents(machine), [...before, "child:stdin closed"])
+  assert.deepEqual(tabEvents(machine), [...before, "child:tools/call browser_close", "child:stdin closed"])
   assert.equal(machine.stub.spawns[0].child.recreated, 0)
 })
 
@@ -1499,8 +1528,7 @@ test("the host closing stdin closes the agent's tabs before the browser is told 
   host.stdin.end()
   await host.wait(() => host.exits.length === 1, "the launcher to exit")
   assert.deepEqual(tabEvents(machine), [
-    "child:tools/call browser_tabs list",
-    "child:tools/call browser_tabs close",
+    "child:tools/call browser_close",
     "child:stdin closed",
   ])
   assert.deepEqual(host.exits, [0])
@@ -1516,8 +1544,7 @@ test("a stop signal closes the tabs, then stops the browser and ends the launche
     await host.wait(() => host.kills.length === 1, "the launcher to pass the signal on")
     assert.deepEqual(host.kills, [signal])
     assert.deepEqual(tabEvents(machine), [
-      "child:tools/call browser_tabs list",
-      "child:tools/call browser_tabs close",
+      "child:tools/call browser_close",
       `child:killed ${signal}`,
       `kill:${signal}`,
     ])
@@ -1581,8 +1608,8 @@ test("a repeated stop does not run the cleanup twice at once", posixOnly, async 
   await host.call(2)
   host.signals.emit("SIGTERM")
   host.signals.emit("SIGHUP")
-  await host.wait(() => host.kills.length === 2, "both signals to be passed on")
-  assert.equal(machine.events.filter((event) => event === "child:tools/call browser_tabs close").length, 1)
+  await host.wait(() => host.kills.length >= 1, "the owned child to stop")
+  assert.equal(machine.events.filter((event) => event === "child:tools/call browser_close").length, 1)
 })
 
 test("a browser process that ends takes its tabs with it, and the launcher ends with its code", posixOnly, async () => {
@@ -1606,10 +1633,10 @@ test("a missing extension is one clear line on the first call, then works once i
   const first = await host.call(2)
   assert.equal(first.result.isError, true)
   const payload = JSON.parse(textOf(first))
-  assert.equal(payload.code, "browser_extension_missing")
-  assert.ok(payload.fix.includes(real.INSTALL_URL))
+  assert.equal(payload.code, "browser_native_messaging_setup_required")
+  assert.ok(payload.fix.includes("Load Unpacked"))
   assert.equal(machine.stub.spawns.length, 0)
-  assert.equal(host.stderr.filter((line) => line.includes("browser_extension_missing")).length, 1)
+  assert.equal(host.stderr.filter((line) => line.includes("browser_native_messaging_setup_required")).length, 1)
   machine.levelEntries.entries = [[tokenKey(), latin(TOKEN)]]
   assert.equal(textOf(await host.call(3)), "ran browser_navigate")
   assert.equal(machine.stub.spawns.length, 1)
@@ -1621,7 +1648,7 @@ test("a declared profile that is not there names what was looked for", posixOnly
   const host = session(machine)
   await host.handshake()
   const payload = JSON.parse(textOf(await host.call(2)))
-  assert.equal(payload.code, "browser_profile_not_found")
+  assert.equal(payload.code, "browser_profile_missing")
   assert.match(payload.summary, /@microsoft\.com/u)
   assert.equal(machine.stub.spawns.length, 0)
   await host.close()
@@ -1656,6 +1683,7 @@ function installNpm(calls, options = {}) {
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.82", bin: { "playwright-mcp": "cli.js" } }))
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "cli.js"), "")
       if (withReader) touch(path.join(prefix, "node_modules", "classic-level", "package.json"), "{}")
+      if (argv.includes("ws@8.21.3")) touch(path.join(prefix, "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
       child.emit("close", 0)
     })
     return child
@@ -1670,7 +1698,7 @@ test("a declaration installs the token reader in the same npm call as Playwright
   assert.equal(textOf(await host.call(2)), "ran browser_navigate")
   await host.close()
   assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0].slice(-2), ["@playwright/mcp@latest", "classic-level@1.4.1"])
+  assert.deepEqual(calls[0].slice(-3), ["@playwright/mcp@latest", "classic-level@1.4.1", "ws@8.21.3"])
   assert.match(machine.stub.spawns[0].argv[0], /installs\/.*\/node_modules\/@playwright\/mcp\/cli\.js$/u)
   assert.equal(JSON.stringify(calls).includes(TOKEN), false)
 })
@@ -1681,8 +1709,8 @@ test("a reader that cannot be installed leaves the browser installed, marked, an
   const host = session(machine, { npmSpawn: installNpm(calls, { readerFails: true }) })
   await host.handshake()
   const payload = JSON.parse(textOf(await host.call(2)))
-  assert.equal(payload.code, "browser_token_unreadable")
-  assert.deepEqual(calls.map((call) => call.slice(-2).join(" ")), ["@playwright/mcp@latest classic-level@1.4.1", "--no-package-lock @playwright/mcp@latest"])
+  assert.equal(payload.code, "browser_native_messaging_unavailable")
+  assert.deepEqual(calls.map((call) => call.slice(-3).join(" ")), ["@playwright/mcp@latest classic-level@1.4.1 ws@8.21.3", "--no-save --no-package-lock @playwright/mcp@latest"])
   assert.equal(machine.opens.length, 0, "no window opens for a connection that cannot be made")
   const installed = browser.readInstalled(machine.state)
   assert.equal(installed.reader, true, "the marked install counts as having been tried")
@@ -1690,7 +1718,7 @@ test("a reader that cannot be installed leaves the browser installed, marked, an
   await host.close()
   const again = session(machine, { npmSpawn: installNpm(calls, { allFail: true }) })
   await again.handshake()
-  assert.equal(JSON.parse(textOf(await again.call(2))).code, "browser_token_unreadable")
+  assert.equal(JSON.parse(textOf(await again.call(2))).code, "browser_native_messaging_unavailable")
   assert.equal(calls.length, 2, "a later launch does not install again")
   await again.close()
 })
@@ -1712,7 +1740,7 @@ test("a marker younger than a day is not retried", posixOnly, async () => {
   const calls = []
   const host = session(machine, { npmSpawn: installNpm(calls) })
   await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_native_messaging_unavailable")
   assert.deepEqual(calls, [])
   await host.close()
 })
@@ -1724,7 +1752,7 @@ test("a marker older than a day is retried once, and the reader installs when np
   await host.handshake()
   assert.equal(textOf(await host.call(2)), "ran browser_navigate")
   assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0].slice(-2), ["@playwright/mcp@latest", "classic-level@1.4.1"])
+  assert.deepEqual(calls[0].slice(-3), ["@playwright/mcp@latest", "classic-level@1.4.1", "ws@8.21.3"])
   const installed = browser.readInstalled(machine.state)
   assert.equal(existsSync(path.join(installed.dir, "node_modules", "classic-level", "package.json")), true)
   assert.equal(installed.unavailableAt, undefined)
@@ -1736,7 +1764,7 @@ test("a retry that fails again writes a fresh marker, and a retry that cannot in
   const calls = []
   const host = session(machine, { npmSpawn: installNpm(calls, { readerFails: true }) })
   await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_native_messaging_unavailable")
   assert.equal(calls.length, 2)
   const installed = browser.readInstalled(machine.state)
   assert.notEqual(installed.dir, path.join(machine.state, "installs", "1-1-a"))
@@ -1747,7 +1775,7 @@ test("a retry that fails again writes a fresh marker, and a retry that cannot in
   const downCalls = []
   const offline = session(down, { npmSpawn: installNpm(downCalls, { allFail: true }) })
   await offline.handshake()
-  assert.equal(JSON.parse(textOf(await offline.call(2))).code, "browser_token_unreadable", "the old install still starts")
+  assert.equal(JSON.parse(textOf(await offline.call(2))).code, "browser_native_messaging_unavailable", "the old install still starts")
   assert.equal(downCalls.length, 2)
   assert.equal(browser.readInstalled(down.state).dir, path.join(down.state, "installs", "1-1-a"))
   await offline.close()
@@ -1759,7 +1787,7 @@ test("a stale marker does not make a launch wait for another session's install",
   const calls = []
   const host = session(machine, { npmSpawn: installNpm(calls) })
   await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_native_messaging_unavailable")
   assert.deepEqual(calls, [])
   assert.match(host.stderr.join(""), /another Desk session is installing; keeping the install without the connection reader/u)
   await host.close()
@@ -1775,7 +1803,8 @@ test("when the reader cannot be installed the existing install is kept and npm's
   }
   const host = session(machine, { npmSpawn: noisy })
   await host.handshake()
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate", "the stubbed reader stands in; only the kept install is under test")
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_native_messaging_unavailable",
+    "kept MCP installation must not fabricate native profile-reader availability")
   await host.close()
   const err = host.stderr.join("")
   assert.match(err, /could not install the connection reader \(.*\); keeping the install without it/u)

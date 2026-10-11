@@ -23,6 +23,42 @@ async function parser() {
   }) };
 }
 
+test('GivenNativeStartupFailure_WhenDiagnosed_StableCodeIsRetainedWithoutPrivateMessage', async () => {
+  const { nativeDiagnosticCode } = await import(moduleUrl);
+  assert.equal(nativeDiagnosticCode({ code: 'NATIVE_CONTROL_MISMATCH', message: 'private context token' }, 'NATIVE_HOST_FAILED'),
+    'NATIVE_CONTROL_MISMATCH');
+  assert.equal(nativeDiagnosticCode({ code: 'credential-bearing-url', message: 'private token' }, 'NATIVE_HOST_FAILED'),
+    'NATIVE_HOST_FAILED');
+  assert.equal(nativeDiagnosticCode(new Error('private token'), 'NATIVE_HOST_FAILED'), 'NATIVE_HOST_FAILED');
+});
+
+test('GivenControlNavigationFailure_WhenDiagnosed_BoundedReasonRetainsNoUrlOrToken', async () => {
+  const { nativeDiagnosticLine } = await import(moduleUrl);
+  const result = nativeDiagnosticLine({
+    code: 'NATIVE_CONTROL_NAVIGATION_FAILED',
+    message: 'Cannot navigate chrome-extension://owned/control.html#owner-secret token ' + 'a'.repeat(64),
+  }, 'NATIVE_HOST_FAILED');
+  assert.match(result, /Cannot navigate/u);
+  assert.equal(result.includes('owner-secret'), false);
+  assert.equal(result.includes('a'.repeat(64)), false);
+  assert.equal(nativeDiagnosticLine({ code: 'OTHER_FAILURE', message: 'private content' }, 'NATIVE_HOST_FAILED'), 'OTHER_FAILURE');
+  assert.match(nativeDiagnosticLine({ code: 'NATIVE_CONTROL_RESTORATION_FAILED', message: 'Recorded route unavailable' },
+    'NATIVE_HOST_FAILED'), /Recorded route unavailable/u);
+});
+
+test('GivenNativeReady_WhenExecutedExtensionSourceDiffers_ProviderCannotStart', async () => {
+  const { assertNativeReady } = await import(moduleUrl);
+  const config = { extensionId: 'owned-extension', extensionSourceDigest: 'a'.repeat(64) };
+  const ready = { event: 'ready', protocolVersion: 1, extensionId: 'owned-extension', sourceDigest: 'a'.repeat(64) };
+  assert.doesNotThrow(() => assertNativeReady(ready, config));
+  for (const sourceDigest of [undefined, '', 'b'.repeat(64)]) {
+    assert.throws(() => assertNativeReady({ ...ready, sourceDigest }, config),
+      error => error.code === 'NATIVE_EXTENSION_SOURCE_MISMATCH');
+  }
+  assert.throws(() => assertNativeReady({ ...ready, extensionId: 'foreign' }, config),
+    error => error.code === 'NATIVE_PROTOCOL_MISMATCH');
+});
+
 test('GivenFragmentedUnicodeFrames_WhenPushed_FramerEmitsCompleteMessagesOnly', async () => {
   const { messages, errors, framer } = await parser();
   const message = { text: 'caf\u00e9 \ud83d\ude80', id: '__proto__' };
@@ -242,4 +278,23 @@ test('GivenTruncatedNativeInput_WhenEofArrives_ReportsIncompleteFrame', async ()
   const running = runNativeHost({ stdin, stdout, config, processReader: reader });
   stdin.end(Buffer.from([1, 0]));
   await assert.rejects(running, error => error.code === 'NATIVE_FRAME_INCOMPLETE');
+});
+
+test('GivenNativeEntryDisappears_WhenHostRemains_ExactOrphanTransportStopsWithoutWaitingForBrowserEof', async () => {
+  const { runNativeHost } = await import(moduleUrl);
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  let lost = false;
+  const running = runNativeHost({
+    stdin, stdout, config, identityPollMs: 10,
+    processReader: async pid => lost && pid === runtime.parentPid ? undefined : reader(pid),
+  });
+  const outcome = running.then(() => 'closed', error => error.code);
+  await new Promise(setImmediate);
+  lost = true;
+  const result = await Promise.race([outcome, new Promise(resolve => setTimeout(() => resolve('still-orphaned'), 100))]);
+  stdin.end();
+  await outcome;
+  assert.equal(result, 'NATIVE_ANCESTRY_INVALID');
+  assert.equal(stdin.destroyed, true, 'fatal orphan transport must release its own input pipe, not leave a paused live handle');
 });

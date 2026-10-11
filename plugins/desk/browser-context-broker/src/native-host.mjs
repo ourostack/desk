@@ -17,6 +17,28 @@ function messageObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function nativeDiagnosticCode(error, fallback) {
+  return /^[A-Z][A-Z0-9_]{0,79}$/u.test(error?.code ?? '') ? error.code : fallback;
+}
+
+export function nativeDiagnosticLine(error, fallback) {
+  const code = nativeDiagnosticCode(error, fallback);
+  if (!['NATIVE_CONTROL_NAVIGATION_FAILED', 'NATIVE_CONTROL_RESTORATION_FAILED'].includes(code)) return code;
+  const reason = String(error.message ?? '').replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, '<redacted-url>')
+    .replace(/[a-f0-9]{32,}/giu, '<redacted>').replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 240);
+  return code + ': ' + reason;
+}
+
+export function assertNativeReady(message, config) {
+  if (message?.event !== 'ready' || message.protocolVersion !== 1 || message.extensionId !== config.extensionId) {
+    throw new BrokerError('NATIVE_PROTOCOL_MISMATCH', 'Native readiness must identify the registered extension and protocol');
+  }
+  if (!/^[a-f0-9]{64}$/u.test(config.extensionSourceDigest ?? '') ||
+      message.sourceDigest !== config.extensionSourceDigest) {
+    throw new BrokerError('NATIVE_EXTENSION_SOURCE_MISMATCH', 'Executed extension source does not match the verified native runtime');
+  }
+}
+
 export function encodeNativeMessage(message) {
   if (!messageObject(message)) {
     throw new BrokerError('NATIVE_FRAME_INVALID_MESSAGE', 'Native messages must be JSON objects');
@@ -117,7 +139,7 @@ async function observeNativeIdentity(processReader, pid) {
     return chain;
   }
 
-  export async function runNativeHost({ stdin, stdout, config, processReader = readNativeProcess }) {
+  export async function runNativeHost({ stdin, stdout, config, processReader = readNativeProcess, identityPollMs = 1000 }) {
     if (!/^chrome-extension:\/\/[a-p]{32}\/$/u.test(config?.extensionOrigin ?? '') ||
         config.origin !== config.extensionOrigin) {
       throw new BrokerError('NATIVE_ORIGIN_REFUSED', 'Native caller does not match the configured extension');
@@ -139,7 +161,10 @@ async function observeNativeIdentity(processReader, pid) {
       let inputEnded = false;
       let pending = 0;
       let dispatch = Promise.resolve();
+      let identityTimer;
+      let checkingIdentity = false;
       const cleanup = () => {
+        clearInterval(identityTimer);
         stdin.off('data', onData);
         stdin.off('end', onEnd);
         stdin.off('error', fail);
@@ -151,7 +176,7 @@ async function observeNativeIdentity(processReader, pid) {
         if (settled) return;
         settled = true;
         cleanup();
-        stdin.pause();
+        stdin.destroy();
         reject(error);
       };
       const send = message => new Promise((sent, failed) => {
@@ -206,6 +231,22 @@ async function observeNativeIdentity(processReader, pid) {
       stdout.on('close', onOutputClose);
       stdin.on('data', onData);
       stdin.on('end', onEnd);
+      identityTimer = setInterval(async () => {
+        if (settled || checkingIdentity) return;
+        checkingIdentity = true;
+        try {
+          const current = await readNativeAncestry(config.pid ?? process.pid, { processReader });
+          if (current.some((identity, index) => ['pid', 'parentPid', 'startIdentity', 'owner', 'executable']
+            .some(key => identity[key] !== chain[index][key]))) {
+            throw new BrokerError('NATIVE_ANCESTRY_INVALID', 'Native transport lost its exact browser-entry-runtime ancestry');
+          }
+        } catch (error) {
+          fail(error);
+        } finally {
+          checkingIdentity = false;
+        }
+      }, identityPollMs);
+      identityTimer.unref();
       if (stdin.destroyed || stdout.destroyed) {
         fail(new BrokerError('NATIVE_TRANSPORT_CLOSED', 'Native transport streams were already closed'));
       }

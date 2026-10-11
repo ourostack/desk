@@ -7,6 +7,8 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import http from 'node:http';
+import net from 'node:net';
 
 import { CdpClient } from '../../../../plugins/desk/browser-context-broker/src/cdp-client.mjs';
 import { startLeaseProxy } from '../../../../plugins/desk/browser-context-broker/src/cdp-proxy.mjs';
@@ -113,6 +115,78 @@ async function client(t, endpoint) {
   t.after(() => connected.close());
   return connected;
 }
+
+
+
+test('GivenNativeHttpConnectionPending_WhenAdapterCloses_OwnTransportIsTerminated', async t => {
+    const { server } = await setup(t);
+    const port = Number(new URL(server.origin).port);
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    socket.write('GET /marker/fixture HTTP/1.1\r\nHost: 127.0.0.1\r\n');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const closing = server.close();
+    const timely = await Promise.race([closing.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]);
+    socket.destroy();
+    await closing;
+    assert.equal(timely, true, 'private HTTP connections cannot keep the stopped provider generation alive');
+  });
+
+test('GivenNativeEventAdmissionPending_WhenLaterContextEventArrives_SourceOrderIsPreserved', async t => {
+  const { server, transport, stateDir, lease } = await setup(t);
+  const created = await createOwnedTarget({ stateDir, leaseId: lease.id, rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } });
+  const connected = await client(t, server.endpointForLease(lease.id));
+  await connected.send('Target.attachToTarget', { targetId: created.targetId, flatten: true });
+  await connected.send('Target.setDiscoverTargets', { discover: true });
+  const parent = (await readRegistry(stateDir)).leases[lease.id].nativeRouting.targetTabs[created.targetId];
+  const popupId = 901;
+  transport.leases.get(lease.id).tabs.set(popupId, {
+    tabId: popupId, windowId: parent.windowId, targetId: 'chrome-popup', url: 'about:blank', title: 'popup', openerTabId: parent.tabId,
+  });
+  let release;
+  let entered;
+  const pending = new Promise(resolve => { release = resolve; });
+  const begun = new Promise(resolve => { entered = resolve; });
+  const original = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.admit') { entered(); await pending; }
+    return original(message);
+  };
+  const events = [];
+  connected.on('event', event => events.push(event.method));
+  transport.emit('event', { event: 'target.popup', leaseId: lease.id, tabId: popupId, windowId: parent.windowId, openerTabId: parent.tabId });
+  await begun;
+  transport.emit('event', { event: 'cdp', leaseId: lease.id, tabId: parent.tabId, method: 'Runtime.executionContextsCleared', params: {} });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const early = events.slice();
+  release();
+  for (let attempt = 0; attempt < 100 && !events.includes('Runtime.executionContextsCleared'); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(early.includes('Runtime.executionContextsCleared'), false);
+  assert.ok(events.indexOf('Target.targetCreated') < events.indexOf('Runtime.executionContextsCleared'));
+});
+
+test('GivenNativeTransportUpdate_WhenPaused_OnlyExactReloadCanDispatchUntilResume', async () => {
+  const { NativeCommandTransport } = await import(moduleUrl);
+  const sent = [];
+  const transport = new NativeCommandTransport({ send: message => sent.push(message) });
+  transport.pause();
+  await assert.rejects(transport.request({ leaseId: 'owned', method: 'target.create' }),
+    error => error.code === 'NATIVE_UPDATE_IN_PROGRESS');
+  assert.equal(sent.length, 0);
+  const reload = transport.request({ leaseId: 'provider-update', method: 'extension.reload' });
+  await new Promise(setImmediate);
+  transport.receive({ id: sent[0].id, result: { reload: true } });
+  assert.deepEqual(await reload, { reload: true });
+  transport.resume();
+  const pending = transport.request({ leaseId: 'owned', method: 'target.readback' });
+  assert.throws(() => transport.pause(), error => error.code === 'NATIVE_UPDATE_EFFECTS_PENDING');
+  await new Promise(setImmediate);
+  transport.receive({ id: sent[1].id, result: { tabs: [] } });
+  await pending;
+  transport.close();
+});
 
 test('GivenNativeEndpoint_WhenCapabilityOrNamespaceIsWrong_HttpAndWsRefuseBeforeDispatch', async t => {
   const { server, transport, lease } = await setup(t);
@@ -410,6 +484,25 @@ test('GivenSyntheticNativeTarget_WhenFrameTreeRead_RootFrameMatchesPlaywrightTar
   assert.equal(tree.frameTree.frame.id, created.targetId);
   await connected.send('Page.createIsolatedWorld', { frameId: created.targetId, worldName: 'owned' }, sessionId);
   assert.equal(transport.calls.at(-1).params.params.frameId, 'native-main-' + transport.calls.at(-1).params.tabId);
+});
+
+test('GivenOwnedRendererRootReplaced_WhenNavigationEventArrives_StableTargetAndNewNativeFrameStayCorrelated', async t => {
+  const { server, stateDir, lease, transport } = await setup(t);
+  const created = await createOwnedTarget({ stateDir, leaseId: lease.id, rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } });
+  const connected = await client(t, server.endpointForLease(lease.id));
+  const { sessionId } = await connected.send('Target.attachToTarget', { targetId: created.targetId, flatten: true });
+  const tabId = (await readRegistry(stateDir)).leases[lease.id].nativeRouting.targetTabs[created.targetId].tabId;
+  const events = [];
+  connected.on('event', event => events.push(event));
+  transport.emit('event', {
+    event: 'cdp', leaseId: lease.id, tabId, method: 'Page.frameNavigated',
+    params: { frame: { id: 'replacement-native-root', url: 'https://replacement.test/' } },
+  });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const navigated = events.find(event => event.method === 'Page.frameNavigated');
+  assert.equal(navigated.params.frame.id, created.targetId);
+  await connected.send('Page.createIsolatedWorld', { frameId: created.targetId, worldName: 'owned' }, sessionId);
+  assert.equal(transport.calls.at(-1).params.params.frameId, 'replacement-native-root');
 });
 
 test('GivenAutoAttachedNativeClient_WhenSeparateCreateCompletes_NewPageEventReachesExistingClient', async t => {

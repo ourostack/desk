@@ -134,6 +134,8 @@ function serve(options) {
     var calls = {};
     var preparing = Object.create(null);
     var cleaning = null;
+    var launchInitialization = null;
+    var pendingWaiters = [];
     var forms = [];
     var errorText = "";
     var nextId = 1;
@@ -146,6 +148,9 @@ function serve(options) {
     var initialized = false;
     var hostClientInfo = null;
     var pendingLaunch = null;
+    var restarting = null;
+    var replacingChild = null;
+    var restartHandshake = null;
     var handlers = {};
 
     function send(message) {
@@ -174,15 +179,93 @@ function serve(options) {
       });
     }
 
-    var api = { callTool: callTool };
+    function pendingSettled() {
+      if (Object.keys(inflight).length !== 0) return;
+      var waiters = pendingWaiters;
+      pendingWaiters = [];
+      waiters.forEach(function (waiter) {
+        clearTimeout(waiter.timer);
+        waiter.resolve();
+      });
+    }
+
+    function waitForPendingCalls(ms) {
+      if (Object.keys(inflight).length === 0) return Promise.resolve();
+      return new Promise(function (resolve, reject) {
+        var waiter = { resolve: resolve };
+        waiter.timer = setTimeout(function () {
+          pendingWaiters = pendingWaiters.filter(function (candidate) { return candidate !== waiter; });
+          var error = new Error("browser_operations_pending");
+          error.code = "browser_operations_pending";
+          reject(error);
+        }, ms);
+        pendingWaiters.push(waiter);
+      });
+    }
+
+    function restartChild(launch) {
+      if (restarting) return restarting;
+      if (closed || Object.keys(inflight).length !== 0 || Object.keys(own).length !== 0) {
+        return Promise.reject(new Error("browser_operations_pending"));
+      }
+      var previous = child;
+      childReady = false;
+      replacingChild = previous;
+      var stopped = previous === null ? Promise.resolve() : new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () {
+          previous.kill("SIGTERM");
+          reject(new Error("browser_client_detach_unconfirmed"));
+        }, closeMs);
+        previous.once("exit", function () { clearTimeout(timer); resolve(); });
+        previous.stdin.end();
+      });
+      restarting = stopped.then(function () {
+        if (closed) throw new Error("browser_session_closed");
+        child = null;
+        childLines = { text: "", scanned: 0 };
+        flushErrors();
+        return new Promise(function (resolve, reject) {
+          var timer = setTimeout(function () {
+            restartHandshake = null;
+            reject(new Error("browser_client_handshake_unconfirmed"));
+          }, holdMs);
+          restartHandshake = function (error) {
+            clearTimeout(timer);
+            restartHandshake = null;
+            if (error) reject(error);
+            else resolve();
+          };
+          startChild(launch);
+        });
+      }).then(function () {
+        replacingChild = null;
+        restarting = null;
+      }, function (error) {
+        replacingChild = null;
+        restarting = null;
+        throw error;
+      });
+      return restarting;
+    }
+
+    var api = { callTool: callTool, waitForPendingCalls: waitForPendingCalls, restartChild: restartChild,
+      childReady: function () { return child !== null && childReady; } };
 
     // The cleanup the caller asked for, run once at a time and cut off after cleanupMs; resolves when it is done, never rejects.
     function cleanup() {
-      if (options.cleanup === undefined || !childReady) return Promise.resolve();
+      if (options.cleanup === undefined || (!childReady && !options.cleanupBeforeReady)) return Promise.resolve();
       if (cleaning === null) {
         cleaning = new Promise(function (resolve) {
           var timer = setTimeout(resolve, cleanupMs);
-          options.cleanup(api).then(function () {
+          Promise.resolve(launchInitialization).then(function () {
+            return options.cleanup(api);
+          }, function () {
+            return options.cleanup(api);
+          }).then(function () {
+            clearTimeout(timer);
+            resolve();
+          }, function () {
+            stderr.write("[web] browser_cleanup_incomplete: pre-child resources could not be confirmed closed.\n");
             clearTimeout(timer);
             resolve();
           });
@@ -234,8 +317,10 @@ function serve(options) {
         }
         options.abort();
         detach();
-        options.kill(process.pid, signal);
-        done();
+        cleanup().then(function () {
+          options.kill(process.pid, signal);
+          done();
+        });
       };
       signals.on(signal, handlers[signal]);
     });
@@ -253,6 +338,11 @@ function serve(options) {
     }
 
     function dispatch(entry) {
+      if (!childReady) {
+        entry.prepared = true;
+        queue.push(entry);
+        return;
+      }
       var childId = nextId;
       nextId += 1;
       entry.childId = childId;
@@ -280,7 +370,8 @@ function serve(options) {
       queue = [];
       held.forEach(function (entry) {
         release(entry);
-        forward(entry);
+        if (entry.prepared) dispatch(entry);
+        else forward(entry);
       });
     }
 
@@ -295,11 +386,13 @@ function serve(options) {
     function childMessage(message) {
       if (message.id === HANDSHAKE_ID) {
         if (message.error) {
+          if (restartHandshake) restartHandshake(new Error(String(message.error.message)));
           fail(options.spawnPayload(new Error(String(message.error.message))));
           child.kill("SIGTERM");
           return;
         }
         childReady = true;
+        if (restartHandshake) restartHandshake();
         toChild({ method: "notifications/initialized" });
         toChild({ id: LIST_ID, method: "tools/list" });
         flush();
@@ -319,6 +412,7 @@ function serve(options) {
         var hostId = inflight[message.id];
         if (hostId === undefined) return;
         delete inflight[message.id];
+        pendingSettled();
         var finished = calls[message.id];
         delete calls[message.id];
         var reply = { id: hostId };
@@ -354,29 +448,37 @@ function serve(options) {
     }
 
     function onChildExit(code, signal) {
+      if (child === replacingChild) return;
+      if (restartHandshake) restartHandshake(new Error("browser_client_exited"));
+      var wasReady = childReady;
       var payload = options.exitPayload(code, signal);
       Object.keys(inflight).forEach(function (childId) {
         send({ id: inflight[childId], result: callFailure(payload) });
         if (options.afterCall !== undefined) options.afterCall(calls[childId].params, true, calls[childId].operation);
       });
       inflight = {};
+      pendingSettled();
       calls = {};
       Object.keys(own).forEach(function (id) {
         own[id]({ error: { message: "the browser ended" } });
       });
       own = {};
       flushErrors();
-      if (!childReady) {
-        // It ended before it could take calls: answer them with the reason and keep the handshake alive.
-        child = null;
-        if (failure === null) fail(payload);
-        if (closed) done();
-        return;
+      child = null;
+      childReady = false;
+      function finishExit() {
+        if (!wasReady) {
+          if (failure === null) fail(payload);
+          if (closed) done();
+          return;
+        }
+        detach();
+        if (signal) options.kill(process.pid, signal);
+        else options.exit(code);
+        done();
       }
-      detach();
-      if (signal) options.kill(process.pid, signal);
-      else options.exit(code);
-      done();
+      if (options.cleanupBeforeReady) cleanup().then(finishExit);
+      else finishExit();
     }
 
     // The browser's stderr as it comes, or, once there is a secret to hide, a line at a time so a secret split across two chunks is still found.
@@ -404,20 +506,39 @@ function serve(options) {
         pendingLaunch = launch;
         return;
       }
-      if (options.onInitialize !== undefined) options.onInitialize(launch, hostClientInfo);
+      if (options.onInitialize === undefined) {
+        startChild(launch);
+        return;
+      }
+      launchInitialization = Promise.resolve().then(function () {
+        return options.onInitialize(launch, hostClientInfo);
+      });
+      launchInitialization.then(function () {
+        if (!closed) startChild(launch);
+      }, function (error) {
+        fail(options.spawnPayload(error));
+      });
+    }
+
+    function startChild(launch) {
       forms = secretForms(either(launch.secrets, []));
       try {
         child = options.spawn(launch.node, [launch.indexFile].concat(launch.args), { stdio: ["pipe", "pipe", "pipe"], env: launch.env, windowsHide: true });
       } catch (error) {
         child = null;
+        if (restartHandshake) {
+          restartHandshake(error);
+          return;
+        }
         fail(options.spawnPayload(error));
+        if (options.cleanupBeforeReady) cleanup();
         return;
       }
       var launched = child;
       launched.stdout.setEncoding("utf8");
-      launched.stdout.on("data", onChildData);
+      launched.stdout.on("data", function (chunk) { if (child === launched) onChildData(chunk); });
       launched.stderr.setEncoding("utf8");
-      launched.stderr.on("data", writeErrors);
+      launched.stderr.on("data", function (chunk) { if (child === launched) writeErrors(chunk); });
       launched.stdin.on("error", function () {
         // The child went away first; its exit is reported below.
       });
@@ -429,9 +550,10 @@ function serve(options) {
         }
         child = null;
         fail(options.spawnPayload(error));
-        if (closed) done();
+        if (options.cleanupBeforeReady) cleanup().then(function () { if (closed) done(); });
+        else if (closed) done();
       });
-      launched.on("exit", onChildExit);
+      launched.on("exit", function (code, signal) { if (child === launched) onChildExit(code, signal); });
       toChild({
         id: HANDSHAKE_ID,
         method: "initialize",
@@ -584,7 +706,7 @@ function serve(options) {
         });
         return;
       }
-      if (settled) done();
+      if (settled) cleanup().then(done);
     }
 
     stdin.setEncoding("utf8");

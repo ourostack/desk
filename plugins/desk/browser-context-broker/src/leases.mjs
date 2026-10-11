@@ -727,6 +727,32 @@ export async function createLease({
   }
 }
 
+export async function renewNativeLeaseBinding({ stateDir, leaseId, processIdentity, mediationChain, rawEndpoint, transportGeneration }) {
+  return mutateLease(stateDir, leaseId, lease => {
+    if (!sameProcessIdentity(lease.processIdentity, processIdentity) || !lease.nativeRouting ||
+        lease.pendingTargetCreates?.length || lease.releasing || typeof rawEndpoint !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u.test(transportGeneration ?? '') ||
+        !Array.isArray(mediationChain) || mediationChain.length !== 2) {
+      throw new BrokerError('NATIVE_RECOVERY_PENDING', 'Native binding renewal requires exact browser identity and resolved recorded effects');
+    }
+    lease.rawEndpoint = rawEndpoint;
+    lease.mediationChain = structuredClone(mediationChain);
+    lease.nativeRouting.transportGeneration = transportGeneration;
+    lease.heartbeatAt = new Date().toISOString();
+    lease.expiresAt = new Date(Date.now() + 300000).toISOString();
+  });
+}
+
+export async function recordLeasePurpose(stateDir, leaseId, work) {
+  if (work !== null && (typeof work !== 'string' || !work.trim() || work.length > 160 || /[\u0000-\u001f\u007f]/u.test(work))) {
+    throw new BrokerError('NATIVE_PURPOSE_INVALID', 'Native purpose requires a bounded non-sensitive label or null');
+  }
+  return mutateLease(stateDir, leaseId, lease => {
+    if (lease.releasing) throw new BrokerError('LEASE_RELEASING', 'Native purpose cannot change during release');
+    lease.work = work;
+  });
+}
+
 export async function recordNativeRouting({
   stateDir, leaseId, processIdentity, marker, transportGeneration,
   controlTargetId, controlTabId, controlMarker, windowId, targetTabs, openerTargetId,

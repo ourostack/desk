@@ -112,6 +112,102 @@ async function create(extension, id = "create", leaseId = "lease-a") {
   return extension.dispatch({ id, leaseId, method: "target.create", params: { marker: `marker-${id}` } })
 }
 
+test("extension build verifies executed-source identity across every shipped source file", async () => {
+  const { mkdir, writeFile, copyFile, readFile } = await import("node:fs/promises")
+  const { createRequire } = await import("node:module")
+  const require = createRequire(import.meta.url)
+  const root = await mkTempRoot("extension-source-build-")
+  const scripts = path.join(root, "mcp/scripts")
+  const extension = path.join(root, "browser-extension")
+  await mkdir(scripts, { recursive: true })
+  await mkdir(extension)
+  await mkdir(path.join(root, "browser-context-broker/src"), { recursive: true })
+  await writeFile(path.join(root, "browser-context-broker/src/markers.mjs"), "export const marker = 1;\n")
+  await writeFile(path.join(extension, "manifest.json"), '{"version":"1"}')
+  await writeFile(path.join(extension, "background.js"), "export const background = 1;\n")
+  await copyFile(path.join(mcpRoot, "scripts/build-browser-extension.cjs"), path.join(scripts, "build-browser-extension.cjs"))
+  const builder = require(path.join(scripts, "build-browser-extension.cjs"))
+  builder.run([])
+  assert.match(await readFile(path.join(extension, "source-digest.js"), "utf8"), /export const SOURCE_DIGEST = "[a-f0-9]{64}";/u)
+  builder.run(["--verify"])
+  await writeFile(path.join(extension, "background.js"), "export const background = 2;\n")
+  assert.throws(() => builder.run(["--verify"]), /browser_extension_generated_source_mismatch/u)
+})
+
+test("native restoration distinguishes a missing control page from a mismatched lease marker", async () => {
+  const { extension, tabs } = await setup()
+  const first = await create(extension)
+  const params = {
+    profileToken: token, owner: "test-owner", work: "test-work", transportGeneration: "host-b",
+    windowId: first.result.windowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
+    targetTabs: [{ tabId: first.result.tabId, windowId: first.result.windowId }],
+  }
+  const original = tabs.get(first.result.controlTabId).url
+  tabs.get(first.result.controlTabId).url = "about:blank"
+  const missing = await extension.dispatch({ id: "restore-page", leaseId: "lease-a", method: "lease.restore", params })
+  assert.equal(missing.error.code, "NATIVE_CONTROL_URL_MISMATCH")
+  const label = JSON.parse(decodeURIComponent(original.split("#")[1]))
+  tabs.get(first.result.controlTabId).url = original.split("#")[0] + "#" + encodeURIComponent(JSON.stringify({ ...label, marker: "foreign" }))
+  const wrong = await extension.dispatch({ id: "restore-marker", leaseId: "lease-a", method: "lease.restore", params })
+  assert.equal(wrong.error.code, "NATIVE_CONTROL_MISMATCH")
+  tabs.get(first.result.controlTabId).url = original.split("#")[0] + "#not-json"
+  const invalid = await extension.dispatch({ id: "restore-label", leaseId: "lease-a", method: "lease.restore", params })
+  assert.equal(invalid.error.code, "NATIVE_CONTROL_LABEL_INVALID")
+  tabs.get(first.result.controlTabId).url = "chrome-extension://invalid/"
+  const unavailable = await extension.dispatch({ id: "restore-invalid-extension", leaseId: "lease-a", method: "lease.restore", params })
+  assert.equal(unavailable.error.code, "NATIVE_CONTROL_URL_MISMATCH")
+  for (const [url, code] of [
+    ["chrome-error://chromewebdata/", "NATIVE_CONTROL_URL_MISMATCH"],
+    ["https://fixture.example/", "NATIVE_CONTROL_URL_MISMATCH"],
+    ["edge://newtab/", "NATIVE_CONTROL_URL_MISMATCH"],
+    ["chrome-extension://" + extensionId + "/", "NATIVE_CONTROL_URL_MISMATCH"],
+  ]) {
+    tabs.get(first.result.controlTabId).url = url
+    const result = await extension.dispatch({ id: "restore-shape-" + code, leaseId: "lease-a", method: "lease.restore", params })
+    assert.equal(result.error.code, code)
+  }
+})
+
+
+
+test("native ready identifies the executed extension build before provider attachment", async () => {
+  const { extension, sent } = await setup()
+  await extension.start()
+  assert.match(sent.find(message => message.event === "ready").sourceDigest, /^[a-f0-9]{64}$/u)
+  extension.stop()
+})
+
+test("deliberate extension reload requires exact profile and replies before disconnecting", async () => {
+  const { extension, chrome, port, sent, calls } = await setup()
+  let reloadCount = 0
+  const updateToken = "c".repeat(64)
+  let complete
+  const reloaded = new Promise(resolve => { complete = resolve })
+  chrome.runtime.reload = () => {
+    reloadCount++
+    complete()
+  }
+  await extension.start()
+  const refused = await extension.dispatch({
+    id: "wrong-reload", leaseId: "provider-update", method: "extension.reload",
+    params: { profileToken: "b".repeat(64), updateToken },
+  })
+  assert.equal(refused.error.code, "NATIVE_PROFILE_MISMATCH")
+  const ready = await extension.dispatch({
+    id: "reload-probe", leaseId: "provider-update", method: "extension.reload", params: { profileToken: token, updateToken },
+  })
+  assert.equal(ready.result?.reload, true)
+  port.onMessage.emit({ id: "reload-port", leaseId: "provider-update", method: "extension.reload", params: { profileToken: token, updateToken } })
+  await new Promise(setImmediate)
+  assert.equal(reloadCount, 0, "native preparation reply must reach the provider before it requests disconnect")
+  port.onMessage.emit({ id: "reload-commit", leaseId: "provider-update", method: "extension.reload.commit", params: { profileToken: token, updateToken } })
+  await reloaded
+  assert.equal(sent.at(-1).id, "reload-commit")
+  assert.equal(sent.at(-1).result.committing, true)
+  assert.equal(calls.some(call => call.method === "windows.create" || call.method === "tabs.remove"), false)
+  extension.stop()
+})
+
 test("first owner window is unfocused with selected control and background task pages", async () => {
   const { extension, calls, tabs } = await setup()
   const first = await create(extension)
@@ -335,4 +431,50 @@ test("close success requires exact target absence rather than API return alone",
   chrome.tabs.remove = async () => {}
   const result = await extension.dispatch({ id: "close-unconfirmed", leaseId: "lease-a", method: "target.close", params: { tabId: first.result.tabId } })
   assert.equal(result.error.code, "NATIVE_CLOSE_UNCONFIRMED")
+})
+
+test("native host reconnect restores only exact prior control and recorded Chrome tabs", async () => {
+  const { extension, calls } = await setup()
+  const first = await create(extension)
+  await extension.dispatch({ id: "initial-attach", leaseId: "lease-a", method: "target.attach", params: { tabId: first.result.tabId } })
+  const count = calls.filter(call => call.method === "windows.create").length
+  const restored = await extension.dispatch({ id: "restore", leaseId: "lease-a", method: "lease.restore", params: {
+    profileToken: token, owner: "test-owner", work: "test-work", transportGeneration: "host-b",
+    windowId: first.result.windowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
+    targetTabs: [{ tabId: first.result.tabId, windowId: first.result.windowId }],
+  } })
+  assert.equal(restored.error, undefined)
+  assert.equal(restored.result.controlTabId, first.result.controlTabId)
+  assert.equal(calls.filter(call => call.method === "windows.create").length, count)
+  assert.equal(calls.filter(call => call.method === "debugger.detach").length, 1,
+    "the lost transport's enabled domains must detach before a new logical client requests fresh contexts")
+  await extension.dispatch({ id: "restored-attach", leaseId: "lease-a", method: "target.attach", params: { tabId: first.result.tabId } })
+  assert.equal(calls.filter(call => call.method === "debugger.attach").length, 2)
+})
+
+test("native debugger events preserve Chrome ordering across asynchronous owned-tab validation", async () => {
+  const { extension, chrome, sent } = await setup()
+  const first = await create(extension)
+  await extension.dispatch({ id: "attach-order", leaseId: "lease-a", method: "target.attach", params: { tabId: first.result.tabId } })
+  await extension.start()
+  const originalGet = chrome.tabs.get
+  let reads = 0
+  let finish
+  const held = new Promise(resolve => { finish = resolve })
+  chrome.tabs.get = async id => {
+    if (++reads === 1) await held
+    return originalGet(id)
+  }
+  chrome.debugger.onEvent.emit({ tabId: first.result.tabId }, "Runtime.executionContextsCleared", {})
+  chrome.debugger.onEvent.emit({ tabId: first.result.tabId }, "Runtime.executionContextCreated", { context: { id: 42 } })
+  await new Promise(setImmediate)
+  const early = sent.filter(message => message.event === "cdp")
+  finish()
+  for (let attempt = 0; attempt < 20 && sent.filter(message => message.event === "cdp").length < 2; attempt++) {
+    await new Promise(setImmediate)
+  }
+  assert.equal(early.length, 0, "later context may not overtake the earlier invalidation")
+  assert.deepEqual(sent.filter(message => message.event === "cdp").map(message => message.method),
+    ["Runtime.executionContextsCleared", "Runtime.executionContextCreated"])
+  extension.stop()
 })

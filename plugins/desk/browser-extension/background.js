@@ -1,9 +1,10 @@
 import { controlTitle } from "./control.js"
 import { markerTargetUrl } from "./markers.js"
+import { SOURCE_DIGEST } from "./source-digest.js"
 
 const HOST = "com.ourostack.desk.browser"
 const METHODS = new Set([
-  "profile.read", "lease.bind", "lease.restore", "lease.unbind",
+  "profile.read", "extension.reload", "extension.reload.commit", "lease.bind", "lease.restore", "lease.unbind",
   "target.create", "target.attach", "target.detach", "target.command",
   "target.close", "target.readback", "target.admit", "purpose.set",
 ])
@@ -31,6 +32,7 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
   let stopped = false
   let retryTimer
   let retryMs = 1000
+  let pendingReloadToken
 
   async function ensureTokenDocument() {
     if (tokenDocument) return tokenDocument
@@ -90,7 +92,13 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
   async function labelControl(lease) {
     await ownTab(lease, lease.controlTabId, true)
     const url = controlUrl(lease)
-    await api.tabs.update(lease.controlTabId, { url })
+    try {
+      await api.tabs.update(lease.controlTabId, { url })
+    } catch (error) {
+      const reason = String(error.message ?? "").replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, "<redacted-url>")
+        .replace(/[a-f0-9]{32,}/giu, "<redacted>").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 240)
+      throw refusal("NATIVE_CONTROL_NAVIGATION_FAILED", reason)
+    }
     const expected = controlTitle(lease)
     for (let attempt = 0; attempt < 60; attempt++) {
       const tab = await ownTab(lease, lease.controlTabId, true)
@@ -108,22 +116,30 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
     return targets[0]
   }
 
-  async function restore(lease, params) {
+  async function restore(lease, params, previous) {
     if (!integer(params.windowId) || !integer(params.controlTabId) ||
         typeof params.controlMarker !== "string" || !params.controlMarker ||
         !Array.isArray(params.targetTabs) || params.targetTabs.length > 50) {
       throw refusal("NATIVE_ROUTING_INVALID", "Restoration requires exact recorded native routing")
     }
     const control = await api.tabs.get(params.controlTabId)
+    if (control.windowId !== params.windowId) {
+      throw refusal("NATIVE_CONTROL_MISMATCH", "The recorded owner control moved from its exact window")
+    }
     let label
+    let url
     try {
-      const url = new URL(control.url)
-      if (url.origin + url.pathname !== api.runtime.getURL("control.html")) throw new Error("wrong control origin")
+      url = new URL(control.url)
+      if (url.protocol + "//" + url.host + url.pathname !== api.runtime.getURL("control.html")) throw new Error("wrong control origin")
+    } catch {
+      throw refusal("NATIVE_CONTROL_URL_MISMATCH", "The recorded owner control page URL cannot be verified")
+    }
+    try {
       label = JSON.parse(decodeURIComponent(url.hash.slice(1)))
     } catch {
-      throw refusal("NATIVE_CONTROL_MISMATCH", "The recorded owner control cannot be verified")
+      throw refusal("NATIVE_CONTROL_LABEL_INVALID", "The recorded owner control page label cannot be decoded")
     }
-    if (control.windowId !== params.windowId || label.leaseId !== lease.id || label.marker !== params.controlMarker) {
+    if (label.leaseId !== lease.id || label.marker !== params.controlMarker) {
       throw refusal("NATIVE_CONTROL_MISMATCH", "The recorded owner control belongs to a different lease")
     }
     const records = new Map([[control.id, { tabId: control.id, windowId: control.windowId, control: true }]])
@@ -133,7 +149,14 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       }
       const tab = await api.tabs.get(record.tabId)
       if (tab.windowId !== record.windowId) throw refusal("NATIVE_WINDOW_MISMATCH", "Recorded task routing has changed")
-      records.set(record.tabId, { ...record, sessions: new Set(), attached: false })
+      const prior = previous?.tabs.get(record.tabId)
+      records.set(record.tabId, { ...record, sessions: new Set(), attached: false,
+        detachPrior: Boolean(prior?.attached && prior.windowId === record.windowId) })
+    }
+    for (const record of records.values()) {
+      if (!record.detachPrior) continue
+      await api.debugger.detach({ tabId: record.tabId })
+      delete record.detachPrior
     }
     lease.windowId = params.windowId
     lease.controlTabId = params.controlTabId
@@ -144,6 +167,26 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
 
   async function invoke(request) {
     const { method, leaseId, params = {} } = request
+    if (method === "extension.reload" || method === "extension.reload.commit") {
+      if (leaseId !== "provider-update" || !TOKEN.test(params.profileToken ?? "") ||
+          params.profileToken !== await profileToken()) {
+        throw refusal("NATIVE_PROFILE_MISMATCH", "Deliberate reload requires the exact native profile")
+      }
+      if (requests.size !== 1 || [...leases.values()].some(lease =>
+        lease.tabs.size !== 0 || [...lease.creates.values()].some(create => create.pending))) {
+        throw refusal("NATIVE_UPDATE_EFFECTS_PENDING", "Exact native effects must settle before extension reload")
+      }
+      if (!TOKEN.test(params.updateToken ?? "") ||
+          (method === "extension.reload.commit" && params.updateToken !== pendingReloadToken)) {
+        throw refusal("NATIVE_UPDATE_TOKEN_INVALID", "Reload commit must match its exact prepared update")
+      }
+      if (method === "extension.reload.commit") {
+        pendingReloadToken = undefined
+        return { committing: true }
+      }
+      pendingReloadToken = params.updateToken
+      return { reload: true }
+    }
     if (method === "profile.read") return { profileToken: await profileToken(), extensionId: api.runtime.id }
     if (method === "lease.bind" || method === "lease.restore") {
       if (!TOKEN.test(params.profileToken ?? "") || params.profileToken !== await profileToken()) {
@@ -153,14 +196,26 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       if (typeof params.transportGeneration !== "string" || !ID.test(params.transportGeneration)) {
         throw refusal("NATIVE_GENERATION_INVALID", "Native transport generation is required")
       }
-      if (leases.has(leaseId)) {
+      if (leases.has(leaseId) && method !== "lease.restore") {
         throw refusal("NATIVE_LEASE_ALREADY_BOUND", "Native lease is already bound; explicit restoration is required")
       }
       const lease = {
         id: leaseId, owner: params.owner, work: params.work, transportGeneration: params.transportGeneration,
         tabs: new Map(), creates: new Map(),
       }
-      const result = method === "lease.restore" ? await restore(lease, params) : { bound: true }
+      const previous = leases.get(leaseId)
+      if (previous && Array.from(previous.creates.values()).some(value => value.pending)) {
+        throw refusal("NATIVE_CREATE_PENDING", "Exact create reconciliation is required before native restoration")
+      }
+      let result
+      try {
+        result = method === "lease.restore" ? await restore(lease, params, previous) : { bound: true }
+      } catch (error) {
+        if (error.code) throw error
+        const reason = String(error.message ?? "").replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, "<redacted-url>")
+          .replace(/[a-f0-9]{32,}/giu, "<redacted>").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 240)
+        throw refusal("NATIVE_CONTROL_RESTORATION_FAILED", reason)
+      }
       leases.set(leaseId, lease)
       return result
     }
@@ -342,7 +397,9 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       if (!record?.attached || (source.sessionId && !record.sessions.has(source.sessionId))) continue
       if (method === "Target.attachedToTarget" && typeof params?.sessionId === "string") record.sessions.add(params.sessionId)
       if (method === "Target.detachedFromTarget") record.sessions.delete(params?.sessionId)
-      ownTab(lease, source.tabId).then(() => publish({ event: "cdp", leaseId: lease.id, tabId: source.tabId, sessionId: source.sessionId, method, params }),
+      record.eventProcessing = (record.eventProcessing ?? Promise.resolve()).then(() =>
+        ownTab(lease, source.tabId)).then(() =>
+        publish({ event: "cdp", leaseId: lease.id, tabId: source.tabId, sessionId: source.sessionId, method, params }),
         () => publish({ event: "target.routingLost", leaseId: lease.id, tabId: source.tabId }))
     }
   })
@@ -379,17 +436,23 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       port = connected
       connected.onMessage.addListener(request => {
         dispatch(request).then(response => {
-          if (port === connected) publish(response)
+          if (port === connected) {
+            publish(response)
+            if (request.method === "extension.reload.commit" && response.result?.committing === true) api.runtime.reload()
+          }
           else onStatus("NATIVE_RESPONSE_UNDELIVERED")
         })
       })
       connected.onDisconnect.addListener(() => {
         void api.runtime.lastError
         if (port === connected) port = undefined
+        pendingReloadToken = undefined
         if (!stopped) onStatus("NATIVE_TRANSPORT_DISCONNECTED")
         retry()
       })
-      publish({ event: "ready", protocolVersion: 1, extensionId: api.runtime.id, profileToken: token })
+      publish({ event: "ready", protocolVersion: 1, extensionId: api.runtime.id, sourceDigest: SOURCE_DIGEST, profileToken: token,
+        browserVersion: typeof navigator === "undefined" ? undefined : navigator.userAgent.match(/(?:Edg|Chrome)\/[\d.]+/u)?.[0],
+        userAgent: typeof navigator === "undefined" ? undefined : navigator.userAgent })
       retryMs = 1000
     })()
     try {

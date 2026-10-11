@@ -31,8 +31,23 @@ export class NativeCommandTransport extends EventEmitter {
     this.closed = false;
   }
 
+  pause() {
+    if (this.closed) throw new BrokerError('NATIVE_TRANSPORT_DISCONNECTED', 'Native transport is disconnected');
+    if (this.pending.size !== 0) {
+      throw new BrokerError('NATIVE_UPDATE_EFFECTS_PENDING', 'Native IPC must settle before deliberate source update');
+    }
+    this.paused = true;
+  }
+
+  resume() {
+    this.paused = false;
+  }
+
   request({ leaseId, method, params = {} }) {
     if (this.closed) return Promise.reject(new BrokerError('NATIVE_TRANSPORT_DISCONNECTED', 'Native transport is disconnected'));
+    if (this.paused && !(leaseId === 'provider-update' && ['extension.reload', 'extension.reload.commit'].includes(method))) {
+      return Promise.reject(new BrokerError('NATIVE_UPDATE_IN_PROGRESS', 'Native IPC is paused for deliberate source update'));
+    }
     if (!ID.test(leaseId ?? '') || typeof method !== 'string' || !/^[a-z][a-z.]{0,63}$/u.test(method) ||
         !params || typeof params !== 'object' || Array.isArray(params)) {
       return Promise.reject(new BrokerError('NATIVE_REQUEST_INVALID', 'Native request requires an exact lease, method and object parameters'));
@@ -135,6 +150,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
   let closing;
   let origin;
   let privateReservation;
+  let eventProcessing = Promise.resolve();
   const native = (leaseId, method, params = {}) => transport.request({ leaseId, method, params });
 
   async function leaseRecord(leaseId) {
@@ -146,7 +162,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
     return lease;
   }
 
-  async function bindLease({ leaseId, owner }) {
+  async function bindLease({ leaseId, owner, restore = false }) {
     if (closed || !ID.test(leaseId ?? '') || typeof owner !== 'string' || !owner) {
       throw new BrokerError('INVALID_NATIVE_BINDING', 'Native lease binding requires an exact lease and owner');
     }
@@ -154,8 +170,13 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
     if (!lease || lease.owner !== owner || !sameIdentity(lease.processIdentity, identity) || bindings.has(leaseId)) {
       throw new BrokerError('INVALID_NATIVE_BINDING', 'Native lease binding does not match its recorded browser and owner');
     }
-    await native(leaseId, 'lease.bind', {
-      profileToken: contextIdentity.profileToken, owner, work: null, transportGeneration: generation,
+    const routing = lease.nativeRouting;
+    await native(leaseId, restore && routing?.controlTabId ? 'lease.restore' : 'lease.bind', {
+      profileToken: contextIdentity.profileToken, owner, work: lease.work ?? null, transportGeneration: generation,
+      ...(restore && routing?.controlTabId ? {
+        controlTabId: routing.controlTabId, windowId: routing.windowId, controlMarker: routing.controlMarker,
+        targetTabs: Object.values(routing.targetTabs),
+      } : {}),
     });
     bindings.set(leaseId, { owner });
     return { rawEndpoint: endpointForLease(leaseId), transportGeneration: generation };
@@ -328,6 +349,12 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         const result = await native(leaseId, 'target.command', {
           tabId: session.tabId, method, params: mappedParams, ...(session.nativeSessionId ? { sessionId: session.nativeSessionId } : {}),
         });
+        if (method === 'Page.getFrameTree' && !session.nativeSessionId &&
+            typeof result?.frameTree?.frame?.id === 'string' && result.frameTree.frame.id) {
+          for (const owned of peer.sessions.values()) {
+            if (owned.tabId === session.tabId) owned.nativeFrameId = result.frameTree.frame.id;
+          }
+        }
         return method.startsWith('Page.') ? frameReferences(result, session.nativeFrameId, session.targetId) : result;
       }
       if (!ROOT_METHODS.has(method)) throw denied(-32004, 'Native browser-global command is denied');
@@ -489,6 +516,13 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
           (session.nativeSessionId ?? undefined) === (message.sessionId ?? undefined));
         if (!parent) continue;
         const [parentId, parentSession] = parent;
+        if (message.method === 'Page.frameNavigated' && !parentSession.nativeSessionId &&
+            !message.params?.frame?.parentId && typeof message.params?.frame?.id === 'string' &&
+            message.params.frame.id) {
+          for (const owned of peer.sessions.values()) {
+            if (owned.tabId === message.tabId) owned.nativeFrameId = message.params.frame.id;
+          }
+        }
         const eventParams = frameReferences(message.params, parentSession.nativeFrameId, parentSession.targetId);
         if (message.method === 'Target.attachedToTarget') {
           if (!['iframe', 'worker'].includes(message.params?.targetInfo?.type) ||
@@ -533,7 +567,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         }
       }
     };
-    routeEvent().catch(() => {
+    eventProcessing = eventProcessing.then(routeEvent).catch(() => {
       for (const peer of peers) {
         if (peer.leaseId === message.leaseId) peer.socket.close(1011, 'Native event ownership could not be verified');
       }
@@ -555,6 +589,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
       transport.off?.('event', onTransportEvent);
       for (const peer of peers) peer.socket.terminate();
       sockets.close();
+      server.closeAllConnections();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       if (privateReservation) {
         try {
