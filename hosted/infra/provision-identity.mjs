@@ -33,6 +33,7 @@
 //   ... --rotate entra-secret  adds a 12-month gateway client secret, writes it to Key Vault through stdin tagged
 //       key-id=<new> previous-key-id=<old>, restarts the app, and deletes the old credential only once the gateway's
 //       startup line logs the new secret's fingerprint; a rerun finishes a rotation the gateway hadn't confirmed yet
+//       Run it once at a time: each run's credential has its own display name and the run touches only that one.
 //
 // Secrets move only inside this process: read with `--query value -o tsv`,
 // trimmed of az's one trailing newline, and written through a child's stdin or
@@ -47,6 +48,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { randomBytes } from "node:crypto";
 import { fingerprint } from "../src/auth/seal.js";
 import { defaultRunner, trimOneNewline } from "./runner.mjs";
 import { issueInvite, seed } from "../src/accounts/invites.js";
@@ -962,6 +964,8 @@ async function emergencyRotate(ctx) {
 // Rotates the gateway's Entra client secret without a sign-in outage and without ever writing an empty value (Task 8
 // review findings 1 and 2). The old credential is deleted only when the gateway's own startup line shows the new
 // secret's fingerprint; until then it stays, and a rerun picks the rotation up where it stopped.
+const firstLine = (error) => `${error?.stderr || error?.message || error}`.trim().split("\n")[0];
+
 async function rotateEntraSecret(ctx) {
   const { env, record } = ctx;
   const app = ctx.settings.app;
@@ -990,34 +994,59 @@ async function rotateEntraSecret(ctx) {
       ctx.log(`${name} names no credential on the app; the app has one, ${old}, so that is the one the gateway holds.`);
     }
     if (!old) throw new Error(`Can't tell which of the gateway app's ${credentials.length} credentials ${name} holds: its key-id tag is missing or names none of them. Find the credential (az ad app credential list --id ${appId}) and tag the secret with key-id=<keyId>; nothing was changed.`);
+    // A name no other run shares, so this run finds and removes only its own credential (re-review N2).
+    const displayName = `desk-gateway-${env}-${new Date(ctx.now()).toISOString().replace(/\.\d{3}Z$/, "Z")}-${randomBytes(3).toString("hex")}`;
     if (ctx.dryRun) {
-      ctx.log(`    would run: az ad app credential reset --id ${appId} --append --display-name desk-gateway-${env} --years 1 --query password -o tsv`);
+      ctx.log(`    would run: az ad app credential reset --id ${appId} --append --display-name ${displayName} --years 1 --query password -o tsv`);
       ctx.log(`    would run: az keyvault secret set --vault-name ${VAULT} --name ${name} --file /dev/stdin --tags ${KEY_ID_TAG}=<new> ${PREVIOUS_KEY_ID_TAG}=${old} (stdin: ***)`);
       ctx.log(`    would restart ${app} and delete credential ${old} once the gateway logs the new fingerprint`);
       return;
     }
-    const before = new Set(credentials);
-    const removeAdded = async () => {
-      for (const keyId of (await keyIds()).filter((id) => !before.has(id))) {
+    const ownKeyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", `[?displayName=='${displayName}'].keyId`, "-o", "tsv"]));
+    const removeOwn = async () => {
+      for (const keyId of await ownKeyIds()) {
         await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", keyId]);
-        ctx.log(`    removed the unsaved credential ${keyId} from ${GATEWAY_APP_NAME}`);
+        ctx.log(`    removed this run's unsaved credential ${keyId} from ${GATEWAY_APP_NAME}`);
       }
     };
+    const readTags = async () => (await azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "tags", "-o", "json", ...SUB])) ?? {};
     let password;
     let added;
     try {
       // secretFromAz refuses an empty or whitespace value, so a failed or odd reset never reaches Key Vault.
-      password = secretFromAz(await out(ctx, "az", ["ad", "app", "credential", "reset", "--id", appId, "--append", "--display-name", `desk-gateway-${env}`, "--years", "1", "--query", "password", "-o", "tsv"]), "The gateway's new client secret");
-      added = (await keyIds()).filter((id) => !before.has(id));
+      password = secretFromAz(await out(ctx, "az", ["ad", "app", "credential", "reset", "--id", appId, "--append", "--display-name", displayName, "--years", "1", "--query", "password", "-o", "tsv"]), "The gateway's new client secret");
+      added = await ownKeyIds();
       for (let attempt = 0; added.length !== 1 && attempt < GRAPH_LAG_TRIES; attempt += 1) {
         await ctx.sleep(GRAPH_LAG_MS);
-        added = (await keyIds()).filter((id) => !before.has(id));
+        added = await ownKeyIds();
       }
-      if (added.length !== 1) throw new Error(`Could not tell which credential the reset added (${added.length} new); nothing was written to Key Vault.`);
+      if (added.length !== 1) throw new Error(`Could not find the credential this run added (${displayName}, ${added.length} found); nothing was written to Key Vault.`);
+      // Another run may have rotated since this one read the tags: stop rather than overwrite its secret.
+      const now = await readTags();
+      if (now[KEY_ID_TAG] !== tags[KEY_ID_TAG] || now[PREVIOUS_KEY_ID_TAG] !== tags[PREVIOUS_KEY_ID_TAG]) {
+        throw new Error(`${name}'s tags changed while this run was working (key-id ${tags[KEY_ID_TAG] ?? "none"} -> ${now[KEY_ID_TAG] ?? "none"}): another rotation is running. Nothing was written; run --rotate entra-secret once at a time, after the other run finishes.`);
+      }
+    } catch (error) {
+      await removeOwn();
+      throw error;
+    }
+    try {
       await propagated(ctx, () => out(ctx, "az", ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", name, "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `${KEY_ID_TAG}=${added[0]}`, `${PREVIOUS_KEY_ID_TAG}=${old}`, "--query", "id", "-o", "tsv", ...SUB], { input: password }), "Writing to Key Vault");
     } catch (error) {
-      await removeAdded();
-      throw error;
+      // A failed write may still have landed (a timeout after the vault stored it, say), and the gateway may then pick
+      // the new secret up at any moment, so the new credential is deleted only when Key Vault is seen not to hold it
+      // (re-review N1).
+      let held;
+      try {
+        held = (await readTags())[KEY_ID_TAG];
+      } catch {
+        throw new Stop(`Writing ${name} failed (${firstLine(error)}) and Key Vault can't be read back, so this run can't tell whether ${name} holds the new credential ${added[0]}. Both credentials are kept, so sign-in keeps working. Run --rotate entra-secret --env ${env} again once Key Vault answers: if ${name}'s key-id tag names ${added[0]} the rerun finishes the rotation; if it still names ${old}, delete the unused credential with az ad app credential delete --id ${appId} --key-id ${added[0]} and run the rotation again.`);
+      }
+      if (held !== added[0]) {
+        await removeOwn();
+        throw error;
+      }
+      ctx.log(`Writing ${name} reported a failure (${firstLine(error)}), but its key-id tag names the new credential ${added[0]}, so the write landed; carrying on.`);
     }
     const stored = secretFromAz(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "value", "-o", "tsv", ...SUB]), name);
     newFingerprint = fingerprint(password);

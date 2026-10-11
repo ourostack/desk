@@ -171,11 +171,16 @@ export function createFakeRunner(cloud = emptyCloud()) {
     if (joined.startsWith("ad app credential reset")) {
       const app = appById();
       const password = `Gw~${guid()}.secret`;
-      app.passwordCredentials.push({ keyId: guid() });
+      app.passwordCredentials.push({ keyId: guid(), displayName: opt(args, "--display-name") });
       cloud.lastGatewaySecret = password;
       return tsv(password);
     }
-    if (joined.startsWith("ad app credential list")) return tsv(appById().passwordCredentials.map(({ keyId }) => keyId).join("\n"));
+    if (joined.startsWith("ad app credential list")) {
+      // Only the one JMESPath filter the rotation uses: [?displayName=='<name>'].keyId.
+      const named = /^\[\?displayName=='([^']*)'\]\.keyId$/.exec(opt(args, "--query") ?? "");
+      const credentials = appById().passwordCredentials.filter(({ displayName }) => !named || displayName === named[1]);
+      return tsv(credentials.map(({ keyId }) => keyId).join("\n"));
+    }
     if (joined.startsWith("ad app credential delete")) {
       const app = appById();
       app.passwordCredentials = app.passwordCredentials.filter(({ keyId }) => keyId !== opt(args, "--key-id"));

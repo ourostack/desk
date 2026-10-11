@@ -201,11 +201,13 @@ node hosted/infra/provision-identity.mjs --env <env> --rotate entra-secret
 
 Run it with the env's Ouro tenant as az's current account ([az sign-ins](#az-sign-ins)). Add `--dry-run` first to see what it would do. It gives you `Key Vault Secrets Officer` on the vault if you lack it.
 
+Run it once at a time for each env: never start a second run while one is still going, in another terminal or on another machine. If a second run starts anyway, each run gives its credential its own name, `desk-gateway-<env>-<time>-<random>`, and touches only that one, and a run whose Key Vault tags change under it stops before writing anything.
+
 The command keeps sign-in working throughout, and it never writes an empty secret:
 
 1. It finds the credential the gateway holds now, from the `key-id` tag on `entra-client-secret-<env>`. If the tag is missing and the app has exactly one credential, it uses that one. Otherwise it stops before changing anything and says how to tag the secret.
-2. It adds a 12-month credential with `--append`, so the old one keeps working. If the reset fails, or prints an empty or whitespace value, it stops, removes whatever the reset added, and writes nothing to Key Vault.
-3. It writes the new secret to Key Vault through stdin, tagged `key-id=<new>` and `previous-key-id=<old>`, and reads it back to check its fingerprint.
+2. It adds a 12-month credential with `--append`, so the old one keeps working. If the reset fails, or prints an empty or whitespace value, it stops, removes the credential it added, and writes nothing to Key Vault.
+3. It writes the new secret to Key Vault through stdin, tagged `key-id=<new>` and `previous-key-id=<old>`, and reads it back to check its fingerprint. If the write reports a failure, the command reads the `key-id` tag to see whether the write landed anyway. If the tag names the new credential, it carries on. If the tag still names the old one, it removes the new credential and stops. If Key Vault can't be read, it keeps both credentials, so sign-in keeps working, and stops with exit code 2. Then rerun the command once Key Vault answers: if the tag names the new credential the rerun finishes the rotation, and if it still names the old one, delete the unused credential with the `az ad app credential delete` line the message prints and rotate again.
 4. It restarts the app's revision and waits for the gateway's startup line, `keys: … entra <fingerprint>`, to show the new secret's fingerprint. Only then does it delete the old credential.
 
 If the gateway still shows the old fingerprint after about five minutes, the command stops with exit code 2 and keeps the old credential, so sign-in keeps working. Container Apps reads a new Key Vault version within about 30 minutes. Run the same command again later; it sees the rotation under way, adds nothing, and deletes the old credential once the gateway shows the new secret. An image from before this check logs no `entra` fingerprint, so the command can't confirm the rotation and always keeps the old credential.

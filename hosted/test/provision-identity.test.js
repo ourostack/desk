@@ -1000,17 +1000,16 @@ function entraRotation(t, { pickUp = true, tags = { "key-id": "k-old" }, credent
   const revision = staging.shown.properties.latestReadyRevisionName;
   staging.logs.push({ revision, text: entraLine(revision, OLD_ENTRA) });
   const state = { pickUp };
-  const runner = context.fake.runner;
-  const wrapped = async (cmd, args, options) => {
+  const withPickUp = (runner) => async (cmd, args, options) => {
     const result = await runner(cmd, args, options);
     if (args.slice(0, 3).join(" ") === "containerapp revision restart" && state.pickUp) {
       staging.logs.push({ revision: args[args.indexOf("--revision") + 1], text: entraLine(args[args.indexOf("--revision") + 1], cloud.vault.secrets["entra-client-secret-test"].value) });
     }
     return result;
   };
-  const go = (flags = { rotate: "entra-secret" }) => context.go(flags, { runner: wrapped });
+  const go = (flags = { rotate: "entra-secret" }) => context.go(flags, { runner: withPickUp(context.fake.runner) });
   const credentialIds = () => cloud.graph.apps.find(({ appId }) => appId === GW_APP_ID).passwordCredentials.map(({ keyId }) => keyId);
-  const goWith = (runnerFor, flags = { rotate: "entra-secret" }) => context.go(flags, { runner: runnerFor });
+  const goWith = (runnerFor, flags = { rotate: "entra-secret" }) => context.go(flags, { runner: withPickUp(runnerFor) });
   return { ...context, staging, state, go, goWith, credentialIds };
 }
 
@@ -1089,6 +1088,124 @@ test("review 1: the rotation refuses when az's current account isn't the env's t
   rotation.cloud.account.tenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47";
   await assert.rejects(rotation.go(), /az login --tenant/);
   assert.deepEqual(writes(rotation.fake), []);
+});
+
+// Combined fix round (re-review N1, N2, M3, M4).
+const isCall = (args, words) => args.slice(0, words.split(" ").length).join(" ") === words;
+const resets = (fake) => fake.calls.filter(({ args }) => isCall(args, "ad app credential reset"));
+const deletes = (fake) => fake.calls.filter(({ args }) => isCall(args, "ad app credential delete")).map(({ args }) => args[args.indexOf("--key-id") + 1]);
+const tagsRead = (args) => isCall(args, "keyvault secret show") && args[args.indexOf("--query") + 1] === "tags";
+
+test("combined round M3: a Key Vault value that reads back differently stops the rotation and keeps both credentials", async (t) => {
+  const rotation = entraRotation(t);
+  rotation.cloud.corruptKeyVaultWrites = true;
+  await assert.rejects(rotation.go(), /reads back as .*old credential k-old is kept/);
+  assert.equal(rotation.credentialIds().length, 2);
+  assert.deepEqual(deletes(rotation.fake), []);
+  assert.deepEqual(rotation.staging.restarts, []);
+});
+
+test("combined round M4: a previous-key-id tag alone is no rotation under way, so the run starts a fresh one instead of confirming the old secret", async (t) => {
+  const rotation = entraRotation(t, { tags: { "key-id": "k-gone", "previous-key-id": "k-old" }, credentials: [{ keyId: "k-old" }] });
+  await rotation.go();
+  assert.equal(resets(rotation.fake).length, 1);
+  const secret = rotation.cloud.vault.secrets["entra-client-secret-test"];
+  assert.notEqual(secret.value, OLD_ENTRA);
+  assert.deepEqual(rotation.credentialIds(), [secret.tags["key-id"]]);
+});
+
+test("combined round N2: each run names its credential uniquely and touches only its own, even with another run's credential on the app", async (t) => {
+  const rotation = entraRotation(t);
+  const runner = rotation.fake.runner;
+  const app = () => rotation.cloud.graph.apps.find(({ appId }) => appId === GW_APP_ID);
+  const alongside = async (cmd, args, options) => {
+    const result = await runner(cmd, args, options);
+    // Another run's reset lands at the same moment.
+    if (isCall(args, "ad app credential reset")) app().passwordCredentials.push({ keyId: "k-other", displayName: "desk-gateway-test-2026-11-01T00:00:00Z-ffffff" });
+    return result;
+  };
+  await rotation.goWith(alongside);
+  const [reset] = resets(rotation.fake);
+  assert.match(reset.args[reset.args.indexOf("--display-name") + 1], /^desk-gateway-test-2026-11-01T00:00:00Z-[0-9a-f]{6}$/);
+  const own = rotation.cloud.vault.secrets["entra-client-secret-test"].tags["key-id"];
+  assert.notEqual(own, "k-other");
+  assert.deepEqual(rotation.credentialIds().sort(), ["k-other", own].sort());
+  assert.deepEqual(deletes(rotation.fake), ["k-old"]);
+
+  // A write that fails outright, with Key Vault still naming k-old, removes only this run's credential.
+  const failing = entraRotation(t);
+  const failRunner = failing.fake.runner;
+  const refused = async (cmd, args, options) => {
+    if (isCall(args, "ad app credential reset")) {
+      const result = await failRunner(cmd, args, options);
+      failing.cloud.graph.apps.find(({ appId }) => appId === GW_APP_ID).passwordCredentials.push({ keyId: "k-other", displayName: "desk-gateway-test-other" });
+      return result;
+    }
+    if (isCall(args, "keyvault secret set")) throw Object.assign(new Error("az keyvault secret set failed"), { stderr: "ERROR: (InternalServerError)" });
+    return failRunner(cmd, args, options);
+  };
+  await assert.rejects(failing.goWith(refused), /InternalServerError|secret set failed/);
+  assert.deepEqual(failing.credentialIds().sort(), ["k-old", "k-other"]);
+  assert.equal(deletes(failing.fake).length, 1);
+  assert.notEqual(deletes(failing.fake)[0], "k-other");
+});
+
+test("combined round N2: a run stops before writing when Key Vault's tags changed under it, and removes only its own credential", async (t) => {
+  const rotation = entraRotation(t);
+  const runner = rotation.fake.runner;
+  const raced = async (cmd, args, options) => {
+    const result = await runner(cmd, args, options);
+    if (isCall(args, "ad app credential reset")) {
+      rotation.cloud.graph.apps.find(({ appId }) => appId === GW_APP_ID).passwordCredentials.push({ keyId: "k-other", displayName: "desk-gateway-test-other" });
+      rotation.cloud.vault.secrets["entra-client-secret-test"] = { value: "Gw~other.run.secret", tags: { "key-id": "k-other", "previous-key-id": "k-old" } };
+    }
+    return result;
+  };
+  await assert.rejects(rotation.goWith(raced), /changed while this run|another rotation/);
+  assert.deepEqual(rotation.cloud.vault.secrets["entra-client-secret-test"], { value: "Gw~other.run.secret", tags: { "key-id": "k-other", "previous-key-id": "k-old" } });
+  assert.deepEqual(rotation.credentialIds().sort(), ["k-old", "k-other"]);
+  assert.equal(rotation.fake.calls.filter(({ args }) => isCall(args, "keyvault secret set")).length, 0);
+});
+
+test("combined round N1: a write that reports failure but landed is detected by the key-id tag and the rotation carries on", async (t) => {
+  const rotation = entraRotation(t);
+  const runner = rotation.fake.runner;
+  const landedThenFailed = async (cmd, args, options) => {
+    const result = await runner(cmd, args, options);
+    if (isCall(args, "keyvault secret set")) throw Object.assign(new Error("az keyvault secret set failed"), { stderr: "ERROR: The operation timed out" });
+    return result;
+  };
+  await rotation.goWith(landedThenFailed);
+  const secret = rotation.cloud.vault.secrets["entra-client-secret-test"];
+  assert.deepEqual(rotation.credentialIds(), [secret.tags["key-id"]]);
+  assert.deepEqual(deletes(rotation.fake), ["k-old"]);
+});
+
+test("combined round N1: when Key Vault can't be read after a failed write, both credentials are kept and the operator is told what to rerun", async (t) => {
+  const rotation = entraRotation(t);
+  const runner = rotation.fake.runner;
+  let written = false;
+  const blind = async (cmd, args, options) => {
+    if (written && isCall(args, "keyvault secret show")) throw Object.assign(new Error("az keyvault secret show failed"), { stderr: "ERROR: connection reset" });
+    const result = await runner(cmd, args, options);
+    if (isCall(args, "keyvault secret set")) {
+      written = true;
+      throw Object.assign(new Error("az keyvault secret set failed"), { stderr: "ERROR: connection reset" });
+    }
+    return result;
+  };
+  await assert.rejects(rotation.goWith(blind), (error) => {
+    assert.match(error.message, /can't tell whether .*entra-client-secret-test holds/i);
+    assert.match(error.message, /--rotate entra-secret/);
+    assert.match(error.message, /az ad app credential delete --id/);
+    return true;
+  });
+  assert.equal(rotation.credentialIds().length, 2);
+  assert.deepEqual(deletes(rotation.fake), []);
+  // The write had landed, so the rerun finds the rotation under way and finishes it without another reset.
+  await rotation.go();
+  assert.equal(resets(rotation.fake).length, 1);
+  assert.deepEqual(rotation.credentialIds(), [rotation.cloud.vault.secrets["entra-client-secret-test"].tags["key-id"]]);
 });
 
 test("review 3: --rotate signing-key --emergency replaces both keys and drops the previous key, in production too, and confirms the startup line", async (t) => {
