@@ -76,6 +76,9 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
+      - name: Install native broker dependencies
+        run: npm ci --prefix plugins/desk/browser-context-broker
+
       # Builds the release on the checked-out main and runs every check on the release commit. The steps live in
       # scripts/build-and-check-release.sh, which pull request CI also runs as a dry run (desk-mcp-tests.yml), so a
       # release that would fail fails its pull request first.
