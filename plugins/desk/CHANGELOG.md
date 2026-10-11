@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.285 — 2026-10-11
+
+The [`using-desk`](skills/using-desk/SKILL.md) foundation now says when to open the Agentic Engineering V2 RFC: before explaining Desk or its method to people, or writing or reviewing its docs, sites, pitches or onboarding. Ordinary code review of the Desk repository does not trigger it. An agent had written a public site about Desk's method without opening it, because "on demand" named no moment. The RFC still does not load at every startup. To keep the startup context within its 9,700-character budget, the foundation no longer repeats the rule for raising older unsigned deliveries, which [`interaction-style`](skills/interaction-style/SKILL.md) already owns.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.284 — 2026-10-11
 
 Desk now requires Plain Language 0.2.6, whose always-on contract makes brevity and the absence of AI writing tells part of every agent's writing rules. The new "Keep it short" section asks of each sentence whether the reader learns something they cannot already see, and "Don't write like an AI" lists the tells to cut, such as throat-clearing, reframes and tricolons. A subagent kickoff brief may still be as long as it needs to be. The brevity carve-out in [`interaction-style`](skills/interaction-style/SKILL.md) no longer says written artifacts are exempt from terseness: they follow Plain Language's length rules, and only that section's phrase bans and reply structure stay limited to the live conversation.
