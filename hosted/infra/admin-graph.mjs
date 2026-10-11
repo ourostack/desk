@@ -15,10 +15,12 @@ import { fingerprint } from "../src/auth/seal.js";
 import { trimOneNewline } from "./runner.mjs";
 
 export const ADMIN_APP_NAME = "ouro-identity-admin";
-// The Graph application roles the admin app needs for provision-identity.mjs's tenant steps and identity-checks.mjs's
-// local runs: the Apple provider; the user flow, its identity providers and its applications; the email one-time-code
-// policy; and reading app registrations (a user flow's application link and the gateway's client-secret expiry).
-export const ADMIN_ROLES = ["IdentityProvider.ReadWrite.All", "IdentityUserFlow.ReadWrite.All", "EventListener.ReadWrite.All", "Policy.ReadWrite.AuthenticationMethod", "Application.ReadWrite.All"];
+// The Graph application roles the admin app needs, each for a call it makes: the Apple provider
+// (IdentityProvider.ReadWrite.All); the user flow, its identity providers and its applications
+// (EventListener.ReadWrite.All, as authenticationEventsFlows take; IdentityUserFlow.* is for B2C user flows and no
+// call here uses it); the email one-time-code policy (Policy.ReadWrite.AuthenticationMethod); and app registrations, for
+// a user flow's application link and the gateway's client-secret expiry (Application.ReadWrite.All).
+export const ADMIN_ROLES = ["IdentityProvider.ReadWrite.All", "EventListener.ReadWrite.All", "Policy.ReadWrite.AuthenticationMethod", "Application.ReadWrite.All"];
 export const adminKeychainService = (tenantId) => `ouro-identity-admin-${tenantId}`;
 
 const LOGIN = "https://login.microsoftonline.com";
@@ -65,13 +67,18 @@ const claimsOf = (token) => {
 
 // Graph through the admin app. `fresh` says this run just created the secret or granted roles, so a refused secret or
 // a token without every role is waited for (both take effect after a delay) instead of failing at once.
-export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh = () => false, tries = 20, waitMs = 15_000 }) {
+// A token is fetched again a minute before it expires, and once when Graph answers 401.
+const EXPIRY_MARGIN_MS = 60_000;
+
+export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh = () => false, tries = 20, waitMs = 15_000, now = Date.now }) {
   let cached = null;
+  let expiresAt = 0;
 
   async function requestToken() {
     const body = new URLSearchParams({ client_id: appId, client_secret: secret, scope: "https://graph.microsoft.com/.default", grant_type: "client_credentials" });
     const response = await fetch(`${LOGIN}/${tenantId}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() });
     const answer = await response.json().catch(() => ({}));
+    if (response.ok && answer.access_token) expiresAt = now() + Number(answer.expires_in ?? 3599) * 1000 - EXPIRY_MARGIN_MS;
     if (!response.ok || !answer.access_token) {
       // Entra's error description names the app and the request, never the secret.
       const code = answer.error ?? `HTTP ${response.status}`;
@@ -81,7 +88,7 @@ export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh 
   }
 
   async function token({ refresh = false } = {}) {
-    if (cached && !refresh) return cached;
+    if (cached && !refresh && now() < expiresAt) return cached;
     for (let attempt = 0; ; attempt += 1) {
       let candidate;
       try {
@@ -112,10 +119,18 @@ export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh 
   // A failure names the method, the path and Graph's error code and message, never the request body.
   async function call(method, url, body) {
     const path = new URL(url).pathname.replace(/^\/v1\.0\//, "");
-    for (let attempt = 0; ; attempt += 1) {
-      const response = await fetch(url, { method: method.toUpperCase(), headers: { Authorization: `Bearer ${await token({ refresh: attempt > 0 })}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body }) });
+    let refreshed401 = false;
+    for (let attempt = 0, refresh = false; ; attempt += 1) {
+      const response = await fetch(url, { method: method.toUpperCase(), headers: { Authorization: `Bearer ${await token({ refresh })}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body }) });
       const text = await response.text();
       if (response.ok) return text.trim() ? JSON.parse(text) : null;
+      // An expired or revoked token: fetch a new one and try once more.
+      if (response.status === 401 && !refreshed401) {
+        refreshed401 = true;
+        refresh = true;
+        continue;
+      }
+      refresh = response.status === 403;
       // A role granted moments ago may not be in effect yet.
       if (response.status === 403 && fresh() && attempt < tries) {
         await sleep(waitMs);

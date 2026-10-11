@@ -70,6 +70,14 @@ export function emptyCloud() {
     keychain: {},
     // A user flow refuses a new service principal's app id ("The application id ... is invalid") for this many tries.
     flowLinkLag: 0,
+    // A new service principal's first appRoleAssignments POSTs answer 404 (replication) this many times.
+    grantLag: 0,
+    // The next this-many appRoleAssignments reads come back empty (a stale replica).
+    staleRoleReads: 0,
+    // A new password credential is missing from `ad app credential list` for this many lists.
+    credentialListLag: 0,
+    // `security -i` fails ("fail") or stores a different value ("corrupt").
+    keychainWrite: "ok",
     vault: { secrets: {} },
     identities: {},
     roles: [],
@@ -185,7 +193,17 @@ export function createFakeRunner(cloud = emptyCloud()) {
     match = path.match(/^servicePrincipals\/([^/]+)\/appRoleAssignments$/);
     if (match) {
       const sp = g.sps.find(({ id }) => id === match[1]) ?? notFound(match[1]);
-      if (method === "get") return { value: sp.appRoleAssignments.map((appRoleId) => ({ appRoleId, resourceId: GRAPH_SP_ID })) };
+      if (method === "get") {
+        if (cloud.staleRoleReads > 0) {
+          cloud.staleRoleReads -= 1;
+          return { value: [] };
+        }
+        return { value: sp.appRoleAssignments.map((appRoleId) => ({ appRoleId, resourceId: GRAPH_SP_ID })) };
+      }
+      if (sp.grantLag > 0) {
+        sp.grantLag -= 1;
+        refuse(404, "Not Found", "Request_ResourceNotFound", `Resource '${sp.id}' does not exist or one of its queried reference-property objects are not present.`);
+      }
       if (body.principalId !== sp.id || body.resourceId !== GRAPH_SP_ID) refuse(400, "Bad Request", "Request_BadRequest", "principalId or resourceId is wrong.");
       if (sp.appRoleAssignments.includes(body.appRoleId)) refuse(400, "Bad Request", "Request_BadRequest", "Permission being assigned already exists on the object");
       sp.appRoleAssignments.push(body.appRoleId);
@@ -265,14 +283,18 @@ export function createFakeRunner(cloud = emptyCloud()) {
     if (joined.startsWith("ad app credential reset")) {
       const app = appById();
       const password = `Gw~${guid()}.secret`;
-      app.passwordCredentials.push({ keyId: guid(), displayName: opt(args, "--display-name"), endDateTime: opt(args, "--end-date") ?? null, secretText: password });
+      app.passwordCredentials.push({ keyId: guid(), displayName: opt(args, "--display-name"), endDateTime: opt(args, "--end-date") ?? null, secretText: password, unlistedFor: cloud.credentialListLag });
       cloud.lastGatewaySecret = password;
       return tsv(password);
     }
     if (joined.startsWith("ad app credential list")) {
       // Only the one JMESPath filter the rotation uses: [?displayName=='<name>'].keyId.
       const named = /^\[\?displayName=='([^']*)'\]\.keyId$/.exec(opt(args, "--query") ?? "");
-      const credentials = appById().passwordCredentials.filter(({ displayName }) => !named || displayName === named[1]);
+      const credentials = appById().passwordCredentials.filter((credential) => {
+        if (!credential.unlistedFor) return true;
+        credential.unlistedFor -= 1;
+        return false;
+      }).filter(({ displayName }) => !named || displayName === named[1]);
       return tsv(credentials.map(({ keyId }) => keyId).join("\n"));
     }
     if (joined.startsWith("ad app credential delete")) {
@@ -314,7 +336,7 @@ export function createFakeRunner(cloud = emptyCloud()) {
     }
     if (joined.startsWith("ad sp create")) {
       if (g.sps.some((sp) => sp.appId === opt(args, "--id"))) throw new CallFailed("az ad sp create failed", "ERROR: a service principal for this app already exists");
-      g.sps.push({ id: guid(), appId: opt(args, "--id"), appRoleAssignments: [], hiddenFor: cloud.graphLag, flowLinkLag: cloud.flowLinkLag });
+      g.sps.push({ id: guid(), appId: opt(args, "--id"), appRoleAssignments: [], hiddenFor: cloud.graphLag, flowLinkLag: cloud.flowLinkLag, grantLag: cloud.grantLag });
       return { stdout: "" };
     }
     // Key Vault.
@@ -461,7 +483,8 @@ export function createFakeRunner(cloud = emptyCloud()) {
     if (args[0] === "-i") {
       const parsed = /^add-generic-password -U -a (\S+) -s (\S+) -w "([^"]*)"\n$/.exec(input ?? "");
       if (!parsed) throw new CallFailed("security -i failed", "security: unparsed command");
-      cloud.keychain[parsed[2]] = { account: parsed[1], password: parsed[3] };
+      if (cloud.keychainWrite === "fail") throw new CallFailed("security -i failed: exit 1", "add-generic-password: returned -25308");
+      cloud.keychain[parsed[2]] = { account: parsed[1], password: cloud.keychainWrite === "corrupt" ? `${parsed[3]}x` : parsed[3] };
       return { stdout: "" };
     }
     throw new CallFailed(`fake security has no ${args.join(" ")}`, "");
