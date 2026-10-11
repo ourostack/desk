@@ -1,6 +1,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import fsBuiltin from "node:fs"
+import fsPromises from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
+import { EventEmitter } from "node:events"
 import { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -12,14 +16,51 @@ import { beginBackgroundConvergence, callTool, connectOrStartController, startCo
 
 const CUSTOM_MODEL = "other-768-dimensional-model"
 
-function fixture(t, models) {
+function fixture(t, models, { uncertainFence = null } = {}) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-model-admission-"))
   const stateHome = path.join(root, "controller-state")
   const cleanups = []
+  const handles = [], restores = [], markerWrites = []
   t.after(async () => {
-    for (const cleanup of cleanups.reverse()) await cleanup()
-    rmSync(root, { recursive: true, force: true })
+    try {
+      for (const cleanup of cleanups.reverse()) await cleanup()
+    } finally {
+      for (const handle of handles) handle.close()
+      for (const restore of restores.reverse()) restore()
+      syncBuiltinESMExports()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
+  // Model/admission semantics use controlled backend delivery, not native
+  // macOS delivery timing. Keep the production watcher, marker bytes, scan,
+  // journal, controller and query proof. Native behavior has its own tests.
+  // startControllerRuntime constructs its watcher internally: reach only its
+  // default builtin watch boundary, never a caller-selectable real issuer.
+  const watchNative = fsBuiltin.watch, writeNative = fsPromises.writeFile
+  let registration = null
+  const watchMock = t.mock.method(fsBuiltin, "watch", function (target, options, callback) {
+    if (target !== root) return Reflect.apply(watchNative, this, arguments)
+    const handle = new EventEmitter()
+    handle.closed = false
+    handle.close = () => { handle.closed = true }
+    handles.push(handle)
+    registration = { handle, callback }
+    return handle
+  })
+  restores.push(() => watchMock.mock.restore())
+  const writeMock = t.mock.method(fsPromises, "writeFile", async function (file, ...args) {
+    const result = await Reflect.apply(writeNative, this, [file, ...args])
+    if (typeof file !== "string" ||
+        !/^\.state\/readiness-fences\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.fence$/u.test(path.relative(root, file))) return result
+    assert.ok(registration && !registration.handle.closed, "exact fixture watcher must be registered before marker delivery")
+    assert.equal(readFileSync(file, "utf8"), path.basename(file), "deliver only a completed actual marker write")
+    markerWrites.push(file)
+    if (markerWrites.length === uncertainFence) registration.handle.emit("error", new Error("controlled watcher failure"))
+    registration.callback("rename", path.relative(root, file))
+    return result
+  })
+  restores.push(() => writeMock.mock.restore())
+  syncBuiltinESMExports()
   for (const name of ["DESK_EMBED_MODEL", "OLLAMA_EMBED_MODEL"]) {
     const previous = process.env[name]
     if (models[name] === undefined) delete process.env[name]
@@ -35,7 +76,7 @@ function fixture(t, models) {
     requests.push(JSON.parse(request.body))
     return new Response(JSON.stringify({ embedding: Array(768).fill(0.1) }))
   })
-  return { root, stateHome, requests, cleanups }
+  return { root, stateHome, requests, cleanups, markerWrites }
 }
 
 function runtime(fixture) {
@@ -140,7 +181,7 @@ const acceptedModels = [
 
 for (const semantic of ["background", "required"]) {
   for (const { label, models } of acceptedModels) {
-    test(`${semantic} ${label} uses the active model for ordinary index and query embedding with production fence proof`, async (t) => {
+    test(`${semantic} ${label} uses the active model for ordinary index and query embedding with controlled watcher evidence`, async (t) => {
       const context = fixture(t, models)
       const ordinary = runtime(context)
       await ordinary.start(semantic)
@@ -162,6 +203,7 @@ for (const semantic of ["background", "required"]) {
       const result = JSON.parse(response.content[0].text)
       assert.equal(result.search_mode, "hybrid")
       assert.equal(result.semantic_unavailable, false)
+      assert.equal(context.markerWrites.length, 2, "both before/after read fences retain actual marker writes")
       assert.ok(result.results.some(({ path: docPath }) => docPath === "task.md"))
       assert.ok(context.requests.length > 0)
       assert.ok(context.requests.every(({ model }) => model === ACTIVE_EMBEDDING_SPEC.model))
@@ -178,6 +220,35 @@ for (const semantic of ["background", "required"]) {
       }
     })
   }
+}
+
+for (const [uncertainFence, reason] of [[1, "watcher_failed"], [2, "readiness_changed_during_read"]]) {
+  test(`controlled watcher error at query fence ${uncertainFence} refuses unproven hybrid output`, async (t) => {
+    const context = fixture(t, {}, { uncertainFence })
+    const ordinary = runtime(context)
+    await ordinary.start("required")
+    await ordinary.converged()
+    const controller = ordinary.controllers[0]
+    assert.equal((await controller.barrier({ capability: "semantic" })).current, true)
+    context.requests.splice(0)
+    const response = await callTool({
+      deskRoot: context.root, name: "desk_search",
+      input: { query: "semantic safety" }, statusContext: ordinary.starts[0],
+    })
+    assert.notEqual(response.isError, true)
+    const result = JSON.parse(response.content[0].text)
+    assert.equal(result.search_mode, "lexical")
+    assert.equal(result.semantic_unavailable, true)
+    assert.equal(result.readiness_diagnostic.reason, reason)
+    assert.equal(context.markerWrites.length, uncertainFence)
+    assert.ok(result.results.some(({ path: docPath }) => docPath === "task.md"))
+    if (uncertainFence === 1) {
+      assert.equal(context.requests.some(({ prompt }) => prompt === "semantic safety"), false)
+    } else {
+      assert.ok(context.requests.some(({ prompt }) => prompt === "semantic safety"),
+        "indexed evaluation occurred but its unproven post-read result was refused")
+    }
+  })
 }
 
 for (const variable of ["DESK_EMBED_MODEL", "OLLAMA_EMBED_MODEL"]) {
