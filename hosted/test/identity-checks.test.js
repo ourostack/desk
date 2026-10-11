@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { alertText, ALERT_PHRASES, main, parseFlags, runChecks } from "../infra/identity-checks.mjs";
+import { alertText, ALERT_PHRASES, main, parseFlags, phrase as phraseOf, runChecks } from "../infra/identity-checks.mjs";
 import { fingerprint } from "../src/auth/seal.js";
 
 const NOW = Date.parse("2026-10-10T06:00:00Z");
@@ -17,9 +17,18 @@ const OTHER_TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
 const GATEWAY_OBJECT = "0b0b0b0b-0000-4000-8000-00000000000b";
 const GATEWAY_APP_ID = "0c0c0c0c-0000-4000-8000-00000000000c";
 const ACCOUNT = "acct_7Qx2Lm9PzW4n";
-const KEY_A = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgAPPLEKEYSLOTAAAAAA\n-----END PRIVATE KEY-----\n";
-const KEY_B = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgAPPLEKEYSLOTBBBBBB\n-----END PRIVATE KEY-----\n";
+const KEY_A = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgAPPLEKEYSLOTAAAAAAAA\n-----END PRIVATE KEY-----\n";
+const KEY_B = "-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgAPPLEKEYSLOTBBBBBBBB\n-----END PRIVATE KEY-----\n";
 const SECRET_HINT = "Gw~";
+// What Graph's certificateData takes: the .p8's Base64 body, without the PEM lines or line breaks (spike, 2026-10-11).
+const BODY_A = KEY_A.split("\n")[1];
+const BODY_B = KEY_B.split("\n")[1];
+// An external tenant gives the Apple provider a GUID id (the test tenant's, from the spike), not B2C's fixed name.
+const APPLE_PROVIDER_ID = "18fc0b27-71d7-4192-9fd0-03735a28864e";
+const BASE64_ONLY = /^[A-Za-z0-9+/]+={0,2}$/;
+// The operator's admin app and its keychain secret (spike Step 3), for local runs with --admin-app.
+const ADMIN_APP_ID = "8d518663-4a25-4c58-ba35-3ec34fa99072";
+const ADMIN_SECRET = "Kc8~adminKeychainSecret.value_2";
 const GRAPH = "https://graph.microsoft.com/v1.0/";
 const iso = (ms) => new Date(ms).toISOString();
 
@@ -35,7 +44,8 @@ function record(env, { outcome = "A", releasedAt = null, legacyCutoff = null, ga
     env,
     tenant: { name: env === "prod" ? "ourobot" : "ourobottest", subdomain: env === "prod" ? "ourobot" : "ourobottest", id: env === "prod" ? PROD_TENANT : TENANT },
     gatewayApp,
-    apple: { outcome, developerId: "TEAMID1234", serviceId: "bot.ouro.identity.test", keyIds: { a: "KEYIDAAAAA", b: "KEYIDBBBBB" }, providerId: "Apple-Managed-OIDC" },
+    adminApp: { appId: ADMIN_APP_ID },
+    apple: { outcome, developerId: "TEAMID1234", serviceId: "bot.ouro.identity.test", keyIds: { a: "KEYIDAAAAA", b: "KEYIDBBBBB" }, providerId: APPLE_PROVIDER_ID },
     ari: { accountId: ACCOUNT, githubUserId: 16390116, githubLogin: "arimendelow" },
     legacyCutoff,
     releasedAt,
@@ -50,7 +60,7 @@ function healthyCloud(env = "test") {
       { keyId: "k-old", endDateTime: iso(NOW + 5 * DAY), hint: SECRET_HINT, displayName: "desk-gateway-old" },
       { keyId: "k-new", endDateTime: iso(NOW + 330 * DAY), hint: SECRET_HINT, displayName: "desk-gateway-new" },
     ],
-    provider: { id: "Apple-Managed-OIDC", "@odata.type": "#microsoft.graph.appleManagedIdentityProvider", keyId: "KEYIDAAAAA", certificateData: KEY_A },
+    provider: { id: APPLE_PROVIDER_ID, "@odata.type": "#microsoft.graph.appleManagedIdentityProvider", keyId: "KEYIDAAAAA", certificateData: BODY_A },
     patchFailure: null,
     vault: {
       // Each key carries the Key ID and fingerprint the import read from it (review C1).
@@ -92,6 +102,10 @@ function fakeAz(cloud) {
       }
       if (method === "patch") {
         if (cloud.patchFailure) throw new CallFailed("az rest failed", cloud.patchFailure);
+        // As Graph answers a whole PEM, or anything else that isn't plain Base64.
+        if (body.certificateData !== undefined && !BASE64_ONLY.test(body.certificateData)) {
+          throw new CallFailed("az rest failed", `ERROR: Bad Request({"error":{"code":"Request_BadRequest","message":"The property 'CertificateData' should be a Base64 encoded string."}})`);
+        }
         cloud.patches.push(body);
         // Graph answered 204 but kept the old key (the read-back must catch it).
         if (cloud.patchIgnored) return null;
@@ -104,7 +118,16 @@ function fakeAz(cloud) {
   }
   async function runner(cmd, args, { input } = {}) {
     calls.push({ cmd, args: [...args], input });
+    if (cmd === "security" && args[0] === "find-generic-password") {
+      const item = cloud.keychain?.[opt(args, "-s")];
+      if (!item || item.account !== opt(args, "-a")) throw new CallFailed("security failed: exit 44", "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.");
+      return tsv(item.password);
+    }
     if (cmd !== "az") throw new CallFailed(`fake has no ${cmd}`, "");
+    // Local runs: az's own token is delegated and can't reach the Apple provider (spike Step 3).
+    if (cloud.delegatedAz && args[0] === "rest" && opt(args, "--url").includes("identity/identityProviders")) {
+      throw new CallFailed("az rest failed: Forbidden", `ERROR: Forbidden({"error":{"code":"Authorization_RequestDenied","message":"Insufficient privileges to complete the operation."}})`);
+    }
     const joined = args.join(" ");
     if (joined.startsWith("account show")) return tsv(cloud.tenantId);
     if (args[0] === "rest") {
@@ -135,9 +158,28 @@ function fakeAz(cloud) {
     }
     throw new CallFailed(`fake az has no ${joined}`, "");
   }
+  // The admin app's token and its app-only Graph calls, recorded as cmd "fetch".
+  async function fetch(url, { method = "GET", headers = {}, body } = {}) {
+    calls.push({ cmd: "fetch", args: [method, url], input: body });
+    const reply = (status, value) => new Response(value === null ? null : JSON.stringify(value), { status });
+    if (url.startsWith("https://login.microsoftonline.com/")) {
+      const form = new URLSearchParams(body);
+      if (form.get("client_id") !== ADMIN_APP_ID || form.get("client_secret") !== ADMIN_SECRET) return reply(401, { error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." });
+      const claims = { tid: cloud.adminTokenTenant ?? url.split("/")[3], appid: ADMIN_APP_ID, roles: ["IdentityProvider.ReadWrite.All", "IdentityUserFlow.ReadWrite.All", "EventListener.ReadWrite.All", "Policy.ReadWrite.AuthenticationMethod", "Application.ReadWrite.All"] };
+      return reply(200, { access_token: ["e30", Buffer.from(JSON.stringify(claims)).toString("base64url"), "c2ln"].join(".") });
+    }
+    if (!/^Bearer e30\./.test(headers.Authorization ?? "")) return reply(401, { error: { code: "InvalidAuthenticationToken", message: "no token" } });
+    try {
+      const answer = graph(method.toLowerCase(), url, body === undefined ? undefined : JSON.parse(body));
+      return reply(answer === null ? 204 : 200, answer);
+    } catch (error) {
+      const status = Number(/\((\d{3})\)|Bad Request/.test(error.stderr ?? "") ? 400 : 404);
+      return reply(status, { error: { code: "Request_BadRequest", message: "refused" } });
+    }
+  }
   cloud.patches ??= [];
   cloud.sets ??= [];
-  return { runner, calls };
+  return { runner, fetch, calls };
 }
 
 function setup(t, { env = "test", rec = record(env), cloud = healthyCloud(env) } = {}) {
@@ -146,12 +188,12 @@ function setup(t, { env = "test", rec = record(env), cloud = healthyCloud(env) }
   writeFileSync(join(dir, `identity-${env}.json`), JSON.stringify(rec));
   const fake = fakeAz(cloud);
   const logs = [];
-  const go = (options = {}) => runChecks({ env, runner: fake.runner, now: () => NOW, recordDir: dir, log: (line) => logs.push(line), ...options });
+  const go = (options = {}) => runChecks({ env, runner: fake.runner, fetch: fake.fetch, now: () => NOW, recordDir: dir, log: (line) => logs.push(line), ...options });
   // The command line, with its streams captured.
   const cli = async (argv) => {
     const out = [];
     const err = [];
-    const code = await main(argv, { runner: fake.runner, now: () => NOW, recordDir: dir, stdout: (text) => out.push(text), stderr: (text) => err.push(text) });
+    const code = await main(argv, { runner: fake.runner, fetch: fake.fetch, now: () => NOW, recordDir: dir, stdout: (text) => out.push(text), stderr: (text) => err.push(text) });
     return { code, stdout: out.join(""), stderr: err.join("") };
   };
   return { dir, cloud, fake, logs, go, cli };
@@ -182,7 +224,7 @@ test("renewal writes apple-renewed-at only after a 2xx PATCH and alternates key 
   const result = await go({ renewApple: true });
   assert.equal(result.ok, true, JSON.stringify(result.results));
   assert.equal(cloud.patches.length, 1);
-  assert.deepEqual(cloud.patches[0], { "@odata.type": "#microsoft.graph.appleManagedIdentityProvider", keyId: "KEYIDBBBBB", certificateData: KEY_B });
+  assert.deepEqual(cloud.patches[0], { "@odata.type": "#microsoft.graph.appleManagedIdentityProvider", keyId: "KEYIDBBBBB", certificateData: BODY_B });
   // The tag is written after the PATCH, never before.
   const patchIndex = fake.calls.findIndex(({ args }) => args[0] === "rest" && args.includes("patch"));
   const setIndex = fake.calls.findIndex(({ args }) => args.slice(0, 3).join(" ") === "keyvault secret set");
@@ -195,7 +237,7 @@ test("renewal writes apple-renewed-at only after a 2xx PATCH and alternates key 
   const second = await go({ renewApple: true, now: () => NOW + 31 * DAY });
   assert.equal(second.ok, true);
   assert.equal(cloud.patches[1].keyId, "KEYIDAAAAA");
-  assert.equal(cloud.patches[1].certificateData, KEY_A);
+  assert.equal(cloud.patches[1].certificateData, BODY_A);
   assert.equal(cloud.vault["apple-siwa-active-test"].value, "a");
 });
 
@@ -208,7 +250,7 @@ test("renewal never sends a slot tagged revoked, re-sends the live slot and exit
   assert.deepEqual(failed(result), ["apple-renewal"]);
   assert.equal(cloud.patches.length, 1);
   assert.equal(cloud.patches[0].keyId, "KEYIDAAAAA");
-  assert.equal(cloud.patches[0].certificateData, KEY_A);
+  assert.equal(cloud.patches[0].certificateData, BODY_A);
   // The revoked key is never even read, and a re-send can't prove a new client secret, so the age keeps counting.
   assert.ok(!fake.calls.some(({ args }) => args.includes("apple-siwa-key-b-test") && args.includes("value")));
   assert.equal(markerTag(cloud), before);
@@ -363,7 +405,7 @@ test("the alert text holds only check names and dates", async (t) => {
   const body = lines.slice(1).filter(Boolean);
   assert.equal(body.length, 4, alert);
   for (const line of body) assert.ok(allowed.has(line.replace(/\d{4}-\d{2}-\d{2}/g, "{date}")), `not a known phrase: ${line}`);
-  for (const id of [ACCOUNT, PROD_TENANT, GATEWAY_OBJECT, GATEWAY_APP_ID, "KEYIDAAAAA", "KEYIDBBBBB", "Apple-Managed-OIDC", "TEAMID1234", SECRET_HINT]) assert.ok(!alert.includes(id), `alert holds ${id}`);
+  for (const id of [ACCOUNT, PROD_TENANT, GATEWAY_OBJECT, GATEWAY_APP_ID, "KEYIDAAAAA", "KEYIDBBBBB", APPLE_PROVIDER_ID, "TEAMID1234", SECRET_HINT]) assert.ok(!alert.includes(id), `alert holds ${id}`);
   // A read that fails renders as a fixed phrase, never as az's error text.
   const failing = alertText({ env: "test", now: NOW, results: [{ check: "entra-client-secret", ok: false, code: "unreadable", dates: [], detail: `tenant ${TENANT} said no for ${ACCOUNT}` }] });
   assert.ok(!failing.includes(TENANT) && !failing.includes(ACCOUNT));
@@ -400,8 +442,10 @@ test("--record-apple-upload records a manual upload once Graph shows that slot's
 });
 
 test("the command line takes --env, --renew-apple, --record-apple-upload and --alert-file, one action at a time", () => {
-  assert.deepEqual(parseFlags(["--env", "prod"]), { env: "prod", renewApple: false, recordAppleUpload: undefined, alertFile: undefined });
-  assert.deepEqual(parseFlags(["--env", "test", "--renew-apple", "--alert-file", "/x"]), { env: "test", renewApple: true, recordAppleUpload: undefined, alertFile: "/x" });
+  assert.deepEqual(parseFlags(["--env", "prod"]), { env: "prod", renewApple: false, recordAppleUpload: undefined, alertFile: undefined, adminApp: false, showAppleKey: false });
+  assert.deepEqual(parseFlags(["--env", "test", "--renew-apple", "--alert-file", "/x"]), { env: "test", renewApple: true, recordAppleUpload: undefined, alertFile: "/x", adminApp: false, showAppleKey: false });
+  assert.deepEqual(parseFlags(["--env", "test", "--admin-app", "--show-apple-key"]), { env: "test", renewApple: false, recordAppleUpload: undefined, alertFile: undefined, adminApp: true, showAppleKey: true });
+  assert.throws(() => parseFlags(["--env", "test", "--renew-apple", "--show-apple-key"]), /one action/);
   assert.throws(() => parseFlags(["--env", "staging"]), /--env must be test or prod/);
   assert.throws(() => parseFlags(["--env", "test", "--renew-apple", "--record-apple-upload", "a"]), /one action/);
   assert.throws(() => parseFlags(["--env", "test", "--record-apple-upload", "c"]), /a or b/);
@@ -739,4 +783,91 @@ test("Minor 4: the Entra phrases name the credential Key Vault holds, not the ne
   cloud.passwordCredentials[1].endDateTime = iso(NOW + 29 * DAY);
   const { stderr } = await cli(["--env", "test"]);
   assert.match(stderr, /entra-client-secret: the client secret Key Vault holds \(its key-id tag\) ends 2026-11-08, within 30 days/);
+});
+
+// --- The live spike (2026-10-11) ------------------------------------------------------------------------------------
+
+test("spike: Graph takes certificateData as the .p8's Base64 body only, so the renewal strips the PEM lines and line breaks", async (t) => {
+  const { go, cloud, fake } = setup(t);
+  const result = await go({ renewApple: true });
+  assert.equal(result.ok, true, JSON.stringify(result.results));
+  assert.equal(cloud.patches[0].certificateData, BODY_B);
+  assert.doesNotMatch(cloud.patches[0].certificateData, /-----|\n/);
+  // The key still leaves only through the PATCH's stdin.
+  assert.ok(!fake.calls.some(({ args }) => args.some((arg) => arg.includes(BODY_B))));
+});
+
+test("spike: a key that isn't a Base64 PEM body is refused before any PATCH", async (t) => {
+  const { appleCertificateData } = await import("../infra/identity-record.mjs");
+  assert.equal(appleCertificateData(KEY_A), BODY_A);
+  assert.equal(appleCertificateData(`${KEY_A.replace(/\n/g, "\r\n")}`), BODY_A);
+  assert.equal(appleCertificateData(BODY_A), BODY_A);
+  for (const bad of ["", "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n", "-----BEGIN PRIVATE KEY-----\nnot base64!\n-----END PRIVATE KEY-----\n"]) {
+    assert.throws(() => appleCertificateData(bad), (error) => !error.message.includes("not base64") && /Base64/.test(error.message));
+  }
+});
+
+test("spike: the Apple provider has a GUID id in an external tenant, and is found by its type when the record names none", async (t) => {
+  const rec = record("test");
+  delete rec.apple.providerId;
+  const { go, cloud, fake } = setup(t, { rec });
+  const result = await go({ renewApple: true });
+  assert.equal(result.ok, true, JSON.stringify(result.results));
+  assert.equal(cloud.patches.length, 1);
+  const patch = fake.calls.find(({ args }) => args[0] === "rest" && args.includes("patch"));
+  assert.equal(patch.args[patch.args.indexOf("--url") + 1], `${GRAPH}identity/identityProviders/${APPLE_PROVIDER_ID}`);
+});
+
+// A machine where az is the operator's own sign-in: its delegated token can't reach the Apple provider.
+function localCloud(env = "test") {
+  const cloud = healthyCloud(env);
+  cloud.delegatedAz = true;
+  cloud.keychain = { [`ouro-identity-admin-${env === "prod" ? PROD_TENANT : TENANT}`]: { account: ADMIN_APP_ID, password: ADMIN_SECRET } };
+  return cloud;
+}
+
+test("spike 3: under the operator's own az sign-in the renewal can't reach the Apple provider through az rest", async (t) => {
+  const { go, cloud } = setup(t, { cloud: localCloud() });
+  const result = await go({ renewApple: true });
+  assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "unreadable");
+  assert.deepEqual(cloud.patches, []);
+});
+
+test("spike 3: with --admin-app, every Graph call goes through the admin app's app-only token from the keychain, and its secret shows nowhere", async (t) => {
+  const { cli, cloud, fake } = setup(t, { cloud: localCloud() });
+  const { code, stdout, stderr } = await cli(["--env", "test", "--renew-apple", "--admin-app"]);
+  assert.equal(code, 0, stdout + stderr);
+  assert.equal(cloud.patches.length, 1);
+  assert.equal(cloud.patches[0].certificateData, BODY_B);
+  assert.ok(!fake.calls.some(({ cmd, args }) => cmd === "az" && args[0] === "rest"), "no az rest");
+  assert.ok(fake.calls.some(({ cmd, args }) => cmd === "fetch" && args[0] === "PATCH" && args[1].endsWith(`identity/identityProviders/${APPLE_PROVIDER_ID}`)));
+  // The secret goes only into the token request's body.
+  const shown = [stdout, stderr, ...fake.calls.map(({ cmd, args }) => [cmd, ...args].join(" "))].join("\n");
+  assert.ok(!shown.includes(ADMIN_SECRET));
+  const bodies = fake.calls.filter(({ input }) => input?.includes(ADMIN_SECRET) || (typeof input === "string" && new URLSearchParams(input).get("client_secret") === ADMIN_SECRET));
+  assert.ok(!shown.includes(encodeURIComponent(ADMIN_SECRET).replace(/~/g, "%7E")));
+  assert.deepEqual(bodies.map(({ args }) => args[1]), [`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`]);
+});
+
+test("spike 3: --admin-app refuses a token for another tenant, and a missing keychain secret, before any other check", async (t) => {
+  const wrong = setup(t, { cloud: localCloud() });
+  wrong.cloud.adminTokenTenant = OTHER_TENANT;
+  const result = await wrong.go({ adminApp: true });
+  assert.deepEqual(result.results.map(({ check, code }) => `${check}:${code}`), ["graph-tenant:wrong-tenant"]);
+  const missing = setup(t, { cloud: localCloud() });
+  missing.cloud.keychain = {};
+  const none = await missing.go({ adminApp: true });
+  assert.deepEqual(none.results.map(({ check, code }) => `${check}:${code}`), ["graph-tenant:no-admin-secret"]);
+  assert.match(phraseOf(none.results[0]), /keychain/);
+});
+
+test("spike 3: --show-apple-key prints the Key ID and slot the Apple provider uses, and nothing else", async (t) => {
+  const { cli, cloud } = setup(t, { cloud: localCloud() });
+  const { code, stdout } = await cli(["--env", "test", "--show-apple-key", "--admin-app"]);
+  assert.equal(code, 0);
+  assert.match(stdout, /^apple-provider: Key ID KEYIDAAAAA \(slot a\)$/m);
+  cloud.provider.keyId = "SOMEOTHERK";
+  const other = await cli(["--env", "test", "--show-apple-key", "--admin-app"]);
+  assert.equal(other.code, 1);
+  assert.match(other.stdout, /^apple-provider: Key ID SOMEOTHERK \(neither recorded slot\)$/m);
 });

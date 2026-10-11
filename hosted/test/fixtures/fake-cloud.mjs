@@ -25,6 +25,37 @@ export class CallFailed extends Error {
     this.stderr = stderr;
   }
 }
+// Graph's answer to a refused call: az rest turns it into stderr, fetch into a status and a JSON body.
+export class GraphRefused extends Error {
+  constructor(status, reason, code, message) {
+    super(message);
+    Object.assign(this, { status, reason, code });
+  }
+}
+const refuse = (status, reason, code, message) => {
+  throw new GraphRefused(status, reason, code, message);
+};
+// Microsoft Graph's service principal in the tenant, with the application roles the scripts look up by name.
+export const GRAPH_SP_ID = "0f0f0f0f-0000-4000-8000-00000000000f";
+export const GRAPH_ROLES = {
+  "IdentityProvider.ReadWrite.All": "90db2b9a-d928-4d33-a4dd-8442ae3d41e4",
+  "Application.Read.All": "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30",
+  "Application.ReadWrite.All": "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9",
+  "IdentityUserFlow.ReadWrite.All": "65319a09-a2be-469d-8782-f6b07debf789",
+  "EventListener.ReadWrite.All": "0edf5e9e-4ce8-468a-8f2d-2c4a4aa8bd0a",
+  "Policy.ReadWrite.AuthenticationMethod": "29c18626-4985-4dcd-85c0-193eef327366",
+  "User.Read.All": "df021288-bdef-4463-88db-98f22de89214",
+};
+// The role a Graph path needs from an app-only token, for the paths az's delegated token can't reach (spike Step 3).
+function roleFor(path) {
+  if (path.startsWith("identity/identityProviders")) return "IdentityProvider.ReadWrite.All";
+  if (path.startsWith("identity/authenticationEventsFlows")) return "EventListener.ReadWrite.All";
+  if (path.startsWith("policies/authenticationMethodsPolicy")) return "Policy.ReadWrite.AuthenticationMethod";
+  return null;
+}
+const BASE64_ONLY = /^[A-Za-z0-9+/]+={0,2}$/;
+export const APPLE_TYPE = "#microsoft.graph.appleManagedIdentityProvider";
+
 const notFound = (what) => {
   throw new CallFailed(`not found: ${what}`, `ERROR: (ResourceNotFound) ${what} was not found. HTTP 404`);
 };
@@ -34,7 +65,11 @@ export function emptyCloud() {
     account: { tenantId: TEST_TENANT },
     ciam: { ourobottest: { tenantId: TEST_TENANT, domainName: "ourobottest.onmicrosoft.com" } },
     taken: new Set(["ouro", "ourotest"]),
-    graph: { email: { state: "disabled", allowExternalIdToUseEmailOtp: "default" }, providers: [], flows: [], apps: [], sps: [] },
+    graph: { email: { state: "disabled", allowExternalIdToUseEmailOtp: "default" }, providers: [], flows: [], apps: [], sps: [], grants: [] },
+    // The operator's macOS keychain: generic passwords by service, each { account, password }.
+    keychain: {},
+    // A user flow refuses a new service principal's app id ("The application id ... is invalid") for this many tries.
+    flowLinkLag: 0,
     vault: { secrets: {} },
     identities: {},
     roles: [],
@@ -81,9 +116,14 @@ export function createFakeRunner(cloud = emptyCloud()) {
     }
   }
 
-  function graph(method, url, body) {
-    const path = url.slice(GRAPH.length);
+  // Graph over the in-memory tenant. `caller` is "user" for az rest (az's delegated token) or { appId, roles } for an
+  // app-only token. Delegated calls to the identity paths are refused, as live (spike Step 3: no consentable scope).
+  function graph(method, url, body, caller = "user") {
+    const [path, query = ""] = url.slice(GRAPH.length).split("?");
     const g = cloud.graph;
+    const role = roleFor(path);
+    if (role && caller === "user") refuse(403, "Forbidden", "Authorization_RequestDenied", "Insufficient privileges to complete the operation.");
+    if (role && caller !== "user" && !caller.roles.includes(role)) refuse(403, "Forbidden", "Authorization_RequestDenied", "Insufficient privileges to complete the operation.");
     if (path === "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email") {
       if (method === "get") return g.email;
       Object.assign(g.email, { state: body.state, allowExternalIdToUseEmailOtp: body.allowExternalIdToUseEmailOtp });
@@ -91,9 +131,26 @@ export function createFakeRunner(cloud = emptyCloud()) {
     }
     if (path === "identity/identityProviders") {
       if (method === "get") return { value: g.providers.map(({ certificateData, ...rest }) => rest) };
-      const provider = { id: "Apple-Managed-OIDC", ...body };
+      if (body["@odata.type"] === APPLE_TYPE && g.providers.some((provider) => provider["@odata.type"] === APPLE_TYPE)) refuse(400, "Bad Request", "Request_BadRequest", "An Apple identity provider already exists in this tenant.");
+      if (body.certificateData !== undefined && !BASE64_ONLY.test(body.certificateData)) refuse(400, "Bad Request", "Request_BadRequest", "The property 'CertificateData' should be a Base64 encoded string.");
+      // An external tenant names the provider with a GUID, not B2C's Apple-Managed-OIDC (spike Step 5).
+      const provider = { id: guid(), ...body };
       g.providers.push(provider);
-      return provider;
+      const { certificateData, ...shown } = provider;
+      void certificateData;
+      return shown;
+    }
+    let match = path.match(/^identity\/identityProviders\/([^/]+)$/);
+    if (match) {
+      const provider = g.providers.find(({ id }) => id === match[1]) ?? notFound(match[1]);
+      if (method === "get") {
+        const { certificateData, ...shown } = provider;
+        void certificateData;
+        return shown;
+      }
+      if (body.certificateData !== undefined && !BASE64_ONLY.test(body.certificateData)) refuse(400, "Bad Request", "Request_BadRequest", "The property 'CertificateData' should be a Base64 encoded string.");
+      Object.assign(provider, body);
+      return null;
     }
     if (path === "identity/authenticationEventsFlows") {
       if (method === "get") return { value: g.flows.filter(visible).map(({ apps, idps, hiddenFor, ...flow }) => flow) };
@@ -101,10 +158,16 @@ export function createFakeRunner(cloud = emptyCloud()) {
       g.flows.push(flow);
       return { id: flow.id, displayName: flow.displayName };
     }
-    let match = path.match(/^identity\/authenticationEventsFlows\/([^/]+)\/conditions\/applications\/includeApplications$/);
+    match = path.match(/^identity\/authenticationEventsFlows\/([^/]+)\/conditions\/applications\/includeApplications$/);
     if (match) {
       const flow = g.flows.find(({ id }) => id === match[1]) ?? notFound(match[1]);
       if (method === "get") return { value: flow.apps.map((appId) => ({ appId })) };
+      // A new service principal's app id is refused for about 30 seconds (spike Step 3).
+      const sp = g.sps.find(({ appId }) => appId === body.appId);
+      if (!sp || sp.flowLinkLag > 0) {
+        if (sp) sp.flowLinkLag -= 1;
+        refuse(400, "Bad Request", "Request_BadRequest", `The application id ${body.appId} is invalid.`);
+      }
       flow.apps.push(body.appId);
       return {};
     }
@@ -115,10 +178,33 @@ export function createFakeRunner(cloud = emptyCloud()) {
       flow.idps.push(body["@odata.id"].split("/").at(-1));
       return {};
     }
+    // Delegated with az's AppRoleAssignment.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All.
+    if (path === "servicePrincipals" && /appId%20eq%20'00000003-0000-0000-c000-000000000000'/.test(query)) {
+      return { value: [{ id: GRAPH_SP_ID, appRoles: Object.entries(GRAPH_ROLES).map(([value, id]) => ({ id, value, allowedMemberTypes: ["Application"] })) }] };
+    }
     match = path.match(/^servicePrincipals\/([^/]+)\/appRoleAssignments$/);
     if (match) {
       const sp = g.sps.find(({ id }) => id === match[1]) ?? notFound(match[1]);
-      return { value: sp.appRoleAssignments.map((appRoleId) => ({ appRoleId })) };
+      if (method === "get") return { value: sp.appRoleAssignments.map((appRoleId) => ({ appRoleId, resourceId: GRAPH_SP_ID })) };
+      if (body.principalId !== sp.id || body.resourceId !== GRAPH_SP_ID) refuse(400, "Bad Request", "Request_BadRequest", "principalId or resourceId is wrong.");
+      if (sp.appRoleAssignments.includes(body.appRoleId)) refuse(400, "Bad Request", "Request_BadRequest", "Permission being assigned already exists on the object");
+      sp.appRoleAssignments.push(body.appRoleId);
+      return { id: guid(), ...body };
+    }
+    if (path === "oauth2PermissionGrants") {
+      if (method === "get") {
+        const clientId = /clientId%20eq%20'([^']+)'/.exec(query)?.[1];
+        return { value: g.grants.filter((grant) => !clientId || grant.clientId === clientId) };
+      }
+      const grant = { id: guid(), ...body };
+      g.grants.push(grant);
+      return grant;
+    }
+    match = path.match(/^oauth2PermissionGrants\/([^/]+)$/);
+    if (match) {
+      const grant = g.grants.find(({ id }) => id === match[1]) ?? notFound(match[1]);
+      Object.assign(grant, body);
+      return null;
     }
     throw new CallFailed(`fake Graph has no ${method} ${path}`, "");
   }
@@ -132,7 +218,15 @@ export function createFakeRunner(cloud = emptyCloud()) {
       const method = opt(args, "--method");
       const url = opt(args, "--url");
       const body = input ? JSON.parse(input) : undefined;
-      if (url.startsWith(GRAPH)) return json(graph(method, url, body));
+      if (url.startsWith(GRAPH)) {
+        try {
+          const answer = graph(method, url, body);
+          return answer === null ? { stdout: "" } : json(answer);
+        } catch (error) {
+          if (!(error instanceof GraphRefused)) throw error;
+          throw new CallFailed(`az rest failed: ${error.reason}`, `ERROR: ${error.reason}(${JSON.stringify({ error: { code: error.code, message: error.message } })})`);
+        }
+      }
       if (url.includes("/checkNameAvailability")) return json({ nameAvailable: !cloud.taken.has(body.name) && !cloud.ciam[body.name] });
       const ciam = url.match(/ciamDirectories\/([^?]+)\?/);
       if (ciam && method === "put") {
@@ -171,7 +265,7 @@ export function createFakeRunner(cloud = emptyCloud()) {
     if (joined.startsWith("ad app credential reset")) {
       const app = appById();
       const password = `Gw~${guid()}.secret`;
-      app.passwordCredentials.push({ keyId: guid(), displayName: opt(args, "--display-name") });
+      app.passwordCredentials.push({ keyId: guid(), displayName: opt(args, "--display-name"), endDateTime: opt(args, "--end-date") ?? null, secretText: password });
       cloud.lastGatewaySecret = password;
       return tsv(password);
     }
@@ -199,6 +293,9 @@ export function createFakeRunner(cloud = emptyCloud()) {
       void list;
       return { stdout: "" };
     }
+    // az's admin-consent posts to the portal's internal API (main.iam.ad.ext.azure.com), not Graph; the scripts grant
+    // roles through appRoleAssignments instead, so this fake refuses it.
+    if (joined.startsWith("ad app permission admin-consent") && !cloud.allowAdminConsent) throw new CallFailed("az ad app permission admin-consent failed", "ERROR: the scripts must not use the portal's internal consent API");
     if (joined.startsWith("ad app permission admin-consent")) {
       const app = appById();
       const sp = g.sps.find(({ appId }) => appId === app.appId) ?? notFound("service principal");
@@ -217,7 +314,7 @@ export function createFakeRunner(cloud = emptyCloud()) {
     }
     if (joined.startsWith("ad sp create")) {
       if (g.sps.some((sp) => sp.appId === opt(args, "--id"))) throw new CallFailed("az ad sp create failed", "ERROR: a service principal for this app already exists");
-      g.sps.push({ id: guid(), appId: opt(args, "--id"), appRoleAssignments: [], hiddenFor: cloud.graphLag });
+      g.sps.push({ id: guid(), appId: opt(args, "--id"), appRoleAssignments: [], hiddenFor: cloud.graphLag, flowLinkLag: cloud.flowLinkLag });
       return { stdout: "" };
     }
     // Key Vault.
@@ -354,6 +451,60 @@ export function createFakeRunner(cloud = emptyCloud()) {
     throw new CallFailed(`fake gh has no ${joined}`, "");
   }
 
+  // The macOS keychain, through `security`.
+  function security(args, input) {
+    if (args[0] === "find-generic-password") {
+      const item = cloud.keychain[opt(args, "-s")];
+      if (!item || (opt(args, "-a") && item.account !== opt(args, "-a"))) throw new CallFailed("security find-generic-password failed: exit 44", "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.");
+      return tsv(item.password);
+    }
+    if (args[0] === "-i") {
+      const parsed = /^add-generic-password -U -a (\S+) -s (\S+) -w "([^"]*)"\n$/.exec(input ?? "");
+      if (!parsed) throw new CallFailed("security -i failed", "security: unparsed command");
+      cloud.keychain[parsed[2]] = { account: parsed[1], password: parsed[3] };
+      return { stdout: "" };
+    }
+    throw new CallFailed(`fake security has no ${args.join(" ")}`, "");
+  }
+
+  // fetch, for the admin app's token and its app-only Graph calls. Each is recorded in `calls` as cmd "fetch".
+  const appToken = (claims) => ["eyJhbGciOiJSUzI1NiJ9", Buffer.from(JSON.stringify(claims)).toString("base64url"), "c2ln"].join(".");
+  async function fetch(url, { method = "GET", headers = {}, body } = {}) {
+    const isToken = url.startsWith("https://login.microsoftonline.com/");
+    calls.push({ cmd: "fetch", args: [method, url], input: body, write: !isToken && method !== "GET" });
+    const reply = (status, value) => new Response(value === null ? null : JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+    if (isToken) {
+      const tenant = url.split("/")[3];
+      const form = new URLSearchParams(body);
+      const app = cloud.graph.apps.find(({ appId }) => appId === form.get("client_id"));
+      const sp = app && cloud.graph.sps.find(({ appId }) => appId === app.appId);
+      if (tenant !== cloud.account.tenantId || !app || !sp) return reply(400, { error: "unauthorized_client", error_description: "AADSTS700016: Application not found in the directory." });
+      const credential = app.passwordCredentials.find(({ secretText }) => secretText === form.get("client_secret"));
+      if (!credential || (credential.endDateTime && Date.parse(credential.endDateTime) <= (cloud.now ?? 0))) return reply(401, { error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." });
+      if (credential.pendingFor > 0) {
+        credential.pendingFor -= 1;
+        return reply(401, { error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." });
+      }
+      const roles = Object.entries(GRAPH_ROLES).filter(([, id]) => sp.appRoleAssignments.includes(id)).map(([name]) => name);
+      return reply(200, { token_type: "Bearer", access_token: appToken({ tid: tenant, appid: app.appId, roles }) });
+    }
+    const bearer = /^Bearer (.+)$/.exec(headers.Authorization ?? "")?.[1];
+    let claims = {};
+    try {
+      claims = JSON.parse(Buffer.from(bearer.split(".")[1], "base64url").toString("utf8"));
+    } catch {
+      return reply(401, { error: { code: "InvalidAuthenticationToken", message: "Access token is empty." } });
+    }
+    try {
+      const answer = graph(method.toLowerCase(), url, body === undefined ? undefined : JSON.parse(body), { appId: claims.appid, roles: claims.roles ?? [] });
+      return reply(answer === null ? 204 : 200, answer);
+    } catch (error) {
+      if (error instanceof GraphRefused) return reply(error.status, { error: { code: error.code, message: error.message } });
+      if (error instanceof CallFailed && /not found/.test(error.message)) return reply(404, { error: { code: "Request_ResourceNotFound", message: error.message } });
+      throw error;
+    }
+  }
+
   const WRITES = [
     /^rest --method (put|post|patch|delete)/i,
     /^ad (app|sp) (create|update)/,
@@ -365,6 +516,7 @@ export function createFakeRunner(cloud = emptyCloud()) {
     /^containerapp (update|create|revision restart|secret set)/,
     /^api -X (PUT|POST|PATCH|DELETE)/,
     /^variable set/,
+    /^-i$/,
   ];
 
   async function runner(cmd, args, { input } = {}) {
@@ -374,11 +526,12 @@ export function createFakeRunner(cloud = emptyCloud()) {
     calls.push({ cmd, args: [...args], input, write });
     if (cmd === "az") return az(args, input);
     if (cmd === "gh") return gh(args, input);
+    if (cmd === "security") return security(args, input);
     if (cmd === cloud.probeCommand) return cloud.probe?.(args) ?? { stdout: "ok\n" };
     if (cmd === cloud.openerCommand) return { stdout: "" };
     throw new CallFailed(`fake runner has no ${cmd}`, "");
   }
-  return { runner, calls, cloud };
+  return { runner, fetch, calls, cloud };
 }
 
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");

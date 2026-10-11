@@ -43,6 +43,11 @@
 //
 // az must be signed in to the Azure subscription and, for the Graph steps, have
 // the env's tenant as its current account (the script checks and says how).
+// az's delegated Graph token makes the app registrations, service principals,
+// role grants and consents. It can't reach the Apple provider, the user flow or
+// the email one-time-code policy (spike, 2026-10-11: no consentable scope), so
+// those go through the tenant's ouro-identity-admin app with an app-only token
+// (admin-graph.mjs), whose secret this script keeps in the macOS keychain.
 import { chmodSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -53,6 +58,7 @@ import { fingerprint } from "../src/auth/seal.js";
 import { defaultRunner, trimOneNewline } from "./runner.mjs";
 import { issueInvite, seed } from "../src/accounts/invites.js";
 import { buildAppYaml, checkWritten, isKeyVaultFillFailure, keyVaultFillFailure, writeAppYaml } from "./app-yaml.mjs";
+import { ADMIN_APP_NAME, ADMIN_ROLES, adminKeychainService, createAdminGraph, readAdminSecret, storeAdminSecret } from "./admin-graph.mjs";
 import {
   APPS_RESOURCE_GROUP,
   ARI,
@@ -75,6 +81,7 @@ import {
   KEY_ID_TAG,
   PREVIOUS_KEY_ID_TAG,
   appleActiveSecretName,
+  appleCertificateData,
   appleKeyProblem,
   isRevoked,
   appleActiveSetArgs,
@@ -103,27 +110,31 @@ const SUB = ["--subscription", SUBSCRIPTION];
 const GRAPH = "https://graph.microsoft.com/v1.0/";
 const CIAM_API = "2023-05-17-preview";
 const GRAPH_APP = "00000003-0000-0000-c000-000000000000";
-// Microsoft Graph's ids: the application roles IdentityProvider.ReadWrite.All and Application.Read.All, and the
-// delegated openid and profile.
-const IDENTITY_PROVIDER_READWRITE_ALL = "90db2b9a-d928-4d33-a4dd-8442ae3d41e4";
-const APPLICATION_READ_ALL = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30";
-// The automation app's Graph roles in its tenant. IdentityProvider.ReadWrite.All lets the identity-checks workflow
-// renew the Apple provider. Application.Read.All lets it read the gateway app's passwordCredentials[].endDateTime
-// (Task 7): it is the least-privileged application permission Microsoft documents for GET /applications/{id}. The only
-// narrower-scoped one, Application.ReadWrite.OwnedBy with the automation app as the gateway app's owner, would also let
-// it add credentials to the gateway app, which is worse than reading every app registration in this tenant.
-const AUTOMATION_ROLES = { [IDENTITY_PROVIDER_READWRITE_ALL]: "IdentityProvider.ReadWrite.All", [APPLICATION_READ_ALL]: "Application.Read.All" };
+// The automation app's Graph roles in its tenant, by name; their ids are read from Graph's service principal.
+// IdentityProvider.ReadWrite.All lets the identity-checks workflow renew the Apple provider. Application.Read.All lets
+// it read the gateway app's passwordCredentials[].endDateTime (Task 7): it is the least-privileged application
+// permission Microsoft documents for GET /applications/{id}. The only narrower-scoped one,
+// Application.ReadWrite.OwnedBy with the automation app as the gateway app's owner, would also let it add credentials
+// to the gateway app, which is worse than reading every app registration in this tenant.
+const AUTOMATION_ROLES = ["IdentityProvider.ReadWrite.All", "Application.Read.All"];
+// Graph's delegated openid and profile, which the gateway app requests.
 const OPENID = "37f7f235-527c-4136-accd-4a02d197296e";
 const PROFILE = "14dad69e-099b-42c9-810b-d002981feec1";
 const APPLE_TYPE = "#microsoft.graph.appleManagedIdentityProvider";
 const EMAIL_OTP_PROVIDER = "EmailOtpSignup-OAUTH";
-const USER_FLOW_NAME = "Ouro sign-in";
 const FLOW_IDPS = "microsoft.graph.externalUsersSelfServiceSignUpEventsFlow/onAuthenticationMethodLoadStart/microsoft.graph.onAuthenticationMethodLoadStartExternalUsersSelfServiceSignUp/identityProviders";
 const APP_SECRETS = ["desk-app-id", "desk-app-client-id", "desk-app-client-secret", "desk-app-key"];
 const PROD_APP = ENVIRONMENTS.prod.app;
 const STAGING_APP = ENVIRONMENTS.test.app;
 const CHECKS_FEDERATED_NAME = "github-identity-environment";
 const POLL_MS = 15_000;
+// A user flow refuses a new service principal's app id for about 30 seconds (spike Step 3); allow three minutes.
+const SP_LAG_TRIES = 18;
+const SP_LAG_MS = 10_000;
+const SP_LAG = /application id .*invalid/i;
+// The admin app's keychain secret lasts 90 days, as the spike's did; a refused one is replaced on the next run.
+const ADMIN_SECRET_DAYS = 90;
+const DAY_MS = 24 * 3600 * 1000;
 // Graph's directory reads lag its writes by seconds.
 const GRAPH_LAG_TRIES = 12;
 const GRAPH_LAG_MS = 5_000;
@@ -136,6 +147,8 @@ export class Stop extends Error {}
 
 const placeholder = (what) => `<${what} once created>`;
 const isPlaceholder = (arg) => typeof arg === "string" && /^<.* once created>$/.test(arg);
+// An argument or a JSON body that still names something that doesn't exist yet.
+const namesPlaceholder = (text) => typeof text === "string" && /<[^<>]* once created>/.test(text);
 const isNotFound = (error) => /ResourceNotFound|NotFound|Not Found|not found|could not be found|does not exist|HTTP 404|\(404\)/i.test(`${error?.stderr ?? ""} ${error?.message ?? ""}`);
 
 // --- Reading -----------------------------------------------------------------------------------------------------
@@ -157,12 +170,24 @@ async function maybe(read) {
 }
 const lines = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
 const graphGet = (ctx, path) => azJson(ctx, ["rest", "--method", "get", "--url", `${GRAPH}${path}`]);
+// Graph through az's delegated token: app registrations, service principals, role grants and consents only.
 const graphCall = (method, path, body, { secret = false } = {}) => ({
   cmd: "az",
   args: ["rest", "--method", method, "--url", `${GRAPH}${path}`, "--headers", "Content-Type=application/json", "--body", "@/dev/stdin"],
   input: body === undefined ? undefined : JSON.stringify(body),
   secret,
 });
+
+// Graph through the admin app's app-only token (admin-graph.mjs), for what az's token can't reach. `input` is the JSON
+// body; a secret one is shown as *** in a dry run.
+const appCall = (method, path, body, { secret = false, ...extra } = {}) => ({
+  cmd: "graph",
+  args: [method.toUpperCase(), `${GRAPH}${path}`],
+  input: body === undefined ? undefined : JSON.stringify(body),
+  secret,
+  ...extra,
+});
+const appGet = async (ctx, path) => ctx.adminGraph.call("GET", `${GRAPH}${path}`);
 
 // The name check takes its body through stdin, like every other az rest call here.
 async function nameAvailable(ctx, name) {
@@ -270,6 +295,49 @@ async function rolesAt(ctx, scope) {
   return (await azJson(ctx, ["role", "assignment", "list", "--scope", scope, "--query", "[].{principalId: principalId, roleDefinitionName: roleDefinitionName}", "-o", "json", ...SUB])) ?? [];
 }
 
+// Microsoft Graph's own service principal in the tenant, with its application roles' ids by name.
+async function graphServicePrincipal(ctx) {
+  const found = (await graphGet(ctx, `servicePrincipals?$filter=appId%20eq%20'${GRAPH_APP}'&$select=id,appRoles`))?.value?.[0];
+  if (!found?.id) throw new Error("Microsoft Graph's service principal isn't in this tenant; Graph roles can't be granted.");
+  return { id: found.id, roles: Object.fromEntries((found.appRoles ?? []).filter(({ allowedMemberTypes }) => !allowedMemberTypes || allowedMemberTypes.includes("Application")).map(({ id, value }) => [value, id])) };
+}
+
+// The Graph application roles a service principal holds, as appRoleAssignments (az's token can read and grant these).
+async function appRolesOf(ctx, servicePrincipalId) {
+  if (!servicePrincipalId) return [];
+  return ((await graphGet(ctx, `servicePrincipals/${servicePrincipalId}/appRoleAssignments`))?.value ?? []).map(({ appRoleId }) => appRoleId);
+}
+
+// The tenant-wide consent to Graph's delegated scopes for a client, or null.
+async function graphGrant(ctx, clientId, resourceId) {
+  const grants = (await graphGet(ctx, `oauth2PermissionGrants?$filter=clientId%20eq%20'${clientId}'`))?.value ?? [];
+  return grants.find((grant) => grant.consentType === "AllPrincipals" && grant.resourceId === resourceId) ?? null;
+}
+
+// Whether this run can call Graph as the admin app: "ready" (ctx.adminGraph is set), "no-app", "no-secret" (none in the
+// keychain), "no-roles" (a role isn't granted yet) or "refused" (Entra refuses the keychain's secret: expired or
+// replaced). The secret never leaves this process.
+async function adminAccess(ctx, state) {
+  const app = state.adminApp;
+  if (!app?.servicePrincipalId) return "no-app";
+  if (ctx.adminGraph?.appId === app.appId) return "ready";
+  const secret = await readAdminSecret({ runner: ctx.runner, tenantId: state.tenant.id, appId: app.appId });
+  if (!secret) return "no-secret";
+  if (ADMIN_ROLES.some((name) => !app.appRoles.includes(state.graphSp.roles[name]))) return "no-roles";
+  const graph = createAdminGraph({ tenantId: state.tenant.id, appId: app.appId, secret, fetch: ctx.fetch, sleep: ctx.sleep, fresh: () => ctx.created.adminAccess });
+  try {
+    await graph.token();
+  } catch (error) {
+    if (error.code === "invalid_client") {
+      ctx.log(`The ${ADMIN_APP_NAME} app's secret in the keychain (${adminKeychainService(state.tenant.id)}) is refused: expired or replaced.`);
+      return "refused";
+    }
+    throw error;
+  }
+  ctx.adminGraph = graph;
+  return "ready";
+}
+
 export async function readState(ctx) {
   const { env, settings } = ctx;
   const state = {};
@@ -314,28 +382,38 @@ export async function readState(ctx) {
     throw new Error(`az's current account is in tenant ${signedIn || "(none)"}, not ${state.tenant.name} (${state.tenant.id}). Run: az login --tenant ${state.tenant.id} --allow-no-subscriptions, then az account set --subscription ${state.tenant.id}, and run this again.`);
   }
   state.graph = true;
-  state.email = await graphGet(ctx, "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email");
-  const providers = (await graphGet(ctx, "identity/identityProviders"))?.value ?? [];
-  state.apple = providers.find((provider) => provider["@odata.type"] === APPLE_TYPE) ?? null;
+  ctx.tenantId = state.tenant.id;
+  state.graphSp = await graphServicePrincipal(ctx);
   state.gatewayApp = await readApp(ctx, GATEWAY_APP_NAME);
+  if (state.gatewayApp?.servicePrincipalId) state.gatewayGrant = await graphGrant(ctx, state.gatewayApp.servicePrincipalId, state.graphSp.id);
   state.automationApp = await readApp(ctx, AUTOMATION_APP_NAME);
   if (state.automationApp) {
     state.automationApp.subjects = lines(await out(ctx, "az", ["ad", "app", "federated-credential", "list", "--id", state.automationApp.appId, "--query", "[].subject", "-o", "tsv"]));
-    state.automationApp.appRoles = state.automationApp.servicePrincipalId
-      ? ((await graphGet(ctx, `servicePrincipals/${state.automationApp.servicePrincipalId}/appRoleAssignments`))?.value ?? []).map(({ appRoleId }) => appRoleId)
-      : [];
+    state.automationApp.appRoles = await appRolesOf(ctx, state.automationApp.servicePrincipalId);
   }
+  state.adminApp = await readApp(ctx, ADMIN_APP_NAME);
+  if (state.adminApp) state.adminApp.appRoles = await appRolesOf(ctx, state.adminApp.servicePrincipalId);
+  state.adminAccess = await adminAccess(ctx, state);
+  state.adminGraph = state.adminAccess === "ready";
+  if (!state.adminGraph) return state;
+
+  // What az's delegated token can't read, through the admin app.
+  state.email = await appGet(ctx, "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email");
+  // An external tenant names its Apple provider with a GUID (spike Step 5), so it is found by its type.
+  const providers = (await appGet(ctx, "identity/identityProviders"))?.value ?? [];
+  state.apple = providers.find((provider) => provider["@odata.type"] === APPLE_TYPE) ?? null;
+  const flowName = settings.userFlowName;
   const readFlow = async () => {
-    const flows = ((await graphGet(ctx, "identity/authenticationEventsFlows"))?.value ?? []).filter(({ displayName }) => displayName === USER_FLOW_NAME);
-    if (flows.length > 1) throw new Error(`There are ${flows.length} user flows named ${USER_FLOW_NAME}; keep one, delete the others, and run this again.`);
+    const flows = ((await appGet(ctx, "identity/authenticationEventsFlows"))?.value ?? []).filter(({ displayName }) => displayName === flowName);
+    if (flows.length > 1) throw new Error(`There are ${flows.length} user flows named ${flowName}; keep one, delete the others, and run this again.`);
     return flows[0] ?? null;
   };
-  const flow = await untilVisible(ctx, readFlow, ctx.created.flow, `User flow ${USER_FLOW_NAME}`);
+  const flow = await untilVisible(ctx, readFlow, ctx.created.flow, `User flow ${flowName}`);
   state.userFlow = flow
     ? {
         id: flow.id,
-        apps: ((await graphGet(ctx, `identity/authenticationEventsFlows/${flow.id}/conditions/applications/includeApplications`))?.value ?? []).map(({ appId }) => appId),
-        idps: ((await graphGet(ctx, `identity/authenticationEventsFlows/${flow.id}/${FLOW_IDPS}`))?.value ?? []).map(({ id }) => id),
+        apps: ((await appGet(ctx, `identity/authenticationEventsFlows/${flow.id}/conditions/applications/includeApplications`))?.value ?? []).map(({ appId }) => appId),
+        idps: ((await appGet(ctx, `identity/authenticationEventsFlows/${flow.id}/${FLOW_IDPS}`))?.value ?? []).map(({ id }) => id),
       }
     : null;
   return state;
@@ -367,8 +445,22 @@ function hasAccess(app, resourceAppId, id, type) {
 
 const sameSet = (a = [], b = []) => a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
 
+// Grants an app's service principal the Graph application roles it lacks, through appRoleAssignments with az's
+// delegated token (AppRoleAssignment.ReadWrite.All), after adding any it doesn't request yet to its registration.
+// az's `ad app permission admin-consent` would post to the portal's internal API instead of Graph, so it isn't used.
+function roleSteps({ label, app, appId, roleNames, graphSp, extra = {} }) {
+  const roleId = (name) => graphSp.roles[name] ?? placeholder(`Graph role ${name} id`);
+  const ungranted = roleNames.filter((name) => !(app?.appRoles ?? []).includes(roleId(name)));
+  if (!ungranted.length) return [];
+  const unrequested = ungranted.filter((name) => !hasAccess(app, GRAPH_APP, roleId(name), "Role"));
+  const spId = app?.servicePrincipalId ?? placeholder(`${label} service principal id`);
+  const add = unrequested.length ? [az("ad", "app", "permission", "add", "--id", appId, "--api", GRAPH_APP, "--api-permissions", ...unrequested.map((name) => `${roleId(name)}=Role`))] : [];
+  const grants = ungranted.map((name) => graphCall("post", `servicePrincipals/${spId}/appRoleAssignments`, { principalId: spId, resourceId: graphSp.id, appRoleId: roleId(name) }));
+  return [{ name: `${label} ${ungranted.join(", ")}`, ...extra, calls: [...add, ...grants] }];
+}
+
 // The steps that would bring `state` to the env's target. Pure; `record` gives the Apple facts.
-export function plan({ env, state, record = {} }) {
+export function plan({ env, state, record = {}, now = Date.now() }) {
   const settings = environment(env);
   const steps = [];
   const tenant = state.tenant ?? {};
@@ -410,6 +502,28 @@ export function plan({ env, state, record = {} }) {
 
   // Everything below is in the tenant, through Graph.
   if (tenant.id && state.graph !== false) {
+    const graphSp = state.graphSp ?? { id: placeholder("Graph service principal id"), roles: {} };
+
+    // The admin app, first: the email code, Apple and the user flow below need its app-only token (spike Step 3).
+    // Each step rereads, so nothing below runs before the admin app can sign in.
+    const admin = state.adminApp;
+    const adminAppId = admin?.appId ?? placeholder(`${ADMIN_APP_NAME} appId`);
+    if (!admin) steps.push({ name: "admin app registration", reread: true, creates: { app: ADMIN_APP_NAME }, calls: [az("ad", "app", "create", "--display-name", ADMIN_APP_NAME, "--sign-in-audience", "AzureADMyOrg", "--query", "{appId: appId, id: id}", "-o", "json")] });
+    if (!admin?.servicePrincipalId) steps.push({ name: "admin service principal", reread: true, creates: { servicePrincipal: adminAppId }, calls: [az("ad", "sp", "create", "--id", adminAppId, "--output", "none")] });
+    steps.push(...roleSteps({ label: "admin app", app: admin, appId: adminAppId, roleNames: ADMIN_ROLES, graphSp, extra: { reread: true, adminRoles: true } }));
+    if (["no-app", "no-secret", "refused", undefined].includes(state.adminAccess)) {
+      const endDate = new Date(now + ADMIN_SECRET_DAYS * DAY_MS).toISOString().slice(0, 10);
+      steps.push({
+        name: "admin app secret in the keychain",
+        reread: true,
+        adminSecret: true,
+        calls: [
+          az("ad", "app", "credential", "reset", "--id", adminAppId, "--append", "--display-name", `provision-identity-${env}`, "--end-date", endDate, "--query", "password", "-o", "tsv"),
+          call("security", ["-i"], { input: "", secret: true }),
+        ],
+      });
+    }
+
     const gateway = state.gatewayApp;
     const gatewayAppId = gateway?.appId ?? placeholder(`${GATEWAY_APP_NAME} appId`);
     const redirects = settings.publicUrls.map((url) => `${url}/oauth/entra/callback`);
@@ -419,9 +533,20 @@ export function plan({ env, state, record = {} }) {
       steps.push({ name: "gateway app redirects", calls: [az("ad", "app", "update", "--id", gatewayAppId, "--web-redirect-uris", ...redirects)] });
     }
     if (gateway?.tokenVersion !== 2) steps.push({ name: "gateway app v2 tokens", calls: [az("ad", "app", "update", "--id", gatewayAppId, "--set", "api.requestedAccessTokenVersion=2")] });
-    if (!gateway?.servicePrincipalId) steps.push({ name: "gateway service principal", creates: { servicePrincipal: gatewayAppId }, calls: [az("ad", "sp", "create", "--id", gatewayAppId, "--output", "none")] });
+    if (!gateway?.servicePrincipalId) steps.push({ name: "gateway service principal", reread: true, creates: { servicePrincipal: gatewayAppId }, calls: [az("ad", "sp", "create", "--id", gatewayAppId, "--output", "none")] });
     if (!hasAccess(gateway, GRAPH_APP, OPENID, "Scope") || !hasAccess(gateway, GRAPH_APP, PROFILE, "Scope")) {
-      steps.push({ name: "gateway app openid and profile", calls: [az("ad", "app", "permission", "add", "--id", gatewayAppId, "--api", GRAPH_APP, "--api-permissions", `${OPENID}=Scope`, `${PROFILE}=Scope`), az("ad", "app", "permission", "admin-consent", "--id", gatewayAppId)] });
+      steps.push({ name: "gateway app requests openid and profile", calls: [az("ad", "app", "permission", "add", "--id", gatewayAppId, "--api", GRAPH_APP, "--api-permissions", `${OPENID}=Scope`, `${PROFILE}=Scope`)] });
+    }
+    // Tenant-wide consent to openid and profile, as an oauth2PermissionGrant (az's DelegatedPermissionGrant.ReadWrite.All).
+    // az's `ad app permission admin-consent` posts to the portal's internal API instead of Graph, so it isn't used.
+    const consented = (state.gatewayGrant?.scope ?? "").split(" ").filter(Boolean);
+    if (!consented.includes("openid") || !consented.includes("profile")) {
+      const scope = [...new Set([...consented, "openid", "profile"])].join(" ");
+      const gatewaySpId = gateway?.servicePrincipalId ?? placeholder(`${GATEWAY_APP_NAME} service principal id`);
+      steps.push({
+        name: "gateway app consent to openid and profile",
+        calls: [state.gatewayGrant ? graphCall("patch", `oauth2PermissionGrants/${state.gatewayGrant.id}`, { scope }) : graphCall("post", "oauth2PermissionGrants", { clientId: gatewaySpId, consentType: "AllPrincipals", resourceId: graphSp.id, scope })],
+      });
     }
     // Its client secret: appended (an existing one keeps working), straight into Key Vault through stdin.
     if (!(state.vaultSecrets ?? []).includes(entraSecretName(env)) || !gateway?.passwords) {
@@ -444,20 +569,15 @@ export function plan({ env, state, record = {} }) {
     if (!(automation?.subjects ?? []).includes(CHECKS_SUBJECT)) {
       steps.push({ name: "automation federated credential", calls: [call("az", ["ad", "app", "federated-credential", "create", "--id", automationAppId, "--parameters", "@/dev/stdin"], { input: JSON.stringify({ name: CHECKS_FEDERATED_NAME, issuer: GITHUB_ISSUER, subject: CHECKS_SUBJECT, audiences: [FEDERATED_AUDIENCE] }) })] });
     }
-    // Each role is added only if the app doesn't request it yet, and consent runs while any is not granted.
-    const ungranted = Object.keys(AUTOMATION_ROLES).filter((id) => !(automation?.appRoles ?? []).includes(id));
-    if (ungranted.length) {
-      const unrequested = ungranted.filter((id) => !hasAccess(automation, GRAPH_APP, id, "Role"));
-      const add = unrequested.length ? [az("ad", "app", "permission", "add", "--id", automationAppId, "--api", GRAPH_APP, "--api-permissions", ...unrequested.map((id) => `${id}=Role`))] : [];
-      steps.push({ name: `automation app ${ungranted.map((id) => AUTOMATION_ROLES[id]).join(", ")}`, calls: [...add, az("ad", "app", "permission", "admin-consent", "--id", automationAppId)] });
-    }
+    steps.push(...roleSteps({ label: "automation app", app: automation, appId: automationAppId, roleNames: AUTOMATION_ROLES, graphSp }));
 
     // Email one-time codes for external users.
     if (state.email?.state !== "enabled" || state.email?.allowExternalIdToUseEmailOtp !== "enabled") {
-      steps.push({ name: "email one-time code", calls: [graphCall("patch", "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email", { "@odata.type": "#microsoft.graph.emailAuthenticationMethodConfiguration", state: "enabled", allowExternalIdToUseEmailOtp: "enabled" })] });
+      steps.push({ name: "email one-time code", calls: [appCall("patch", "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email", { "@odata.type": "#microsoft.graph.emailAuthenticationMethodConfiguration", state: "enabled", allowExternalIdToUseEmailOtp: "enabled" })] });
     }
 
-    // Apple: Graph under outcome A, the admin center under outcome B.
+    // Apple: Graph under outcome A, the admin center under outcome B. An Apple provider that exists, whoever made it, is
+    // adopted (readState finds it by type), never made again.
     const apple = record.apple ?? {};
     if (!state.apple) {
       if (apple.outcome === "A") {
@@ -467,7 +587,7 @@ export function plan({ env, state, record = {} }) {
           appleProvider: true,
           calls: [
             az("keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName("a", env), "--query", "value", "-o", "tsv", SUB),
-            graphCall("post", "identity/identityProviders", { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.a, certificateData: "***" }, { secret: true }),
+            appCall("post", "identity/identityProviders", { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.a, certificateData: "***" }, { secret: true }),
             // After Graph accepts the POST: the slot sent and when, which the daily Apple age check reads (Task 7).
             call("az", appleActiveSetArgs(env, "<time of the POST>"), { input: "<slot sent>" }),
           ],
@@ -487,9 +607,9 @@ export function plan({ env, state, record = {} }) {
         reread: true,
         creates: { flow: true },
         calls: [
-          graphCall("post", "identity/authenticationEventsFlows", {
+          appCall("post", "identity/authenticationEventsFlows", {
             "@odata.type": "#microsoft.graph.externalUsersSelfServiceSignUpEventsFlow",
-            displayName: USER_FLOW_NAME,
+            displayName: settings.userFlowName,
             onInteractiveAuthFlowStart: { "@odata.type": "#microsoft.graph.onInteractiveAuthFlowStartExternalUsersSelfServiceSignUp", isSignUpAllowed: true },
             onAuthenticationMethodLoadStart: { "@odata.type": "#microsoft.graph.onAuthenticationMethodLoadStartExternalUsersSelfServiceSignUp", identityProviders: [{ id: EMAIL_OTP_PROVIDER }, { id: appleId }] },
             onUserCreateStart: { "@odata.type": "#microsoft.graph.onUserCreateStartExternalUsersSelfServiceSignUp", userTypeToCreate: "member" },
@@ -499,10 +619,11 @@ export function plan({ env, state, record = {} }) {
     }
     const flowId = flow?.id ?? placeholder("user flow id");
     if (flow && !flow.idps.includes(appleId)) {
-      steps.push({ name: "user flow: Apple", calls: [graphCall("post", `identity/authenticationEventsFlows/${flowId}/${FLOW_IDPS}/$ref`, { "@odata.id": `${GRAPH}identityProviders/${appleId}` })] });
+      steps.push({ name: "user flow: Apple", calls: [appCall("post", `identity/authenticationEventsFlows/${flowId}/${FLOW_IDPS}/$ref`, { "@odata.id": `${GRAPH}identityProviders/${appleId}` })] });
     }
     if (!flow?.apps?.includes(gateway?.appId)) {
-      steps.push({ name: "user flow: gateway app", calls: [graphCall("post", `identity/authenticationEventsFlows/${flowId}/conditions/applications/includeApplications`, { "@odata.type": "#microsoft.graph.authenticationConditionApplication", appId: gatewayAppId })] });
+      // A service principal made moments ago is refused for about 30 seconds (spike Step 3), so this retries.
+      steps.push({ name: "user flow: gateway app", retry: { pattern: SP_LAG, tries: SP_LAG_TRIES, ms: SP_LAG_MS, what: "The user flow refuses the gateway app's new service principal" }, calls: [appCall("post", `identity/authenticationEventsFlows/${flowId}/conditions/applications/includeApplications`, { "@odata.type": "#microsoft.graph.authenticationConditionApplication", appId: gatewayAppId })] });
     }
 
     // The GitHub environment the identity-checks workflow runs in: main only, with variables naming the identities.
@@ -545,8 +666,26 @@ function describe(stepCall) {
 }
 
 async function execCall(ctx, stepCall, input = stepCall.input) {
-  if (stepCall.args.some(isPlaceholder)) throw new Error(`Internal: ${stepCall.cmd} ${stepCall.args.slice(0, 3).join(" ")} still names an id that doesn't exist yet.`);
+  if (stepCall.args.some(namesPlaceholder) || namesPlaceholder(input)) throw new Error(`Internal: ${stepCall.cmd} ${stepCall.args.slice(0, 3).join(" ")} still names an id that doesn't exist yet.`);
+  if (stepCall.cmd === "graph") {
+    if (!ctx.adminGraph) throw new Error(`Internal: ${stepCall.args.join(" ")} needs the ${ADMIN_APP_NAME} app, which can't sign in yet.`);
+    const answer = await ctx.adminGraph.call(stepCall.args[0], stepCall.args[1], input);
+    return answer === null ? "" : JSON.stringify(answer);
+  }
   return out(ctx, stepCall.cmd, stepCall.args, input === undefined ? undefined : { input });
+}
+
+// Runs `action` again while its error matches `retry.pattern`, up to `retry.tries` times.
+async function withRetry(ctx, retry, action) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await action();
+    } catch (error) {
+      if (!retry || !retry.pattern.test(`${error?.message ?? ""} ${error?.stderr ?? ""}`) || attempt >= retry.tries) throw error;
+      if (attempt === 0) ctx.log(`    ${retry.what}; retrying for up to ${Math.round((retry.tries * retry.ms) / 60_000)} minutes.`);
+      await ctx.sleep(retry.ms);
+    }
+  }
 }
 
 async function execStep(ctx, step) {
@@ -579,6 +718,26 @@ async function execStep(ctx, step) {
     ctx.log(`    wrote ${entraSecretName(ctx.env)} to Key Vault (fingerprint ${fingerprint(password)}${added.length === 1 ? `, credential ${added[0]}` : ""})`);
     return;
   }
+  if (step.adminSecret) {
+    // The new secret goes from az's stdout into the keychain through `security -i`'s stdin and nowhere else. If the
+    // keychain refuses it, the credential just added is deleted again.
+    const appId = step.calls[0].args[step.calls[0].args.indexOf("--id") + 1];
+    const keyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", "[].keyId", "-o", "tsv"]));
+    const before = new Set(await keyIds());
+    const password = secretFromAz(await execCall(ctx, step.calls[0]), `The ${ADMIN_APP_NAME} app's new client secret`);
+    try {
+      await storeAdminSecret({ runner: ctx.runner, tenantId: ctx.tenantId, appId, secret: password });
+    } catch (error) {
+      for (const keyId of (await keyIds()).filter((id) => !before.has(id))) {
+        await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", keyId]);
+        ctx.log(`    removed the unsaved credential ${keyId} from ${ADMIN_APP_NAME}`);
+      }
+      throw error;
+    }
+    ctx.created.adminAccess = true;
+    ctx.log(`    stored the ${ADMIN_APP_NAME} app's new client secret in the keychain as ${adminKeychainService(ctx.tenantId)} (fingerprint ${fingerprint(password)}, ends ${step.calls[0].args[step.calls[0].args.indexOf("--end-date") + 1]})`);
+    return;
+  }
   if (step.appleProvider) {
     const { slot, tags } = await liveAppleSlot(ctx);
     const certificateData = trimOneNewline(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName(slot, ctx.env), "--query", "value", "-o", "tsv", ...SUB]));
@@ -586,7 +745,8 @@ async function execStep(ctx, step) {
     // The key and the record's Key ID must be the pair the import tagged (Task 7 review C1).
     const problem = appleKeyProblem({ tags, recordedKeyId: apple.keyIds?.[slot], value: certificateData });
     if (problem) throw new Error(`Apple key slot ${slot} for ${ctx.env} can't be sent: ${problem}. Nothing was sent; re-import the slot with --apple-key-file.`);
-    const body = { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.[slot], certificateData };
+    // Key Vault holds the whole PEM; Graph takes only its Base64 body (spike Step 5).
+    const body = { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.[slot], certificateData: appleCertificateData(certificateData) };
     await execCall(ctx, step.calls[1], JSON.stringify(body));
     ctx.log(`    created the Apple provider with key slot ${slot}`);
     const renewedAt = new Date(ctx.now()).toISOString();
@@ -595,7 +755,8 @@ async function execStep(ctx, step) {
     return;
   }
   let last = "";
-  for (const stepCall of step.calls) last = await execCall(ctx, stepCall);
+  for (const stepCall of step.calls) last = await withRetry(ctx, step.retry, () => execCall(ctx, stepCall));
+  if (step.adminRoles) ctx.created.adminAccess = true;
   if (step.creates?.app) ctx.created.apps[step.creates.app] = JSON.parse(last || "{}");
   if (step.creates?.servicePrincipal) ctx.created.servicePrincipals.add(step.creates.servicePrincipal);
   if (step.creates?.flow) ctx.created.flow = true;
@@ -619,11 +780,11 @@ function updateRecord(record, state) {
     if (state[key]) next[key] = { name: state[key].name, id: state[key].id, clientId: state[key].clientId, principalId: state[key].principalId, tenantId: state[key].tenantId };
   }
   if (state.vaultId) next.keyVault = { name: VAULT, id: state.vaultId, entraClientSecret: entraSecretName(record.env) };
-  for (const key of ["gatewayApp", "automationApp"]) {
+  for (const key of ["gatewayApp", "automationApp", "adminApp"]) {
     if (state[key]) next[key] = { appId: state[key].appId, objectId: state[key].id, servicePrincipalId: state[key].servicePrincipalId };
   }
   if (state.apple) next.apple = { ...(next.apple ?? {}), providerId: state.apple.id };
-  if (state.userFlow) next.userFlow = { id: state.userFlow.id, displayName: USER_FLOW_NAME };
+  if (state.userFlow) next.userFlow = { id: state.userFlow.id, displayName: environment(record.env).userFlowName };
   return next;
 }
 
@@ -642,12 +803,13 @@ async function reconcile(ctx) {
       ctx.record = updateRecord(ctx.record, state);
       saveRecord(ctx.record, ctx.recordDir);
     }
-    const steps = plan({ env: ctx.env, state, record: ctx.record });
+    const steps = plan({ env: ctx.env, state, record: ctx.record, now: ctx.now() });
     if (steps.length === 0) {
       ctx.log(`${ctx.env}: everything is in place.`);
       return;
     }
     if (ctx.dryRun) {
+      if (state.graph && !state.adminGraph) ctx.log(`The ${ADMIN_APP_NAME} app can't sign in yet, so this dry run plans the tenant's email code, Apple provider and user flow as missing.`);
       for (const step of steps) {
         ctx.log(`==> ${step.name}`);
         for (const stepCall of step.calls) ctx.log(`    would run: ${describe(stepCall)}`);
@@ -1149,9 +1311,10 @@ export async function run({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   probeCommand = { cmd: process.execPath, args: [join(HERE, "mcp-probe.mjs")] },
   openerCommand = process.env.DESK_CDP_OPENER ? { cmd: process.execPath, args: [process.env.DESK_CDP_OPENER] } : null,
+  fetch = globalThis.fetch,
 }) {
   const settings = environment(env);
-  const ctx = { env, settings, record: loadRecord(env, recordDir), created: { apps: {}, servicePrincipals: new Set(), flow: false }, runner, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
+  const ctx = { env, settings, record: loadRecord(env, recordDir), created: { apps: {}, servicePrincipals: new Set(), flow: false, adminAccess: false }, runner, fetch, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
   if (ctx.dryRun) log(`Dry run for ${env}: reads only; every write is printed instead, secret input as ***.`);
   if (flags.appleKeyFile) return importAppleKey(ctx, { file: flags.appleKeyFile, slot: flags.appleKeySlot, keepFile: flags.keepFile, keyId: flags.appleKeyId });
   if (flags.inviteAri) return inviteAri(ctx);

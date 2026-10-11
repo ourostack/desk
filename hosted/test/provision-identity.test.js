@@ -11,7 +11,7 @@ import { keysStartupLine, readConfig } from "../src/main.js";
 import { createMemoryStore } from "../src/accounts/memory-store.js";
 import { hashToken } from "../src/accounts/invites.js";
 import { plan, run, parseFlags } from "../infra/provision-identity.mjs";
-import { addContainerApp, createFakeRunner, emptyCloud, OPERATOR, OPERATOR_TOKEN, TEST_TENANT, VAULT_ID } from "./fixtures/fake-cloud.mjs";
+import { addContainerApp, APPLE_TYPE, createFakeRunner, emptyCloud, GRAPH_ROLES, GRAPH_SP_ID, OPERATOR, OPERATOR_TOKEN, TEST_TENANT, VAULT_ID } from "./fixtures/fake-cloud.mjs";
 import { defaultRunner } from "../infra/provision-identity.mjs";
 
 const shownFixture = JSON.parse(readFileSync(new URL("./fixtures/containerapp-shown.json", import.meta.url), "utf8"));
@@ -62,6 +62,7 @@ function setup(t, { env = "test", record = {}, cloud = emptyCloud() } = {}) {
       env,
       flags,
       runner: fake.runner,
+      fetch: fake.fetch,
       log: (line) => logs.push(line),
       home,
       now: () => NOW,
@@ -130,7 +131,10 @@ test("a dry run makes no write call and prints each would-be write with every se
   const shown = logs.join("\n");
   assert.match(shown, /would run: az ad app create --display-name ouro-desk-hosted /);
   assert.match(shown, /would run: az ad app credential reset .*--append.*\n.*would run: az keyvault secret set .*--file \/dev\/stdin.*\(stdin: \*\*\*\)/);
-  assert.match(shown, /would run: az rest --method post --url https:\/\/graph\.microsoft\.com\/v1\.0\/identity\/identityProviders .*\(stdin: \*\*\*\)/);
+  // The Apple provider goes through the admin app's app-only token (spike Step 3), its key as stdin-like body only.
+  assert.match(shown, /would run: graph POST https:\/\/graph\.microsoft\.com\/v1\.0\/identity\/identityProviders \(stdin: \*\*\*\)/);
+  assert.match(shown, /would run: az ad app credential reset --id <ouro-identity-admin appId once created> --append .*\n.*would run: security -i \(stdin: \*\*\*\)/);
+  assert.match(shown, /The ouro-identity-admin app can't sign in yet, so this dry run plans the tenant's email code, Apple provider and user flow as missing/);
   assert.match(shown, /would run: gh api -X PUT repos\/ourostack\/desk\/environments\/identity/);
   assert.match(shown, /would run: az storage account create -n stouroacctstest261e0b .*--sku Standard_ZRS.*--min-tls-version TLS1_2.*--allow-shared-key-access false/);
   assertNoneOf(everythingShown({ logs, fake }), [APPLE_KEY]);
@@ -369,16 +373,19 @@ test("identity-<env>.json holds tenant id, subdomain, app ids, Services ID, Key 
   assert.match(record.automationApp.appId, /^[0-9a-f-]{36}$/);
   assert.equal(record.apple.serviceId, "bot.ouro.identity.test");
   assert.deepEqual(record.apple.keyIds, { a: "KEYIDAAAAA", b: "KEYIDBBBBB" });
-  assert.equal(record.apple.providerId, "Apple-Managed-OIDC");
+  // An external tenant names the provider with a GUID (spike Step 5).
+  assert.match(record.apple.providerId, /^[0-9a-f-]{36}$/);
+  assert.match(record.adminApp.appId, /^[0-9a-f-]{36}$/);
   assert.match(record.userFlow.id, /^[0-9a-f-]{36}$/);
   assert.ok(record.ari.accountId);
   assert.equal(record.storage.endpoint, "https://stouroacctstest261e0b.table.core.windows.net");
   assert.ok(record.gatewayIdentity.clientId && record.checksIdentity.clientId);
   const text = JSON.stringify(record);
-  assertNoneOf(text, [APPLE_KEY, context.cloud.lastGatewaySecret]);
+  assertNoneOf(text, [APPLE_KEY, context.cloud.lastGatewaySecret, ...Object.values(context.cloud.keychain).map(({ password }) => password)]);
   // The user flow offers email and Apple, and the gateway app signs in through it.
   const flow = context.cloud.graph.flows[0];
-  assert.deepEqual(flow.idps, ["EmailOtpSignup-OAUTH", "Apple-Managed-OIDC"]);
+  assert.deepEqual(flow.idps, ["EmailOtpSignup-OAUTH", record.apple.providerId]);
+  assert.equal(flow.displayName, "Ouro sign-in (test)");
   assert.deepEqual(flow.apps, [record.gatewayApp.appId]);
   const app = context.cloud.graph.apps.find(({ appId }) => appId === record.gatewayApp.appId);
   assert.deepEqual(app.web.redirectUris, ["https://ouro-desk-hosted-staging.blueflower-44af4710.eastus2.azurecontainerapps.io/oauth/entra/callback"]);
@@ -400,7 +407,7 @@ test("a tenant name already taken moves to the next candidate", async (t) => {
 test("under outcome B the Apple step stops with the admin-center text instead of calling Graph", async (t) => {
   const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()), record: { apple: { outcome: "B", developerId: "TEAMID1234", serviceId: "bot.ouro.identity.test", keyIds: { a: "KEYIDAAAAA" } } } });
   await assert.rejects(context.go(), /admin center/);
-  assert.ok(!context.fake.calls.some(({ args }) => args.includes("post") && args.some((arg) => arg.endsWith("identity/identityProviders"))));
+  assert.ok(!context.fake.calls.some(({ args }) => (args.includes("post") || args.includes("POST")) && args.some((arg) => arg.endsWith("identity/identityProviders"))));
   assert.ok(!context.fake.calls.some(({ args }) => args.includes("apple-siwa-key-a-test")));
   assert.match(context.logs.join("\n"), /All identity providers/);
 });
@@ -654,7 +661,7 @@ test("I5: a create that Graph doesn't show yet is waited for, never created twic
   assert.equal(cloud.graph.apps.filter(({ displayName }) => displayName === "ouro-desk-hosted").length, 1);
   assert.equal(cloud.graph.apps.filter(({ displayName }) => displayName === "ouro-identity-automation").length, 1);
   assert.equal(cloud.graph.flows.length, 1);
-  assert.equal(cloud.graph.sps.length, 2);
+  assert.equal(cloud.graph.sps.length, 3);
 
   const stuck = withAppleKeyInVault(emptyCloud());
   stuck.graphLag = 1000;
@@ -666,7 +673,7 @@ test("I5: a create that Graph doesn't show yet is waited for, never created twic
 test("I5: two app registrations with the gateway's name stop the run instead of picking one", async (t) => {
   const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
   await context.go();
-  context.cloud.graph.apps.push({ ...structuredClone(context.cloud.graph.apps[0]), appId: "dup", id: "dup" });
+  context.cloud.graph.apps.push({ ...structuredClone(context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted")), appId: "dup", id: "dup" });
   await assert.rejects(context.go(), /2 app registrations named ouro-desk-hosted/);
 });
 
@@ -679,7 +686,8 @@ test("M1: the Apple provider is created with slot b when slot a is tagged revoke
   await context.go();
   const provider = cloud.graph.providers[0];
   assert.equal(provider.keyId, "KEYIDBBBBB");
-  assert.equal(provider.certificateData, keyB);
+  // Graph takes the key's Base64 body only (spike Step 5).
+  assert.equal(provider.certificateData, keyB.split("\n")[1]);
 });
 
 test("M2: --seed-ari leaves an existing account as it is, access off and binding included", async (t) => {
@@ -743,11 +751,11 @@ test("M13: storage that allows shared keys or old TLS is corrected", () => {
 
 test("M14: an existing user flow without Apple gets the Apple provider linked", async (t) => {
   const cloud = withAppleKeyInVault(emptyCloud());
-  cloud.graph.providers.push({ id: "Apple-Managed-OIDC", "@odata.type": "#microsoft.graph.appleManagedIdentityProvider" });
-  cloud.graph.flows.push({ id: "flow-1", displayName: "Ouro sign-in", idps: ["EmailOtpSignup-OAUTH"], apps: [] });
+  cloud.graph.providers.push({ id: "18fc0b27-71d7-4192-9fd0-03735a28864e", "@odata.type": APPLE_TYPE });
+  cloud.graph.flows.push({ id: "flow-1", displayName: "Ouro sign-in (test)", idps: ["EmailOtpSignup-OAUTH"], apps: [] });
   const context = setup(t, { cloud });
   await context.go();
-  assert.deepEqual(cloud.graph.flows[0].idps, ["EmailOtpSignup-OAUTH", "Apple-Managed-OIDC"]);
+  assert.deepEqual(cloud.graph.flows[0].idps, ["EmailOtpSignup-OAUTH", "18fc0b27-71d7-4192-9fd0-03735a28864e"]);
 });
 
 test("m1: a gateway secret that Key Vault refuses is removed from the app again", async (t) => {
@@ -824,7 +832,7 @@ test("N-m1: when listSecrets returns a Key Vault reference without a value, az's
 
 // --- Task 7: the checks' Graph access, the Apple renewal record ---------------------------------------------------
 
-test("Task 7: an automation app holding only IdentityProvider.ReadWrite.All gains Application.Read.All with admin consent, and a rerun writes nothing", async (t) => {
+test("Task 7: an automation app holding only IdentityProvider.ReadWrite.All gains Application.Read.All through an appRoleAssignment, and a rerun writes nothing", async (t) => {
   const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
   addContainerApp(context.cloud, { name: "ouro-desk-hosted-staging", shown: { ...shownFixture, id: "/apps/ouro-desk-hosted-staging" }, secrets: {} });
   await context.go();
@@ -835,10 +843,10 @@ test("Task 7: an automation app holding only IdentityProvider.ReadWrite.All gain
   sp.appRoleAssignments = ["90db2b9a-d928-4d33-a4dd-8442ae3d41e4"];
   context.fake.calls.length = 0;
   await context.go();
-  const written = writes(context.fake).map(({ args }) => args.join(" "));
+  const written = writes(context.fake).map(({ args, input }) => `${args.join(" ")}${input ? ` ${input}` : ""}`);
   assert.deepEqual(written, [
     `ad app permission add --id ${automation.appId} --api 00000003-0000-0000-c000-000000000000 --api-permissions 9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30=Role`,
-    `ad app permission admin-consent --id ${automation.appId}`,
+    `rest --method post --url https://graph.microsoft.com/v1.0/servicePrincipals/${sp.id}/appRoleAssignments --headers Content-Type=application/json --body @/dev/stdin ${JSON.stringify({ principalId: sp.id, resourceId: GRAPH_SP_ID, appRoleId: "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30" })}`,
   ]);
   assert.ok(sp.appRoleAssignments.includes("9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"));
   context.fake.calls.length = 0;
@@ -846,11 +854,12 @@ test("Task 7: an automation app holding only IdentityProvider.ReadWrite.All gain
   assert.deepEqual(writes(context.fake), []);
 });
 
-test("Task 7: a consented permission that was never granted is consented again without being added twice", () => {
+test("Task 7: a requested role that was never granted is granted without being requested twice", () => {
   const steps = plan({
     env: "test",
     state: {
       tenant: { id: TEST_TENANT, name: "ourobottest" },
+      graphSp: { id: GRAPH_SP_ID, roles: GRAPH_ROLES },
       automationApp: {
         appId: "app-1",
         servicePrincipalId: "sp-1",
@@ -862,7 +871,8 @@ test("Task 7: a consented permission that was never granted is consented again w
   });
   const step = steps.find(({ name }) => name.startsWith("automation app "));
   assert.equal(step.name, "automation app Application.Read.All");
-  assert.deepEqual(step.calls.map(({ args }) => args.slice(0, 4).join(" ")), ["ad app permission admin-consent"]);
+  assert.deepEqual(step.calls.map(({ args }) => args.slice(0, 4).join(" ")), ["rest --method post --url"]);
+  assert.deepEqual(JSON.parse(step.calls[0].input), { principalId: "sp-1", resourceId: GRAPH_SP_ID, appRoleId: "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30" });
 });
 
 test("Task 7: creating the Apple provider records the live slot and apple-renewed-at, after the POST", async (t) => {
@@ -871,7 +881,7 @@ test("Task 7: creating the Apple provider records the live slot and apple-renewe
   const marker = context.cloud.vault.secrets["apple-siwa-active-test"];
   assert.equal(marker.value, "a");
   assert.equal(marker.tags["apple-renewed-at"], new Date(NOW).toISOString());
-  const post = context.fake.calls.findIndex(({ args }) => args.join(" ").startsWith("rest --method post --url https://graph.microsoft.com/v1.0/identity/identityProviders"));
+  const post = context.fake.calls.findIndex(({ cmd, args }) => cmd === "fetch" && args.join(" ") === "POST https://graph.microsoft.com/v1.0/identity/identityProviders");
   const set = context.fake.calls.findIndex(({ args }) => args.includes("apple-siwa-active-test") && args.includes("set"));
   assert.ok(post !== -1 && set > post);
 });
@@ -947,8 +957,9 @@ test("Minor 3: when the reset adds more than one credential, the Entra secret is
   // Someone appends a second credential while the run's reset happens: the run can't tell which one it holds.
   const racing = async (cmd, args, options) => {
     const result = await runner(cmd, args, options);
-    if (args.slice(0, 4).join(" ") === "ad app credential reset") {
-      cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted").passwordCredentials.push({ keyId: "0d0d0d0d-0000-4000-8000-0000000000aa" });
+    const gateway = cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted");
+    if (args.slice(0, 4).join(" ") === "ad app credential reset" && gateway && args.includes(gateway.appId)) {
+      gateway.passwordCredentials.push({ keyId: "0d0d0d0d-0000-4000-8000-0000000000aa" });
     }
     return result;
   };
@@ -1232,4 +1243,152 @@ test("review 3: --rotate signing-key --emergency replaces both keys and drops th
   assert.throws(() => parseFlags(["--env", "prod", "--emergency"]), /--emergency/);
   assert.equal(parseFlags(["--env", "prod", "--rotate", "signing-key", "--emergency"]).flags.emergency, true);
   assert.equal(parseFlags(["--env", "prod", "--rotate", "entra-secret"]).flags.rotate, "entra-secret");
+});
+
+// --- The live spike (2026-10-11) ------------------------------------------------------------------------------------
+
+const ADMIN_ROLE_NAMES = ["IdentityProvider.ReadWrite.All", "IdentityUserFlow.ReadWrite.All", "EventListener.ReadWrite.All", "Policy.ReadWrite.AuthenticationMethod", "Application.ReadWrite.All"];
+const IDENTITY_PATHS = /identity\/identityProviders|identity\/authenticationEventsFlows|policies\/authenticationMethodsPolicy/;
+
+// A tenant as the spike left it: the admin app with its roles and keychain secret, and an Apple provider with a GUID id.
+function spikeTenant(cloud = emptyCloud()) {
+  const admin = { appId: "8d518663-4a25-4c58-ba35-3ec34fa99072", id: "ad000000-0000-4000-8000-0000000000ad", displayName: "ouro-identity-admin", web: { redirectUris: [] }, api: { requestedAccessTokenVersion: null }, passwordCredentials: [{ keyId: "kc-1", displayName: "agent-keychain", endDateTime: "2027-01-09T00:00:00Z", secretText: "Kc8~spikeKeychainSecret.value_1" }], requiredResourceAccess: [], federated: [] };
+  cloud.graph.apps.push(admin);
+  cloud.graph.sps.push({ id: "ad000000-0000-4000-8000-0000000000sp", appId: admin.appId, appRoleAssignments: Object.values(GRAPH_ROLES), flowLinkLag: 0 });
+  cloud.keychain[`ouro-identity-admin-${TEST_TENANT}`] = { account: admin.appId, password: "Kc8~spikeKeychainSecret.value_1" };
+  cloud.graph.providers.push({ id: "18fc0b27-71d7-4192-9fd0-03735a28864e", "@odata.type": APPLE_TYPE, developerId: "743GT2AJ24", serviceId: "bot.ouro.identity.test", keyId: "J99VQR95QH", certificateData: "QUJD" });
+  return { cloud, admin };
+}
+
+test("spike 1: the Apple provider is created with certificateData as the key's Base64 body, and Graph's 400 for a PEM would have caught the old code", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go();
+  const provider = context.cloud.graph.providers[0];
+  assert.equal(provider.certificateData, APPLE_KEY.split("\n")[1]);
+  assert.doesNotMatch(provider.certificateData, /-----|\n/);
+  // The fake refuses a whole PEM, as Graph does.
+  const { fetch } = context.fake;
+  const token = await (await fetch(`https://login.microsoftonline.com/${TEST_TENANT}/oauth2/v2.0/token`, { method: "POST", body: new URLSearchParams({ client_id: context.readRecord().adminApp.appId, client_secret: context.cloud.keychain[`ouro-identity-admin-${TEST_TENANT}`].password }).toString() })).json();
+  const refused = await fetch(`https://graph.microsoft.com/v1.0/identity/identityProviders/${provider.id}`, { method: "PATCH", headers: { Authorization: `Bearer ${token.access_token}` }, body: JSON.stringify({ "@odata.type": APPLE_TYPE, certificateData: APPLE_KEY }) });
+  assert.equal(refused.status, 400);
+  assert.match((await refused.json()).error.message, /should be a Base64 encoded string/);
+});
+
+test("spike 2: an existing Apple provider with a GUID id is adopted by its type, never created again, and its id recorded", async (t) => {
+  const { cloud } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  const context = setup(t, { cloud });
+  await context.go();
+  assert.equal(cloud.graph.providers.length, 1);
+  assert.ok(!context.fake.calls.some(({ cmd, args }) => cmd === "fetch" && args[0] === "POST" && args[1].endsWith("identity/identityProviders")));
+  assert.equal(context.readRecord().apple.providerId, "18fc0b27-71d7-4192-9fd0-03735a28864e");
+  assert.deepEqual(cloud.graph.flows[0].idps, ["EmailOtpSignup-OAUTH", "18fc0b27-71d7-4192-9fd0-03735a28864e"]);
+  // Nothing in the scripts names B2C's fixed provider id.
+  for (const file of ["provision-identity.mjs", "identity-checks.mjs", "identity-record.mjs", "admin-graph.mjs"]) {
+    assert.doesNotMatch(readFileSync(new URL(`../infra/${file}`, import.meta.url), "utf8"), /Apple-Managed-OIDC/, file);
+  }
+});
+
+test("spike 3: the email policy, the Apple provider and the user flow go through the admin app's app-only token, never az's delegated one", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go();
+  // az rest never touches the paths its delegated token can't reach.
+  const viaAz = context.fake.calls.filter(({ cmd, args }) => cmd === "az" && args[0] === "rest" && IDENTITY_PATHS.test(args[args.indexOf("--url") + 1] ?? ""));
+  assert.deepEqual(viaAz, []);
+  const viaApp = context.fake.calls.filter(({ cmd, args }) => cmd === "fetch" && IDENTITY_PATHS.test(args[1]));
+  assert.ok(viaApp.some(({ args }) => args[0] === "PATCH" && /authenticationMethodConfigurations\/email$/.test(args[1])));
+  assert.ok(viaApp.some(({ args }) => args[0] === "POST" && /identity\/authenticationEventsFlows$/.test(args[1])));
+  assert.deepEqual(context.cloud.graph.email, { state: "enabled", allowExternalIdToUseEmailOtp: "enabled" });
+  // The admin app holds exactly its roles, granted through appRoleAssignments; az's portal-only admin-consent is never used.
+  const admin = context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-identity-admin");
+  const adminSp = context.cloud.graph.sps.find(({ appId }) => appId === admin.appId);
+  assert.deepEqual([...adminSp.appRoleAssignments].sort(), ADMIN_ROLE_NAMES.map((name) => GRAPH_ROLES[name]).sort());
+  assert.ok(!context.fake.calls.some(({ args }) => args.includes("admin-consent")));
+  // The gateway app's openid and profile are consented tenant-wide through an oauth2PermissionGrant.
+  const gateway = context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted");
+  const gatewaySp = context.cloud.graph.sps.find(({ appId }) => appId === gateway.appId);
+  assert.deepEqual(context.cloud.graph.grants.map(({ clientId, consentType, resourceId, scope }) => ({ clientId, consentType, resourceId, scope })), [{ clientId: gatewaySp.id, consentType: "AllPrincipals", resourceId: GRAPH_SP_ID, scope: "openid profile" }]);
+});
+
+test("spike 3: the admin app's new secret reaches the keychain through stdin only, and a rerun reads it there instead of making another", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go();
+  const admin = context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-identity-admin");
+  assert.equal(admin.passwordCredentials.length, 1);
+  const item = context.cloud.keychain[`ouro-identity-admin-${TEST_TENANT}`];
+  assert.equal(item.account, admin.appId);
+  assert.equal(item.password, admin.passwordCredentials[0].secretText);
+  // 90 days, as the spike's.
+  assert.equal(admin.passwordCredentials[0].endDateTime, "2027-01-30");
+  // The secret went to `security -i` on stdin, and appears in no argv, log or record.
+  const store = context.fake.calls.find(({ cmd, args }) => cmd === "security" && args[0] === "-i");
+  assert.ok(store.input.includes(item.password));
+  assertNoneOf(everythingShown(context), [item.password]);
+  assertNoneOf(JSON.stringify(context.readRecord()), [item.password]);
+  // The token request carries it in its body only, never in the URL.
+  const fetches = context.fake.calls.filter(({ cmd }) => cmd === "fetch");
+  assert.ok(fetches.every(({ args }) => !args.join(" ").includes(item.password)));
+  assert.ok(fetches.some(({ args, input }) => args[1].endsWith("/oauth2/v2.0/token") && new URLSearchParams(input).get("client_secret") === item.password));
+  assert.ok(fetches.filter(({ args }) => !args[1].endsWith("/oauth2/v2.0/token")).every(({ input }) => !String(input ?? "").includes(item.password)));
+  context.fake.calls.length = 0;
+  await context.go();
+  assert.deepEqual(writes(context.fake), []);
+  assert.equal(admin.passwordCredentials.length, 1);
+});
+
+test("spike 3: an admin app and keychain secret made earlier (by the spike) are adopted, and a secret Entra refuses is replaced", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  const context = setup(t, { cloud });
+  await context.go();
+  assert.equal(cloud.graph.apps.filter(({ displayName }) => displayName === "ouro-identity-admin").length, 1);
+  assert.equal(admin.passwordCredentials.length, 1, "no new credential while the keychain's works");
+  assert.equal(context.readRecord().adminApp.appId, admin.appId);
+  // The keychain's secret expired: the next run adds a credential and replaces the keychain item.
+  admin.passwordCredentials[0].endDateTime = "2026-10-01T00:00:00Z";
+  cloud.now = NOW;
+  await context.go();
+  assert.equal(admin.passwordCredentials.length, 2);
+  assert.equal(cloud.keychain[`ouro-identity-admin-${TEST_TENANT}`].password, admin.passwordCredentials[1].secretText);
+});
+
+test("spike 3: a new admin secret refused for a while, and roles not yet in its token, are waited for", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  const context = setup(t, { cloud });
+  // Every new credential is refused for its first two token requests (AADSTS7000215), as Entra does for a fresh secret.
+  const reset = context.fake.runner;
+  const runner = async (cmd, args, options) => {
+    const result = await reset(cmd, args, options);
+    if (cmd === "az" && args.join(" ").startsWith("ad app credential reset")) for (const app of cloud.graph.apps) for (const credential of app.passwordCredentials) credential.pendingFor ??= 2;
+    return result;
+  };
+  await context.go({}, { runner });
+  assert.equal(cloud.graph.providers.length, 1);
+});
+
+test("spike 3: a dry run reads the tenant's settings through the admin app when it can sign in, and writes nothing", async (t) => {
+  const { cloud } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  cloud.graph.email = { state: "enabled", allowExternalIdToUseEmailOtp: "enabled" };
+  const context = setup(t, { cloud });
+  await context.go({ dryRun: true });
+  assert.deepEqual(writes(context.fake), []);
+  const shown = context.logs.join("\n");
+  assert.doesNotMatch(shown, /can't sign in yet/);
+  assert.doesNotMatch(shown, /email one-time code|==> Apple provider/);
+  assert.match(shown, /would run: graph POST https:\/\/graph\.microsoft\.com\/v1\.0\/identity\/authenticationEventsFlows/);
+  assertNoneOf(everythingShown(context), ["Kc8~spikeKeychainSecret.value_1"]);
+});
+
+test("spike 4: a user flow refuses a brand-new service principal for about 30 seconds, so linking the gateway app retries until Graph accepts it", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.flowLinkLag = 3;
+  const context = setup(t, { cloud });
+  await context.go();
+  const gateway = cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted");
+  assert.deepEqual(cloud.graph.flows[0].apps, [gateway.appId]);
+  const links = context.fake.calls.filter(({ cmd, args }) => cmd === "fetch" && args[0] === "POST" && args[1].endsWith("includeApplications"));
+  assert.equal(links.length, 4);
+  // A link that never takes stops with the reason.
+  const stuck = withAppleKeyInVault(emptyCloud());
+  stuck.flowLinkLag = 1000;
+  const second = setup(t, { cloud: stuck });
+  await assert.rejects(second.go(), /application id .* is invalid/i);
 });
