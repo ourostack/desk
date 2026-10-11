@@ -65,12 +65,15 @@ const claimsOf = (token) => {
   }
 };
 
-// Graph through the admin app. `fresh` says this run just created the secret or granted roles, so a refused secret or
-// a token without every role is waited for (both take effect after a delay) instead of failing at once.
+// Graph through the admin app. `freshSecret` says this run just made the secret, so a refused secret is waited for;
+// `freshRoles` says it just granted roles, so a token without every role, or a 403, is waited for. Both take effect
+// after a delay. `fresh` sets both. A new secret also comes with a new role grant's wait, since a token can only show
+// roles once it is issued.
 // A token is fetched again a minute before it expires, and once when Graph answers 401.
 const EXPIRY_MARGIN_MS = 60_000;
 
-export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh = () => false, tries = 20, waitMs = 15_000, now = Date.now }) {
+export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh = () => false, freshSecret = fresh, freshRoles = fresh, tries = 20, waitMs = 15_000, now = Date.now }) {
+  const freshAny = () => freshSecret() || freshRoles();
   let cached = null;
   let expiresAt = 0;
 
@@ -96,7 +99,8 @@ export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh 
       } catch (error) {
         // A new client secret is refused (AADSTS7000215, invalid_client), and a new service principal not found
         // (AADSTS700016, unauthorized_client), until Entra has it everywhere.
-        if ((error.code === "invalid_client" || error.code === "unauthorized_client") && fresh() && attempt < tries) {
+        const waitable = error.code === "invalid_client" ? freshSecret() : error.code === "unauthorized_client" && freshAny();
+        if (waitable && attempt < tries) {
           await sleep(waitMs);
           continue;
         }
@@ -105,7 +109,7 @@ export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh 
       const claims = claimsOf(candidate);
       if (claims.tid !== tenantId) throw new GraphError(`The ${ADMIN_APP_NAME} token is for tenant ${claims.tid ?? "(none)"}, not ${tenantId}; nothing was called.`, { code: "wrong-tenant" });
       const missing = ADMIN_ROLES.filter((role) => !(claims.roles ?? []).includes(role));
-      if (missing.length && fresh() && attempt < tries) {
+      if (missing.length && freshAny() && attempt < tries) {
         await sleep(waitMs);
         continue;
       }
@@ -132,7 +136,7 @@ export function createAdminGraph({ tenantId, appId, secret, fetch, sleep, fresh 
       }
       refresh = response.status === 403;
       // A role granted moments ago may not be in effect yet.
-      if (response.status === 403 && fresh() && attempt < tries) {
+      if (response.status === 403 && freshAny() && attempt < tries) {
         await sleep(waitMs);
         continue;
       }
