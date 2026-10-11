@@ -1,5 +1,0 @@
-### Bounded production clocks in factory reports
-
-Factory reports now carry a `clocks` envelope on each job file and on its task and stack-up rows, and each job page states it after the lead time. It separates production time into episodes, so the time between a delivery and a reopen is no longer read as production, and it splits each episode into recorded working time (every worker of the task counted once, ask-tool waits out unless another worker is busy) and production not recorded as active. Every clock states its basis, its state and, when partial, which way the true figure lies. See [Lifecycle clocks](docs/factory-local-capture.md#lifecycle-clocks).
-
-Recorded request-to-delivery and queue time stay unavailable, because published facts do not record the original request; a card made after work began never yields a negative queue. Late work without a recorded reopen, untimed or lost lifecycle history, unplaced sessions and missing capture leave the production clocks unavailable or bounded, never an exact zero. The legacy lead time, its basis and every existing report value are unchanged.
