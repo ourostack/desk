@@ -4,17 +4,22 @@
 //
 //   node hosted/infra/identity-checks.mjs --env test|prod [--renew-apple] [--alert-file <path>]
 //       Refuses to run unless az's current account is in the tenant identity-<env>.json records. Then, with
-//       --renew-apple (outcome A only), PATCHes the Apple provider with the other key slot, read inside this process,
-//       unless that slot is revoked or missing: then it re-sends the live slot and alerts. apple-renewed-at is
-//       written only after Graph accepts a PATCH that changes the slot. Then it checks:
-//         entra-client-secret   the gateway app's newest client secret ends more than 30 days from now
+//       --renew-apple (outcome A only), PATCHes the Apple provider with the other key slot, read inside this process.
+//       A slot is sent only when its Key Vault tags prove the pair: the Key ID tag equals the record's Key ID and the
+//       key matches the fingerprint taken at import. An unproven slot means nothing is sent. A revoked or missing next
+//       slot means the live slot is re-sent (after the same proof) and the run alerts. apple-renewed-at is written only
+//       after Graph accepts a PATCH that changes the slot and the provider, read back, shows the new Key ID. Then:
+//         entra-client-secret   the credential the gateway uses (the keyId tagged on entra-client-secret-<env>) ends
+//                               more than 30 days from now
 //         apple-secret-age      the Apple client secret (six months from apple-renewed-at) ends more than 30 days out
-//         legacy-cutoff         (prod) DESK_LEGACY_CUTOFF is set on the app once releasedAt is more than a day old
+//         legacy-cutoff         (prod) DESK_LEGACY_CUTOFF is set on the app once releasedAt is more than a day old, or
+//                               whenever the app maps GitHub accounts
 //       Any failure exits 1 with one line on stderr. --alert-file then holds the alert: check names and dates only,
 //       because the issue it becomes is public.
 //   node hosted/infra/identity-checks.mjs --env test|prod --record-apple-upload a|b
-//       Outcome B: after a manual admin-center upload, records that slot and the time once Graph's Apple provider
-//       shows that slot's Key ID, so the daily check counts the six months from the upload.
+//       Outcome B (or none recorded): after a manual admin-center upload of the other slot's key, records that slot
+//       and the time, once Graph's Apple provider shows that slot's Key ID and the slot recorded as live is the other
+//       one. Re-recording the live slot is refused: Graph can't show a same-key upload.
 //
 // Graph calls go to az's current account, which must be the Ouro tenant (the automation app in the workflow); Key
 // Vault and Container Apps calls name the subscription, which selects the id-ouro-identity-checks sign-in. Nothing
@@ -24,7 +29,7 @@ import { writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { APPLE_RENEWED_TAG, ENVIRONMENTS, SUBSCRIPTION, APPS_RESOURCE_GROUP, VAULT, appleActiveSecretName, appleActiveSetArgs, appleKeySecretName, environment, loadRecord } from "./identity-record.mjs";
+import { APPLE_RENEWED_TAG, ENVIRONMENTS, KEY_ID_TAG, SUBSCRIPTION, APPS_RESOURCE_GROUP, VAULT, appleActiveSecretName, appleActiveSetArgs, appleKeyProblem, appleKeySecretName, entraSecretName, environment, isRevoked, loadRecord } from "./identity-record.mjs";
 import { defaultRunner, trimOneNewline } from "./runner.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -36,6 +41,10 @@ const WARN_DAYS = 30;
 // Entra's Apple client secret, generated from the key, lasts six months.
 const APPLE_SECRET_MONTHS = 6;
 const SLOTS = ["a", "b"];
+// A renewal date this far past now is clock skew; further is a wrong tag.
+const SKEW_MS = 3600 * 1000;
+// Container Apps through plain ARM (Reader is enough), so the workflow needs no az extension.
+const APP_API_VERSION = "2024-03-01";
 
 // Every line an alert or a check result can say, by check and result code. `{date}` is the only variable part, so the
 // alert (a public issue) never carries an id, a key or an error text.
@@ -51,6 +60,7 @@ export const ALERT_PHRASES = {
     "ends-soon": "the newest client secret ends {date}, within 30 days",
     ended: "the newest client secret ended {date}",
     none: "the gateway app has no client secret",
+    unidentified: "the credential Key Vault holds can't be identified on the gateway app",
     unrecorded: "identity-<env>.json records no gateway app",
     unreadable: "the gateway app could not be read",
   },
@@ -59,6 +69,7 @@ export const ALERT_PHRASES = {
     "ends-soon": "renewed {date}; the client secret ends about {date}, within 30 days",
     ended: "renewed {date}; the client secret ended about {date}",
     unrecorded: "no renewal or upload date is recorded",
+    future: "the recorded renewal date {date} is in the future",
     unreadable: "the renewal date could not be read",
   },
   "legacy-cutoff": {
@@ -67,6 +78,7 @@ export const ALERT_PHRASES = {
     "not-due": "released {date}; the cutoff is due a day later",
     "no-mappings": "the app maps no GitHub accounts, so no cutoff is needed",
     missing: "released {date}, and DESK_LEGACY_CUTOFF is still not set",
+    "unreleased-mapped": "the app maps GitHub accounts, but no release is recorded and DESK_LEGACY_CUTOFF is not set",
     unreadable: "the app's settings could not be read",
   },
   "apple-renewal": {
@@ -75,6 +87,8 @@ export const ALERT_PHRASES = {
     "renewed-unrecorded": "sent the other key slot on {date}, but the renewal date could not be recorded",
     refused: "Graph refused the update; the renewal date is unchanged",
     "no-usable-slot": "neither key slot is usable; nothing was sent",
+    "unverified-key": "a key slot doesn't match its recorded Key ID or import fingerprint; nothing was sent",
+    unconfirmed: "Graph accepted the update, but the provider read back doesn't show the new key; the renewal date is unchanged",
     "live-unknown": "the Apple provider uses neither recorded key; nothing was sent",
     "not-outcome-a": "renewal runs only under outcome A; nothing was sent",
     unreadable: "failed before it finished; see the run log",
@@ -82,6 +96,8 @@ export const ALERT_PHRASES = {
   "apple-upload": {
     recorded: "recorded the upload on {date}",
     mismatch: "the Apple provider doesn't use that slot's key; nothing was recorded",
+    "no-change": "that slot is already recorded as live, so no new upload is shown; nothing was recorded",
+    "not-outcome-b": "records uploads only under outcome B or before the outcome is recorded; nothing was recorded",
     unreadable: "failed before it finished; see the run log",
   },
 };
@@ -139,18 +155,29 @@ async function checkTenant(ctx) {
   }
 }
 
+// Judges the credential the gateway uses: the one whose keyId provision-identity.mjs tagged on the Key Vault secret
+// when it wrote it, never simply the newest (Task 7 review I3). Only the secret's tags are read, never its value.
 async function checkEntraSecret(ctx) {
   const objectId = ctx.record.gatewayApp?.objectId;
   if (!objectId) return result("entra-client-secret", "unrecorded");
   try {
-    // passwordCredentials carry a hint (the secret's first characters); only endDateTime is used, and nothing printed.
+    let tags;
+    try {
+      tags = await azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", entraSecretName(ctx.env), "--query", "tags", "-o", "json", ...SUB]);
+    } catch (error) {
+      if (isNotFound(error)) return result("entra-client-secret", "unidentified");
+      throw error;
+    }
+    // passwordCredentials carry a hint (the secret's first characters); only keyId and endDateTime are used.
     const app = await graphGet(ctx, `applications/${objectId}?$select=passwordCredentials`);
-    const ends = (app?.passwordCredentials ?? []).map(({ endDateTime }) => Date.parse(endDateTime)).filter(Number.isFinite);
-    if (!ends.length) return result("entra-client-secret", "none");
-    const newest = Math.max(...ends);
-    if (newest <= ctx.now) return result("entra-client-secret", "ended", [day(newest)]);
-    if (newest - ctx.now <= WARN_DAYS * DAY) return result("entra-client-secret", "ends-soon", [day(newest)]);
-    return result("entra-client-secret", "ok", [day(newest)]);
+    const credentials = app?.passwordCredentials ?? [];
+    if (!credentials.length) return result("entra-client-secret", "none");
+    const inUse = tags?.[KEY_ID_TAG] ? credentials.find(({ keyId }) => keyId === tags[KEY_ID_TAG]) : undefined;
+    const ends = Date.parse(inUse?.endDateTime ?? "");
+    if (!Number.isFinite(ends)) return result("entra-client-secret", "unidentified");
+    if (ends <= ctx.now) return result("entra-client-secret", "ended", [day(ends)]);
+    if (ends - ctx.now <= WARN_DAYS * DAY) return result("entra-client-secret", "ends-soon", [day(ends)]);
+    return result("entra-client-secret", "ok", [day(ends)]);
   } catch (error) {
     return result("entra-client-secret", "unreadable", [], detailOf(ctx, error));
   }
@@ -167,6 +194,7 @@ async function checkAppleAge(ctx) {
     }
     const renewed = Date.parse(tags?.[APPLE_RENEWED_TAG] ?? "");
     if (!Number.isFinite(renewed)) return result("apple-secret-age", "unrecorded");
+    if (renewed > ctx.now + SKEW_MS) return result("apple-secret-age", "future", [day(renewed)]);
     const ends = addMonths(renewed, APPLE_SECRET_MONTHS);
     const dates = [day(renewed), day(ends)];
     if (ends <= ctx.now) return result("apple-secret-age", "ended", dates);
@@ -178,15 +206,19 @@ async function checkAppleAge(ctx) {
 }
 
 // Production only: a forgotten cutoff would let legacy tokens live forever (plan ruling on DESK_LEGACY_CUTOFF).
+// Also when main's record has no releasedAt yet: an app that already maps GitHub accounts has been released, so a
+// missing cutoff then is an alert too (review minor 6).
 async function checkCutoff(ctx) {
   const releasedAt = Date.parse(ctx.record.releasedAt ?? "");
-  if (!Number.isFinite(releasedAt)) return result("legacy-cutoff", "not-released");
-  if (ctx.now - releasedAt <= DAY) return result("legacy-cutoff", "not-due", [day(releasedAt)]);
+  const released = Number.isFinite(releasedAt);
+  if (released && ctx.now - releasedAt <= DAY) return result("legacy-cutoff", "not-due", [day(releasedAt)]);
   try {
     // Only the names of env vars that hold a value or a secret reference leave az; no value does.
-    const names = (await azJson(ctx, ["containerapp", "show", "-n", ENVIRONMENTS.prod.app, "-g", APPS_RESOURCE_GROUP, "--query", "properties.template.containers[].env[] | [?value || secretRef].name", "-o", "json", ...SUB])) ?? [];
+    const id = `/subscriptions/${SUBSCRIPTION}/resourceGroups/${APPS_RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${ENVIRONMENTS.prod.app}`;
+    const names = (await azJson(ctx, ["resource", "show", "--ids", id, "--api-version", APP_API_VERSION, "--query", "properties.template.containers[].env[] | [?value || secretRef].name", "-o", "json"])) ?? [];
     if (names.includes("DESK_LEGACY_CUTOFF")) return result("legacy-cutoff", "ok");
-    if (!names.includes("DESK_GITHUB_ACCOUNTS")) return result("legacy-cutoff", "no-mappings", [day(releasedAt)]);
+    if (!names.includes("DESK_GITHUB_ACCOUNTS")) return result("legacy-cutoff", released ? "no-mappings" : "not-released", released ? [day(releasedAt)] : []);
+    if (!released) return result("legacy-cutoff", "unreleased-mapped");
     return result("legacy-cutoff", "missing", [day(releasedAt)]);
   } catch (error) {
     return result("legacy-cutoff", "unreadable", [], detailOf(ctx, error));
@@ -209,15 +241,32 @@ async function liveSlot(ctx) {
   return { providerId, slot };
 }
 
-// A slot is usable when its key is in Key Vault and not tagged revoked (plan ruling N2).
-async function usable(ctx, slot) {
+// A slot's key, proven to be the key whose Key ID the record holds: { status: "ok", value }, or "missing" (never
+// imported), "revoked" (plan ruling N2), or "unverified" (review C1: no recorded Key ID, a Key ID tag that differs,
+// or key material that doesn't match the fingerprint taken at import). A revoked or unverified key is never read.
+async function slotKey(ctx, slot) {
+  const name = appleKeySecretName(slot, ctx.env);
+  let tags;
   try {
-    const tags = await azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName(slot, ctx.env), "--query", "tags", "-o", "json", ...SUB]);
-    return !tags?.revoked;
+    tags = await azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "tags", "-o", "json", ...SUB]);
   } catch (error) {
-    if (isNotFound(error)) return false;
+    if (isNotFound(error)) return { status: "missing" };
     throw error;
   }
+  if (isRevoked(tags)) return { status: "revoked" };
+  const recordedKeyId = ctx.record.apple?.keyIds?.[slot];
+  let problem = appleKeyProblem({ tags, recordedKeyId });
+  if (problem) {
+    ctx.log(`apple-renewal: slot ${slot}: ${problem}.`);
+    return { status: "unverified" };
+  }
+  const value = trimOneNewline(await out(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "value", "-o", "tsv", ...SUB]));
+  problem = appleKeyProblem({ tags, recordedKeyId, value });
+  if (problem) {
+    ctx.log(`apple-renewal: slot ${slot}: ${problem}.`);
+    return { status: "unverified" };
+  }
+  return { status: "ok", value };
 }
 
 async function renewApple(ctx) {
@@ -228,11 +277,16 @@ async function renewApple(ctx) {
     if (!live) return result("apple-renewal", "live-unknown");
     const next = live === "a" ? "b" : "a";
     let send;
-    if (await usable(ctx, next)) send = next;
-    else if (await usable(ctx, live)) send = live;
-    else return result("apple-renewal", "no-usable-slot");
-    const certificateData = trimOneNewline(await out(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName(send, ctx.env), "--query", "value", "-o", "tsv", ...SUB]));
-    const body = { "@odata.type": APPLE_TYPE, keyId: apple.keyIds[send], certificateData };
+    let key = await slotKey(ctx, next);
+    if (key.status === "ok") send = next;
+    else if (key.status === "unverified") return result("apple-renewal", "unverified-key");
+    else {
+      key = await slotKey(ctx, live);
+      if (key.status === "unverified") return result("apple-renewal", "unverified-key");
+      if (key.status !== "ok") return result("apple-renewal", "no-usable-slot");
+      send = live;
+    }
+    const body = { "@odata.type": APPLE_TYPE, keyId: apple.keyIds[send], certificateData: key.value };
     try {
       await out(ctx, ["rest", "--method", "patch", "--url", `${GRAPH}identity/identityProviders/${providerId}`, "--headers", "Content-Type=application/json", "--body", "@/dev/stdin"], JSON.stringify(body));
     } catch (error) {
@@ -240,6 +294,12 @@ async function renewApple(ctx) {
       const status = /ERROR: ([A-Za-z ]{3,40})\(/.exec(`${error?.stderr ?? ""}`)?.[1]?.trim();
       ctx.log(`apple-renewal: Graph did not accept the PATCH of slot ${send}${status ? ` (${status})` : ""}.`);
       return result("apple-renewal", "refused");
+    }
+    // Graph's 2xx is not enough: the provider read back must show the Key ID just sent.
+    const shown = await graphGet(ctx, `identity/identityProviders/${providerId}`);
+    if (shown?.keyId !== apple.keyIds[send]) {
+      ctx.log(`apple-renewal: Graph accepted slot ${send}, but the provider reads back Key ID ${shown?.keyId ?? "(none)"}.`);
+      return result("apple-renewal", "unconfirmed");
     }
     if (send === live) {
       // A re-send of the same key can't be shown to make a new client secret (plan ruling on alternating), so the
@@ -259,8 +319,19 @@ async function renewApple(ctx) {
   }
 }
 
+// Graph can't show an upload of the same key, so an upload counts only when it switched slots: the provider must now
+// use this slot's Key ID, and the slot recorded as live must be the other one (review I2). The first record, when
+// nothing is recorded yet, needs only the provider to show the slot.
 async function recordUpload(ctx, slot) {
+  if (ctx.record.apple?.outcome === "A") return result("apple-upload", "not-outcome-b");
   try {
+    let recorded = null;
+    try {
+      recorded = trimOneNewline(await out(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleActiveSecretName(ctx.env), "--query", "value", "-o", "tsv", ...SUB]));
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+    if (recorded === slot) return result("apple-upload", "no-change");
     const { slot: live } = await liveSlot(ctx);
     if (live !== slot) return result("apple-upload", "mismatch");
     await out(ctx, appleActiveSetArgs(ctx.env, new Date(ctx.now).toISOString()), slot);

@@ -8,6 +8,7 @@
 // email address.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fingerprint } from "../src/auth/seal.js";
 
 export const SUBSCRIPTION = "261e0bf1-934d-41ab-9295-229b0d254418";
 export const APPS_RESOURCE_GROUP = "rg-ouro-work-substrate";
@@ -79,6 +80,20 @@ export const appleKeySecretName = (slot, env) => `apple-siwa-key-${slot}-${env}`
 export const appleActiveSecretName = (env) => `apple-siwa-active-${env}`;
 export const APPLE_RENEWED_TAG = "apple-renewed-at";
 export const appleActiveSetArgs = (env, renewedAt) => ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", appleActiveSecretName(env), "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `${APPLE_RENEWED_TAG}=${renewedAt}`, "--query", "id", "-o", "tsv", "--subscription", SUBSCRIPTION];
+// Tags that bind a Key Vault secret to what it holds (Task 7 review C1 and I3). An Apple key slot carries the Key ID
+// read from its .p8 file name at import and the key's fingerprint; the gateway's Entra client secret carries the keyId
+// of the app credential it is. A fingerprint is an HMAC keyed by the key, so it is safe to store and log.
+export const KEY_ID_TAG = "key-id";
+export const FINGERPRINT_TAG = "fingerprint";
+// `revoked` counts by its presence, whatever its value (review minor 7): `--tags revoked=` still marks the slot.
+export const isRevoked = (tags) => Boolean(tags) && Object.hasOwn(tags, "revoked");
+// Why a slot's key can't be sent with the record's Key ID, or null. `value` is checked only when given.
+export function appleKeyProblem({ tags, recordedKeyId, value }) {
+  if (!recordedKeyId) return "identity-<env>.json records no Key ID for it";
+  if (tags?.[KEY_ID_TAG] !== recordedKeyId) return `its Key ID tag (${tags?.[KEY_ID_TAG] ?? "none"}) doesn't match the recorded Key ID ${recordedKeyId}`;
+  if (value !== undefined && (!tags?.[FINGERPRINT_TAG] || fingerprint(value) !== tags[FINGERPRINT_TAG])) return "its key doesn't match the fingerprint taken at import";
+  return null;
+}
 export const vaultSecretUrl = (name) => `https://${VAULT}.vault.azure.net/secrets/${name}`;
 export const recordPath = (env, dir) => join(dir, `identity-${env}.json`);
 

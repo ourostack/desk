@@ -12,10 +12,11 @@
 //       through stdin), the ouro-identity-automation app, email one-time codes,
 //       the Apple provider (outcome A; outcome B stops with the admin-center
 //       steps), the user flow, and the GitHub environment `identity`.
-//   ... --apple-key-file <p8> --apple-key-slot a|b [--keep-file]
-//       imports an Apple key into Key Vault through stdin, clears any `revoked`
-//       tag on that slot, and deletes the file once Key Vault returns the same
-//       bytes (unless --keep-file).
+//   ... --apple-key-file <p8> --apple-key-slot a|b [--apple-key-id <id>] [--keep-file]
+//       imports an Apple key into Key Vault through stdin, tagged with its Key ID
+//       (from AuthKey_<id>.p8, or --apple-key-id) and fingerprint, which clears
+//       any `revoked` tag on that slot; records the Key ID in identity-<env>.json;
+//       and deletes the file once Key Vault returns the same bytes (unless --keep-file).
 //   ... --seed-ari            reconciles, then creates Ari's account and binding and records his accountId
 //   ... --invite-ari [--browser-context <name>]
 //       issues an invite for the recorded account: 24 hours in prod, written to
@@ -37,7 +38,7 @@
 // the env's tenant as its current account (the script checks and says how).
 import { chmodSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { fingerprint } from "../src/auth/seal.js";
@@ -62,7 +63,11 @@ import {
   SUBSCRIPTION,
   VAULT,
   APPLE_RENEWED_TAG,
+  FINGERPRINT_TAG,
+  KEY_ID_TAG,
   appleActiveSecretName,
+  appleKeyProblem,
+  isRevoked,
   appleActiveSetArgs,
   appleKeySecretName,
   entraSecretName,
@@ -541,8 +546,18 @@ async function execStep(ctx, step) {
     const keyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", "[].keyId", "-o", "tsv"]));
     const before = new Set(await keyIds());
     const password = secretFromAz(await execCall(ctx, step.calls[0]), "The gateway's new client secret");
+    // The Key Vault secret is tagged with the new credential's keyId, so the daily check judges the credential the
+    // gateway uses, not the newest one on the app (Task 7 review I3). Graph may take a moment to list it.
+    let added = (await keyIds()).filter((id) => !before.has(id));
+    for (let attempt = 0; added.length !== 1 && attempt < GRAPH_LAG_TRIES; attempt += 1) {
+      await ctx.sleep(GRAPH_LAG_MS);
+      added = (await keyIds()).filter((id) => !before.has(id));
+    }
+    const setCall = { ...step.calls[1], args: [...step.calls[1].args] };
+    if (added.length === 1) setCall.args.splice(setCall.args.indexOf("--query"), 0, "--tags", `${KEY_ID_TAG}=${added[0]}`);
+    else ctx.log(`    could not tell which credential reset added (${added.length} new); ${entraSecretName(ctx.env)} is written untagged, and the daily check will alert until it is tagged.`);
     try {
-      await propagated(ctx, () => execCall(ctx, step.calls[1], password), "Writing to Key Vault");
+      await propagated(ctx, () => execCall(ctx, setCall, password), "Writing to Key Vault");
     } catch (error) {
       for (const keyId of (await keyIds()).filter((id) => !before.has(id))) {
         await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", keyId]);
@@ -550,13 +565,16 @@ async function execStep(ctx, step) {
       }
       throw error;
     }
-    ctx.log(`    wrote ${entraSecretName(ctx.env)} to Key Vault (fingerprint ${fingerprint(password)})`);
+    ctx.log(`    wrote ${entraSecretName(ctx.env)} to Key Vault (fingerprint ${fingerprint(password)}${added.length === 1 ? `, credential ${added[0]}` : ""})`);
     return;
   }
   if (step.appleProvider) {
-    const slot = await liveAppleSlot(ctx);
+    const { slot, tags } = await liveAppleSlot(ctx);
     const certificateData = trimOneNewline(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName(slot, ctx.env), "--query", "value", "-o", "tsv", ...SUB]));
     const apple = ctx.record.apple;
+    // The key and the record's Key ID must be the pair the import tagged (Task 7 review C1).
+    const problem = appleKeyProblem({ tags, recordedKeyId: apple.keyIds?.[slot], value: certificateData });
+    if (problem) throw new Error(`Apple key slot ${slot} for ${ctx.env} can't be sent: ${problem}. Nothing was sent; re-import the slot with --apple-key-file.`);
     const body = { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.[slot], certificateData };
     await execCall(ctx, step.calls[1], JSON.stringify(body));
     ctx.log(`    created the Apple provider with key slot ${slot}`);
@@ -576,7 +594,7 @@ async function execStep(ctx, step) {
 async function liveAppleSlot(ctx) {
   for (const slot of ["a", "b"]) {
     const tags = (await maybe(() => azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName(slot, ctx.env), "--query", "tags", "-o", "json", ...SUB]))) ?? null;
-    if (tags && !tags.revoked) return slot;
+    if (tags && !isRevoked(tags)) return { slot, tags };
   }
   throw new Error(`Neither Apple key slot for ${ctx.env} is imported and unrevoked; import one with --apple-key-file.`);
 }
@@ -648,11 +666,26 @@ async function reconcile(ctx) {
 
 // --- Apple key import --------------------------------------------------------------------------------------------
 
-async function importAppleKey(ctx, { file, slot, keepFile }) {
+// Apple names each downloaded key AuthKey_<Key ID>.p8; the .p8 itself holds no Key ID.
+const KEY_ID = /^[A-Z0-9]{10}$/;
+function appleKeyIdFor(ctx, { file, slot, keyId: given }) {
+  const fromName = /^AuthKey_([A-Z0-9]{10})\.p8$/.exec(basename(file))?.[1];
+  if (given !== undefined && !KEY_ID.test(given)) throw new Error(`--apple-key-id ${given} is not an Apple Key ID (10 capital letters or digits).`);
+  if (given && fromName && given !== fromName) throw new Error(`${basename(file)} names Key ID ${fromName}, but --apple-key-id says ${given}; nothing was imported.`);
+  const keyId = given ?? fromName;
+  if (!keyId) throw new Error(`${basename(file)} isn't named AuthKey_<Key ID>.p8; pass the key's Key ID with --apple-key-id.`);
+  const other = slot === "a" ? "b" : "a";
+  if (ctx.record.apple?.keyIds?.[other] === keyId) throw new Error(`Key ID ${keyId} is already recorded for slot ${other} in identity-${ctx.env}.json; one key can't fill both slots. Nothing was imported.`);
+  return keyId;
+}
+
+async function importAppleKey(ctx, { file, slot, keepFile, keyId: givenKeyId }) {
   const name = appleKeySecretName(slot, ctx.env);
+  const keyId = appleKeyIdFor(ctx, { file, slot, keyId: givenKeyId });
   const key = readFileSync(file, "utf8");
   if (!key.includes("PRIVATE KEY")) throw new Error(`${file} is not a .p8 private key.`);
-  const setArgs = ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", name, "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `imported-at=${new Date(ctx.now()).toISOString()}`, "--query", "id", "-o", "tsv", ...SUB];
+  // The Key ID and fingerprint bind this key to its slot's recorded Key ID; the renewal checks both (review C1).
+  const setArgs = ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", name, "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `imported-at=${new Date(ctx.now()).toISOString()}`, `${KEY_ID_TAG}=${keyId}`, `${FINGERPRINT_TAG}=${fingerprint(key)}`, "--query", "id", "-o", "tsv", ...SUB];
   if (ctx.dryRun) {
     await ensureOperatorRole(ctx, "Key Vault Secrets Officer", await vaultId(ctx));
     ctx.log(`    would run: az ${setArgs.join(" ")} (stdin: ***)`);
@@ -665,8 +698,15 @@ async function importAppleKey(ctx, { file, slot, keepFile }) {
   const stored = trimOneNewline(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "value", "-o", "tsv", ...SUB]));
   if (fingerprint(stored) !== fingerprint(key)) throw new Error(`${name} as read back does not match ${file}; the file was kept.`);
   const tags = (await azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "tags", "-o", "json", ...SUB])) ?? {};
-  if (tags.revoked) throw new Error(`${name} still carries a revoked tag after the import; the file was kept.`);
-  ctx.log(`Imported ${name} (fingerprint ${fingerprint(key)}); revoked tag clear.`);
+  if (isRevoked(tags)) throw new Error(`${name} still carries a revoked tag after the import; the file was kept.`);
+  if (tags[KEY_ID_TAG] !== keyId || tags[FINGERPRINT_TAG] !== fingerprint(key)) throw new Error(`${name} as read back lacks its Key ID or fingerprint tag; the file was kept.`);
+  ctx.log(`Imported ${name} (Key ID ${keyId}, fingerprint ${fingerprint(key)}); revoked tag clear.`);
+  const recorded = ctx.record.apple?.keyIds?.[slot] ?? null;
+  if (recorded !== keyId) {
+    ctx.record = { ...ctx.record, apple: { ...(ctx.record.apple ?? {}), keyIds: { ...(ctx.record.apple?.keyIds ?? {}), [slot]: keyId } } };
+    saveRecord(ctx.record, ctx.recordDir);
+    ctx.log(`Changed identity-${ctx.env}.json apple.keyIds.${slot} from ${recorded ?? "null"} to ${keyId}; commit it to main, or the renewal refuses this slot.`);
+  }
   if (keepFile) {
     ctx.log(`Kept ${file} (--keep-file).`);
   } else {
@@ -903,6 +943,7 @@ export function parseFlags(argv) {
       "dry-run": { type: "boolean", default: false },
       "apple-key-file": { type: "string" },
       "apple-key-slot": { type: "string" },
+      "apple-key-id": { type: "string" },
       "keep-file": { type: "boolean", default: false },
       "seed-ari": { type: "boolean", default: false },
       "invite-ari": { type: "boolean", default: false },
@@ -933,6 +974,7 @@ export function parseFlags(argv) {
       migrate: values.migrate,
       rotate: values.rotate,
       browserContext: values["browser-context"],
+      appleKeyId: values["apple-key-id"],
     },
   };
 }
@@ -959,7 +1001,7 @@ export async function run({
   const settings = environment(env);
   const ctx = { env, settings, record: loadRecord(env, recordDir), created: { apps: {}, servicePrincipals: new Set(), flow: false }, runner, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
   if (ctx.dryRun) log(`Dry run for ${env}: reads only; every write is printed instead, secret input as ***.`);
-  if (flags.appleKeyFile) return importAppleKey(ctx, { file: flags.appleKeyFile, slot: flags.appleKeySlot, keepFile: flags.keepFile });
+  if (flags.appleKeyFile) return importAppleKey(ctx, { file: flags.appleKeyFile, slot: flags.appleKeySlot, keepFile: flags.keepFile, keyId: flags.appleKeyId });
   if (flags.inviteAri) return inviteAri(ctx);
   if (flags.copyAppSecrets) return copyAppSecrets(ctx);
   if (flags.clearAppSecrets) return clearAppSecrets(ctx);

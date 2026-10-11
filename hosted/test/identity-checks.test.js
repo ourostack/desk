@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alertText, ALERT_PHRASES, main, parseFlags, runChecks } from "../infra/identity-checks.mjs";
+import { fingerprint } from "../src/auth/seal.js";
 
 const NOW = Date.parse("2026-10-10T06:00:00Z");
 const DAY = 24 * 3600 * 1000;
@@ -52,8 +53,11 @@ function healthyCloud(env = "test") {
     provider: { id: "Apple-Managed-OIDC", "@odata.type": "#microsoft.graph.appleManagedIdentityProvider", keyId: "KEYIDAAAAA", certificateData: KEY_A },
     patchFailure: null,
     vault: {
-      [`apple-siwa-key-a-${env}`]: { value: KEY_A, tags: { "imported-at": iso(NOW - 40 * DAY) } },
-      [`apple-siwa-key-b-${env}`]: { value: KEY_B, tags: { "imported-at": iso(NOW - 40 * DAY) } },
+      // Each key carries the Key ID and fingerprint the import read from it (review C1).
+      [`apple-siwa-key-a-${env}`]: { value: KEY_A, tags: { "imported-at": iso(NOW - 40 * DAY), "key-id": "KEYIDAAAAA", fingerprint: fingerprint(KEY_A) } },
+      [`apple-siwa-key-b-${env}`]: { value: KEY_B, tags: { "imported-at": iso(NOW - 40 * DAY), "key-id": "KEYIDBBBBB", fingerprint: fingerprint(KEY_B) } },
+      // The gateway's client secret names the Entra credential it holds (review I3).
+      [`entra-client-secret-${env}`]: { value: "Gw~not-read-by-the-checks", tags: { "key-id": "k-new" } },
       [`apple-siwa-active-${env}`]: { value: "a", tags: { "apple-renewed-at": iso(NOW - 10 * DAY) } },
     },
     appEnv: {
@@ -88,8 +92,10 @@ function fakeAz(cloud) {
       }
       if (method === "patch") {
         if (cloud.patchFailure) throw new CallFailed("az rest failed", cloud.patchFailure);
-        Object.assign(cloud.provider, body);
         cloud.patches.push(body);
+        // Graph answered 204 but kept the old key (the read-back must catch it).
+        if (cloud.patchIgnored) return null;
+        Object.assign(cloud.provider, body);
         return null;
       }
     }
@@ -118,8 +124,8 @@ function fakeAz(cloud) {
       cloud.sets.push({ name: opt(args, "--name"), at: calls.length });
       return tsv("https://kv/secrets/x/v2");
     }
-    if (joined.startsWith("containerapp show")) {
-      const env = cloud.appEnv[opt(args, "-n")] ?? notFound(opt(args, "-n"));
+    if (joined.startsWith("resource show")) {
+      const env = cloud.appEnv[opt(args, "--ids").split("/").at(-1)] ?? notFound(opt(args, "--ids"));
       // As the query --query "properties.template.containers[].env[] | [?value || secretRef].name" prints it.
       return json(env.filter((entry) => entry.value || entry.secretRef).map(({ name }) => name));
     }
@@ -246,14 +252,14 @@ test("a 4xx PATCH leaves the tag unchanged and exits non-zero", async (t) => {
 
 test("alerts when the Entra client secret ends within 30 days", async (t) => {
   const { go, cloud } = setup(t);
-  assert.equal((await go()).ok, true, "the newest credential counts, not an older one about to end");
+  assert.equal((await go()).ok, true, "the credential Key Vault holds counts, not an older leftover about to end");
   cloud.passwordCredentials[1].endDateTime = iso(NOW + 29 * DAY);
   const soon = await go();
   assert.deepEqual(failed(soon), ["entra-client-secret"]);
   const entry = soon.results.find(({ check }) => check === "entra-client-secret");
   assert.equal(entry.code, "ends-soon");
   assert.deepEqual(entry.dates, ["2026-11-08"]);
-  cloud.passwordCredentials = [{ keyId: "k", endDateTime: iso(NOW - DAY), hint: SECRET_HINT }];
+  cloud.passwordCredentials = [{ keyId: "k-new", endDateTime: iso(NOW - DAY), hint: SECRET_HINT }];
   assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "ended");
   cloud.passwordCredentials = [];
   assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "none");
@@ -302,7 +308,7 @@ test("alerts when production has no cutoff a day after releasedAt", async (t) =>
 test("the cutoff check is production's only, and waits for releasedAt", async (t) => {
   const testRun = setup(t);
   await testRun.go();
-  assert.ok(!testRun.fake.calls.some(({ args }) => args[0] === "containerapp"));
+  assert.ok(!testRun.fake.calls.some(({ args }) => args[0] === "resource"));
   const prod = setup(t, { env: "prod", rec: record("prod", { releasedAt: null }) });
   prod.cloud.appEnv["ouro-desk-hosted"] = [];
   const result = await prod.go();
@@ -470,4 +476,188 @@ test("an error that names the accountId reaches the run log with it masked", asy
   assert.notEqual(code, 0);
   assert.match(stdout, /lookup for <accountId> failed/);
   assert.ok(!`${stdout}${stderr}`.includes(ACCOUNT));
+});
+
+// --- Fix round 1 ----------------------------------------------------------------------------------------------------
+
+test("C1: a slot whose key no longer matches its import fingerprint is never sent, and the date stays", async (t) => {
+  const { go, cloud } = setup(t);
+  // Slot b was replaced in Key Vault by hand (no import), so its tags describe another key.
+  cloud.vault["apple-siwa-key-b-test"].value = KEY_A.replace("SLOTAAAAAA", "SLOTCCCCCC");
+  const before = markerTag(cloud);
+  const result = await go({ renewApple: true });
+  assert.deepEqual(failed(result), ["apple-renewal"]);
+  assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "unverified-key");
+  assert.deepEqual(cloud.patches, []);
+  assert.equal(markerTag(cloud), before);
+});
+
+test("C1: a slot with no recorded Key ID, or whose Key ID tag differs from the record, is never sent", async (t) => {
+  for (const change of ["record-null", "tag-differs", "tag-missing", "fingerprint-missing", "both-missing"]) {
+    const rec = record("test");
+    if (change === "record-null") rec.apple.keyIds.b = null;
+    // Neither the record nor the tag names a Key ID: still no proof of the pair.
+    if (change === "both-missing") delete rec.apple.keyIds.b;
+    const { go, cloud } = setup(t, { rec });
+    if (change === "both-missing") delete cloud.vault["apple-siwa-key-b-test"].tags["key-id"];
+    if (change === "tag-differs") cloud.vault["apple-siwa-key-b-test"].tags["key-id"] = "KEYIDNEWBB";
+    if (change === "tag-missing") delete cloud.vault["apple-siwa-key-b-test"].tags["key-id"];
+    if (change === "fingerprint-missing") delete cloud.vault["apple-siwa-key-b-test"].tags.fingerprint;
+    const before = markerTag(cloud);
+    const result = await go({ renewApple: true });
+    assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "unverified-key", change);
+    assert.deepEqual(cloud.patches, [], change);
+    assert.equal(markerTag(cloud), before, change);
+  }
+});
+
+test("C1: the live slot is verified the same way before a re-send", async (t) => {
+  const { go, cloud } = setup(t);
+  cloud.vault["apple-siwa-key-b-test"].tags.revoked = "true";
+  cloud.vault["apple-siwa-key-a-test"].tags["key-id"] = "KEYIDOTHER";
+  const result = await go({ renewApple: true });
+  assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "unverified-key");
+  assert.deepEqual(cloud.patches, []);
+});
+
+test("C1: renewed is reported only when the provider, read back, shows the new Key ID", async (t) => {
+  const { go, cloud } = setup(t);
+  cloud.patchIgnored = true;
+  const before = markerTag(cloud);
+  const result = await go({ renewApple: true });
+  assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "unconfirmed");
+  assert.equal(result.ok, false);
+  assert.equal(markerTag(cloud), before);
+  assert.deepEqual(cloud.sets, []);
+});
+
+test("I4: when the provider's Key ID matches neither recorded key, or Graph shows none, nothing is sent (live-unknown)", async (t) => {
+  for (const keyId of ["KEYIDZZZZZ", undefined]) {
+    const { go, cloud } = setup(t);
+    if (keyId) cloud.provider.keyId = keyId;
+    else delete cloud.provider.keyId;
+    const before = markerTag(cloud);
+    const result = await go({ renewApple: true });
+    assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "live-unknown");
+    assert.deepEqual(cloud.patches, []);
+    assert.equal(markerTag(cloud), before);
+  }
+});
+
+test("a revoked tag counts by its presence, whatever its value", async (t) => {
+  const { go, cloud } = setup(t);
+  cloud.vault["apple-siwa-key-b-test"].tags.revoked = "";
+  const result = await go({ renewApple: true });
+  assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "resent-live");
+  assert.ok(!cloud.patches.some(({ keyId }) => keyId === "KEYIDBBBBB"));
+});
+
+test("I2: --record-apple-upload refuses under outcome A, and refuses a slot already recorded as live", async (t) => {
+  const underA = setup(t);
+  const a = await underA.go({ recordAppleUpload: "a" });
+  assert.equal(a.results.find(({ check }) => check === "apple-upload").code, "not-outcome-b");
+  assert.deepEqual(underA.cloud.sets, []);
+  // Under B, the marker says slot a is live and Graph still shows a: no upload of the other slot happened.
+  const { go, cloud } = setup(t, { rec: record("test", { outcome: "B" }) });
+  cloud.vault["apple-siwa-active-test"].tags["apple-renewed-at"] = iso(NOW - 165 * DAY);
+  const same = await go({ recordAppleUpload: "a" });
+  assert.equal(same.results.find(({ check }) => check === "apple-upload").code, "no-change");
+  assert.equal(same.ok, false);
+  assert.equal(markerTag(cloud), iso(NOW - 165 * DAY));
+  assert.deepEqual(cloud.sets, []);
+  // After Ari uploads slot b's key, Graph shows b's Key ID: that is recorded.
+  cloud.provider.keyId = "KEYIDBBBBB";
+  const uploaded = await go({ recordAppleUpload: "b" });
+  assert.equal(uploaded.ok, true, JSON.stringify(uploaded.results));
+  assert.equal(cloud.vault["apple-siwa-active-test"].value, "b");
+  assert.equal(markerTag(cloud), iso(NOW));
+});
+
+test("I3: the Entra check judges the credential Key Vault holds, by the keyId tagged at write time", async (t) => {
+  const { go, cloud } = setup(t);
+  // The secret in use is the older one ending in 5 days; a newer appended credential must not hide it.
+  cloud.vault["entra-client-secret-test"].tags["key-id"] = "k-old";
+  const soon = await go();
+  const entry = soon.results.find(({ check }) => check === "entra-client-secret");
+  assert.equal(entry.code, "ends-soon");
+  assert.deepEqual(entry.dates, ["2026-10-15"]);
+  // An untagged secret, or a tag naming a credential the app no longer has, can't be judged: alert.
+  delete cloud.vault["entra-client-secret-test"].tags["key-id"];
+  assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "unidentified");
+  cloud.vault["entra-client-secret-test"].tags["key-id"] = "k-gone";
+  assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "unidentified");
+  delete cloud.vault["entra-client-secret-test"];
+  assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "unidentified");
+});
+
+test("I3: the Entra secret's value is never read, only its tags", async (t) => {
+  const { go, fake } = setup(t);
+  await go();
+  const reads = fake.calls.filter(({ args }) => args.includes("entra-client-secret-test"));
+  assert.ok(reads.length >= 1);
+  for (const { args } of reads) assert.equal(args[args.indexOf("--query") + 1], "tags");
+});
+
+test("an apple-renewed-at later than now is an alert, not a pass", async (t) => {
+  const { go, cloud } = setup(t);
+  cloud.vault["apple-siwa-active-test"].tags["apple-renewed-at"] = "2099-01-01T00:00:00Z";
+  const entry = (await go()).results.find(({ check }) => check === "apple-secret-age");
+  assert.equal(entry.code, "future");
+  assert.equal(entry.ok, false);
+  // A few minutes of clock skew is not.
+  cloud.vault["apple-siwa-active-test"].tags["apple-renewed-at"] = iso(NOW + 5 * 60 * 1000);
+  assert.equal((await go()).results.find(({ check }) => check === "apple-secret-age").code, "ok");
+});
+
+test("with no releasedAt on main, an app that maps GitHub accounts and has no cutoff is an alert", async (t) => {
+  const { go, cloud } = setup(t, { env: "prod", rec: record("prod", { releasedAt: null }) });
+  cloud.appEnv["ouro-desk-hosted"] = [{ name: "DESK_GITHUB_ACCOUNTS", value: `16390116=${ACCOUNT}` }];
+  const result = await go();
+  assert.equal(result.results.find(({ check }) => check === "legacy-cutoff").code, "unreleased-mapped");
+  assert.equal(result.ok, false);
+});
+
+test("thresholds: exactly 30 days out alerts and a moment more doesn't, for both secrets; no mappings needs no cutoff", async (t) => {
+  const { go, cloud } = setup(t);
+  cloud.passwordCredentials[1].endDateTime = iso(NOW + 30 * DAY);
+  assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "ends-soon");
+  cloud.passwordCredentials[1].endDateTime = iso(NOW + 30 * DAY + 60_000);
+  assert.equal((await go()).results.find(({ check }) => check === "entra-client-secret").code, "ok");
+  cloud.vault["apple-siwa-active-test"].tags["apple-renewed-at"] = "2026-05-10T06:00:00.000Z"; // ends 2026-11-10T06:00, 31 days
+  assert.equal((await go()).results.find(({ check }) => check === "apple-secret-age").code, "ok");
+  cloud.vault["apple-siwa-active-test"].tags["apple-renewed-at"] = "2026-05-09T06:00:00.000Z"; // ends 2026-11-09T06:00, 30 days
+  assert.equal((await go()).results.find(({ check }) => check === "apple-secret-age").code, "ends-soon");
+  const prod = setup(t, { env: "prod", rec: record("prod", { releasedAt: iso(NOW - 2 * DAY) }) });
+  prod.cloud.appEnv["ouro-desk-hosted"] = [{ name: "DESK_SIGNING_KEY", secretRef: "desk-signing-key" }];
+  const entry = (await prod.go()).results.find(({ check }) => check === "legacy-cutoff");
+  assert.equal(entry.code, "no-mappings");
+  assert.equal(entry.ok, true);
+});
+
+test("the app is read through ARM by resource id, with no Container Apps extension", async (t) => {
+  const { go, fake } = setup(t, { env: "prod", rec: record("prod", { releasedAt: iso(NOW - 2 * DAY) }) });
+  await go();
+  const read = fake.calls.find(({ args }) => args[0] === "resource");
+  assert.equal(read.args[read.args.indexOf("--ids") + 1], "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.App/containerApps/ouro-desk-hosted");
+  assert.ok(!fake.calls.some(({ args }) => args[0] === "containerapp"));
+  assert.ok(!workflow.includes("az extension add"));
+});
+
+// The workflow's security-relevant lines, pinned (review finding 9).
+const section = (text, start, end) => text.slice(text.indexOf(start), end ? text.indexOf(end, text.indexOf(start)) : undefined);
+
+test("the workflow's triggers are only the schedule and dispatch", () => {
+  const on = section(workflow, "\non:\n", "\npermissions:");
+  assert.deepEqual([...on.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]), ["schedule", "workflow_dispatch"]);
+});
+
+test("the workflow's permissions, checkout, and concurrency are pinned", () => {
+  const check = section(workflow, "\n  check:\n", "\n  alert:\n");
+  const alert = section(workflow, "\n  alert:\n");
+  assert.match(check, /\n {4}permissions:\n {6}contents: read\n {6}id-token: write\n {4}strategy:/);
+  assert.match(alert, /\n {4}permissions:\n {6}issues: write\n {4}steps:/);
+  assert.ok(!/id-token|contents: write|environment:/.test(alert));
+  assert.equal((workflow.match(/permissions:/g) ?? []).length, 3);
+  assert.match(check, /uses: actions\/checkout@v4\n\s+with:\n\s+persist-credentials: false/);
+  assert.match(workflow, /\nconcurrency:\n {2}group: identity-checks\n {2}cancel-in-progress: false\n/);
 });
