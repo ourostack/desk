@@ -476,6 +476,28 @@ test("uncommitted task marker retains pending effects and refuses another create
   assert.equal(calls.filter(call => call.method === "windows.create").length, count)
 })
 
+test("owned about-blank bootstrap navigation completes before its command returns", async () => {
+  const { extension, chrome, tabs } = await setup()
+  const first = await create(extension)
+  await extension.dispatch({ id: "bootstrap-attach", leaseId: "lease-a", method: "target.attach", params: { tabId: first.result.tabId } })
+  chrome.debugger.sendCommand = async () => {
+    const tab = tabs.get(first.result.tabId)
+    tab.status = "loading"
+    return { frameId: "own-frame", loaderId: "own-loader" }
+  }
+  let settled = false
+  const operation = extension.dispatch({
+    id: "bootstrap-command", leaseId: "lease-a", method: "target.command",
+    params: { tabId: first.result.tabId, method: "Page.navigate", params: { url: "about:blank" } },
+  }).then(value => { settled = true; return value })
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(settled, false, "new-page bootstrap must not race the caller's next navigation")
+  Object.assign(tabs.get(first.result.tabId), { url: "about:blank", status: "complete" })
+  const result = await operation
+  assert.equal(result.error, undefined)
+  assert.equal(result.result.loaderId, "own-loader")
+})
+
 test("task tabs must close before control and the same lease can reopen", async () => {
   const { extension, calls } = await setup()
   const first = await create(extension)

@@ -17,7 +17,7 @@ test("current MCP default initializer export binds the supported frozen Page API
     if (originalOwner === undefined) delete process.env.DESK_BROWSER_OWNER
     else process.env.DESK_BROWSER_OWNER = originalOwner
   })
-  const context = {}
+  const context = { newPage: async () => { throw new Error("not requested") } }
   const page = { context: () => context, evaluate: async () => "current-mcp-lease:101" }
   const { default: initializer } = module
   await initializer({ page })
@@ -26,6 +26,77 @@ test("current MCP default initializer export binds the supported frozen Page API
   assert.equal(typeof page.deskBrowserOwner.peers, "function")
 })
 const file = path.join(mcpRoot, "scripts/native-owned-page.cjs")
+
+test("owned newPage waits for one shared initializer before returning a navigable Page", async () => {
+  const { createPageInitializer } = require(file)
+  let resolveProof
+  const proof = new Promise(resolve => { resolveProof = resolve })
+  let reads = 0
+  const child = { evaluate: async () => { reads++; return proof } }
+  const context = { newPage: async () => child }
+  const page = { evaluate: async () => "lease-a:101", context: () => context }
+  const initialize = createPageInitializer({ leaseId: "lease-a", owner: "owner", request: async () => ({}) })
+  await initialize({ page })
+  assert.equal(typeof page.deskBrowserOwner.newPage, "function")
+  let returned = false
+  const creating = page.deskBrowserOwner.newPage().then(value => { returned = true; return value })
+  await new Promise(resolve => setImmediate(resolve))
+  const concurrent = initialize({ page: child })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(returned, false)
+  assert.equal(reads, 1, "MCP and explicit creation share the same proof operation")
+  resolveProof("lease-a:102")
+  assert.equal(await creating, child)
+  await concurrent
+  assert.equal(Object.isFrozen(child.deskBrowserOwner), true)
+})
+
+test("raw owned context newPage also waits for the shared proof before handing off", async () => {
+  const { createPageInitializer } = require(file)
+  let resolveProof
+  const proof = new Promise(resolve => { resolveProof = resolve })
+  const child = { evaluate: async () => proof }
+  const options = { viewport: { width: 800, height: 600 } }
+  let received, receiver
+  const context = { async newPage(value) { receiver = this; received = value; return child } }
+  const page = { evaluate: async () => "lease-a:101", context: () => context }
+  const initialize = createPageInitializer({ leaseId: "lease-a", owner: "owner", request: async () => ({}) })
+  await initialize({ page })
+  let handedOff = false
+  const operation = context.newPage(options).then(value => { handedOff = true; return value })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(handedOff, false)
+  resolveProof("lease-a:102")
+  assert.equal(await operation, child)
+  assert.equal(receiver, context)
+  assert.equal(received, options)
+  assert.equal(Object.isFrozen(child.deskBrowserOwner), true)
+})
+
+test("owned context refuses an incompatible newPage method before renderer proof", async () => {
+  const { createPageInitializer } = require(file)
+  const context = {}
+  Object.defineProperty(context, "newPage", { value: async () => {}, configurable: false })
+  let reads = 0
+  const page = { context: () => context, evaluate: async () => { reads++; return "lease-a:101" } }
+  const initialize = createPageInitializer({ leaseId: "lease-a", owner: "owner", request: async () => ({}) })
+  await assert.rejects(async () => initialize({ page }), /browser_owner_new_page_api_conflict/u)
+  assert.equal(reads, 0)
+})
+
+test("owned newPage propagates foreign target and initialization errors without replay", async () => {
+  const { createPageInitializer } = require(file)
+  let child = { evaluate: async () => "foreign:102" }, creates = 0
+  const context = {
+    newPage: async () => { creates++; return child },
+  }
+  const page = { evaluate: async () => "lease-a:101", context: () => context }
+  await createPageInitializer({ leaseId: "lease-a", owner: "owner", request: async () => ({}) })({ page })
+  await assert.rejects(page.deskBrowserOwner.newPage(), /browser_owner_target_mismatch/u)
+  child = { evaluate: async () => { throw new Error("exact-proof-failed") } }
+  await assert.rejects(page.deskBrowserOwner.newPage(), /exact-proof-failed/u)
+  assert.equal(creates, 2)
+})
 
 test("native public page helper is frozen and owner-scoped without private Playwright access", async () => {
   const { createPageInitializer } = require(file)

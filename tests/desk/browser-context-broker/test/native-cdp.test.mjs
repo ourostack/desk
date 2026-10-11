@@ -159,6 +159,36 @@ for (const controlWindowId of [undefined, null, '101', -1]) {
   });
 }
 
+test('GivenNativeBootstrapPending_WhenTargetCreated_ObserversSeeItOnlyAfterBootstrapCommandSettles', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const observer = await client(t, server.endpointForLease(lease.id));
+  await observer.send('Target.setDiscoverTargets', { discover: true });
+  await observer.send('Target.setAutoAttach', { autoAttach: true, flatten: true });
+  const events = [];
+  observer.on('event', event => events.push(event));
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const request = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.command' && message.params.method === 'Page.navigate') {
+      entered();
+      await held;
+    }
+    return request(message);
+  };
+  const creating = createOwnedTarget({ stateDir, leaseId: lease.id,
+    rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } });
+  await started;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const early = events.slice();
+  release();
+  const created = await creating;
+  assert.equal(early.some(event => ['Target.targetCreated', 'Target.attachedToTarget'].includes(event.method)), false);
+  assert.equal(events.some(event => event.method === 'Target.attachedToTarget' &&
+    event.params.targetInfo.targetId === created.targetId), true);
+});
+
 for (const lifecycle of ['target.closed', 'target.detached', 'target.routingLost']) {
   test(`GivenNative${lifecycle}_WhenTaskWasAttached_ClientLifecycleIsNotLost`, async t => {
     const { server, transport, stateDir, lease } = await setup(t);

@@ -386,7 +386,17 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       }
       const target = { tabId: tab.id }
       if (params.sessionId !== undefined) target.sessionId = params.sessionId
-      return await api.debugger.sendCommand(target, params.method, params.params ?? {}) ?? {}
+      const result = await api.debugger.sendCommand(target, params.method, params.params ?? {}) ?? {}
+      if (params.method === "Page.navigate" && params.params?.url === "about:blank" &&
+          params.sessionId === undefined && !result.errorText) {
+        for (let attempt = 0; attempt < 60; attempt++) {
+          const current = await ownTab(lease, tab.id)
+          if (current.url === "about:blank" && current.status === "complete") return result
+          await delay(50)
+        }
+        throw refusal("NATIVE_TARGET_UNREADY", "The exact owned blank bootstrap did not confirm document readiness")
+      }
+      return result
     }
     throw refusal("NATIVE_METHOD_DENIED", "Native method is not supported")
   }
