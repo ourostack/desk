@@ -1,0 +1,166 @@
+{
+  "schema": "factory.v12.clocks.fixture/1",
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "new_request_unknown",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 5000}], "observations": [{"status": "done", "offset_ms": 5000}]},
+        "working": [[1000, 2000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "measured", "state": "measured", "value": 4000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "measured", "state": "measured", "value": 1000, "reasons": [], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "inferred", "state": "measured", "value": 3000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "measured", "reasons": [], "items": [{"start_ms": 1000, "end_ms": 5000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}]}
+      }
+    },
+    {
+      "id": "adopted_positive_uncaptured",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 10000}], "observations": [{"status": "done", "offset_ms": 10000}]},
+        "working": [[5000, 6000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "measured", "state": "measured", "value": 5000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "measured", "state": "measured", "value": 1000, "reasons": [], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "inferred", "state": "measured", "value": 4000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "measured", "reasons": [], "items": [{"start_ms": 5000, "end_ms": 10000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}]}
+      }
+    },
+    {
+      "id": "adopted_negative",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 3000}], "observations": [{"status": "done", "offset_ms": 3000}]},
+        "working": [[-2000, -1000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded", "work_before_card"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded", "work_before_card"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "measured", "state": "measured", "value": 5000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "measured", "state": "measured", "value": 1000, "reasons": [], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "inferred", "state": "measured", "value": 4000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "measured", "reasons": [], "items": [{"start_ms": -2000, "end_ms": 3000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}]}
+      }
+    },
+    {
+      "id": "reopened",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 2000}, {"to": "doing", "offset_ms": 5000}, {"to": "done", "offset_ms": 8000}], "observations": [{"status": "done", "offset_ms": 2000}, {"status": "done", "offset_ms": 3000}, {"status": "done", "offset_ms": 8000}]},
+        "working": [[0, 1000], [6000, 7000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "measured", "state": "measured", "value": 4000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "measured", "state": "measured", "value": 2000, "reasons": [], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "inferred", "state": "measured", "value": 2000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "measured", "reasons": [], "items": [{"start_ms": 0, "end_ms": 2000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}, {"start_ms": 6000, "end_ms": 8000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}]}
+      }
+    },
+    {
+      "id": "late_work",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 2000}], "observations": [{"status": "done", "offset_ms": 2000}]},
+        "working": [[0, 1000], [3000, 4000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["late_work_without_reopen"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["late_work_without_reopen"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["late_work_without_reopen"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "unavailable", "reasons": ["late_work_without_reopen"], "items": []}
+      }
+    },
+    {
+      "id": "untimed_boundary",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": null}, {"to": "doing", "offset_ms": null}], "observations": [{"status": "doing", "offset_ms": 4000}]},
+        "working": [[0, 1000], [3000, 4000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "partial", "reasons": ["episode_boundary_not_recorded"], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": true},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": true},
+        "production_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["episode_boundary_not_recorded"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": true},
+        "active_in_production_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["episode_boundary_not_recorded"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": true},
+        "production_remainder_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["episode_boundary_not_recorded"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": true},
+        "production_periods": {"state": "unavailable", "reasons": ["episode_boundary_not_recorded"], "items": []}
+      }
+    },
+    {
+      "id": "root_wait_child_work",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 5000}], "observations": [{"status": "done", "offset_ms": 5000}]},
+        "working": [[0, 4000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "measured", "state": "measured", "value": 5000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "measured", "state": "measured", "value": 4000, "reasons": [], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "inferred", "state": "measured", "value": 1000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "measured", "reasons": [], "items": [{"start_ms": 0, "end_ms": 5000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}]}
+      }
+    },
+    {
+      "id": "ask_wait",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 6000}], "observations": [{"status": "done", "offset_ms": 6000}]},
+        "working": [[0, 1000], [4000, 5000]],
+        "coverage": {"activity": {"state": "measured", "reasons": [], "bound": null}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "measured", "state": "measured", "value": 6000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "measured", "state": "measured", "value": 2000, "reasons": [], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "inferred", "state": "measured", "value": 4000, "reasons": [], "basis": ["recorded_activity", "done_transition", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "measured", "reasons": [], "items": [{"start_ms": 0, "end_ms": 6000, "start_basis": "recorded_activity", "end_basis": "done_transition", "so_far": false}]}
+      }
+    },
+    {
+      "id": "opposing_bounds",
+      "input": {
+        "timeline": {"transitions": [], "observations": [{"status": "doing", "offset_ms": 6000}]},
+        "working": [[0, 1000], [4000, 5000]],
+        "coverage": {"activity": {"state": "partial", "reasons": ["log_truncated"], "bound": "lower"}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "measured", "reasons": [], "bound": null}, "history": {"state": "measured", "reasons": [], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": true},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": true},
+        "production_ms": {"class": "measured", "state": "partial", "value": 6000, "reasons": ["censored"], "basis": ["recorded_activity", "latest_observation", "lifecycle_history"], "bound": "lower", "so_far": true},
+        "active_in_production_ms": {"class": "measured", "state": "partial", "value": 2000, "reasons": ["log_truncated"], "basis": ["recorded_activity", "lifecycle_history"], "bound": "lower", "so_far": true},
+        "production_remainder_ms": {"class": "inferred", "state": "partial", "value": 4000, "reasons": ["censored", "log_truncated"], "basis": ["recorded_activity", "latest_observation", "lifecycle_history"], "bound": null, "bound_reason": "bound_reasons_conflict", "so_far": true},
+        "production_periods": {"state": "partial", "reasons": ["censored"], "items": [{"start_ms": 0, "end_ms": 6000, "start_basis": "recorded_activity", "end_basis": "latest_observation", "so_far": true}]}
+      }
+    },
+    {
+      "id": "truncated_segments",
+      "input": {
+        "timeline": {"transitions": [{"to": "done", "offset_ms": 6000}], "observations": [{"status": "done", "offset_ms": 6000}]},
+        "working": [[0, 1000]],
+        "coverage": {"activity": {"state": "partial", "reasons": ["log_truncated"], "bound": "lower"}, "classification": {"state": "measured", "reasons": [], "bound": null}, "placement": {"state": "partial", "reasons": ["job_offsets"], "bound": null}, "history": {"state": "partial", "reasons": ["episode_history_incomplete"], "bound": null}}
+      },
+      "expected": {
+        "request_to_delivery_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "queue_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["original_request_not_recorded"], "basis": ["original_request_not_recorded"], "so_far": false},
+        "production_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["episode_history_incomplete"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "active_in_production_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["episode_history_incomplete"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_remainder_ms": {"class": "unavailable", "state": "unavailable", "reasons": ["episode_history_incomplete"], "basis": ["recorded_activity", "lifecycle_history"], "so_far": false},
+        "production_periods": {"state": "unavailable", "reasons": ["episode_history_incomplete"], "items": []}
+      }
+    }
+  ]
+}

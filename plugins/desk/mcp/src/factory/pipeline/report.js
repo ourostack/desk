@@ -75,6 +75,12 @@ const REPORT_REASON_TEXT = {
   stop_not_recorded: "no recorded wait for the operator covers this time, so there is no record of why the agent stopped, and some hosts do not record stops",
   outside_own_share: "the facts do not say which part of the session was this task's, so the evaluator does not judge this wait for it",
   stop_partly_classified: "why the agent stopped is not known for some of this waiting, and some of that may belong here, so this is at least this much",
+  // The lifecycle clocks (`lifecycle-clocks.js`), in the store's words (ourostack/factory site/src/format.js).
+  original_request_not_recorded: "the original request was not recorded",
+  work_before_card: "recorded work began before the task card",
+  late_work_without_reopen: "work was recorded after delivery without a recorded reopen",
+  episode_boundary_not_recorded: "a production episode boundary was not recorded",
+  episode_history_incomplete: "the recorded production episode history is incomplete",
 }
 
 // What the independent evaluator's labels file can declare unreadable, and the codes of the check of labels against facts.
@@ -456,6 +462,39 @@ function referencesText(references) {
   return `Public pull requests: ${labelled(pullRequests, parts.public_prs, false)}; public commits: ${count(parts.public_commits)}; private pull requests counted: ${count(parts.private_prs)}; private commits counted: ${count(parts.private_commits)}`
 }
 
+// The words for a Clock basis.
+const basisText = (basis) => basis.replaceAll("_", " ")
+
+// A lifecycle Clock in words: its value, how far it runs and which way the true figure lies, then its state, evidence and basis; or why
+// it was not recorded.
+function clockText(clock) {
+  if (clock.state === "unavailable") return stateText(clock)
+  const direction = clock.bound === "lower" ? "at least " : clock.bound === "upper" ? "at most " : ""
+  const none = clock.state === "partial" && clock.bound === null ? [clock.bound_reason === "bound_not_moved" ? reasonText(clock.bound_reason) : `direction not known, because ${reasonText(clock.bound_reason)}`] : []
+  return `${direction}${clock.value} ms${clock.so_far ? " so far" : ""} (${[stateText(clock), `basis: ${clock.basis.map(basisText).join(", ")}`, ...none].join("; ")})`
+}
+
+// The production periods in words, each on the job clock with what dates its ends.
+function periodsText(periods) {
+  if (periods.state === "unavailable") return stateText(periods)
+  // A period list that is not unavailable always holds at least one episode (`deriveLifecycleClocks`).
+  const items = periods.items.map((item) => `${item.start_ms} to ${item.end_ms} ms${item.so_far ? " so far" : ""} (${basisText(item.start_basis)} to ${basisText(item.end_basis)})`).join(", ")
+  return `${items} (${stateText(periods, false)})`
+}
+
+// The six lifecycle clock lines of a job page, after its lead time; none when the job has no clocks (a caller that renders the legacy page).
+function clockLines(clocks) {
+  if (clocks === undefined) return []
+  return [
+    `- Recorded request to delivery: ${clockText(clocks.request_to_delivery_ms)}.`,
+    `- Queued before production: ${clockText(clocks.queue_ms)}.`,
+    `- Production time: ${clockText(clocks.production_ms)}.`,
+    `- Recorded working time in production: ${clockText(clocks.active_in_production_ms)}.`,
+    `- Production not recorded as active (not by itself idle time or waste): ${clockText(clocks.production_remainder_ms)}.`,
+    `- Production periods: ${periodsText(clocks.production_periods)}.`,
+  ]
+}
+
 function transitionText(entry) {
   return entry.offset_ms === null ? `${entry.to} at an unknown offset` : `${entry.to} at ${entry.offset_ms} ms`
 }
@@ -509,7 +548,7 @@ function wasteLines(timeline, labelsByJobSession) {
   return lines
 }
 
-export function renderJobMarkdown({ timeline, formulas, labels = new Map() }) {
+export function renderJobMarkdown({ timeline, formulas, labels = new Map(), clocks }) {
   const hostCounts = formulas.sessions_by_host.value
   const sessions = formulas.sessions.value
   const transitions = timeline.transitions.length === 0 ? "none" : timeline.transitions.map(transitionText).join(", ")
@@ -528,6 +567,7 @@ export function renderJobMarkdown({ timeline, formulas, labels = new Map() }) {
     `- Sessions: ${sessions.bound} bound, ${sessions.timeline} on the job clock (${stateText(formulas.sessions)}); by host: ${listedCounts(hostCounts)} (${stateText(formulas.sessions_by_host)}).`,
     `- Shared work: ${plural(sessions.shared, "session")} shared with ${plural(sessions.shared_with_jobs, "other job")} (${stateText(formulas.sessions)}).`,
     `- Lead time: ${metric(formulas.lead_time_ms)}.`,
+    ...clockLines(clocks),
     `- Queue before start: ${metric(formulas.queue_before_start_ms)}.`,
     `- Active time: ${metric(formulas.active_time_ms)} in total; inside the lead-time window: ${metric(formulas.active_in_lead_ms)}.`,
     `- Active before card (work before the task card existed, outside lead time): ${metric(formulas.active_before_card_ms)}.`,

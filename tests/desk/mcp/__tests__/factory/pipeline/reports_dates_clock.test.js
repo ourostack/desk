@@ -11,6 +11,7 @@ import { jobRecord, resolveLabels } from "../../../../../../plugins/desk/mcp/src
 import { ASK_ENDS, timelineAdditions } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/stretches.js"
 import { buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 import { REASON_CHANGE, jobWalk, stackupRollup, tasksRollup } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
+import { jobLifecycleClocks } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/lifecycle-clocks.js"
 
 const J = (digit) => digit.repeat(32)
 const S = (n) => `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`
@@ -485,4 +486,27 @@ test("every new reason has plain words and a decided direction", () => {
     assert.ok(!/[_;()]/u.test(REASON_TEXT[reason]), reason)
   }
   for (const reason of ["finish_from_card_update", "reopened", "finish_before_last_work", "finish_time_not_known", "not_in_published_facts", "no_segments"]) assert.ok(Object.hasOwn(REASON_CHANGE, reason), reason)
+})
+
+// --- the lifecycle clocks keep the ask-tool rule ---------------------------------------------------------------------------------
+
+test("the production clocks count an ask-tool pause as recorded work only where another worker of the task works", () => {
+  const agents = [{ n: 0, parent: null, model: "model-alpha" }, { n: 1, parent: 0, model: "model-alpha" }]
+  const intervals = [span("turn", 0, 0, 60 * MIN), tool(0, 10 * MIN, 50 * MIN, "other"), wait(10 * MIN, 50 * MIN, stopOf("ask_question")), span("turn", 1, 20 * MIN, 30 * MIN)]
+  const session = facts({ id: S(36), duration: 60 * MIN, agents, intervals, jobs: [{ ...bound(J("a"), 0), agents: [0, 1] }] })
+  const { timeline, formulas, walk } = walkOf([session], J("a"))
+  const clocks = jobLifecycleClocks({ timeline, formulas, walk })
+  // The operator's think time (10 to 20 and 30 to 50) is production not recorded as active; the subagent's 20 to 30 is active.
+  assert.deepEqual([clocks.production_ms.value, clocks.active_in_production_ms.value, clocks.production_remainder_ms.value], [60 * MIN, 30 * MIN, 30 * MIN])
+  assert.equal(clocks.active_in_production_ms.value, walk.task.working_ms.value)
+  // The task's legacy lead time and recorded active time are unchanged beside them.
+  assert.equal(walk.task.lead_time_ms.value, 60 * MIN)
+  assert.equal(formulas.active_time_ms.value, 60 * MIN)
+})
+
+test("the lifecycle clock reasons have plain words without codes", () => {
+  for (const reason of ["original_request_not_recorded", "work_before_card", "late_work_without_reopen", "episode_boundary_not_recorded", "episode_history_incomplete"]) {
+    assert.equal(typeof REASON_TEXT[reason], "string", reason)
+    assert.ok(!/[_;()]/u.test(REASON_TEXT[reason]), reason)
+  }
 })

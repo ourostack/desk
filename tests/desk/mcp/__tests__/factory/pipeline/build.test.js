@@ -10,6 +10,7 @@ import { renameWithRetry } from "../../../../../../plugins/desk/mcp/src/util/ren
 import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { REASON_TEXT } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
 import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
+import { stableStringify } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")
@@ -30,6 +31,34 @@ function files(root, relative = "") {
 function bytesByPath(root) {
   return Object.fromEntries(files(root).map((relative) => [relative.replaceAll(path.sep, "/"), readFileSync(path.join(root, relative))]))
 }
+
+// The v1.2 lifecycle clocks are additive: each job file and each task and stack-up row gains `clocks`, and each job page gains its six
+// clock lines. The goldens are not regenerated: every legacy byte must still be what they hold once the additions are taken out, and
+// every addition must be there.
+const CLOCK_LINE = /^- (?:Recorded request to delivery|Queued before production|Production time|Recorded working time in production|Production not recorded as active \(not by itself idle time or waste\)|Production periods): .*\n/gmu
+function withoutClocks(relative, bytes) {
+  if (/^jobs\/[^/]+\.json$/u.test(relative)) {
+    const doc = JSON.parse(bytes.toString("utf8"))
+    assert.ok(Object.hasOwn(doc, "clocks"), `${relative} has its clocks`)
+    delete doc.clocks
+    return Buffer.from(`${stableStringify(doc)}\n`)
+  }
+  if (relative === "rollups/tasks.json" || relative === "rollups/stackup.json") {
+    const doc = JSON.parse(bytes.toString("utf8"))
+    for (const row of doc.jobs) {
+      assert.ok(Object.hasOwn(row, "clocks"), `${relative} ${row.job} has its clocks`)
+      delete row.clocks
+    }
+    return Buffer.from(`${stableStringify(doc)}\n`)
+  }
+  if (/^jobs\/[^/]+\.md$/u.test(relative)) {
+    const text = bytes.toString("utf8")
+    assert.equal(text.match(CLOCK_LINE)?.length, 6, `${relative} has its six clock lines`)
+    return Buffer.from(text.replace(CLOCK_LINE, ""))
+  }
+  return bytes
+}
+const sameLegacy = (relative, actual, expected) => assert.equal(Buffer.compare(withoutClocks(relative, actual), expected), 0, relative)
 
 function scratch(run) {
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-factory-build-"))
@@ -76,7 +105,7 @@ test("build matches every golden output byte for byte and returns exact counts",
   const actual = bytesByPath(out)
   const expected = bytesByPath(EXPECTED)
   assert.deepEqual(Object.keys(actual), Object.keys(expected))
-  for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
+  for (const relative of Object.keys(expected)) sameLegacy(relative, actual[relative], expected[relative])
 }))
 
 test("build turns the golden rollup store's facts and labels into every golden output byte for byte", () => scratch((root) => {
@@ -85,7 +114,7 @@ test("build turns the golden rollup store's facts and labels into every golden o
   const actual = bytesByPath(out)
   const expected = bytesByPath(ROLLUP_EXPECTED)
   assert.deepEqual(Object.keys(actual), Object.keys(expected))
-  for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
+  for (const relative of Object.keys(expected)) sameLegacy(relative, actual[relative], expected[relative])
   assert.deepEqual(Object.keys(actual).filter((relative) => relative.startsWith("rollups/")), [
     "rollups/causes.json", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/outcomes.json", "rollups/stackup.json", "rollups/tasks.json", "rollups/tool-kinds.json", "rollups/totals.json",
   ])
@@ -108,7 +137,7 @@ test("build reads labels as data only: dotfiles are ignored, and malformed or un
   writeFileSync(path.join(jobDir, ".notes"), SENTINEL)
   mkdirSync(path.join(labelsDir, ".hidden"))
   build({ storeDir: store, outDir: out })
-  for (const [relative, bytes] of Object.entries(bytesByPath(out))) assert.equal(Buffer.compare(bytes, golden[relative]), 0, relative)
+  for (const [relative, bytes] of Object.entries(bytesByPath(out))) sameLegacy(relative, bytes, golden[relative])
 
   const refusals = [
     [() => writeFileSync(labelsFile, `{"${SENTINEL}":`), "invalid_published_labels"],
@@ -340,7 +369,7 @@ test("a store mixing legacy and per-worker files builds and legacy numbers are u
   for (const job of ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]) {
     for (const extension of ["json", "md"]) {
       const relative = `jobs/${job}.${extension}`
-      assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
+      sameLegacy(relative, actual[relative], expected[relative])
     }
   }
   const first = JSON.parse(actual["jobs/cccccccccccccccccccccccccccccccc.json"])
@@ -556,4 +585,32 @@ test("a store with no accepted outcome says so, and the attention file carries o
     else assert.ok(["state"].includes(key) && ["measured", "partial", "unavailable"].includes(value), `${key} holds only a state or a reason`)
   }
   assert.ok(!JSON.stringify({ attention, groupings }).includes(SENTINEL))
+}))
+
+test("every built job carries one lifecycle clock envelope, the same on its job file, task row and stack-up row, beside its unchanged lead time", () => scratch((root) => {
+  for (const [store, count] of [[STORE, 2], [ROLLUP_STORE, 6]]) {
+    const out = path.join(root, path.basename(store))
+    build({ storeDir: store, outDir: out })
+    const read = (relative) => JSON.parse(readFileSync(path.join(out, relative), "utf8"))
+    const tasks = read("rollups/tasks.json").jobs
+    const stackup = read("rollups/stackup.json").jobs
+    assert.equal(tasks.length, count)
+    for (const row of tasks) {
+      const report = read(`jobs/${row.job}.json`)
+      assert.deepEqual(Object.keys(report.clocks).sort(), ["active_in_production_ms", "production_ms", "production_periods", "production_remainder_ms", "queue_ms", "request_to_delivery_ms"])
+      assert.deepEqual(row.clocks, report.clocks, row.job)
+      assert.deepEqual(stackup.find((entry) => entry.job === row.job).clocks, report.clocks, row.job)
+      // Published facts carry no original-request proof.
+      for (const key of ["request_to_delivery_ms", "queue_ms"]) {
+        assert.equal(report.clocks[key].state, "unavailable", `${row.job} ${key}`)
+        assert.ok(report.clocks[key].reasons.includes("original_request_not_recorded"), `${row.job} ${key}`)
+      }
+      // Production is known exactly only where active plus remainder is production.
+      const { production_ms: production, active_in_production_ms: active, production_remainder_ms: remainder } = report.clocks
+      if (production.state !== "unavailable") assert.equal(active.value + remainder.value, production.value, row.job)
+      // No new epoch timestamp: periods are job-clock offsets, bounded by plausible job spans.
+      for (const period of report.clocks.production_periods.items) assert.ok(Math.abs(period.start_ms) < 1e12 && Math.abs(period.end_ms) < 1e12, row.job)
+      for (const reason of Object.values(report.clocks).flatMap((clock) => clock.reasons)) assert.equal(typeof REASON_TEXT[reason], "string", reason)
+    }
+  }
 }))
