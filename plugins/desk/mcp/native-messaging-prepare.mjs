@@ -81,6 +81,16 @@ export async function prepareNativeMessaging(options) {
       return unavailable('browser_native_messaging_update_required', 'The running extension source differs from the verified installation',
         'Complete the deliberate native extension update and fresh provider attestation for this exact profile. Do not reload it during background refresh or restart the shared browser.');
     }
+    const paths = platform === 'win32' ? path.win32 : path;
+    const normalize = value => typeof value === 'string' && paths.isAbsolute(value)
+      ? (platform === 'win32' ? paths.resolve(value).toLowerCase() : paths.resolve(value)) : null;
+    const chain = ready.mediationChain;
+    if (!normalize(own.executable) || !normalize(own.runtimeDirectory) || !Array.isArray(chain) || chain.length !== 2 ||
+        normalize(chain[0]?.executable) !== normalize(own.executable) ||
+        chain.some(identity => normalize(identity?.profileRoot) !== normalize(own.runtimeDirectory))) {
+      return unavailable('browser_native_messaging_update_required', 'The loaded native provider does not match the installed runtime capsule',
+        'Close all same-browser owners, then run the deliberate native update and freshly attest the provider. Backend-only upgrades also require this step. Do not restart the shared browser or reload while owners have live targets.');
+    }
     const endpoint = new URL(ready.endpoint);
     if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' ||
         !/^\/provider\/[a-f0-9]{64}$/u.test(endpoint.pathname) || endpoint.search || endpoint.username || endpoint.password) {

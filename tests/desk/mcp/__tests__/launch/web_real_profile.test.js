@@ -18,6 +18,14 @@ const real = require(path.join(mcpRoot, "web-real-profile.cjs"))
 const TOKEN = "tok-9f3a-never-print-me"
 const posixOnly = { skip: process.platform === "win32" ? "the fixture Node is a POSIX link" : false }
 
+test("profile token reads reject missing or malformed extension identities before touching the profile", async () => {
+  for (const options of [
+    { extensionId: "foreign" }, { extensionId: 42 }, { tokenKey: "" }, { tokenKey: "0invalid" }, { tokenKey: 42 },
+  ]) {
+    await assert.rejects(real.readExtensionToken("/unused/profile", options), /browser_token_identity_invalid/u)
+  }
+})
+
 // ---- fixtures ----
 
 function touch(file, contents = "") {
@@ -981,9 +989,16 @@ test("actual native preparation resumes the same lease and replaces only MCP tra
   const userDataRoot = localState(path.join(machine.root, "home"),
     { "Profile 4": "fixture@microsoft.com" }, undefined, "msedge", process.platform)
   const profileRoot = path.join(userDataRoot, "Profile 4")
+  const { installNativeMessaging } = await import("../../../../../plugins/desk/mcp/native-messaging-install.mjs")
+  const owned = await installNativeMessaging({
+    mcpRoot, root: path.join(machine.state, "native-owned"), userDataRoot, profile: "Profile 4", channel: "msedge",
+    browserExecutable, runtimeExecutable: machine.launchOptions.current.path, platform: process.platform, arch: process.arch,
+    levelModule: path.join(machine.state, "installs/1-1-a/node_modules/classic-level"),
+    wsModule: path.join(machine.state, "installs/1-1-a/node_modules/ws"),
+  })
   const processIdentity = { pid: 700, startIdentity: "test-browser", owner: "operator", executable: browserExecutable, profileRoot }
-  const entry = { pid: 701, parentPid: 700, startIdentity: "test-entry", owner: "operator", executable: "/fixture/entry", profileRoot: "/fixture/runtime" }
-  const runtime = { pid: 702, parentPid: 701, startIdentity: "test-runtime", owner: "operator", executable: process.execPath, profileRoot: "/fixture/runtime" }
+  const entry = { pid: 701, parentPid: 700, startIdentity: "test-entry", owner: "operator", executable: owned.executable, profileRoot: owned.runtimeDirectory }
+  const runtime = { pid: 702, parentPid: 701, startIdentity: "test-runtime", owner: "operator", executable: process.execPath, profileRoot: owned.runtimeDirectory }
   const digestText = await fs.readFile(path.resolve(mcpRoot, "../browser-extension/source-digest.js"), "utf8")
   const extensionSourceDigest = digestText.match(/"([a-f0-9]{64})"/u)[1]
   const transport = new EventEmitter()

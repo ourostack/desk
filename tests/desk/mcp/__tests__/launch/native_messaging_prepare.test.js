@@ -111,6 +111,7 @@ test("explicit native setup update freshly attests existing provider and returns
     attested = true
     response.end(JSON.stringify({ ok: true, result: { healthy: true, processIdentity: identity } }))
   })
+
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
   const endpoint = `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`
@@ -133,4 +134,46 @@ test("explicit native setup update freshly attests existing provider and returns
   assert.equal(result.reconciliationRequired, true)
   assert.equal(JSON.stringify(result).includes("a".repeat(64)), false)
   assert.equal(result.providerEndpoint, undefined)
+})
+
+test("unchanged extension digest cannot hide an older native runtime capsule", async t => {
+  const { prepareNativeMessaging } = await import(moduleUrl)
+  const homeDir = await mkTempRoot("native-running-runtime-")
+  const userDataRoot = path.join(homeDir, "Library/Application Support/Microsoft Edge")
+  await mkdir(userDataRoot, { recursive: true })
+  await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
+    profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
+  }))
+  const stateDir = path.join(homeDir, "state")
+  await mkdir(stateDir, { mode: 0o700 })
+  let attestations = 0
+  const server = http.createServer((request, response) => {
+    attestations++
+    response.end(JSON.stringify({ ok: true, result: { healthy: true } }))
+  })
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
+  const endpoint = `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`
+  const profileRoot = path.join(userDataRoot, "Default")
+  const digest = "c".repeat(64)
+  await writeFile(path.join(stateDir, "native-provider-" +
+    createHash("sha256").update(process.execPath + "\0" + profileRoot).digest("hex") + ".json"), JSON.stringify({
+    version: 1, processIdentity: { executable: process.execPath, profileRoot },
+    endpoint, extensionSourceDigest: digest,
+    mediationChain: [
+      { executable: path.join(homeDir, "old-runtime/entry"), profileRoot: path.join(homeDir, "old-runtime") },
+      { executable: process.execPath, profileRoot: path.join(homeDir, "old-runtime") },
+    ],
+  }), { mode: 0o600 })
+  const result = await prepareNativeMessaging({
+    declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin", homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: {},
+    installer: async () => ({ stateDir, extensionSourceDigest: digest,
+      executable: path.join(homeDir, "new-runtime/entry"), runtimeDirectory: path.join(homeDir, "new-runtime") }),
+  })
+  assert.equal(result.payload?.code, "browser_native_messaging_update_required",
+    "backend-only upgrades cannot silently continue using an older native provider")
+  assert.equal(result.args, undefined)
+  assert.equal(attestations, 0, "a known source mismatch is refused before acquisition or browser effects")
 })

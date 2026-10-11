@@ -62,3 +62,36 @@ test("messaging source drift, altered bytes and symlinked assets refuse copying"
   }
   writeFileSync(selected.file, bytes)
 })
+
+test("a failed private executable permission update removes only the unpublished asset", async t => {
+  const native = require(moduleFile)
+  const fs = require("node:fs")
+  const root = await mkTempRoot("native-messaging-copy-failure-")
+  const output = path.join(root, "unpublished.exe")
+  const asset = native.selectAsset(mcpRoot, process.platform, process.arch)
+  const source = readFileSync(asset.file)
+  const chmod = fs.chmodSync
+  t.mock.method(fs, "chmodSync", (file, ...args) => {
+    if (file === output) throw Object.assign(new Error("owned fixture permission failure"), { code: "EPERM" })
+    return chmod(file, ...args)
+  })
+  assert.throws(() => native.copyPrivateAsset(mcpRoot, process.platform, process.arch, output), error => error.code === "EPERM")
+  assert.equal(existsSync(output), false)
+  assert.deepEqual(readFileSync(asset.file), source)
+})
+
+test("native artifact family and malformed manifest identities are refused before private publication", async () => {
+  const { artifactFamily } = require(path.join(mcpRoot, "web-native-artifacts.cjs"))
+  assert.throws(() => artifactFamily("foreign"), /invalid_native_artifact_family/u)
+  const native = require(moduleFile)
+  const root = await mkTempRoot("native-messaging-manifest-")
+  cpSync(path.join(mcpRoot, "native/browser-messaging"), path.join(root, "native/browser-messaging"), { recursive: true })
+  cpSync(path.join(mcpRoot, "artifacts/browser-messaging"), path.join(root, "artifacts/browser-messaging"), { recursive: true })
+  const file = path.join(root, "artifacts/browser-messaging/manifest.json")
+  const manifest = JSON.parse(readFileSync(file, "utf8"))
+  for (const mutation of [{ ...manifest, version: 2 }, { ...manifest, assets: null },
+    { ...manifest, assets: { ...manifest.assets, foreign: {} } }]) {
+    writeFileSync(file, JSON.stringify(mutation))
+    assert.throws(() => native.verifyAssets(root), /browser_native_messaging_integrity/u)
+  }
+})
