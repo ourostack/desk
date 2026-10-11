@@ -28,7 +28,7 @@ Authority follows the human's verb and the surface's owner: investigate and revi
 
 ## Waste judgment
 
-Before and during work, check that each step adds justifiable, necessary, non-duplicative value; the human never needs to know the vocabulary. Make the smallest sufficient change at the nearest layer you own; fold ad-hoc steps into the plan; parallelize independent work, batch to cut waits; redesign repeat failures. "No waste" never means dropping proof. Budget scratch; verify reclaimed space, not exit.
+Before and during work, check that each step adds justifiable, necessary, non-duplicative value; the human never needs to know the vocabulary. Make the smallest sufficient change at the nearest layer you own; fold ad-hoc steps into the plan; parallelize independent work, batch; redesign failures. "No waste" never means dropping proof. Budget scratch; verify reclaimed space, not exit.
 
 ## Cite every factual claim
 
