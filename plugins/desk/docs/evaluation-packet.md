@@ -281,7 +281,7 @@ This scenario depends on the factory store and transport for the trust boundary 
 
 ### 7. A kaizen card's check (lands by the evaluation)
 
-This scenario depends on the kaizen loop in the selected factory store. Earlier packet wording referred to the V2 design's section 6, "Kaizen", as not yet public; that restriction is historical. The [RFC's public factory contract](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work) now describes kaizen and andon. An automatic comparison, a statistical verdict and closure on a verified fix are different outcomes: the [curator](../skills/curator/SKILL.md) permits evidence-based closure when the comparison can structurally never become conclusive. If no automatic check is observable, `observer` records a gap; no statistical verdict is not itself a failure.
+This scenario depends on the kaizen loop in the selected factory store. Earlier packet wording referred to the V2 design's section 6, "Kaizen", as not yet public; that restriction is historical. The [RFC's public factory contract](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work) now describes kaizen and andon. An automatic comparison, a statistical verdict and closure without confirmation are different outcomes. The [current curator](../skills/curator/SKILL.md#the-improvement-card-routine) hands shipped cards to the loop and forbids agents from closing them just because data is thin. The loop's [closure conditions](factory-local-capture.md#how-a-card-closes) distinguish store verdicts, source recovery and `closed_unverified` after repeated thin-data checks; none is permission for a manual statistical verdict. If no automatic check is observable, `observer` records a gap; no statistical verdict is not itself a failure.
 
 **Do:** open the selected store's issues labeled `kaizen` and read a card with a shipped countermeasure and an automatic check. For a personal run, use `ourostack/factory`; keep work-store evidence private.
 
@@ -289,7 +289,7 @@ This scenario depends on the kaizen loop in the selected factory store. Earlier 
 
 - the card names the recurring waste it targets and the jobs that showed it, the pull request that shipped the countermeasure, the version it shipped in, and the measure expected to move and in which direction;
 - the store's build has commented a comparison of that measure between jobs before and after that version, with its uncertainty;
-- the result distinguishes a confirmed or not-confirmed statistical verdict from “not enough independent jobs yet” or “no clear change so far”; closure on a verified fix records that reason and is not presented as statistical confirmation.
+- the result distinguishes a confirmed or not-confirmed statistical verdict from “not enough independent jobs yet” or “no clear change so far”; any `closed_unverified` result carries its documented loop condition and is not presented as statistical confirmation.
 
 ## Record what you find
 
