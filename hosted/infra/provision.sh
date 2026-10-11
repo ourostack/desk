@@ -16,7 +16,12 @@
 # Azure address, it serves arimendelow/desk-rehearsal, and it has no custom domain
 # and no deploy credential. A create uses IMAGE (a tag in the registry, or a full
 # image reference) instead of building one, so the rehearsal starts on
-# production's image; a rerun keeps the running image.
+# production's image; a rerun keeps the running image. Staging never holds
+# production's pull identity ouro-prod-services-mi, which also holds roles on
+# production storage and the email domain: it pulls with its own gateway identity
+# id-ouro-desk-hosted-staging (rg-ouro-identity), which the script creates if it
+# is missing and grants AcrPull on the registry only, reading first so a rerun
+# writes nothing. A staging app that holds the production identity is refused.
 #
 # Every write to an existing app is the whole app as `az containerapp show`
 # printed it, with only the script's own settings changed (app-yaml.mjs): az
@@ -55,7 +60,7 @@
 #      (later images come from .github/workflows/hosted-deploy.yml).
 #   2. Container App ouro-desk-hosted in environment ouro-prod-cae (Consumption):
 #      exactly 1 replica, external ingress on 8080, 2 vCPU / 4 GiB (provisional until
-#      Task 8 measures), pulls with identity ouro-prod-services-mi, a startup and a
+#      Task 8 measures), pulls with identity ouro-prod-services-mi (staging: its own), a startup and a
 #      liveness probe on /healthz, and the desk clone on the container's own disk
 #      (/data/desk, set in the image).
 #   3. Its secrets: desk-signing-key (random, generated once, never rotated by a
@@ -84,17 +89,20 @@ SUBSCRIPTION=261e0bf1-934d-41ab-9295-229b0d254418
 RESOURCE_GROUP=rg-ouro-work-substrate
 ENVIRONMENT=ouro-prod-cae
 REGISTRY=ouroworkprodk2aumligevt3e
-PULL_IDENTITY=ouro-prod-services-mi
+PROD_PULL_IDENTITY=ouro-prod-services-mi
 DEPLOY_IDENTITY=id-ourowork-github-prod
 STAGE="${STAGE:-prod}"
 case "$STAGE" in
   prod)
     APP=ouro-desk-hosted IDENTITY_ENV=prod DESK_REPO=arimendelow/desk
     MIN_REPLICAS=1 CPU=2.0 MEMORY=4Gi
+    PULL_IDENTITY=$PROD_PULL_IDENTITY PULL_IDENTITY_GROUP=$RESOURCE_GROUP
     ;;
   staging)
     APP=ouro-desk-hosted-staging IDENTITY_ENV=test DESK_REPO=arimendelow/desk-rehearsal
     MIN_REPLICAS=0 CPU=1.0 MEMORY=2Gi
+    # Its own gateway identity (identity-record.mjs GATEWAY_IDENTITIES.test), never production's (re-review N-I1).
+    PULL_IDENTITY=id-ouro-desk-hosted-staging PULL_IDENTITY_GROUP=rg-ouro-identity
     ;;
   *) printf 'STAGE must be prod or staging, not %s\n' "$STAGE" >&2; exit 1 ;;
 esac
@@ -131,8 +139,43 @@ write() {
 environment_id="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query id -o tsv)"
 default_domain="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query properties.defaultDomain -o tsv)"
 verification_id="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query properties.customDomainConfiguration.customDomainVerificationId -o tsv)"
-pull_identity_id="$(az_read identity show -n "$PULL_IDENTITY" -g "$RESOURCE_GROUP" --query id -o tsv)"
 login_server="$(az_read acr show -n "$REGISTRY" --query loginServer -o tsv)"
+
+# The identity the app pulls images with. Staging's is its own, made here if missing and granted AcrPull on the
+# registry only; the role is read first, so a rerun writes nothing.
+not_found() { grep -qiE "ResourceNotFound|was not found|could not be found" <<<"$1"; }
+if [[ "$STAGE" == staging ]]; then
+  if identity_error="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query id -o tsv 2>&1 >/dev/null)"; then
+    pull_identity_id="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query id -o tsv)"
+    pull_principal="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query principalId -o tsv)"
+  elif not_found "$identity_error"; then
+    say "Creating identity $PULL_IDENTITY in $PULL_IDENTITY_GROUP; staging pulls images with it"
+    write identity create -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" -l eastus2 --output none
+    if [[ "${DRY_RUN:-0}" == 1 ]]; then
+      pull_identity_id="<$PULL_IDENTITY id>" pull_principal="<$PULL_IDENTITY principal id>"
+    else
+      pull_identity_id="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query id -o tsv)"
+      pull_principal="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query principalId -o tsv)"
+    fi
+  else
+    printf 'Could not read identity %s:\n%s\n' "$PULL_IDENTITY" "$identity_error" >&2
+    exit 1
+  fi
+  registry_id="$(az_read acr show -n "$REGISTRY" --query id -o tsv)"
+  acr_pullers=""
+  if [[ "$pull_principal" != "<"* ]]; then
+    acr_pullers="$(az_read role assignment list --scope "$registry_id" --role AcrPull --query "[].principalId" -o tsv)"
+  fi
+  if grep -qxF -- "$pull_principal" <<<"$acr_pullers"; then
+    say "$PULL_IDENTITY holds AcrPull on $REGISTRY"
+  else
+    say "Granting $PULL_IDENTITY AcrPull on registry $REGISTRY only"
+    write role assignment create --assignee-object-id "$pull_principal" --assignee-principal-type ServicePrincipal --role AcrPull --scope "$registry_id" --output none
+    say "A new role can take a few minutes to apply; until it does, the app's first image pull may be retried."
+  fi
+else
+  pull_identity_id="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query id -o tsv)"
+fi
 fqdn="$APP.$default_domain"
 
 # The app's whole spec. `secrets_yaml` lists secret names (an update keeps their
@@ -246,6 +289,7 @@ build_update() {
     if [[ -n "$DESK_REDIRECTS" ]]; then args+=(--set-env "DESK_REDIRECTS=$DESK_REDIRECTS"); else args+=(--remove-env DESK_REDIRECTS); fi
   fi
   if [[ -f "$IDENTITY_FILE" ]]; then args+=(--identity-record "$IDENTITY_FILE"); else say "No $(basename "$IDENTITY_FILE") yet; Ouro sign-in settings stay as they are" >&2; fi
+  if [[ "$STAGE" == staging ]]; then args+=(--forbid-identity "$PROD_PULL_IDENTITY"); fi
   node "$APP_YAML" "${args[@]}"
 }
 
@@ -255,7 +299,7 @@ build_update() {
 app_exists=0
 if show_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)"; then
   app_exists=1
-elif ! grep -qiE "ResourceNotFound|was not found|could not be found" <<<"$show_error"; then
+elif ! not_found "$show_error"; then
   printf 'Could not read Container App %s:\n%s\n' "$APP" "$show_error" >&2
   exit 1
 fi
@@ -291,16 +335,20 @@ fi
 # Vault references included, from listSecrets before it sends).
 reconcile_app() {
   az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
-  local identity_args=() id attached=0
+  # The check after the update compares with the app as it was before anything here wrote: the identity assign is
+  # itself a full PUT that rewrites the secrets from listSecrets (re-review N-m2).
+  cp "$work/shown.json" "$work/before.json"
+  local identity_args=() stage_args=() id missing
   if [[ -f "$IDENTITY_FILE" ]]; then identity_args=(--identity-record "$IDENTITY_FILE"); fi
+  if [[ "$STAGE" == staging ]]; then stage_args=(--forbid-identity "$PROD_PULL_IDENTITY" --registry-identity "$pull_identity_id"); fi
   if ((${#identity_args[@]})); then
-    while read -r id; do
-      [[ -n "$id" ]] || continue
+    # Captured first, so a failure here stops the script before any write.
+    missing="$(node "$APP_YAML" --shown "$work/shown.json" --missing-identities "${identity_args[@]}")"
+    for id in $missing; do
       say "Attaching identity ${id##*/} to $APP"
       write containerapp identity assign -n "$APP" -g "$RESOURCE_GROUP" --user-assigned "$id" --output none
-      attached=1
-    done < <(node "$APP_YAML" --shown "$work/shown.json" --missing-identities "${identity_args[@]}")
-    if ((attached)) && [[ "${DRY_RUN:-0}" != 1 ]]; then
+    done
+    if [[ -n "$missing" && "${DRY_RUN:-0}" != 1 ]]; then
       az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
     fi
   fi
@@ -308,12 +356,22 @@ reconcile_app() {
   document="$(build_update)"
   say "Updating $APP: missing secrets added, every existing secret, env var, volume and identity kept"
   show_document "$document"
-  write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none
-  if [[ "${DRY_RUN:-0}" != 1 ]]; then
-    az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/after.json"
-    az_read containerapp secret list -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/secrets.json"
-    node "$APP_YAML" --verify --before "$work/shown.json" --after "$work/after.json" --secret-list "$work/secrets.json" ${identity_args[@]+"${identity_args[@]}"}
+  if [[ "${DRY_RUN:-0}" == 1 ]]; then
+    write containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none
+    return
   fi
+  if ! az containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none --subscription "$SUBSCRIPTION" 2>"$work/update.err"; then
+    if grep -qF "KeyError: 'value'" "$work/update.err"; then
+      # az fills each value-less secret from listSecrets and catches only a missing name, not a missing value.
+      printf '%s\n' "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). Nothing was sent; the app is unchanged. Record this for the rehearsal; the update path needs a fix before this app can be updated again." >&2
+    else
+      cat "$work/update.err" >&2
+    fi
+    exit 1
+  fi
+  az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/after.json"
+  az_read containerapp secret list -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/secrets.json"
+  node "$APP_YAML" --verify --before "$work/before.json" --after "$work/after.json" --secret-list "$work/secrets.json" ${identity_args[@]+"${identity_args[@]}"} ${stage_args[@]+"${stage_args[@]}"}
 }
 
 if ((app_exists)); then

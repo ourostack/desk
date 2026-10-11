@@ -2,7 +2,7 @@
 // kept in `calls` as { cmd, args, input, write }; `write` is this fake's own judgement of whether the call changes
 // anything, independent of the script's, so a test can assert that a dry run or a reconciled rerun makes no write.
 import { createHash } from "node:crypto";
-import { armPatch, azUpdateModel } from "./az-update-model.mjs";
+import { armPatch, azUpdateModel, LISTED_WITHOUT_VALUE } from "./az-update-model.mjs";
 
 export const SUB = "261e0bf1-934d-41ab-9295-229b0d254418";
 export const TEST_TENANT = "c12edfb6-c5ab-4bf8-b1d5-1f053311d396";
@@ -50,6 +50,8 @@ export function emptyCloud() {
     graphLag: 0,
     // az fills a Key Vault reference's value from listSecrets before sending an update (the review's worst case).
     resolveRefs: false,
+    // listSecrets returns a Key Vault reference without a value, on which az's update fails before sending.
+    refsWithoutValue: false,
     keepTagsOnSet: false,
   };
 }
@@ -298,8 +300,15 @@ export function createFakeRunner(cloud = emptyCloud()) {
         for (const secret of app.shown.properties.configuration.secrets) {
           if (!secret.keyVaultUrl) listed[secret.name] = app.secrets[secret.name];
           else if (cloud.resolveRefs) listed[secret.name] = "value-from-key-vault";
+          else if (cloud.refsWithoutValue) listed[secret.name] = LISTED_WITHOUT_VALUE;
         }
-        const { app: next, values } = armPatch(app.shown, azUpdateModel(document, listed));
+        let sent;
+        try {
+          sent = azUpdateModel(document, listed);
+        } catch (error) {
+          throw new CallFailed(`containerapp update failed: ${error.message}`, error.stderr);
+        }
+        const { app: next, values } = armPatch(app.shown, sent);
         if (cloud.dropIdentitiesOnUpdate) next.identity = { type: "UserAssigned", userAssignedIdentities: {} };
         Object.assign(app.secrets, values);
         app.shown = next;

@@ -212,3 +212,107 @@ test("a dry run shows the document it would send with every secret value as ***,
   assert.match(output, /"name": "desk-signing-key",\n\s+\| +"value": "\*\*\*"/);
   assert.ok(!HEX64.test(output));
 });
+
+// --- Fix round 2: staging never holds production's pull identity (re-review N-I1) -------------------------------
+
+const PROD_PULL = "ouro-prod-services-mi";
+const REGISTRY_ID = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.ContainerRegistry/registries/ouroworkprodk2aumligevt3e";
+const names = (argv, text) => argv.some((args) => args.some((arg) => arg.includes(text)));
+const grants = (argv) => argv.filter((args) => args.slice(0, 3).join(" ") === "role assignment create");
+
+test("STAGE=staging never names ouro-prod-services-mi: it pulls images with its own identity, already holding AcrPull, and grants nothing", (t) => {
+  const { argv, documents, output } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123" } });
+  assert.ok(!names(argv, PROD_PULL), "no az call names production's pull identity");
+  assert.ok(!output.includes(PROD_PULL));
+  assert.ok(!documents[0].includes(PROD_PULL), "the template doesn't name it");
+  assert.match(documents[0], new RegExp(`registries:\\n\\s+- server: ouroworkprodk2aumligevt3e\\.azurecr\\.io\\n\\s+identity: ${GATEWAY_IDENTITY}$`, "m"));
+  assert.match(documents[0], new RegExp(`userAssignedIdentities:\\n\\s+${GATEWAY_IDENTITY}: \\{\\}`));
+  assert.deepEqual(grants(argv), [], "AcrPull is already held: read first, no write");
+  assert.ok(argv.some((args) => args.slice(0, 3).join(" ") === "role assignment list" && args.includes(REGISTRY_ID) && args.includes("AcrPull")));
+});
+
+test("staging creates its own identity and grants it AcrPull on the registry only, before the app is created", (t) => {
+  const { argv, documents } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", FAKE_NO_STAGING_IDENTITY: "1" } });
+  const create = argv.findIndex((args) => args.slice(0, 2).join(" ") === "identity create");
+  assert.deepEqual(argv[create].slice(0, 8), ["identity", "create", "-n", "id-ouro-desk-hosted-staging", "-g", "rg-ouro-identity", "-l", "eastus2"]);
+  const [grant] = grants(argv);
+  assert.equal(grants(argv).length, 1);
+  const opt = (flag) => grant[grant.indexOf(flag) + 1];
+  assert.equal(opt("--role"), "AcrPull");
+  assert.equal(opt("--scope"), REGISTRY_ID);
+  assert.equal(opt("--assignee-principal-type"), "ServicePrincipal");
+  assert.equal(opt("--assignee-object-id"), "99999999-0000-4000-8000-000000000099");
+  const appCreate = argv.findIndex((args) => args.slice(0, 2).join(" ") === "containerapp create");
+  assert.ok(create < argv.indexOf(grant) && argv.indexOf(grant) < appCreate);
+  assert.ok(!names(argv, PROD_PULL));
+  assert.ok(!documents[0].includes(PROD_PULL));
+  // An identity that exists without the role gets only the grant.
+  const again = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", FAKE_NO_ACRPULL: "1" } });
+  assert.ok(!again.argv.some((args) => args.slice(0, 2).join(" ") === "identity create"));
+  assert.equal(grants(again.argv).length, 1);
+});
+
+test("a staging dry run prints the identity and AcrPull grant it would make, and writes nothing", (t) => {
+  const { argv, output } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", DRY_RUN: "1", FAKE_NO_STAGING_IDENTITY: "1" } });
+  assert.ok(!argv.some((args) => /^(identity create|role assignment create|containerapp create)/.test(args.join(" "))));
+  assert.match(output, /would run: az identity create -n id-ouro-desk-hosted-staging -g rg-ouro-identity/);
+  assert.match(output, /would run: az role assignment create --assignee-object-id <id-ouro-desk-hosted-staging principal id> --assignee-principal-type ServicePrincipal --role AcrPull --scope \/subscriptions\/.*\/registries\/ouroworkprodk2aumligevt3e/);
+  assert.ok(!output.includes(PROD_PULL));
+});
+
+test("production keeps pulling with ouro-prod-services-mi and makes no identity or role write", (t) => {
+  const { argv, documents } = runProvision(t, { env: { IMAGE: "abc123" } });
+  assert.match(documents[0], /registries:\n\s+- server: ouroworkprodk2aumligevt3e\.azurecr\.io\n\s+identity: \/subscriptions\/.*\/rg-ouro-work-substrate\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/ouro-prod-services-mi$/m);
+  assert.ok(!argv.some((args) => /^(identity create|role assignment create)/.test(args.join(" "))));
+  assert.ok(!names(argv, "id-ouro-desk-hosted-staging"));
+});
+
+test("a staging app that holds production's pull identity is refused before any write, and the check after a write refuses it too", (t) => {
+  const app = structuredClone(shown);
+  const prodId = `/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${PROD_PULL}`;
+  app.identity.userAssignedIdentities[prodId] = { clientId: "c", principalId: "p" };
+  const held = runProvision(t, { app, env: { STAGE: "staging" }, expectFailure: true });
+  assert.match(held.output, /ouro-prod-services-mi/);
+  assert.match(held.output, /must not hold/);
+  assert.equal(held.documents.length, 0, "nothing was sent");
+  const registry = structuredClone(shown);
+  registry.properties.configuration.registries[0].identity = prodId;
+  const pulled = runProvision(t, { app: registry, env: { STAGE: "staging" }, expectFailure: true });
+  assert.match(pulled.output, /must not hold/);
+  assert.equal(pulled.documents.length, 0);
+});
+
+// --- Fix round 2: re-review minors ------------------------------------------------------------------------------
+
+test("when listSecrets returns a Key Vault reference without a value, az's KeyError becomes a clear message and nothing changes (N-m1)", (t) => {
+  const { output, final } = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_REFS_WITHOUT_VALUE: "1" }, expectFailure: true });
+  assert.match(output, /listSecrets returned a Key Vault reference without a value/);
+  assert.match(output, /Nothing was sent; the app is unchanged/);
+  assert.ok(!output.includes("Traceback"), "az's traceback is not passed through");
+  assert.deepEqual(final, shown);
+});
+
+test("the check after the update compares with the app as it was before the identity assign, which rewrites the secrets (N-m2)", (t) => {
+  const app = structuredClone(shown);
+  secretsOf(app).push({ name: "kept-by-hand" });
+  delete app.identity.userAssignedIdentities[GATEWAY_IDENTITY];
+  const { output } = runProvision(t, { app, env: { STAGE: "staging", FAKE_ASSIGN_DROPS_SECRET: "kept-by-hand" }, record: completeRecord("test"), expectFailure: true });
+  assert.match(output, /Secret kept-by-hand is gone from the app after the write/);
+});
+
+test("provision.sh's identity names and KeyError message match identity-record.mjs and app-yaml.mjs", async () => {
+  const { GATEWAY_IDENTITIES, PROD_PULL_IDENTITY } = await import("../infra/identity-record.mjs");
+  const { KEY_VAULT_FILL_FAILURE } = await import("../infra/app-yaml.mjs");
+  const text = readFileSync(script, "utf8");
+  assert.match(text, new RegExp(`^PROD_PULL_IDENTITY=${PROD_PULL_IDENTITY}$`, "m"));
+  assert.match(text, new RegExp(`PULL_IDENTITY=${GATEWAY_IDENTITIES.test} PULL_IDENTITY_GROUP=rg-ouro-identity`));
+  assert.ok(text.includes(KEY_VAULT_FILL_FAILURE));
+});
+
+test("the check after a staging update refuses an app that came back pulling with production's identity", (t) => {
+  const prodId = `/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${PROD_PULL}`;
+  const { output } = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_UPDATE_REGISTRY_IDENTITY: prodId }, expectFailure: true });
+  assert.match(output, /must not hold identity ouro-prod-services-mi after the write/);
+  const other = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_UPDATE_REGISTRY_IDENTITY: "/subscriptions/s/resourceGroups/r/providers/Microsoft.ManagedIdentity/userAssignedIdentities/someone-else" }, expectFailure: true });
+  assert.match(other.output, /pulls from ouroworkprodk2aumligevt3e\.azurecr\.io with someone-else, not id-ouro-desk-hosted-staging/);
+});

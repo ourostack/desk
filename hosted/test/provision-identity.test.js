@@ -774,3 +774,46 @@ test("m4: the default runner's error names the command's first words and stderr,
   assert.ok(!error.message.includes("SECRET-ARGUMENT") && !error.message.includes("SECRET-INPUT"));
   assert.equal((await defaultRunner(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { input: "piped" })).stdout, "piped");
 });
+
+// --- Fix round 2 ------------------------------------------------------------------------------------------------
+
+const PROD_PULL_ID = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.ManagedIdentity/userAssignedIdentities/ouro-prod-services-mi";
+
+test("N-I1: a test-env run never names production's pull identity, and a staging write refuses an app that holds it", async (t) => {
+  const { go, fake, logs } = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  addStaging(fake.cloud, { shown: KV_REF_SHOWN(), secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  await go();
+  await go({ clearAppSecrets: true });
+  assert.ok(!everythingShown({ logs, fake }).includes("ouro-prod-services-mi"));
+  const held = setup(t);
+  const shown = KV_REF_SHOWN();
+  shown.identity.userAssignedIdentities[PROD_PULL_ID] = {};
+  addStaging(held.cloud, { shown, secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  await assert.rejects(held.go({ clearAppSecrets: true }), /must not hold identity ouro-prod-services-mi/);
+  assert.equal(held.cloud.containerApps["ouro-desk-hosted-staging"].updates.length, 0);
+  // The check after a write refuses it too, should a write ever bring it back.
+  const after = setup(t);
+  addStaging(after.cloud, { shown: KV_REF_SHOWN(), secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  const app = after.cloud.containerApps["ouro-desk-hosted-staging"];
+  const onUpdate = app.onUpdate;
+  app.onUpdate = (updated) => {
+    onUpdate(updated);
+    updated.shown.properties.configuration.registries[0].identity = PROD_PULL_ID;
+  };
+  await assert.rejects(after.go({ clearAppSecrets: true }), /must not hold identity ouro-prod-services-mi after the write/);
+});
+
+test("N-m1: when listSecrets returns a Key Vault reference without a value, az's KeyError becomes a clear message and the app is unchanged", async (t) => {
+  const { go, fake } = setup(t);
+  fake.cloud.refsWithoutValue = true;
+  addStaging(fake.cloud, { shown: KV_REF_SHOWN(), secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING } });
+  const before = structuredClone(fake.cloud.containerApps["ouro-desk-hosted-staging"].shown);
+  await assert.rejects(go({ clearAppSecrets: true }), (error) => {
+    assert.match(error.message, /listSecrets returned a Key Vault reference without a value/);
+    assert.match(error.message, /Nothing was sent; the app is unchanged/);
+    assert.ok(!error.message.includes("Traceback"));
+    return true;
+  });
+  assert.deepEqual(fake.cloud.containerApps["ouro-desk-hosted-staging"].shown, before);
+  assert.deepEqual(fake.cloud.containerApps["ouro-desk-hosted-staging"].restarts, []);
+});
