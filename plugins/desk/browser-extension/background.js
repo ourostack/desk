@@ -11,6 +11,14 @@ const METHODS = new Set([
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const TOKEN = /^[a-f0-9]{64}$/u
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+const NATIVE_ERRORS = new Map([
+  ["Specified native messaging host not found.", "NATIVE_HOST_NOT_FOUND"],
+  ["Access to the specified native messaging host is forbidden.", "NATIVE_HOST_FORBIDDEN"],
+  ["Native host has exited.", "NATIVE_HOST_EXITED"],
+  ["Failed to start native messaging host.", "NATIVE_HOST_START_FAILED"],
+  ["Invalid native messaging host name specified.", "NATIVE_HOST_NAME_INVALID"],
+  ["Error when communicating with the native messaging host.", "NATIVE_HOST_IO_FAILED"],
+])
 
 function refusal(code, message) {
   const error = new Error(message)
@@ -444,10 +452,11 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         })
       })
       connected.onDisconnect.addListener(() => {
-        void api.runtime.lastError
+        const error = api.runtime.lastError
+        const code = error ? NATIVE_ERRORS.get(error.message) ?? "NATIVE_HOST_ERROR_UNKNOWN" : "NATIVE_TRANSPORT_DISCONNECTED"
         if (port === connected) port = undefined
         pendingReloadToken = undefined
-        if (!stopped) onStatus("NATIVE_TRANSPORT_DISCONNECTED")
+        if (!stopped) onStatus(code)
         retry()
       })
       publish({ event: "ready", protocolVersion: 1, extensionId: api.runtime.id, sourceDigest: SOURCE_DIGEST, profileToken: token,

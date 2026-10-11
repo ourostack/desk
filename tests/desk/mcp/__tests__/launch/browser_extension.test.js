@@ -112,6 +112,39 @@ async function create(extension, id = "create", leaseId = "lease-a") {
   return extension.dispatch({ id, leaseId, method: "target.create", params: { marker: `marker-${id}` } })
 }
 
+test("native startup disconnect reports classified codes without exposing Chrome error text or touching peer resources", async () => {
+  const { createBrowserExtension } = await import(extensionUrl)
+  for (const [message, expected] of [
+    ["Specified native messaging host not found.", "NATIVE_HOST_NOT_FOUND"],
+    ["Access to the specified native messaging host is forbidden.", "NATIVE_HOST_FORBIDDEN"],
+    ["Native host has exited.", "NATIVE_HOST_EXITED"],
+    ["Failed to start native messaging host.", "NATIVE_HOST_START_FAILED"],
+    ["Invalid native messaging host name specified.", "NATIVE_HOST_NAME_INVALID"],
+    ["Error when communicating with the native messaging host.", "NATIVE_HOST_IO_FAILED"],
+    ["Private host /private/account chrome-extension://private/" + token, "NATIVE_HOST_ERROR_UNKNOWN"],
+    [undefined, "NATIVE_TRANSPORT_DISCONNECTED"],
+  ]) {
+    const fake = fixture()
+    const statuses = []
+    const extension = createBrowserExtension(fake.chrome, { onStatus: code => statuses.push(code) })
+    await extension.start()
+    const callsBefore = structuredClone(fake.calls)
+    const sentBefore = structuredClone(fake.sent)
+    fake.chrome.runtime.lastError = message === undefined ? undefined : { message }
+    try {
+      fake.port.onDisconnect.emit()
+      assert.deepEqual(statuses, [expected])
+      assert.deepEqual(fake.calls, callsBefore, "diagnosis must not mutate or inspect any browser resource")
+      assert.deepEqual(fake.sent, sentBefore, "raw diagnostic text must not enter native messages")
+      assert.equal(JSON.stringify(statuses).includes(token), false)
+      assert.equal(fake.tabs.size, 0)
+      assert.equal(fake.windows.size, 0)
+    } finally {
+      extension.stop()
+    }
+  }
+})
+
 test("extension build verifies executed-source identity across every shipped source file", async () => {
   const { mkdir, writeFile, copyFile, readFile } = await import("node:fs/promises")
   const { createRequire } = await import("node:module")
