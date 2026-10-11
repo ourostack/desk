@@ -15,7 +15,7 @@ Align proportionately: state assumptions, gather human input for the whole task 
 
 ## Delivery and sign-off
 
-Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. A child agent never calls task_signoff.
+Done is a delivery, not an acceptance. When you deliver, end with a validation receipt with visual proof (`evidence-discipline`), then ask accept or send back? and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered. A child agent never calls task_signoff.
 
 ## Coaching the collaboration
 

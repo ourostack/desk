@@ -242,7 +242,7 @@ export function signoffInstructions(found, { noninteractive, seen = false }) {
   const lead = atLeast ? "at least " : ""
   const age = oldest === null ? "of unknown age" : `the oldest for ${atLeast ? "at least " : ""}${plural(oldest, "day", "days")}`
   const head = count === 1 ? `${lead}1 delivered task awaits sign-off, ${age}.` : `${lead}${count} delivered tasks await sign-off, ${age}.`
-  const raise = count === 1 ? "raise it, once, as three lines (asked, delivered with proof, accept or send back), and record the answer" : "raise them together, once, each as three lines (asked, delivered with proof, accept or send back), and record each answer"
+  const raise = count === 1 ? "raise it, once, as a validation receipt with proof and then accept or send back (evidence-discipline), and record the answer" : "raise them together, once, each as a validation receipt with proof and then accept or send back (evidence-discipline), and record each answer"
   return [`${head} Finish what the operator asked first. Then ${raise} with task_signoff. Do not raise ${count === 1 ? "it" : "them"} in a noninteractive session.`]
 }
 

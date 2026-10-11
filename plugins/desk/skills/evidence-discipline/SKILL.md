@@ -2,19 +2,19 @@
 name: evidence-discipline
 description: >-
   Invoke before giving a recommendation or claim that depends on external,
-  mutable or unverified facts (a system's current behavior, a product, policy
-  or market, an inherited handoff or another agent's claim), when curated
-  records and current sources disagree, when the answer you have arrived at is
-  complex or may answer an easier adjacent question, before quoting any
-  duration, cost or scope estimate, and before acting on assumed-but-unverified
-  evidence: supervised wrappers, explicit tool warnings, outcome messages,
-  orchestration wrappers, auth transfer, durability claims, process cleanup,
-  precedent claims, or test coverage. Also invoke when writing factual claims
-  into a pull request, task card, handoff or subagent brief, for the citation
-  procedure. Not needed for a routine status read directly from its source.
-  Also invoke when a visual would help verify a state or a milestone claims a
-  rendered, installed, merged or rollout state. Covers citation, primary
-  sources, evidence precedence, fixtures and visual proof.
+  mutable or unverified facts (a system's behavior, a policy, an inherited
+  handoff or another agent's claim), when curated records and current sources
+  disagree, when the answer you have arrived at is complex or may answer an
+  easier adjacent question, before quoting any duration, cost or scope
+  estimate, and before acting on assumed-but-unverified evidence: supervised
+  wrappers, tool warnings, outcome messages, orchestration wrappers, auth
+  transfer, durability claims, process cleanup, precedent claims, or test
+  coverage. Also invoke when writing factual claims into a pull request, task
+  card, handoff or subagent brief, when a visual would help verify a state or
+  a milestone claims a rendered, installed, merged or rollout state, and
+  before asking the operator to accept a delivery. Not needed for a routine
+  status read from its source. Covers citation, primary sources, evidence
+  precedence, fixtures, visual proof and validation receipts.
 ---
 
 # Evidence discipline
@@ -243,3 +243,14 @@ macOS Keychain has analogous per-user encryption (the cipher is in a SQLite stor
 ## Visual proof when it helps
 
 Where a visual would help a human verify a state, capture bounded visual proof at that stage, including working or doing logs and intermediate milestones such as pull request opened, reviewed, or merged states. When a milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result, not a terminal success line. It supplements rather than replaces tests, logs and system-of-record readback. Capture only the relevant bounded view, never secrets or sensitive/private content; if capture is impossible, record why and use the strongest safe alternative. Nonvisual work gets no artificial screenshots.
+
+## Validation receipt at delivery
+
+Never ask the operator "accept or send back?" without a validation receipt. A bare question leaves them to work out what they are accepting. Every delivery that asks it (`using-desk`, "Delivery and sign-off"; `task-lifecycle`, "Done is a delivery") leads with a receipt, then asks:
+
+1. **What you're accepting.** One plain sentence naming the outcome in the operator's terms, not the task's internal name.
+2. **Acceptance checks.** Each check the operator would want, with its result, pass or fail, and its proof. Where the outcome is visible, the proof is a screenshot or rendered capture of the real, live thing: the UI, the page, the chat, the merged pull request. Otherwise it is a link to the primary source ("Cite every factual claim"). A terminal success line is not proof ("Visual proof when it helps").
+3. **What to look at.** The one or two things the operator should check to decide.
+4. **What is not covered.** Anything still open, failed or unverified. Say "nothing" when nothing is.
+
+A substantial delivery publishes the receipt as a page (an artifact, when the host has one) and links it; a small one carries it inline. The proof follows "Visual proof when it helps": a bounded view, never secrets or private content. Then ask "accept or send back?" once, and carry on.
