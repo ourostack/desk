@@ -56,6 +56,119 @@ const processIdentity = {
   profileRoot: declaration.launch.profileRoot,
 };
 
+test('GivenNativeProviderBinding_WhenLeaseCreated_BindingPrecedesEveryCreate', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  let bound = false;
+  const lease = await createLease({
+    stateDir: directory, context: declaration, owner: 'native-owner',
+    rawEndpoint: 'http://127.0.0.1:1/context', processIdentity,
+    providerBind: async ({ lease }) => {
+      assert.equal(fake.methods.some(method => method === 'Target.createTarget'), false);
+      assert.equal((await readRegistry(directory)).leases[lease.id].creating, true);
+      bound = true;
+      return { rawEndpoint: fake.endpoint, transportGeneration: 'native-generation' };
+    },
+  });
+  assert.equal(bound, true);
+  assert.equal(lease.rawEndpoint, fake.endpoint);
+  assert.equal(lease.nativeRouting.transportGeneration, 'native-generation');
+  assert.equal(lease.targetIds.length, 1);
+});
+
+test('GivenDeferredNativeLease_WhenBound_CatalogStartsWithoutAnyTarget', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const count = fake.methods.length;
+  const lease = await createLease({
+    stateDir: directory, context: declaration, owner: 'native-owner',
+    rawEndpoint: fake.endpoint, processIdentity, deferInitialTarget: true,
+    providerBind: async () => ({ rawEndpoint: fake.endpoint, transportGeneration: 'native-generation' }),
+  });
+  assert.deepEqual(lease.targetIds, []);
+  assert.deepEqual(lease.pendingTargetCreates, []);
+  assert.equal(lease.creating, false);
+  assert.equal(fake.methods.length, count);
+});
+
+test('GivenInvalidNativeBinding_WhenLeaseCreated_NoTargetIsDispatched', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const count = fake.methods.length;
+  await assert.rejects(createLease({
+    stateDir: directory, context: declaration, owner: 'native-owner',
+    rawEndpoint: fake.endpoint, processIdentity,
+    providerBind: async () => ({ rawEndpoint: undefined, transportGeneration: 'native-generation' }),
+  }), error => error.code === 'INVALID_NATIVE_BINDING');
+  assert.equal(fake.methods.length, count);
+  assert.deepEqual((await readRegistry(directory)).leases, {});
+});
+
+async function nativeRoutingFixture(t) {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({
+    stateDir: directory, context: declaration, owner: 'native-owner', rawEndpoint: fake.endpoint,
+    processIdentity, deferInitialTarget: true,
+    providerBind: async () => ({ rawEndpoint: fake.endpoint, transportGeneration: 'native-generation' }),
+  });
+  const registry = await readRegistry(directory);
+  registry.leases[lease.id].pendingTargetCreates.push({ marker: 'native-marker', markerUrl: 'data:text/html,marker' });
+  await writeRegistry(directory, registry);
+  return {
+    directory, lease, fake,
+    routing: {
+      stateDir: directory, leaseId: lease.id, processIdentity, marker: 'native-marker',
+      transportGeneration: 'native-generation', controlMarker: 'native-marker',
+      controlTargetId: 'native-control', controlTabId: 101, windowId: 100,
+      targetTabs: { 'native-task': { tabId: 102, windowId: 100 } },
+    },
+  };
+}
+
+test('GivenRecordedNativeCreate_WhenRoutingPublished_ControlAndTaskShareOneLedger', async (t) => {
+  const { directory, lease, routing } = await nativeRoutingFixture(t);
+  await leaseApi.recordNativeRouting(routing);
+  const recorded = (await readRegistry(directory)).leases[lease.id];
+  assert.deepEqual(recorded.targetIds, ['native-control', 'native-task']);
+  assert.equal(recorded.nativeRouting.controlTabId, 101);
+  assert.equal(recorded.nativeRouting.controlMarker, 'native-marker');
+  assert.deepEqual(recorded.nativeRouting.targetTabs, { 'native-task': { tabId: 102, windowId: 100 } });
+  assert.equal(recorded.pendingTargetCreates.length, 1, 'publishing routing does not hide a still-pending create');
+});
+
+for (const mutation of [
+  { marker: 'unrecorded-marker' },
+  { transportGeneration: 'replacement-generation' },
+  { processIdentity: { ...processIdentity, startIdentity: 'replacement-browser' } },
+  { controlTabId: 0 },
+  { targetTabs: { 'native-control': { tabId: 102, windowId: 100 } } },
+  { targetTabs: { 'native-task': { tabId: 101, windowId: 100 } } },
+]) {
+  test('GivenInvalidNativeRouting_WhenPublished_NoOwnershipIsAdded', async (t) => {
+    const { directory, lease, routing } = await nativeRoutingFixture(t);
+    await assert.rejects(leaseApi.recordNativeRouting({ ...routing, ...mutation }),
+      error => ['INVALID_NATIVE_ROUTING', 'NATIVE_ROUTING_GENERATION_MISMATCH', 'NATIVE_CREATE_NOT_RECORDED'].includes(error.code));
+    assert.deepEqual((await readRegistry(directory)).leases[lease.id].targetIds, []);
+  });
+}
+
+test('GivenNativeTabAlreadyOwnedByPeer_WhenPublished_ConflictingIdentityIsRefused', async (t) => {
+  const { directory, lease, routing } = await nativeRoutingFixture(t);
+  const registry = await readRegistry(directory);
+  registry.leases.peer = {
+    id: 'peer', targetIds: ['peer-task'],
+    nativeRouting: { controlTabId: 201, targetTabs: { 'peer-task': { tabId: 102, windowId: 200 } } },
+  };
+  await writeRegistry(directory, registry);
+  await assert.rejects(leaseApi.recordNativeRouting(routing), error => error.code === 'NATIVE_ROUTING_CONFLICT');
+  assert.deepEqual((await readRegistry(directory)).leases[lease.id].targetIds, []);
+});
+
 function attestingProvider(operation, payload) {
   assert.equal(operation, 'attest');
   return Promise.resolve({

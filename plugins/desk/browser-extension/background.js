@@ -1,4 +1,5 @@
 import { controlTitle } from "./control.js"
+import { markerTargetUrl } from "./markers.js"
 
 const HOST = "com.ourostack.desk.browser"
 const METHODS = new Set([
@@ -168,6 +169,10 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       if (typeof params.marker !== "string" || !ID.test(params.marker)) {
         throw refusal("NATIVE_MARKER_INVALID", "Target creation requires the broker's recorded marker")
       }
+      const markerUrl = markerTargetUrl(params.marker)
+      if (params.markerUrl !== undefined && params.markerUrl !== markerUrl) {
+        throw refusal("NATIVE_MARKER_INVALID", "Native marker URL does not match its recorded marker identity")
+      }
       if (lease.creates.has(params.marker) || Array.from(lease.creates.values()).some(value => value.pending)) {
         throw refusal("NATIVE_CREATE_PENDING", "An earlier create has been dispatched and needs exact reconciliation")
       }
@@ -184,7 +189,6 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         await labelControl(lease)
       }
       await ownTab(lease, lease.controlTabId, true)
-      const markerUrl = "about:blank#desk-native-" + encodeURIComponent(params.marker)
       const tab = await api.tabs.create({ windowId: lease.windowId, active: false, url: markerUrl })
       if (!integer(tab.id) || tab.windowId !== lease.windowId) {
         throw refusal("NATIVE_CREATE_INDETERMINATE", "Native tab creation did not return exact owner-window routing")
@@ -210,7 +214,13 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         const tab = await ownTab(lease, record.tabId, true)
         tabs.push({ tabId: tab.id, windowId: tab.windowId, control: Boolean(record.control), targetId: (await targetInfo(tab.id)).id, url: tab.url, title: tab.title })
       }
-      return { windowId: lease.windowId, controlTabId: lease.controlTabId, controlMarker: lease.controlMarker, tabs }
+      const windows = []
+      for (const id of new Set(tabs.map(tab => tab.windowId))) {
+        const window = await api.windows.get(id)
+        if (window.id !== id) throw refusal("NATIVE_WINDOW_MISMATCH", "Owned window readback returned a different identity")
+        windows.push({ id, left: window.left, top: window.top, width: window.width, height: window.height, state: window.state })
+      }
+      return { windowId: lease.windowId, controlTabId: lease.controlTabId, controlMarker: lease.controlMarker, tabs, windows }
     }
     if (method === "lease.unbind") {
       if (lease.tabs.size !== 0 || Array.from(lease.creates.values()).some(value => value.pending)) {
@@ -235,7 +245,12 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         throw refusal("NATIVE_CONTROL_CLOSE_ORDER", "Close exact task targets before the owner control")
       }
       await api.tabs.remove(tab.id)
-      return { closed: true, tabId: tab.id }
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const present = (await api.debugger.getTargets()).some(target => target.tabId === tab.id)
+        if (!present) return { closed: true, tabId: tab.id }
+        await delay(50)
+      }
+      throw refusal("NATIVE_CLOSE_UNCONFIRMED", "The exact native target is still present after close")
     }
     if (method === "target.attach") {
       if (!record.attached) {
@@ -252,6 +267,7 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
     }
     if (method === "target.command") {
       if (typeof params.method !== "string" || /^(Browser|SystemInfo|Tethering|Storage|DOMStorage|IndexedDB|CacheStorage|Database|ServiceWorker)\./u.test(params.method) ||
+          (params.method.startsWith("Target.") && params.method !== "Target.setAutoAttach") ||
           ["Page.bringToFront", "Target.activateTarget", "Target.createTarget", "Target.closeTarget", "Target.attachToBrowserTarget",
             "Network.clearBrowserCache", "Network.clearBrowserCookies", "Network.getAllCookies", "Network.getCookies",
             "Network.setCookie", "Network.setCookies", "Network.deleteCookies"].includes(params.method)) {

@@ -505,6 +505,7 @@ jobs:
       - name: Reproduce and verify committed browser messaging assets
         shell: bash
         run: |
+          node plugins/desk/mcp/scripts/build-browser-extension.cjs --verify
           node plugins/desk/mcp/scripts/build-browser-messaging-assets.cjs
           git diff --exit-code -- plugins/desk/mcp/artifacts/browser-messaging
           node --test tests/desk/mcp/__tests__/launch/web_native_messaging.test.js

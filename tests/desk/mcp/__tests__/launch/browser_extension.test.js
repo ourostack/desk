@@ -36,6 +36,11 @@ function fixture() {
       contexts = [{ documentUrl: chrome.runtime.getURL("token.html") }]
     } },
     windows: {
+      get: async id => {
+        const value = windows.get(id)
+        if (!value) throw new Error("unknown window")
+        return { ...value, left: 10, top: 20, width: 800, height: 600, state: "normal" }
+      },
       create: async params => {
         calls.push({ method: "windows.create", params })
         const id = next++
@@ -306,4 +311,28 @@ test("control title follows a same-document purpose hash update without reloadin
       else delete globalThis[key]
     }
   }
+})
+
+test("recorded broker marker URL is used before original-page navigation", async () => {
+  const { extension, tabs } = await setup()
+  const marker = "encoded-marker"
+  const markerUrl = "data:text/html," + encodeURIComponent('<!doctype html><meta charset="utf-8"><title>Desk target marker</title><meta name="desk-target-marker" content="encoded-marker">')
+  const result = await extension.dispatch({ id: "marker-url", leaseId: "lease-a", method: "target.create", params: { marker, markerUrl } })
+  assert.equal(result.error, undefined)
+  assert.equal(tabs.get(result.result.tabId).url, markerUrl)
+})
+
+test("native readback reports bounds only for exact recorded windows", async () => {
+  const { extension } = await setup()
+  const first = await create(extension)
+  const result = await extension.dispatch({ id: "read", leaseId: "lease-a", method: "target.readback", params: {} })
+  assert.deepEqual(result.result.windows, [{ id: first.result.windowId, left: 10, top: 20, width: 800, height: 600, state: "normal" }])
+})
+
+test("close success requires exact target absence rather than API return alone", async () => {
+  const { extension, chrome } = await setup()
+  const first = await create(extension)
+  chrome.tabs.remove = async () => {}
+  const result = await extension.dispatch({ id: "close-unconfirmed", leaseId: "lease-a", method: "target.close", params: { tabId: first.result.tabId } })
+  assert.equal(result.error.code, "NATIVE_CLOSE_UNCONFIRMED")
 })
