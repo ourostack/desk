@@ -10,6 +10,8 @@ import {tmpdir} from "node:os"
 import * as path from "node:path"
 import {createHash} from "node:crypto"
 import childProcess from "node:child_process"
+import {runInNewContext} from "node:vm"
+import {different} from "../_file_identity.js"
 import * as runner from "../../../../../plugins/desk/mcp/src/factory/triage-runner.js"
 const hash=value=>createHash("sha256").update(value).digest("hex")
 const flags=["--restricted","--safe-mode","--permission-mode","--permission-prompts","--tools","--disable-slash-commands","--no-chrome","--no-session-persistence","--strict-mcp-config","--mcp-config","--settings","--max-budget-usd","--output-format","--verbose","--system-prompt","--allowedTools"]
@@ -20,9 +22,817 @@ const readers={read:({cli}={})=>{
   const file=cli&&path.join(path.dirname(cli),"managed-policy.json")
   const current=file?{...source,path:file,settings:JSON.parse(readFileSync(file)),revision:hash(readFileSync(file))}:source
   return {complete:true,controller_invariant:true,sources:[current],validation_errors:[],
-    capabilities:{customization_sources_disabled:true,result_is_data_only:true,engine_sha256:"fixture-only-not-native-attestation"}}
+    capabilities:{result_is_data_only:true,engine_sha256:"fixture-only-not-native-attestation"}}
 }}
 const diagnostic=async()=>({kind:"closed",code:0,stdout:doctor,truncated:false})
+const fixedOff=()=>Object.fromEntries(["cc-plugin-responsive-mode","cc-plugin-diff","cc-plugin-you-should-know","cc-plugin-claude-test",
+  "cc-plugin-plugin-authoring","cc-plugin-mods-guide","cc-plugin-mermaid","cc-plugin-agents-md","cc-plugin-telemetry"].map(n=>[n+"@builtin",false]))
+test("all_eleven_registered_ids_accounted",async(t)=>{
+  const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"fixed-set"),deadline:Date.now()+15000})
+  t.after(()=>owned.close())
+  const p=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
+  assert.deepEqual(p.settings.enabledPlugins,fixedOff())
+  for(const map of [{},{...fixedOff(),"extra@builtin":false},{...fixedOff(),"cc-plugin-tips@builtin":false},
+    {...fixedOff(),"cc-plugin-sec-default@builtin":false},{...fixedOff(),"cc-plugin-diff@builtin":true}]){
+    assert.equal(runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch,
+      settings:{...p.settings,enabledPlugins:map}}).state,"scope_unqualified")
+  }
+})
+test("nine_false_after_managed_fold_or_hold",async()=>{
+  const input={...controlInput(),settings:{...controlInput().settings,enabledPlugins:fixedOff()},mode:"registeredConfiguration"}
+  const positive=await runner.runNonacceptedControlCollection(input)
+  assert.equal(positive.outcome.state,"collected")
+  assert.equal(positive.outcome.evidence.schema,"desk.factory.triage-controls/3")
+  assert.deepEqual(Object.keys(positive.outcome.evidence.builtin_basis).sort(),["cc-plugin-sec-default@builtin","cc-plugin-tips"])
+  for(const id of Object.keys(fixedOff())){
+    for(const value of [true,null,"false"]){
+      const r=await runner.runNonacceptedControlCollection({...input,sources:[{enabledPlugins:{[id]:value}}]})
+      assert.equal(r.outcome.state,"scope_unqualified");assert.equal(r.statistics.diagnostics,0)
+      assert.equal(r.productionAuthority,false)
+    }
+    const missing=fixedOff();delete missing[id]
+    const r=await runner.runNonacceptedControlCollection({...input,settings:{...input.settings,enabledPlugins:missing}})
+    assert.equal(r.outcome.state,"scope_unqualified");assert.equal(r.statistics.diagnostics,0)
+    const off=await runner.runNonacceptedControlCollection({...input,sources:[{enabledPlugins:{[id]:false}}]})
+    assert.equal(off.outcome.state,"collected");assert.equal(off.productionAuthority,false)
+  }
+  const unknown=await runner.runNonacceptedControlCollection({...input,sources:[{enabledPlugins:{"unreviewed@builtin":false}}]})
+  assert.equal(unknown.outcome.state,"scope_unqualified");assert.equal(unknown.statistics.diagnostics,0)
+})
+test("availability_variants_cannot_enable_fixed_off_set",async()=>{
+  const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"))
+  const registry=bytes.subarray(190345930,190348300)
+  assert.equal(hash(registry),"0d44a3195cf29f26ba956f4a0b7ad8beea17cb6d19b3d4b89e273437513895e1")
+  const text=registry.toString(),body=text.slice(text.indexOf("function E3("),text.indexOf("function iUn("))
+  const availabilityBody=text.slice(text.indexOf("function lho("),text.indexOf("function hb("))
+  const fold=bytes.subarray(199358867,199358867+4637)
+  assert.equal(hash(fold),"8f210786b67345f02a97acb015c99034b13f7c7dc88b2ebe84cebe6f8c76e01c")
+  for(const id of Object.keys(fixedOff())){
+    for(const availability of [true,false,"exception"]){
+      for(const defaultEnabled of [true,false,undefined]){
+        const name=id.slice(0,-8),plugins=new Map([[name,{name,defaultEnabled,hooksModule:{}}]])
+        let callbackActivation=0
+        plugins.get(name).isAvailable=()=>{if(availability==="exception")throw Error("availability");return availability}
+        const context={Qn:()=>({enabledPlugins:fixedOff()}),xr:()=>({builtinPlugins:plugins,builtinPluginFailures:new Set}),
+          ko:()=>{},Pi:"builtin",mR:()=>[],
+          vn:()=>{throw Error("policy-only not in fixed set")},yUn:()=>{throw Error("trusted-only not in fixed set")},
+          bQt:()=>{throw Error("unresolved alias")},Jk:()=>({activate:()=>callbackActivation++})}
+        context.lho=runInNewContext(`(${availabilityBody})`,context)
+        const E3=runInNewContext(`(${body})`,context)
+        const selected=E3()
+        assert.equal(selected.enabled.length,0)
+        assert.equal(selected.disabled.length,availability===true?1:0)
+        const IUr=runInNewContext(`(${fold.toString()})`,{gEn:()=>new Map})
+        const resolved=IUr({session:[],synced:[],marketplace:[],skill:[],builtin:[...selected.enabled,...selected.disabled],
+          managedEntries:[],recordedDisableFolds:new Set})
+        const enabled=resolved.plugins.filter(p=>p.enabled)
+        assert.equal(enabled.length,0)
+        for(const plugin of enabled)plugin.activate()
+        assert.equal(callbackActivation,0)
+        const shared=await runner.runNonacceptedControlCollection({...controlInput(),sources:[{enabledPlugins:{[id]:false}}],
+          mode:"registeredConfiguration"})
+        assert.equal(shared.outcome.state,"collected");assert.equal(shared.productionAuthority,false)
+      }
+    }
+  }
+})
+test("disabled_registration_consumers_no_activation",()=>{
+  const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"))
+  const diff=bytes.subarray(222747175,222811837)
+  assert.equal(hash(diff),"d6ff6dbf628c22298f8981c41908d000331c7046449df5ab2cc49c88d57c3e7f")
+  const text=diff.toString(),guard=text.slice(text.indexOf("var it=!0;var at="),text.indexOf('var Fr="diff";'))
+  const registration=text.slice(text.indexOf("function ol("),text.indexOf("export{Fr as"))
+  for(const [interactive,desktop,expected]of [[false,false,0],[true,false,1],[false,true,1]]){
+    let carry=0,registered=0,featureCalls=0
+    const ol=runInNewContext(`${guard};(${registration})`,{ve:()=>!interactive,qE:()=>desktop?"claude-desktop":"sdk-cli",
+      nj:()=>true,Ie:()=>"feature",k:()=>{featureCalls++;return true},zr:()=>true,
+      Ir:()=>{carry++;return Promise.resolve()},ce:()=>({diffSidebarOpen:true}),t:()=>{},
+      hb:()=>registered++,Fye:"cc-plugin-diff",Fr:"diff",vr:"diff",oW:()=>({}),sUn:()=>"/inert",Ne:{},jn:()=>{throw Error("disabled hook loaded")}})
+    ol();assert.equal(carry,expected);assert.equal(featureCalls,expected);assert.equal(registered,1)
+  }
+  const native=bytes.subarray(222899700,222951399)
+  assert.equal(hash(native),"e1cd8d46a49e05f972e077bf9ea19b964e2b0653de08cafbeae3555bca1af368")
+  const source=native.toString(),Qo=source.slice(source.indexOf("function Qo("),source.indexOf("export{be as"))
+  let descriptor,connect=0
+  const state={wantedSessions:new Set}
+  const register=runInNewContext(`(${Qo.replace("import.meta.dir",JSON.stringify("/inert"))})`,{i:state,Ne:()=>{},Je:()=>{},qe:()=>{},hb:d=>descriptor=d,
+    h:"cc-plugin-claude-test",We:"test",b:"version",Ue:()=>true,rt:[],K:()=>"fresh",Le:()=>{connect++;return{}},
+    oW:()=>({}),L:{},vt:()=>{throw Error("disabled module loaded")}})
+  register()
+  // E3 reads descriptor metadata even for disabled entries. The actual
+  // conditional getter is accessed, but its fresh-session MCP activation
+  // branch must not run; do not claim metadata construction never happens.
+  assert.equal(descriptor.mcpServers,undefined);assert.equal(connect,0)
+  state.wantedSessions.add("fresh")
+  descriptor.mcpServers;assert.equal(connect,1,"counterexample pins why fresh/no disabled consumer invocation matters")
+})
+test("fixed_set_recipe_source_drift_rejects_old_records",async(t)=>{
+  for(const version of [1,2,3,4])assert.throws(()=>runner.validateOwnedQualificationStructure({record:{version}}),
+    {message:"qualification_structure"})
+  const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"fixed-source"),deadline:Date.now()+15000})
+  t.after(()=>owned.close())
+  const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
+  const actual=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")
+  let selected
+  pinnedSourceMemoryFD(t,actual,(at,buffer,offset)=>{if(at===selected)buffer[offset]^=1})
+  for(const offset of [222737738,222747175,222811837,222877373,222899700,222951399,222969807,223001881,223047021,223060107,
+    190345930,199366501,199358867,187450707,186845095,205416120]){
+    selected=offset;let diagnostics=0
+    const result=await runner.collectTriageControls({cli:actual,env:{HOME:f.dir},argv:policy.argv,
+      runDiagnostic:()=>{diagnostics++}})
+    assert.equal(result.detail,"predicate_revision");assert.equal(diagnostics,0)
+    assert.equal(result.evidence,null);assert.equal(result.state,"scope_unqualified")
+  }
+})
+// The isolation guard conservatively treats O_NOFOLLOW numeric opens as
+// writes. Preserve that guard and production no-follow: these source-only
+// test reads use a memory FD over the actual readFileSync bytes, not an
+// executable engine copy or an auth/native launch.
+function pinnedSourceMemoryFD(t,cli,alter=()=>{}){
+  const bytes=readFileSync(cli),stat=fsNative.lstatSync(cli)
+  const open=fsNative.openSync,read=fsNative.readSync,fstat=fsNative.fstatSync,close=fsNative.closeSync
+  const fd=987654321
+  let cursor=0
+  t.mock.method(fsNative,"openSync",(file,...args)=>file===cli?(cursor=0,fd):open(file,...args))
+  t.mock.method(fsNative,"readSync",(file,buffer,offset,length,position)=>{
+    if(file!==fd)return read(file,buffer,offset,length,position)
+    const at=position===null?cursor:position,n=Math.min(length,bytes.length-at)
+    bytes.copy(buffer,offset,at,at+n);if(position===null)cursor+=n
+    else alter(at,buffer,offset,n)
+    return n
+  })
+  t.mock.method(fsNative,"fstatSync",(file,...args)=>file===fd?stat:fstat(file,...args))
+  t.mock.method(fsNative,"closeSync",file=>file===fd?undefined:close(file))
+  syncBuiltinESMExports()
+  t.after(()=>{t.mock.restoreAll();Object.assign(fsNative,{openSync:open,readSync:read,fstatSync:fstat,closeSync:close});syncBuiltinESMExports()})
+}
+test("restricted_recipe_exact_three_effective_off_values",async(t)=>{
+  const f=await fixture(t)
+  const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"recipe"),deadline:Date.now()+15000})
+  t.after(()=>owned.close())
+  const p=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
+  assert.equal(p.argv.includes("--safe-mode"),false)
+  assert.equal(p.argv.includes("--bare"),false)
+  assert.equal(p.argv[p.argv.indexOf("--tools")+1],"")
+  assert.deepEqual(p.settings,{permissions:p.settings.permissions,disableAllHooks:true,disableSkillShellExecution:true,disableWorkflows:true,
+    enabledPlugins:fixedOff()})
+  assert.equal(JSON.parse(p.argv[p.argv.indexOf("--mcp-config")+1]).mcpServers.triage_catalog.type,"stdio")
+})
+const controlInput=()=>{
+  const settings={permissions:{allow:metadata.flags.length?["mcp__triage_catalog__evidence_read","mcp__triage_catalog__evidence_search","mcp__triage_catalog__evidence_list","mcp__triage_catalog__candidate_submit"]:[],deny:["Read","Edit","Write","Grep","Glob","Bash","PowerShell","REPL","Agent","Task","Skill","WebFetch","WebSearch"]},disableAllHooks:true,disableSkillShellExecution:true,disableWorkflows:true,enabledPlugins:fixedOff()}
+  return {env:{},settings,sources:[],closure:{instructions:[],memory:[],plugins:[],controller:null,lsp:[]}}
+}
+test("builtin_selection_unobserved_not_inventory",async()=>{
+  const r=await runner.runNonacceptedControlCollection(controlInput())
+  assert.equal(r.outcome.evidence.schema,"desk.factory.triage-controls/3")
+  const basis=r.outcome.evidence.builtin_basis
+  assert.deepEqual(Object.keys(basis).sort(),["cc-plugin-sec-default@builtin","cc-plugin-tips"])
+  for(const entry of Object.values(basis)){
+    assert.equal(entry.basis,"exhaustive_builtin_variants")
+    assert.equal(entry.selection,"unobserved")
+    assert.match(entry.variant_set_sha256,/^[a-f0-9]{64}$/u)
+  }
+  assert.deepEqual(basis["cc-plugin-tips"].variant_ids,["unavailable","off","on"])
+  assert.deepEqual(basis["cc-plugin-sec-default@builtin"].variant_ids,["absent","present"])
+  assert.equal(r.productionAuthority,false)
+  for(const mutate of [
+    e=>delete e.builtin_basis,e=>e.builtin_basis.extra=e.builtin_basis["cc-plugin-tips"],
+    e=>e.builtin_basis["cc-plugin-tips"].selection="on",
+    e=>e.builtin_basis["cc-plugin-tips"].basis="exact_observation",
+    e=>e.builtin_basis["cc-plugin-tips"].variant_ids.push("other"),
+    e=>e.builtin_basis["cc-plugin-tips"].variant_set_sha256="a".repeat(64),
+    e=>e.builtin_basis["cc-plugin-tips"].source_refs=[],
+  ]){
+    const changed=structuredClone(r.outcome.evidence);mutate(changed)
+    assert.equal(runner.validateTriageControls(changed).ok,false)
+  }
+})
+test("control_vector_ten_source_bound_rows",async()=>{
+  assert.equal(typeof runner.validateTriageControls,"function")
+  const result=await runner.runNonacceptedControlCollection(controlInput())
+  assert.equal(result.outcome.state,"collected")
+  assert.equal(result.authority,false)
+  assert.equal(result.statistics.actualFileOperations,0)
+  const e=result.outcome.evidence
+  assert.equal(Object.keys(e.controls).length,10)
+  assert.equal(runner.validateTriageControls(e).ok,true)
+  assert.equal(result.productionAuthority,false)
+  for(const mutate of [
+    x=>delete x.controls.memory,x=>x.controls.extra=x.controls.memory,
+    x=>x.controls.memory.predicate_id="arbitrary",x=>x.controls.memory.source_refs=[],
+    x=>x.sources[0].revision_sha256="not-a-hash",x=>x.external_requirements.extra=false,
+    x=>x.sources.push({...x.sources[0]}),x=>x.controls.memory.state="invented",
+  ]){
+    const copy=structuredClone(e);mutate(copy)
+    assert.equal(runner.validateTriageControls(copy).ok,false)
+  }
+})
+test("json_admission_assertion_never_authority",async()=>{
+  const result=await runner.runNonacceptedControlCollection(controlInput())
+  assert.equal(result.productionAuthority,false)
+  assert.equal(runner.hasCollectedTriageControls(structuredClone(result.outcome.evidence)),false)
+})
+test("invalid_control_recipe_never_runs_diagnostic",async()=>{
+  let diagnostics=0
+  const r=await runner.collectTriageControls({cli:"/synthetic/missing",env:{},argv:["--settings","{}"],runDiagnostic:()=>{diagnostics++}})
+  assert.equal(r.reason,"policy_control_unsupported")
+  assert.equal(diagnostics,0)
+})
+test("legacy_adapter_requires_measurement_metadata_before_reader_effects",async()=>{
+  const argv=process.execArgv,coverage=process.env.DESK_COVERAGE_RUNNER_CHILD,nodeOptions=process.env.NODE_OPTIONS
+  // This isolated test child verifies only the refusing branch. It cannot
+  // issue controls, invoke an engine or write a qualification store.
+  try{
+    process.execArgv=[];delete process.env.DESK_COVERAGE_RUNNER_CHILD;delete process.env.NODE_OPTIONS
+    let reads=0
+    const r=await runner.collectTriageAdmission({cli:"/unit/not-an-engine",env:{},argv:[],
+      policyReaders:{read:()=>{reads++;throw Error("must not execute")}}})
+    assert.equal(r.reason,"policy_control_unsupported");assert.equal(reads,0)
+  }finally{
+    process.execArgv=argv
+    if(coverage===undefined)delete process.env.DESK_COVERAGE_RUNNER_CHILD
+    else process.env.DESK_COVERAGE_RUNNER_CHILD=coverage
+    if(nodeOptions===undefined)delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS=nodeOptions
+  }
+})
+test("default_native_dependencies_keep_billing_and_host_guards_before_spawn",async()=>{
+  const headless=await import("../../../../../plugins/desk/mcp/src/factory/headless.js")
+  assert.equal((await headless.probeSignIn({cli:"/unit/not-an-engine",env:{ANTHROPIC_API_KEY:"unit"}})).state,"disabled_would_bill")
+  assert.equal((await headless.runHeadless({env:{},job:{host:"unsupported"}})).state,"unsupported_host")
+})
+test("helpers_preflight_precedes_doctor_signin",async()=>{
+  for(const key of ["hooks","policyHelper","policyHelpers","processWrapper","apiKeyHelper","otelHeadersHelper","proxyAuthHelper"]){
+    const config=controlInput();config.sources=[{[key]:key==="hooks"?{SessionStart:[{}]}:"synthetic helper"}]
+    const r=await runner.runNonacceptedControlCollection(config)
+    assert.equal(r.outcome.state,"scope_unqualified",key)
+    assert.equal(r.statistics.diagnostics,0,key)
+    assert.equal(r.productionAuthority,false)
+    assert.equal(r.outcome.capture.channels.diagnostic.observation,"unobserved")
+    assert.equal(r.outcome.capture.channels.controls.observation,"unobserved")
+    assert.ok(r.outcome.capture.stages.length<=64)
+  }
+})
+test("required_safe_hermetic_simple_mcp_holds",async()=>{
+  for(const key of ["CLAUDE_CODE_SAFE_MODE","CLAUDE_CODE_SIMPLE","CLAUDE_CODE_REMOTE_HERMETIC_MODE","CLAUDE_CODE_PROCESS_WRAPPER"]){
+    const config=controlInput();config.env[key]="1"
+    const r=await runner.runNonacceptedControlCollection(config)
+    assert.equal(r.outcome.state,"scope_unqualified")
+    assert.equal(r.statistics.diagnostics,0)
+  }
+  for(const value of ["0","false","no","off",""]){
+    const config=controlInput();config.env.CLAUDE_CODE_SAFE_MODE=value
+    const r=await runner.runNonacceptedControlCollection(config)
+    assert.equal(r.outcome.state,"scope_unqualified","present selector cannot be silently erased without source-proven compatibility")
+    assert.equal(r.statistics.diagnostics,0)
+  }
+})
+test("finite_plugin_controller_lsp_closure",async()=>{
+  for(const closure of [
+    {plugins:["external.js"]},{lsp:["external-server"]},{controller:{id:"security",revision:"a".repeat(64)}},
+  ]){
+    const config=controlInput();Object.assign(config.closure,closure)
+    const r=await runner.runNonacceptedControlCollection(config)
+    assert.equal(r.outcome.state,"scope_unqualified")
+  }
+  const config=controlInput()
+  config.closure.controller={id:"cc-plugin-sec-default",engine_owned:true,external_edges:[],eligible:true}
+  const r=await runner.runNonacceptedControlCollection(config)
+  assert.equal(r.outcome.evidence.controls.policy_controller.state,"required_controller")
+  assert.equal(r.productionAuthority,false)
+})
+test("registered_predicates_require_selected_off_values_not_declared_defaults",async()=>{
+  const off=Object.fromEntries(["cc-plugin-responsive-mode","cc-plugin-diff","cc-plugin-you-should-know","cc-plugin-claude-test",
+    "cc-plugin-plugin-authoring","cc-plugin-mods-guide","cc-plugin-tips","cc-plugin-mermaid","cc-plugin-agents-md","cc-plugin-telemetry"].map(n=>[n+"@builtin",false]))
+  const evaluate=sources=>runner.runNonacceptedControlCollection({...controlInput(),sources,mode:"registeredConfiguration"})
+  const unresolved=await evaluate([])
+  assert.equal(unresolved.outcome.state,"collected","source-bound exact inline false map is effective with no managed override")
+  const disabled=await evaluate([{enabledPlugins:off,prependPlugins:[]}])
+  assert.equal(disabled.outcome.state,"collected")
+  assert.equal(disabled.productionAuthority,false);assert.equal(disabled.statistics.actualFileOperations,0)
+  assert.equal(disabled.outcome.evidence.controls.plugins_modules.state,"known_nonexecuting_data")
+  assert.equal(disabled.outcome.evidence.controls.lsp_monitors.state,"effective_off")
+  assert.equal(disabled.outcome.capture.channels.controls.observation,"present")
+  const trusted=await evaluate([{enabledPlugins:off}])
+  assert.equal(trusted.outcome.evidence.controls.policy_controller.state,"required_controller")
+  const ordered=await evaluate([{enabledPlugins:off,prependPlugins:["cc-plugin-sec-default@builtin"]}])
+  assert.equal(ordered.outcome.evidence.controls.policy_controller.state,"required_controller")
+  const noLocalSeat=await runner.runNonacceptedControlCollection({...controlInput(),sources:[{enabledPlugins:off}],mode:"remoteRegisteredConfiguration"})
+  assert.equal(noLocalSeat.outcome.state,"collected")
+  assert.equal(noLocalSeat.outcome.evidence.controls.policy_controller.state,"required_controller")
+  assert.equal(noLocalSeat.outcome.evidence.builtin_basis["cc-plugin-sec-default@builtin"].selection,"unobserved")
+  assert.equal(noLocalSeat.productionAuthority,false)
+  const missingTips={...off};delete missingTips["cc-plugin-diff@builtin"]
+  assert.equal((await evaluate([{enabledPlugins:missingTips,prependPlugins:[]}])).outcome.state,"collected","missing managed key does not erase exact inline false")
+  for(const selection of [{enabledPlugins:{"external@market":true}},{prependPlugins:["external@market"]},
+    {appendPlugins:["cc-plugin-tips@builtin"]},{enabledPlugins:null},{enabledPlugins:{"cc-plugin-tips@builtin":"false"}}]){
+    const r=await evaluate([selection])
+    assert.equal(r.outcome.state,"scope_unqualified")
+    assert.equal(r.outcome.detail,"control_external_plugin_registration")
+    assert.equal(r.productionAuthority,false)
+  }
+})
+const otherBuiltinsOff=()=>Object.fromEntries(["cc-plugin-responsive-mode","cc-plugin-diff","cc-plugin-you-should-know","cc-plugin-claude-test",
+  "cc-plugin-plugin-authoring","cc-plugin-mods-guide","cc-plugin-mermaid","cc-plugin-agents-md","cc-plugin-telemetry"].map(n=>[n+"@builtin",false]))
+test("tips_exhaustive_variants_noninteractive_and_replay",async()=>{
+  const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"))
+  const span=(offset,length,sha)=>{
+    const data=bytes.subarray(offset,offset+length);assert.equal(hash(data),sha);return data.toString()
+  }
+  const tips=span(222997168,4713,"7f0fc000a21f439df3891a9ca1344d2c3f57b40d7b5a259e5e39936475356a74")
+  const replay=span(216423866,1800,"20e57b3a3c9f22807933773004a23a7dd439bee85a182c1b876f676e1f7ac67b")
+  const print=span(222377600,700,"f31d0504334d8ab251eedada41fa61c9064906bfd728f1fdb4e075f3d016789a")
+  assert.match(print,/jOr\(\{loaded:it\(\)\.hookRegistrationInFlight,surface:null,isInteractive:!1\}\)/u)
+  const h=tips.slice(tips.indexOf("function H("),tips.indexOf("function z("))
+  const ln=replay.slice(0,replay.indexOf("async function un("))
+  const un=replay.slice(replay.indexOf("async function un("),replay.indexOf("var Tr="))
+  // Execute only these hash-bound callback bodies in an inert VM; no native
+  // engine, imports, configured helper, settings, environment or provider runs.
+  let callback,installed=0,providers=0,forwarded=0,late
+  const picker={install:()=>installed++}
+  const H=runInNewContext(`(${h})`,{D:()=>providers++})
+  H((name,fn)=>{assert.equal(name,"session.start");callback=fn},picker)
+  const deliver=event=>callback({settings:{read:()=>{throw Error("settings called")}},
+    env:{get:()=>{throw Error("env called")}}},event,e=>{forwarded++;return e})
+  const module={name:"cc-plugin-tips",hooks:name=>name==="session.start"}
+  const context={t:()=>{},l:String,se:()=>"/inert",it:()=>({loadedModules:[]}),Vsr:()=>{},
+    ysr:{set:fn=>late=fn},Qte:()=>({session:{start:deliver}})}
+  const initial=runInNewContext(`(${un})`,context)
+  const replayFn=runInNewContext(`(${ln})`,context)
+  // Bind the exact function used by un's late callback, not a replacement.
+  context.ln=replayFn
+  const initialBound=runInNewContext(`(${un})`,context)
+  for(const availability of ["unavailable","off","on","availability_error"]){
+    await initialBound({loaded:Promise.resolve(),surface:null,isInteractive:false},()=>true)
+    if(availability==="on"){late([module]);await Promise.resolve();await Promise.resolve()}
+    assert.equal(installed,0);assert.equal(providers,0)
+  }
+  assert.equal(typeof initial,"function");assert.equal(forwarded,5)
+  deliver({isInteractive:true});assert.equal(installed,1,"positive control proves the actual guard can install")
+  for(const on of [undefined,false,true]){
+    const enabled=otherBuiltinsOff();if(on!==undefined)enabled["cc-plugin-tips@builtin"]=on
+    const r=await runner.runNonacceptedControlCollection({...controlInput(),sources:[{enabledPlugins:enabled}],mode:"registeredConfiguration"})
+    assert.equal(r.outcome.state,"collected")
+    assert.equal(r.outcome.evidence.builtin_basis["cc-plugin-tips"].selection,"unobserved")
+    assert.equal(r.productionAuthority,false)
+  }
+})
+test("controller_absent_present_preserves_closed_authority",async()=>{
+  const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")).subarray(223038175,223043450)
+  assert.equal(hash(bytes),"8cb36bf40b25f7fac035d04f7f73ab5854f33575f576baaf386a54aeb92e0f39")
+  const text=bytes.toString(),body=text.slice(text.indexOf("function ue("),text.indexOf("var ge="))
+  const handlers=new Map(),failures=new Map()
+  const register=(name,...values)=>{handlers.set(name,values.at(-1));return {catch:fn=>failures.set(name,fn)}}
+  const ue=runInNewContext(`(${body})`,{F:()=>fn=>fn(),G:null,a:"options",u:async()=>true,B:"managedOnly",M:"deny",
+    d:()=>{throw Error("unused describe")},z:()=>{throw Error("unused list")},O:()=>[],P:()=>false,
+    C:()=>({decision:"deny"}),v:"managed refusal",V:()=>true,f:String,h:String,H:String})
+  ue(register)
+  let appended=0
+  const next=async()=>({decision:"deny"});next.to=async()=>{appended++;return {decision:"allow"}};next.trace=[]
+  const refusal=await handlers.get("tool.check")({}, {tool:"Bash"},next)
+  assert.equal(refusal.decision,"deny");assert.equal(appended,0)
+  const failed=async()=>{throw Error("policy unavailable")};failed.trace=[]
+  assert.equal((await failures.get("tool.check")({settings:{read:()=>({})}}, {},failed)).decision,"deny")
+  const registration=async()=>({registered:true});registration.origin={tier:"user"}
+  assert.equal((await handlers.get("tool.register")({settings:{read:()=>({})}},{},registration)).deny,"managed refusal")
+  assert.equal((await handlers.get("plugin.register")({settings:{read:()=>({})}},{name:"external"},registration)).refuse,"external")
+  registration.called=false
+  assert.equal((await failures.get("plugin.register")({ui:{log:()=>{}}},{name:"external"},registration)).refuse,"external")
+  for(const prepend of [[],["cc-plugin-sec-default@builtin"],undefined]){
+    const settings={enabledPlugins:otherBuiltinsOff(),...(prepend===undefined?{}:{prependPlugins:prepend})}
+    const r=await runner.runNonacceptedControlCollection({...controlInput(),sources:[settings],mode:"registeredConfiguration"})
+    assert.equal(r.outcome.state,"collected")
+    assert.equal(r.outcome.evidence.controls.plugins_modules.state,"known_nonexecuting_data")
+    assert.equal(r.outcome.evidence.controls.policy_controller.state,"required_controller")
+    assert.equal(r.outcome.evidence.builtin_basis["cc-plugin-sec-default@builtin"].selection,"unobserved")
+    assert.equal(r.productionAuthority,false)
+  }
+})
+test("tips_interactive_reuse_or_changed_closure_blocks",async(t)=>{
+  const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"variant-argv"),deadline:Date.now()+15000})
+  t.after(()=>owned.close())
+  const p=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
+  for(const argv of [p.argv.filter(v=>v!=="-p"),...["--resume","--continue","--remote-control","--interactive"].map(v=>[...p.argv,v])]){
+    let calls=0
+    const r=await runner.collectTriageControls({cli:f.cli,env:{},argv,runDiagnostic:()=>{calls++}})
+    assert.equal(r.detail,"control_recipe");assert.equal(calls,0);assert.equal(r.evidence,null)
+  }
+  const actual=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")
+  let selected
+  pinnedSourceMemoryFD(t,actual,(at,buffer,offset)=>{if(at===selected)buffer[offset]^=1})
+  // Memory-only source reader changes; never installed bytes or whole-source
+  // provenance guards. Each pinned guard/import/body must independently hold.
+  for(const offset of [222997168,222992072,222377600,221870233,216414647,216423866,216424221,216426559,216711914,
+    223038175,223032624,195219863,195218970]){
+    selected=offset
+    let calls=0
+    const r=await runner.collectTriageControls({cli:actual,env:{HOME:f.dir},argv:p.argv,runDiagnostic:()=>{calls++}})
+    assert.equal(r.detail,"predicate_revision");assert.equal(calls,0)
+    assert.equal(r.evidence,null);assert.equal(r.state,"scope_unqualified")
+  }
+})
+test("variant_basis_hash_recipe_source_drift_blocks",async()=>{
+  const r=await runner.runNonacceptedControlCollection({...controlInput(),sources:[{enabledPlugins:otherBuiltinsOff()}],mode:"registeredConfiguration"})
+  assert.equal(r.outcome.state,"collected")
+  const changed=structuredClone(r.outcome.evidence)
+  changed.builtin_basis["cc-plugin-tips"].variant_set_sha256="f".repeat(64)
+  assert.equal(runner.validateTriageControls(changed).ok,false)
+  assert.equal(runner.hasCollectedTriageControls(r.outcome.evidence),false)
+  assert.equal(runner.hasCollectedTriageControls(changed),false)
+  for(const policy of [{pluginConfigs:{"cc-plugin-sec-default@builtin":{options:{allowModsToOverrideDenyRules:true}}}},
+    {allowedMcpServers:[{serverName:"external"}]},{managedMcpServers:{external:{}}},{appendPlugins:["external"]}]){
+    const blocked=await runner.runNonacceptedControlCollection({...controlInput(),sources:[{enabledPlugins:otherBuiltinsOff(),...policy}],mode:"registeredConfiguration"})
+    assert.equal(blocked.outcome.state,"scope_unqualified");assert.equal(blocked.productionAuthority,false)
+  }
+})
+test("managed_data_imports_no_execution",async()=>{
+  const config=controlInput();config.closure.instructions=[{text:"Managed prose only",imports:[]}]
+  const r=await runner.runNonacceptedControlCollection(config)
+  assert.equal(r.outcome.evidence.controls.instructions_agents.state,"known_nonexecuting_data")
+  assert.equal(r.statistics.actualFileOperations,0)
+  for(const item of [{text:"x".repeat(65537),imports:[]},{text:"x",imports:["self"]},{text:"x",imports:[],execute:"forbidden"}]){
+    const c=controlInput();c.closure.instructions=[item]
+    assert.equal((await runner.runNonacceptedControlCollection(c)).outcome.state,"scope_unqualified")
+  }
+})
+test("controls_fail_closed_delivery_merge_and_current_source_matrix",async()=>{
+  for(const change of [
+    {settings:{...controlInput().settings,disableWorkflows:false}},
+    {sources:[{permissions:{allow:["Bash"]}}]},
+    {sources:[{env:{ANTHROPIC_API_KEY:"synthetic"}}]},
+    {sources:[{disableSideloadFlags:true}]},
+    {sources:Array.from({length:63},()=>({}))},
+    {closure:{...controlInput().closure,memory:[{text:"x",imports:["unresolved"]}]}},
+  ]){
+    const r=await runner.runNonacceptedControlCollection({...controlInput(),...change})
+    assert.equal(r.outcome.state,"scope_unqualified")
+    assert.equal(r.productionAuthority,false)
+  }
+  const clean=await runner.runNonacceptedControlCollection(controlInput())
+  const malformed=structuredClone(clean.outcome.evidence)
+  malformed.controls.workflows.state="required_controller"
+  assert.equal(runner.validateTriageControls(malformed).ok,false)
+})
+test("control_drift_between_launches_and_postrun",async()=>{
+  for(const mode of ["sourceDrift","helperTierUnknown","closureUnknown","doctorTimeout","doctorFailed","doctorTruncated","deliveryPending","deliveryUnknown","deliveryFailed"]){
+    const r=await runner.runNonacceptedControlCollection({...controlInput(),mode})
+    assert.equal(r.outcome.state,"scope_unqualified",mode)
+    assert.equal(r.productionAuthority,false,mode)
+  }
+  assert.equal((await runner.runNonacceptedControlCollection({...controlInput(),mode:"sourceDrift"})).outcome.detail,"control_source_drift")
+})
+test("finite_control_rejections_preserve_named_boundary_and_no_authority",async()=>{
+  for(const [change,detail]of [
+    [{env:{CLAUDE_CODE_SAFE_MODE:"unrecognized"}},"external_requirements"],
+    [{sources:[{mcpServers:{external:{}}}]},"incompatible_mcp_policy"],
+    [{sources:[{agent:"external"}]},"agent_override"],
+    [{sources:[{agents:{external:{}}}]},"agent_override"],
+    [{sources:Array.from({length:17},()=>({description:"x".repeat(65536)}))},"control_source_bytes"],
+    [{closure:{...controlInput().closure,instructions:null}},"control_data"],
+    [{closure:{...controlInput().closure,plugins:null}},"control_closure"],
+    [{closure:{...controlInput().closure,lsp:null}},"control_closure"],
+    [{closure:{...controlInput().closure,instructions:Array.from({length:65},()=>({text:"data",imports:[]}))}},"control_closure"],
+    ...[
+      {id:"other",engine_owned:true,eligible:true,external_edges:[]},
+      {id:"cc-plugin-sec-default",engine_owned:false,eligible:true,external_edges:[]},
+      {id:"cc-plugin-sec-default",engine_owned:true,eligible:false,external_edges:[]},
+      {id:"cc-plugin-sec-default",engine_owned:true,eligible:true,external_edges:null},
+      {id:"cc-plugin-sec-default",engine_owned:true,eligible:true,external_edges:["external"]},
+    ].map(controller=>[{closure:{...controlInput().closure,controller}},"policy_controller"]),
+    [{mode:"engineThrows"},"unit_engine"],
+    [{closure:{...controlInput().closure,sources:Array.from({length:64},()=>({kind:"instruction",revision_sha256:"a".repeat(64),path_identity:null}))}},"control_source_count"],
+    [{closure:{...controlInput().closure,total:1048577}},"control_source_bytes"],
+  ]){
+    const r=await runner.runNonacceptedControlCollection({...controlInput(),...change})
+    assert.equal(r.outcome.detail,detail);assert.equal(r.outcome.state,"scope_unqualified");assert.equal(r.productionAuthority,false)
+  }
+  const lost=await runner.runNonacceptedControlCollection({...controlInput(),mode:"lostCollection"})
+  assert.equal(lost.admission.reason,"diagnostic_inadequate")
+  const memory=controlInput();memory.closure.memory=[{text:"managed data",imports:[]}]
+  assert.equal((await runner.runNonacceptedControlCollection(memory)).outcome.evidence.controls.memory.state,"known_nonexecuting_data")
+  const controllerUnknown=controlInput()
+  controllerUnknown.closure.unknown={key:"policy_controller",detail:"unit_unresolved_external_chain"}
+  const unresolved=await runner.runNonacceptedControlCollection(controllerUnknown)
+  assert.equal(unresolved.outcome.detail,"unit_unresolved_external_chain")
+  assert.equal(unresolved.outcome.evidence.controls.policy_controller.state,"unknown")
+  assert.equal(unresolved.productionAuthority,false)
+  for(const controller of [null,{id:"cc-plugin-sec-default",engine_owned:true,eligible:true,external_edges:[]}]){
+    const pending=controlInput()
+    pending.closure.unknown={key:"plugins_modules",detail:"unit_unresolved_selected_external_module"}
+    pending.closure.controller=controller
+    const result=await runner.runNonacceptedControlCollection(pending)
+    assert.equal(result.outcome.detail,"unit_unresolved_selected_external_module")
+    assert.equal(result.outcome.evidence.controls.instructions_agents.state,"unknown")
+    assert.equal(result.outcome.evidence.controls.memory.state,"unknown")
+    assert.equal(result.outcome.evidence.controls.policy_controller.state,controller===null?"unknown":"required_controller")
+    assert.equal(result.productionAuthority,false)
+  }
+  await assert.rejects(runner.runNonacceptedControlCollection({...controlInput(),mode:"unsupported"}),{message:"unit_mode"})
+  const e=(await runner.runNonacceptedControlCollection(controlInput())).outcome.evidence
+  e.effective_sources_sha256="a".repeat(64)
+  assert.deepEqual(runner.validateTriageControls(e),{ok:false,errors:["control_source_identity"]})
+})
+test("old_safe_mode_record_rejected",()=>{
+  assert.throws(()=>runner.validateOwnedQualificationStructure({record:{version:2}}),{message:"qualification_structure"})
+})
+test("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory",async(t)=>{
+  const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
+  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"actual-control"),deadline:Date.now()+20000})
+  t.after(()=>owned.close())
+  const p=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
+  const actual=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")
+  pinnedSourceMemoryFD(t,actual)
+  const env={HOME:f.dir}
+  let calls=0
+  const observed=await runner.collectTriageControls({cli:actual,env,argv:p.argv,runDiagnostic:async()=>{calls++;return diagnostic()}})
+  assert.equal(observed.state,"collected")
+  assert.equal(calls,1)
+  assert.equal(observed.evidence.controls.plugins_modules.state,"known_nonexecuting_data")
+  assert.equal(observed.evidence.controls.instructions_agents.state,"source_disabled")
+  assert.equal(observed.evidence.controls.memory.state,"effective_off")
+  assert.equal(runner.hasCollectedTriageControls(observed.evidence),true)
+  assert.equal(observed.evidence.builtin_basis["cc-plugin-tips"].selection,"unobserved")
+  assert.equal(observed.evidence.sources[0].path_identity.path,actual)
+  const unknown=await runner.collectTriageControls({cli:f.cli,env,argv:p.argv,runDiagnostic:()=>{throw Error("no diagnostic")}})
+  assert.equal(unknown.detail,"engine_revision")
+  const {EventEmitter}=await import("node:events"),{PassThrough}=await import("node:stream")
+  t.mock.method(childProcess,"spawn",(_command,args)=>{
+    assert.deepEqual(args,["doctor"])
+    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.pid=0;child.kill=()=>true
+    queueMicrotask(()=>{child.stdout.end(doctor);child.stderr.end();child.emit("close",0,null)})
+    return child
+  })
+  syncBuiltinESMExports()
+  const defaultDiagnostic=await runner.collectTriageControls({cli:actual,env,argv:p.argv,deadline:Date.now()+10000})
+  assert.equal(defaultDiagnostic.state,"collected")
+  const legacyDiagnostic=await runner.collectTriageAdmission({cli:actual,env,argv:p.argv,policyReaders:{read:()=>({
+    complete:true,controller_invariant:true,sources:[source],validation_errors:[],
+  })}})
+  assert.equal(legacyDiagnostic.authority,false);assert.equal(legacyDiagnostic.state,"admitted")
+  const platform=Object.getOwnPropertyDescriptor(process,"platform")
+  try{
+    Object.defineProperty(process,"platform",{...platform,value:"linux"})
+    const linuxLaunch=custody.ownedServerLaunch(owned.launch.identity)
+    const linuxPolicy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:linuxLaunch})
+    assert.equal((await runner.collectTriageControls({cli:actual,env,argv:linuxPolicy.argv,runDiagnostic:diagnostic})).detail,"control_host")
+  }finally{Object.defineProperty(process,"platform",platform)}
+  assert.equal((await runner.collectTriageControls({cli:actual,env:{HOME:"relative"},argv:p.argv,runDiagnostic:diagnostic})).detail,"control_path_ambiguous")
+  const brokenDiagnostic=await runner.collectTriageControls({cli:actual,env,argv:p.argv,
+    runDiagnostic:async()=>({stdout:BigInt(1),stderr:null})})
+  assert.equal(brokenDiagnostic.capture.channels.diagnostic.observation,"unobserved")
+  assert.equal(brokenDiagnostic.capture.diagnostic.kind,"unknown")
+  assert.equal(brokenDiagnostic.capture.diagnostic.stdout_base64,null)
+  const largeDiagnostic=await runner.collectTriageControls({cli:actual,env,argv:p.argv,
+    runDiagnostic:async()=>({kind:"closed",code:0,stdout:"x".repeat(65537),stderr:"",truncated:true})})
+  assert.equal(largeDiagnostic.capture.channels.diagnostic.truncated,true)
+  for(const diagnosticValue of ["", "invalid"]){
+    const r=await runner.collectTriageControls({cli:actual,env,argv:p.argv,runDiagnostic:async()=>diagnosticValue})
+    assert.equal(r.reason,"diagnostic_inadequate")
+    assert.equal(r.capture.channels.diagnostic.observation,diagnosticValue?"present":"observed_absent")
+  }
+  for(const mutate of [
+    v=>v.mcpServers.triage_catalog.type="sdk",v=>v.mcpServers.triage_catalog.args=null,
+  ]){
+    const argv=[...p.argv],i=argv.indexOf("--mcp-config")+1,config=JSON.parse(argv[i]);mutate(config);argv[i]=JSON.stringify(config)
+    assert.equal((await runner.collectTriageControls({cli:actual,env,argv})).detail,"control_recipe")
+  }
+  const changed=[...p.argv];changed[changed.indexOf("--system-prompt")+1]+=" different"
+  assert.equal((await runner.collectTriageControls({cli:actual,env,argv:changed})).detail,"control_recipe")
+})
+test("control_structure_limits_path_identity_and_state_pairs",async()=>{
+  const r=await runner.runNonacceptedControlCollection(controlInput()),e=r.outcome.evidence
+  for(const mutate of [
+    v=>v.schema="other",v=>v.engine_sha256="a".repeat(64),v=>v.recipe_sha256=3,
+    v=>v.remote_delivery="other",v=>v.external_requirements.safe_mode=0,
+    v=>v.sources=[],v=>v.sources=Array(65).fill(v.sources[0]),
+    v=>v.sources[0].id="wrong",v=>v.sources[0].kind="user",
+    v=>v.sources[0].path_identity={path:"relative",dev:1,ino:1,uid:1,mode:384,size:1},
+    v=>v.sources[0].path_identity={path:"/unit",dev:-1,ino:1,uid:1,mode:384,size:1},
+    v=>v.sources[0].path_identity={path:"/unit",dev:1,ino:1,uid:1,mode:384,size:1,other:true},
+    v=>v.controls.settings_sources.state="effective_off",v=>v.controls.native_tools_mcp.state="required_controller",
+    v=>v.controls.memory.source_refs=["s999"],v=>v.controls.memory.source_refs=["s000","s000"],
+    v=>v.sources[0].revision_sha256="x".repeat(65536),
+  ]){
+    const x=structuredClone(e);mutate(x)
+    assert.equal(runner.validateTriageControls(x).ok,false)
+  }
+  const valid=structuredClone(e)
+  valid.sources[0].path_identity={path:"/unit",dev:1,ino:1,uid:1,mode:384,size:1}
+  valid.effective_sources_sha256=hash(JSON.stringify(valid.sources.map(s=>Object.fromEntries(Object.entries(s).sort()))))
+  // The canonical source digest—not a claim of live source authority.
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  valid.effective_sources_sha256=hash(catalog.catalogCanonical(valid.sources))
+  assert.equal(runner.validateTriageControls(valid).ok,true)
+})
+test("source_bound_control_reader_safe_file_failure_matrix",async(t)=>{
+  const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
+  const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
+  await catalog.writeTriagePreparedFile({inputDir:f.inputDir,brief:data.brief,records:data.record_inputs,recordRefs:data.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"control-files"),deadline:Date.now()+30000})
+  t.after(()=>owned.close())
+  const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
+  const cli=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"),env={HOME:f.dir}
+  const original={...Object.fromEntries(["lstatSync","openSync","readFileSync","readdirSync","fstatSync","readSync","closeSync"].map(k=>[k,fsNative[k]]))}
+  const nativeBytes=readFileSync(cli),nativeStat=fsNative.lstatSync(cli),nativeFD=987654321
+  let nativeCursor=0
+  const synthetic=path.join(f.dir,"policy.json");writeFileSync(synthetic,"{}",{mode:0o600})
+  const realStat=fsNative.lstatSync,realOpen=fsNative.openSync,realRead=fsNative.readFileSync,realList=fsNative.readdirSync
+  const realFdStat=fsNative.fstatSync,realSyncRead=fsNative.readSync
+  let mode="normal",opens=0,engineStats=0,ancestorReads=0,directoryReads=0
+  const dataDir=path.join(f.dir,"data");fsNative.mkdirSync(dataDir,{mode:0o700})
+  const managedRoot="/Library/Application Support/ClaudeCode"
+  const dataFile=file=>String(file).startsWith(managedRoot+"/")&&String(file).endsWith(".md")?path.join(dataDir,path.basename(String(file))):null
+  const mappedDirectory=file=>mode.startsWith("dir")&&String(file).startsWith(managedRoot+"/.claude/")?
+    path.join(dataDir,path.relative(managedRoot+"/.claude",String(file))):null
+  const selected=file=>String(file)===managedRoot||String(file).startsWith(managedRoot+"/")||
+    String(file)==="/Library/Managed Preferences"||String(file).startsWith("/Library/Managed Preferences/")
+  t.mock.method(fsNative,"lstatSync",(file,...args)=>{
+    if(!selected(file))return realStat(file,...args)
+    if(mappedDirectory(file)){
+      const s=realStat(mappedDirectory(file),...args)
+      if(mode==="dirTypeChanged"&&String(file).endsWith("/rules")&&++ancestorReads>1)return {...s,isDirectory:()=>false,isSymbolicLink:()=>false}
+      if(mode==="dirAncestorsChanged"&&directoryReads>0)s.ino=different(s.ino)
+      return s
+    }
+    if(dataFile(file)&&mode.startsWith("import"))return realStat(dataFile(file))
+    if(!String(file).endsWith(".json")&&!String(file).endsWith(".plist")){
+      if(String(file).endsWith(".md")||String(file).includes("/.claude/"))throw Object.assign(Error("absent"),{code:"ENOENT"})
+      const s=realStat(f.dir)
+      if(mode==="ancestorUnreadable")throw Object.assign(Error("ancestor_access"),{code:"EACCES"})
+      if(mode==="dropinReplaced"&&directoryReads>0)s.ino=different(s.ino)
+      if(mode==="ancestorLink")return {...s,isDirectory:()=>true,isSymbolicLink:()=>true}
+      if(mode==="ancestorWritable")s.mode|=0o022
+      if(mode==="ancestorOwner")s.uid=process.getuid()+1
+      return s
+    }
+    if(String(file).endsWith(".plist")&&mode!=="plist")throw Object.assign(Error("absent"),{code:"ENOENT"})
+    const s=realStat(synthetic)
+    if(mode==="symlink")return {...s,isFile:()=>true,isSymbolicLink:()=>true}
+    if(mode==="nlink")s.nlink=2
+    if(mode==="oversize")s.size=65537
+    if(mode==="writable")s.mode|=0o022
+    if(mode==="postStat"&&opens>0)s.mtimeMs++
+    return s
+  })
+  t.mock.method(fsNative,"openSync",(file,...args)=>{
+    if(file===cli){nativeCursor=0;return nativeFD}
+    if(dataFile(file)&&mode.startsWith("import"))return realOpen(dataFile(file),...args)
+    if(mappedDirectory(file))return realOpen(mappedDirectory(file),...args)
+    if(selected(file)){opens++;if(mode==="fileVanished")throw Object.assign(Error("vanished"),{code:"ENOENT"});return realOpen(synthetic,...args)}
+    return realOpen(file,...args)
+  })
+  t.mock.method(fsNative,"readFileSync",(file,...args)=>{
+    if(typeof file==="number"&&mode==="boundedRead")throw Error("unbounded_policy_read")
+    if(typeof file==="number"&&mode==="shortRead")return Buffer.from(" ")
+    if(typeof file==="number"&&mode==="badShape")return Buffer.from("[]")
+    if(typeof file==="number"&&mode==="badUTF8")return Buffer.from([0xff])
+    return realRead(file,...args)
+  })
+  t.mock.method(fsNative,"readdirSync",(file,...args)=>{
+    if(mappedDirectory(file)){
+      directoryReads++
+      if(mode==="dirUnreadable")throw Object.assign(Error("unreadable"),{code:"EACCES"})
+      if(mode==="dirBadName")return [".."]
+      if(mode==="dirMany")return Array.from({length:65},(_,i)=>`${i}.md`)
+      if(mode==="dirListingChanged"&&directoryReads>2)return ["changed.md"]
+      return realList(mappedDirectory(file),...args)
+    }
+    if(String(file).endsWith("managed-settings.d")){
+      if(mode==="dropinReplaced")directoryReads++
+      if(mode==="listMany")return Array.from({length:33},(_,i)=>`${i}.json`)
+      if(mode==="listError")throw Object.assign(Error("unreadable"),{code:"EACCES"})
+      return ["unit.json",".hidden.json","not-json.txt"]
+    }
+    return realList(file,...args)
+  })
+  t.mock.method(fsNative,"fstatSync",(fd,...args)=>{
+    if(fd===nativeFD){
+      engineStats++
+      if(mode==="engineType")return {...nativeStat,isFile:()=>false}
+      const s=Object.assign(Object.create(Object.getPrototypeOf(nativeStat)),nativeStat)
+      if(mode==="engineChanged"&&engineStats>1)s.mtimeMs++
+      return s
+    }
+    const s=realFdStat(fd,...args)
+    if(mode==="identity"&&s.size===2)s.ino=different(s.ino)
+    return s
+  })
+  t.mock.method(fsNative,"readSync",(fd,buffer,offset,length,position)=>{
+    let n
+    if(fd===nativeFD){
+      const at=position===null?nativeCursor:position
+      n=Math.min(length,nativeBytes.length-at)
+      nativeBytes.copy(buffer,offset,at,at+n);if(position===null)nativeCursor+=n
+    }else{
+      n=realSyncRead(fd,buffer,offset,length,position)
+      if(n>0){
+        if(mode==="shortRead"){buffer[offset]=32;n=1}
+        if(mode==="badShape")Buffer.from("[]").copy(buffer,offset)
+        if(mode==="badUTF8"){buffer[offset]=255;buffer[offset+1]=255}
+        if(mode==="growth"){buffer.fill(32,offset,offset+length);n=length}
+      }
+    }
+    if(mode==="fragment"&&position===200633045&&n>0)buffer[0]^=1
+    return n
+  })
+  t.mock.method(fsNative,"closeSync",fd=>fd===nativeFD?undefined:original.closeSync(fd))
+  const originalExec=childProcess.execFileSync
+  t.mock.method(childProcess,"execFileSync",(command,args,opts)=>mode==="plist"&&command==="/usr/bin/plutil"?"{}":originalExec(command,args,opts))
+  syncBuiltinESMExports()
+  t.after(()=>{t.mock.restoreAll();Object.assign(fsNative,original);syncBuiltinESMExports()})
+  for(const next of ["normal","pretty","boundedRead","plist","symlink","nlink","oversize","writable","duplicate","nestedDuplicate","escapedDuplicate","jsonNumericMismatch","ancestorLink","ancestorWritable","ancestorOwner","ancestorUnreadable","dropinReplaced","fileVanished","postStat","shortRead","badShape","badUTF8","growth","helperUnknown","listMany","listError","identity","fragment","engineType","engineChanged",
+    "importNormal","importCycle","importOutside","importDepth","importMissing","importFrontmatter","importYAML","importAlias","importYAMLDuplicate","importYAMLObject","importYAMLPaths","importYAMLEmpty","importYAMLBadPaths","importCode","importHTML","importTilde","importExtension","importAbsolute","importEmptyFragment","importRepeated",
+    "dirNormal","dirDepth","dirSymlink","dirMany","dirBadName","dirUnreadable","dirAggregate","dirMembers","dirDirectoryMembers","dirTypeChanged","dirAncestorsChanged","dirListingChanged","externalRegistration"]){
+    mode=next;opens=0;engineStats=0;ancestorReads=0;directoryReads=0;let calls=0
+    const policyBytes={helperUnknown:'{"unknown":true}',pretty:' { "disableAllHooks" : true } ',
+      duplicate:'{"disableAllHooks":false,"disableAllHooks":true}',nestedDuplicate:'{"permissions":{"allow":["Bash"],"allow":[]}}',
+      escapedDuplicate:'{"disableAllHooks":false,"\\u0064isableAllHooks":true}',jsonNumericMismatch:'{"number":1e3}',
+      externalRegistration:'{"enabledPlugins":{"external@market":true}}'}
+    writeFileSync(synthetic,policyBytes[mode]??"{}")
+    for(let n=0;n<6;n++)writeFileSync(path.join(dataDir,n===0?"CLAUDE.md":`${n}.md`),
+      n<5?`Managed data\n@./${n+1}.md\n`:"Managed data",{mode:0o600})
+    if(mode==="importNormal")writeFileSync(path.join(dataDir,"CLAUDE.md"),"Managed data\n@./1.md")
+    if(mode==="importNormal")writeFileSync(path.join(dataDir,"1.md"),"Included managed data")
+    if(mode==="importCycle")writeFileSync(path.join(dataDir,"1.md"),"@./CLAUDE.md")
+    if(mode==="importOutside")writeFileSync(path.join(dataDir,"CLAUDE.md"),"@../outside.md")
+    if(mode==="importMissing")writeFileSync(path.join(dataDir,"CLAUDE.md"),"@./missing.md")
+    if(mode==="importFrontmatter")writeFileSync(path.join(dataDir,"CLAUDE.md"),"---javascript\nthrow Error('forbidden')\n---\nManaged data")
+    const contents={
+      importYAML:"---\nname: Named\ndescription: data\n---\nManaged data",
+      importAlias:"---\nname: &a Named\ndescription: *a\n---\nManaged data",
+      importYAMLDuplicate:"---\nname: First\nname: Second\n---\nManaged data",
+      importYAMLObject:"---\nname: {}\n---\nManaged data",
+      importYAMLPaths:"---\npaths: [file.md]\n---\nManaged data",
+      importYAMLEmpty:"---\n\n---\nManaged data",
+      importYAMLBadPaths:"---\npaths: [1]\n---\nManaged data",
+      importCode:"` @./1.md `",importHTML:"<!-- @./1.md -->",importTilde:"@~/1.md",importExtension:"@./other.js",
+      importAbsolute:"@"+(managedRoot+"/1.md").replaceAll(" ","\\ "),importEmptyFragment:"@#section",
+      importRepeated:"@./1.md\n@./1.md",
+    }
+    if(contents[mode]!==undefined){writeFileSync(path.join(dataDir,"CLAUDE.md"),contents[mode]);writeFileSync(path.join(dataDir,"1.md"),"Included data")}
+    if(mode.startsWith("dir")){
+      const rules=path.join(dataDir,"rules");fsNative.rmSync(rules,{recursive:true,force:true});fsNative.mkdirSync(rules,{mode:0o700})
+      if(mode==="dirDepth"){
+        let p=rules;for(let i=0;i<6;i++){p=path.join(p,"nested");fsNative.mkdirSync(p,{mode:0o700})}
+      }else if(mode==="dirDirectoryMembers"){
+        for(let i=0;i<64;i++)fsNative.mkdirSync(path.join(rules,`${i}`),{mode:0o700})
+      }else if(mode==="dirSymlink")fsNative.symlinkSync(path.join(dataDir,"1.md"),path.join(rules,"alias.md"))
+      else if(mode==="dirAggregate"||mode==="dirMembers"){
+        for(let i=0;i<(mode==="dirMembers"?64:17);i++)writeFileSync(path.join(rules,`${i}.md`),mode==="dirMembers"?"data":"x".repeat(65536),{mode:0o600})
+      }else{
+        fsNative.mkdirSync(path.join(rules,"nested"),{mode:0o700})
+        writeFileSync(path.join(rules,"nested","rule.md"),"Managed rule",{mode:0o600})
+        writeFileSync(path.join(rules,"ignored.txt"),"Not a selected rule",{mode:0o600})
+      }
+    }
+    const r=await runner.collectTriageControls({cli,env,argv:policy.argv,runDiagnostic:async()=>{calls++;return diagnostic()}})
+    const compatible=["normal","pretty","boundedRead","plist","importNormal","importYAML","importYAMLPaths","importYAMLEmpty",
+      "importAbsolute","importEmptyFragment","importRepeated","dirNormal"].includes(mode)
+    assert.equal(r.state,compatible?"collected":"scope_unqualified",mode)
+    assert.equal(runner.hasCollectedTriageControls(r.evidence),compatible,mode)
+    assert.equal(calls,["normal","pretty","boundedRead","plist"].includes(mode)||mode.startsWith("import")||mode.startsWith("dir")?1:0,mode)
+    if(["duplicate","nestedDuplicate","escapedDuplicate"].includes(mode))assert.equal(r.detail,"control_json_ambiguous",mode)
+    if(mode.startsWith("ancestor"))assert.equal(r.detail,mode==="ancestorUnreadable"?"ancestor_access":"control_ancestor_unsafe",mode)
+    if(mode==="importNormal"){
+      assert.equal(r.evidence.controls.instructions_agents.state,"known_nonexecuting_data","bounded managed data and exact disabled builtin loading are both proved")
+      assert.ok(r.evidence.sources.some(s=>s.kind==="instruction"&&s.path_identity?.path===managedRoot+"/1.md"))
+    }
+    if(mode==="importCycle")assert.equal(r.detail,"control_import_cycle")
+    if(mode==="importOutside")assert.equal(r.detail,"control_import_outside")
+    if(mode==="importDepth")assert.equal(r.detail,"control_import_depth")
+    if(mode==="importMissing")assert.equal(r.detail,"control_import_missing")
+    if(mode==="importFrontmatter")assert.equal(r.detail,"control_frontmatter_unsupported")
+    const expected={jsonNumericMismatch:"hooks_helpers:selected_policy_tier_unresolved",importAlias:"control_frontmatter_unsupported",
+      importYAMLDuplicate:"control_frontmatter_unsupported",importYAMLObject:"control_frontmatter_unsupported",importYAMLBadPaths:"control_frontmatter_unsupported",
+      importCode:"control_import_ambiguous",importHTML:"control_import_ambiguous",importTilde:"control_import_unsupported",importExtension:"control_import_unsupported",
+      dirDepth:"control_import_depth",dirSymlink:"control_ancestor_unsafe",dirMany:"control_closure_count",dirBadName:"control_path_ambiguous",
+      dirUnreadable:"unreadable",dirAggregate:"control_source_bytes",dirMembers:"control_closure_count",dirDirectoryMembers:"control_closure_count",
+      dirTypeChanged:"control_ancestor_unsafe",dirAncestorsChanged:"control_source_changed",dirListingChanged:"control_source_changed",
+      dropinReplaced:"control_source_changed",fileVanished:"control_source_changed"}
+    if(mode==="externalRegistration")assert.equal(r.detail,"control_external_plugin_registration")
+    if(expected[mode])assert.equal(r.detail,expected[mode],mode)
+  }
+})
 async function fixture(t){
   const dir=realpathSync(mkdtempSync(path.join(tmpdir(),"triage-test-")))
   t.after(()=>rmSync(dir,{recursive:true,force:true}))
@@ -179,11 +989,32 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
     directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools})
     invocationIdentities.push(runner.ownedInvocationIdentity({invocation,chain:{effective_argv:[f.cli]},cliMetadata:metadata,env}))
   }
-  const synthetic={version:2,enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity,
+  const collected=await runner.runNonacceptedControlCollection(controlInput()),controls=collected.outcome.evidence
+  const control_history=nativeReceipts.map(run=>({...structuredClone(controls),recipe_sha256:hash(catalog.catalogCanonical({version:3,argv:run.invocation.args}))}))
+  const registered=[...Object.keys(fixedOff()),"cc-plugin-tips@builtin","cc-plugin-sec-default@builtin"]
+  const synthetic={version:5,enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity,
+    recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",
+    optional_off_sha256:hash(catalog.catalogCanonical(fixedOff())),registered_set_sha256:hash(catalog.catalogCanonical(registered)),
+    effective_off_sha256:hash(catalog.catalogCanonical(control_history.map(e=>({recipe:e.recipe_sha256,sources:e.effective_sources_sha256,
+      optional_off:fixedOff()})))),
+    builtin_basis_sha256:hash(catalog.catalogCanonical(control_history.map(e=>e.builtin_basis))),
+    control_evidence:control_history,predicate_table_sha256:collected.outcome.predicate_table_sha256,
     policy_sources_fingerprint:"a".repeat(64),chain_fingerprint:"b".repeat(64),directReceipts,nativeReceipts,cliMetadata:metadata,
     cli:f.cli,format_fingerprint:hash(catalog.catalogCanonical(directReceipts[0].tools)),resources:{native_launches:2,direct_bundles:2},invocationIdentities}
   assert.deepEqual(runner.validateOwnedQualificationStructure({record:synthetic,out,sourceIdentity,env}),{state:"structure_validated",authority:false})
-  const document=runner.prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission:{sources:[],remote_delivery:"not_applicable",capabilities:null},
+  const previous=structuredClone(synthetic);previous.version=4
+  assert.throws(()=>runner.validateOwnedQualificationStructure({record:previous,out,sourceIdentity,env}),{message:"qualification_structure"})
+  for(const mutate of [r=>r.predicate_table="E296/2",r=>r.builtin_basis_sha256="a".repeat(64),
+    r=>r.optional_off_sha256="a".repeat(64),r=>r.registered_set_sha256="a".repeat(64),r=>r.effective_off_sha256="a".repeat(64),
+    r=>delete r.control_evidence[0].builtin_basis]){
+    const changed=structuredClone(synthetic);mutate(changed)
+    assert.throws(()=>runner.validateOwnedQualificationStructure({record:changed,out,sourceIdentity,env}))
+  }
+  const old=structuredClone(synthetic)
+  old.version=2
+  for(const key of ["recipe_version","controls_schema","control_evidence","predicate_table_sha256"])delete old[key]
+  assert.throws(()=>runner.validateOwnedQualificationStructure({record:old,out,sourceIdentity,env}),{message:"qualification_structure"},"old safe-mode record version must not qualify the revised recipe")
+  const document=runner.prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission:{sources:[],remote_delivery:"not_applicable",controls:control_history[1],control_history},
     chain:{effective_argv:[f.cli],fingerprint:"b".repeat(64)},cliMetadata:metadata,cli:path.join(f.dir,"indirect-selector"),env})
   assert.equal(document.state,"unaccepted_document");assert.equal(document.authority,false)
   assert.equal(document.record.cli,f.cli,"record binds actual execution target, not original selector")
@@ -192,7 +1023,7 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   assert.throws(()=>runner.prepareOwnedQualificationDocument({directReceipts,nativeReceipts:lateArgs,
     admission:{sources:[],remote_delivery:"not_applicable",capabilities:null},
     chain:{effective_argv:[f.cli],fingerprint:"b".repeat(64)},cliMetadata:metadata,env}),{message:"invocation_template"})
-  const unitConfig={record:document.record,env,admission:{state:"admitted",sources:[],remote_delivery:"not_applicable",capabilities:null,fingerprint:"unit-admission"},
+  const unitConfig={record:document.record,env,admission:{state:"admitted",sources:[],remote_delivery:"not_applicable",controls:control_history[1],control_history,fingerprint:"unit-admission"},
     chain:{state:"inspected",effective_argv:[f.cli],fingerprint:"b".repeat(64)}}
   const unit=runner.createNonacceptedTriageUnit(unitConfig)
   const sealed=unit.seal()
@@ -263,7 +1094,7 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
     assert.equal(outcome.authority,false);assert.equal(outcome.outcome.state,want,failure)
     if(!["source","prepare"].includes(failure))assert.ok(isolated.statistics().closed>=1,`${failure}: owned unit handle closes`)
   }
-  for(const failure of ["read","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect"]){
+  for(const failure of ["read","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect","admission","admissionIdentity"]){
     const isolated=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
     await isolated.save(document.record)
     const refused=await isolated.load()
@@ -288,11 +1119,22 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   assert.equal(nativeUnit.statistics.syntheticLaunches,2)
   assert.equal(nativeUnit.statistics.syntheticAuthGenerations,2)
   assert.equal(nativeUnit.statistics.memoryDocuments,1)
-  for(const failure of ["policy","chain","chainIdentity","admission","admissionIdentity","signIn","prepared","postAdmission","postIdentity","native","direct","write","read"]){
+  for(const failure of ["policy","chain","chainIdentity","admission","admissionIdentity","signIn","prepared","postAdmission","postIdentity","postExitAdmission","postExitIdentity","runChainUnknown","runChainDrift","native","direct","write","read"]){
     const refused=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{[failure]:true}})
     assert.equal(refused.authority,false)
     assert.equal(refused.outcome.state,"blocked",failure)
   }
+  const noCurrentControls=await qualifier.runNonacceptedNativeQualification({...unitConfig,admission:{...unitConfig.admission,controls:null}})
+  assert.equal(noCurrentControls.outcome.state,"blocked")
+  assert.equal(noCurrentControls.statistics.syntheticLaunches,0)
+  for(const history of [null,[]]){
+    const noHistory=runner.createNonacceptedTriageUnit({...unitConfig,admission:{...unitConfig.admission,control_history:history}})
+    assert.throws(()=>noHistory.seal(),{message:"control_collection_untrusted"})
+  }
+  const noVector=runner.createNonacceptedTriageUnit({...unitConfig,admission:{...unitConfig.admission,controls:null}})
+  const noVectorRecord=noVector.seal().record
+  await noVector.save(noVectorRecord)
+  assert.equal((await noVector.load()).outcome.state,"scope_unqualified")
   const missingMetadata={...unitConfig,record:{...unitConfig.record,cliMetadata:null}}
   const helpUnit=await qualifier.runNonacceptedNativeQualification(missingMetadata)
   assert.equal(helpUnit.authority,false)
@@ -322,6 +1164,28 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   const nativeFailure=await qualifier.runNonacceptedCatalogTransaction({...unitConfig,fixture:data,phaseFailure:null,failures:{admission:true}})
   assert.equal(nativeFailure.outcome.state,"blocked")
   assert.equal(nativeFailure.outcome.reason,"diagnostic_inadequate")
+  for(const failure of ["outside","mkdir","write","reloadThrows"]){
+    const r=await qualifier.runNonacceptedCatalogTransaction({...unitConfig,fixture:data,phaseFailure:failure})
+    assert.equal(r.outcome.state,"blocked")
+    assert.ok(r.outcome.resources.failure_capture.stages.length<=64)
+    assert.equal(r.outcome.resources.failure_capture.channels.qualification.observation,"unobserved")
+    assert.equal(r.statistics.actualLaunches,0)
+  }
+  const admissionHold=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{admission:true}})
+  assert.equal(admissionHold.outcome.state,"blocked")
+  assert.ok(admissionHold.evidence.some(e=>e.name==="native-1-stages.json"&&e.value.channels.native.observation==="unobserved"))
+  const captureWrite=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{write:true}})
+  assert.equal(captureWrite.outcome.state,"blocked")
+  assert.equal(captureWrite.statistics.syntheticLaunches,1,"missing first-run stage capture must stop the second launch")
+  for(const failures of [{close:true},{invocation:true},{nativeMode:"emptyInit"}]){
+    const refusal=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures})
+    assert.equal(refusal.outcome.state,"blocked")
+  }
+  const syntheticFailure=await qualifier.runNonacceptedCatalogTransaction({...unitConfig,fixture:data,phaseFailure:null,failures:{run:true}})
+  assert.equal(syntheticFailure.outcome.resources.failure_capture.channels.native.observation,"present","a returned synthetic bundle is observed data, never a real model receipt")
+  const syntheticNative=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{nativeMode:"normal"}})
+  assert.equal(syntheticNative.authority,false)
+  assert.ok(syntheticNative.evidence.some(x=>x.name==="native-1-stages.json"&&x.value.channels.native.observation==="present"))
   for(const failure of ["native","direct","write","read","restoreNative","restoreDirect"]){
     const result=await qualifier.runNonacceptedQualifierTransaction({...unitConfig,failures:{[failure]:true}})
     assert.equal(result.authority,false)
@@ -496,6 +1360,20 @@ test("chain_relative_files_and_selected_permissions_fail_closed",async(t)=>{
   assert.equal(result.state,"admitted")
   assert.equal(result.capabilities,null)
 })
+test("fixed_optional_map_legacy_hazard_checks_accept_only_exact_off_controls",async(t)=>{
+  const f=await fixture(t),settings={...controlInput().settings,permissions:{allow:[],deny:[]}}
+  const read=value=>({complete:true,controller_invariant:true,validation_errors:[],sources:[{...source,settings:value}]})
+  const accepted=await runner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
+    runDiagnostic:diagnostic,policyReaders:{read:()=>read(settings)}})
+  assert.equal(accepted.state,"admitted");assert.equal(accepted.authority,false)
+  for(const changed of [{...settings,enabledPlugins:{}},{...settings,enabledPlugins:{...fixedOff(),"extra@builtin":false}},
+    {...settings,enabledPlugins:{...fixedOff(),"cc-plugin-diff@builtin":true}},{...settings,disableWorkflows:false},
+    {...settings,disableSkillShellExecution:"true"}]){
+    const result=await runner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
+      runDiagnostic:diagnostic,policyReaders:{read:()=>read(changed)}})
+    assert.equal(result.state,"scope_unqualified")
+  }
+})
 test("admission_missing_invalid_and_incompatible_evidence_never_becomes_none",async(t)=>{
   const f=await fixture(t)
   for(const [observed,evidence,reason]of [
@@ -513,7 +1391,7 @@ test("admission_missing_invalid_and_incompatible_evidence_never_becomes_none",as
   assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:()=>{throw Error("failed diagnostic")}})).reason,"effective_policy_unknown")
   assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{...readers,captureDiagnostic:()=>{throw Error("private capture failed")}}})).reason,"effective_policy_unknown")
   assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,"diagnostic_inadequate")
-  assert.equal((await runner.collectTriageAdmission({...f,cli:process.execPath,argv:[]})).reason,"diagnostic_inadequate")
+  assert.equal((await runner.collectTriageAdmission({...f,cli:process.execPath,argv:[]})).reason,"policy_control_unsupported")
 })
 test("native_loader_inspection_refuses_unknown_or_unreadable_images",async(t)=>{
   const f={...await fixture(t),resolveExec:undefined},realRead=fsNative.readFileSync,realPath=fsNative.realpathSync
