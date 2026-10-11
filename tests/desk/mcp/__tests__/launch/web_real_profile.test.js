@@ -1446,6 +1446,29 @@ test("close waits for earlier window preparation before dispatch and exact clean
   await host.close()
 })
 
+test("later work stays behind close while an earlier operation is still preparing", posixOnly, async () => {
+  let complete
+  let preparations = 0
+  const machine = await realMachine({ launch: {
+    nativeBefore: () => ++preparations === 1 ? new Promise(resolve => { complete = resolve }) : Promise.resolve(),
+  } })
+  const host = session(machine)
+  await host.handshake()
+  const first = host.call(2)
+  await host.wait(() => complete, "the earlier preparation")
+  const closing = host.call(3, "browser_close")
+  const later = host.call(4, "browser_snapshot")
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const premature = machine.events.includes("child:tools/call browser_snapshot")
+  complete()
+  await first
+  assert.equal((await closing).result.isError, undefined)
+  assert.equal((await later).result.isError, undefined)
+  assert.equal(premature, false, "later work cannot overtake an earlier close's pending-operation barrier")
+  assert.equal(machine.nativeState.windows, 2, "later work creates its own replacement only after verified clear")
+  await host.close()
+})
+
 test("a cancelled preparation is never dispatched after its asynchronous hook resolves", posixOnly, async () => {
   let complete
   const machine = await realMachine({ launch: {

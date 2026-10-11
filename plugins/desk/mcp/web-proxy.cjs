@@ -134,6 +134,7 @@ function serve(options) {
     var calls = {};
     var preparing = Object.create(null);
     var operationOrder = 0;
+    var preparationOrder = Promise.resolve();
     var cleaning = null;
     var launchInitialization = null;
     var pendingWaiters = [];
@@ -370,7 +371,9 @@ function serve(options) {
       preparing[entry.id] = entry;
       var operationApi = Object.create(api);
       operationApi.waitForPendingCalls = function (ms) { return waitForPendingCalls(ms, entry); };
-      options.beforeCall(entry.params, operationApi, entry).then(function (local) {
+      preparationOrder = preparationOrder.then(function () {
+        return entry.cancelled ? null : options.beforeCall(entry.params, operationApi, entry);
+      }).then(function (local) {
         delete preparing[entry.id];
         if (!entry.cancelled) {
           if (local === null) dispatch(entry);
