@@ -324,12 +324,12 @@ async function adminAccess(ctx, state) {
   const secret = await readAdminSecret({ runner: ctx.runner, tenantId: state.tenant.id, appId: app.appId });
   if (!secret) return "no-secret";
   if (ADMIN_ROLES.some((name) => !app.appRoles.includes(state.graphSp.roles[name]))) return "no-roles";
-  const graph = createAdminGraph({ tenantId: state.tenant.id, appId: app.appId, secret, fetch: ctx.fetch, sleep: ctx.sleep, fresh: () => ctx.created.adminAccess });
+  const graph = createAdminGraph({ tenantId: state.tenant.id, appId: app.appId, secret, fetch: ctx.fetch, sleep: ctx.sleep, freshSecret: () => ctx.created.adminSecret, freshRoles: () => ctx.created.adminRoles });
   try {
     await graph.token();
   } catch (error) {
     // This run made the secret and waited for it: minting another would only leave this one behind (round 2, m1).
-    if (error.code === "invalid_client" && ctx.created.adminAccess) throw new Error(`The ${ADMIN_APP_NAME} app's new secret is still refused; run this again in a few minutes. It stays in the keychain as ${adminKeychainService(state.tenant.id)}.`);
+    if (error.code === "invalid_client" && ctx.created.adminSecret) throw new Error(`The ${ADMIN_APP_NAME} app's new secret is still refused; run this again in a few minutes. It stays in the keychain as ${adminKeychainService(state.tenant.id)}.`);
     if (error.code === "invalid_client") {
       ctx.log(`The ${ADMIN_APP_NAME} app's secret in the keychain (${adminKeychainService(state.tenant.id)}) is refused: expired or replaced.`);
       return "refused";
@@ -732,33 +732,33 @@ async function execStep(ctx, step) {
     return;
   }
   if (step.adminSecret) {
-    // The new secret goes from az's stdout into the keychain through `security -i`'s stdin and nowhere else. If the
-    // keychain write or its readback fails, the credential this run created, and only that one, is deleted again.
+    // The new secret goes from az's stdout into the keychain through `security -i`'s stdin and nowhere else. It is
+    // stored and read back first, so a slow credential listing never costs a working secret. Only if the write or the
+    // readback fails does the run wait for Graph to list the credential it created, by its unique name, and delete
+    // that one by keyId.
     const reset = step.calls[0].args;
     const appId = reset[reset.indexOf("--id") + 1];
     const displayName = reset[reset.indexOf("--display-name") + 1];
     const ownKeyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", `[?displayName=='${displayName}'].keyId`, "-o", "tsv"]));
     const password = secretFromAz(await execCall(ctx, step.calls[0]), `The ${ADMIN_APP_NAME} app's new client secret`);
-    // Graph may take a moment to list it; it is identified by keyId before anything relies on it.
-    let added = await ownKeyIds();
-    for (let attempt = 0; added.length !== 1 && attempt < GRAPH_LAG_TRIES; attempt += 1) {
-      await ctx.sleep(GRAPH_LAG_MS);
-      added = await ownKeyIds();
-    }
     try {
-      if (added.length !== 1) throw new Error(`Graph doesn't list the credential this run added to ${ADMIN_APP_NAME} (${displayName}, ${added.length} found), so it wasn't stored.`);
       await storeAdminSecret({ runner: ctx.runner, tenantId: ctx.tenantId, appId, secret: password });
     } catch (error) {
+      let added = await ownKeyIds();
+      for (let attempt = 0; added.length !== 1 && attempt < GRAPH_LAG_TRIES; attempt += 1) {
+        await ctx.sleep(GRAPH_LAG_MS);
+        added = await ownKeyIds();
+      }
       if (added.length === 1) {
         await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", added[0]]);
         ctx.log(`    removed the unsaved credential ${added[0]} from ${ADMIN_APP_NAME}`);
       } else {
-        ctx.log(`    a credential named ${displayName} may be left on ${ADMIN_APP_NAME}; delete it with az ad app credential delete --id ${appId} --key-id <its keyId>`);
+        ctx.log(`    a credential named ${displayName} may be left on ${ADMIN_APP_NAME} (${added.length} found); delete it with az ad app credential delete --id ${appId} --key-id <its keyId>`);
       }
       throw error;
     }
-    ctx.created.adminAccess = true;
-    ctx.log(`    stored the ${ADMIN_APP_NAME} app's new client secret (credential ${added[0]}) in the keychain as ${adminKeychainService(ctx.tenantId)} (fingerprint ${fingerprint(password)}, ends ${reset[reset.indexOf("--end-date") + 1]})`);
+    ctx.created.adminSecret = true;
+    ctx.log(`    stored the ${ADMIN_APP_NAME} app's new client secret (${displayName}) in the keychain as ${adminKeychainService(ctx.tenantId)} (fingerprint ${fingerprint(password)}, ends ${reset[reset.indexOf("--end-date") + 1]})`);
     return;
   }
   if (step.appleProvider) {
@@ -787,7 +787,7 @@ async function execStep(ctx, step) {
       last = "";
     }
   }
-  if (step.adminRoles) ctx.created.adminAccess = true;
+  if (step.adminRoles) ctx.created.adminRoles = true;
   if (step.creates?.app) ctx.created.apps[step.creates.app] = JSON.parse(last || "{}");
   if (step.creates?.servicePrincipal) ctx.created.servicePrincipals.add(step.creates.servicePrincipal);
   if (step.creates?.flow) ctx.created.flow = true;
@@ -1345,7 +1345,7 @@ export async function run({
   fetch = globalThis.fetch,
 }) {
   const settings = environment(env);
-  const ctx = { env, settings, record: loadRecord(env, recordDir), created: { apps: {}, servicePrincipals: new Set(), flow: false, adminAccess: false }, runner, fetch, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
+  const ctx = { env, settings, record: loadRecord(env, recordDir), created: { apps: {}, servicePrincipals: new Set(), flow: false, adminSecret: false, adminRoles: false }, runner, fetch, log, home, now, recordDir, openStore, sleep, probeCommand, openerCommand, dryRun: Boolean(flags.dryRun), browserContext: flags.browserContext };
   if (ctx.dryRun) log(`Dry run for ${env}: reads only; every write is printed instead, secret input as ***.`);
   if (flags.appleKeyFile) return importAppleKey(ctx, { file: flags.appleKeyFile, slot: flags.appleKeySlot, keepFile: flags.keepFile, keyId: flags.appleKeyId });
   if (flags.inviteAri) return inviteAri(ctx);

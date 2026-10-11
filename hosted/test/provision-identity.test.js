@@ -1542,3 +1542,35 @@ test("round 2 m1: provisioning doesn't wait on an expired keychain secret it did
   assert.equal(withOld.length, 1);
   assert.equal(admin.passwordCredentials.length, 2);
 });
+
+// --- Spike fix round 3 ------------------------------------------------------------------------------------------------
+
+test("round 3 r2-m1: a run that only granted a role doesn't wait on, or blame, an expired secret it didn't make", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  const context = setup(t, { cloud });
+  await context.go();
+  // ADMIN_ROLES gained a role the app lacks, and the keychain's secret expired.
+  const adminSp = cloud.graph.sps.find(({ appId }) => appId === admin.appId);
+  adminSp.appRoleAssignments = adminSp.appRoleAssignments.filter((id) => id !== GRAPH_ROLES["EventListener.ReadWrite.All"]);
+  admin.passwordCredentials[0].endDateTime = "2026-10-01T00:00:00Z";
+  cloud.now = NOW;
+  context.fake.calls.length = 0;
+  await context.go();
+  const withOld = context.fake.calls.filter(({ cmd, args, input }) => cmd === "fetch" && args[1].endsWith("/oauth2/v2.0/token") && new URLSearchParams(input).get("client_secret") === "Kc8~spikeKeychainSecret.value_1");
+  assert.equal(withOld.length, 1, "no wait on a secret this run didn't make");
+  assert.equal(admin.passwordCredentials.length, 2, "the expired one is replaced in the same run");
+  assert.ok(adminSp.appRoleAssignments.includes(GRAPH_ROLES["EventListener.ReadWrite.All"]));
+});
+
+test("round 3 r2-m2: a working secret is stored even when Graph never lists its credential, and nothing is deleted", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  cloud.keychain = {};
+  cloud.credentialListLag = 1_000_000;
+  const context = setup(t, { cloud });
+  await context.go();
+  assert.equal(admin.passwordCredentials.length, 2);
+  assert.equal(cloud.keychain[`ouro-identity-admin-${TEST_TENANT}`].password, admin.passwordCredentials[1].secretText);
+  assert.equal(credentialDeletes(context.fake).length, 0);
+  // The listing is never asked for on the success path.
+  assert.ok(!context.fake.calls.some(({ cmd, args }) => cmd === "az" && args.slice(0, 4).join(" ") === "ad app credential list" && args.some((arg) => arg.includes("provision-identity-"))));
+});
