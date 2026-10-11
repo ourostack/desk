@@ -72,6 +72,13 @@ export function environment(env) {
 
 export const entraSecretName = (env) => `entra-client-secret-${env}`;
 export const appleKeySecretName = (slot, env) => `apple-siwa-key-${slot}-${env}`;
+// The Apple client secret Entra makes from a key lasts six months. Key Vault secret apple-siwa-active-<env> holds the
+// slot letter Entra was last given and, in its `apple-renewed-at` tag, when: written by provision-identity.mjs when it
+// creates the provider, by identity-checks.mjs after a renewal Graph accepted, and by `identity-checks.mjs
+// --record-apple-upload` after a manual admin-center upload (outcome B). The daily check counts the age from it.
+export const appleActiveSecretName = (env) => `apple-siwa-active-${env}`;
+export const APPLE_RENEWED_TAG = "apple-renewed-at";
+export const appleActiveSetArgs = (env, renewedAt) => ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", appleActiveSecretName(env), "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `${APPLE_RENEWED_TAG}=${renewedAt}`, "--query", "id", "-o", "tsv", "--subscription", SUBSCRIPTION];
 export const vaultSecretUrl = (name) => `https://${VAULT}.vault.azure.net/secrets/${name}`;
 export const recordPath = (env, dir) => join(dir, `identity-${env}.json`);
 
