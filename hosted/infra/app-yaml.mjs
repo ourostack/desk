@@ -33,7 +33,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { checkIdentitySettings, cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
+import { checkIdentitySettings, cutoffGapWarning, cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
+import { OURO_SETTINGS, readIdentity } from "../src/identity-config.js";
 
 // `az containerapp show -o json`'s output, as text or already parsed.
 export function parseShown(shown) {
@@ -225,6 +226,8 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
       "set-env": { type: "string", multiple: true, default: [] },
       "remove-env": { type: "string", multiple: true, default: [] },
       "identity-record": { type: "string" },
+      "identity-env": { type: "string" },
+      "remove-ouro": { type: "boolean", default: false },
       "get-env": { type: "string" },
       mask: { type: "string" },
       "missing-identities": { type: "boolean", default: false },
@@ -268,6 +271,13 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   const setEnv = Object.fromEntries(values["set-env"].map((text) => splitAssignment(text, "--set-env")));
   if (setEnv.DESK_GITHUB_SIGNIN !== undefined && !["on", "off"].includes(setEnv.DESK_GITHUB_SIGNIN)) throw new Error("DESK_GITHUB_SIGNIN must be on or off.");
   const current = Object.fromEntries((gatewayContainer(shown).env ?? []).filter((entry) => entry.value !== undefined).map((entry) => [entry.name, entry.value]));
+  const removeEnv = [...values["remove-env"]];
+  if (values["remove-ouro"]) {
+    if (record) throw new Error("--remove-ouro takes every Ouro setting off; it can't also apply an identity record.");
+    if (Object.keys(setEnv).some((name) => OURO_SETTINGS.includes(name))) throw new Error("REMOVE_OURO_SETTINGS=1 removes every Ouro setting; don't pass DESK_GITHUB_SIGNIN with it. This update was not sent to the app.");
+    removeEnv.push(...OURO_SETTINGS);
+    note(`Removing every Ouro sign-in setting (${OURO_SETTINGS.join(", ")}); the gateway goes back to GitHub sign-in for DESK_ALLOWED_LOGINS.`);
+  }
   let identity = { setEnv: {}, secretRefs: {}, keyVaultSecrets: {}, addIdentities: [] };
   if (record) {
     identity = identitySettings(record, { githubSignIn: setEnv.DESK_GITHUB_SIGNIN ?? current.DESK_GITHUB_SIGNIN ?? "on" });
@@ -279,6 +289,24 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     }
     const warning = cutoffWarning(record, now);
     if (warning) note(warning);
+    const gap = identity.missing.length ? null : cutoffGapWarning(record);
+    if (gap) note(gap);
+  }
+  // No Ouro setting reaches the app unless the whole set, as the app will hold it, passes the gateway's own check
+  // (re-review N-1): DESK_GITHUB_SIGNIN alone, say, makes the gateway refuse to start as "partly configured".
+  const written = [...Object.keys(setEnv), ...Object.keys(identity.setEnv), ...Object.keys(identity.secretRefs)];
+  if (written.some((name) => OURO_SETTINGS.includes(name))) {
+    const result = {};
+    for (const entry of gatewayContainer(shown).env ?? []) if (!removeEnv.includes(entry.name)) result[entry.name] = entry.value ?? (entry.secretRef ? "secret-reference" : undefined);
+    Object.assign(result, setEnv, identity.setEnv);
+    for (const name of Object.keys(identity.secretRefs)) result[name] = "secret-reference";
+    try {
+      readIdentity(result, "https://desk.invalid");
+    } catch (error) {
+      const file = record ? `identity-${record.env}.json` : `identity-${values["identity-env"] ?? "<env>"}.json`;
+      const incomplete = !record || identity.missing.length ? ` DESK_GITHUB_SIGNIN applies only once ${file} is complete.` : "";
+      throw new Error(`the app would hold Ouro settings the gateway refuses, so it would not start: ${error.message} This update was not sent to the app.${incomplete}`);
+    }
   }
   const text = buildAppYaml({
     shownYaml: shown,
@@ -287,7 +315,7 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     secretRefs: identity.secretRefs,
     keyVaultSecrets: identity.keyVaultSecrets,
     addIdentities: identity.addIdentities,
-    removeEnv: values["remove-env"],
+    removeEnv,
     forbidIdentities: values["forbid-identity"],
   });
   const { file } = writeAppYaml(text, { parent: values.out });
