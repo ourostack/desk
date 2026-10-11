@@ -45,7 +45,8 @@ function fixture() {
       create: async params => {
         calls.push({ method: "windows.create", params })
         const id = next++
-        const tab = { id: next++, windowId: id, active: true, url: params.url, title: "" }
+        const tab = { id: next++, windowId: id, active: true, url: params.url,
+          title: params.url.startsWith("data:") ? "Desk target marker" : "", status: "complete" }
         tabs.set(tab.id, tab)
         const value = { id, focused: params.focused, tabs: [tab] }
         windows.set(id, value)
@@ -198,7 +199,7 @@ test("native restoration distinguishes a missing control page from a mismatched 
   const first = await create(extension)
   const params = {
     profileToken: token, owner: "test-owner", work: "test-work", transportGeneration: "host-b",
-    windowId: first.result.windowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
+    windowId: first.result.controlWindowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
     targetTabs: [{ tabId: first.result.tabId, windowId: first.result.windowId }],
   }
   const original = tabs.get(first.result.controlTabId).url
@@ -267,19 +268,23 @@ test("deliberate extension reload requires exact profile and replies before disc
   extension.stop()
 })
 
-test("first owner window is unfocused with selected control and background task pages", async () => {
+test("owner control and each task use separate unfocused popup windows", async () => {
   const { extension, calls, tabs } = await setup()
   const first = await create(extension)
   assert.equal(first.error, undefined)
   const later = await create(extension, "later")
   assert.equal(later.error, undefined)
-  const window = calls.find(call => call.method === "windows.create").params
-  assert.equal(window.focused, false)
+  const windows = calls.filter(call => call.method === "windows.create")
+  assert.equal(windows.length, 3)
+  assert.equal(windows.every(call => call.params.focused === false && call.params.type === "popup"), true)
   const taskCalls = calls.filter(call => call.method === "tabs.create")
-  assert.equal(taskCalls.length, 2)
-  assert.equal(taskCalls[0].params.windowId, first.result.windowId)
-  assert.equal(taskCalls[1].params.windowId, first.result.windowId)
-  assert.equal(taskCalls.every(call => call.params.active === false), true)
+  assert.equal(taskCalls.length, 0, "popup targets must not escape into a normal fallback window")
+  assert.equal(first.result.controlWindowId, later.result.controlWindowId)
+  assert.equal(first.result.controlTabId, later.result.controlTabId)
+  assert.notEqual(first.result.windowId, first.result.controlWindowId)
+  assert.notEqual(later.result.windowId, first.result.windowId)
+  assert.equal(tabs.get(first.result.tabId).windowId, first.result.windowId)
+  assert.equal(tabs.get(later.result.tabId).windowId, later.result.windowId)
   assert.equal(tabs.get(first.result.controlTabId).active, true)
   assert.equal(tabs.get(first.result.controlTabId).title, "Desk | test-owner | test-work")
   assert.equal(calls.some(call => call.params.focused === true || call.params.active === true), false)
@@ -392,8 +397,9 @@ test("overlapping first creates share exactly one owner window", async () => {
   const { extension, calls } = await setup()
   const results = await Promise.all([create(extension, "one"), create(extension, "two")])
   assert.equal(results.every(result => result.error === undefined), true)
-  assert.equal(calls.filter(call => call.method === "windows.create").length, 1)
-  assert.equal(results[0].result.windowId, results[1].result.windowId)
+  assert.equal(calls.filter(call => call.method === "windows.create").length, 3)
+  assert.equal(results[0].result.controlWindowId, results[1].result.controlWindowId)
+  assert.notEqual(results[0].result.windowId, results[1].result.windowId)
 })
 
 test("unknown initial create cannot be bypassed with a new marker", async () => {
@@ -408,6 +414,88 @@ test("unknown initial create cannot be bypassed with a new marker", async () => 
   assert.equal(calls.filter(call => call.method === "windows.create").length, 1)
   const unbind = await extension.dispatch({ id: "unbind", leaseId: "lease-a", method: "lease.unbind", params: {} })
   assert.equal(unbind.error.code, "NATIVE_LEASE_NOT_EMPTY")
+})
+
+test("unknown task popup create remains pending without a normal-window fallback", async () => {
+  const { extension, chrome, calls } = await setup()
+  const initial = await create(extension)
+  assert.equal(initial.error, undefined)
+  const createWindow = chrome.windows.create
+  chrome.windows.create = async params => {
+    await createWindow(params)
+    return { id: 500, tabs: [] }
+  }
+  const failed = await create(extension, "lost-task-window")
+  assert.equal(failed.error.code, "NATIVE_CREATE_INDETERMINATE")
+  const count = calls.filter(call => call.method === "windows.create").length
+  const retry = await create(extension, "new-marker-after-loss")
+  assert.equal(retry.error.code, "NATIVE_CREATE_PENDING")
+  assert.equal(calls.filter(call => call.method === "windows.create").length, count)
+  assert.equal(calls.some(call => call.method === "tabs.create"), false)
+})
+
+test("task popup target is not published before its exact marker document commits", async () => {
+  const { extension, chrome, tabs } = await setup()
+  const createWindow = chrome.windows.create
+  let pendingTab
+  chrome.windows.create = async params => {
+    const result = await createWindow(params)
+    if (params.url.startsWith("data:")) {
+      pendingTab = tabs.get(result.tabs[0].id)
+      pendingTab.status = "loading"
+      pendingTab.title = ""
+    }
+    return result
+  }
+  let settled = false
+  const operation = create(extension).then(value => { settled = true; return value })
+  for (let i = 0; i < 20 && !pendingTab; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  assert.ok(pendingTab)
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(settled, false, "native target discovery must wait for the recorded marker commit")
+  pendingTab.status = "complete"
+  pendingTab.title = "Desk target marker"
+  const result = await operation
+  assert.equal(result.error, undefined)
+  assert.equal(result.result.tabId, pendingTab.id)
+})
+
+test("uncommitted task marker retains pending effects and refuses another create", async () => {
+  const { extension, chrome, tabs, calls } = await setup()
+  const createWindow = chrome.windows.create
+  chrome.windows.create = async params => {
+    const result = await createWindow(params)
+    if (params.url.startsWith("data:")) tabs.get(result.tabs[0].id).status = "loading"
+    return result
+  }
+  const initial = await create(extension, "uncommitted")
+  assert.equal(initial.error.code, "NATIVE_TARGET_UNREADY")
+  const count = calls.filter(call => call.method === "windows.create").length
+  const later = await create(extension, "after-uncommitted")
+  assert.equal(later.error.code, "NATIVE_CREATE_PENDING")
+  assert.equal(calls.filter(call => call.method === "windows.create").length, count)
+})
+
+test("owned about-blank bootstrap navigation completes before its command returns", async () => {
+  const { extension, chrome, tabs } = await setup()
+  const first = await create(extension)
+  await extension.dispatch({ id: "bootstrap-attach", leaseId: "lease-a", method: "target.attach", params: { tabId: first.result.tabId } })
+  chrome.debugger.sendCommand = async () => {
+    const tab = tabs.get(first.result.tabId)
+    tab.status = "loading"
+    return { frameId: "own-frame", loaderId: "own-loader" }
+  }
+  let settled = false
+  const operation = extension.dispatch({
+    id: "bootstrap-command", leaseId: "lease-a", method: "target.command",
+    params: { tabId: first.result.tabId, method: "Page.navigate", params: { url: "about:blank" } },
+  }).then(value => { settled = true; return value })
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(settled, false, "new-page bootstrap must not race the caller's next navigation")
+  Object.assign(tabs.get(first.result.tabId), { url: "about:blank", status: "complete" })
+  const result = await operation
+  assert.equal(result.error, undefined)
+  assert.equal(result.result.loaderId, "own-loader")
 })
 
 test("task tabs must close before control and the same lease can reopen", async () => {
@@ -447,7 +535,8 @@ test("token document disappearance is rechecked instead of caching setup forever
 test("control title follows a same-document purpose hash update without reloading", async () => {
   const old = new Map(["document", "location", "addEventListener"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
   const heading = { textContent: "" }
-  const document = { title: "", getElementById: () => heading }
+  const listing = { textContent: "" }
+  const document = { title: "", getElementById: id => id === "owner" ? heading : listing }
   const location = { hash: "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: "work" })) }
   let changed
   try {
@@ -460,6 +549,110 @@ test("control title follows a same-document purpose hash update without reloadin
     changed?.()
     assert.equal(document.title, "Desk | owner")
     assert.equal(heading.textContent, "Desk | owner")
+  } finally {
+    for (const [key, descriptor] of old) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  }
+})
+
+test("control projects exact owned work windows on readback without changing page titles", async () => {
+  const { extension, tabs, calls } = await setup()
+  const first = await create(extension)
+  const second = await create(extension, "listing-second")
+  tabs.get(first.result.tabId).title = "<img src=x onerror=alert(1)>"
+  tabs.get(second.result.tabId).title = "<img src=x onerror=alert(1)>"
+  const read = () => extension.dispatch({ id: "listing-read", leaseId: "lease-a", method: "target.readback" })
+  await read()
+  const label = JSON.parse(decodeURIComponent(tabs.get(first.result.controlTabId).url.split("#")[1]))
+  assert.deepEqual(label.targets, [
+    { tabId: first.result.tabId, windowId: first.result.windowId, title: "<img src=x onerror=alert(1)>" },
+    { tabId: second.result.tabId, windowId: second.result.windowId, title: "<img src=x onerror=alert(1)>" },
+  ])
+  const changes = calls.filter(call => call.method === "tabs.update").length
+  await read()
+  assert.equal(calls.filter(call => call.method === "tabs.update").length, changes, "unchanged projection must not renavigate control")
+  await extension.dispatch({ id: "listing-close", leaseId: "lease-a", method: "target.close", params: { tabId: first.result.tabId } })
+  await read()
+  const remaining = JSON.parse(decodeURIComponent(tabs.get(first.result.controlTabId).url.split("#")[1]))
+  assert.deepEqual(remaining.targets, [label.targets[1]])
+  assert.equal(tabs.get(second.result.tabId).title, "<img src=x onerror=alert(1)>")
+})
+
+test("restoration followed by purpose change preserves every recorded work-window entry", async () => {
+  const { extension, tabs } = await setup()
+  const first = await create(extension)
+  const later = await create(extension, "restore-projection-later")
+  tabs.get(first.result.tabId).title = "First work"
+  tabs.get(later.result.tabId).title = "Later work"
+  await extension.dispatch({ id: "projection-before-restore", leaseId: "lease-a", method: "target.readback" })
+  const expected = [
+    { tabId: first.result.tabId, windowId: first.result.windowId, title: "First work" },
+    { tabId: later.result.tabId, windowId: later.result.windowId, title: "Later work" },
+  ]
+  const restored = await extension.dispatch({ id: "projection-restore", leaseId: "lease-a", method: "lease.restore", params: {
+    profileToken: token, owner: "test-owner", work: "test-work", transportGeneration: "host-b",
+    windowId: first.result.controlWindowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
+    targetTabs: expected.map(({ tabId, windowId }) => ({ tabId, windowId })),
+  } })
+  assert.equal(restored.error, undefined)
+  const purpose = await extension.dispatch({ id: "projection-purpose", leaseId: "lease-a", method: "purpose.set", params: { work: "Recovered work" } })
+  assert.equal(purpose.result.title, "Desk | test-owner | Recovered work")
+  const label = JSON.parse(decodeURIComponent(tabs.get(first.result.controlTabId).url.split("#")[1]))
+  assert.deepEqual(label.targets, expected)
+})
+
+test("control renders hostile and duplicate titles literally with their exact window identities", async () => {
+  const keys = ["document", "location", "addEventListener"]
+  const old = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  const heading = { textContent: "" }, listing = { textContent: "" }
+  const document = { title: "", getElementById: id => id === "owner" ? heading : listing }
+  const targets = [
+    { tabId: 11, windowId: 101, title: "<script>owned?</script>" },
+    { tabId: 12, windowId: 102, title: "<script>owned?</script>" },
+    { tabId: 13, windowId: 103, title: "" },
+  ]
+  const location = { hash: "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: null, targets })) }
+  try {
+    Object.defineProperty(globalThis, "document", { value: document, configurable: true })
+    Object.defineProperty(globalThis, "location", { value: location, configurable: true })
+    Object.defineProperty(globalThis, "addEventListener", { value: () => {}, configurable: true })
+    await import(new URL("control.js?literal-window-list-test", extensionUrl))
+    assert.equal(document.title, "Desk | owner")
+    assert.equal(listing.textContent, "Window 101 | Tab 11 | <script>owned?</script>\nWindow 102 | Tab 12 | <script>owned?</script>\nWindow 103 | Tab 13 | Untitled")
+    assert.equal(Object.hasOwn(listing, "innerHTML"), false)
+  } finally {
+    for (const [key, descriptor] of old) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  }
+})
+
+test("invalid control window projection refuses instead of rendering arbitrary identities", async () => {
+  const old = new Map(["document", "location", "addEventListener", "console"].map(key =>
+    [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  const owner = { textContent: "" }, listing = { textContent: "unchanged" }, errors = []
+  const document = { title: "", getElementById: id => id === "owner" ? owner : listing }
+  let changed
+  const location = { hash: "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: null, targets: [] })) }
+  try {
+    Object.defineProperty(globalThis, "document", { value: document, configurable: true })
+    Object.defineProperty(globalThis, "location", { value: location, configurable: true })
+    Object.defineProperty(globalThis, "addEventListener", { value: (_, handler) => { changed = handler }, configurable: true })
+    Object.defineProperty(globalThis, "console", { value: { error: error => errors.push(error) }, configurable: true })
+    await import(new URL("control.js?invalid-window-projection-test", extensionUrl))
+    for (const targets of [{}, [{ tabId: 1, windowId: "2", title: "page" }],
+      [{ tabId: -1, windowId: 2, title: "page" }], [{ tabId: 1, windowId: -2, title: "page" }],
+      [{ tabId: 1, windowId: 2, title: "a".repeat(241) }], Array.from({ length: 51 }, () => ({ tabId: 1, windowId: 2, title: "page" }))]) {
+      listing.textContent = "unchanged"
+      location.hash = "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: null, targets }))
+      changed()
+      assert.equal(document.title, "Desk | invalid ownership label")
+      assert.equal(listing.textContent, "unchanged")
+    }
+    assert.equal(errors.length, 6)
   } finally {
     for (const [key, descriptor] of old) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor)
@@ -481,7 +674,10 @@ test("native readback reports bounds only for exact recorded windows", async () 
   const { extension } = await setup()
   const first = await create(extension)
   const result = await extension.dispatch({ id: "read", leaseId: "lease-a", method: "target.readback", params: {} })
-  assert.deepEqual(result.result.windows, [{ id: first.result.windowId, left: 10, top: 20, width: 800, height: 600, state: "normal" }])
+  assert.deepEqual(result.result.windows, [
+    { id: first.result.controlWindowId, left: 10, top: 20, width: 800, height: 600, state: "normal" },
+    { id: first.result.windowId, left: 10, top: 20, width: 800, height: 600, state: "normal" },
+  ])
 })
 
 test("close success requires exact target absence rather than API return alone", async () => {
@@ -495,12 +691,16 @@ test("close success requires exact target absence rather than API return alone",
 test("native host reconnect restores only exact prior control and recorded Chrome tabs", async () => {
   const { extension, calls } = await setup()
   const first = await create(extension)
+  const later = await create(extension, "restore-later")
   await extension.dispatch({ id: "initial-attach", leaseId: "lease-a", method: "target.attach", params: { tabId: first.result.tabId } })
   const count = calls.filter(call => call.method === "windows.create").length
   const restored = await extension.dispatch({ id: "restore", leaseId: "lease-a", method: "lease.restore", params: {
     profileToken: token, owner: "test-owner", work: "test-work", transportGeneration: "host-b",
-    windowId: first.result.windowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
-    targetTabs: [{ tabId: first.result.tabId, windowId: first.result.windowId }],
+    windowId: first.result.controlWindowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
+    targetTabs: [
+      { tabId: first.result.tabId, windowId: first.result.windowId },
+      { tabId: later.result.tabId, windowId: later.result.windowId },
+    ],
   } })
   assert.equal(restored.error, undefined)
   assert.equal(restored.result.controlTabId, first.result.controlTabId)

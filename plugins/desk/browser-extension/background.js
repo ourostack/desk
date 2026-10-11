@@ -107,12 +107,16 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
   function controlUrl(lease) {
     return api.runtime.getURL("control.html") + "#" + encodeURIComponent(JSON.stringify({
       owner: lease.owner, work: lease.work, leaseId: lease.id, marker: lease.controlMarker,
+      targets: lease.targetProjection ?? [],
     }))
   }
 
   async function labelControl(lease) {
     await ownTab(lease, lease.controlTabId, true)
     const url = controlUrl(lease)
+    const expected = controlTitle(lease)
+    const current = await ownTab(lease, lease.controlTabId, true)
+    if (current.url === url && current.title === expected) return expected
     try {
       await api.tabs.update(lease.controlTabId, { url })
     } catch (error) {
@@ -120,7 +124,6 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         .replace(/[a-f0-9]{32,}/giu, "<redacted>").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 240)
       throw refusal("NATIVE_CONTROL_NAVIGATION_FAILED", reason)
     }
-    const expected = controlTitle(lease)
     for (let attempt = 0; attempt < 60; attempt++) {
       const tab = await ownTab(lease, lease.controlTabId, true)
       if (tab.url === url && tab.title === expected) return expected
@@ -164,12 +167,14 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       throw refusal("NATIVE_CONTROL_MISMATCH", "The recorded owner control belongs to a different lease")
     }
     const records = new Map([[control.id, { tabId: control.id, windowId: control.windowId, control: true }]])
+    const projection = []
     for (const record of params.targetTabs) {
       if (!integer(record.tabId) || !integer(record.windowId) || records.has(record.tabId)) {
         throw refusal("NATIVE_ROUTING_INVALID", "Native restoration contains duplicate or invalid Chrome identities")
       }
       const tab = await api.tabs.get(record.tabId)
       if (tab.windowId !== record.windowId) throw refusal("NATIVE_WINDOW_MISMATCH", "Recorded task routing has changed")
+      projection.push({ tabId: tab.id, windowId: tab.windowId, title: String(tab.title ?? "").slice(0, 240) })
       const prior = previous?.tabs.get(record.tabId)
       records.set(record.tabId, { ...record, sessions: new Set(), attached: false,
         detachPrior: Boolean(prior?.attached && prior.windowId === record.windowId) })
@@ -183,6 +188,7 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
     lease.controlTabId = params.controlTabId
     lease.controlMarker = params.controlMarker
     lease.tabs = records
+    lease.targetProjection = projection
     return { windowId: lease.windowId, controlTabId: lease.controlTabId }
   }
 
@@ -255,7 +261,7 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       lease.creates.set(params.marker, { pending: true })
       if (lease.controlTabId === undefined) {
         lease.controlMarker = params.marker
-        const window = await api.windows.create({ url: controlUrl(lease), focused: false, type: "normal" })
+        const window = await api.windows.create({ url: controlUrl(lease), focused: false, type: "popup" })
         if (!integer(window.id) || window.tabs?.length !== 1 || !integer(window.tabs[0].id)) {
           throw refusal("NATIVE_CREATE_INDETERMINATE", "Native window creation did not return exact Chrome identities")
         }
@@ -265,15 +271,29 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         await labelControl(lease)
       }
       await ownTab(lease, lease.controlTabId, true)
-      const tab = await api.tabs.create({ windowId: lease.windowId, active: false, url: markerUrl })
-      if (!integer(tab.id) || tab.windowId !== lease.windowId) {
-        throw refusal("NATIVE_CREATE_INDETERMINATE", "Native tab creation did not return exact owner-window routing")
+      const window = await api.windows.create({ url: markerUrl, focused: false, type: "popup" })
+      const tab = window?.tabs?.[0]
+      if (!integer(window?.id) || window.tabs?.length !== 1 || !integer(tab?.id) ||
+          tab.windowId !== window.id || window.id === lease.windowId) {
+        throw refusal("NATIVE_CREATE_INDETERMINATE", "Native task window creation did not return exact independent routing")
       }
       lease.tabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId, sessions: new Set(), attached: false })
+      let markerReady = false
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const current = await ownTab(lease, tab.id)
+        if (current.url === markerUrl && current.status === "complete" && current.title === "Desk target marker") {
+          markerReady = true
+          break
+        }
+        await delay(50)
+      }
+      if (!markerReady) {
+        throw refusal("NATIVE_TARGET_UNREADY", "The exact recorded task marker did not confirm document readiness")
+      }
       const target = await targetInfo(tab.id)
       const control = await targetInfo(lease.controlTabId)
       const result = {
-        tabId: tab.id, targetId: target.id, windowId: tab.windowId, controlTabId: lease.controlTabId,
+        tabId: tab.id, targetId: target.id, windowId: tab.windowId, controlWindowId: lease.windowId, controlTabId: lease.controlTabId,
         controlTargetId: control.id, controlMarker: lease.controlMarker, markerUrl,
       }
       lease.creates.set(params.marker, result)
@@ -289,6 +309,18 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       for (const record of lease.tabs.values()) {
         const tab = await ownTab(lease, record.tabId, true)
         tabs.push({ tabId: tab.id, windowId: tab.windowId, control: Boolean(record.control), targetId: (await targetInfo(tab.id)).id, url: tab.url, title: tab.title })
+      }
+      if (lease.controlTabId !== undefined) {
+        lease.targetProjection = tabs.filter(tab => !tab.control).map(tab => ({
+          tabId: tab.tabId, windowId: tab.windowId, title: String(tab.title ?? "").slice(0, 240),
+        }))
+        await labelControl(lease)
+        const control = tabs.find(tab => tab.control)
+        if (control) {
+          const fresh = await ownTab(lease, lease.controlTabId, true)
+          control.url = fresh.url
+          control.title = fresh.title
+        }
       }
       const windows = []
       for (const id of new Set(tabs.map(tab => tab.windowId))) {
@@ -354,7 +386,17 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       }
       const target = { tabId: tab.id }
       if (params.sessionId !== undefined) target.sessionId = params.sessionId
-      return await api.debugger.sendCommand(target, params.method, params.params ?? {}) ?? {}
+      const result = await api.debugger.sendCommand(target, params.method, params.params ?? {}) ?? {}
+      if (params.method === "Page.navigate" && params.params?.url === "about:blank" &&
+          params.sessionId === undefined && !result.errorText) {
+        for (let attempt = 0; attempt < 60; attempt++) {
+          const current = await ownTab(lease, tab.id)
+          if (current.url === "about:blank" && current.status === "complete") return result
+          await delay(50)
+        }
+        throw refusal("NATIVE_TARGET_UNREADY", "The exact owned blank bootstrap did not confirm document readiness")
+      }
+      return result
     }
     throw refusal("NATIVE_METHOD_DENIED", "Native method is not supported")
   }

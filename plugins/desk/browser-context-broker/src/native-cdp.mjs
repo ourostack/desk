@@ -145,6 +145,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
   const capabilityText = capability.toString('hex');
   const bindings = new Map();
   const peers = new Set();
+  const pendingBootstrap = new Set();
   const privateFile = path.join(stateDir, `native-cdp-${createHash('sha256').update(generation).digest('hex')}.json`);
   let closed = false;
   let closing;
@@ -353,6 +354,17 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         const result = await native(leaseId, 'target.command', {
           tabId: session.tabId, method, params: mappedParams, ...(session.nativeSessionId ? { sessionId: session.nativeSessionId } : {}),
         });
+        if (method === 'Page.navigate' && !session.nativeSessionId && pendingBootstrap.has(session.targetId) &&
+            !result?.errorText) {
+          pendingBootstrap.delete(session.targetId);
+          const info = (await readTargets(leaseId)).find(target => target.targetId === session.targetId);
+          if (!info) throw denied(-32002, 'Bootstrapped native target disappeared before readback');
+          for (const observer of peers) {
+            if (observer.leaseId !== leaseId || observer.socket.readyState !== WebSocket.OPEN) continue;
+            if (observer.discover) observer.send({ method: 'Target.targetCreated', params: { targetInfo: info } });
+            if (observer.autoAttach) await observer.attach(session.targetId, true);
+          }
+        }
         if (method === 'Page.getFrameTree' && !session.nativeSessionId &&
             typeof result?.frameTree?.frame?.id === 'string' && result.frameTree.frame.id) {
           for (const owned of peer.sessions.values()) {
@@ -392,10 +404,11 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         let created;
         try {
           created = await native(leaseId, 'target.create', { marker: pending.marker, markerUrl: pending.markerUrl });
+          pendingBootstrap.add(virtualTarget(leaseId, created.tabId));
           await recordNativeRouting({
             stateDir, leaseId, processIdentity: identity, marker: pending.marker, transportGeneration: generation,
             controlTargetId: virtualTarget(leaseId, created.controlTabId), controlTabId: created.controlTabId,
-            controlMarker: created.controlMarker, windowId: created.windowId,
+            controlMarker: created.controlMarker, windowId: created.controlWindowId,
             targetTabs: { [virtualTarget(leaseId, created.tabId)]: { tabId: created.tabId, windowId: created.windowId } },
           });
           await readTargets(leaseId);
@@ -405,12 +418,6 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         }
         const targetId = virtualTarget(leaseId, created.tabId);
         await targetRoute(targetId);
-        const info = (await readTargets(leaseId)).find(target => target.targetId === targetId);
-        for (const observer of peers) {
-          if (observer.leaseId !== leaseId || observer.socket.readyState !== WebSocket.OPEN) continue;
-          if (observer.discover) observer.send({ method: 'Target.targetCreated', params: { targetInfo: info } });
-          if (observer.autoAttach) await observer.attach(targetId, true);
-        }
         return { targetId };
       }
       if (method === 'Target.attachToTarget') {
@@ -426,17 +433,22 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         const route = await targetRoute(params.targetId, true);
         const result = await native(leaseId, 'target.close', { tabId: route.tabId });
         if (result?.closed !== true) throw denied(-32006, 'Native target close was not confirmed');
+        pendingBootstrap.delete(params.targetId);
         return { success: true };
       }
       if (method === 'Target.setDiscoverTargets') {
         peer.discover = params.discover === true;
-        if (peer.discover) for (const info of await readTargets(leaseId)) send({ method: 'Target.targetCreated', params: { targetInfo: info } });
+        if (peer.discover) for (const info of await readTargets(leaseId)) {
+          if (!pendingBootstrap.has(info.targetId)) send({ method: 'Target.targetCreated', params: { targetInfo: info } });
+        }
         return {};
       }
       if (method === 'Target.setAutoAttach') {
         if (params.flatten !== true) throw denied(-32004, 'Native auto-attachment requires flattened sessions');
         peer.autoAttach = params.autoAttach === true;
-        if (peer.autoAttach) for (const info of await readTargets(leaseId)) await attach(info.targetId, true);
+        if (peer.autoAttach) for (const info of await readTargets(leaseId)) {
+          if (!pendingBootstrap.has(info.targetId)) await attach(info.targetId, true);
+        }
         return {};
       }
       throw denied(-32004, 'Native method has no supported translation');

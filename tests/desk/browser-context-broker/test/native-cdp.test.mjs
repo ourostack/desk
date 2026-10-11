@@ -14,6 +14,7 @@ import { CdpClient } from '../../../../plugins/desk/browser-context-broker/src/c
 import { startLeaseProxy } from '../../../../plugins/desk/browser-context-broker/src/cdp-proxy.mjs';
 import { createLease, createOwnedTarget, clearLeaseTargets, closeOwnedTarget } from '../../../../plugins/desk/browser-context-broker/src/leases.mjs';
 import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
+import { markerTargetUrl } from '../../../../plugins/desk/browser-context-broker/src/markers.mjs';
 
 const moduleUrl = new URL('../../../../plugins/desk/browser-context-broker/src/native-cdp.mjs', import.meta.url);
 const identity = { pid: 700, startIdentity: 'browser-700', owner: 'operator', executable: '/opt/browser', profileRoot: '/profiles/shared' };
@@ -38,18 +39,20 @@ class NativeWorld extends EventEmitter {
         lease.tabs.set(lease.controlTabId, { tabId: lease.controlTabId, windowId: lease.windowId, targetId: `chrome-${lease.controlTabId}`, control: true, url: 'chrome-extension://own/control.html', title: 'owner' });
       }
       const tabId = ++this.next;
-      const target = { tabId, windowId: lease.windowId, targetId: `chrome-${tabId}`, control: false, url: params.markerUrl, title: 'marker' };
+      const target = { tabId, windowId: ++this.next, targetId: `chrome-${tabId}`, control: false, url: params.markerUrl, title: 'marker' };
       if (this.pendingNavigation) target.url = '';
       lease.tabs.set(tabId, target);
       if (this.loseCreateResponse) {
         this.loseCreateResponse = false;
         throw Object.assign(new Error('native create response lost'), { code: 'NATIVE_EFFECT_UNKNOWN' });
       }
-      return { ...target, controlTabId: lease.controlTabId, controlTargetId: `chrome-${lease.controlTabId}`, controlMarker: lease.controlMarker };
+      return { ...target, controlWindowId: lease.windowId, controlTabId: lease.controlTabId, controlTargetId: `chrome-${lease.controlTabId}`, controlMarker: lease.controlMarker };
     }
     if (method === 'target.readback') {
       return { windowId: lease.windowId, controlTabId: lease.controlTabId, controlMarker: lease.controlMarker,
-        windows: [{ id: lease.windowId, left: 10, top: 20, width: 800, height: 600, state: 'normal' }],
+        windows: [...new Set([...lease.tabs.values()].map(tab => tab.windowId))].map(id => ({
+          id, left: 10, top: 20, width: 800, height: 600, state: 'normal',
+        })),
         tabs: [...lease.tabs.values()].map(tab => ({ ...tab })) };
     }
     const tab = lease.tabs.get(params.tabId);
@@ -115,6 +118,125 @@ async function client(t, endpoint) {
   t.after(() => connected.close());
   return connected;
 }
+
+test('GivenSeparateNativeWorkWindows_WhenCreated_ControlAndTaskRoutingRemainDistinct', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const endpoint = server.endpointForLease(lease.id);
+  const first = await createOwnedTarget({ stateDir, leaseId: lease.id, rawEndpoint: endpoint, params: { url: 'about:blank' } });
+  const later = await createOwnedTarget({ stateDir, leaseId: lease.id, rawEndpoint: endpoint, params: { url: 'about:blank' } });
+  const routing = (await readRegistry(stateDir)).leases[lease.id].nativeRouting;
+  assert.equal(routing.windowId, transport.leases.get(lease.id).windowId);
+  assert.notEqual(routing.targetTabs[first.targetId].windowId, routing.windowId);
+  assert.notEqual(routing.targetTabs[later.targetId].windowId, routing.windowId);
+  assert.notEqual(routing.targetTabs[later.targetId].windowId, routing.targetTabs[first.targetId].windowId);
+  const connected = await client(t, endpoint);
+  const window = await connected.send('Browser.getWindowForTarget', { targetId: later.targetId });
+  assert.equal(window.windowId, routing.targetTabs[later.targetId].windowId);
+});
+
+for (const controlWindowId of [undefined, null, '101', -1]) {
+  test(`GivenInvalidNativeControlWindow_${String(controlWindowId)}_WhenCreated_NoControlIsGuessed`, async t => {
+    const { stateDir, lease, server, transport } = await setup(t);
+    const request = transport.request.bind(transport);
+    transport.request = async message => {
+      const result = await request(message);
+      if (message.method === 'target.create') result.controlWindowId = controlWindowId;
+      return result;
+    };
+    const marker = `${lease.id}:invalid-control-fixture`;
+    const markerUrl = markerTargetUrl(marker);
+    const registry = await readRegistry(stateDir);
+    registry.leases[lease.id].pendingTargetCreates = [{
+      marker, markerUrl, requestedUrl: 'about:blank', startedAt: new Date().toISOString(),
+    }];
+    await writeRegistry(stateDir, registry);
+    const connected = await client(t, server.endpointForLease(lease.id));
+    await assert.rejects(connected.send('Target.createTarget', { url: markerUrl, background: true }),
+      error => error.code === 'CDP_COMMAND_FAILED' && error.details.cdpCode === -32006);
+    const after = (await readRegistry(stateDir)).leases[lease.id].nativeRouting;
+    assert.equal(after.windowId, 101, 'only independent exact readback can establish control routing');
+    assert.equal(transport.calls.filter(call => call.method === 'target.create').length, 1);
+  });
+}
+
+test('GivenNativeBootstrapPending_WhenTargetCreated_ObserversSeeItOnlyAfterBootstrapCommandSettles', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const observer = await client(t, server.endpointForLease(lease.id));
+  await observer.send('Target.setDiscoverTargets', { discover: true });
+  await observer.send('Target.setAutoAttach', { autoAttach: true, flatten: true });
+  const events = [];
+  observer.on('event', event => events.push(event));
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const request = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.command' && message.params.method === 'Page.navigate') {
+      entered();
+      await held;
+    }
+    return request(message);
+  };
+  const creating = createOwnedTarget({ stateDir, leaseId: lease.id,
+    rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } });
+  await started;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const early = events.slice();
+  release();
+  const created = await creating;
+  assert.equal(early.some(event => ['Target.targetCreated', 'Target.attachedToTarget'].includes(event.method)), false);
+  assert.equal(events.some(event => event.method === 'Target.attachedToTarget' &&
+    event.params.targetInfo.targetId === created.targetId), true);
+});
+
+test('GivenFailedNativeBootstrapAndClose_WhenReconciled_LiveTargetRoutingIsRetained', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const request = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.command' && message.params.method === 'Page.navigate') throw new Error('bootstrap failed');
+    if (message.method === 'target.close') throw new Error('close failed before effect');
+    return request(message);
+  };
+  await assert.rejects(createOwnedTarget({ stateDir, leaseId: lease.id,
+    rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } }));
+  const before = (await readRegistry(stateDir)).leases[lease.id];
+  const targetId = Object.keys(before.nativeRouting.targetTabs)[0];
+  const result = await closeOwnedTarget({ stateDir, leaseId: lease.id,
+    rawEndpoint: server.endpointForLease(lease.id), targetId });
+  assert.equal(result.closed, false);
+  const after = (await readRegistry(stateDir)).leases[lease.id];
+  assert.equal(after.targetIds.includes(targetId), true);
+  assert.deepEqual(after.nativeRouting.targetTabs[targetId], before.nativeRouting.targetTabs[targetId]);
+});
+
+test('GivenNativeCreationReadbackPending_WhenObserverStarts_MarkerIsNotPublished', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const creator = await client(t, server.endpointForLease(lease.id));
+  const marker = `${lease.id}:publication-barrier`;
+  const markerUrl = markerTargetUrl(marker);
+  const registry = await readRegistry(stateDir);
+  registry.leases[lease.id].pendingTargetCreates = [{ marker, markerUrl, requestedUrl: 'about:blank', startedAt: new Date().toISOString() }];
+  await writeRegistry(stateDir, registry);
+  let entered, release, reads = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const request = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.readback' && ++reads === 1) { entered(); await held; }
+    return request(message);
+  };
+  const creating = creator.send('Target.createTarget', { url: markerUrl, background: true });
+  await started;
+  const observer = await client(t, server.endpointForLease(lease.id));
+  const events = [];
+  observer.on('event', event => events.push(event));
+  await observer.send('Target.setDiscoverTargets', { discover: true });
+  await observer.send('Target.setAutoAttach', { autoAttach: true, flatten: true });
+  const early = events.slice();
+  release();
+  await creating;
+  assert.equal(early.some(event => ['Target.targetCreated', 'Target.attachedToTarget'].includes(event.method)), false);
+});
 
 for (const lifecycle of ['target.closed', 'target.detached', 'target.routingLost']) {
   test(`GivenNative${lifecycle}_WhenTaskWasAttached_ClientLifecycleIsNotLost`, async t => {
@@ -189,9 +311,17 @@ test('GivenNativeEventAdmissionPending_WhenLaterContextEventArrives_SourceOrderI
   await new Promise(resolve => setTimeout(resolve, 30));
   const early = events.slice();
   release();
-  for (let attempt = 0; attempt < 100 && !events.includes('Runtime.executionContextsCleared'); attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
+  await new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error('Ordered context event did not arrive')), 500);
+    const received = event => {
+      if (event.method !== 'Runtime.executionContextsCleared') return;
+      clearTimeout(deadline);
+      connected.off('event', received);
+      resolve();
+    };
+    if (events.includes('Runtime.executionContextsCleared')) { clearTimeout(deadline); resolve(); }
+    else connected.on('event', received);
+  });
   assert.equal(early.includes('Runtime.executionContextsCleared'), false);
   assert.ok(events.indexOf('Target.targetCreated') < events.indexOf('Runtime.executionContextsCleared'));
 });
@@ -575,15 +705,27 @@ test('GivenNativePopupWithOwnedOpener_WhenAdmitted_RoutingAndAutoAttachAreRecord
   const tabId = ++transport.next;
   const record = (await readRegistry(stateDir)).leases[lease.id];
   const openerTabId = record.nativeRouting.targetTabs[created.targetId].tabId;
+  const popupWindowId = ++transport.next;
   transport.leases.get(lease.id).tabs.set(tabId, {
-    tabId, windowId: record.nativeRouting.windowId, targetId: `chrome-${tabId}`, openerTabId,
+    tabId, windowId: popupWindowId, targetId: `chrome-${tabId}`, openerTabId,
     url: 'https://popup.test/', title: 'popup',
   });
-  transport.emit('event', { event: 'target.popup', leaseId: lease.id, tabId, windowId: record.nativeRouting.windowId, openerTabId });
-  await new Promise(resolve => setTimeout(resolve, 150));
+  const attached = new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error('Owned popup auto-attach did not arrive')), 500);
+    const received = event => {
+      if (event.method !== 'Target.attachedToTarget' || event.params.targetInfo.tabId !== tabId) return;
+      clearTimeout(deadline);
+      connected.off('event', received);
+      resolve();
+    };
+    connected.on('event', received);
+  });
+  transport.emit('event', { event: 'target.popup', leaseId: lease.id, tabId, windowId: popupWindowId, openerTabId });
+  await attached;
   const current = (await readRegistry(stateDir)).leases[lease.id];
   const popup = Object.entries(current.nativeRouting.targetTabs).find(([, route]) => route.tabId === tabId);
   assert.ok(popup, 'exact-opener popup must enter the same authoritative lease');
+  assert.equal(popup[1].windowId, popupWindowId);
   assert.equal(events.some(event => event.method === 'Target.attachedToTarget' && event.params.targetInfo.targetId === popup[0]), true);
 });
 

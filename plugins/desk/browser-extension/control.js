@@ -13,6 +13,15 @@ function renderControl() {
     const label = JSON.parse(decodeURIComponent(location.hash.slice(1)))
     document.title = controlTitle(label)
     document.getElementById("owner").textContent = document.title
+    const targets = label.targets ?? []
+    if (!Array.isArray(targets) || targets.length > 50 ||
+        targets.some(target => !Number.isSafeInteger(target.tabId) || target.tabId < 0 ||
+          !Number.isSafeInteger(target.windowId) || target.windowId < 0 ||
+          typeof target.title !== "string" || target.title.length > 240)) {
+      throw new Error("NATIVE_CONTROL_TARGETS_INVALID")
+    }
+    document.getElementById("targets").textContent = targets.map(target =>
+      `Window ${target.windowId} | Tab ${target.tabId} | ${target.title || "Untitled"}`).join("\n")
   } catch {
     document.title = "Desk | invalid ownership label"
     document.getElementById("owner").textContent = document.title
