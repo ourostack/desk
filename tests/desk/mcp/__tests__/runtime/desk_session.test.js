@@ -1141,6 +1141,28 @@ test("a background attempt that starts after a call's gate is joined, not report
   assert.deepEqual(runtime.calls.map((call) => call.name), ["task_create"])
 })
 
+test("a call joins at most three late background attempts before it refuses as admitting", async (t) => {
+  const runtime = fakeRuntime()
+  const { session } = await makeSession(t, { runtime })
+  await session.admission.refresh()
+  const refresh = session.admission.refresh
+  let gates = 0
+  const backgrounds = []
+  // Every gate is followed by another background attempt, as from a .git/HEAD that keeps changing.
+  session.admission.refresh = async (options) => {
+    const snapshot = await refresh(options)
+    gates += 1
+    queueMicrotask(() => queueMicrotask(() => { backgrounds.push(refresh({ force: true, waitMs: 0 })) }))
+    return snapshot
+  }
+  const refused = await session.callTool({ name: "task_create" })
+  await Promise.all(backgrounds)
+  assert.equal(refused.isError, true)
+  assert.equal(payload(refused).code, "admitting")
+  assert.equal(gates, 4, "the first gate and three rejoins")
+  assert.deepEqual(runtime.calls, [])
+})
+
 test("a tool that throws answers a structured degraded result", async (t) => {
   const runtime = fakeRuntime()
   const { session, log } = await makeSession(t, { runtime })

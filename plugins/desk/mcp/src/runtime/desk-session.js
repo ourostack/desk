@@ -721,13 +721,12 @@ export function createDeskSession(deps) {
           fresh: true,
           revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
         })
-        // Only an attempt that started after this call's wait ended is joined; a wait that ran out refuses as before.
+        // Only an attempt that started after this call's wait ended is joined; a wait that ran out (including one
+        // left with no budget) refuses as before.
         const settled = !admission.running
         const result = await operation((release) => {
-          if (disposed) return pendingRefusal(name)
-          if (admission.running) {
-            return settled && gate < GATE_REJOINS && Date.now() < deadline ? GATE_RETRY : pendingRefusal(name)
-          }
+          if (!disposed && admission.running && settled && gate < GATE_REJOINS) return GATE_RETRY
+          if (disposed || admission.running) return pendingRefusal(name)
           return dispatch(name, input, signal, release)
         })
         if (result !== GATE_RETRY) return result
