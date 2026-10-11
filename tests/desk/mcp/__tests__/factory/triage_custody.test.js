@@ -9,6 +9,7 @@ import {spawn} from "node:child_process"
 import childProcess from "node:child_process"
 import {EventEmitter} from "node:events"
 import {PassThrough} from "node:stream"
+import {createHmac,createHash} from "node:crypto"
 import {Client} from "@modelcontextprotocol/sdk/client/index.js"
 import {ReadBuffer,serializeMessage,deserializeMessage} from "@modelcontextprotocol/sdk/shared/stdio.js"
 const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js").catch(()=>({}))
@@ -237,9 +238,57 @@ test("nonaccepted_lifecycle_matrix_reuses_controller_without_real_maps_or_fds",a
     serverPid:500001,catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,key:snapshot.receipt_key})
   const frames=[frame("bootstrap",1,{snapshot_sha256:prepared.snapshotSha256,uid:123,euid:123,env_version:2,cwd:launch.cwd,
     launcher_pid:500002,module_closure:[]}),frame("submit",2,{candidate:fixture.candidate}),frame("terminal",3,{reason:"stdin_eof",final_sequence:3})]
+  const observation=frame("observation",1,custody.makeCatalogObservation({kind:"input_frame",direction:"input",pid:500001,bytes:Buffer.from("{}\n")}))
+  const exitObservation=frame("observation",1,custody.makeCatalogObservation({kind:"launcher_exit",pid:500002,code:0}))
+  for(const [name,selected]of [
+    ["before_boot",[observation,...frames]],
+    ["good",[frames[0],observation,...frames.slice(1),exitObservation]],
+    ["bad_pid",[frames[0],{...observation,server_pid:500003},...frames.slice(1)]],
+    ["bad_sequence",[frames[0],{...observation,sequence:2},...frames.slice(1)]],
+    ["bad_payload_pid",[frames[0],{...observation,payload:{...observation.payload,pid:500003}},...frames.slice(1)]],
+    ["unknown_payload",[frames[0],{...observation,payload:{...observation.payload,extra:true}},...frames.slice(1)]],
+    ["wrong_launcher",[frames[0],{...exitObservation,payload:{...exitObservation.payload,pid:500003}},...frames.slice(1)]],
+    ["wrong_exit_sequence",[frames[0],{...exitObservation,sequence:2},...frames.slice(1)]],
+    ["two_exits",[frames[0],exitObservation,exitObservation,...frames.slice(1)]],
+    ["server_after_exit",[frames[0],exitObservation,observation,...frames.slice(1)]],
+    ["observation_limit",[frames[0],...Array.from({length:17},(_,i)=>({...observation,sequence:i+1})),...frames.slice(1)]],
+  ]){
+    const signed=selected.map(value=>{
+      const {mac,...body}=value
+      return {...body,mac:createHmac("sha256",Buffer.from(snapshot.receipt_key,"hex")).update(catalog.catalogCanonical(body)).digest("hex")}
+    })
+    const result=await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames:signed,mode:"normal"})
+    assert.equal(result.authority,false)
+    assert.equal(result.outcome.state,name==="good"?"closed":"failed",name)
+    assert.equal(result.statistics.actualLaunches,0)
+  }
+  await t.test("replacement_bootstrap_still_rejected",async()=>{
+    // A reconnect cannot repair a failed session: a second server in the same
+    // generation is never accepted as bootstrap, receipt or observation source.
+    const replacement=(event,sequence,payload)=>custody.makeReceipt({event,sequence,payload,generation:snapshot.generation,
+      serverPid:500009,catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,key:snapshot.receipt_key})
+    const secondBoot=replacement("bootstrap",1,{...frames[0].payload,launcher_pid:500010})
+    const secondObservation=replacement("observation",1,custody.makeCatalogObservation({kind:"input_frame",direction:"input",pid:500009,bytes:Buffer.from("{}\n")}))
+    for(const [name,selected]of [
+      ["second_bootstrap_same_sequence",[frames[0],secondBoot,...frames.slice(1)]],
+      ["second_bootstrap_next_sequence",[frames[0],{...secondBoot,sequence:2},...frames.slice(1)]],
+      ["replacement_after_submit",[frames[0],frames[1],{...secondBoot,sequence:3},frames[2]]],
+      ["replacement_observation",[frames[0],secondObservation,...frames.slice(1)]],
+      ["replacement_submit",[frames[0],replacement("submit",2,{candidate:fixture.candidate}),frames[2]]],
+    ]){
+      const signed=selected.map(value=>{
+        const {mac,...body}=value
+        return {...body,mac:createHmac("sha256",Buffer.from(snapshot.receipt_key,"hex")).update(catalog.catalogCanonical(body)).digest("hex")}
+      })
+      const result=await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames:signed,mode:"normal"})
+      assert.equal(result.authority,false,name)
+      assert.equal(result.outcome.state,"failed",name)
+      assert.equal(result.outcome.custody,undefined,name)
+    }
+  })
   await assert.rejects(custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames,mode:"unknown"}),{message:"unit_mode"})
   for(const mode of ["normal","abort","abortKilled","abortAbsent","deadline","source","snapshot","modules","lateModules","observe",
-    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal"]){
+    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired"]){
     await t.test(mode,async()=>{
       const result=await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames,mode})
       assert.equal(result.authority,false)
@@ -346,7 +395,7 @@ test("failure_absent_vs_unobserved_and_immutable_attempt",async()=>{
 })
 test("capture_serialization_and_snapshot_exceptions_return_bounded_failed_observations",async()=>{
   for(const mode of ["argvSerializationThrows","snapshotThrows","snapshotCircular","snapshotOverflow","snapshotTextLimit",
-    "snapshotReceiptShape","snapshotReceiptCount","snapshotResourcesLimit","snapshotControlFramesLimit","snapshotPumpLimit"]){
+    "snapshotReceiptShape","snapshotReceiptCount","snapshotResourcesLimit","snapshotControlFramesLimit","snapshotObservationShape","snapshotObservationLimit","snapshotPumpLimit"]){
     const r=await custody.runNonacceptedNativeTransaction({mode})
     assert.equal(r.authority,false)
     assert.notEqual(r.outcome.state,"ran",mode)
@@ -421,7 +470,8 @@ test("sdk_client_binding_and_run_preparation_failures_are_observed",async(t)=>{
     const client=new custody.CatalogClient({name:"isolated_unit",version:"1"},{capabilities:{}})
     await client.request({method:"initialize",params:{protocolVersion:"wrong"}},{},{})
     await client.request({method:"ping"},{},{})
-    assert.equal(received[0].params.protocolVersion,"2025-06-18")
+    assert.equal(received[0].params.protocolVersion,"wrong")
+    assert.equal(custody.CatalogClient,Client)
     assert.equal(received[1].method,"ping")
   }finally{Client.prototype.request=request}
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -445,6 +495,58 @@ test("sdk_client_binding_and_run_preparation_failures_are_observed",async(t)=>{
     assert.equal(held.reason,"runtime_provenance_unsupported");await held.cleanup()
     await assert.rejects(custody.prepareOwnedCatalogRun({inputDir,runDir:path.join(dir,"run"),deadline:Date.now()+5000}),{message:"runtime_provenance_unsupported"})
   }finally{moduleBuiltin.registerHooks=hooks;syncBuiltinESMExports()}
+})
+test("protected_first_wire_trace_bounded",async()=>{
+  const child=new EventEmitter()
+  Object.assign(child,{pid:123,stdout:new PassThrough(),stdin:new PassThrough()})
+  const trace={version:2,generation:"a".repeat(64),events:[],bytes:16777216,truncated:false}
+  const transport=custody.boundClient(child,[],trace)
+  await transport.start()
+  await transport.send({jsonrpc:"2.0",id:0,method:"ping"})
+  assert.equal(trace.truncated,true)
+  assert.equal(trace.events.some(x=>x.base64!=="") ,false)
+  child.emit("close",0,null)
+  await transport.close();child.stdout.destroy();child.stdin.destroy()
+  const bounded={version:2,generation:"b".repeat(64),events:Array.from({length:1024},()=>({})),bytes:0,truncated:false}
+  const second=new EventEmitter();Object.assign(second,{stdout:new PassThrough(),stdin:new PassThrough()})
+  const service=custody.boundClient(second,[],bounded)
+  await service.start();second.stdout.write("{\n")
+  assert.equal(bounded.truncated,true)
+  assert.equal(bounded.events.length,1024)
+  await service.close();second.stdout.destroy();second.stdin.destroy()
+})
+test("private_observation_envelope_rejects_authority_and_lossy_fields",()=>{
+  const catalogHashFor=value=>createHash("sha256").update(value).digest("hex")
+  const value=custody.makeCatalogObservation({kind:"input_frame",direction:"input",bytes:Buffer.from('{"x":1}\n')})
+  assert.equal(custody.validateCatalogObservation(value),true)
+  for(const mutate of [
+    x=>x.kind="submit",x=>x.kind="bootstrap",x=>x.kind="terminal",x=>x.extra=true,x=>x.version=2,
+    x=>x.direction="auth",x=>x.pid=0,x=>x.pid=1.5,x=>x.at_ms=-1,x=>x.offset=-1,x=>x.bytes=16777217,
+    x=>x.sha256="bad",x=>x.retained_sha256="bad",x=>x.base64=1,x=>x.base64="a".repeat(10925),
+    x=>x.truncated="false",x=>x.base64="not-base64",x=>x.retained_sha256="a".repeat(64),
+    x=>x.bytes++,x=>x.observation="unobserved",x=>x.blocked=1,x=>x.signal="UNKNOWN",x=>x.code="secret",
+  ]){
+    const changed=structuredClone(value);mutate(changed)
+    assert.throws(()=>custody.validateCatalogObservation(changed))
+  }
+  const truncated=custody.makeCatalogObservation({kind:"input_frame",direction:"input",bytes:Buffer.alloc(9000,65)})
+  assert.equal(truncated.truncated,true)
+  assert.equal(Buffer.from(truncated.base64,"base64").length,8192)
+  const exit=custody.makeCatalogObservation({kind:"launcher_exit",code:0})
+  assert.equal(exit.signal,null)
+  for(const change of [{direction:"input"},{bytes:1},{blocked:true},{code:-1},{code:1.5},{code:256}]){
+    assert.throws(()=>custody.validateCatalogObservation({...exit,...change}))
+  }
+  assert.equal(custody.validateCatalogObservation(custody.makeCatalogObservation({kind:"launcher_exit",code:null,signal:"SIGTERM"})),true)
+  for(const change of [
+    {direction:"none"},{base64:Buffer.from("{}").toString("base64"),bytes:2,sha256:catalogHashFor("{}"),retained_sha256:catalogHashFor("{}")},
+    {kind:"write_complete",direction:"output"},{kind:"backpressure",direction:"output",blocked:null},
+    {kind:"server_closing",direction:"none",code:"unknown"},
+  ])assert.throws(()=>custody.validateCatalogObservation({...value,...change}))
+})
+test("output_volume_fixture_respects_current_id_envelope",()=>{
+  const output=custody.catalogFatalCases(fixture).find(x=>x.name==="output")
+  assert.ok(output.frames.every(x=>!Object.hasOwn(x,"id")||typeof x.id!=="string"||Buffer.byteLength(x.id)<=64))
 })
 test("prepared_reader_is_closed_if_uid_drifts_before_launch_construction",async(t)=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -796,6 +898,33 @@ test("restored_source_module_and_process_identity_drift_refuses",async(t)=>{
   assert.equal(run.state,"proved")
   const record=custody.retainDirectReceipt(run)
   assert.equal(await custody.restoreDirectReceipt(structuredClone(record)),true)
+  const snapshot=JSON.parse(fs.readFileSync(run.snapshotArchive))
+  for(const mutate of [
+    x=>x.custody.observations=[],
+    x=>x.custody.observations=Array(18).fill(x.custody.observations[0]),
+    x=>x.custody.observations[0].payload.extra=true,
+    x=>x.custody.observations[0].server_pid++,
+    x=>x.custody.observations[0].generation="b".repeat(64),
+    x=>x.custody.observations[0].event="submit",
+    x=>x.custody.observations[0].version=2,
+    x=>x.custody.observations[0].sequence=2,
+    x=>x.custody.observations[0].payload.pid++,
+    x=>x.custody.observations.find(v=>v.payload.kind==="launcher_exit").payload.code=1,
+    x=>x.custody.observations.find(v=>v.payload.kind==="launcher_exit").sequence=2,
+    x=>x.custody.observations.find(v=>v.payload.kind==="launcher_exit").payload.pid++,
+    x=>x.custody.observations.push(x.custody.observations.find(v=>v.payload.kind==="launcher_exit")),
+    x=>x.custody.observations.push(x.custody.observations[0]),
+    x=>x.custody.observations=x.custody.observations.filter(v=>v.payload.kind!=="input_frame"),
+  ]){
+    const changed=structuredClone(record);mutate(changed)
+    for(const frame of changed.custody.observations){
+      const {mac,...body}=frame
+      const signed=custody.makeReceipt({event:body.event,generation:body.generation,sequence:body.sequence,
+        serverPid:body.server_pid,catalogSha256:body.catalog_sha256,briefSha256:body.brief_sha256,payload:body.payload,key:snapshot.receipt_key})
+      frame.mac=signed.mac
+    }
+    await assert.rejects(custody.restoreDirectReceipt(changed))
+  }
   for(const mutate of [
     x=>x.custody.observation.ok=false,
     x=>x.custody.observation.identity.server.pid++,
@@ -946,9 +1075,10 @@ test("large_submit_receipt_backpressure",async(t)=>{
   const closed=new Promise(resolve=>child.on("close",(code,signal)=>resolve({code,signal})))
   let pump,control,serverPid,failure,connected
   const boot=new Promise(resolve=>{connected=resolve})
-  const receipts=[],startPump=()=>custody.fifoPump({fd:owned.reader.handle.fd,deadline,maxFrame:393216,maxBytes:2097152,maxFrames:4,
+  const receipts=[],observations=[],startPump=()=>custody.fifoPump({fd:owned.reader.handle.fd,deadline,maxFrame:393216,maxBytes:2097152,maxFrames:24,
     onFailure:error=>{failure=error},
     async onFrame(value){
+      if(value.event==="observation"){custody.validateCatalogObservation(value.payload);observations.push(value);return}
       receipts.push(value)
       if(value.event==="bootstrap"){
         serverPid=value.server_pid
@@ -1105,7 +1235,7 @@ test("two_actual_direct_bundles_are_not_native_qualification",async(t)=>{
   assert.equal(result.resources.launches,0)
   for(let i=1;i<=2;i++){
     for(const [name,detail]of [["malformed-json","catalog_session_failed"],["frame-count","wire_frame_count"],
-      ["aggregate","wire_input_limit"],["output","wire_output_limit"],["second-initialize","protocol_state"]]){
+      ["aggregate","wire_input_limit"],["output","wire_noncanonical"],["second-initialize","protocol_state"]]){
       const file=path.join(dir,"evidence",`direct-${i}-${name}.json`)
       assert.equal(fs.existsSync(file),true,`missing actual bundle case ${i}:${name}`)
       const sub=JSON.parse(fs.readFileSync(file))
@@ -1169,6 +1299,9 @@ test("two_actual_direct_bundles_are_not_native_qualification",async(t)=>{
       return custody.makeReceipt({event:r.event,generation:r.generation,sequence:r.sequence,serverPid:r.server_pid,
         catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,payload,key:snapshot.receipt_key})
     })
+    changed.custody.observations=changed.custody.observations.map(r=>custody.makeReceipt({
+      event:r.event,generation:r.generation,sequence:r.sequence,serverPid:r.server_pid,
+      catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,payload:r.payload,key:snapshot.receipt_key}))
     return {changed,bytes:prepared.snapshotBytes}
   }
   for(const change of [x=>x.record_inputs[1].text+=" altered",x=>{
@@ -1184,8 +1317,12 @@ test("two_actual_direct_bundles_are_not_native_qualification",async(t)=>{
     try{await assert.rejects(custody.restoreDirectReceipt(structuredClone(record)),{message:"proof_noncanonical"})}
     finally{fs.writeFileSync(proofFile,bytes)}
     const changes=[x=>x.state="failed",x=>x.descriptorSha256="f".repeat(64),x=>x.normalTerminal=true,x=>x.reason="changed",x=>x.resources.stderr="changed"]
-    if(name==="output")changes.push(x=>x.resources.stdout.path=path.join(root,"wrong"),x=>x.resources.stdout.bytes++,
-      x=>x.resources.stdout.bytes=16777217,x=>x.resources.stdout.sha256="f".repeat(64))
+    if(name==="output")changes.push(x=>x.resources.stdout="changed",
+      x=>x.resources.stdout={path:path.join(root,"wrong"),bytes:1,sha256:"f".repeat(64)},
+      x=>x.resources.stdout={path:path.join(root,"wrong"),bytes:16777217,sha256:"f".repeat(64)})
+    if(name==="output"&&typeof proof.resources.stdout==="object")changes.push(
+      x=>x.resources.stdout.bytes++,x=>x.resources.stdout.bytes=16777217,
+      x=>x.resources.stdout.sha256="f".repeat(64))
     for(const mutate of changes){
       const altered=structuredClone(proof);mutate(altered);fs.writeFileSync(proofFile,catalog.catalogCanonical(altered)+"\n")
       try{await assert.rejects(custody.restoreDirectReceipt(structuredClone(record)))}

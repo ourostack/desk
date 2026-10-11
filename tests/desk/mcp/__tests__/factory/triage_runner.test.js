@@ -992,7 +992,9 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   const collected=await runner.runNonacceptedControlCollection(controlInput()),controls=collected.outcome.evidence
   const control_history=nativeReceipts.map(run=>({...structuredClone(controls),recipe_sha256:hash(catalog.catalogCanonical({version:3,argv:run.invocation.args}))}))
   const registered=[...Object.keys(fixedOff()),"cc-plugin-tips@builtin","cc-plugin-sec-default@builtin"]
-  const synthetic={version:5,enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity,
+  const {catalogProtocolIdentity}=await import("../../../../../plugins/desk/mcp/src/factory/triage-protocol.js")
+  const synthetic={version:6,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
+    enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity,
     recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",
     optional_off_sha256:hash(catalog.catalogCanonical(fixedOff())),registered_set_sha256:hash(catalog.catalogCanonical(registered)),
     effective_off_sha256:hash(catalog.catalogCanonical(control_history.map(e=>({recipe:e.recipe_sha256,sources:e.effective_sources_sha256,
@@ -1004,7 +1006,8 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   assert.deepEqual(runner.validateOwnedQualificationStructure({record:synthetic,out,sourceIdentity,env}),{state:"structure_validated",authority:false})
   const previous=structuredClone(synthetic);previous.version=4
   assert.throws(()=>runner.validateOwnedQualificationStructure({record:previous,out,sourceIdentity,env}),{message:"qualification_structure"})
-  for(const mutate of [r=>r.predicate_table="E296/2",r=>r.builtin_basis_sha256="a".repeat(64),
+  for(const mutate of [r=>r.version=5,r=>r.protocol_envelope_version=1,r=>r.protocol_identity.negotiated="2025-11-25",
+    r=>r.protocol_identity.schema_sha256="a".repeat(64),r=>r.predicate_table="E296/2",r=>r.builtin_basis_sha256="a".repeat(64),
     r=>r.optional_off_sha256="a".repeat(64),r=>r.registered_set_sha256="a".repeat(64),r=>r.effective_off_sha256="a".repeat(64),
     r=>delete r.control_evidence[0].builtin_basis]){
     const changed=structuredClone(synthetic);mutate(changed)
@@ -1017,6 +1020,8 @@ test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
   const document=runner.prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission:{sources:[],remote_delivery:"not_applicable",controls:control_history[1],control_history},
     chain:{effective_argv:[f.cli],fingerprint:"b".repeat(64)},cliMetadata:metadata,cli:path.join(f.dir,"indirect-selector"),env})
   assert.equal(document.state,"unaccepted_document");assert.equal(document.authority,false)
+  assert.equal(document.record.version,6,"published protocol amendment invalidates record5")
+  assert.equal(document.record.protocol_envelope_version,2,"record binds the finite reviewed protocol envelope")
   assert.equal(document.record.cli,f.cli,"record binds actual execution target, not original selector")
   const lateArgs=structuredClone(nativeReceipts),secondArgs=lateArgs[1].invocation.args
   secondArgs[Symbol.iterator]=function*(){for(let i=0;i<this.length;i++)yield i===0?"unit-late-argv-drift":this[i]}

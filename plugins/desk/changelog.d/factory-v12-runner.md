@@ -61,3 +61,17 @@ uncertainty, not cancellation or branch authority.
 Enclose the initial and post-repair Git inspections in certain before/after
 HEAD observations. Reconcile native hints through the same bounded sample
 owner instead of treating delayed notifications as observed HEAD drift.
+
+Accept semantically unambiguous JSON member order and grammatical whitespace
+through bounded decoded-key/Unicode/original-object validation before SDK
+stripping. Recognize only the finite inert native client declaration envelope,
+negotiate the two approved offers to 2025-06-18, and keep four tools with no
+counterpart calls. Replace direct forced-version/order adapters with the ordinary
+installed SDK Client. Record v6 with protocol envelope 2 invalidates previous
+qualification.
+Retain bounded authenticated first-wire/refusal/exit observations on the private
+receipt channel without replacing submission receipts or trusting reconnect
+bootstrap. The launcher writes exit evidence only after its server closes.
+The live receipt reader now also rejects any later receipt from a server PID
+other than the bootstrapped one, matching the existing reload check.
+Direct compatibility and local gates remain distinct from native qualification.

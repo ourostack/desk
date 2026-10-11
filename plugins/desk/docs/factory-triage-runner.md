@@ -120,11 +120,23 @@ See [the shared environment and launch recipe](../mcp/src/factory/triage-custody
 [launcher](../mcp/scripts/launch-triage-catalog.js) and
 [server](../mcp/scripts/triage-catalog-server.js).
 
-The installed SDK remains the parser/server/transport. A bounded adapter checks
-UTF-8, canonical SDK roundtrip, frame/aggregate/count limits and one active plus
-one pending frame before dispatch. Protocol version is pinned to `2025-06-18`;
-capability widening and unknown notifications fail. Actual installed-native
-negotiation compatibility is not inferred from direct SDK tests.
+The installed SDK remains the parser/server/transport. Wire envelope 2 accepts
+JSON member order and grammatical whitespace outside strings. A bounded lexical
+walk checks decoded duplicate keys at every depth, prototype keys, Unicode,
+numbers and raw limits before JSON.parse; the original closed request is checked
+before SDK field stripping. IDs stay control-free, nonempty strings of at most
+64 bytes or nonnegative safe integers. Depth 32, 1024 keys and the existing raw
+frame/aggregate/count and one-active/one-pending limits remain enforced.
+
+Client offers `2025-06-18` or `2025-11-25` negotiate only `2025-06-18`.
+Bounded name/version and optional title/description/websiteUrl are inert data.
+Only closed roots/listChanged, empty elicitation form/url, and the exact optional
+`io.modelcontextprotocol/ui` MIME declaration are recognized; sampling, tasks,
+experimental and unknown extensions reject. None enables counterpart calls.
+The custom server response remains tools-only with four exact tools.
+Unknown notifications and unsolicited responses refuse; well-formed unknown
+requests get side-effect-free method-not-found. Actual installed-native
+qualification is not inferred from direct SDK compatibility.
 See [wire and protocol enforcement](../mcp/src/factory/triage-protocol.js).
 
 The repository's Node≥20 floor is unchanged. This owned-catalog mechanism
@@ -154,6 +166,8 @@ issuer, store or measurement detector. The qualifier's import is inert, and its
 direct entry still calls the fixed production route. See
 [qualifier guards and nonaccepted transactions](../mcp/scripts/qualify-triage-runner.js).
 
+The direct path uses the installed unmodified SDK Client, ordinary latest offer
+and native-shaped metadata, without forced-version or wire-order normalization.
 The parent opens/drains the receipt reader before spawn, independently observes
 live launcher/server lineage, command, clean environment and loaded source
 closure, then sends fixed ready control. A successful submit response waits for
@@ -163,6 +177,22 @@ and parent verify normal process/stdio closure. One absolute deadline includes
 the teardown reserve. Initial FIFO zero reads are not terminal proof. These are
 first-party runtime controls, not a universal OS sandbox or privileged-admin
 tamper-proof claim. See [custody and lifecycle](../mcp/src/factory/triage-custody.js).
+
+Fixed authenticated `observation` frames on the same private receipt FIFO retain
+first input/output bytes before parsing, refusal codes, write/backpressure and
+closure metadata. They have separate diagnostic ordinals and cannot advance or
+replace bootstrap/submit/terminal. Up to 16 server observations and one launcher
+exit observation share the existing 2 MiB/393216-byte receipt bounds; the pump
+has a fixed 24-frame ceiling. Each raw prefix is bounded to 8192 bytes, with original
+length/hash and explicit truncation. The launcher retains an idle writer solely
+for its actual child-close observation, writes only after the server is closed,
+then closes it. A second bootstrap or replacement server remains invalid, and
+every later receipt must carry the bootstrapped server PID.
+Null pre-exit metadata is unobserved, not proof of successful exit; observations
+are protected evidence, never an MCP tool/resource or model result.
+See [observer validation](../mcp/src/factory/triage-custody.js),
+[server](../mcp/scripts/triage-catalog-server.js) and
+[launcher](../mcp/scripts/launch-triage-catalog.js).
 
 ## Qualification and protected unaccepted output
 
@@ -175,7 +205,8 @@ node plugins/desk/mcp/scripts/qualify-triage-runner.js --cli /absolute/existing/
 ```
 
 Evidence remains owner-only outside Git. The version-3 `owned_catalog_mcp`
-record v5 binds recipe version 3, table E296/3, controls /3, both control
+record v6 binds protocol envelope 2 and its schema/negotiation identity, recipe
+version 3, table E296/3, controls /3, both control
 collections and their closed builtin-basis hashes, exact optional false-map
 and eleven-ID registry hashes, and current effective source-fold identities.
 It rejects old safe-mode/native-path/probing records and unissued caller objects.

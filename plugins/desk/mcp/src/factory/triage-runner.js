@@ -13,6 +13,7 @@ import {assertOutsideGitWorkspace} from "./os-protect.js"
 import {ownedServerLaunch,prepareOwnedCatalogRun,runOwnedCatalogNative,ownedSourceIdentity,authenticatedNativeRuns,
   authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction} from "./triage-custody.js"
 import {catalogCanonical,closedObject,safeCatalogPath,catalogToolSchemas} from "./triage-catalog.js"
+import {catalogProtocolIdentity} from "./triage-protocol.js"
 
 const digest=value=>createHash("sha256").update(value).digest("hex")
 const fingerprint=value=>digest(catalogCanonical(value))
@@ -842,7 +843,8 @@ export function prepareOwnedQualificationDocument({directReceipts,nativeReceipts
   if(catalogCanonical(identity)!==catalogCanonical(nativeReceipts[1].custody.sourceIdentity))throw Error("source_identity")
   const invocationIdentities=nativeReceipts.map(run=>ownedInvocationIdentity({invocation:run.invocation,chain,cliMetadata,env}))
   if(invocationIdentities[0].template_sha256!==invocationIdentities[1].template_sha256)throw Error("invocation_template")
-  const record={version:5,enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity:identity,
+  const record={version:6,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
+    enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity:identity,
     recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",
     optional_off_sha256:fingerprint(FIXED_OPTIONAL_OFF),registered_set_sha256:fingerprint(REGISTERED_BUILTINS),
     effective_off_sha256:effectiveOffHash(admission.control_history),
@@ -855,10 +857,12 @@ export function prepareOwnedQualificationDocument({directReceipts,nativeReceipts
   return {state:"unaccepted_document",authority:false,record}
 }
 export function validateOwnedQualificationStructure({record,out,sourceIdentity,env}){
-  if(record?.version!==5)throw Error("qualification_structure")
-  closedObject(record,["version","enforcement_scheme","state","env_recipe_version","sourceIdentity","policy_sources_fingerprint","chain_fingerprint","directReceipts","nativeReceipts","cliMetadata","cli","format_fingerprint","resources","invocationIdentities","recipe_version","controls_schema","control_evidence","predicate_table_sha256","predicate_table","builtin_basis_sha256","optional_off_sha256","registered_set_sha256","effective_off_sha256"])
+  if(record?.version!==6)throw Error("qualification_structure")
+  closedObject(record,["version","protocol_envelope_version","protocol_identity","enforcement_scheme","state","env_recipe_version","sourceIdentity","policy_sources_fingerprint","chain_fingerprint","directReceipts","nativeReceipts","cliMetadata","cli","format_fingerprint","resources","invocationIdentities","recipe_version","controls_schema","control_evidence","predicate_table_sha256","predicate_table","builtin_basis_sha256","optional_off_sha256","registered_set_sha256","effective_off_sha256"])
   closedObject(record.resources,["native_launches","direct_bundles"])
-  if(record.version!==5||record.recipe_version!==3||record.controls_schema!=="desk.factory.triage-controls/3"||
+  if(record.version!==6||record.protocol_envelope_version!==2||
+    catalogCanonical(record.protocol_identity)!==catalogCanonical(catalogProtocolIdentity())||
+    record.recipe_version!==3||record.controls_schema!=="desk.factory.triage-controls/3"||
     record.predicate_table!=="E296/3"||record.predicate_table_sha256!==predicateTableHash()||
     record.optional_off_sha256!==fingerprint(FIXED_OPTIONAL_OFF)||record.registered_set_sha256!==fingerprint(REGISTERED_BUILTINS)||
     record.effective_off_sha256!==effectiveOffHash(record.control_evidence)||
@@ -937,7 +941,9 @@ export async function runTriageChild({
 async function runRegisteredTriage({env,inputDir,resultFile,workDir,qualification,deadline,onChild,onChildExit,spawn,clock},context){
   if(context===realTransaction&&qualificationMeasurementActive())return held("diagnostic_inadequate")
   const seal=context.records.get(qualification)
-  if(!seal||qualification.version!==5||qualification.state!=="qualified"||seal.seal!==fingerprint(qualification))return held("diagnostic_inadequate")
+  if(!seal||qualification.version!==6||qualification.protocol_envelope_version!==2||
+    catalogCanonical(qualification.protocol_identity)!==catalogCanonical(catalogProtocolIdentity())||
+    qualification.state!=="qualified"||seal.seal!==fingerprint(qualification))return held("diagnostic_inadequate")
   const cli=qualification.cli??context.findCLI({env})
   if(!cli)return outcome("no_agent_cli")
   let owned

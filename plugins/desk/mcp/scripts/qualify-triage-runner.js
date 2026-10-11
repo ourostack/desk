@@ -33,7 +33,7 @@ async function qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},c
   const resources={out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]},directReceipts=[],nativeReceipts=[]
   const stages=[],stage=name=>stages.push({name,observation:"present",at_ms:Date.now()})
   let outReady=false
-  let record={version:5,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
+  let record={version:6,protocol_envelope_version:2,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
   const save=async(name,value)=>{
     const file=path.join(evidenceDir,name)
     await context.write(file,catalogCanonical(value)+"\n");resources.files.push(file)
