@@ -27,6 +27,12 @@
 //   ... --clear-app-secrets   (test) writes `unset` over staging's four GitHub App secrets
 //   ... --migrate client-key  copies desk-signing-key into desk-client-key and sets DESK_CLIENT_KEY
 //   ... --rotate signing-key  (test) rotates the signing key with a 30-day overlap
+//   ... --rotate signing-key --emergency
+//       (prod or test) for a signing key that may have leaked: new random signing and client keys, no previous key;
+//       every client registers and signs in again
+//   ... --rotate entra-secret  adds a 12-month gateway client secret, writes it to Key Vault through stdin tagged
+//       key-id=<new> previous-key-id=<old>, restarts the app, and deletes the old credential only once the gateway's
+//       startup line logs the new secret's fingerprint; a rerun finishes a rotation the gateway hadn't confirmed yet
 //
 // Secrets move only inside this process: read with `--query value -o tsv`,
 // trimmed of az's one trailing newline, and written through a child's stdin or
@@ -65,6 +71,7 @@ import {
   APPLE_RENEWED_TAG,
   FINGERPRINT_TAG,
   KEY_ID_TAG,
+  PREVIOUS_KEY_ID_TAG,
   appleActiveSecretName,
   appleKeyProblem,
   isRevoked,
@@ -79,6 +86,8 @@ import {
   CLIENT_KEY_MIGRATION,
   checkClientKeyLine,
   checkCopySource,
+  checkEmergencyLine,
+  emergencyChanges,
   checkReadBack,
   checkRotatedLine,
   newestKeysLine,
@@ -915,6 +924,117 @@ async function migrateClientKey(ctx) {
   }
 }
 
+// After a write or restart: polls the app's latest ready revision until its newest keys line passes `accepts`, and
+// returns that line, or the last line seen (null if none) when it never does. The revision is read again each time,
+// because an update may start a new revision after the poll begins.
+async function awaitKeysLine(ctx, app, accepts, tries = 20) {
+  let last = null;
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    const revision = await latestRevision(ctx, app);
+    last = revision ? await keysLine(ctx, app, revision) : null;
+    if (last && accepts(last)) return { line: last, confirmed: true };
+    await ctx.sleep(POLL_MS);
+  }
+  return { line: last, confirmed: false };
+}
+
+// For a signing key that may have leaked (Task 3 review M5): nothing sealed with the old keys stays valid.
+async function emergencyRotate(ctx) {
+  const app = ctx.settings.app;
+  const shown = await showApp(ctx, app);
+  const changes = emergencyChanges({ appEnv: gatewayEnv(shown), heldSecrets: shown.properties.configuration.secrets.map(({ name }) => name) });
+  ctx.log(`Emergency rotation on ${app}: new signing key ${fingerprint(changes.setSecrets["desk-signing-key"])}, new client key ${fingerprint(changes.setSecrets["desk-client-key"])}, no previous key. Every token and registered client stops working, so every client must register and sign in again.`);
+  if (!(await updateApp(ctx, app, shown, changes, "new desk-signing-key and desk-client-key, no previous key"))) return;
+  await restartLatest(ctx, app);
+  const expected = (line) => {
+    try {
+      checkEmergencyLine({ changes, after: line });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const { line } = await awaitKeysLine(ctx, app, expected);
+  checkEmergencyLine({ changes, after: line });
+  ctx.log(`${app} logs signing ${line.signing}, client ${line.client} from DESK_CLIENT_KEY and no previous key: the emergency rotation is confirmed.`);
+}
+
+// Rotates the gateway's Entra client secret without a sign-in outage and without ever writing an empty value (Task 8
+// review findings 1 and 2). The old credential is deleted only when the gateway's own startup line shows the new
+// secret's fingerprint; until then it stays, and a rerun picks the rotation up where it stopped.
+async function rotateEntraSecret(ctx) {
+  const { env, record } = ctx;
+  const app = ctx.settings.app;
+  const appId = record.gatewayApp?.appId;
+  if (!appId || !record.tenant?.id) throw new Error(`identity-${env}.json records no gateway app or tenant; run provision-identity.mjs --env ${env} first.`);
+  const signedIn = (await out(ctx, "az", ["account", "show", "--query", "tenantId", "-o", "tsv"])).trim();
+  if (signedIn !== record.tenant.id) {
+    throw new Error(`az's current account is in tenant ${signedIn || "(none)"}, not ${record.tenant.name} (${record.tenant.id}). Run: az login --tenant ${record.tenant.id} --allow-no-subscriptions, then az account set --subscription ${record.tenant.id}, and run this again.`);
+  }
+  const name = entraSecretName(env);
+  await ensureOperatorRole(ctx, "Key Vault Secrets Officer", await vaultId(ctx));
+  const tags = (await propagated(ctx, () => azJson(ctx, ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "tags", "-o", "json", ...SUB]), "Reading Key Vault")) ?? {};
+  const keyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", "[].keyId", "-o", "tsv"]));
+  const credentials = await keyIds();
+  const pending = tags[PREVIOUS_KEY_ID_TAG] && credentials.includes(tags[PREVIOUS_KEY_ID_TAG]) && tags[KEY_ID_TAG] && credentials.includes(tags[KEY_ID_TAG]);
+  let old;
+  let newFingerprint;
+  if (pending) {
+    old = tags[PREVIOUS_KEY_ID_TAG];
+    newFingerprint = fingerprint(secretFromAz(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "value", "-o", "tsv", ...SUB]), name));
+    ctx.log(`A rotation is under way: ${name} holds credential ${tags[KEY_ID_TAG]} (fingerprint ${newFingerprint}); the old credential ${old} is still on the app.`);
+  } else {
+    old = tags[KEY_ID_TAG] && credentials.includes(tags[KEY_ID_TAG]) ? tags[KEY_ID_TAG] : null;
+    if (!old && credentials.length === 1) {
+      [old] = credentials;
+      ctx.log(`${name} names no credential on the app; the app has one, ${old}, so that is the one the gateway holds.`);
+    }
+    if (!old) throw new Error(`Can't tell which of the gateway app's ${credentials.length} credentials ${name} holds: its key-id tag is missing or names none of them. Find the credential (az ad app credential list --id ${appId}) and tag the secret with key-id=<keyId>; nothing was changed.`);
+    if (ctx.dryRun) {
+      ctx.log(`    would run: az ad app credential reset --id ${appId} --append --display-name desk-gateway-${env} --years 1 --query password -o tsv`);
+      ctx.log(`    would run: az keyvault secret set --vault-name ${VAULT} --name ${name} --file /dev/stdin --tags ${KEY_ID_TAG}=<new> ${PREVIOUS_KEY_ID_TAG}=${old} (stdin: ***)`);
+      ctx.log(`    would restart ${app} and delete credential ${old} once the gateway logs the new fingerprint`);
+      return;
+    }
+    const before = new Set(credentials);
+    const removeAdded = async () => {
+      for (const keyId of (await keyIds()).filter((id) => !before.has(id))) {
+        await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", keyId]);
+        ctx.log(`    removed the unsaved credential ${keyId} from ${GATEWAY_APP_NAME}`);
+      }
+    };
+    let password;
+    let added;
+    try {
+      // secretFromAz refuses an empty or whitespace value, so a failed or odd reset never reaches Key Vault.
+      password = secretFromAz(await out(ctx, "az", ["ad", "app", "credential", "reset", "--id", appId, "--append", "--display-name", `desk-gateway-${env}`, "--years", "1", "--query", "password", "-o", "tsv"]), "The gateway's new client secret");
+      added = (await keyIds()).filter((id) => !before.has(id));
+      for (let attempt = 0; added.length !== 1 && attempt < GRAPH_LAG_TRIES; attempt += 1) {
+        await ctx.sleep(GRAPH_LAG_MS);
+        added = (await keyIds()).filter((id) => !before.has(id));
+      }
+      if (added.length !== 1) throw new Error(`Could not tell which credential the reset added (${added.length} new); nothing was written to Key Vault.`);
+      await propagated(ctx, () => out(ctx, "az", ["keyvault", "secret", "set", "--vault-name", VAULT, "--name", name, "--file", "/dev/stdin", "--encoding", "utf-8", "--tags", `${KEY_ID_TAG}=${added[0]}`, `${PREVIOUS_KEY_ID_TAG}=${old}`, "--query", "id", "-o", "tsv", ...SUB], { input: password }), "Writing to Key Vault");
+    } catch (error) {
+      await removeAdded();
+      throw error;
+    }
+    const stored = secretFromAz(await out(ctx, "az", ["keyvault", "secret", "show", "--vault-name", VAULT, "--name", name, "--query", "value", "-o", "tsv", ...SUB]), name);
+    newFingerprint = fingerprint(password);
+    if (fingerprint(stored) !== newFingerprint) throw new Error(`${name} reads back as ${fingerprint(stored)}, not the new secret's ${newFingerprint}; the old credential ${old} is kept.`);
+    ctx.log(`Wrote ${name} (credential ${added[0]}, fingerprint ${newFingerprint}); the old credential ${old} stays until the gateway shows the new secret.`);
+  }
+  await restartLatest(ctx, app);
+  const { line, confirmed } = await awaitKeysLine(ctx, app, (candidate) => candidate.entra === newFingerprint);
+  if (!confirmed) {
+    const seen = !line ? "logs no keys line" : line.entra ? `still logs entra ${line.entra}` : "logs no entra fingerprint (an image before this check)";
+    throw new Stop(`${app} ${seen}, not the new secret's ${newFingerprint}, so the old credential ${old} is kept and sign-in keeps working. Run --rotate entra-secret again later (the platform reads a new Key Vault version within about 30 minutes); it deletes ${old} once the gateway shows the new secret.`);
+  }
+  ctx.log(`${app} revision ${line.revision} logs entra ${newFingerprint}: the gateway holds the new secret.`);
+  await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", old]);
+  ctx.log(`Deleted the old credential ${old} from ${GATEWAY_APP_NAME}.`);
+}
+
 async function rotate(ctx) {
   const app = ctx.settings.app;
   if (ctx.env !== "test") refuseRotation({ env: ctx.env, appEnv: [], now: ctx.now() });
@@ -951,6 +1071,7 @@ export function parseFlags(argv) {
       "clear-app-secrets": { type: "boolean", default: false },
       migrate: { type: "string" },
       rotate: { type: "string" },
+      emergency: { type: "boolean", default: false },
       "browser-context": { type: "string" },
     },
   });
@@ -958,7 +1079,8 @@ export function parseFlags(argv) {
   const actions = ["apple-key-file", "seed-ari", "invite-ari", "copy-app-secrets", "clear-app-secrets", "migrate", "rotate"].filter((name) => values[name] !== undefined && values[name] !== false);
   if (actions.length > 1) throw new Error(`Run one action at a time; got ${actions.map((name) => `--${name}`).join(", ")}.`);
   if (values.migrate !== undefined && values.migrate !== "client-key") throw new Error("Only --migrate client-key exists.");
-  if (values.rotate !== undefined && values.rotate !== "signing-key") throw new Error("Only --rotate signing-key exists.");
+  if (values.rotate !== undefined && values.rotate !== "signing-key" && values.rotate !== "entra-secret") throw new Error("Only --rotate signing-key and --rotate entra-secret exist.");
+  if (values.emergency && values.rotate !== "signing-key") throw new Error("--emergency goes only with --rotate signing-key.");
   if (values["apple-key-file"] && !["a", "b"].includes(values["apple-key-slot"])) throw new Error("--apple-key-file needs --apple-key-slot a or b.");
   return {
     env: values.env,
@@ -975,6 +1097,7 @@ export function parseFlags(argv) {
       rotate: values.rotate,
       browserContext: values["browser-context"],
       appleKeyId: values["apple-key-id"],
+      emergency: values.emergency,
     },
   };
 }
@@ -1006,7 +1129,8 @@ export async function run({
   if (flags.copyAppSecrets) return copyAppSecrets(ctx);
   if (flags.clearAppSecrets) return clearAppSecrets(ctx);
   if (flags.migrate === "client-key") return migrateClientKey(ctx);
-  if (flags.rotate === "signing-key") return rotate(ctx);
+  if (flags.rotate === "signing-key") return flags.emergency ? emergencyRotate(ctx) : rotate(ctx);
+  if (flags.rotate === "entra-secret") return rotateEntraSecret(ctx);
   try {
     await reconcile(ctx);
   } catch (error) {

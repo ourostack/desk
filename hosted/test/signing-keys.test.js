@@ -12,6 +12,8 @@ import {
   rotationChanges,
   checkRotatedLine,
   CLIENT_KEY_MIGRATION,
+  emergencyChanges,
+  checkEmergencyLine,
 } from "../infra/signing-keys.mjs";
 
 const SIGNING = "a".repeat(64);
@@ -144,4 +146,39 @@ test("after a rotation, the gateway must name the old key as previous, a new sig
   assert.throws(() => checkRotatedLine({ before, after: after({ signing: OTHER }) }), /previous/);
   assert.throws(() => checkRotatedLine({ before, after: after({ signing: OTHER, previous: SIGNING, client: OTHER }) }), /client/);
   assert.throws(() => checkRotatedLine({ before, after: null }), /startup line/);
+});
+
+test("Task 8 review 2: the startup line's entra fingerprint is read when the gateway logs one, and absent otherwise", () => {
+  const withEntra = `${line()} entra ${fingerprint("the-entra-secret")}`;
+  assert.equal(newestKeysLine(withEntra, { revision: REV }).entra, fingerprint("the-entra-secret"));
+  assert.equal(newestKeysLine(line(), { revision: REV }).entra, undefined);
+});
+
+test("Task 8 review 3: an emergency rotation replaces the signing and client keys, keeps no previous key and needs no logged line", () => {
+  const appEnv = [
+    { name: "DESK_SIGNING_KEY", secretRef: "desk-signing-key" },
+    { name: "DESK_CLIENT_KEY", secretRef: "desk-client-key" },
+    { name: "DESK_SIGNING_KEY_PREVIOUS", secretRef: "desk-signing-key-previous" },
+    { name: "DESK_SIGNING_KEY_PREVIOUS_UNTIL", value: "2026-12-01T00:00:00Z" },
+  ];
+  let n = 0;
+  const changes = emergencyChanges({ appEnv, heldSecrets: ["desk-signing-key", "desk-client-key", "desk-signing-key-previous"], random: () => Buffer.alloc(32, ++n) });
+  assert.equal(changes.setSecrets["desk-signing-key"], Buffer.alloc(32, 1).toString("hex"));
+  assert.equal(changes.setSecrets["desk-client-key"], Buffer.alloc(32, 2).toString("hex"));
+  assert.notEqual(changes.setSecrets["desk-signing-key"], changes.setSecrets["desk-client-key"]);
+  // A previous key, possibly the leaked one, is overwritten and no longer read.
+  assert.equal(changes.setSecrets["desk-signing-key-previous"], Buffer.alloc(32, 3).toString("hex"));
+  assert.deepEqual(changes.secretRefs, { DESK_CLIENT_KEY: "desk-client-key" });
+  assert.deepEqual(changes.removeEnv.sort(), ["DESK_SIGNING_KEY_PREVIOUS", "DESK_SIGNING_KEY_PREVIOUS_UNTIL"]);
+  const fresh = emergencyChanges({ appEnv: appEnv.slice(0, 1), heldSecrets: ["desk-signing-key"], random: () => Buffer.alloc(32, 9) });
+  assert.ok(!("desk-signing-key-previous" in fresh.setSecrets));
+});
+
+test("Task 8 review 3: after an emergency rotation the gateway must log both new keys, from DESK_CLIENT_KEY, and no previous key", () => {
+  const changes = { setSecrets: { "desk-signing-key": OTHER, "desk-client-key": "c".repeat(64) } };
+  assert.doesNotThrow(() => checkEmergencyLine({ changes, after: logged({ signing: OTHER, client: "c".repeat(64) }) }));
+  assert.throws(() => checkEmergencyLine({ changes, after: logged({ signing: OTHER, client: "c".repeat(64), previous: SIGNING }) }), /previous/);
+  assert.throws(() => checkEmergencyLine({ changes, after: logged({ signing: SIGNING, client: "c".repeat(64) }) }), /signing/);
+  assert.throws(() => checkEmergencyLine({ changes, after: logged({ signing: OTHER, client: SIGNING }) }), /client/);
+  assert.throws(() => checkEmergencyLine({ changes, after: null }), /startup line/);
 });
