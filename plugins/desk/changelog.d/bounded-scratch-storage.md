@@ -1,0 +1,1 @@
+Bound agent scratch storage before heavyweight allocations and at every retry. Browser qualification now requires explicit fixture byte/count limits, a free-space reserve, exact inactive disposable-profile cleanup and disk readback before delivery; compact proof survives without retaining whole regenerable profiles.
