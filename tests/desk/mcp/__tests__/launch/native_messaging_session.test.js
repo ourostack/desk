@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import path from "node:path"
 import http from "node:http"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, writeFile, unlink } from "node:fs/promises"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 const require = createRequire(import.meta.url)
@@ -297,8 +297,9 @@ test("native resume checks private readiness, source, attestation and exact rest
   await write({ ...ready, endpoint: endpoint.replace("a".repeat(64), "b".repeat(64)) })
   await assert.rejects(session.resume(), error => error.code === "NATIVE_RESUME_RESPONSE_INVALID")
   await writeFile(readyFile, "not-json")
-  await assert.rejects(session.resume(), SyntaxError)
-  await require("node:fs").promises.chmod(readyFile, 0o644)
+  await assert.rejects(session.resume(), { name: "SyntaxError" })
+  await unlink(readyFile)
+  await mkdir(readyFile)
   await assert.rejects(session.resume(), error => error.code === "NATIVE_READINESS_NOT_PRIVATE")
   assert.ok(requests > 0)
 })

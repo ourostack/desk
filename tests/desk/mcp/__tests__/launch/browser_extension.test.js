@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 const extensionUrl = new URL("../../../../../plugins/desk/browser-extension/background.js", import.meta.url)
 const token = "a".repeat(64)
@@ -342,7 +343,7 @@ test("hidden token reader reuses profile-local token and refuses corrupt stored 
 })
 
 test("explicit extension storage identity is passed to temporary-copy reader without changing defaults", async () => {
-  const real = (await import(path.join(mcpRoot, "web-real-profile.cjs"))).default
+  const real = (await import(pathToFileURL(path.join(mcpRoot, "web-real-profile.cjs")).href)).default
   const root = await mkTempRoot("native-token-storage-")
   const { mkdir, writeFile } = await import("node:fs/promises")
   await mkdir(path.join(root, "profile", "Local Storage", "leveldb"), { recursive: true })
