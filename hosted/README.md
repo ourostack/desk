@@ -18,7 +18,7 @@ Some Desk tools, doctor repairs and skills need a shell, the host machine or a c
 
 1. In claude.ai, install the Desk plugin and its dependencies (superpowers, plain-language) from the ourostack marketplace.
 2. Open **Settings → Connectors → Add custom connector** and enter `https://desk.ouro.bot/mcp`. Leave the OAuth client fields empty; Claude registers itself.
-3. Connect, approve on the Hosted Desk consent page, then sign in with GitHub as an allowed login (`arimendelow`).
+3. Connect and approve on the Hosted Desk consent page. With Ouro sign-in on, choose **Continue with Apple or email** and sign in through the Ouro tenant. A new person first opens their invite link in the same browser, so the sign-in can redeem it. Ari can also choose **Continue with GitHub** while `DESK_GITHUB_SIGNIN=on`. Without Ouro sign-in, sign in with GitHub as an allowed login (`arimendelow`).
 4. Start a chat. Desk's instructions tell the agent to call `desk_status` first.
 
 ## Environment
@@ -75,11 +75,11 @@ The root `.dockerignore` limits the build context to `plugins/desk` and `hosted`
 
 ## Set up on Azure
 
-Do these once, in order. They run on a machine signed in to `az` with write access to resource group `rg-ouro-work-substrate`.
+Do these once, in order. They run on a machine signed in to `az` with write access to resource group `rg-ouro-work-substrate`. Ouro sign-in has its own steps, in [Turn on Ouro sign-in](#turn-on-ouro-sign-in).
 
 1. **Provision.** `hosted/infra/provision.sh` creates the Container App `ouro-desk-hosted` and its secrets (the App's as `unset`), mounts the App key, adds the deploy workflow's federated credential, and prints the repository variables to set. It is safe to run again and never overwrites a secret's value. Run it with `DRY_RUN=1` first to see every change it would make. Until `desk.ouro.bot` exists, run it with `DESK_PUBLIC_URL=https://<the app's Azure address>`.
 2. **Set the repository variables** it prints (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `DESK_PUBLIC_URL`) on `ourostack/desk`.
-3. **Create the GitHub App.** Run `node hosted/infra/create-github-app.mjs --public-url <DESK_PUBLIC_URL>` and open `http://127.0.0.1:8787/` in a browser signed in to GitHub as an ourostack owner. Confirm on GitHub. The script stores the App's credentials in the Container App without printing them and prints the App's install URL.
+3. **Create the GitHub App.** Do not run `create-github-app.mjs` again until it is fixed: it passes the App's secrets to `az containerapp secret set` as arguments, where any process on the machine can read them. The fix is planned for v1b-2. The App already exists for `desk.ouro.bot`, so only a fresh setup needs this step. Once fixed, run `node hosted/infra/create-github-app.mjs --public-url <DESK_PUBLIC_URL>` and open `http://127.0.0.1:8787/` in a browser signed in to GitHub as an ourostack owner. Confirm on GitHub. The script stores the App's credentials in the Container App without printing them and prints the App's install URL.
 4. **Install the App** on `arimendelow/desk` only, from that URL. The script waits for the installation, restarts the app's revision so the gateway picks up the credentials, and exits.
 5. **Add DNS.** At ouro.bot's DNS (Cloudflare, DNS only), add the `CNAME` and `asuid` `TXT` records that `provision.sh` prints, then run `provision.sh` again to bind `desk.ouro.bot` with a managed certificate. This rerun keeps the app's current public URL.
 
@@ -95,6 +95,267 @@ A rerun of `provision.sh` keeps the app's current `DESK_PUBLIC_URL` unless one i
 
 The GitHub App needs no change: its callbacks already list both the Azure address and `desk.ouro.bot`.
 
+### Turn on Ouro sign-in
+
+Do this for the test tenant and staging first (`--env test`, `STAGE=staging`), then for production (`--env prod`). [Ouro identity](#ouro-identity) describes each piece. Every step is safe to run again.
+
+1. **Sign `az` in** to the subscription and to the env's Ouro tenant, as [az sign-ins](#az-sign-ins) says.
+2. **Record the Apple facts** in `hosted/infra/identity-<env>.json`: `apple.developerId` (Apple's Team ID) and `apple.outcome`, `"A"` if Graph can renew the Apple provider or `"B"` if only the admin center can. Leave `apple.outcome` as `null` until it is known; the checks then behave as under outcome B.
+3. **Import both Apple keys**, slot `a` and slot `b`, as [Import an Apple key](#import-an-apple-key) says. Under outcome B, add `--keep-file` to slot `a`'s import, because Ari uploads that file in step 5.
+4. **Provision the tenant.** Run `node hosted/infra/provision-identity.mjs --env <env> --dry-run` and read what it would change. Then run it without `--dry-run`. It creates or reconciles every piece, writes the gateway's client secret to Key Vault without printing it, and records every id in `identity-<env>.json`. It stops with exit code 2 when it must wait: while a tenant is still being created, or, under outcome B, at the Apple provider, where it prints the admin-center steps.
+5. **Outcome B only: add Apple by hand.** Ari follows the printed steps in the Entra admin center and uploads slot `a`'s file. Then run, in this order:
+   1. `node hosted/infra/provision-identity.mjs --env <env>` again, which finishes the user flow and the GitHub environment.
+   2. `node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload a`, which records the upload date (see [The first upload record](#the-first-upload-record)).
+   3. The slot `a` import again, without `--keep-file`. It writes the same key again and deletes the file.
+6. **Seed Ari's account.** Run `node hosted/infra/provision-identity.mjs --env <env> --seed-ari`. It gives you `Storage Table Data Contributor` on that env's accounts storage, creates Ari's account bound to his desk (`arimendelow/desk` in production, `arimendelow/desk-rehearsal` in test) and records his `accountId`. An account that exists is left as it is.
+7. **Commit `identity-<env>.json` to main** through a small pull request. The identity checks workflow reads main's copy.
+8. **Production only: copy the client key.** Save the rollback state ([Rollback](#rollback), "Before each production deploy"), then run `node hosted/infra/provision-identity.mjs --env prod --migrate client-key`. It copies `desk-signing-key` byte for byte into `desk-client-key`, sets `DESK_CLIENT_KEY`, and checks the copy against the fingerprint the gateway logs. An image that logs no fingerprints is checked with the legacy probe instead.
+9. **Add the settings to the app.** Run `hosted/infra/provision.sh` (`STAGE=staging hosted/infra/provision.sh` for test). Once the record is complete, Ari's `accountId` included, it attaches the gateway identity and sets the Ouro tenant settings, the Key Vault reference for `DESK_ENTRA_CLIENT_SECRET`, `DESK_GITHUB_SIGNIN=on`, and `DESK_GITHUB_ACCOUNTS` and `DESK_GITHUB_LOGINS` for Ari's GitHub user id. Until the record is complete, it leaves the Ouro settings as they are. `DESK_ALLOWED_LOGINS` stays.
+10. **Deploy, then set the legacy cutoff.** The deploy needs the settings from step 9 ([Deploy](#deploy) says why). Once the release is confirmed live, set `releasedAt` (that time) and `legacyCutoff` (14 days later, an ISO time with its zone) in `identity-prod.json`, run `hosted/infra/provision.sh` to set `DESK_LEGACY_CUTOFF`, and commit the file to main. A rerun never moves the cutoff, because `provision.sh` reads it from the file.
+11. **Invite Ari.** Run `node hosted/infra/provision-identity.mjs --env <env> --invite-ari`. Production's link lasts 24 hours and goes to `~/.ouro/invite-prod.url` (mode 0600), never to the screen. Pass `--browser-context <name>` and set `DESK_CDP_OPENER` to open it in the browser that will connect. Test links last 7 days and are printed.
+
+Staging stays apart from production. It has its own gateway identity, `id-ouro-desk-hosted-staging`, which holds `AcrPull` on the registry and data roles only on `entra-client-secret-test` and the test accounts storage. It never holds production's pull identity `ouro-prod-services-mi`, and both scripts refuse a staging app that does. Production's GitHub App secrets reach staging only through `node hosted/infra/provision-identity.mjs --env test --copy-app-secrets`, for a rehearsal. Afterwards, `--env test --clear-app-secrets` writes `unset` over them.
+
 ## Deploy
 
 Hosted Desk serves only released Desk. `.github/workflows/hosted-deploy.yml` runs after each successful "Desk release" run and by hand (`workflow_dispatch` on main). Either way it deploys the newest `Release Desk` commit on main, not main's head, so a gateway change ships with the next Desk release. As a check it refuses a commit whose `plugins/desk/changelog.d/` holds a fragment no release has carried (anything but `README.md`). It builds the image with `az acr build`, tagged with the commit SHA, points the app at it, waits for the new revision and fails unless `/healthz` answers 200 and then `/healthz/deep` answers 200 within 5 minutes (a 404, from an image that predates the route, is a notice). A failing deep check fails the workflow but rolls nothing back.
+
+The first deploy of a release with Ouro sign-in needs the app's Ouro settings in place first ([Turn on Ouro sign-in](#turn-on-ouro-sign-in), step 9). `DESK_GITHUB_ACCOUNTS` and `DESK_GITHUB_LOGINS` must name Ari's GitHub user id. With the Ouro tenant set and an empty mapping, the gateway logs `LEGACY ACCOUNT MAPPING EMPTY`, refuses Ari's legacy connector, and fails `/healthz/deep`, which fails the deploy. Set `DESK_LEGACY_CUTOFF` once the release is confirmed live (step 10). Until then legacy tokens never expire, and the identity checks alert a day after `releasedAt`. A 404 from `/healthz/deep` is only a notice, because an image from before the route can't answer it, so after such a deploy run the legacy probe by hand: `node hosted/infra/mcp-probe.mjs status --name prod-legacy`.
+
+## Ouro identity
+
+People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External ID directory, with Apple or an email one-time code. Production uses the tenant `ourobot` (`de8841c3-7799-4523-bbad-44f8a2426eaa`). The staging app, `ouro-desk-hosted-staging`, uses the test tenant `ourobottest` (`c12edfb6-c5ab-4bf8-b1d5-1f053311d396`), which stays for later rehearsals.
+
+`hosted/infra/provision-identity.mjs` builds each tenant's pieces and records every non-secret id in `hosted/infra/identity-<env>.json`, where `<env>` is `prod` or `test`. `provision.sh` reads that file and never recomputes an id, Ari's `accountId` or the legacy cutoff. Commit the file to main after every change, because the identity checks workflow reads main's copy.
+
+| Piece | Name | What it does |
+| --- | --- | --- |
+| Gateway app registration | `ouro-desk-hosted`, in each tenant | The app the gateway signs people in as. Its 12-month client secret lives in Key Vault. |
+| User flow | `Ouro sign-in` | Offers the email code and Apple to the gateway app. |
+| Apple provider | Sign in with Apple | Signs people in with Apple, using one of the tenant's two Apple keys. |
+| Automation app | `ouro-identity-automation`, in each tenant | The identity checks sign in to the tenant as this app, through a federated credential with no secret. It holds Graph's `IdentityProvider.ReadWrite.All` and `Application.Read.All`. |
+| Key Vault | `kv-ouro-identity-261e0b`, in resource group `rg-ouro-identity` | Holds the gateway's Entra client secret and the Apple keys, with access granted per secret. It was made with the tenants; the scripts never create it. |
+| Accounts store | Storage accounts `stouroaccounts261e0b` (prod) and `stouroacctstest261e0b` (test) | Tables `accounts`, `identities`, `invites` and `bindings`. Shared keys are off, so it is reached only through Entra roles. |
+| Gateway identity | `id-ouro-desk-hosted` (prod), `id-ouro-desk-hosted-staging` (staging) | Reads its env's Entra client secret and accounts store. Staging's also pulls staging's images. |
+| Checks identity | `id-ouro-identity-checks` | The identity checks' Azure identity: `Key Vault Secrets Officer` on the vault and `Reader` on both Container Apps. |
+| GitHub environment | `identity`, on ourostack/desk | Allows deployments from main only, and holds the variables the identity checks workflow reads. |
+
+`node hosted/infra/provision-identity.mjs --env test|prod` takes one action at a time:
+
+| Flags | What it does |
+| --- | --- |
+| none | Creates or reconciles every piece above. Add `--dry-run` to print every write instead, with secret input shown as `***`. |
+| `--apple-key-file <file> --apple-key-slot a\|b`, optionally `--apple-key-id <Key ID>` and `--keep-file` | Imports an Apple key ([Import an Apple key](#import-an-apple-key)). |
+| `--seed-ari` | Reconciles, then creates Ari's account and binding and records his `accountId`. |
+| `--invite-ari`, optionally `--browser-context <name>` | Issues Ari's invite ([Turn on Ouro sign-in](#turn-on-ouro-sign-in), step 11). |
+| `--copy-app-secrets`, `--clear-app-secrets` | Test only. Copies production's four GitHub App secrets to staging, or writes `unset` over staging's copies. |
+| `--migrate client-key` | Copies the signing key into the client key, checked by fingerprint. |
+| `--rotate signing-key` | Test only in v1b-1. Rotates the signing key with a 30-day overlap ([Rotate the signing key](#rotate-the-signing-key)). |
+
+### az sign-ins
+
+The scripts and runbooks need two `az` sign-ins at once, and each kind of call goes to its own.
+
+- **The Azure subscription** `261e0bf1-934d-41ab-9295-229b0d254418`, in Microsoft's tenant. Key Vault, Container Apps, storage and role assignments go through Azure Resource Manager there, and every such command names `--subscription 261e0bf1-934d-41ab-9295-229b0d254418`. Microsoft Graph is blocked in this tenant by a conditional-access policy (error `AADSTS530084`). Therefore never run `az ad …` there, and never pass `--assignee <name>` or anything else az must look up by name. The scripts use object ids and Resource Manager for this reason. Find an identity's ids with `az identity show` and grant roles with `--assignee-object-id`.
+- **The env's Ouro tenant**, for Graph. Run `az login --tenant <tenant id> --allow-no-subscriptions`, then `az account set --subscription <tenant id>` to make it az's current account. `az ad app …` and the Graph parts of both scripts work only while the env's tenant is current. Both scripts check this and refuse to run otherwise. This tenant's Graph is not blocked.
+
+### Identity checks
+
+`.github/workflows/identity-checks.yml` runs `hosted/infra/identity-checks.mjs` every day at 06:00 UTC for both envs, in the `identity` environment, from main only. Each run fails, and opens or comments on one issue labelled `identity-alert`, when any of these checks fails:
+
+- `entra-client-secret`: the gateway's client secret ends more than 30 days from now. The check judges the credential whose keyId is in the `key-id` tag of Key Vault secret `entra-client-secret-<env>`, not the newest one. A missing or stale tag fails the check.
+- `apple-secret-age`: the Apple client secret, which lasts six months from the `apple-renewed-at` tag on Key Vault secret `apple-siwa-active-<env>`, ends more than 30 days from now. No recorded date fails, and so does a date more than 5 minutes in the future.
+- `legacy-cutoff`, production only: `DESK_LEGACY_CUTOFF` is set on the app once `releasedAt` in `identity-prod.json` is more than a day old. With no `releasedAt` recorded, it must be set as soon as the app maps GitHub accounts.
+
+Under Apple outcome A the workflow also renews the Apple client secret on the first of each month. The issue holds only check names and dates, because the repository is public. To run the checks by hand, run `gh workflow run "Identity checks" -R ourostack/desk`. To run them locally, sign in as [az sign-ins](#az-sign-ins) says and run `node hosted/infra/identity-checks.mjs --env <env>`.
+
+## Secrets and rotation
+
+Every secret hosted Desk uses is listed here, with where it lives, when it expires and how it rotates. No runbook prints a secret or passes one as a command argument.
+
+| Secret | Where it lives | Expires | How it rotates |
+| --- | --- | --- | --- |
+| The gateway's Entra client secret | Key Vault `entra-client-secret-<env>`, tagged `key-id` with its credential's keyId. The app reads it as a Key Vault reference. | 12 months after it was made. The identity checks alert 30 days ahead. | [Rotate the gateway's Entra client secret](#rotate-the-gateways-entra-client-secret). |
+| The Apple keys (.p8) | Key Vault `apple-siwa-key-a-<env>` and `apple-siwa-key-b-<env>`, two per tenant's App ID (`bot.ouro.identity` for prod, `bot.ouro.identity.testapp` for test). Key Vault holds the only copies. | Never. | Revoke a key and import its replacement ([Revoke an Apple key](#revoke-an-apple-key)). |
+| The Apple client secret | Inside Entra, made by Entra from the live Apple key. Key Vault `apple-siwa-active-<env>` records the live slot and, in its `apple-renewed-at` tag, when Entra was given it. | 6 months after that date. The identity checks alert 30 days ahead. | Under outcome A, the monthly renewal. Under outcome B, by hand ([Apple keys and the Apple client secret](#apple-keys-and-the-apple-client-secret)). |
+| The token-signing key | Container App secret `desk-signing-key`, and `desk-signing-key-previous` during a rollover | Never. | `provision-identity.mjs --rotate signing-key`, with a 30-day overlap. Never in production in v1b-1 ([Rotate the signing key](#rotate-the-signing-key)). |
+| The client key | Container App secret `desk-client-key` (`DESK_CLIENT_KEY`) | Never. | No command rotates it. Changing it makes every client register and sign in again. |
+| The GitHub App's credentials | Container App secrets `desk-app-id`, `desk-app-client-id`, `desk-app-client-secret` and `desk-app-key` (mounted as a file). Staging holds copies only during a rehearsal. | The private key never expires. | By hand, in the App's settings on GitHub ([The GitHub App's credentials](#the-github-apps-credentials)). |
+| Ari's production invite link | `~/.ouro/invite-prod.url`, mode 0600, on the machine that issued it | 24 hours, or when redeemed | `--invite-ari` issues a new one. |
+| The legacy probe's refresh tokens | `~/.ouro/probe-<name>.json`, mode 0600, written by the legacy probe `hosted/infra/mcp-probe.mjs`, which arrives with the rehearsal | Refused after `DESK_LEGACY_CUTOFF` | On day 14, move them to `~/.Trash/` with `mv`. |
+| Accounts storage access | No secret: the gateway's managed identity holds an Entra role, and shared keys are off. | — | Nothing to rotate. |
+| The automation app and the checks identity | No secret: each signs in through a federated credential that trusts only the `identity` environment on ourostack/desk. | — | Nothing to rotate. |
+| The Microsoft-account sign-in secret | Not present yet; it arrives with Microsoft-account sign-in in v1b-3. | At most 2 years. | Planned with v1b-3. |
+| The backup writer's credential | Not present yet; it arrives with backups in v1c. | — | Planned with v1c. |
+
+### Rotate the gateway's Entra client secret
+
+Rotate it when the identity checks say it ends within 30 days, or at once if it may have leaked. The new secret goes straight from Entra into Key Vault through a pipe, so it never appears on screen. The old one keeps working until you delete it in the last step, so sign-in never breaks.
+
+Set these first. `ENV` is `prod` or `test`; `GATEWAY` is `ouro-desk-hosted` for prod or `ouro-desk-hosted-staging` for test. Run the commands from the repository root, with the env's Ouro tenant as az's current account ([az sign-ins](#az-sign-ins)).
+
+```sh
+ENV=prod
+GATEWAY=ouro-desk-hosted
+APP_ID="$(node -p "require('./hosted/infra/identity-$ENV.json').gatewayApp.appId")"
+```
+
+1. Note the credential in use now, from the Key Vault tag:
+   ```sh
+   OLD="$(az keyvault secret show --vault-name kv-ouro-identity-261e0b --name "entra-client-secret-$ENV" --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --query 'tags."key-id"' -o tsv)"
+   ```
+2. List the app's credentials before the change:
+   ```sh
+   BEFORE="$(az ad app credential list --id "$APP_ID" --query "[].keyId" -o tsv | sort)"
+   ```
+3. Add a 12-month credential and write it to Key Vault. `--append` keeps the old one working, and `perl` drops the one newline az adds:
+   ```sh
+   az ad app credential reset --id "$APP_ID" --append --display-name "desk-gateway-$ENV" --years 1 --query password -o tsv | perl -pe 'chomp if eof' | az keyvault secret set --vault-name kv-ouro-identity-261e0b --name "entra-client-secret-$ENV" --file /dev/stdin --encoding utf-8 --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --query id -o tsv
+   ```
+   If the Key Vault write fails, the new credential is on the app but nobody holds it. Find it with step 4 and delete it as in step 8, then start again.
+4. Find the new credential's keyId. This must print exactly one keyId. If it prints none, Graph hasn't caught up yet; wait a minute and run it again.
+   ```sh
+   NEW="$(comm -13 <(printf '%s\n' "$BEFORE") <(az ad app credential list --id "$APP_ID" --query "[].keyId" -o tsv | sort))"; echo "$NEW"
+   ```
+5. Tag the new Key Vault version with that keyId. Without the tag, the identity checks can't tell which credential the gateway holds, and they alert. It is a second command because the keyId exists only after the reset in step 3, and the secret itself must never sit in a shell variable.
+   ```sh
+   az keyvault secret set-attributes --vault-name kv-ouro-identity-261e0b --name "entra-client-secret-$ENV" --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --tags "key-id=$NEW"
+   ```
+6. Restart the app's revision so it reads the new secret:
+   ```sh
+   az containerapp revision restart -n "$GATEWAY" -g rg-ouro-work-substrate --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --revision "$(az containerapp show -n "$GATEWAY" -g rg-ouro-work-substrate --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --query properties.latestReadyRevisionName -o tsv)"
+   ```
+7. Confirm the new secret works. Finish one sign-in through the Ouro tenant, with Apple or an email code. The sign-in page loading is not enough, because the gateway uses the secret only when it redeems the sign-in's code. Then run `node hosted/infra/identity-checks.mjs --env "$ENV"`, which must print `ok entra-client-secret` with a date about a year away.
+8. Delete the old credential:
+   ```sh
+   az ad app credential delete --id "$APP_ID" --key-id "$OLD"
+   ```
+
+### Apple keys and the Apple client secret
+
+Each tenant has its own Apple App ID with two Sign in with Apple keys, in slots `a` and `b`: `bot.ouro.identity` for production and `bot.ouro.identity.testapp` for test. Each key is in Key Vault as `apple-siwa-key-<slot>-<env>`, tagged with its Key ID, its fingerprint and when it was imported. Entra makes the Apple client secret from the key the Apple provider uses, and that secret lasts six months. Key Vault secret `apple-siwa-active-<env>` records which slot the provider uses, and its `apple-renewed-at` tag records when Entra was given it. The identity checks count the six months from that tag.
+
+How the client secret is renewed depends on Apple's outcome, recorded as `apple.outcome` in `identity-<env>.json`. Under outcome A, Graph can update the Apple provider, so the workflow renews it every month by switching to the other slot. Under outcome B, only the Entra admin center can, so Ari uploads the other slot's key by hand, about every five months, when the identity checks alert.
+
+Change the test tenant first. After any Apple change, finish one Apple sign-in in the test tenant before you change production.
+
+#### Import an Apple key
+
+Keep the file name Apple gives the download, `AuthKey_<Key ID>.p8`. The import reads the Key ID from that name. If the file was renamed, pass the Key ID with `--apple-key-id <Key ID>`; a Key ID is 10 capital letters or digits.
+
+```sh
+node hosted/infra/provision-identity.mjs --env <env> --apple-key-file <folder>/AuthKey_<Key ID>.p8 --apple-key-slot <a or b>
+```
+
+The import writes the key to Key Vault through stdin and tags it with its Key ID and fingerprint. A new version carries only these tags, so the import also clears a `revoked` tag on that slot. It records the Key ID as `apple.keyIds.<slot>` in `identity-<env>.json`, and deletes the file once Key Vault returns the same key. With `--keep-file`, it keeps the file.
+
+After every import, commit `identity-<env>.json` to main through a small pull request. The workflow sends a key only when its Key ID tag matches the Key ID recorded in main's copy of the file. Until the change is on main, the renewal refuses that slot and alerts "a key slot doesn't match its recorded Key ID or import fingerprint".
+
+#### Renew under outcome A
+
+The workflow renews on the first of each month. To renew by hand, run `gh workflow run "Identity checks" -R ourostack/desk -f renew_apple=true`. To renew locally, run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple`.
+
+The renewal sends the other slot's key, but only when its tags prove it is the recorded key. It records the new date only after Graph accepts the change and the provider, read back, shows the new Key ID. If the other slot is revoked or missing, it sends the live slot again, keeps the old date and alerts, so the next step is to [replace the revoked key](#replace-a-revoked-apple-key). An Apple provider created without a recorded date gets one from its first renewal.
+
+#### Renew under outcome B
+
+Do this when the identity checks alert that the Apple client secret ends within 30 days. Every upload must switch to the other key slot, because Graph can't tell a second upload of the same key from no upload.
+
+1. Find the live slot. This prints `a` or `b`, a slot letter, not a secret. You will upload the other slot.
+   ```sh
+   az keyvault secret show --vault-name kv-ouro-identity-261e0b --name apple-siwa-active-<env> --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --query value -o tsv
+   ```
+2. Download the other slot's key into a new private folder, named after its Key ID, which is `apple.keyIds.<other slot>` in `identity-<env>.json`. Nobody opens the file.
+   ```sh
+   DIR="$(mktemp -d)"; az keyvault secret download --vault-name kv-ouro-identity-261e0b --name apple-siwa-key-<other slot>-<env> --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --file "$DIR/AuthKey_<Key ID>.p8"
+   ```
+3. Ari uploads it. In the Entra admin center for the env's tenant, go to External Identities, All identity providers, Apple, and edit the provider. Enter that slot's Key ID and upload the file. Only Ari does this upload.
+4. Record the upload. The command checks that the provider now shows that slot's Key ID and that the slot recorded as live is the other one, and refuses otherwise.
+   ```sh
+   node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload <other slot>
+   ```
+5. Delete the file through the import, which writes the same key again and deletes the file once Key Vault returns it:
+   ```sh
+   node hosted/infra/provision-identity.mjs --env <env> --apple-key-file "$DIR/AuthKey_<Key ID>.p8" --apple-key-slot <other slot>
+   ```
+6. Finish one Apple sign-in in the test tenant.
+
+#### The first upload record
+
+Until a date is recorded, the daily check alerts "no renewal or upload date is recorded". That is the state after the admin center creates the Apple provider, and for any provider created before these checks existed. Nothing back-dates it.
+
+Under outcome B, or while `apple.outcome` is `null`, record the first date right after the upload: run `node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload <slot>` with the slot the provider uses. With no earlier record, the command needs only the provider to show that slot's Key ID. It records the time you run it, not the time of the upload. If the provider's key was uploaded more than a day earlier, upload the other slot now, as in [Renew under outcome B](#renew-under-outcome-b), and record that one, so the date is true.
+
+Under outcome A the command refuses. A renewal records the first date instead.
+
+#### Revoke an Apple key
+
+Revoke a key if it may have leaked, or to replace it. If it is the live slot, switch the provider to the other slot first, or Apple sign-in breaks: under outcome A, renew; under outcome B, upload the other slot and record it.
+
+1. Revoke the key in the Apple Developer portal, under Certificates, Identifiers & Profiles, Keys.
+2. Tag its Key Vault secret as revoked, so no renewal sends it:
+   ```sh
+   az keyvault secret set-attributes --vault-name kv-ouro-identity-261e0b --name apple-siwa-key-<slot>-<env> --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --tags revoked=true
+   ```
+   This command replaces all of the secret's tags, so it also drops `key-id` and `fingerprint`. Taking the `revoked` tag off again therefore doesn't make the key usable. If you tagged the wrong slot, import that key again.
+3. [Replace the revoked key](#replace-a-revoked-apple-key).
+
+#### Replace a revoked Apple key
+
+1. In the Apple Developer portal, create a new Sign in with Apple key under the same App ID, and download it. Apple lets you download it only once.
+2. Import it into the revoked slot, as [Import an Apple key](#import-an-apple-key) says. The import clears the `revoked` tag and records the new Key ID.
+3. Commit `identity-<env>.json` to main.
+4. Finish one Apple sign-in in the test tenant.
+
+#### Email codes are not Ari's fallback
+
+An email-code sign-in is not a way back in for Ari's account in v1b-1. If his email identity's `oid` differs from his Apple identity's, an email sign-in lands on the invite-only page. His fallbacks are the GitHub sign-in, while `DESK_GITHUB_SIGNIN=on`, and a [rollback](#rollback).
+
+### Rotate the signing key
+
+Run `node hosted/infra/provision-identity.mjs --env test --rotate signing-key`. It works only against staging in v1b-1. Production signing-key rotations wait until day 14 after the release, when the rollback image retires, because a rolled-back image would know only the new key. Allowing `--env prod` after that is a later change.
+
+The rotation refuses to run while `DESK_CLIENT_KEY` is unset, so run `--migrate client-key` first. It reads the running revision's startup line and refuses if the key it read differs from the one the gateway logged. It then writes the old key as `desk-signing-key-previous`, accepted until `DESK_SIGNING_KEY_PREVIOUS_UNTIL` (30 days and an hour later), and a new random `desk-signing-key`. After the restart it checks the new startup line. A second rotation is refused while the previous key is still accepted.
+
+### The GitHub App's credentials
+
+The App's private key never expires. To rotate it, generate a new key in the "Ouro Desk" App's settings on GitHub. No command can yet write the new key to the Container App without passing it as an argument, because `create-github-app.mjs` does exactly that. Until its fix in v1b-2, rotate the key only if it may have leaked, and treat that as a change of its own.
+
+## Rollback
+
+To roll back, point the app at the image it ran before the deploy, then turn off the deploy workflow. Do not apply a saved app YAML with `az containerapp update --yaml`.
+
+**Before each production deploy**, save the app's settings (secret names only, no values) and its image:
+
+```sh
+mkdir -p ~/.ouro
+az containerapp show -n ouro-desk-hosted -g rg-ouro-work-substrate --subscription 261e0bf1-934d-41ab-9295-229b0d254418 -o yaml > ~/.ouro/hosted-before-$(date -u +%F).yaml
+az containerapp show -n ouro-desk-hosted -g rg-ouro-work-substrate --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --query "properties.template.containers[0].image" -o tsv > ~/.ouro/hosted-before-$(date -u +%F).image
+```
+
+**To roll back**, run these two commands, with the date of the saved files:
+
+```sh
+az containerapp update -n ouro-desk-hosted -g rg-ouro-work-substrate --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --image "$(cat ~/.ouro/hosted-before-<date>.image)" --output none
+gh workflow disable "Hosted Desk deploy" -R ourostack/desk
+```
+
+The first command changes only the image. The second stops the next Desk release from putting the new image back; while it is off, Desk releases don't reach hosted Desk. Then run `node hosted/infra/mcp-probe.mjs status --name prod-legacy` to confirm Ari's legacy connection works.
+
+Why not apply the saved YAML: az's YAML update reads every secret's value and sends them all back, and it drops the identity map from the request. The app holds a Key Vault reference, `entra-client-secret`, which has no value to read, so az either fails or turns the reference into a plain secret, and the missing identity map can take the gateway identity off the app. An update with only `--image` sends just the new image and never touches secrets or identities; it is the same command the deploy workflow runs on every release. `provision.sh` avoids the same problem for its own writes by building the whole app document and attaching identities first.
+
+The new settings can stay on the app, because the older image ignores them: `DESK_ENTRA_*`, `DESK_ACCOUNTS_ENDPOINT`, `AZURE_CLIENT_ID`, `DESK_GITHUB_*`, `DESK_LEGACY_CUTOFF` and `DESK_CLIENT_KEY`. Leaving them means a fixed release needs no settings change. If a setting itself must change, use `provision.sh`, never the saved YAML.
+
+The older image keeps working because:
+- `DESK_ALLOWED_LOGINS` and every old secret stay on the app until day 14;
+- the client key is a byte-exact copy of the signing key, so registered clients stay valid;
+- tokens refreshed from Ari's legacy tokens keep v1a's claims, which the older image accepts.
+
+Clients that signed in with Apple must sign in again with GitHub after a rollback.
+
+Keep these rules while a rollback is possible:
+- No production signing-key rotation happens before day 14.
+- A red `/healthz/deep` fails the deploy workflow but doesn't roll back. The new revision keeps serving until someone runs the two commands.
+- Re-enable the deploy with `gh workflow enable "Hosted Desk deploy" -R ourostack/desk` only after a fix, or a revert of the v1b-1 pull request, is released. After that release deploys, run `node hosted/infra/mcp-probe.mjs status --name prod-legacy` again.
+
+To roll back staging, run the same `az containerapp update` against `ouro-desk-hosted-staging`, with staging's saved image. The deploy workflow doesn't deploy staging, so there is nothing to disable.
