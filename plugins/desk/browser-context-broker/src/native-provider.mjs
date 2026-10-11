@@ -198,6 +198,10 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
           !peer.releasing).map(peer => ({
           leaseId: peer.id, owner: peer.owner, work: peer.work ?? null, windowId: peer.nativeRouting?.windowId,
           targetIds: peer.targetIds.filter(id => id !== peer.nativeRouting?.controlTargetId),
+          targetWindows: peer.targetIds.filter(id => id !== peer.nativeRouting?.controlTargetId &&
+            peer.nativeRouting?.targetTabs?.[id]).map(targetId => ({
+            targetId, windowId: peer.nativeRouting.targetTabs[targetId].windowId,
+          })),
         })) };
       }
       if (operation === 'purpose') {

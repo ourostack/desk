@@ -261,7 +261,10 @@ test('GivenOwnedNativePurpose_WhenSet_DiscoveryShowsAttributedWorkAndNullClearsI
   const first = await service.invoke('ensureWindow', payload);
   assert.equal((await service.invoke('purpose', { ...payload, targetId: first.targetId, work: 'work' })).title, 'Desk | native-test-owner | work');
   const peers = await service.invoke('peers', payload);
-  assert.equal(peers.leases.find(lease => lease.leaseId === acquired.leaseId).work, 'work');
+  const record = peers.leases.find(lease => lease.leaseId === acquired.leaseId);
+  assert.equal(record.work, 'work');
+  assert.deepEqual(record.targetWindows, [{ targetId: first.targetId, windowId: record.windowId + 3 }]);
+  assert.equal(JSON.stringify(peers).includes(acquired.endpoint), false);
   await service.invoke('purpose', { ...payload, targetId: first.targetId, work: null });
   assert.equal((await service.invoke('peers', payload)).leases.find(lease => lease.leaseId === acquired.leaseId).work, null);
 });

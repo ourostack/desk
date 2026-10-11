@@ -107,12 +107,16 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
   function controlUrl(lease) {
     return api.runtime.getURL("control.html") + "#" + encodeURIComponent(JSON.stringify({
       owner: lease.owner, work: lease.work, leaseId: lease.id, marker: lease.controlMarker,
+      targets: lease.targetProjection ?? [],
     }))
   }
 
   async function labelControl(lease) {
     await ownTab(lease, lease.controlTabId, true)
     const url = controlUrl(lease)
+    const expected = controlTitle(lease)
+    const current = await ownTab(lease, lease.controlTabId, true)
+    if (current.url === url && current.title === expected) return expected
     try {
       await api.tabs.update(lease.controlTabId, { url })
     } catch (error) {
@@ -120,7 +124,6 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         .replace(/[a-f0-9]{32,}/giu, "<redacted>").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 240)
       throw refusal("NATIVE_CONTROL_NAVIGATION_FAILED", reason)
     }
-    const expected = controlTitle(lease)
     for (let attempt = 0; attempt < 60; attempt++) {
       const tab = await ownTab(lease, lease.controlTabId, true)
       if (tab.url === url && tab.title === expected) return expected
@@ -291,6 +294,18 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       for (const record of lease.tabs.values()) {
         const tab = await ownTab(lease, record.tabId, true)
         tabs.push({ tabId: tab.id, windowId: tab.windowId, control: Boolean(record.control), targetId: (await targetInfo(tab.id)).id, url: tab.url, title: tab.title })
+      }
+      if (lease.controlTabId !== undefined) {
+        lease.targetProjection = tabs.filter(tab => !tab.control).map(tab => ({
+          tabId: tab.tabId, windowId: tab.windowId, title: String(tab.title ?? "").slice(0, 240),
+        }))
+        await labelControl(lease)
+        const control = tabs.find(tab => tab.control)
+        if (control) {
+          const fresh = await ownTab(lease, lease.controlTabId, true)
+          control.url = fresh.url
+          control.title = fresh.title
+        }
       }
       const windows = []
       for (const id of new Set(tabs.map(tab => tab.windowId))) {

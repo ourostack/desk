@@ -470,7 +470,8 @@ test("token document disappearance is rechecked instead of caching setup forever
 test("control title follows a same-document purpose hash update without reloading", async () => {
   const old = new Map(["document", "location", "addEventListener"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
   const heading = { textContent: "" }
-  const document = { title: "", getElementById: () => heading }
+  const listing = { textContent: "" }
+  const document = { title: "", getElementById: id => id === "owner" ? heading : listing }
   const location = { hash: "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: "work" })) }
   let changed
   try {
@@ -483,6 +484,87 @@ test("control title follows a same-document purpose hash update without reloadin
     changed?.()
     assert.equal(document.title, "Desk | owner")
     assert.equal(heading.textContent, "Desk | owner")
+  } finally {
+    for (const [key, descriptor] of old) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  }
+})
+
+test("control projects exact owned work windows on readback without changing page titles", async () => {
+  const { extension, tabs, calls } = await setup()
+  const first = await create(extension)
+  const second = await create(extension, "listing-second")
+  tabs.get(first.result.tabId).title = "<img src=x onerror=alert(1)>"
+  tabs.get(second.result.tabId).title = "<img src=x onerror=alert(1)>"
+  const read = () => extension.dispatch({ id: "listing-read", leaseId: "lease-a", method: "target.readback" })
+  await read()
+  const label = JSON.parse(decodeURIComponent(tabs.get(first.result.controlTabId).url.split("#")[1]))
+  assert.deepEqual(label.targets, [
+    { tabId: first.result.tabId, windowId: first.result.windowId, title: "<img src=x onerror=alert(1)>" },
+    { tabId: second.result.tabId, windowId: second.result.windowId, title: "<img src=x onerror=alert(1)>" },
+  ])
+  const changes = calls.filter(call => call.method === "tabs.update").length
+  await read()
+  assert.equal(calls.filter(call => call.method === "tabs.update").length, changes, "unchanged projection must not renavigate control")
+  await extension.dispatch({ id: "listing-close", leaseId: "lease-a", method: "target.close", params: { tabId: first.result.tabId } })
+  await read()
+  const remaining = JSON.parse(decodeURIComponent(tabs.get(first.result.controlTabId).url.split("#")[1]))
+  assert.deepEqual(remaining.targets, [label.targets[1]])
+  assert.equal(tabs.get(second.result.tabId).title, "<img src=x onerror=alert(1)>")
+})
+
+test("control renders hostile and duplicate titles literally with their exact window identities", async () => {
+  const keys = ["document", "location", "addEventListener"]
+  const old = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  const heading = { textContent: "" }, listing = { textContent: "" }
+  const document = { title: "", getElementById: id => id === "owner" ? heading : listing }
+  const targets = [
+    { tabId: 11, windowId: 101, title: "<script>owned?</script>" },
+    { tabId: 12, windowId: 102, title: "<script>owned?</script>" },
+    { tabId: 13, windowId: 103, title: "" },
+  ]
+  const location = { hash: "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: null, targets })) }
+  try {
+    Object.defineProperty(globalThis, "document", { value: document, configurable: true })
+    Object.defineProperty(globalThis, "location", { value: location, configurable: true })
+    Object.defineProperty(globalThis, "addEventListener", { value: () => {}, configurable: true })
+    await import(new URL("control.js?literal-window-list-test", extensionUrl))
+    assert.equal(document.title, "Desk | owner")
+    assert.equal(listing.textContent, "Window 101 | Tab 11 | <script>owned?</script>\nWindow 102 | Tab 12 | <script>owned?</script>\nWindow 103 | Tab 13 | Untitled")
+    assert.equal(Object.hasOwn(listing, "innerHTML"), false)
+  } finally {
+    for (const [key, descriptor] of old) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  }
+})
+
+test("invalid control window projection refuses instead of rendering arbitrary identities", async () => {
+  const old = new Map(["document", "location", "addEventListener", "console"].map(key =>
+    [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  const owner = { textContent: "" }, listing = { textContent: "unchanged" }, errors = []
+  const document = { title: "", getElementById: id => id === "owner" ? owner : listing }
+  let changed
+  const location = { hash: "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: null, targets: [] })) }
+  try {
+    Object.defineProperty(globalThis, "document", { value: document, configurable: true })
+    Object.defineProperty(globalThis, "location", { value: location, configurable: true })
+    Object.defineProperty(globalThis, "addEventListener", { value: (_, handler) => { changed = handler }, configurable: true })
+    Object.defineProperty(globalThis, "console", { value: { error: error => errors.push(error) }, configurable: true })
+    await import(new URL("control.js?invalid-window-projection-test", extensionUrl))
+    for (const targets of [{}, [{ tabId: 1, windowId: "2", title: "page" }],
+      [{ tabId: -1, windowId: 2, title: "page" }], [{ tabId: 1, windowId: -2, title: "page" }],
+      [{ tabId: 1, windowId: 2, title: "a".repeat(241) }], Array.from({ length: 51 }, () => ({ tabId: 1, windowId: 2, title: "page" }))]) {
+      listing.textContent = "unchanged"
+      location.hash = "#" + encodeURIComponent(JSON.stringify({ owner: "owner", work: null, targets }))
+      changed()
+      assert.equal(document.title, "Desk | invalid ownership label")
+      assert.equal(listing.textContent, "unchanged")
+    }
+    assert.equal(errors.length, 6)
   } finally {
     for (const [key, descriptor] of old) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor)
