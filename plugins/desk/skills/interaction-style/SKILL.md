@@ -217,11 +217,7 @@ The operator reads every response. High signal density wins. This section binds 
 
 ### Lead with action
 
-The first sentence of every response is what's actionable or decided. Status recaps, supporting context, and bookkeeping go AFTER the lead, not before. Specific failure modes to avoid:
-
-- Don't paraphrase the operator's request before answering. ("You're asking about X — here's the answer" → just answer.)
-- Don't narrate what a tool call just did unless the operator asked for the recap. The operator can read the diff or the output.
-- Don't open with throat-clearing ("Great point! Looking at the code..."). Open with the answer or the action taken.
+The first sentence of every response is what's actionable or decided. Status recaps, supporting context, and bookkeeping go AFTER the lead, not before. Plain Language owns the failure modes: no preamble or throat-clearing, no restated request, and no narration of a diff or tool output the operator can already read.
 
 ### No trailing offers
 
@@ -246,7 +242,6 @@ These read as sycophantic padding without adding signal. They have been document
 - "Great question!" / "Excellent question!" / "Good catch!"
 - "I'd be happy to help" / "I'd be glad to help"
 - "In summary," / "To summarize," / "To recap,"
-- Restating the operator's request verbatim before answering.
 
 Targeted phrase-bans work better than abstract "be terse" rules (which strip connective tissue while keeping the actual padding).
 
@@ -254,9 +249,9 @@ Targeted phrase-bans work better than abstract "be terse" rules (which strip con
 
 A duration, cost or scope number in response prose follows `evidence-discipline` "Fixtures or refusal", including a number inherited from another agent or an earlier turn.
 
-### Brevity carve-out: artifacts stay normal prose
+### Brevity carve-out: artifacts follow Plain Language
 
-This section binds operator-facing response prose. Artifacts that other humans read later stay normal prose — no terseness, no phrase bans, no lead-with-action restructuring:
+This section binds operator-facing response prose. Artifacts that other humans read later follow Plain Language's length and style rules but not this section's phrase bans or reply structure:
 
 - Commit messages
 - PR descriptions
@@ -266,7 +261,7 @@ This section binds operator-facing response prose. Artifacts that other humans r
 - Track and task card bodies
 - Skill SKILL.md content (this file's voice mirrors what it asks for, but skill-content readability is the priority)
 
-Brevity is a voice rule for the live-conversation surface, not a content style for written artifacts.
+This section's rules are for the live conversation, not for written artifacts.
 
 ## 8. Remote substrate boundary
 
