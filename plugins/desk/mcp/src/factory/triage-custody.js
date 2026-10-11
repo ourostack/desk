@@ -77,7 +77,11 @@ export function catalogFatalCases(fixture){
     {name:"frame-count",frames:[initialize,initialized,...Array.from({length:255},(_,j)=>({jsonrpc:"2.0",id:j+2,method:"ping"}))]},
     {name:"aggregate",frames:[initialize,initialized,...Array.from({length:52},(_,j)=>({jsonrpc:"2.0",id:j+2,method:"tools/call",
       params:{name:"evidence_read",arguments:{id:"x".repeat(330000)}}}))]},
-    {name:"output",frames:[initialize,initialized,...Array.from({length:252},(_,j)=>({jsonrpc:"2.0",id:String(j)+"x".repeat(66300),method:"tools/list"}))]},
+    // Legal bounded IDs exercise actual output-volume archival, then an exact
+    // malformed frame closes the session. The output cap itself is also
+    // exercised by the guarded transport tests; oversized IDs are a separate
+    // pre-dispatch negative under protocol envelope2.
+    {name:"output",frames:[initialize,initialized,...Array.from({length:252},(_,j)=>({jsonrpc:"2.0",id:String(j)+"x".repeat(60),method:"tools/list"})),"{\n"]},
     ...fixture.histories.fatal_inputs.map((frame,j)=>({name:`closed-input-${j+1}`,frames:[initialize,initialized,frame]})),
   ]
 }
@@ -257,6 +261,43 @@ function verifyReceipt(receipt,key) {
     return mac===createHmac("sha256",Buffer.from(key,"hex")).update(catalogCanonical(body)).digest("hex")
   }catch{return false}
 }
+const observationKinds=["input_frame","output_frame","parser_refused","server_refused","write_complete","backpressure","input_end","server_closing","launcher_exit"]
+const observationCodes=["wire_noncanonical","catalog_invalid","protocol_state","wire_input_limit","wire_frame_limit",
+  "wire_frame_count","wire_queue_limit","wire_output_limit","wire_closed","wire_incomplete","write_failed","unknown"]
+export function makeCatalogObservation({kind,direction="none",offset=0,bytes=Buffer.alloc(0),code=null,signal=null,blocked=null,pid=process.pid}){
+  const raw=Buffer.from(bytes),retained=raw.subarray(0,8192)
+  const value={version:1,kind,direction,pid,at_ms:Date.now(),offset,bytes:raw.length,
+    sha256:catalogHash(raw),retained_sha256:catalogHash(retained),base64:retained.toString("base64"),
+    truncated:raw.length>retained.length,observation:raw.length?"present":"observed_absent",code,signal,blocked}
+  validateCatalogObservation(value)
+  return value
+}
+export function validateCatalogObservation(value){
+  closedObject(value,["version","kind","direction","pid","at_ms","offset","bytes","sha256","retained_sha256",
+    "base64","truncated","observation","code","signal","blocked"])
+  if(value.version!==1||!observationKinds.includes(value.kind)||!["input","output","none"].includes(value.direction)||
+    !Number.isSafeInteger(value.pid)||value.pid<1||!Number.isSafeInteger(value.at_ms)||value.at_ms<0||
+    !Number.isSafeInteger(value.offset)||value.offset<0||!Number.isSafeInteger(value.bytes)||value.bytes<0||value.bytes>16777216||
+    !hex.test(value.sha256)||!hex.test(value.retained_sha256)||typeof value.base64!=="string"||
+    value.base64.length>10924||typeof value.truncated!=="boolean")fail("observation_invalid")
+  const raw=Buffer.from(value.base64,"base64")
+  if(raw.toString("base64")!==value.base64||raw.length>8192||catalogHash(raw)!==value.retained_sha256||
+    value.truncated!==(value.bytes>raw.length)||(!value.truncated&&(value.bytes!==raw.length||value.sha256!==value.retained_sha256))||
+    value.observation!==(value.bytes?"present":"observed_absent")||
+    (value.blocked!==null&&typeof value.blocked!=="boolean")||
+    (value.signal!==null&&!["SIGTERM","SIGKILL","SIGINT","SIGHUP","SIGABRT","SIGSEGV","SIGPIPE","SIGBUS","SIGILL","SIGQUIT"].includes(value.signal)))fail("observation_invalid")
+  if(value.kind==="launcher_exit"){
+    if(value.direction!=="none"||value.bytes!==0||value.blocked!==null||
+      (value.code!==null&&(!Number.isSafeInteger(value.code)||value.code<0||value.code>255)))fail("observation_invalid")
+  }else if(value.signal!==null||(value.code!==null&&!observationCodes.includes(value.code)))fail("observation_invalid")
+  const input=value.kind==="input_frame"||value.kind==="input_end",output=["output_frame","write_complete","backpressure"].includes(value.kind)
+  if((input&&value.direction!=="input")||(output&&value.direction!=="output")||
+    (value.kind==="server_closing"&&(value.direction!=="none"||value.code!==null))||
+    (value.kind==="backpressure"?typeof value.blocked!=="boolean":value.blocked!==null)||
+    (!["input_frame","output_frame","parser_refused"].includes(value.kind)&&value.bytes!==0)||
+    (["input_frame","output_frame"].includes(value.kind)&&(value.bytes===0||(!value.truncated&&raw.at(-1)!==10))))fail("observation_invalid")
+  return true
+}
 export function ownedServerLaunch({runtime,launcher:launchFile,entry:entryFile,bootstrap,deadline}) {
   const exact=ownedCatalogEntries()
   if(runtime!==exact.runtime||launchFile!==exact.launcher||entryFile!==exact.entry)fail("launch_source")
@@ -407,6 +448,21 @@ async function restoredCustody(custody,snapshotFile) {
       r.catalog_sha256!==catalogHash(catalogCanonical(snapshot.records))||r.brief_sha256!==catalogHash(catalogCanonical(snapshot.brief))||
       r.server_pid!==custody.receipts[0].server_pid)fail("restored_receipt")
   }
+  if(!Array.isArray(custody.observations)||custody.observations.length>17)fail("restored_observation")
+  let serverSequence=0,exitObserved=false
+  for(const frame of custody.observations){
+    if(!verifyReceipt(frame,snapshot.receipt_key)||frame.event!=="observation"||frame.version!==1||
+      frame.generation!==snapshot.generation||frame.server_pid!==custody.receipts[0].server_pid||
+      frame.catalog_sha256!==custody.receipts[0].catalog_sha256||frame.brief_sha256!==custody.receipts[0].brief_sha256)fail("restored_observation")
+    validateCatalogObservation(frame.payload)
+    if(frame.payload.kind==="launcher_exit"){
+      if(exitObserved||frame.sequence!==1||frame.payload.pid!==custody.receipts[0].payload.launcher_pid||
+        frame.payload.code!==0||frame.payload.signal!==null)fail("restored_observation")
+      exitObserved=true
+    }else if(exitObserved||frame.sequence!==++serverSequence||serverSequence>16||
+      frame.payload.pid!==frame.server_pid)fail("restored_observation")
+  }
+  if(!exitObserved||!["input_frame","output_frame"].every(kind=>custody.observations.some(x=>x.payload.kind===kind)))fail("restored_observation")
   if(custody.receipts[0].payload.snapshot_sha256!==custody.snapshotSha256||
     custody.receipts[2].payload.reason!=="stdin_eof"||custody.receipts[2].payload.final_sequence!==3||
     custody.observation?.ok!==true||custody.observation.identity.server.pid!==custody.receipts[0].server_pid||
@@ -529,10 +585,10 @@ export async function restoreDirectReceipt(bundle) {
 
 const realLifecycle=Object.freeze({readBytes:file=>fs.readFile(file),source:ownedSourceIdentity,
   verifyModules:verifyModuleClosure,observe:observeOwnedServer,openControl:openSafe,writeControl:boundedFdWrite,
-  pump:fifoPump,live:ownedPidLive,closeFd:close,registry:trustedCustody})
+  pump:fifoPump,live:ownedPidLive,closeFd:close,registry:trustedCustody,requireObservations:true})
 async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHandle,controlPath,deadline,clock=Date.now},context=realLifecycle) {
   // The direct client and native path share this receipt/provenance controller.
-  const receipts=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
+  const receipts=[],observations=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
   const sourceBefore=await context.source()
   let error=null,observation=null,control=null,terminal=false,moduleClosure=null,bootWork=null
   const controlFrames=[]
@@ -541,10 +597,24 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
   // Caller awaits boot immediately; retain rejection handler during startup.
   boot.catch(()=>{})
   const onFailure=e=>{error??=e;bootReject(e)}
-  const pump=context.pump({fd:receiptFd,deadline,maxFrame:393216,maxBytes:2097152,maxFrames:4,onFailure,
+  let observedSequence=0,launcherObserved=false
+  const pump=context.pump({fd:receiptFd,deadline,maxFrame:393216,maxBytes:2097152,maxFrames:24,onFailure,
     async onFrame(frame){
-      if(!verifyReceipt(frame,snapshot.receipt_key)||frame.sequence!==receipts.length+1||frame.generation!==snapshot.generation||
+      if(!verifyReceipt(frame,snapshot.receipt_key)||frame.version!==1||frame.generation!==snapshot.generation||
         frame.catalog_sha256!==catalogHash(catalogCanonical(snapshot.records))||frame.brief_sha256!==catalogHash(catalogCanonical(snapshot.brief)))fail("receipt_invalid")
+      if(frame.event==="observation"){
+        validateCatalogObservation(frame.payload)
+        const boot=receipts[0]
+        if(!boot||frame.server_pid!==boot.server_pid)fail("observation_identity")
+        if(frame.payload.kind==="launcher_exit"){
+          if(launcherObserved||frame.sequence!==1||frame.payload.pid!==boot.payload.launcher_pid||context.live(boot.server_pid))fail("observation_identity")
+          launcherObserved=true
+        }else if(launcherObserved||frame.sequence!==++observedSequence||observedSequence>16||frame.payload.pid!==boot.server_pid)fail("observation_identity")
+        observations.push(frame);return
+      }
+      // Every later receipt comes from the one bootstrapped server; a
+      // replacement in the same generation never continues the session.
+      if(frame.sequence!==receipts.length+1||(receipts.length&&frame.server_pid!==receipts[0].server_pid))fail("receipt_invalid")
       const expectedEvent=receipts.length===0?"bootstrap":receipts.length===1?"submit":"terminal"
       if(frame.event!==expectedEvent)fail(`receipt_sequence_${frame.event}_${expectedEvent}`)
       receipts.push(frame)
@@ -580,8 +650,8 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
     if(receiptHandle)await receiptHandle.close();else await context.closeFd(receiptFd)
     if(control)await control.handle.close()
   }
-  return {boot,receipts,resources,
-    snapshot:()=>({receipts:[...receipts],observation,module_closure_sha256:moduleClosure?catalogHash(catalogCanonical(moduleClosure)):null,
+  return {boot,receipts,observations,resources,
+    snapshot:()=>({receipts:[...receipts],observations:[...observations],observation,module_closure_sha256:moduleClosure?catalogHash(catalogCanonical(moduleClosure)):null,
       control_frames:[...controlFrames],receipt_pump:pump.diagnostic?.()??null,terminal,error:error?.message??null,resources}),
     fail:onFailure,
     async finish(){
@@ -603,6 +673,10 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
         resources.receipt_eof_after_server_exit=resources.server_exit_observed&&pump.status().zeroReads>beforeEOF
         if(!resources.receipt_eof_after_server_exit)onFailure(Error("receipt_close_unproven"))
       }
+      if(context.requireObservations&&!error&&(!launcherObserved||
+        observations.find(x=>x.payload.kind==="launcher_exit").payload.code!==0||
+        observations.find(x=>x.payload.kind==="launcher_exit").payload.signal!==null||
+        !["input_frame","output_frame"].every(kind=>observations.some(x=>x.payload.kind===kind))))onFailure(Error("observation_missing"))
       clearTimeout(timer)
       resources.initialReceiptZeroRead=pump.status().zeroReads>0
       await closeOwned()
@@ -611,7 +685,7 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
       if(catalogCanonical(sourceBefore)!==catalogCanonical(sourceAfter)||
         catalogHash(await context.readBytes(launch.identity.bootstrap.snapshotFile))!==launch.identity.bootstrap.expectedSha256)fail("source_changed")
       await context.verifyModules(moduleClosure)
-      const custody={receipts,observation:{...observation,ok:true},moduleClosure,sourceCustodyUnchanged:true,sourceIdentity:sourceAfter,
+      const custody={receipts,observations,observation:{...observation,ok:true},moduleClosure,sourceCustodyUnchanged:true,sourceIdentity:sourceAfter,
         briefSha256:catalogHash(catalogCanonical(snapshot.brief)),snapshotSha256:launch.identity.bootstrap.expectedSha256,launchIdentity:structuredClone(launch)}
       context.registry.set(custody,{seal:catalogCanonical(custody),records:snapshot.records})
       return {state:"closed",custody,resources}
@@ -627,12 +701,12 @@ export async function runNonacceptedLifecycleTransaction(config){
   closedObject(config,["snapshot","launch","frames","mode"])
   const {snapshot,launch,frames,mode}=JSON.parse(catalogCanonical(config))
   if(!["normal","abort","abortKilled","abortAbsent","deadline","source","snapshot","modules","lateModules","observe",
-    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal"].includes(mode))fail("unit_mode")
+    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualFdOperations:0,actualLaunches:0,closed:0,killed:0,registered:0}
   let controller,reads=0,sources=0,modules=0,liveness=0,zeroReads=0,clockReads=0,releaseTerminal
   const deadline=Date.now()+1100
   const context={
-    registry,
+    registry,requireObservations:mode==="observationRequired",
     async readBytes(){reads++;return Buffer.from(catalogCanonical(snapshot)+(mode==="snapshot"&&reads>1?" ":""))},
     async source(){sources++;return {unit:sources>1&&mode==="source"?"changed":"nonaccepted"}},
     async verifyModules(value){modules++;if(mode==="modules"||mode==="lateModules"&&modules>1)throw Error("unit_module_changed");return structuredClone(value)},
@@ -690,13 +764,26 @@ export async function runNonacceptedLifecycleTransaction(config){
   }catch(e){await controller.abort();outcome={state:"failed",reason:e.message}}
   return {authority:false,outcome,statistics,evidence:controller.snapshot()}
 }
-export function boundClient(child,history) {
+export function boundClient(child,history,trace={version:2,events:[],bytes:0,truncated:false}) {
   const buffer=new ReadBuffer()
+  const offsets={client_to_server:0,server_to_client:0}
+  const observe=(event,direction,chunk,extra={})=>{
+    const bytes=chunk?Buffer.from(chunk):Buffer.alloc(0),offset=offsets[direction]
+    offsets[direction]+=bytes.length
+    if(trace.events.length>=1024||trace.bytes+bytes.length>CATALOG_LIMITS.incomingBytes){trace.truncated=true;return}
+    trace.bytes+=bytes.length
+    trace.events.push({event,direction,pid:child.pid??null,generation:trace.generation??null,at_ms:Date.now(),offset,bytes:bytes.length,
+      observation:bytes.length?"present":"observed_absent",sha256:catalogHash(bytes),base64:bytes.toString("base64"),...extra})
+  }
   return {async start(){
-    child.stdout.on("data",chunk=>{try{buffer.append(chunk);let value;while((value=buffer.readMessage())!==null)this.onmessage?.(value)}catch(e){this.onerror?.(e)}})
-    child.stdout.on("error",e=>this.onerror?.(e));child.on("close",()=>this.onclose?.())
-  },send(message){const wire=serializeMessage(deserializeMessage(serializeMessage(message).trimEnd()));history.push(JSON.parse(wire))
-    return new Promise((resolve,reject)=>child.stdin.write(wire,e=>e?reject(e):resolve()))},
+    child.stdout.on("data",chunk=>{observe("read","server_to_client",chunk);try{buffer.append(chunk);let value;while((value=buffer.readMessage())!==null)this.onmessage?.(value)}catch(e){observe("parser_error","server_to_client",null,{error:e.message});this.onerror?.(e)}})
+    child.stdout.on("error",e=>{observe("read_error","server_to_client",null,{error:e.message});this.onerror?.(e)})
+    child.on("close",(code,signal)=>{observe("close","server_to_client",null,{code,signal});this.onclose?.()})
+  },send(message){const wire=serializeMessage(message);history.push(JSON.parse(wire));observe("write","client_to_server",wire)
+    return new Promise((resolve,reject)=>{
+      const flowing=child.stdin.write(wire,e=>{observe("write_complete","client_to_server",null,{error:e?.message??null});if(e)reject(e);else resolve()})
+      observe("backpressure","client_to_server",null,{blocked:!flowing})
+    })},
   async close(){child.stdin.end()}}
 }
 export async function prepareOwnedCatalogRun({inputDir,runDir,deadline}) {
@@ -753,7 +840,8 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
         const value=lifecycle.snapshot(),text=catalogCanonical(value)
         // Fixed private capture bounds; no arbitrary snapshot properties or
         // unbounded stage/resource arrays can escape into an evidence bundle.
-        closedObject(value,["receipts","observation","resources"],["module_closure_sha256","control_frames","receipt_pump","terminal","error"])
+        closedObject(value,["receipts","observation","resources"],["observations","module_closure_sha256","control_frames","receipt_pump","terminal","error"])
+        if(value.observations!==undefined&&(!Array.isArray(value.observations)||value.observations.length>17))fail("native_capture_limit")
         if(Buffer.byteLength(text)>6291456||!Array.isArray(value.receipts)||value.receipts.length>4||
           Object.keys(value.resources).length>64||value.control_frames&&value.control_frames.length>64)fail("native_capture_limit")
         if(value.receipt_pump){
@@ -921,7 +1009,7 @@ export async function runNonacceptedNativeTransaction(config){
     "budget","budgetZero","budgetBadCost","budgetNegativeCost","budgetMissingCost","budgetWrongError","budgetProse","budgetCompleteThrows",
     "emptyInit","emptyInitStderr","closedBeforeBoot","successBeforeBoot","initMissing","initExtra","initDuplicate","successNoInit","argvLimit","abortThrows","configCapture","settingsCapture",
     "argvSerializationThrows","snapshotThrows","snapshotCircular","snapshotOverflow","snapshotTextLimit","snapshotReceiptShape","snapshotReceiptCount",
-    "snapshotResourcesLimit","snapshotControlFramesLimit","snapshotPumpLimit","snapshotPumpEmpty","emptyInitSnapshotThrows"].includes(mode))fail("unit_mode")
+    "snapshotResourcesLimit","snapshotControlFramesLimit","snapshotObservationShape","snapshotObservationLimit","snapshotPumpLimit","snapshotPumpEmpty","emptyInitSnapshotThrows"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualLaunches:0,actualFileOperations:0,closed:0,signals:[],registered:false}
   const child=new EventEmitter()
   Object.assign(child,{pid:mode==="pidUnknown"?0:500003,stdout:new PassThrough(),stderr:new PassThrough()})
@@ -944,6 +1032,7 @@ export async function runNonacceptedNativeTransaction(config){
       return {receipts:mode==="snapshotReceiptShape"?null:mode==="snapshotReceiptCount"?Array(5).fill({}):[],observation:null,
         resources:mode==="snapshotTextLimit"?{large:"x".repeat(6291457)}:mode==="snapshotResourcesLimit"?Object.fromEntries(Array.from({length:65},(_,i)=>[i,0])):{},
         ...(mode==="snapshotControlFramesLimit"?{control_frames:Array(65).fill("")}:{}),
+        ...(mode==="snapshotObservationShape"?{observations:{}}:mode==="snapshotObservationLimit"?{observations:Array(18).fill({})}:{}),
         ...(mode==="snapshotPumpLimit"?{receipt_pump:{raw_base64:Buffer.alloc(2097153).toString("base64")}}:{}),
         ...(mode==="snapshotPumpEmpty"?{receipt_pump:{}}:{}),
         ...(mode==="snapshotOverflow"?{extra:"x".repeat(2097153)}:{})}
@@ -1068,12 +1157,7 @@ export function createNonacceptedNativePair(config){
     return {authority:false,valid:authenticateNativePair(value,registry)}
   }})
 }
-export class CatalogClient extends Client {
-  request(request,schema,options) {
-    if(request.method==="initialize")request={...request,params:{...request.params,protocolVersion:"2025-06-18"}}
-    return super.request(request,schema,options)
-  }
-}
+export {Client as CatalogClient}
 export async function runCatalogWireCase({fixture,frames,deadline}) {
     const dir=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"triage-wire-")));await fs.chmod(dir,0o700)
     const resources={dir,owner:"direct-parent",serverExited:false,pids:[],exited:[]}
@@ -1117,6 +1201,7 @@ export async function runCatalogWireCase({fixture,frames,deadline}) {
       const result=await lifecycle.complete()
       resources.serverExited=!ownedPidLive(boot.server_pid);if(resources.serverExited)resources.exited.push(boot.server_pid)
       resources.stdout=stdout;resources.stderr=stderr;resources.exit=ended
+      resources.observations=structuredClone(lifecycle.observations)
       const proof={state:!driverFailed&&ended.code!==0&&result.state!=="closed"&&resources.serverExited?"refused":"failed",
         descriptorSha256:descriptorHash(frames),normalTerminal:result.state==="closed",reason:result.reason,resources,cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
       wireRuns.set(proof,catalogHash(JSON.stringify(proof)))
@@ -1125,6 +1210,7 @@ export async function runCatalogWireCase({fixture,frames,deadline}) {
       if(child&&!child.killed)child.kill("SIGTERM")
       if(lifecycle)await lifecycle.abort();else if(owned)await owned.close()
       await reapOwnedChild(child,deadline)
+      if(lifecycle)resources.observations=structuredClone(lifecycle.observations)
       return {state:"failed",reason:e.message,normalTerminal:false,resources,cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
     }
 }
@@ -1149,9 +1235,12 @@ export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
     child.on("error",()=>lifecycle.abort())
     child.on("exit",(code)=>{if(code!==0)lifecycle.fail(new Error("launcher_exit"))})
     const boot=await lifecycle.boot
-    const client=new CatalogClient({name:"triage_direct",version:"1"},{capabilities:{}})
+    const client=new Client({name:"claude-code",title:"Claude Code",version:"2.1.296",
+      description:"Anthropic's agentic coding tool",websiteUrl:"https://code.claude.com"},
+      {capabilities:{roots:{listChanged:true},elicitation:{}}})
     resources.wire=[]
-    await client.connect(boundClient(child,resources.wire))
+    resources.trace={version:2,generation:owned.generation,events:[],bytes:0,truncated:false}
+    await client.connect(boundClient(child,resources.wire,resources.trace))
     const tools=(await client.listTools()).tools,history=[],responses=[]
     const call=async(name,args,expectedError=false)=>{
       const response=await client.callTool({name,arguments:args})
