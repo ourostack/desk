@@ -125,8 +125,12 @@ function fakeAz(cloud) {
       return tsv("https://kv/secrets/x/v2");
     }
     if (joined.startsWith("resource show")) {
-      const env = cloud.appEnv[opt(args, "--ids").split("/").at(-1)] ?? notFound(opt(args, "--ids"));
-      // As the query --query "properties.template.containers[].env[] | [?value || secretRef].name" prints it.
+      const [, app, revision] = /\/containerApps\/([^/]+)(?:\/revisions\/([^/]+))?$/.exec(opt(args, "--ids")) ?? [];
+      if (!cloud.appEnv[app]) notFound(opt(args, "--ids"));
+      // The app itself: its latest and latest ready revisions. By default one revision, ready, running the template.
+      if (!revision) return json(cloud.revisions?.[app] ?? { latest: `${app}--r1`, ready: `${app}--r1` });
+      // A revision: its env, as --query "properties.template.containers[].env[] | [?value || secretRef].name" prints it.
+      const env = cloud.revisionEnv?.[revision] ?? (revision === `${app}--r1` ? cloud.appEnv[app] : notFound(opt(args, "--ids")));
       return json(env.filter((entry) => entry.value || entry.secretRef).map(({ name }) => name));
     }
     throw new CallFailed(`fake az has no ${joined}`, "");
@@ -634,11 +638,31 @@ test("thresholds: exactly 30 days out alerts and a moment more doesn't, for both
   assert.equal(entry.ok, true);
 });
 
+test("combined round: the cutoff check reads the revision that is running, not the app's template", async (t) => {
+  const { go, cloud } = setup(t, { env: "prod", rec: record("prod", { releasedAt: iso(NOW - 2 * DAY) }) });
+  const withCutoff = cloud.appEnv["ouro-desk-hosted"];
+  assert.ok(withCutoff.some(({ name }) => name === "DESK_LEGACY_CUTOFF"));
+  // The template (and its newest revision, which failed to start) has the cutoff; the revision still serving doesn't.
+  cloud.revisions = { "ouro-desk-hosted": { latest: "ouro-desk-hosted--r2", ready: "ouro-desk-hosted--r1" } };
+  cloud.revisionEnv = { "ouro-desk-hosted--r1": withCutoff.filter(({ name }) => name !== "DESK_LEGACY_CUTOFF"), "ouro-desk-hosted--r2": withCutoff };
+  const entry = (await go()).results.find(({ check }) => check === "legacy-cutoff");
+  assert.equal(entry.code, "missing");
+  // Once the new revision is the ready one, the check passes.
+  cloud.revisions["ouro-desk-hosted"].ready = "ouro-desk-hosted--r2";
+  assert.equal((await go()).results.find(({ check }) => check === "legacy-cutoff").code, "ok");
+  // No ready revision at all: the check can't say what is running, which is an alert.
+  cloud.revisions["ouro-desk-hosted"].ready = null;
+  const none = (await go()).results.find(({ check }) => check === "legacy-cutoff");
+  assert.equal(none.code, "no-ready-revision");
+  assert.equal(none.ok, false);
+});
+
 test("the app is read through ARM by resource id, with no Container Apps extension", async (t) => {
   const { go, fake } = setup(t, { env: "prod", rec: record("prod", { releasedAt: iso(NOW - 2 * DAY) }) });
   await go();
-  const read = fake.calls.find(({ args }) => args[0] === "resource");
-  assert.equal(read.args[read.args.indexOf("--ids") + 1], "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.App/containerApps/ouro-desk-hosted");
+  const reads = fake.calls.filter(({ args }) => args[0] === "resource").map(({ args }) => args[args.indexOf("--ids") + 1]);
+  const app = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.App/containerApps/ouro-desk-hosted";
+  assert.deepEqual(reads, [app, `${app}/revisions/ouro-desk-hosted--r1`]);
   assert.ok(!fake.calls.some(({ args }) => args[0] === "containerapp"));
   assert.ok(!workflow.includes("az extension add"));
 });

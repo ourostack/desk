@@ -12,8 +12,8 @@
 //         entra-client-secret   the credential the gateway uses (the keyId tagged on entra-client-secret-<env>) ends
 //                               more than 30 days from now
 //         apple-secret-age      the Apple client secret (six months from apple-renewed-at) ends more than 30 days out
-//         legacy-cutoff         (prod) DESK_LEGACY_CUTOFF is set on the app once releasedAt is more than a day old, or
-//                               whenever the app maps GitHub accounts
+//         legacy-cutoff         (prod) DESK_LEGACY_CUTOFF is set on the app's ready (serving) revision once
+//                               releasedAt is more than a day old, or whenever that revision maps GitHub accounts
 //       Any failure exits 1 with one line on stderr. --alert-file then holds the alert: check names and dates only,
 //       because the issue it becomes is public.
 //   node hosted/infra/identity-checks.mjs --env test|prod --record-apple-upload a|b
@@ -80,6 +80,7 @@ export const ALERT_PHRASES = {
     "no-mappings": "the app maps no GitHub accounts, so no cutoff is needed",
     missing: "released {date}, and DESK_LEGACY_CUTOFF is still not set",
     "unreleased-mapped": "the app maps GitHub accounts, but no release is recorded and DESK_LEGACY_CUTOFF is not set",
+    "no-ready-revision": "the app has no ready revision, so what it runs can't be checked",
     unreadable: "the app's settings could not be read",
   },
   "apple-renewal": {
@@ -215,9 +216,13 @@ async function checkCutoff(ctx) {
   const released = Number.isFinite(releasedAt);
   if (released && ctx.now - releasedAt <= DAY) return result("legacy-cutoff", "not-due", [day(releasedAt)]);
   try {
-    // Only the names of env vars that hold a value or a secret reference leave az; no value does.
+    // The revision that serves now, not the app's template: a newer revision that never became ready (a bad setting,
+    // say) leaves the older one running without the cutoff.
     const id = `/subscriptions/${SUBSCRIPTION}/resourceGroups/${APPS_RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${ENVIRONMENTS.prod.app}`;
-    const names = (await azJson(ctx, ["resource", "show", "--ids", id, "--api-version", APP_API_VERSION, "--query", "properties.template.containers[].env[] | [?value || secretRef].name", "-o", "json"])) ?? [];
+    const revisions = await azJson(ctx, ["resource", "show", "--ids", id, "--api-version", APP_API_VERSION, "--query", "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}", "-o", "json"]);
+    if (!revisions?.ready) return result("legacy-cutoff", "no-ready-revision");
+    // Only the names of env vars that hold a value or a secret reference leave az; no value does.
+    const names = (await azJson(ctx, ["resource", "show", "--ids", `${id}/revisions/${revisions.ready}`, "--api-version", APP_API_VERSION, "--query", "properties.template.containers[].env[] | [?value || secretRef].name", "-o", "json"])) ?? [];
     if (names.includes("DESK_LEGACY_CUTOFF")) return result("legacy-cutoff", "ok");
     if (!names.includes("DESK_GITHUB_ACCOUNTS")) return result("legacy-cutoff", released ? "no-mappings" : "not-released", released ? [day(releasedAt)] : []);
     if (!released) return result("legacy-cutoff", "unreleased-mapped");
