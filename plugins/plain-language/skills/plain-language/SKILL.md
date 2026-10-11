@@ -17,7 +17,7 @@ Before writing, identify what the reader needs to know, decide, or do.
 
 ## Make the answer easy to find
 
-- Put the answer, outcome, decision, blocker, or warning in the opening sentence. Do not open with a preamble or restate the question.
+- Put the answer, outcome, decision, blocker, or warning in the opening sentence, and give support only if asked. Do not open with a preamble or restate the question.
 - Put warnings before the instructions they govern.
 - Present steps in the order the reader performs them.
 - Group related information. Use a list for three or more parallel items.
@@ -26,10 +26,12 @@ Before writing, identify what the reader needs to know, decide, or do.
 
 ## Keep it short
 
-Length is a cost. Chat messages, pull request bodies, review comments, code comments and commit messages all compete for the reader's attention, and a long correct answer loses to a short one. Test each sentence: does the reader learn something they cannot already see? They have the diff, the code, the thread and the output, so cut any restatement of them, even one clause.
+Length is a cost. Chat messages, pull request bodies, review and issue comments, code and doc comments, and commit messages all compete for the reader's attention. Past a few sentences the reader skims, and past a paragraph they stop reading. A long correct answer loses to a short one.
 
-- Answer the question asked, not the topic. Add background, caveats or alternatives only when they change what the reader understands or does.
-- Do not summarize your own work. Describe a change only where the reader cannot see it.
+Test each sentence: does the reader learn something they cannot already see? They have the diff, the code, the thread and the output, so cut any restatement of them, even one clause.
+
+- Answer the question asked, not the topic. Leave out caveats, alternatives and background the reader did not ask for: adding them is the completeness reflex. Warnings and open checks are not caveats.
+- Do not summarize your own work. A work report states the outcome and its evidence and describes a change only where the reader cannot see it.
 - A code comment explains why a line is surprising, and a doc comment states the contract. Neither narrates the code.
 - Assume expertise and let the reader ask for more depth.
 
@@ -40,13 +42,11 @@ A subagent kickoff brief is the exception: it starts with no context, so it may 
 These tells survive a tight edit. Cut them:
 
 - Throat-clearing, such as "The key insight is" or "It's worth noting that". The sentence after the preamble is the sentence.
-- The reframe, such as "It's not just A, it's B". Say it once, affirmatively.
+- The reframe, such as "X, which reads as Y rather than Z" or "It's not just A, it's B". Say it once, affirmatively.
 - The same claim twice, such as a paragraph and then a bullet that repeats it. Pick one.
 - An explanation of what you just said. Stop when the point lands.
 - Abstract headings, such as "Escalate appropriately". Make the heading the rule itself.
 - Tricolons and symmetry for their own sake. "Clear, concise, and correct" is one idea three times.
-
-The length and AI-tell rules adapt Tim Clem's [agent instructions](https://github.com/tclem/dotfiles/blob/main/copilot/copilot-instructions.md).
 
 ## Make the answer easy to understand
 
