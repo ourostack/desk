@@ -86,7 +86,7 @@ test("removeEnv drops only the named env vars, and a Key Vault reference and ide
   assert.ok(!envOf(app).some((entry) => entry.name === "DESK_ALLOWED_LOGINS"));
   assert.equal(envOf(app).length, envOf(shown).length - 1);
   assert.deepEqual(secretsOf(app).at(-1), { name: "kv-new", keyVaultUrl: "https://kv-ouro-identity-261e0b.vault.azure.net/secrets/x", identity: KV_IDENTITY });
-  assert.deepEqual(Object.keys(app.identity.userAssignedIdentities).length, 3);
+  assert.deepEqual(Object.keys(app.identity.userAssignedIdentities).length, Object.keys(shown.identity.userAssignedIdentities).length + 1);
   assert.equal(app.identity.type, "UserAssigned");
 });
 
@@ -186,4 +186,32 @@ test("a volume that mounts a secret the app doesn't hold is refused", () => {
   const app = structuredClone(shown);
   app.properties.configuration.secrets = app.properties.configuration.secrets.filter(({ name }) => name !== "desk-app-key");
   assert.throws(() => buildAppYaml({ shownYaml: app }), /Volume app-key mounts secret desk-app-key/);
+});
+
+// --- Fix round 2: staging never holds production's pull identity (re-review N-I1) -------------------------------
+
+const PROD_PULL_ID = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.ManagedIdentity/userAssignedIdentities/ouro-prod-services-mi";
+
+test("buildAppYaml refuses an app that holds a forbidden identity, attached or as its registry identity", () => {
+  buildAppYaml({ shownYaml, forbidIdentities: ["ouro-prod-services-mi"] });
+  const attached = structuredClone(shown);
+  attached.identity.userAssignedIdentities[PROD_PULL_ID] = {};
+  assert.throws(() => buildAppYaml({ shownYaml: attached, forbidIdentities: ["ouro-prod-services-mi"] }), /must not hold identity ouro-prod-services-mi/);
+  const registry = structuredClone(shown);
+  registry.properties.configuration.registries[0].identity = PROD_PULL_ID.toUpperCase();
+  assert.throws(() => buildAppYaml({ shownYaml: registry, forbidIdentities: ["ouro-prod-services-mi"] }), /must not hold identity ouro-prod-services-mi/);
+});
+
+test("checkWritten refuses a forbidden identity after the write, and a registry that doesn't pull with the expected identity", () => {
+  const ok = { before: shown, secretList: secretList(shown) };
+  checkWritten({ ...ok, after: shown, forbidIdentities: ["ouro-prod-services-mi"], registryIdentity: KV_IDENTITY.toLowerCase() });
+  const attached = structuredClone(shown);
+  attached.identity.userAssignedIdentities[PROD_PULL_ID] = {};
+  assert.throws(() => checkWritten({ ...ok, after: attached, forbidIdentities: ["ouro-prod-services-mi"] }), /must not hold identity ouro-prod-services-mi/);
+  const registry = structuredClone(shown);
+  registry.properties.configuration.registries[0].identity = PROD_PULL_ID;
+  assert.throws(() => checkWritten({ ...ok, after: registry, registryIdentity: KV_IDENTITY }), /pulls from ouroworkprodk2aumligevt3e\.azurecr\.io with ouro-prod-services-mi, not id-ouro-desk-hosted-staging/);
+  const none = structuredClone(shown);
+  none.properties.configuration.registries = [];
+  assert.throws(() => checkWritten({ ...ok, after: none, registryIdentity: KV_IDENTITY }), /no registry/);
 });

@@ -17,10 +17,16 @@ const clean = (value) => {
   return value;
 };
 
+// listSecrets returned this secret without a `value` key. az then fails before sending anything: its
+// `next(s["value"] for s in secret_values if s["name"] == ...)` raises KeyError, and it catches only StopIteration.
+export const LISTED_WITHOUT_VALUE = Symbol("listed without a value");
+export const AZ_KEYERROR_STDERR = "The command failed with an unexpected error. Here is the traceback:\n'value'\nTraceback (most recent call last):\n  File \"_utils.py\", line 987, in _populate_secret_values\n    value[\"value\"] = next(s[\"value\"] for s in secret_values if s[\"name\"] == value[\"name\"])\nKeyError: 'value'";
+
 export function azUpdateModel(document, listSecretValues) {
   const sent = structuredClone(document);
   for (const id of Object.keys(sent.identity?.userAssignedIdentities ?? {})) sent.identity.userAssignedIdentities[id] = {};
   for (const secret of sent.properties?.configuration?.secrets ?? []) {
+    if (!secret.value && listSecretValues[secret.name] === LISTED_WITHOUT_VALUE) throw Object.assign(new Error("KeyError: 'value'"), { stderr: AZ_KEYERROR_STDERR });
     if (!secret.value && listSecretValues[secret.name] !== undefined) secret.value = listSecretValues[secret.name];
   }
   return clean(sent);

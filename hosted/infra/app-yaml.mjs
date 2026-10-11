@@ -21,9 +21,12 @@
 //     [--ensure-placeholder <name>]... the value `unset`, only if the app lacks it
 //     [--set-env NAME=value]... [--remove-env NAME]...
 //     [--identity-record <identity-env.json>]   the Ouro tenant settings (identity-record.mjs)
+//     [--forbid-identity <name>]...    refuse an app that holds this identity (staging: production's pull identity)
 // It prints only the written file's path; notes go to stderr.
 //   node hosted/infra/app-yaml.mjs --shown <show.json> --get-env NAME    prints that env var's plain value
 //   node hosted/infra/app-yaml.mjs --mask <file>                         prints a document with every secret value as ***
+//   node hosted/infra/app-yaml.mjs --verify --before <show.json> --after <show.json> --secret-list <list.json>
+//     [--identity-record <file>] [--forbid-identity <name>]... [--registry-identity <id>]   the check after a write
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,6 +47,12 @@ export function parseShown(shown) {
 
 const isKeyVaultReference = (secret) => Boolean(secret.keyVaultUrl);
 
+// az 2.77's YAML update fills each value-less secret from listSecrets and catches only a missing name: a Key Vault
+// reference that listSecrets returns without a value makes it fail with KeyError before it sends anything (re-review
+// N-m1). provision.sh prints the same text.
+export const KEY_VAULT_FILL_FAILURE = "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). Nothing was sent; the app is unchanged. Record this for the rehearsal; the update path needs a fix before this app can be updated again.";
+export const isKeyVaultFillFailure = (stderr) => String(stderr ?? "").includes("KeyError: 'value'");
+
 // The one container the gateway runs in: the one named `gateway`, or the only one.
 function gatewayContainer(app) {
   const containers = app.properties?.template?.containers ?? [];
@@ -52,8 +61,9 @@ function gatewayContainer(app) {
   return container;
 }
 
-export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRefs = {}, keyVaultSecrets = {}, removeEnv = [], addIdentities = [] }) {
+export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRefs = {}, keyVaultSecrets = {}, removeEnv = [], addIdentities = [], forbidIdentities = [] }) {
   const app = parseShown(shownYaml);
+  refuseForbidden(app, forbidIdentities, "");
   app.properties.configuration ??= {};
   const shownSecrets = app.properties.configuration.secrets ?? [];
 
@@ -118,6 +128,19 @@ export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRe
 
 const identityIds = (app) => Object.keys(app?.identity?.userAssignedIdentities ?? {});
 const lower = (ids) => new Set(ids.map((id) => id.toLowerCase()));
+const identityName = (id) => String(id).split("/").at(-1);
+
+// Staging must never hold production's pull identity, which can write production storage and change email settings
+// (re-review N-I1): neither attached nor as the identity a registry pulls with.
+function refuseForbidden(app, forbidIdentities, when) {
+  const held = [...identityIds(app), ...(app.properties?.configuration?.registries ?? []).map((registry) => registry.identity ?? "")];
+  for (const id of held) {
+    const name = forbidIdentities.find((candidate) => candidate.toLowerCase() === identityName(id).toLowerCase());
+    if (name) {
+      throw new Error(`${app.name ?? "The app"} must not hold identity ${name}${when}: it carries production roles. Point the registry at the stage's own identity (az containerapp registry set --server <registry> --identity <its id>), remove it (az containerapp identity remove --user-assigned ${name}), and run this again.`);
+    }
+  }
+}
 
 // The user-assigned identities in `ids` that the app doesn't have. az's YAML update drops the identity map before
 // it sends the PATCH (process_loaded_yaml, then clean_null_values), so an identity is attached with
@@ -131,7 +154,7 @@ export function missingIdentities(shown, ids) {
 // included), and may drop identities, so the app as read back must still hold every secret the document held,
 // every Key Vault reference as a reference, and every identity. `secretList` is `az containerapp secret list -o
 // json` (names, and keyVaultUrl for a reference; no values).
-export function checkWritten({ before, after, secretList, keyVaultSecrets = {}, expectIdentities = [] }) {
+export function checkWritten({ before, after, secretList, keyVaultSecrets = {}, expectIdentities = [], forbidIdentities = [], registryIdentity = null }) {
   const shown = parseShown(before);
   const listed = new Map(secretList.map((secret) => [secret.name, secret]));
   for (const { name } of shown.properties?.configuration?.secrets ?? []) {
@@ -144,6 +167,17 @@ export function checkWritten({ before, after, secretList, keyVaultSecrets = {}, 
   const held = lower(identityIds(parseShown(after)));
   for (const id of [...identityIds(shown), ...expectIdentities]) {
     if (!held.has(id.toLowerCase())) throw new Error(`Identity ${id.split("/").at(-1)} is no longer attached to the app after the write.`);
+  }
+  const app = parseShown(after);
+  refuseForbidden(app, forbidIdentities, " after the write");
+  if (registryIdentity) {
+    const registries = app.properties?.configuration?.registries ?? [];
+    if (!registries.length) throw new Error(`The app has no registry after the write; it must pull with ${identityName(registryIdentity)}.`);
+    for (const registry of registries) {
+      if ((registry.identity ?? "").toLowerCase() !== registryIdentity.toLowerCase()) {
+        throw new Error(`The app pulls from ${registry.server} with ${identityName(registry.identity ?? "no identity")}, not ${identityName(registryIdentity)}, after the write.`);
+      }
+    }
   }
 }
 
@@ -188,6 +222,8 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
       before: { type: "string" },
       after: { type: "string" },
       "secret-list": { type: "string" },
+      "forbid-identity": { type: "string", multiple: true, default: [] },
+      "registry-identity": { type: "string" },
     },
   });
   const record = values["identity-record"] ? loadRecordFile(values["identity-record"]) : null;
@@ -203,6 +239,8 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
       secretList: JSON.parse(readFileSync(values["secret-list"], "utf8")),
       keyVaultSecrets: wanted.keyVaultSecrets,
       expectIdentities: wanted.addIdentities,
+      forbidIdentities: values["forbid-identity"],
+      registryIdentity: values["registry-identity"] ?? null,
     });
     return print("Checked: every secret, Key Vault reference and identity is still on the app.");
   }
@@ -237,6 +275,7 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     keyVaultSecrets: identity.keyVaultSecrets,
     addIdentities: identity.addIdentities,
     removeEnv: values["remove-env"],
+    forbidIdentities: values["forbid-identity"],
   });
   const { file } = writeAppYaml(text, { parent: values.out });
   print(file);
