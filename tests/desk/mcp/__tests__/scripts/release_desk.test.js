@@ -174,6 +174,28 @@ function sharedScript() {
   return readFileSync(path.join(repoRoot, "scripts", "build-and-check-release.sh"), "utf8")
 }
 
+test("release setup installs both committed dependency sets before running native acceptance", () => {
+  const { workflow } = releaseWorkflow()
+  const setup = workflow.jobs.build.steps
+  const acceptance = setup.findIndex(step => step.name === "Build and check the release")
+  const dependencySteps = setup.slice(0, acceptance).filter(step => step.run?.startsWith("npm ci"))
+  const installed = []
+  for (const step of dependencySteps) {
+    const result = spawnSync("node", ["-e",
+      `const args = process.argv.slice(1); const prefix = args.indexOf("--prefix");
+       console.log(JSON.stringify({ command: args[0], root: prefix < 0 ? process.env.FIXTURE_CWD : args[prefix + 1] }));`,
+      ...step.run.split(/\s+/u).slice(1)], {
+      encoding: "utf8", env: { ...bareEnv, FIXTURE_CWD: step["working-directory"] ?? "." },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    installed.push(JSON.parse(result.stdout))
+  }
+  assert.deepEqual(installed, [
+    { command: "ci", root: "plugins/desk/mcp" },
+    { command: "ci", root: "plugins/desk/browser-context-broker" },
+  ], "the actual release job must establish native dependencies before acceptance, just like the PR dry run")
+})
+
 test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
   const { text, workflow } = releaseWorkflow()
   assert.deepEqual(workflow.on.push, { branches: ["main"], paths: ["plugins/desk/changelog.d/**"] })
