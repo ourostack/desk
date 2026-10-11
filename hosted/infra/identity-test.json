@@ -8,16 +8,23 @@
   },
   "gatewayApp": null,
   "automationApp": null,
-  "userFlow": null,
+  "adminApp": {
+    "appId": "8d518663-4a25-4c58-ba35-3ec34fa99072"
+  },
+  "userFlow": {
+    "id": "a2433c80-0a14-4914-b23b-af2130b469e3",
+    "displayName": "Ouro sign-in (test)"
+  },
   "apple": {
     "outcome": null,
-    "developerId": null,
+    "developerId": "743GT2AJ24",
     "appId": "bot.ouro.identity.testapp",
     "serviceId": "bot.ouro.identity.test",
     "keyIds": {
-      "a": null,
-      "b": null
-    }
+      "a": "J99VQR95QH",
+      "b": "KHT26755BK"
+    },
+    "providerId": "18fc0b27-71d7-4192-9fd0-03735a28864e"
   },
   "gatewayIdentity": null,
   "checksIdentity": null,

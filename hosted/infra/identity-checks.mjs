@@ -16,12 +16,21 @@
 //                               releasedAt is more than a day old, or whenever that revision maps GitHub accounts
 //       Any failure exits 1 with one line on stderr. --alert-file then holds the alert: check names and dates only,
 //       because the issue it becomes is public.
+//   node hosted/infra/identity-checks.mjs --env test|prod --show-apple-key
+//       Prints the Key ID the Apple provider uses and which recorded slot that is; exits 1 when it is neither. The
+//       audit log can't tell: a PATCH of the provider logs only "Set federation settings on domain", with no Key ID
+//       (spike, 2026-10-11, Step 5).
+//   ... --admin-app (with any of the above, on the operator's machine)
+//       Calls Graph as the tenant's ouro-identity-admin app, with an app-only token made from the secret in the macOS
+//       keychain (admin-graph.mjs), instead of through az. az's own sign-in is delegated and can't reach the Apple
+//       provider (spike Step 3); the workflow's az sign-in is the automation app, which can.
 //   node hosted/infra/identity-checks.mjs --env test|prod --record-apple-upload a|b
 //       Outcome B (or none recorded): after a manual admin-center upload of the other slot's key, records that slot
 //       and the time, once Graph's Apple provider shows that slot's Key ID and the slot recorded as live is the other
 //       one. Re-recording the live slot is refused: Graph can't show a same-key upload.
 //
-// Graph calls go to az's current account, which must be the Ouro tenant (the automation app in the workflow); Key
+// Graph calls go to az's current account, which must be the Ouro tenant (the automation app in the workflow), or with
+// --admin-app to the admin app's own token, which must be for the record's tenant; Key
 // Vault and Container Apps calls name the subscription, which selects the id-ouro-identity-checks sign-in. Nothing
 // here calls Graph in the subscription's own tenant. Every call goes through `runner`, so tests replace it. No key,
 // secret, hint or accountId is ever an argument or printed.
@@ -29,8 +38,9 @@ import { writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { APPLE_RENEWED_TAG, ENVIRONMENTS, KEY_ID_TAG, SUBSCRIPTION, APPS_RESOURCE_GROUP, VAULT, appleActiveSecretName, appleActiveSetArgs, appleKeyProblem, appleKeySecretName, entraSecretName, environment, isRevoked, loadRecord } from "./identity-record.mjs";
+import { APPLE_RENEWED_TAG, ENVIRONMENTS, KEY_ID_TAG, SUBSCRIPTION, APPS_RESOURCE_GROUP, VAULT, appleActiveSecretName, appleActiveSetArgs, appleCertificateData, appleKeyProblem, appleKeySecretName, entraSecretName, environment, isRevoked, loadRecord } from "./identity-record.mjs";
 import { defaultRunner, trimOneNewline } from "./runner.mjs";
+import { adminKeychainService, createAdminGraph, readAdminSecret } from "./admin-graph.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GRAPH = "https://graph.microsoft.com/v1.0/";
@@ -55,6 +65,8 @@ export const ALERT_PHRASES = {
     "wrong-tenant": "az's current account is not in this env's Ouro tenant; nothing else was checked",
     unrecorded: "identity-<env>.json records no tenant id; nothing else was checked",
     unreadable: "az's current account could not be read; nothing else was checked",
+    "no-admin-app": "identity-<env>.json records no admin app, which --admin-app needs; nothing else was checked",
+    "no-admin-secret": "the admin app's secret isn't in this machine's keychain; nothing else was checked",
   },
   "entra-client-secret": {
     ok: "the client secret Key Vault holds (its key-id tag) ends {date}",
@@ -133,7 +145,9 @@ async function azJson(ctx, args) {
   const text = (await out(ctx, args)).trim();
   return text ? JSON.parse(text) : null;
 }
-const graphGet = (ctx, path) => azJson(ctx, ["rest", "--method", "get", "--url", `${GRAPH}${path}`]);
+// Graph through az (the workflow's automation app), or through the admin app with --admin-app.
+const graphGet = (ctx, path) => (ctx.admin ? ctx.admin.call("GET", `${GRAPH}${path}`) : azJson(ctx, ["rest", "--method", "get", "--url", `${GRAPH}${path}`]));
+const graphPatch = (ctx, path, body) => (ctx.admin ? ctx.admin.call("PATCH", `${GRAPH}${path}`, body) : out(ctx, ["rest", "--method", "patch", "--url", `${GRAPH}${path}`, "--headers", "Content-Type=application/json", "--body", "@/dev/stdin"], body));
 
 // Error text for the run log only: the command's own first line, with any accountId removed. Never for the alert.
 function detailOf(ctx, error) {
@@ -145,12 +159,41 @@ function detailOf(ctx, error) {
 async function checkTenant(ctx) {
   const expected = ctx.record.tenant?.id;
   if (!expected) return result("graph-tenant", "unrecorded");
+  if (ctx.useAdmin) return checkAdminTenant(ctx, expected);
   try {
     const signedIn = (await out(ctx, ["account", "show", "--query", "tenantId", "-o", "tsv"])).trim();
     if (signedIn !== expected) {
       ctx.log(`az's current account is in tenant ${signedIn || "(none)"}, not ${ctx.record.tenant.name} (${expected}); sign in to it (az login --tenant ${expected} --allow-no-subscriptions) and run this again.`);
       return result("graph-tenant", "wrong-tenant");
     }
+    return result("graph-tenant", "ok");
+  } catch (error) {
+    return result("graph-tenant", "unreadable", [], detailOf(ctx, error));
+  }
+}
+
+// With --admin-app: the admin app's secret from the keychain, and a token for the record's tenant. The secret and the
+// token stay in this process.
+async function checkAdminTenant(ctx, expected) {
+  const appId = ctx.record.adminApp?.appId;
+  if (!appId) return result("graph-tenant", "no-admin-app");
+  try {
+    const secret = await readAdminSecret({ runner: ctx.runner, tenantId: expected, appId });
+    if (!secret) {
+      ctx.log(`The keychain has no ${adminKeychainService(expected)} item for app ${appId}; provision-identity.mjs --env ${ctx.env} makes one.`);
+      return result("graph-tenant", "no-admin-secret");
+    }
+    const admin = createAdminGraph({ tenantId: expected, appId, secret, fetch: ctx.fetch, sleep: async () => {} });
+    try {
+      await admin.token();
+    } catch (error) {
+      if (error.code === "wrong-tenant") {
+        ctx.log(detailOf(ctx, error));
+        return result("graph-tenant", "wrong-tenant");
+      }
+      throw error;
+    }
+    ctx.admin = admin;
     return result("graph-tenant", "ok");
   } catch (error) {
     return result("graph-tenant", "unreadable", [], detailOf(ctx, error));
@@ -294,12 +337,13 @@ async function renewApple(ctx) {
       if (key.status !== "ok") return result("apple-renewal", "no-usable-slot");
       send = live;
     }
-    const body = { "@odata.type": APPLE_TYPE, keyId: apple.keyIds[send], certificateData: key.value };
+    // Key Vault holds the whole PEM; Graph takes only its Base64 body (spike, 2026-10-11).
+    const body = { "@odata.type": APPLE_TYPE, keyId: apple.keyIds[send], certificateData: appleCertificateData(key.value) };
     try {
-      await out(ctx, ["rest", "--method", "patch", "--url", `${GRAPH}identity/identityProviders/${providerId}`, "--headers", "Content-Type=application/json", "--body", "@/dev/stdin"], JSON.stringify(body));
+      await graphPatch(ctx, `identity/identityProviders/${providerId}`, JSON.stringify(body));
     } catch (error) {
-      // Graph's error body is never passed on; only its status words, which can't hold the key.
-      const status = /ERROR: ([A-Za-z ]{3,40})\(/.exec(`${error?.stderr ?? ""}`)?.[1]?.trim();
+      // Graph's error body is never passed on; only its status words or number, which can't hold the key.
+      const status = /ERROR: ([A-Za-z ]{3,40})\(/.exec(`${error?.stderr ?? ""}`)?.[1]?.trim() ?? (error?.status ? `HTTP ${error.status}` : undefined);
       ctx.log(`apple-renewal: Graph did not accept the PATCH of slot ${send}${status ? ` (${status})` : ""}.`);
       return result("apple-renewal", "refused");
     }
@@ -350,16 +394,38 @@ async function recordUpload(ctx, slot) {
   }
 }
 
+// The Key ID the Apple provider uses and its recorded slot, as one line; ok only when it is a recorded slot.
+async function showAppleKey(ctx) {
+  const apple = ctx.record.apple ?? {};
+  let providerId = apple.providerId;
+  if (!providerId) providerId = ((await graphGet(ctx, "identity/identityProviders"))?.value ?? []).find((provider) => provider["@odata.type"] === APPLE_TYPE)?.id;
+  if (!providerId) return { line: "apple-provider: the tenant has no Apple provider", ok: false };
+  const keyId = (await graphGet(ctx, `identity/identityProviders/${providerId}`))?.keyId ?? null;
+  const slot = SLOTS.find((candidate) => keyId && apple.keyIds?.[candidate] === keyId) ?? null;
+  return { line: `apple-provider: Key ID ${keyId ?? "(none)"} (${slot ? `slot ${slot}` : "neither recorded slot"})`, ok: Boolean(slot) };
+}
+
 // --- Entry -------------------------------------------------------------------------------------------------------
 
-export async function runChecks({ env, renewApple: renew = false, recordAppleUpload, runner = defaultRunner, now = Date.now, recordDir = HERE, log = () => {} }) {
+export async function runChecks({ env, renewApple: renew = false, recordAppleUpload, showAppleKey: show = false, adminApp = false, runner = defaultRunner, fetch = globalThis.fetch, now = Date.now, recordDir = HERE, log = () => {} }) {
   environment(env);
   const record = loadRecord(env, recordDir);
   const accountId = record.ari?.accountId;
   const redact = (text) => (accountId ? String(text).split(accountId).join("<accountId>") : String(text));
-  const ctx = { env, record, runner, now: now(), log: (line) => log(redact(line)), redact };
+  const ctx = { env, record, runner, fetch, useAdmin: adminApp, now: now(), log: (line) => log(redact(line)), redact };
   const results = [await checkTenant(ctx)];
   if (results[0].ok) {
+    if (show) {
+      try {
+        const shown = await showAppleKey(ctx);
+        ctx.log(shown.line);
+        if (!shown.ok) return { ok: false, results, now: ctx.now, redact, shown: true };
+      } catch (error) {
+        ctx.log(`apple-provider: could not be read: ${detailOf(ctx, error)}`);
+        return { ok: false, results, now: ctx.now, redact, shown: true };
+      }
+      return { ok: true, results, now: ctx.now, redact, shown: true };
+    }
     if (recordAppleUpload) {
       results.push(await recordUpload(ctx, recordAppleUpload));
     } else {
@@ -379,16 +445,18 @@ export function parseFlags(argv) {
       "renew-apple": { type: "boolean", default: false },
       "record-apple-upload": { type: "string" },
       "alert-file": { type: "string" },
+      "admin-app": { type: "boolean", default: false },
+      "show-apple-key": { type: "boolean", default: false },
     },
   });
   environment(values.env);
-  if (values["renew-apple"] && values["record-apple-upload"] !== undefined) throw new Error("Run one action at a time: --renew-apple or --record-apple-upload.");
+  if ([values["renew-apple"], values["record-apple-upload"] !== undefined, values["show-apple-key"]].filter(Boolean).length > 1) throw new Error("Run one action at a time: --renew-apple, --record-apple-upload or --show-apple-key.");
   if (values["record-apple-upload"] !== undefined && !SLOTS.includes(values["record-apple-upload"])) throw new Error("--record-apple-upload takes a or b.");
-  return { env: values.env, renewApple: values["renew-apple"], recordAppleUpload: values["record-apple-upload"], alertFile: values["alert-file"] };
+  return { env: values.env, renewApple: values["renew-apple"], recordAppleUpload: values["record-apple-upload"], alertFile: values["alert-file"], adminApp: values["admin-app"], showAppleKey: values["show-apple-key"] };
 }
 
 // The command line: one `ok` or `FAIL` line per check on stdout, and on failure one line on stderr and the alert file.
-export async function main(argv, { runner = defaultRunner, now = Date.now, recordDir = HERE, stdout = (text) => process.stdout.write(text), stderr = (text) => process.stderr.write(text) } = {}) {
+export async function main(argv, { runner = defaultRunner, fetch = globalThis.fetch, now = Date.now, recordDir = HERE, stdout = (text) => process.stdout.write(text), stderr = (text) => process.stderr.write(text) } = {}) {
   let flags;
   try {
     flags = parseFlags(argv);
@@ -396,7 +464,9 @@ export async function main(argv, { runner = defaultRunner, now = Date.now, recor
     stderr(`identity-checks: ${error.message}\n`);
     return 1;
   }
-  const outcome = await runChecks({ ...flags, runner, now, recordDir, log: (line) => stdout(`${line}\n`) });
+  const outcome = await runChecks({ ...flags, runner, fetch, now, recordDir, log: (line) => stdout(`${line}\n`) });
+  // --show-apple-key prints its own line; the tenant check's line only when it failed.
+  if (outcome.shown) return outcome.ok ? 0 : 1;
   for (const entry of outcome.results) {
     stdout(`${entry.ok ? "ok" : "FAIL"} ${entry.check}: ${phrase(entry)}\n`);
     if (entry.detail) stdout(`   ${entry.detail}\n`);

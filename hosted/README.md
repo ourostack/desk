@@ -109,13 +109,13 @@ The GitHub App needs no change: its callbacks already list both the Azure addres
 
 Do this for the test tenant and staging first (`--env test`, `STAGE=staging`), then for production (`--env prod`). [Ouro identity](#ouro-identity) describes each piece. Every step is safe to run again.
 
-1. **Sign `az` in** to the subscription and to the env's Ouro tenant, as [az sign-ins](#az-sign-ins) says.
+1. **Sign `az` in** to the subscription and to the env's Ouro tenant, as [az sign-ins](#az-sign-ins) says. Run the scripts on a Mac: the admin app's secret lives in the macOS keychain.
 2. **Record the Apple facts** in `hosted/infra/identity-<env>.json`: `apple.developerId` (Apple's Team ID) and `apple.outcome`, `"A"` if Graph can renew the Apple provider or `"B"` if only the admin center can. Leave `apple.outcome` as `null` until it is known; the checks then behave as under outcome B.
-3. **Import both Apple keys**, slot `a` and slot `b`, as [Import an Apple key](#import-an-apple-key) says. Under outcome B, add `--keep-file` to slot `a`'s import, because Ari uploads that file in step 5.
-4. **Provision the tenant.** Run `node hosted/infra/provision-identity.mjs --env <env> --dry-run` and read what it would change. Then run it without `--dry-run`. It creates or reconciles every piece, writes the gateway's client secret to Key Vault without printing it, and records every id in `identity-<env>.json`. It stops with exit code 2 when it must wait: while a tenant is still being created, or, under outcome B, at the Apple provider, where it prints the admin-center steps.
+3. **Import both Apple keys**, slot `a` and slot `b`, as [Import an Apple key](#import-an-apple-key) says. Under outcome B, add `--keep-file` to slot `a`'s import, because Ari uploads that file in step 5. A key put in Key Vault any other way has no `key-id` or `fingerprint` tag, so provisioning and the renewal refuse to send it. The 2026-10-11 spike imported all four keys with `az keyvault secret set --file` (tags `keyId` and `teamId` only), so import each of them again with this command, from the `.p8` files the spike kept, before the first renewal.
+4. **Provision the tenant.** Run `node hosted/infra/provision-identity.mjs --env <env> --dry-run` and read what it would change. Then run it without `--dry-run`. It creates or reconciles every piece, writes the gateway's client secret to Key Vault without printing it, and records every id in `identity-<env>.json`. It first creates or adopts the admin app `ouro-identity-admin`, grants it its Graph roles, and keeps its secret in your keychain ([az sign-ins](#az-sign-ins)); until that app can sign in, a dry run plans the email code, the Apple provider and the user flow as missing. An Apple provider or user flow that already exists is adopted, never made again: the spike made both tenants' Apple providers and the test tenant's user flow, `Ouro sign-in (test)`. A user flow refuses a new app for about 30 seconds, so linking the gateway app retries for up to three minutes. It stops with exit code 2 when it must wait: while a tenant is still being created, or, under outcome B, at the Apple provider, where it prints the admin-center steps.
 5. **Outcome B only: add Apple by hand.** Ari follows the printed steps in the Entra admin center and uploads slot `a`'s file. Then run, in this order:
    1. `node hosted/infra/provision-identity.mjs --env <env>` again, which finishes the user flow and the GitHub environment.
-   2. `node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload a`, which records the upload date (see [The first upload record](#the-first-upload-record)).
+   2. `node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload a --admin-app`, which records the upload date (see [The first upload record](#the-first-upload-record)).
    3. The slot `a` import again, without `--keep-file`. It writes the same key again and deletes the file.
 6. **Seed Ari's account.** Run `node hosted/infra/provision-identity.mjs --env <env> --seed-ari`. It gives you `Storage Table Data Contributor` on that env's accounts storage, creates Ari's account bound to his desk (`arimendelow/desk` in production, `arimendelow/desk-rehearsal` in test) and records his `accountId`. An account that exists is left as it is.
 7. **Commit `identity-<env>.json`** to the branch that carries this change, or to main through a small pull request once the identity files exist there. The identity checks workflow reads main's copy, so it checks an env only after its file reaches main.
@@ -123,7 +123,7 @@ Do this for the test tenant and staging first (`--env test`, `STAGE=staging`), t
 9. **Add the settings to the app.** Run `hosted/infra/provision.sh` (`STAGE=staging hosted/infra/provision.sh` for test). Once the record is complete, Ari's `accountId` included, it attaches the gateway identity and sets the Ouro tenant settings, the Key Vault reference for `DESK_ENTRA_CLIENT_SECRET`, `DESK_GITHUB_SIGNIN`, and `DESK_GITHUB_ACCOUNTS` and `DESK_GITHUB_LOGINS` for Ari's GitHub user id. `DESK_GITHUB_SIGNIN` is `on` the first time; after that a rerun keeps the app's value unless you pass `DESK_GITHUB_SIGNIN=on` or `DESK_GITHUB_SIGNIN=off`. Passing it before the record is complete is refused, because the setting alone would leave Ouro sign-in partly configured and the gateway would not start. Until the record is complete, it leaves the Ouro settings as they are. `DESK_ALLOWED_LOGINS` stays. Before it writes, it checks the settings with the gateway's own reader and stops if the gateway would refuse one. After the update, it waits until the app's new revision is the ready one, and fails if the revision doesn't start, so a bad setting can't leave the old revision serving unnoticed.
 10. **Deploy, then set the legacy cutoff.** The deploy needs the settings from step 9 ([Deploy](#deploy) says why). Once the release is confirmed live, set `releasedAt` (that time) and `legacyCutoff` (14 days later, an ISO time with its zone) in `identity-prod.json`, run `hosted/infra/provision.sh` to set `DESK_LEGACY_CUTOFF`, and commit the file to main. A rerun never moves the cutoff, because `provision.sh` reads it from the file. `provision.sh` refuses a cutoff or `releasedAt` without a zone, a cutoff that isn't after `releasedAt`, and a new cutoff that is already in the past, because that would end Ari's legacy connector at once. A cutoff the app already holds may be in the past, so reruns after day 14 still work. It also warns when the cutoff is not 13 to 15 days after `releasedAt`.
 11. **Invite Ari.** Run `node hosted/infra/provision-identity.mjs --env <env> --invite-ari`. Production's link lasts 24 hours and goes to `~/.ouro/invite-prod.url` (mode 0600), never to the screen. Pass `--browser-context <name>` and set `DESK_CDP_OPENER` to open it in the browser that will connect. Test links last 7 days and are printed.
-12. **Outcome A only: renew once.** Run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple`, so the Apple client secret has a recorded date at once instead of alerting daily until the next scheduled renewal.
+12. **Outcome A only: renew once.** Run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple --admin-app`, so the Apple client secret has a recorded date at once instead of alerting daily until the next scheduled renewal.
 
 To turn Ouro sign-in off again, run `REMOVE_OURO_SETTINGS=1 hosted/infra/provision.sh` (with `STAGE=staging` for test). It takes every Ouro setting off the app (`DESK_ENTRA_*`, `DESK_ACCOUNTS_ENDPOINT`, `DESK_GITHUB_*`, `DESK_LEGACY_CUTOFF` and `AZURE_CLIENT_ID`), applies no identity record, and leaves secrets, the Key Vault reference and identities in place. The gateway then signs in with GitHub for `DESK_ALLOWED_LOGINS` only, so every Ouro account is shut out until the settings return. It is also the way to clear a partial set of Ouro settings that stops the gateway from starting.
 
@@ -144,8 +144,9 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 | Piece | Name | What it does |
 | --- | --- | --- |
 | Gateway app registration | `ouro-desk-hosted`, in each tenant | The app the gateway signs people in as. Its 12-month client secret lives in Key Vault. |
-| User flow | `Ouro sign-in` | Offers the email code and Apple to the gateway app. |
-| Apple provider | Sign in with Apple | Signs people in with Apple, using one of the tenant's two Apple keys. |
+| User flow | `Ouro sign-in` (prod), `Ouro sign-in (test)` (test) | Offers the email code and Apple to the gateway app. |
+| Apple provider | Sign in with Apple | Signs people in with Apple, using one of the tenant's two Apple keys. Graph gives it a GUID id in an external tenant (`apple.providerId` in the record), not B2C's `Apple-Managed-OIDC`, so the scripts find it by its type. |
+| Admin app | `ouro-identity-admin`, in each tenant | The scripts call Graph as this app, on your machine, for what `az` can't reach: the Apple provider, the user flow and the email one-time-code policy. It holds Graph's `IdentityProvider.ReadWrite.All`, `IdentityUserFlow.ReadWrite.All`, `EventListener.ReadWrite.All`, `Policy.ReadWrite.AuthenticationMethod` and `Application.ReadWrite.All`, granted as application roles. Its secret is only in your macOS keychain. |
 | Automation app | `ouro-identity-automation`, in each tenant | The identity checks sign in to the tenant as this app, through a federated credential with no secret. It holds Graph's `IdentityProvider.ReadWrite.All` and `Application.Read.All`. |
 | Key Vault | `kv-ouro-identity-261e0b`, in resource group `rg-ouro-identity` | Holds the gateway's Entra client secret and the Apple keys, with access granted per secret. It was made with the tenants; the scripts never create it. |
 | Accounts store | Storage accounts `stouroaccounts261e0b` (prod) and `stouroacctstest261e0b` (test) | Tables `accounts`, `identities`, `invites` and `bindings`. Shared keys are off, so it is reached only through Entra roles. |
@@ -173,6 +174,7 @@ The scripts and runbooks need two `az` sign-ins at once, and each kind of call g
 
 - **The Azure subscription** `261e0bf1-934d-41ab-9295-229b0d254418`, in Microsoft's tenant. Key Vault, Container Apps, storage and role assignments go through Azure Resource Manager there, and every such command names `--subscription 261e0bf1-934d-41ab-9295-229b0d254418`. Microsoft Graph is blocked in this tenant by a conditional-access policy (error `AADSTS530084`). Therefore never run `az ad …` there, and never pass `--assignee <name>` or anything else az must look up by name. The scripts use object ids and Resource Manager for this reason. Find an identity's ids with `az identity show` and grant roles with `--assignee-object-id`.
 - **The env's Ouro tenant**, for Graph. Run `az login --tenant <tenant id> --allow-no-subscriptions`, then `az account set --subscription <tenant id>` to make it az's current account. `az ad app …` and the Graph parts of both scripts work only while the env's tenant is current. Both scripts check this and refuse to run otherwise. This tenant's Graph is not blocked.
+- **The admin app**, for the Graph calls az can't make. az's Graph token is delegated, for the Azure CLI's own app, and has no scope for identity providers, user flows or the email policy; Entra refuses to consent one (`AADSTS65002`, between two Microsoft apps). It does have `Application.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All`, so `provision-identity.mjs` uses it to create `ouro-identity-admin`, grant it its roles, and add a 90-day client secret, which it stores in your macOS keychain as `ouro-identity-admin-<tenant id>` through stdin. The scripts then sign in as that app with client credentials and call Graph themselves; the secret and the token stay in memory. When the secret expires, the next provisioning run adds a new one and replaces the keychain item. `identity-checks.mjs` uses the app when you pass `--admin-app`.
 
 ### Identity checks
 
@@ -182,7 +184,7 @@ The scripts and runbooks need two `az` sign-ins at once, and each kind of call g
 - `apple-secret-age`: the Apple client secret, which lasts six months from the `apple-renewed-at` tag on Key Vault secret `apple-siwa-active-<env>`, ends more than 30 days from now. No recorded date fails, and so does a date more than 5 minutes in the future.
 - `legacy-cutoff`, production only: `DESK_LEGACY_CUTOFF` is set on the revision that is serving, the app's latest ready revision, once `releasedAt` in `identity-prod.json` is more than a day old. With no `releasedAt` recorded, it must be set as soon as that revision maps GitHub accounts. The check reads the serving revision rather than the app's template, so a newer revision that never started doesn't count. An app with no ready revision fails the check.
 
-Under Apple outcome A the workflow also renews the Apple client secret, for test on the 1st of each month and for production on the 2nd. The issue holds only check names and dates, because the repository is public. To run the checks by hand, run `gh workflow run "Identity checks" -R ourostack/desk`. To run them locally, sign in as [az sign-ins](#az-sign-ins) says and run `node hosted/infra/identity-checks.mjs --env <env>`.
+Under Apple outcome A the workflow also renews the Apple client secret, for test on the 1st of each month and for production on the 2nd. The issue holds only check names and dates, because the repository is public. To run the checks by hand, run `gh workflow run "Identity checks" -R ourostack/desk`. To run them locally, sign in as [az sign-ins](#az-sign-ins) says and run `node hosted/infra/identity-checks.mjs --env <env> --admin-app`. Locally, always pass `--admin-app`: your own `az` sign-in can't read the Apple provider, so a renewal, an upload record or `--show-apple-key` fails without it. The workflow doesn't need it, because its `az` sign-in is the automation app.
 
 ## Secrets and rotation
 
@@ -199,6 +201,7 @@ Every secret hosted Desk uses is listed here, with where it lives, when it expir
 | Ari's production invite link | `~/.ouro/invite-prod.url`, mode 0600, on the machine that issued it | 24 hours, or when redeemed | `--invite-ari` issues a new one. |
 | The legacy probe's refresh tokens | `~/.ouro/probe-<name>.json`, mode 0600, written by the legacy probe `hosted/infra/mcp-probe.mjs`, which arrives with the rehearsal | Refused after `DESK_LEGACY_CUTOFF` | On day 14, move them to `~/.Trash/` with `mv`. |
 | Accounts storage access | No secret: the gateway's managed identity holds an Entra role, and shared keys are off. | — | Nothing to rotate. |
+| The admin app's client secret | Your macOS keychain, generic password `ouro-identity-admin-<tenant id>` with the app id as its account. The spike's secrets end on 2027-01-09. | 90 days after it was made. | The next `provision-identity.mjs --env <env>` run after it expires adds a new one and replaces the keychain item. To replace it earlier, delete the keychain item (`security delete-generic-password -s ouro-identity-admin-<tenant id>`) and run provisioning. Delete the old credential with `az ad app credential delete`. |
 | The automation app and the checks identity | No secret: each signs in through a federated credential that trusts only the `identity` environment on ourostack/desk. | — | Nothing to rotate. |
 | The Microsoft-account sign-in secret | Not present yet; it arrives with Microsoft-account sign-in in v1b-3. | At most 2 years. | Planned with v1b-3. |
 | The backup writer's credential | Not present yet; it arrives with backups in v1c. | — | Planned with v1c. |
@@ -224,7 +227,7 @@ The command keeps sign-in working throughout, and it never writes an empty secre
 
 If the gateway still shows the old fingerprint after about five minutes, the command stops with exit code 2 and keeps the old credential, so sign-in keeps working. Container Apps reads a new Key Vault version within about 30 minutes. Run the same command again later; it sees the rotation under way, adds nothing, and deletes the old credential once the gateway shows the new secret. An image from before this check logs no `entra` fingerprint, so the command can't confirm the rotation and always keeps the old credential.
 
-Afterwards, `node hosted/infra/identity-checks.mjs --env <env>` must print `ok entra-client-secret` with a date about a year away.
+Afterwards, `node hosted/infra/identity-checks.mjs --env <env> --admin-app` must print `ok entra-client-secret` with a date about a year away.
 
 ### Apple keys and the Apple client secret
 
@@ -251,13 +254,13 @@ After every import, commit `identity-<env>.json` to main through a small pull re
 The workflow renews test on the 1st of each month and production on the 2nd, so a renewal that breaks Apple sign-in shows in test a day before it reaches production. To renew by hand, renew test first and production after one Apple sign-in in the test tenant works:
 
 ```sh
-node hosted/infra/identity-checks.mjs --env test --renew-apple
-node hosted/infra/identity-checks.mjs --env prod --renew-apple
+node hosted/infra/identity-checks.mjs --env test --renew-apple --admin-app
+node hosted/infra/identity-checks.mjs --env prod --renew-apple --admin-app
 ```
 
 Don't use `gh workflow run "Identity checks" -f renew_apple=true` for this, because it renews test and production together.
 
-The renewal sends the other slot's key, but only when its tags prove it is the recorded key. It records the new date only after Graph accepts the change and the provider, read back, shows the new Key ID. If the other slot is revoked or missing, it sends the live slot again, keeps the old date and alerts, so the next step is to [replace the revoked key](#replace-a-revoked-apple-key). An Apple provider created without a recorded date gets one from its first renewal, so run one renewal right after setup rather than waiting for the scheduled one.
+The renewal sends the other slot's key, but only when its tags prove it is the recorded key. Key Vault holds the whole `.p8`; the renewal sends Graph only its Base64 body, without the `BEGIN` and `END` lines or line breaks, because Graph refuses a whole PEM. The renewal checks its own work by reading the provider back: Entra's audit log can't, because a change to the Apple provider logs only "Set federation settings on domain", with no Key ID. It records the new date only after Graph accepts the change and the provider, read back, shows the new Key ID. If the other slot is revoked or missing, it sends the live slot again, keeps the old date and alerts, so the next step is to [replace the revoked key](#replace-a-revoked-apple-key). An Apple provider created without a recorded date gets one from its first renewal, so run one renewal right after setup rather than waiting for the scheduled one.
 
 #### Renew under outcome B
 
@@ -278,7 +281,7 @@ Do this when the identity checks alert that the Apple client secret ends within 
 3. Ari uploads it. In the Entra admin center for the env's tenant, go to External Identities, All identity providers, Apple, and edit the provider. Enter the Key ID that step 1 printed and upload the file. Only Ari does this upload.
 4. Record the upload. The command checks that the provider now shows that slot's Key ID and that the slot recorded as live is the other one, and refuses otherwise.
    ```sh
-   node hosted/infra/identity-checks.mjs --env "$ENV" --record-apple-upload "$OTHER"
+   node hosted/infra/identity-checks.mjs --env "$ENV" --record-apple-upload "$OTHER" --admin-app
    ```
 5. Delete the file through the import, which writes the same key again and deletes the file once Key Vault returns it. Run this step even if step 3 or 4 failed, so the private key doesn't stay in the folder. Because the name comes from the record, the Key ID can't change.
    ```sh
@@ -290,7 +293,7 @@ Do this when the identity checks alert that the Apple client secret ends within 
 
 Until a date is recorded, the daily check alerts "no renewal or upload date is recorded". That is the state after the admin center creates the Apple provider, and for any provider created before these checks existed. Nothing back-dates it.
 
-Under outcome B, or while `apple.outcome` is `null`, record the first date right after the upload: run `node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload <slot>` with the slot the provider uses. With no earlier record, the command needs only the provider to show that slot's Key ID. It records the time you run it, not the time of the upload. If the provider's key was uploaded more than a day earlier, upload the other slot now, as in [Renew under outcome B](#renew-under-outcome-b), and record that one, so the date is true.
+Under outcome B, or while `apple.outcome` is `null`, record the first date right after the upload: run `node hosted/infra/identity-checks.mjs --env <env> --record-apple-upload <slot> --admin-app` with the slot the provider uses. With no earlier record, the command needs only the provider to show that slot's Key ID. It records the time you run it, not the time of the upload. If the provider's key was uploaded more than a day earlier, upload the other slot now, as in [Renew under outcome B](#renew-under-outcome-b), and record that one, so the date is true.
 
 Under outcome A the command refuses. A renewal records the first date instead.
 
@@ -298,12 +301,11 @@ Under outcome A the command refuses. A renewal records the first date instead.
 
 Never revoke the key the Apple provider uses: Apple sign-in breaks at once. Tag the slot in Key Vault before you revoke it at Apple, so no renewal can send it in between.
 
-1. Check which key the provider uses. With the env's Ouro tenant as az's current account, this prints only the provider's Key ID:
+1. Check which key the provider uses. This prints only the provider's Key ID and which recorded slot it is. `az rest` can't do this, because your own `az` sign-in can't read identity providers:
    ```sh
-   az rest --method get --url "https://graph.microsoft.com/v1.0/identity/identityProviders/$(node -p "require('./hosted/infra/identity-<env>.json').apple.providerId")" --query keyId -o tsv
+   node hosted/infra/identity-checks.mjs --env <env> --show-apple-key --admin-app
    ```
-   Compare it with `apple.keyIds.a` and `apple.keyIds.b` in `identity-<env>.json`.
-2. If it is the key you want to revoke, switch the provider to the other slot first. Under outcome A, run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple`, which must print `ok apple-renewal: sent the other key slot`. Under outcome B, upload the other slot and record it ([Renew under outcome B](#renew-under-outcome-b)). Then run step 1 again. Go on only when it prints the other slot's Key ID. If the other slot is missing or revoked too, stop: [replace that key](#replace-a-revoked-apple-key) first.
+2. If it is the key you want to revoke, switch the provider to the other slot first. Under outcome A, run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple --admin-app`, which must print `ok apple-renewal: sent the other key slot`. Under outcome B, upload the other slot and record it ([Renew under outcome B](#renew-under-outcome-b)). Then run step 1 again. Go on only when it prints the other slot's Key ID. If the other slot is missing or revoked too, stop: [replace that key](#replace-a-revoked-apple-key) first.
 3. Tag the slot you are revoking:
    ```sh
    az keyvault secret set-attributes --vault-name kv-ouro-identity-261e0b --name apple-siwa-key-<slot>-<env> --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --tags revoked=true

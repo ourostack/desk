@@ -51,6 +51,7 @@ export const ENVIRONMENTS = {
     publicUrls: ["https://desk.ouro.bot", `https://ouro-desk-hosted.${AZURE_DOMAIN}`],
     inviteTtlMs: 24 * 3600 * 1000,
     probe: "prod-legacy",
+    userFlowName: "Ouro sign-in",
   },
   test: {
     app: "ouro-desk-hosted-staging",
@@ -63,6 +64,8 @@ export const ENVIRONMENTS = {
     publicUrls: [`https://ouro-desk-hosted-staging.${AZURE_DOMAIN}`],
     inviteTtlMs: 7 * 24 * 3600 * 1000,
     probe: "staging-legacy",
+    // The name the spike gave the test tenant's flow (spike Step 6), so provisioning adopts it instead of adding a second.
+    userFlowName: "Ouro sign-in (test)",
   },
 };
 
@@ -98,11 +101,24 @@ export function appleKeyProblem({ tags, recordedKeyId, value }) {
   if (value !== undefined && (!tags?.[FINGERPRINT_TAG] || fingerprint(value) !== tags[FINGERPRINT_TAG])) return "its key doesn't match the fingerprint taken at import";
   return null;
 }
+// What Graph's appleManagedIdentityProvider.certificateData takes: the .p8's Base64 body only, with no
+// `-----BEGIN/END PRIVATE KEY-----` lines and no line breaks. A whole PEM is refused with 400 "The property
+// 'CertificateData' should be a Base64 encoded string" (spike, 2026-10-11). Key Vault keeps the whole PEM, as the import
+// wrote it, so the fingerprint taken at import still matches what Key Vault holds. The error never quotes the key.
+export function appleCertificateData(pem) {
+  const body = String(pem)
+    .split(/\r?\n/)
+    .filter((line) => !/^-----(BEGIN|END) [A-Z ]+-----$/.test(line.trim()))
+    .join("")
+    .replace(/\s+/g, "");
+  if (!body || body.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) throw new Error("The Apple key is not a PEM private key with a Base64 body, so Graph would refuse it; nothing was sent.");
+  return body;
+}
 export const vaultSecretUrl = (name) => `https://${VAULT}.vault.azure.net/secrets/${name}`;
 export const recordPath = (env, dir) => join(dir, `identity-${env}.json`);
 
 export function emptyRecord(env) {
-  return { env, tenant: null, gatewayApp: null, automationApp: null, userFlow: null, apple: null, gatewayIdentity: null, checksIdentity: null, storage: null, ari: null, legacyCutoff: null, releasedAt: null };
+  return { env, tenant: null, gatewayApp: null, automationApp: null, adminApp: null, userFlow: null, apple: null, gatewayIdentity: null, checksIdentity: null, storage: null, ari: null, legacyCutoff: null, releasedAt: null };
 }
 
 export function loadRecordFile(file) {
