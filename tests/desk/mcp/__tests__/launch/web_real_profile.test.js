@@ -989,6 +989,7 @@ test("actual native preparation resumes the same lease and replaces only MCP tra
   const userDataRoot = localState(path.join(machine.root, "home"),
     { "Profile 4": "fixture@microsoft.com" }, undefined, "msedge", process.platform)
   const profileRoot = path.join(userDataRoot, "Profile 4")
+  leveldb(profileRoot)
   await fs.writeFile(path.join(machine.state, "installs/1-1-a/node_modules/classic-level/index.js"), `
     exports.ClassicLevel = class {
       iterator() {
