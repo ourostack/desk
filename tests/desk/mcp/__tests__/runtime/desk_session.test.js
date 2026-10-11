@@ -1099,6 +1099,48 @@ test("refusals while admitting explain that Desk is still admitting", async (t) 
   assert.match(refused.fix, /still admitting/u)
 })
 
+test("a background attempt that starts after a call's gate is joined, not reported as admitting", async (t) => {
+  let holdInputs = null
+  const runtime = fakeRuntime()
+  const { session, root } = await makeSession(t, {
+    runtime,
+    resolveInputs: async () => {
+      if (holdInputs) await holdInputs.promise
+      return inputs({ root })
+    },
+  })
+  await session.admission.refresh()
+  assert.equal(session.admission.snapshot().state, "ready")
+  // A .git/HEAD change or a backoff retry lands after the write's own gate settled and before its turn to dispatch:
+  // two microtask hops put it after callTool resumes from the gate and before the queued dispatch runs.
+  const refresh = session.admission.refresh
+  let gates = 0
+  let background = null
+  session.admission.refresh = async (options) => {
+    const snapshot = await refresh(options)
+    gates += 1
+    if (gates === 1) {
+      queueMicrotask(() => queueMicrotask(() => {
+        holdInputs = Promise.withResolvers()
+        background = refresh({ force: true, waitMs: 0 })
+      }))
+    }
+    return snapshot
+  }
+  const write = session.callTool({ name: "task_create" })
+  await waitUntil(() => background !== null)
+  assert.equal(session.admission.running, true)
+  await flush()
+  const held = holdInputs
+  holdInputs = null
+  held.resolve()
+  await background
+  const written = await write
+  assert.notEqual(written.isError, true, JSON.stringify(written))
+  assert.equal(gates, 2, "the write joined the background attempt and gated again")
+  assert.deepEqual(runtime.calls.map((call) => call.name), ["task_create"])
+})
+
 test("a tool that throws answers a structured degraded result", async (t) => {
   const runtime = fakeRuntime()
   const { session, log } = await makeSession(t, { runtime })

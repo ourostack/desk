@@ -54,6 +54,9 @@ const STATUS_BUDGET_MS = 90
 // How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
 const STATUS_RUN_LIMIT_MS = 10000
 const GATE_WAIT_MS = 10000
+// How many background attempts that start between a gated call's own admission check and its dispatch it joins before refusing.
+const GATE_REJOINS = 3
+const GATE_RETRY = Symbol("gate retry")
 // How long task_focus waits for a session that is still admitting: short, because the call is a declaration, not work.
 const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
@@ -705,17 +708,30 @@ export function createDeskSession(deps) {
       if (name === "desk_skill") return deskSkill(input, { env })
       if (name === "desk_doctor" && !context.root) return await deskDoctor(input, signal)
       const waitMs = name === "task_focus" ? deps.focusWaitMs ?? FOCUS_WAIT_MS : GATE_WAIT_MS
-      await admission.refresh({
-        waitMs,
-        // A running status/HEAD attempt may have sampled context before this
-        // operation arrived. Join its completion, then resolve inputs anew.
-        fresh: true,
-        revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
-      })
-      return await operation((release) => {
-        if (disposed || admission.running) return pendingRefusal(name)
-        return dispatch(name, input, signal, release)
-      })
+      // A background attempt (a .git/HEAD change, a retry on the backoff) can start after this call's own
+      // attempt settled and before its turn to dispatch. Never dispatch across it: join it and gate again,
+      // within the same wait budget and a bounded number of times, instead of refusing a call that arrived while
+      // the session was admitted.
+      const deadline = Date.now() + waitMs
+      for (let gate = 0; ; gate += 1) {
+        await admission.refresh({
+          waitMs: gate === 0 ? waitMs : Math.max(0, deadline - Date.now()),
+          // A running status/HEAD attempt may have sampled context before this
+          // operation arrived. Join its completion, then resolve inputs anew.
+          fresh: true,
+          revalidateOnly: name === "desk_doctor" || requirementMet(toolRequirement(name), context),
+        })
+        // Only an attempt that started after this call's wait ended is joined; a wait that ran out refuses as before.
+        const settled = !admission.running
+        const result = await operation((release) => {
+          if (disposed) return pendingRefusal(name)
+          if (admission.running) {
+            return settled && gate < GATE_REJOINS && Date.now() < deadline ? GATE_RETRY : pendingRefusal(name)
+          }
+          return dispatch(name, input, signal, release)
+        })
+        if (result !== GATE_RETRY) return result
+      }
     } catch (error) {
       return toolException(name, error)
     }
