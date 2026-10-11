@@ -15,9 +15,9 @@ import { createMcpServer } from "../../../../../plugins/desk/mcp/src/server.js"
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const pluginRoot = path.join(repoRoot, "plugins", "desk")
 const mcpRoot = path.join(pluginRoot, "mcp")
-const expectedPluginVersion = "3.2.0-alpha.283"
+const expectedPluginVersion = "3.2.0-alpha.284"
 const expectedMcpVersion = "1.4.0-alpha.6"
-const expectedReleaseDate = "2026-10-10"
+const expectedReleaseDate = "2026-10-11"
 
 function readJson(...segments) {
   return JSON.parse(readFileSync(path.join(repoRoot, ...segments), "utf8"))
@@ -33,7 +33,7 @@ function recordMismatch(errors, label, actual, expected) {
   }
 }
 
-test("Desk 3.2.0-alpha.283 and MCP 1.4.0-alpha.6 candidate surfaces move together", async () => {
+test("Desk 3.2.0-alpha.284 and MCP 1.4.0-alpha.6 candidate surfaces move together", async () => {
   const errors = []
   const deskPlugin = readJson("plugins", "desk", "plugin.json")
   const claudePlugin = readJson("plugins", "desk", ".claude-plugin", "plugin.json")
