@@ -971,11 +971,17 @@ test("actual native preparation resumes the same lease and replaces only MCP tra
   const fs = await import("node:fs/promises")
   const { startNativeProvider } = await import("../../../../../plugins/desk/browser-context-broker/src/native-provider.mjs")
   const machine = await realMachine({ native: false })
+  const browserExecutable = browser.browserPaths("msedge", process.platform, {})[0]
+  const existing = machine.launchOptions.exists
+  machine.launchOptions.platform = process.platform
+  machine.launchOptions.arch = process.arch
+  machine.launchOptions.exists = file => file === browserExecutable || existing(file)
   await fs.cp(path.resolve(mcpRoot, "../browser-context-broker/node_modules/ws"),
     path.join(machine.state, "installs/1-1-a/node_modules/ws"), { recursive: true })
-  const userDataRoot = real.userDataDir("msedge", "darwin", {}, path.join(machine.root, "home"))
+  const userDataRoot = localState(path.join(machine.root, "home"),
+    { "Profile 4": "fixture@microsoft.com" }, undefined, "msedge", process.platform)
   const profileRoot = path.join(userDataRoot, "Profile 4")
-  const processIdentity = { pid: 700, startIdentity: "test-browser", owner: "operator", executable: EDGE, profileRoot }
+  const processIdentity = { pid: 700, startIdentity: "test-browser", owner: "operator", executable: browserExecutable, profileRoot }
   const entry = { pid: 701, parentPid: 700, startIdentity: "test-entry", owner: "operator", executable: "/fixture/entry", profileRoot: "/fixture/runtime" }
   const runtime = { pid: 702, parentPid: 701, startIdentity: "test-runtime", owner: "operator", executable: process.execPath, profileRoot: "/fixture/runtime" }
   const digestText = await fs.readFile(path.resolve(mcpRoot, "../browser-extension/source-digest.js"), "utf8")
