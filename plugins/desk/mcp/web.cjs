@@ -743,7 +743,6 @@ function start(o, io) {
   var nativeConnection = null;
   var nativeLaunchConfiguration = null;
   var nativeChildEndpoint = null;
-  var nativeRebinding = null;
   var nativeTargetsPossible = false;
   function detachNativeChild(api) {
     return api.callTool("browser_close", {}, 10000).then(function (result) {
@@ -755,8 +754,7 @@ function start(o, io) {
     });
   }
   function readyNativeChild(api, operation) {
-    if (nativeRebinding) return nativeRebinding;
-    nativeRebinding = nativeSession.resume().then(function (resumed) {
+    return nativeSession.resume().then(function (resumed) {
       if ((operation && operation.cancelled) || resumed.endpoint === nativeChildEndpoint) return;
       return api.waitForPendingCalls(30000).then(function () {
         if (operation && operation.cancelled) return;
@@ -769,13 +767,7 @@ function start(o, io) {
           nativeChildEndpoint = resumed.endpoint;
         });
       });
-    }).then(function () {
-      nativeRebinding = null;
-    }, function (error) {
-      nativeRebinding = null;
-      throw error;
     });
-    return nativeRebinding;
   }
   var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
@@ -880,7 +872,6 @@ function start(o, io) {
           "Tab selection was not performed because it activates the browser window.",
           "Use browser_run_code_unsafe to resolve exactly one task page by a recorded URL or nonce within page.context().pages(), reject missing or ambiguous matches, and perform the action directly on that Page without bringToFront. This is action-scoped: subsequent ordinary tools still use the existing current tab. Do not transfer tab groups or borrow a browser-global tab.")) }] });
       }
-      if (operation && operation.cancelled) return Promise.resolve(null);
       var work = readyNativeChild(api, operation).then(function () {
         if (operation && operation.cancelled) return null;
         return params.name === "browser_close"

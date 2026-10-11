@@ -443,3 +443,83 @@ test("native transport replacement reinitializes only the MCP child before the n
   }
   assert.equal(cleanupCount, 1)
 })
+
+test("mapped native replies preserve errors and pending internal calls fail when their exact child exits", async t => {
+  const fixture = await controlledProxy(t, {
+    mapResult: () => ({ content: [{ type: "text", text: "mapped exact result" }], isError: true }),
+    afterCall: (params, failed) => assert.equal(failed, true),
+  })
+  await fixture.wait(() => fixture.messages.some(message => message.id === 2))
+  assert.equal(fixture.messages.find(message => message.id === 2).result.content[0].text, "mapped exact result")
+  const child = fixture.children[0]
+  child.stdin.removeAllListeners("data")
+  const pending = fixture.api().callTool("browser_snapshot", {}, 100)
+  child.emit("exit", 1, null)
+  await assert.rejects(pending, /the browser ended/u)
+})
+
+test("shutdown during MCP replacement refuses a new child after the old child exits", async t => {
+  const fixture = await controlledProxy(t, { holdExit: true })
+  await fixture.wait(() => fixture.messages.some(message => message.id === 2))
+  const replacing = fixture.api().restartChild(fixture.launch)
+  fixture.stdin.end()
+  await new Promise(setImmediate)
+  fixture.children[0].emit("exit", 0, null)
+  await assert.rejects(replacing, /browser_session_closed/u)
+  assert.equal(fixture.children.length, 1)
+})
+
+test("cancellation of held startup work removes it before browser preparation", async () => {
+  const stdin = new PassThrough(), stdout = new PassThrough(), messages = []
+  let ready
+  stdout.on("data", bytes => messages.push(String(bytes)))
+  const running = proxy.serve({
+    stdin, stdout, stderr: { write() {} }, signals: new EventEmitter(), catalog: [],
+    ready: new Promise(resolve => { ready = resolve }), holdMs: 50,
+    timeoutPayload: { code: "startup-timeout" }, spawn: () => assert.fail("closed cancelled startup cannot spawn"),
+  })
+  stdin.write(JSON.stringify({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } }) + "\n")
+  stdin.write(JSON.stringify({ method: "notifications/cancelled", params: { requestId: 2 } }) + "\n")
+  stdin.end()
+  ready({ payload: { code: "closed-startup" } })
+  await running
+  assert.equal(messages.some(text => text.includes('"id":2')), false)
+})
+
+test("a no-PID child error after host shutdown settles without requiring an unavailable cleanup hook", async () => {
+  const stdin = new PassThrough(), stdout = new PassThrough(), child = new EventEmitter()
+  stdout.resume()
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough()
+  const running = proxy.serve({
+    stdin, stdout, stderr: { write() {} }, signals: new EventEmitter(), catalog: [],
+    ready: Promise.resolve({ launch: { node: process.execPath, indexFile: "/fixture", args: [], env: {} } }),
+    spawnPayload: error => ({ code: error.message }), spawn: () => child,
+  })
+  stdin.write(JSON.stringify({ id: 1, method: "initialize", params: {} }) + "\n")
+  await new Promise(resolve => setTimeout(resolve, 5))
+  stdin.end()
+  await new Promise(setImmediate)
+  child.emit("error", new Error("no-pid-after-close"))
+  await running
+})
+
+test("MCP replacement cannot create a new client after the original spawn failed", async () => {
+  const stdin = new PassThrough(), stdout = new PassThrough(), errors = []
+  stdout.resume()
+  let spawns = 0
+  const launch = { node: process.execPath, indexFile: "/fixture", args: [], env: {} }
+  const running = proxy.serve({
+    stdin, stdout, stderr: { write: value => errors.push(value) }, signals: new EventEmitter(), catalog: [],
+    ready: Promise.resolve({ launch }), cleanupBeforeReady: true,
+    spawn: () => { spawns++; throw new Error("original-spawn-failed") },
+    spawnPayload: error => ({ code: error.message }),
+    cleanup: async api => {
+      await assert.rejects(api.restartChild(launch), /browser_operations_pending/u)
+    },
+  })
+  stdin.write(JSON.stringify({ id: 1, method: "initialize", params: {} }) + "\n")
+  await new Promise(resolve => setTimeout(resolve, 20))
+  stdin.end(); await running
+  assert.equal(spawns, 1, "transport replacement must not become an implicit initial-launch retry")
+  assert.equal(errors.some(value => value.includes("browser_cleanup_incomplete")), false)
+})

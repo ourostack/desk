@@ -1969,3 +1969,43 @@ test("cancelled native rebind never replaces the MCP client or forwards the held
   assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
   await host.close()
 })
+
+test("native preparation environment is forwarded without a working-directory dependency", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeMessagingPrepare = async options => ({
+    ...await prepare(options), env: { DESK_NATIVE_FIXTURE_MARKER: "non-sensitive" },
+  })
+  const host = session(machine, { cleanupMs: 100 })
+  await host.handshake()
+  await host.call(2)
+  assert.equal(machine.stub.spawns[0].env.DESK_NATIVE_FIXTURE_MARKER, "non-sensitive")
+  await host.close()
+})
+
+test("a cancelled native rebind waiting for earlier dispatched work cannot replace its transport", posixOnly, async () => {
+  const machine = await realMachine({ mode: "heldfirst" })
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeMessagingPrepare = async options => {
+    const connection = await prepare(options)
+    let calls = 0
+    connection.session.resume = () => Promise.resolve({
+      changed: ++calls !== 1,
+      endpoint: calls === 1 ? "http://127.0.0.1:1234/owned" : "http://127.0.0.1:1234/replacement",
+    })
+    return connection
+  }
+  const host = session(machine)
+  await host.handshake()
+  const first = host.call(2)
+  await host.wait(() => machine.stub.spawns[0]?.child.completeFirst, "the earlier dispatched call")
+  host.send({ id: 3, method: "tools/call", params: { name: "browser_snapshot", arguments: {} } })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  host.send({ method: "notifications/cancelled", params: { requestId: 3 } })
+  machine.stub.spawns[0].child.completeFirst()
+  await first
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(machine.stub.spawns.length, 1)
+  assert.equal(machine.events.includes("child:tools/call browser_snapshot"), false)
+  await host.close()
+})

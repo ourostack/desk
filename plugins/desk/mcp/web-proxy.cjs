@@ -217,13 +217,13 @@ function serve(options) {
 
     function restartChild(launch) {
       if (restarting) return restarting;
-      if (closed || Object.keys(inflight).length !== 0 || Object.keys(own).length !== 0) {
+      if (closed || child === null || Object.keys(inflight).length !== 0 || Object.keys(own).length !== 0) {
         return Promise.reject(new Error("browser_operations_pending"));
       }
       var previous = child;
       childReady = false;
       replacingChild = previous;
-      var stopped = previous === null ? Promise.resolve() : new Promise(function (resolve, reject) {
+      var stopped = new Promise(function (resolve, reject) {
         var timer = setTimeout(function () {
           reject(new Error("browser_client_detach_unconfirmed"));
           previous.kill("SIGTERM");

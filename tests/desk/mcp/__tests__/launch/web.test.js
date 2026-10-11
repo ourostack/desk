@@ -1575,3 +1575,18 @@ test("sessions that start together install once and every one gets its first cal
   assert.equal(npmCalls(fixture.log).filter((call) => call.args[0] === "install").length, 1)
   assert.equal(readdirSync(path.join(fixture.state, "installs")).length, 1)
 })
+
+test("unchanged maintained release preserves a native-ready install or a recorded optional-reader refusal", posixOnly, async () => {
+  for (const nativeReady of [true, false]) {
+    const m = await refreshMachine("desk-web-native-refresh-", { FAKE_NPM_VERSION: "0.0.81" })
+    preinstall(m.state)
+    if (nativeReady) {
+      touch(path.join(m.state, "installs/1-1-a/node_modules/classic-level/package.json"), "{}")
+      touch(path.join(m.state, "installs/1-1-a/node_modules/ws/package.json"), "{}")
+    } else {
+      touch(path.join(m.state, "installs/1-1-a/reader-unavailable"), "")
+    }
+    assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
+    assert.equal(m.calls().some(call => call.args[0] === "install"), false)
+  }
+})
