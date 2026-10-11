@@ -711,7 +711,7 @@ export async function runOwnedCatalogNative(options) {
   return runNativeTransaction(options,realNativeRun)
 }
 async function runNativeTransaction({owned,command,args,env,deadline,resultFile,onChild,onChildExit,spawn:spawnNative=spawn},context) {
-    let child,lifecycle,closed=false,ownsPID=false,exitCode=null,signal=null,nativeError=null,stdout="",stderr="",partial="",total=0,successSeen=false
+    let child,lifecycle,closed=false,ownsPID=false,exitCode=null,signal=null,nativeError=null,stdout="",stderr="",partial="",total=0,successSeen=false,cost=null,budgetExceeded=false
     let timer,hard
     const decoder=new TextDecoder("utf-8",{fatal:true})
     const resources={runDir:owned.runDir,pids:[],exited_pids:[],native_exit:null}
@@ -751,8 +751,15 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
           try{
             const value=JSON.parse(line)
             if(value.type==="result"){
+              cost=Number.isFinite(value.total_cost_usd)&&value.total_cost_usd>=0?value.total_cost_usd:null
               if(value.subtype==="success"&&value.is_error===false){successSeen=true;lifecycle.finish().catch(lifecycle.fail)}
-              else{nativeError=new Error("native_failed");lifecycle.fail(nativeError);child.kill("SIGTERM")}
+              else{
+                // Pinned native error-result discriminator, never prose or a
+                // substring. Malformed/cost-unvalidated terminals stay failed.
+                budgetExceeded=value.subtype==="error_max_budget_usd"&&value.is_error===true&&cost!==null
+                nativeError=new Error(budgetExceeded?"native_budget_exceeded":"native_failed")
+                lifecycle.fail(nativeError);child.kill("SIGTERM")
+              }
             }
           }catch{nativeError=new Error("native_bad_stream");lifecycle.fail(nativeError);child.kill("SIGTERM")}
         }
@@ -766,18 +773,21 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       clearTimeout(timer);clearTimeout(hard)
       resources.native_exit={code:exitCode,signal,stdio_closed:closed}
       const stream={kind:closed?"closed":"timeout",code:exitCode,stdout,truncated:total>1048576}
-      if(nativeError||!closed||exitCode!==0||signal||!successSeen||done.state!=="closed"||!await owned.verifyPrepared())return {state:"failed",reason:nativeError?.message??done.reason??"native_incomplete",stream,resources}
+      if(nativeError||!closed||exitCode!==0||signal||!successSeen||done.state!=="closed"||!await owned.verifyPrepared())return {
+        state:nativeError?.message==="native_timeout"||!closed?"timeout":budgetExceeded?"budget_exceeded":"failed",
+        cost_usd:cost,reason:nativeError?.message??done.reason??"native_incomplete",stream,resources}
       const materialized=await context.materialize({custody:done.custody,nativeStream:stream,brief:owned.prepared.brief,resultFile})
       const run={...materialized,stream,custody:done.custody,resources,
         invocation:{command,args,cwd:owned.runDir,parent_env_sha256:catalogHash(catalogCanonical(env)),owned_launch:owned.launch,
           prepared_sha256:owned.prepared.sha256,catalog_sha256:owned.catalog.catalogSha256,brief_sha256:owned.catalog.briefSha256,record_refs_sha256:owned.catalog.recordRefsSha256},
-        snapshotFile:owned.launch.identity.bootstrap.snapshotFile,cost_usd:JSON.parse(stdout.trim().split("\n").at(-1)).total_cost_usd??null}
+        snapshotFile:owned.launch.identity.bootstrap.snapshotFile,cost_usd:cost}
       if(run.state==="ran")context.registry.set(run,catalogHash(catalogCanonical(run)))
       return run
     }catch(e){
       if(child&&!closed&&ownsPID)child.kill("SIGTERM")
       if(lifecycle)await lifecycle.abort();else await owned.close()
-      return {state:"scope_unqualified",reason:"diagnostic_inadequate",detail:e.message,stream:{kind:"failed",stdout,truncated:false},resources}
+      return {state:nativeError?.message==="native_timeout"?"timeout":budgetExceeded?"budget_exceeded":"scope_unqualified",
+        cost_usd:cost,reason:"diagnostic_inadequate",detail:e.message,stream:{kind:"failed",stdout,truncated:false},resources}
     }finally{
       // A rejected bootstrap must not return before its owned native process
       // has been reaped; timers belong to every path, not just normal closure.
@@ -799,7 +809,8 @@ export async function runNonacceptedNativeTransaction(config){
   if(!["normal","lateClose","noCost","emptyLines","stderrSmall","prepareChanged","statDev","statIno","statHash",
     "lifecycleThrows","spawnThrows","pidUnknown","outputLimit","badUTF8","badJSON","resultFailure","stderrLimit","childError",
     "closeBadUTF8","softTimeout","hardTimeout","noClose","timerAfterClose","noSuccess","nonzeroExit","signalExit","preparedFinal",
-    "materializeRefused","completeThrows","abortStuck","finishReject"].includes(mode))fail("unit_mode")
+    "materializeRefused","completeThrows","abortStuck","finishReject",
+    "budget","budgetZero","budgetBadCost","budgetNegativeCost","budgetMissingCost","budgetWrongError","budgetProse","budgetCompleteThrows"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualLaunches:0,actualFileOperations:0,closed:0,signals:[],registered:false}
   const child=new EventEmitter()
   Object.assign(child,{pid:mode==="pidUnknown"?0:500003,stdout:new PassThrough(),stderr:new PassThrough()})
@@ -812,7 +823,8 @@ export async function runNonacceptedNativeTransaction(config){
     return Promise.resolve()
   }
   const lifecycle={boot:Promise.resolve(),finish,fail(e){error=e;if(mode!=="timerAfterClose")completeResolve(result())},
-    async complete(){if(["completeThrows","abortStuck"].includes(mode))throw Error("unit_complete_failed");await complete;return result()},
+    async complete(){if(["completeThrows","abortStuck"].includes(mode))throw Error("unit_complete_failed");await complete;
+      if(mode==="budgetCompleteThrows")throw Error("unit_complete_failed");return result()},
     async abort(){error=Error("unit_abort");completeResolve(result())}}
   const closeChild=(code=0,signal=null)=>{
     if(exited)return
@@ -848,6 +860,17 @@ export async function runNonacceptedNativeTransaction(config){
       if(mode==="badUTF8"){child.stdout.write(Buffer.from([0xff]));return}
       if(mode==="badJSON"){child.stdout.write("{\n");return}
       if(mode==="resultFailure"){child.stdout.write('{"type":"result","subtype":"error","is_error":true}\n');return}
+      if(mode.startsWith("budget")){
+        // Actual installed 2.1.296 error-result shape, synthetic data only.
+        const value={type:"result",subtype:mode==="budgetProse"?"error_budget_in_prose":"error_max_budget_usd",
+          is_error:mode!=="budgetWrongError",duration_ms:1,duration_api_ms:1,num_turns:1,stop_reason:null,
+          total_cost_usd:mode==="budgetBadCost"?"1.25":mode==="budgetNegativeCost"?-1:mode==="budgetZero"?0:1.25,
+          usage:{input_tokens:0,output_tokens:0,cache_creation_input_tokens:0,cache_read_input_tokens:0},
+          modelUsage:{},permission_denials:[],errors:["synthetic budget terminal"],
+          uuid:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",session_id:"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}
+        if(mode==="budgetMissingCost")delete value.total_cost_usd
+        child.stdout.write(JSON.stringify(value)+"\n");return
+      }
       if(mode==="stderrLimit"){child.stderr.write(Buffer.alloc(65537));return}
       if(mode==="childError"){child.emit("error",Error("unit_child_failed"));closeChild(1);return}
       if(mode==="closeBadUTF8"){child.stdout.write(Buffer.from([0xf0]));closeChild(0);return}

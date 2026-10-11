@@ -274,6 +274,27 @@ test("nonaccepted_lifecycle_matrix_reuses_controller_without_real_maps_or_fds",a
 })
 test("nonaccepted_native_io_matrix_keeps_actual_registry_and_spawn_unreachable",async(t)=>{
   await assert.rejects(custody.runNonacceptedNativeTransaction({mode:"unknown"}),{message:"unit_mode"})
+  for(const [mode,state,cost]of [
+    ["softTimeout","timeout",null],["hardTimeout","timeout",null],
+    ["budget","budget_exceeded",1.25],["budgetZero","budget_exceeded",0],["budgetCompleteThrows","budget_exceeded",1.25],
+    ["budgetBadCost","failed",null],["budgetNegativeCost","failed",null],
+    ["budgetMissingCost","failed",null],["budgetWrongError","failed",1.25],["budgetProse","failed",1.25],
+  ]){
+    await t.test(`terminal_${mode}`,async()=>{
+      const result=await custody.runNonacceptedNativeTransaction({mode})
+      assert.equal(result.outcome.state,state,mode)
+      assert.equal(result.outcome.cost_usd,cost,mode)
+      assert.equal(result.statistics.registered,false,mode)
+      if(mode==="hardTimeout"){
+        assert.ok(result.statistics.signals.includes("SIGKILL"))
+        assert.equal(typeof result.outcome.resources.native_exit.stdio_closed,"boolean")
+        // An absolute deadline may win the queued close event. Preserve that
+        // ambiguity; do not invent a closed stream or materialize its output.
+        if(!result.outcome.resources.native_exit.stdio_closed)assert.equal(result.outcome.stream.kind,"timeout")
+      }else assert.equal(result.outcome.resources.native_exit.stdio_closed,true,mode)
+      assert.equal(result.authority,false)
+    })
+  }
   for(const mode of ["normal","lateClose","noCost","emptyLines","stderrSmall","prepareChanged","statDev","statIno","statHash",
     "lifecycleThrows","spawnThrows","pidUnknown","outputLimit","badUTF8","badJSON","resultFailure","stderrLimit","childError",
     "closeBadUTF8","softTimeout","hardTimeout","noClose","timerAfterClose","noSuccess","nonzeroExit","signalExit","preparedFinal",

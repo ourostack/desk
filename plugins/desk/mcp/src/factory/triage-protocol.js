@@ -52,7 +52,10 @@ export function guardedCatalogTransport({input,output,onFailure,onMessage,limits
         if(index<0)break
         framesIn++
         if(framesIn>limits.incomingFrames)throw new Error("wire_frame_count")
-        const line=new TextDecoder("utf-8",{fatal:true}).decode(partial)
+        // An optional single CR immediately before LF is a delimiter, not
+        // JSON whitespace. Keep original bytes in frame/aggregate accounting.
+        const payload=partial.at(-1)===13?partial.subarray(0,-1):partial
+        const line=new TextDecoder("utf-8",{fatal:true}).decode(payload)
         const message=deserializeMessage(line)
         if(serializeMessage(message)!==line+"\n")throw new Error("wire_noncanonical")
         // SDK unknown object keys otherwise disappear on schema parse. Tool

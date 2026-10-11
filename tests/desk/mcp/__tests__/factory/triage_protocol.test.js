@@ -117,7 +117,7 @@ test("same_source_unit_launcher_control_and_teardown_outcomes",async(t)=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   for(const scenario of ["finish","native_eof","wrong_generation","wrong_event","extra_key","input_error","child_error","stderr_limit","parent_changed","signal","nonzero_exit",
     "deadline","early_eof","pipe_error","redundant_epipe","stderr_small","readable_after_ready","spawn_throw",
-    "wrong_cwd","uid_changed_after_first_js","close_listener_throw"]){
+    "wrong_cwd","uid_changed_after_first_js","close_listener_throw","parent_stable"]){
     await t.test(scenario,async()=>{
       const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-launcher-")));fs.chmodSync(dir,0o700)
       t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
@@ -179,6 +179,7 @@ test("same_source_unit_launcher_control_and_teardown_outcomes",async(t)=>{
         if(scenario==="child_error")child.emit("error",Error("synthetic"))
         if(scenario==="stderr_limit")child.stderr.write(Buffer.alloc(65537))
         if(scenario==="parent_changed")runtime.ppid++
+        if(scenario==="parent_stable"){await new Promise(resolve=>setTimeout(resolve,150));await send({...ready,event:"finish"})}
         if(scenario==="signal")runtime.emit("SIGTERM")
         if(scenario==="nonzero_exit")close(1)
         if(scenario==="pipe_error")child.stdin.emit("error",Object.assign(Error("synthetic_pipe"),{code:"EPIPE"}))
@@ -189,7 +190,7 @@ test("same_source_unit_launcher_control_and_teardown_outcomes",async(t)=>{
       const stop=Date.now()+2000
       while(!runtime.stdout.writableEnded&&Date.now()<stop)await new Promise(resolve=>setTimeout(resolve,10))
       assert.equal(runtime.stdout.writableEnded,true,"source must close pipes/timer/watch")
-      assert.equal(runtime.exitCode,["finish","native_eof","redundant_epipe","stderr_small","readable_after_ready"].includes(scenario)?0:1)
+      assert.equal(runtime.exitCode,["finish","native_eof","redundant_epipe","stderr_small","readable_after_ready","parent_stable"].includes(scenario)?0:1)
       assert.equal(fs.existsSync(path.join(dir,"qualification.json")),false)
       assert.equal(fs.existsSync(path.join(dir,"unaccepted.json")),false)
     })
@@ -313,14 +314,40 @@ process.once("beforeExit",()=>{process.exitCode=runtime.exitCode})
     })
   }
 })
-test("canonical_wire_does_not_silently_rewrite_crlf",async()=>{
-  const input=new PassThrough(),output=new PassThrough()
-  let failure
-  const guarded=protocol.guardedCatalogTransport({input,output,onFailure:error=>{failure=error}})
-  input.end('{"jsonrpc":"2.0","id":1,"method":"ping"}\r\n')
-  await new Promise(resolve=>setTimeout(resolve,10))
-  assert.equal(failure?.message,"wire_noncanonical")
-  await guarded.close()
+test("canonical_wire_accepts_lf_and_crlf_only_with_raw_byte_limits",async(t)=>{
+  const payload='{"jsonrpc":"2.0","id":1,"method":"ping"}'
+  for(const [name,parts,frameBytes,incomingBytes,want]of [
+    ["lf",[payload+"\n"],payload.length,payload.length+1,null],
+    ["crlf",[payload+"\r\n"],payload.length+1,payload.length+2,null],
+    ["split_crlf",[payload+"\r","\n"],payload.length+1,payload.length+2,null],
+    ["split_payload",[payload.slice(0,12),payload.slice(12)+"\r","\n"],payload.length+1,payload.length+2,null],
+    ["lf_frame_over",[payload+"\n"],payload.length-1,1000,"wire_frame_limit"],
+    ["crlf_frame_over",[payload+"\r\n"],payload.length,1000,"wire_frame_limit"],
+    ["crlf_raw_over",[payload+"\r\n"],1000,payload.length+1,"wire_input_limit"],
+    ["double_cr",[payload+"\r\r\n"],1000,1000,"wire_noncanonical"],
+    ["trailing_space",[payload+" \n"],1000,1000,"wire_noncanonical"],
+    ["trailing_tab",[payload+"\t\r\n"],1000,1000,"wire_noncanonical"],
+    ["leading_space",[" "+payload+"\r\n"],1000,1000,"wire_noncanonical"],
+    ["lone_cr",[payload+"\r"],1000,1000,"wire_incomplete"],
+  ]){
+    await t.test(name,async()=>{
+      const input=new PassThrough(),output=new PassThrough(),messages=[]
+      let failure
+      const guard=protocol.guardedCatalogTransport({input,output,
+        limits:{frameBytes,incomingBytes,outgoingBytes:1000,incomingFrames:1,outgoingFrames:1},
+        onFailure:error=>{failure=error},onMessage:value=>messages.push(value)})
+      guard.transport.onmessage=()=>{}
+      await guard.transport.start()
+      for(const part of parts)input.write(part)
+      input.end()
+      await new Promise(resolve=>setTimeout(resolve,10))
+      assert.equal(failure?.message??null,want,name)
+      assert.equal(messages.length,want===null?1:0,name)
+      assert.equal(guard.counters().totalIn,parts.reduce((n,x)=>n+Buffer.byteLength(x),0),name)
+      if(want===null)assert.deepEqual(messages[0],{jsonrpc:"2.0",id:1,method:"ping"})
+      await guard.close()
+    })
+  }
 })
 test("failed_private_receipt_does_not_seal_submission",async(t)=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
