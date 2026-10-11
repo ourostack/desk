@@ -510,6 +510,10 @@ jobs:
           git diff --exit-code -- plugins/desk/mcp/artifacts/browser-messaging
           node --test tests/desk/mcp/__tests__/launch/web_native_messaging.test.js
 
+      - name: Verify installed messaging configuration on this operating system
+        shell: bash
+        run: node --test tests/desk/mcp/__tests__/launch/native_messaging_host_install.test.js
+
       - name: Build the native runtime dependency pack
         shell: bash
         working-directory: plugins/desk/mcp
