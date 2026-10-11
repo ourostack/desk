@@ -131,10 +131,10 @@ test("a dry run makes no write call and prints each would-be write with every se
   const shown = logs.join("\n");
   assert.match(shown, /would run: az ad app create --display-name ouro-desk-hosted /);
   assert.match(shown, /would run: az ad app credential reset .*--append.*\n.*would run: az keyvault secret set .*--file \/dev\/stdin.*\(stdin: \*\*\*\)/);
-  // The Apple provider goes through the admin app's app-only token (spike Step 3), its key as stdin-like body only.
-  assert.match(shown, /would run: graph POST https:\/\/graph\.microsoft\.com\/v1\.0\/identity\/identityProviders \(stdin: \*\*\*\)/);
+  // Until the admin app can sign in, the tenant's own settings are unknown, not planned as missing (round 2, m2).
+  assert.match(shown, /==> email code, Apple provider and user flow: unknown until the ouro-identity-admin app can sign in/);
   assert.match(shown, /would run: az ad app credential reset --id <ouro-identity-admin appId once created> --append .*\n.*would run: security -i \(stdin: \*\*\*\)/);
-  assert.match(shown, /The ouro-identity-admin app can't sign in yet, so this dry run plans the tenant's email code, Apple provider and user flow as missing/);
+  assert.match(shown, /The ouro-identity-admin app can't sign in yet, so this dry run can't read the tenant's email code, Apple provider or user flow/);
   assert.match(shown, /would run: gh api -X PUT repos\/ourostack\/desk\/environments\/identity/);
   assert.match(shown, /would run: az storage account create -n stouroacctstest261e0b .*--sku Standard_ZRS.*--min-tls-version TLS1_2.*--allow-shared-key-access false/);
   assertNoneOf(everythingShown({ logs, fake }), [APPLE_KEY]);
@@ -1247,7 +1247,8 @@ test("review 3: --rotate signing-key --emergency replaces both keys and drops th
 
 // --- The live spike (2026-10-11) ------------------------------------------------------------------------------------
 
-const ADMIN_ROLE_NAMES = ["IdentityProvider.ReadWrite.All", "IdentityUserFlow.ReadWrite.All", "EventListener.ReadWrite.All", "Policy.ReadWrite.AuthenticationMethod", "Application.ReadWrite.All"];
+// No call uses IdentityUserFlow.ReadWrite.All: authenticationEventsFlows take EventListener.* (round 2, m3).
+const ADMIN_ROLE_NAMES = ["IdentityProvider.ReadWrite.All", "EventListener.ReadWrite.All", "Policy.ReadWrite.AuthenticationMethod", "Application.ReadWrite.All"];
 const IDENTITY_PATHS = /identity\/identityProviders|identity\/authenticationEventsFlows|policies\/authenticationMethodsPolicy/;
 
 // A tenant as the spike left it: the admin app with its roles and keychain secret, and an Apple provider with a GUID id.
@@ -1391,4 +1392,153 @@ test("spike 4: a user flow refuses a brand-new service principal for about 30 se
   stuck.flowLinkLag = 1000;
   const second = setup(t, { cloud: stuck });
   await assert.rejects(second.go(), /application id .* is invalid/i);
+});
+
+// --- Spike fix round 2 (the scoped re-review) ------------------------------------------------------------------------
+
+const adminApp = (cloud) => cloud.graph.apps.find(({ displayName }) => displayName === "ouro-identity-admin");
+const credentialDeletes = (fake) => fake.calls.filter(({ cmd, args }) => cmd === "az" && args.slice(0, 4).join(" ") === "ad app credential delete");
+
+test("round 2 I1: when the keychain refuses the admin secret, exactly the credential this run created is deleted, once Graph lists it", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  cloud.keychain = {};
+  cloud.keychainWrite = "fail";
+  // Graph lists the new credential only on the third list.
+  cloud.credentialListLag = 2;
+  const context = setup(t, { cloud });
+  await assert.rejects(context.go(), /security -i failed/);
+  const deletes = credentialDeletes(context.fake);
+  assert.equal(deletes.length, 1);
+  assert.notEqual(deletes[0].args[deletes[0].args.indexOf("--key-id") + 1], "kc-1", "the spike's credential is never deleted");
+  assert.deepEqual(admin.passwordCredentials.map(({ keyId }) => keyId), ["kc-1"]);
+  assert.match(context.logs.join("\n"), /removed the unsaved credential/);
+});
+
+test("round 2 I1: a keychain item that reads back as a different secret makes the run delete its own credential", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  cloud.keychain = {};
+  cloud.keychainWrite = "corrupt";
+  const context = setup(t, { cloud });
+  await assert.rejects(context.go(), /doesn't read back/);
+  assert.equal(credentialDeletes(context.fake).length, 1);
+  assert.deepEqual(admin.passwordCredentials.map(({ keyId }) => keyId), ["kc-1"]);
+});
+
+test("round 2 m1: a secret this run made that Entra still refuses stops the run instead of minting a second one", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  cloud.keychain = {};
+  const context = setup(t, { cloud });
+  const runner = async (cmd, args, options) => {
+    const result = await context.fake.runner(cmd, args, options);
+    if (cmd === "az" && args.join(" ").startsWith("ad app credential reset")) for (const credential of admin.passwordCredentials) credential.pendingFor ??= 10_000;
+    return result;
+  };
+  await assert.rejects(context.go({}, { runner }), /new secret is still refused; run this again in a few minutes/);
+  assert.equal(admin.passwordCredentials.length, 2, "the spike's and this run's, no third");
+  assert.equal(credentialDeletes(context.fake).length, 0, "the pending credential is kept for the rerun");
+});
+
+test("round 2 m1: a refused secret this run didn't make is not waited for; one this run made is", async () => {
+  const { createAdminGraph } = await import("../infra/admin-graph.mjs");
+  let tokenRequests = 0;
+  let sleeps = 0;
+  const fetch = async () => {
+    tokenRequests += 1;
+    return new Response(JSON.stringify({ error: "invalid_client", error_description: "AADSTS7000215" }), { status: 401 });
+  };
+  const stale = createAdminGraph({ tenantId: TEST_TENANT, appId: "app", secret: "s", fetch, sleep: async () => (sleeps += 1), fresh: () => false });
+  await assert.rejects(stale.token(), (error) => error.code === "invalid_client");
+  assert.deepEqual([tokenRequests, sleeps], [1, 0]);
+  tokenRequests = 0;
+  const fresh = createAdminGraph({ tenantId: TEST_TENANT, appId: "app", secret: "s", fetch, sleep: async () => (sleeps += 1), fresh: () => true, tries: 3 });
+  await assert.rejects(fresh.token(), (error) => error.code === "invalid_client");
+  assert.deepEqual([tokenRequests, sleeps], [4, 3]);
+});
+
+test("round 2 m2: an Apple provider that exists is never answered with the admin-center steps, even when the admin app can't sign in yet", async (t) => {
+  const { cloud } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  cloud.keychain = {};
+  const context = setup(t, { cloud, record: { apple: { outcome: null, developerId: "743GT2AJ24", serviceId: "bot.ouro.identity.test", keyIds: { a: "KEYIDAAAAA", b: "KEYIDBBBBB" } } } });
+  await context.go({ dryRun: true });
+  const shown = context.logs.join("\n");
+  assert.doesNotMatch(shown, /admin center|All identity providers/);
+  assert.match(shown, /unknown until the ouro-identity-admin app can sign in/);
+  // The steps after it are still listed.
+  assert.match(shown, /==> GitHub environment identity/);
+});
+
+test("round 2 m3: the admin app is granted only the roles some call needs", async () => {
+  const { ADMIN_ROLES } = await import("../infra/admin-graph.mjs");
+  assert.deepEqual([...ADMIN_ROLES].sort(), [...ADMIN_ROLE_NAMES].sort());
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith("| Admin app |"));
+  const [granted, spikeApps] = row.split("2026-10-11 spike");
+  for (const role of ADMIN_ROLE_NAMES) assert.ok(granted.includes(role), role);
+  assert.ok(!granted.includes("IdentityUserFlow.ReadWrite.All"));
+  // The spike-made apps hold four more, which nothing removes.
+  for (const extra of ["IdentityUserFlow.ReadWrite.All", "Policy.ReadWrite.AuthenticationFlows", "User.Read.All", "AuditLog.Read.All"]) assert.ok(spikeApps.includes(extra), extra);
+});
+
+test("round 2 m4: a brand-new service principal's first role grants are retried through replication, and an existing grant counts as done", async (t) => {
+  const cloud = withAppleKeyInVault(emptyCloud());
+  cloud.grantLag = 2;
+  const context = setup(t, { cloud });
+  await context.go();
+  const adminSp = cloud.graph.sps.find(({ appId }) => appId === adminApp(cloud).appId);
+  assert.deepEqual([...adminSp.appRoleAssignments].sort(), ADMIN_ROLE_NAMES.map((name) => GRAPH_ROLES[name]).sort());
+  // A stale read plans grants that exist; Graph's "already exists" is success.
+  cloud.staleRoleReads = 1;
+  await context.go();
+  assert.equal(adminSp.appRoleAssignments.length, ADMIN_ROLE_NAMES.length);
+});
+
+test("round 2 m5: the README re-imports the spike's keys with --keep-file until Task 9 confirms outcome A", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const step = readme.split("\n").find((line) => line.startsWith("3. **Import both Apple keys**"));
+  assert.match(step, /spike/);
+  assert.match(step, /--keep-file/);
+  assert.match(step, /Task 9/);
+  assert.match(step.slice(step.indexOf("spike")), /--keep-file/);
+});
+
+test("round 2 m6: the admin token is fetched again when it expires or Graph answers 401", async () => {
+  const { createAdminGraph } = await import("../infra/admin-graph.mjs");
+  const claims = Buffer.from(JSON.stringify({ tid: TEST_TENANT, roles: ADMIN_ROLE_NAMES })).toString("base64url");
+  let issued = 0;
+  let clock = 0;
+  let rejectNext = false;
+  const fetch = async (url, { headers = {} } = {}) => {
+    if (url.includes("/oauth2/v2.0/token")) {
+      issued += 1;
+      return new Response(JSON.stringify({ access_token: `h.${claims}.t${issued}`, expires_in: 3600 }), { status: 200 });
+    }
+    if (rejectNext) {
+      rejectNext = false;
+      return new Response(JSON.stringify({ error: { code: "InvalidAuthenticationToken", message: "Lifetime validation failed, the token is expired." } }), { status: 401 });
+    }
+    return new Response(JSON.stringify({ token: headers.Authorization.split(".").at(-1) }), { status: 200 });
+  };
+  const graph = createAdminGraph({ tenantId: TEST_TENANT, appId: "app", secret: "s", fetch, sleep: async () => {}, now: () => clock });
+  assert.deepEqual(await graph.call("GET", "https://graph.microsoft.com/v1.0/x"), { token: "t1" });
+  // An hour later the cached token has expired: a new one is fetched before the call.
+  clock = 3600 * 1000;
+  assert.deepEqual(await graph.call("GET", "https://graph.microsoft.com/v1.0/x"), { token: "t2" });
+  // Graph refuses a token early: one refresh and one retry.
+  rejectNext = true;
+  assert.deepEqual(await graph.call("GET", "https://graph.microsoft.com/v1.0/x"), { token: "t3" });
+  assert.equal(issued, 3);
+});
+
+test("round 2 m1: provisioning doesn't wait on an expired keychain secret it didn't make", async (t) => {
+  const { cloud, admin } = spikeTenant(withAppleKeyInVault(emptyCloud()));
+  const context = setup(t, { cloud });
+  await context.go();
+  // Reconciled; now the keychain's secret expires.
+  admin.passwordCredentials[0].endDateTime = "2026-10-01T00:00:00Z";
+  cloud.now = NOW;
+  context.fake.calls.length = 0;
+  await context.go();
+  const withOld = context.fake.calls.filter(({ cmd, args, input }) => cmd === "fetch" && args[1].endsWith("/oauth2/v2.0/token") && new URLSearchParams(input).get("client_secret") === "Kc8~spikeKeychainSecret.value_1");
+  assert.equal(withOld.length, 1);
+  assert.equal(admin.passwordCredentials.length, 2);
 });

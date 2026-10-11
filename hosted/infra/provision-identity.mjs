@@ -328,6 +328,8 @@ async function adminAccess(ctx, state) {
   try {
     await graph.token();
   } catch (error) {
+    // This run made the secret and waited for it: minting another would only leave this one behind (round 2, m1).
+    if (error.code === "invalid_client" && ctx.created.adminAccess) throw new Error(`The ${ADMIN_APP_NAME} app's new secret is still refused; run this again in a few minutes. It stays in the keychain as ${adminKeychainService(state.tenant.id)}.`);
     if (error.code === "invalid_client") {
       ctx.log(`The ${ADMIN_APP_NAME} app's secret in the keychain (${adminKeychainService(state.tenant.id)}) is refused: expired or replaced.`);
       return "refused";
@@ -455,8 +457,11 @@ function roleSteps({ label, app, appId, roleNames, graphSp, extra = {} }) {
   const unrequested = ungranted.filter((name) => !hasAccess(app, GRAPH_APP, roleId(name), "Role"));
   const spId = app?.servicePrincipalId ?? placeholder(`${label} service principal id`);
   const add = unrequested.length ? [az("ad", "app", "permission", "add", "--id", appId, "--api", GRAPH_APP, "--api-permissions", ...unrequested.map((name) => `${roleId(name)}=Role`))] : [];
-  const grants = ungranted.map((name) => graphCall("post", `servicePrincipals/${spId}/appRoleAssignments`, { principalId: spId, resourceId: graphSp.id, appRoleId: roleId(name) }));
-  return [{ name: `${label} ${ungranted.join(", ")}`, ...extra, calls: [...add, ...grants] }];
+  // A grant that exists already (a stale read planned it) is done, not an error.
+  const grants = ungranted.map((name) => ({ ...graphCall("post", `servicePrincipals/${spId}/appRoleAssignments`, { principalId: spId, resourceId: graphSp.id, appRoleId: roleId(name) }), doneIf: /already exists/i }));
+  // A service principal made seconds ago may be unknown to the replica that takes the grant.
+  const retry = { pattern: /does not exist|Request_ResourceNotFound|NotFound|HTTP 404|\(404\)/i, tries: GRAPH_LAG_TRIES, ms: GRAPH_LAG_MS, what: `Graph doesn't know the ${label}'s new service principal yet` };
+  return [{ name: `${label} ${ungranted.join(", ")}`, retry, ...extra, calls: [...add, ...grants] }];
 }
 
 // The steps that would bring `state` to the env's target. Pure; `record` gives the Apple facts.
@@ -518,7 +523,8 @@ export function plan({ env, state, record = {}, now = Date.now() }) {
         reread: true,
         adminSecret: true,
         calls: [
-          az("ad", "app", "credential", "reset", "--id", adminAppId, "--append", "--display-name", `provision-identity-${env}`, "--end-date", endDate, "--query", "password", "-o", "tsv"),
+          // A name no other run shares, so a failed run finds and deletes only its own credential.
+          az("ad", "app", "credential", "reset", "--id", adminAppId, "--append", "--display-name", `provision-identity-${env}-${new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z")}`, "--end-date", endDate, "--query", "password", "-o", "tsv"),
           call("security", ["-i"], { input: "", secret: true }),
         ],
       });
@@ -571,59 +577,66 @@ export function plan({ env, state, record = {}, now = Date.now() }) {
     }
     steps.push(...roleSteps({ label: "automation app", app: automation, appId: automationAppId, roleNames: AUTOMATION_ROLES, graphSp }));
 
-    // Email one-time codes for external users.
-    if (state.email?.state !== "enabled" || state.email?.allowExternalIdToUseEmailOtp !== "enabled") {
-      steps.push({ name: "email one-time code", calls: [appCall("patch", "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email", { "@odata.type": "#microsoft.graph.emailAuthenticationMethodConfiguration", state: "enabled", allowExternalIdToUseEmailOtp: "enabled" })] });
-    }
+    // Until the admin app can sign in, the email code, the Apple provider and the user flow can't be read, so they are
+    // unknown, not missing: planning them as missing would print outcome B's admin-center steps for an Apple provider
+    // that may exist (round 2, m2). A real run never gets here, because each admin step above rereads first.
+    if (!state.adminGraph) {
+      steps.push({ name: `email code, Apple provider and user flow: unknown until the ${ADMIN_APP_NAME} app can sign in`, calls: [] });
+    } else {
+      // Email one-time codes for external users.
+      if (state.email?.state !== "enabled" || state.email?.allowExternalIdToUseEmailOtp !== "enabled") {
+        steps.push({ name: "email one-time code", calls: [appCall("patch", "policies/authenticationMethodsPolicy/authenticationMethodConfigurations/email", { "@odata.type": "#microsoft.graph.emailAuthenticationMethodConfiguration", state: "enabled", allowExternalIdToUseEmailOtp: "enabled" })] });
+      }
 
-    // Apple: Graph under outcome A, the admin center under outcome B. An Apple provider that exists, whoever made it, is
-    // adopted (readState finds it by type), never made again.
-    const apple = record.apple ?? {};
-    if (!state.apple) {
-      if (apple.outcome === "A") {
+      // Apple: Graph under outcome A, the admin center under outcome B. An Apple provider that exists, whoever made it, is
+      // adopted (readState finds it by type), never made again.
+      const apple = record.apple ?? {};
+      if (!state.apple) {
+        if (apple.outcome === "A") {
+          steps.push({
+            name: "Apple provider",
+            reread: true,
+            appleProvider: true,
+            calls: [
+              az("keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName("a", env), "--query", "value", "-o", "tsv", SUB),
+              appCall("post", "identity/identityProviders", { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.a, certificateData: "***" }, { secret: true }),
+              // After Graph accepts the POST: the slot sent and when, which the daily Apple age check reads (Task 7).
+              call("az", appleActiveSetArgs(env, "<time of the POST>"), { input: "<slot sent>" }),
+            ],
+          });
+        } else {
+          steps.push({ name: "Apple provider", calls: [], stop: adminCenterText({ env, tenant, apple }) });
+          return steps;
+        }
+      }
+
+      // The user flow: email code and Apple, used by the gateway app.
+      const appleId = state.apple?.id ?? placeholder("Apple provider id");
+      const flow = state.userFlow;
+      if (!flow) {
         steps.push({
-          name: "Apple provider",
+          name: "user flow",
           reread: true,
-          appleProvider: true,
+          creates: { flow: true },
           calls: [
-            az("keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName("a", env), "--query", "value", "-o", "tsv", SUB),
-            appCall("post", "identity/identityProviders", { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.a, certificateData: "***" }, { secret: true }),
-            // After Graph accepts the POST: the slot sent and when, which the daily Apple age check reads (Task 7).
-            call("az", appleActiveSetArgs(env, "<time of the POST>"), { input: "<slot sent>" }),
+            appCall("post", "identity/authenticationEventsFlows", {
+              "@odata.type": "#microsoft.graph.externalUsersSelfServiceSignUpEventsFlow",
+              displayName: settings.userFlowName,
+              onInteractiveAuthFlowStart: { "@odata.type": "#microsoft.graph.onInteractiveAuthFlowStartExternalUsersSelfServiceSignUp", isSignUpAllowed: true },
+              onAuthenticationMethodLoadStart: { "@odata.type": "#microsoft.graph.onAuthenticationMethodLoadStartExternalUsersSelfServiceSignUp", identityProviders: [{ id: EMAIL_OTP_PROVIDER }, { id: appleId }] },
+              onUserCreateStart: { "@odata.type": "#microsoft.graph.onUserCreateStartExternalUsersSelfServiceSignUp", userTypeToCreate: "member" },
+            }),
           ],
         });
-      } else {
-        steps.push({ name: "Apple provider", calls: [], stop: adminCenterText({ env, tenant, apple }) });
-        return steps;
       }
-    }
-
-    // The user flow: email code and Apple, used by the gateway app.
-    const appleId = state.apple?.id ?? placeholder("Apple provider id");
-    const flow = state.userFlow;
-    if (!flow) {
-      steps.push({
-        name: "user flow",
-        reread: true,
-        creates: { flow: true },
-        calls: [
-          appCall("post", "identity/authenticationEventsFlows", {
-            "@odata.type": "#microsoft.graph.externalUsersSelfServiceSignUpEventsFlow",
-            displayName: settings.userFlowName,
-            onInteractiveAuthFlowStart: { "@odata.type": "#microsoft.graph.onInteractiveAuthFlowStartExternalUsersSelfServiceSignUp", isSignUpAllowed: true },
-            onAuthenticationMethodLoadStart: { "@odata.type": "#microsoft.graph.onAuthenticationMethodLoadStartExternalUsersSelfServiceSignUp", identityProviders: [{ id: EMAIL_OTP_PROVIDER }, { id: appleId }] },
-            onUserCreateStart: { "@odata.type": "#microsoft.graph.onUserCreateStartExternalUsersSelfServiceSignUp", userTypeToCreate: "member" },
-          }),
-        ],
-      });
-    }
-    const flowId = flow?.id ?? placeholder("user flow id");
-    if (flow && !flow.idps.includes(appleId)) {
-      steps.push({ name: "user flow: Apple", calls: [appCall("post", `identity/authenticationEventsFlows/${flowId}/${FLOW_IDPS}/$ref`, { "@odata.id": `${GRAPH}identityProviders/${appleId}` })] });
-    }
-    if (!flow?.apps?.includes(gateway?.appId)) {
-      // A service principal made moments ago is refused for about 30 seconds (spike Step 3), so this retries.
-      steps.push({ name: "user flow: gateway app", retry: { pattern: SP_LAG, tries: SP_LAG_TRIES, ms: SP_LAG_MS, what: "The user flow refuses the gateway app's new service principal" }, calls: [appCall("post", `identity/authenticationEventsFlows/${flowId}/conditions/applications/includeApplications`, { "@odata.type": "#microsoft.graph.authenticationConditionApplication", appId: gatewayAppId })] });
+      const flowId = flow?.id ?? placeholder("user flow id");
+      if (flow && !flow.idps.includes(appleId)) {
+        steps.push({ name: "user flow: Apple", calls: [appCall("post", `identity/authenticationEventsFlows/${flowId}/${FLOW_IDPS}/$ref`, { "@odata.id": `${GRAPH}identityProviders/${appleId}` })] });
+      }
+      if (!flow?.apps?.includes(gateway?.appId)) {
+        // A service principal made moments ago is refused for about 30 seconds (spike Step 3), so this retries.
+        steps.push({ name: "user flow: gateway app", retry: { pattern: SP_LAG, tries: SP_LAG_TRIES, ms: SP_LAG_MS, what: "The user flow refuses the gateway app's new service principal" }, calls: [appCall("post", `identity/authenticationEventsFlows/${flowId}/conditions/applications/includeApplications`, { "@odata.type": "#microsoft.graph.authenticationConditionApplication", appId: gatewayAppId })] });
+      }
     }
 
     // The GitHub environment the identity-checks workflow runs in: main only, with variables naming the identities.
@@ -720,22 +733,32 @@ async function execStep(ctx, step) {
   }
   if (step.adminSecret) {
     // The new secret goes from az's stdout into the keychain through `security -i`'s stdin and nowhere else. If the
-    // keychain refuses it, the credential just added is deleted again.
-    const appId = step.calls[0].args[step.calls[0].args.indexOf("--id") + 1];
-    const keyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", "[].keyId", "-o", "tsv"]));
-    const before = new Set(await keyIds());
+    // keychain write or its readback fails, the credential this run created, and only that one, is deleted again.
+    const reset = step.calls[0].args;
+    const appId = reset[reset.indexOf("--id") + 1];
+    const displayName = reset[reset.indexOf("--display-name") + 1];
+    const ownKeyIds = async () => lines(await out(ctx, "az", ["ad", "app", "credential", "list", "--id", appId, "--query", `[?displayName=='${displayName}'].keyId`, "-o", "tsv"]));
     const password = secretFromAz(await execCall(ctx, step.calls[0]), `The ${ADMIN_APP_NAME} app's new client secret`);
+    // Graph may take a moment to list it; it is identified by keyId before anything relies on it.
+    let added = await ownKeyIds();
+    for (let attempt = 0; added.length !== 1 && attempt < GRAPH_LAG_TRIES; attempt += 1) {
+      await ctx.sleep(GRAPH_LAG_MS);
+      added = await ownKeyIds();
+    }
     try {
+      if (added.length !== 1) throw new Error(`Graph doesn't list the credential this run added to ${ADMIN_APP_NAME} (${displayName}, ${added.length} found), so it wasn't stored.`);
       await storeAdminSecret({ runner: ctx.runner, tenantId: ctx.tenantId, appId, secret: password });
     } catch (error) {
-      for (const keyId of (await keyIds()).filter((id) => !before.has(id))) {
-        await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", keyId]);
-        ctx.log(`    removed the unsaved credential ${keyId} from ${ADMIN_APP_NAME}`);
+      if (added.length === 1) {
+        await out(ctx, "az", ["ad", "app", "credential", "delete", "--id", appId, "--key-id", added[0]]);
+        ctx.log(`    removed the unsaved credential ${added[0]} from ${ADMIN_APP_NAME}`);
+      } else {
+        ctx.log(`    a credential named ${displayName} may be left on ${ADMIN_APP_NAME}; delete it with az ad app credential delete --id ${appId} --key-id <its keyId>`);
       }
       throw error;
     }
     ctx.created.adminAccess = true;
-    ctx.log(`    stored the ${ADMIN_APP_NAME} app's new client secret in the keychain as ${adminKeychainService(ctx.tenantId)} (fingerprint ${fingerprint(password)}, ends ${step.calls[0].args[step.calls[0].args.indexOf("--end-date") + 1]})`);
+    ctx.log(`    stored the ${ADMIN_APP_NAME} app's new client secret (credential ${added[0]}) in the keychain as ${adminKeychainService(ctx.tenantId)} (fingerprint ${fingerprint(password)}, ends ${reset[reset.indexOf("--end-date") + 1]})`);
     return;
   }
   if (step.appleProvider) {
@@ -755,7 +778,15 @@ async function execStep(ctx, step) {
     return;
   }
   let last = "";
-  for (const stepCall of step.calls) last = await withRetry(ctx, step.retry, () => execCall(ctx, stepCall));
+  for (const stepCall of step.calls) {
+    try {
+      last = await withRetry(ctx, step.retry, () => execCall(ctx, stepCall));
+    } catch (error) {
+      if (!stepCall.doneIf?.test(`${error?.message ?? ""} ${error?.stderr ?? ""}`)) throw error;
+      ctx.log(`    already done: ${stepCall.args.slice(0, 4).join(" ")}`);
+      last = "";
+    }
+  }
   if (step.adminRoles) ctx.created.adminAccess = true;
   if (step.creates?.app) ctx.created.apps[step.creates.app] = JSON.parse(last || "{}");
   if (step.creates?.servicePrincipal) ctx.created.servicePrincipals.add(step.creates.servicePrincipal);
@@ -809,7 +840,7 @@ async function reconcile(ctx) {
       return;
     }
     if (ctx.dryRun) {
-      if (state.graph && !state.adminGraph) ctx.log(`The ${ADMIN_APP_NAME} app can't sign in yet, so this dry run plans the tenant's email code, Apple provider and user flow as missing.`);
+      if (state.graph && !state.adminGraph) ctx.log(`The ${ADMIN_APP_NAME} app can't sign in yet, so this dry run can't read the tenant's email code, Apple provider or user flow.`);
       for (const step of steps) {
         ctx.log(`==> ${step.name}`);
         for (const stepCall of step.calls) ctx.log(`    would run: ${describe(stepCall)}`);
