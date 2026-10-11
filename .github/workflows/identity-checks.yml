@@ -1,0 +1,173 @@
+name: Identity checks
+
+# Daily expiry checks for hosted Desk's two Ouro tenants (test and prod), and the monthly Apple client-secret renewal
+# under outcome A. The work is hosted/infra/identity-checks.mjs; this workflow only signs in and raises the alert.
+#
+# Each env's job runs in the GitHub environment `identity` (deployments from main only, no required reviewers, which
+# would block a scheduled run) and signs in twice with OIDC:
+#   1. as the managed identity id-ouro-identity-checks, for Key Vault (key slots and the renewal tag) and the
+#      production Container App (the cutoff). Its federated credential trusts only
+#      repo:ourostack@265728804/desk@1386529300:environment:identity.
+#   2. as the ouro-identity-automation app in that env's Ouro tenant, for Graph (the gateway app's client-secret
+#      expiry and the Apple provider). It trusts the same subject. This sign-in becomes az's current account, and the
+#      script refuses to run when that account's tenant isn't the one identity-<env>.json records.
+# The variables come from hosted/infra/provision-identity.mjs, which sets them on the environment:
+#   AZURE_CHECKS_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, OURO_TENANT_ID_<ENV>, OURO_AUTOMATION_CLIENT_ID_<ENV>.
+#
+# The renewal runs only for an env whose identity-<env>.json records Apple outcome A: on the first of each month, or
+# when a dispatch asks for it. Under outcome B (or before the outcome is known) the daily check alerts from the age of
+# the last manual upload instead.
+#
+# A failed run opens, or comments on, one open issue labelled identity-alert. The repository is public, so the issue
+# holds only what the script writes to its alert file: check names and dates, never an accountId, an id or an error.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      renew_apple:
+        description: "Also renew the Apple client secret (only for an env whose identity record says outcome A)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One run at a time, and a renewal is never cancelled halfway.
+concurrency:
+  group: identity-checks
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Identity checks (${{ matrix.env }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: identity
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: test
+            tenant: OURO_TENANT_ID_TEST
+            automation: OURO_AUTOMATION_CLIENT_ID_TEST
+          - env: prod
+            tenant: OURO_TENANT_ID_PROD
+            automation: OURO_AUTOMATION_CLIENT_ID_PROD
+    env:
+      ENV: ${{ matrix.env }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # identity-checks.mjs imports only Node's own modules, so there is no npm install here.
+      - name: Decide on the Apple renewal
+        id: renew
+        env:
+          EVENT: ${{ github.event_name }}
+          RENEW_INPUT: ${{ inputs.renew_apple }}
+        run: |
+          set -euo pipefail
+          outcome="$(node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log(r.apple?.outcome ?? "")' "hosted/infra/identity-$ENV.json")"
+          renew=false
+          if [ "$outcome" = A ]; then
+            if [ "$EVENT" = schedule ] && [ "$(date -u +%d)" = 01 ]; then renew=true; fi
+            if [ "$EVENT" = workflow_dispatch ] && [ "$RENEW_INPUT" = true ]; then renew=true; fi
+          fi
+          echo "Apple outcome for $ENV: ${outcome:-not recorded}; renewal: $renew"
+          echo "renew=$renew" >> "$GITHUB_OUTPUT"
+
+      # id-ouro-identity-checks: Key Vault and the Container App. Every such call names the subscription.
+      - name: Sign in to Azure as the checks identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CHECKS_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ouro-identity-automation in this env's Ouro tenant: Graph. Signed in last, so it is az's current account.
+      - name: Sign in to the Ouro tenant as the automation app
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars[matrix.automation] }}
+          tenant-id: ${{ vars[matrix.tenant] }}
+          allow-no-subscriptions: true
+
+      - name: Install the Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Run the identity checks
+        env:
+          RENEW: ${{ steps.renew.outputs.renew }}
+        run: |
+          set -euo pipefail
+          args=(--env "$ENV" --alert-file "$RUNNER_TEMP/identity-alert-$ENV.md")
+          if [ "$RENEW" = true ]; then args+=(--renew-apple); fi
+          node hosted/infra/identity-checks.mjs "${args[@]}"
+
+      # A failure before the script wrote its alert (a sign-in, say) still raises one, with the env and the day only.
+      - name: Note a run that stopped early
+        if: failure()
+        run: |
+          file="$RUNNER_TEMP/identity-alert-$ENV.md"
+          if [ ! -s "$file" ]; then
+            printf 'Identity checks for %s failed on %s.\n\n- run: stopped before the checks finished; see the run log\n' "$ENV" "$(date -u +%F)" > "$file"
+          fi
+
+      - name: Keep the alert for the alert job
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-alert-${{ matrix.env }}
+          path: ${{ runner.temp }}/identity-alert-${{ matrix.env }}.md
+          retention-days: 7
+
+  alert:
+    name: Raise the identity alert
+    needs: check
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Collect the alerts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: identity-alert-*
+          path: alerts
+          merge-multiple: true
+
+      - name: Open or update the identity-alert issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/identity-alert.md"
+          if compgen -G "alerts/*.md" > /dev/null; then
+            cat alerts/*.md > "$body"
+          else
+            printf 'Identity checks failed on %s.\n' "$(date -u +%F)" > "$body"
+          fi
+          printf '\nRun: %s\n' "$RUN_URL" >> "$body"
+          gh label create identity-alert --color B60205 --description "The daily identity checks failed" --force
+          number="$(gh issue list --label identity-alert --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+          else
+            gh issue create --title "Identity checks failed" --label identity-alert --body-file "$body"
+          fi

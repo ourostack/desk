@@ -35,15 +35,15 @@
 //
 // az must be signed in to the Azure subscription and, for the Graph steps, have
 // the env's tenant as its current account (the script checks and says how).
-import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { fingerprint } from "../src/auth/seal.js";
+import { defaultRunner, trimOneNewline } from "./runner.mjs";
 import { issueInvite, seed } from "../src/accounts/invites.js";
-import { buildAppYaml, checkWritten, isKeyVaultFillFailure, KEY_VAULT_FILL_FAILURE, writeAppYaml } from "./app-yaml.mjs";
+import { buildAppYaml, checkWritten, isKeyVaultFillFailure, keyVaultFillFailure, writeAppYaml } from "./app-yaml.mjs";
 import {
   APPS_RESOURCE_GROUP,
   ARI,
@@ -61,6 +61,9 @@ import {
   PROD_PULL_IDENTITY,
   SUBSCRIPTION,
   VAULT,
+  APPLE_RENEWED_TAG,
+  appleActiveSecretName,
+  appleActiveSetArgs,
   appleKeySecretName,
   entraSecretName,
   environment,
@@ -84,8 +87,16 @@ const SUB = ["--subscription", SUBSCRIPTION];
 const GRAPH = "https://graph.microsoft.com/v1.0/";
 const CIAM_API = "2023-05-17-preview";
 const GRAPH_APP = "00000003-0000-0000-c000-000000000000";
-// Microsoft Graph's ids: the application role IdentityProvider.ReadWrite.All, and the delegated openid and profile.
+// Microsoft Graph's ids: the application roles IdentityProvider.ReadWrite.All and Application.Read.All, and the
+// delegated openid and profile.
 const IDENTITY_PROVIDER_READWRITE_ALL = "90db2b9a-d928-4d33-a4dd-8442ae3d41e4";
+const APPLICATION_READ_ALL = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30";
+// The automation app's Graph roles in its tenant. IdentityProvider.ReadWrite.All lets the identity-checks workflow
+// renew the Apple provider. Application.Read.All lets it read the gateway app's passwordCredentials[].endDateTime
+// (Task 7): it is the least-privileged application permission Microsoft documents for GET /applications/{id}. The only
+// narrower-scoped one, Application.ReadWrite.OwnedBy with the automation app as the gateway app's owner, would also let
+// it add credentials to the gateway app, which is worse than reading every app registration in this tenant.
+const AUTOMATION_ROLES = { [IDENTITY_PROVIDER_READWRITE_ALL]: "IdentityProvider.ReadWrite.All", [APPLICATION_READ_ALL]: "Application.Read.All" };
 const OPENID = "37f7f235-527c-4136-accd-4a02d197296e";
 const PROFILE = "14dad69e-099b-42c9-810b-d002981feec1";
 const APPLE_TYPE = "#microsoft.graph.appleManagedIdentityProvider";
@@ -110,7 +121,6 @@ export class Stop extends Error {}
 const placeholder = (what) => `<${what} once created>`;
 const isPlaceholder = (arg) => typeof arg === "string" && /^<.* once created>$/.test(arg);
 const isNotFound = (error) => /ResourceNotFound|NotFound|Not Found|not found|could not be found|does not exist|HTTP 404|\(404\)/i.test(`${error?.stderr ?? ""} ${error?.message ?? ""}`);
-const trimOneNewline = (text) => (text.endsWith("\n") ? text.slice(0, -1) : text);
 
 // --- Reading -----------------------------------------------------------------------------------------------------
 
@@ -418,9 +428,12 @@ export function plan({ env, state, record = {} }) {
     if (!(automation?.subjects ?? []).includes(CHECKS_SUBJECT)) {
       steps.push({ name: "automation federated credential", calls: [call("az", ["ad", "app", "federated-credential", "create", "--id", automationAppId, "--parameters", "@/dev/stdin"], { input: JSON.stringify({ name: CHECKS_FEDERATED_NAME, issuer: GITHUB_ISSUER, subject: CHECKS_SUBJECT, audiences: [FEDERATED_AUDIENCE] }) })] });
     }
-    if (!(automation?.appRoles ?? []).includes(IDENTITY_PROVIDER_READWRITE_ALL)) {
-      const add = hasAccess(automation, GRAPH_APP, IDENTITY_PROVIDER_READWRITE_ALL, "Role") ? [] : [az("ad", "app", "permission", "add", "--id", automationAppId, "--api", GRAPH_APP, "--api-permissions", `${IDENTITY_PROVIDER_READWRITE_ALL}=Role`)];
-      steps.push({ name: "automation app IdentityProvider.ReadWrite.All", calls: [...add, az("ad", "app", "permission", "admin-consent", "--id", automationAppId)] });
+    // Each role is added only if the app doesn't request it yet, and consent runs while any is not granted.
+    const ungranted = Object.keys(AUTOMATION_ROLES).filter((id) => !(automation?.appRoles ?? []).includes(id));
+    if (ungranted.length) {
+      const unrequested = ungranted.filter((id) => !hasAccess(automation, GRAPH_APP, id, "Role"));
+      const add = unrequested.length ? [az("ad", "app", "permission", "add", "--id", automationAppId, "--api", GRAPH_APP, "--api-permissions", ...unrequested.map((id) => `${id}=Role`))] : [];
+      steps.push({ name: `automation app ${ungranted.map((id) => AUTOMATION_ROLES[id]).join(", ")}`, calls: [...add, az("ad", "app", "permission", "admin-consent", "--id", automationAppId)] });
     }
 
     // Email one-time codes for external users.
@@ -439,6 +452,8 @@ export function plan({ env, state, record = {} }) {
           calls: [
             az("keyvault", "secret", "show", "--vault-name", VAULT, "--name", appleKeySecretName("a", env), "--query", "value", "-o", "tsv", SUB),
             graphCall("post", "identity/identityProviders", { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.a, certificateData: "***" }, { secret: true }),
+            // After Graph accepts the POST: the slot sent and when, which the daily Apple age check reads (Task 7).
+            call("az", appleActiveSetArgs(env, "<time of the POST>"), { input: "<slot sent>" }),
           ],
         });
       } else {
@@ -545,6 +560,9 @@ async function execStep(ctx, step) {
     const body = { "@odata.type": APPLE_TYPE, displayName: "Sign in with Apple", developerId: apple.developerId, serviceId: apple.serviceId, keyId: apple.keyIds?.[slot], certificateData };
     await execCall(ctx, step.calls[1], JSON.stringify(body));
     ctx.log(`    created the Apple provider with key slot ${slot}`);
+    const renewedAt = new Date(ctx.now()).toISOString();
+    await out(ctx, "az", appleActiveSetArgs(ctx.env, renewedAt), { input: slot });
+    ctx.log(`    recorded slot ${slot} as live in ${appleActiveSecretName(ctx.env)}, ${APPLE_RENEWED_TAG} ${renewedAt}`);
     return;
   }
   let last = "";
@@ -741,7 +759,8 @@ async function updateApp(ctx, app, shown, changes, summary) {
   try {
     await out(ctx, "az", ["containerapp", "update", ...appArgs(app), "--yaml", file, "--output", "none", ...SUB]);
   } catch (error) {
-    if (isKeyVaultFillFailure(error.stderr)) throw new Error(KEY_VAULT_FILL_FAILURE);
+    // Nothing in updateApp writes to the app before this update.
+    if (isKeyVaultFillFailure(error.stderr)) throw new Error(keyVaultFillFailure());
     throw error;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -956,27 +975,7 @@ export async function run({
   if (flags.seedAri) await seedAri(ctx);
 }
 
-// Runs a command and resolves with { stdout }. stdin carries `input` (a secret, at times); a failure names the
-// command's first three words and az's first error line, never the arguments or the input.
-export function defaultRunner(cmd, args, { input } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) return resolve({ stdout });
-      const error = new Error(`${[cmd, ...args.slice(0, 3)].join(" ")} failed: ${stderr.trim().split("\n")[0] || `exit ${code}`}`);
-      error.stderr = stderr;
-      reject(error);
-    });
-    // A command that never reads stdin may exit first; that is not a failure of the write.
-    child.stdin.on("error", () => {});
-    child.stdin.end(input ?? "");
-  });
-}
+export { defaultRunner };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {

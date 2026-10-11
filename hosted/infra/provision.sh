@@ -339,6 +339,9 @@ reconcile_app() {
   # itself a full PUT that rewrites the secrets from listSecrets (re-review N-m2).
   cp "$work/shown.json" "$work/before.json"
   local identity_args=() stage_args=() id missing
+  # What this run has already sent to the app, for an honest message if the update below can't be sent.
+  local sent_before=()
+  if ((created_now)); then sent_before+=("the creation of $APP"); fi
   if [[ -f "$IDENTITY_FILE" ]]; then identity_args=(--identity-record "$IDENTITY_FILE"); fi
   if [[ "$STAGE" == staging ]]; then stage_args=(--forbid-identity "$PROD_PULL_IDENTITY" --registry-identity "$pull_identity_id"); fi
   if ((${#identity_args[@]})); then
@@ -347,6 +350,7 @@ reconcile_app() {
     for id in $missing; do
       say "Attaching identity ${id##*/} to $APP"
       write containerapp identity assign -n "$APP" -g "$RESOURCE_GROUP" --user-assigned "$id" --output none
+      sent_before+=("the identity attach of ${id##*/}")
     done
     if [[ -n "$missing" && "${DRY_RUN:-0}" != 1 ]]; then
       az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/shown.json"
@@ -363,7 +367,13 @@ reconcile_app() {
   if ! az containerapp update -n "$APP" -g "$RESOURCE_GROUP" --yaml "$document" --output none --subscription "$SUBSCRIPTION" 2>"$work/update.err"; then
     if grep -qF "KeyError: 'value'" "$work/update.err"; then
       # az fills each value-less secret from listSecrets and catches only a missing name, not a missing value.
-      printf '%s\n' "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). Nothing was sent; the app is unchanged. Record this for the rehearsal; the update path needs a fix before this app can be updated again." >&2
+      # The same text as app-yaml.mjs's keyVaultFillFailure().
+      local before="Nothing else was sent to the app before it in this step." joined
+      if ((${#sent_before[@]})); then
+        printf -v joined '%s; ' "${sent_before[@]}"
+        before="Already sent to the app before it, and still in effect: ${joined%; }."
+      fi
+      printf '%s\n' "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). az stops there before sending the update, so none of this update's changes reached the app. $before Record this for the rehearsal; the update path needs a fix before this app can be updated again." >&2
     else
       cat "$work/update.err" >&2
     fi
@@ -374,6 +384,7 @@ reconcile_app() {
   node "$APP_YAML" --verify --before "$work/before.json" --after "$work/after.json" --secret-list "$work/secrets.json" ${identity_args[@]+"${identity_args[@]}"} ${stage_args[@]+"${stage_args[@]}"}
 }
 
+created_now=0
 if ((app_exists)); then
   say "Container App $APP exists; reconciling it from its current spec"
   reconcile_app
@@ -395,6 +406,7 @@ else
   say "Creating Container App $APP"
   show_spec
   write containerapp create -n "$APP" -g "$RESOURCE_GROUP" --yaml "$work/app.yaml" --output none
+  created_now=1
   # The Ouro settings join through the same attach, update and check once the app exists.
   if [[ "${DRY_RUN:-0}" != 1 && -f "$IDENTITY_FILE" ]]; then
     say "Adding the Ouro sign-in settings to $APP"

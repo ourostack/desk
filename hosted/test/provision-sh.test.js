@@ -287,9 +287,20 @@ test("a staging app that holds production's pull identity is refused before any 
 test("when listSecrets returns a Key Vault reference without a value, az's KeyError becomes a clear message and nothing changes (N-m1)", (t) => {
   const { output, final } = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_REFS_WITHOUT_VALUE: "1" }, expectFailure: true });
   assert.match(output, /listSecrets returned a Key Vault reference without a value/);
-  assert.match(output, /Nothing was sent; the app is unchanged/);
+  assert.match(output, /none of this update's changes reached the app\. Nothing else was sent to the app before it in this step\./);
+  assert.ok(!/the app is unchanged/.test(output));
   assert.ok(!output.includes("Traceback"), "az's traceback is not passed through");
   assert.deepEqual(final, shown);
+});
+
+test("after an identity attach, the KeyError message says the attach was already sent and stays (Task 2 re-review Minor)", async (t) => {
+  const app = structuredClone(shown);
+  delete app.identity.userAssignedIdentities[GATEWAY_IDENTITY];
+  const { output } = runProvision(t, { app, env: { STAGE: "staging", FAKE_REFS_WITHOUT_VALUE: "1" }, record: completeRecord("test"), expectFailure: true });
+  const { keyVaultFillFailure } = await import("../infra/app-yaml.mjs");
+  assert.ok(output.includes(keyVaultFillFailure({ sentBefore: [`the identity attach of ${GATEWAY_IDENTITY.split("/").at(-1)}`] })), output);
+  assert.ok(!/Nothing else was sent/.test(output));
+  assert.ok(!/the app is unchanged/.test(output));
 });
 
 test("the check after the update compares with the app as it was before the identity assign, which rewrites the secrets (N-m2)", (t) => {
@@ -302,11 +313,11 @@ test("the check after the update compares with the app as it was before the iden
 
 test("provision.sh's identity names and KeyError message match identity-record.mjs and app-yaml.mjs", async () => {
   const { GATEWAY_IDENTITIES, PROD_PULL_IDENTITY } = await import("../infra/identity-record.mjs");
-  const { KEY_VAULT_FILL_FAILURE } = await import("../infra/app-yaml.mjs");
+  const { KEY_VAULT_FILL_FAILURE, KEY_VAULT_FILL_NOT_SENT, KEY_VAULT_FILL_NOTHING_BEFORE, KEY_VAULT_FILL_SENT_BEFORE, KEY_VAULT_FILL_NEXT } = await import("../infra/app-yaml.mjs");
   const text = readFileSync(script, "utf8");
   assert.match(text, new RegExp(`^PROD_PULL_IDENTITY=${PROD_PULL_IDENTITY}$`, "m"));
   assert.match(text, new RegExp(`PULL_IDENTITY=${GATEWAY_IDENTITIES.test} PULL_IDENTITY_GROUP=rg-ouro-identity`));
-  assert.ok(text.includes(KEY_VAULT_FILL_FAILURE));
+  for (const part of [KEY_VAULT_FILL_FAILURE, KEY_VAULT_FILL_NOT_SENT, KEY_VAULT_FILL_NOTHING_BEFORE, KEY_VAULT_FILL_SENT_BEFORE, KEY_VAULT_FILL_NEXT]) assert.ok(text.includes(part), part);
 });
 
 test("the check after a staging update refuses an app that came back pulling with production's identity", (t) => {
