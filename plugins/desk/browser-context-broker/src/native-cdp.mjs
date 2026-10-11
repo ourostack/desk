@@ -389,8 +389,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
           left: window.left, top: window.top, width: window.width, height: window.height, windowState: window.state,
         } };
       }
-      if (method === 'Target.getTargets') return { targetInfos: (await readTargets(leaseId)).filter(target =>
-        !pendingBootstrap.has(target.targetId)) };
+      if (method === 'Target.getTargets') return { targetInfos: await readTargets(leaseId) };
       if (method === 'Target.getTargetInfo') {
         const targets = await readTargets(leaseId);
         const info = params.targetId ? targets.find(target => target.targetId === params.targetId) : targets[0];
@@ -405,6 +404,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         let created;
         try {
           created = await native(leaseId, 'target.create', { marker: pending.marker, markerUrl: pending.markerUrl });
+          pendingBootstrap.add(virtualTarget(leaseId, created.tabId));
           await recordNativeRouting({
             stateDir, leaseId, processIdentity: identity, marker: pending.marker, transportGeneration: generation,
             controlTargetId: virtualTarget(leaseId, created.controlTabId), controlTabId: created.controlTabId,
@@ -418,7 +418,6 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
         }
         const targetId = virtualTarget(leaseId, created.tabId);
         await targetRoute(targetId);
-        pendingBootstrap.add(targetId);
         return { targetId };
       }
       if (method === 'Target.attachToTarget') {

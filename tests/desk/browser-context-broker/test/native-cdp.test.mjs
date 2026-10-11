@@ -189,6 +189,55 @@ test('GivenNativeBootstrapPending_WhenTargetCreated_ObserversSeeItOnlyAfterBoots
     event.params.targetInfo.targetId === created.targetId), true);
 });
 
+test('GivenFailedNativeBootstrapAndClose_WhenReconciled_LiveTargetRoutingIsRetained', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const request = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.command' && message.params.method === 'Page.navigate') throw new Error('bootstrap failed');
+    if (message.method === 'target.close') throw new Error('close failed before effect');
+    return request(message);
+  };
+  await assert.rejects(createOwnedTarget({ stateDir, leaseId: lease.id,
+    rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } }));
+  const before = (await readRegistry(stateDir)).leases[lease.id];
+  const targetId = Object.keys(before.nativeRouting.targetTabs)[0];
+  const result = await closeOwnedTarget({ stateDir, leaseId: lease.id,
+    rawEndpoint: server.endpointForLease(lease.id), targetId });
+  assert.equal(result.closed, false);
+  const after = (await readRegistry(stateDir)).leases[lease.id];
+  assert.equal(after.targetIds.includes(targetId), true);
+  assert.deepEqual(after.nativeRouting.targetTabs[targetId], before.nativeRouting.targetTabs[targetId]);
+});
+
+test('GivenNativeCreationReadbackPending_WhenObserverStarts_MarkerIsNotPublished', async t => {
+  const { stateDir, lease, server, transport } = await setup(t);
+  const creator = await client(t, server.endpointForLease(lease.id));
+  const marker = `${lease.id}:publication-barrier`;
+  const markerUrl = markerTargetUrl(marker);
+  const registry = await readRegistry(stateDir);
+  registry.leases[lease.id].pendingTargetCreates = [{ marker, markerUrl, requestedUrl: 'about:blank', startedAt: new Date().toISOString() }];
+  await writeRegistry(stateDir, registry);
+  let entered, release, reads = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const request = transport.request.bind(transport);
+  transport.request = async message => {
+    if (message.method === 'target.readback' && ++reads === 1) { entered(); await held; }
+    return request(message);
+  };
+  const creating = creator.send('Target.createTarget', { url: markerUrl, background: true });
+  await started;
+  const observer = await client(t, server.endpointForLease(lease.id));
+  const events = [];
+  observer.on('event', event => events.push(event));
+  await observer.send('Target.setDiscoverTargets', { discover: true });
+  await observer.send('Target.setAutoAttach', { autoAttach: true, flatten: true });
+  const early = events.slice();
+  release();
+  await creating;
+  assert.equal(early.some(event => ['Target.targetCreated', 'Target.attachedToTarget'].includes(event.method)), false);
+});
+
 for (const lifecycle of ['target.closed', 'target.detached', 'target.routingLost']) {
   test(`GivenNative${lifecycle}_WhenTaskWasAttached_ClientLifecycleIsNotLost`, async t => {
     const { server, transport, stateDir, lease } = await setup(t);
