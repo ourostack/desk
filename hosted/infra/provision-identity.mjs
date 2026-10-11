@@ -43,7 +43,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { fingerprint } from "../src/auth/seal.js";
 import { issueInvite, seed } from "../src/accounts/invites.js";
-import { buildAppYaml, checkWritten, writeAppYaml } from "./app-yaml.mjs";
+import { buildAppYaml, checkWritten, isKeyVaultFillFailure, KEY_VAULT_FILL_FAILURE, writeAppYaml } from "./app-yaml.mjs";
 import {
   APPS_RESOURCE_GROUP,
   ARI,
@@ -58,6 +58,7 @@ import {
   IDENTITY_ENVIRONMENT,
   IDENTITY_RESOURCE_GROUP,
   LOCATION,
+  PROD_PULL_IDENTITY,
   SUBSCRIPTION,
   VAULT,
   appleKeySecretName,
@@ -729,7 +730,9 @@ const gatewayEnv = (shown) => (shown.properties.template.containers.find(({ name
 
 // Writes the whole app with `changes` (app-yaml.mjs) and deletes the document afterwards.
 async function updateApp(ctx, app, shown, changes, summary) {
-  const text = buildAppYaml({ shownYaml: shown, ...changes });
+  // Staging never holds production's pull identity (re-review N-I1).
+  const forbidIdentities = app === STAGING_APP ? [PROD_PULL_IDENTITY] : [];
+  const text = buildAppYaml({ shownYaml: shown, ...changes, forbidIdentities });
   if (ctx.dryRun) {
     ctx.log(`    would run: az containerapp update ${appArgs(app).join(" ")} --yaml <whole app, ${summary}, secret values ***>`);
     return false;
@@ -737,6 +740,9 @@ async function updateApp(ctx, app, shown, changes, summary) {
   const { file, dir } = writeAppYaml(text);
   try {
     await out(ctx, "az", ["containerapp", "update", ...appArgs(app), "--yaml", file, "--output", "none", ...SUB]);
+  } catch (error) {
+    if (isKeyVaultFillFailure(error.stderr)) throw new Error(KEY_VAULT_FILL_FAILURE);
+    throw error;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -744,7 +750,7 @@ async function updateApp(ctx, app, shown, changes, summary) {
   // drops the identity map), so every write is checked against the app as it now is (review C1 and I1).
   const after = await showApp(ctx, app);
   const secretList = (await azJson(ctx, ["containerapp", "secret", "list", ...appArgs(app), "-o", "json", ...SUB])) ?? [];
-  checkWritten({ before: shown, after, secretList, keyVaultSecrets: changes.keyVaultSecrets ?? {} });
+  checkWritten({ before: shown, after, secretList, keyVaultSecrets: changes.keyVaultSecrets ?? {}, forbidIdentities });
   ctx.log(`Checked ${app}: every secret, Key Vault reference and identity is still there.`);
   return true;
 }

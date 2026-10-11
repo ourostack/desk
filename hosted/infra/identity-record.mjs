@@ -20,6 +20,9 @@ export const AUTOMATION_APP_NAME = "ouro-identity-automation";
 // accounts tables (ledger ruling on review I2).
 export const GATEWAY_IDENTITIES = { prod: "id-ouro-desk-hosted", test: "id-ouro-desk-hosted-staging" };
 export const CHECKS_IDENTITY = "id-ouro-identity-checks";
+// Production's image-pull identity. It also holds roles on production storage and the email domain, so staging never
+// holds it; staging pulls with its own gateway identity (re-review N-I1; provision.sh).
+export const PROD_PULL_IDENTITY = "ouro-prod-services-mi";
 export const IDENTITY_ENVIRONMENT = "identity";
 export const GITHUB_REPO = "ourostack/desk";
 export const CHECKS_SUBJECT = "repo:ourostack@265728804/desk@1386529300:environment:identity";
