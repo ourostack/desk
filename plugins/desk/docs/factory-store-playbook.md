@@ -297,7 +297,7 @@ jobs:
         run: |
           set -uo pipefail
           association=NONE
-          if printf '%s' "$AUTHOR" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'; then
+          if [[ ${#AUTHOR} -le 39 && "$AUTHOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(_[A-Za-z0-9]+)?$ ]]; then
             if permission=$(gh api "repos/$REPOSITORY/collaborators/$AUTHOR/permission" --jq '.permission' 2> /dev/null); then
               case "$permission" in
                 admin|write) association=COLLABORATOR ;;
@@ -443,7 +443,7 @@ jobs:
             fi
             author=$(jq -r '.user.login' <<<"$pr")
             association=NONE
-            if printf '%s' "$author" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'; then
+            if [[ ${#author} -le 39 && "$author" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(_[A-Za-z0-9]+)?$ ]]; then
               if permission=$(gh api "repos/$REPOSITORY/collaborators/$author/permission" --jq '.permission' 2> /dev/null); then
                 case "$permission" in
                   admin|write) association=COLLABORATOR ;;
@@ -744,7 +744,7 @@ Why the workflows are shaped this way:
 
 - **The candidate's workflow runs; its files are data.** `factory-validate` runs on `pull_request`, so GitHub uses the pull request's copy of the workflow files, with a read-only token and no secrets. A pull request that rewrites `validate.yml`, or adds any workflow with a job named `factory-validate`, can post a green check, and one that names a workflow `factory-validate` or `factory-merge` can start `factory-merge` or `factory-build`. That is why `factory-merge` runs from `main`, reads only `head_sha` from the event, validates again with Desk `main` in a step that holds no token, and rejects anything that fails there, and why `factory-build` reads no event data at all. Changes under `.github/` are outside the data paths, so a non-maintainer's are always rejected.
 - **The merge, not a diff.** `validate-pr` judges the tree that merging the head into `main` produces (`git merge-tree`, Git 2.38 or later), refuses heads whose merge conflicts or that carry merge commits of their own, and fails closed on an older Git. A `main...head` diff reads only one merge base and can miss what a crafted merge changes.
-- **Maintainers by permission.** Both workflows read the author's repository permission and pass `COLLABORATOR` to `validate-pr` for `admin` or `write`, and `NONE` otherwise. A login that is not a plain GitHub user name, or any API error, gives `NONE`, so the check fails closed. No token is widened: the permission API works with the default read-only workflow token.
+- **Maintainers by permission.** Both workflows read the author's repository permission and pass `COLLABORATOR` to `validate-pr` for `admin` or `write`, and `NONE` otherwise. The lookup accepts ordinary GitHub logins and managed-user logins with one underscore followed by an alphanumeric enterprise suffix (for example `synthetic-user_example`), within 39 characters total. GitHub documents the underscore suffix for [managed accounts](https://docs.github.com/en/enterprise-cloud%40latest/admin/managing-iam/iam-configuration-reference/username-considerations-for-external-authentication). The whole value must match: empty values, whitespace, newlines, path separators and other punctuation are refused. Syntax alone grants no authority; an invalid login or any API error gives `NONE`, so the check fails closed. No token is widened: the permission API works with the default read-only workflow token.
 - **Fork pull requests.** `workflow_run.pull_requests` is empty for a pull request from a fork, so `factory-merge` finds pull requests by the validated head commit.
 - **No stale merges.** The merge call passes the validated head as `sha`, so GitHub refuses it if the head moved after validation.
 - **Builds after automatic merges.** A merge made with the workflow token starts no `push` workflow, so `factory-build` also runs when `factory-merge` completes. `factory-validate` → `factory-merge` → `factory-build` is three `workflow_run` levels, GitHub's limit.
