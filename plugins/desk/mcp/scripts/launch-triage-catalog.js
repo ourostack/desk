@@ -15,8 +15,9 @@ export async function startCatalogLauncher(runtime=process){
   if(!launcherFirstEnvironment(runtime)){
     runtime.stderr.write("catalog_launcher_failed_environment\n");runtime.exitCode=1;return null
   }
-  const {openCatalogBootstrap,fifoPump,catalogBootstrapArguments,ownedCatalogEnvironment,validateOwnedCatalogEnvironment}=await import("../src/factory/triage-custody.js")
-  const {closedObject}=await import("../src/factory/triage-catalog.js")
+  const {openCatalogBootstrap,fifoPump,catalogBootstrapArguments,ownedCatalogEnvironment,validateOwnedCatalogEnvironment,
+    readProtectedBytes,makeCatalogObservation,makeReceipt,boundedFdWrite}=await import("../src/factory/triage-custody.js")
+  const {closedObject,catalogHash,catalogCanonical}=await import("../src/factory/triage-catalog.js")
   let child,opened,pump,timer,closing=false,failed=false,finished=false,serverClosed=false,stage="arguments"
   function fatal(){
     if(failed)return
@@ -37,10 +38,16 @@ export async function startCatalogLauncher(runtime=process){
     const recipe=ownedCatalogEnvironment({platform:runtime.platform,uid:runtime.getuid(),euid:runtime.geteuid()})
     if(!validateOwnedCatalogEnvironment({platform:runtime.platform,uid:runtime.getuid(),euid:runtime.geteuid(),env:runtime.env,expected:recipe}).ok)throw Error("launch_identity")
     runtime.stdin.pause();stage="bootstrap";opened=await openCatalogBootstrap(values)
+    // A separate bounded read never advances the descriptor inherited by the
+    // server. This parent keeps the receipt writer idle until that server has
+    // actually closed; it cannot write bootstrap/submit/terminal.
+    const snapshotBytes=await readProtectedBytes(values.snapshotFile,6291456)
+    if(catalogHash(snapshotBytes)!==values.expectedSha256)throw Error("snapshot_hash")
+    const snapshot=JSON.parse(snapshotBytes)
     timer=setTimeout(()=>{fatal();child?.kill("SIGKILL")},Math.max(1,values.deadline-Date.now()-1000))
     child=spawn(actualRuntime,[entry],{env:ownedCatalogEnvironment({platform:runtime.platform,uid:runtime.getuid(),euid:runtime.geteuid()}).env,cwd:runtime.cwd(),shell:false,
       stdio:["pipe","pipe","pipe",opened.receiptFd,opened.snapshotFd]})
-    await Promise.all(opened.handles.slice(1).map(handle=>handle.close()));opened.handles=opened.handles.slice(0,1)
+    await opened.handles[2].close();opened.handles=opened.handles.slice(0,2)
     let stderrBytes=0
     child.stderr.on("data",chunk=>{stderrBytes+=chunk.length;if(stderrBytes>65536)fatal();else runtime.stderr.write(chunk)})
     child.stdout.pipe(runtime.stdout,{end:false})
@@ -65,6 +72,13 @@ export async function startCatalogLauncher(runtime=process){
     child.on("close",async(code,signal)=>{
       serverClosed=true
       if(code!==0||signal||!closing)fatal()
+      try{
+        const payload=makeCatalogObservation({kind:"launcher_exit",pid:runtime.pid,code,signal})
+        const frame=makeReceipt({event:"observation",sequence:1,generation:values.generation,serverPid:child.pid,
+          catalogSha256:catalogHash(catalogCanonical(snapshot.records)),briefSha256:catalogHash(catalogCanonical(snapshot.brief)),
+          payload,key:snapshot.receipt_key})
+        await boundedFdWrite(opened.receiptFd,catalogCanonical(frame)+"\n",values.deadline)
+      }catch{fatal()}
       clearTimeout(timer);await pump.stop();await Promise.all(opened.handles.map(handle=>handle.close()))
       runtime.stdin.off("readable",earlyReadable)
       runtime.stdout.end(()=>{runtime.exitCode=failed?1:0;runtime.stdin.destroy()})

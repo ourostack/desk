@@ -33,25 +33,38 @@ export async function startCatalogServer(runtime=process){
   }
   const loadedModules=new Map(),root=fileURLToPath(new URL("../",import.meta.url))
   const loadHooks=nodeModule.registerHooks({load:(url,context,next)=>catalogModuleLoad(loadedModules,root,url,context,next)})
-  const {loadCatalogSnapshot,makeReceipt,boundedFdWrite,ownedCatalogEnvironment,validateOwnedCatalogEnvironment}=await import("../src/factory/triage-custody.js")
+  const {loadCatalogSnapshot,makeReceipt,makeCatalogObservation,boundedFdWrite,ownedCatalogEnvironment,validateOwnedCatalogEnvironment}=await import("../src/factory/triage-custody.js")
   const {catalogCanonical}=await import("../src/factory/triage-catalog.js")
   const {serveCatalog}=await import("../src/factory/triage-protocol.js")
-  let service,loaded,sequence=0,failed=false,closing=false,receiptBytes=0
-  async function receipt(event,payload){
-    const frame=makeReceipt({event,payload,generation:loaded.generation,sequence:++sequence,serverPid:runtime.pid,
+  let service,loaded,sequence=0,observationSequence=0,failed=false,closing=false,receiptBytes=0,receiptWork=Promise.resolve()
+  function receipt(event,payload){
+    const work=receiptWork.then(async()=>{
+    const ordinal=event==="observation"?++observationSequence:++sequence
+    const frame=makeReceipt({event,payload,generation:loaded.generation,sequence:ordinal,serverPid:runtime.pid,
       catalogSha256:loaded.bootstrapReceipt.catalog_sha256,briefSha256:loaded.bootstrapReceipt.brief_sha256,key:loaded.receiptKey})
     const wire=catalogCanonical(frame)+"\n";receiptBytes+=Buffer.byteLength(wire)
-    if(sequence>4||Buffer.byteLength(wire)>393216||receiptBytes>2097152)throw Error("receipt_limit")
+    if(sequence>4||observationSequence>16||Buffer.byteLength(wire)>393216||receiptBytes>2097152)throw Error("receipt_limit")
     // Bound by the fixed launcher's unchanged inherited deadline; no model
     // selector or environment field supplies a second deadline.
     await boundedFdWrite(3,wire,Infinity)
+    })
+    receiptWork=work
+    return work
+  }
+  function observe(value){
+    const allowed=["wire_noncanonical","catalog_invalid","protocol_state","wire_input_limit","wire_frame_limit",
+      "wire_frame_count","wire_queue_limit","wire_output_limit","wire_closed","wire_incomplete","write_failed"]
+    const code=value.code===undefined||value.code===null?null:allowed.includes(value.code)?value.code:"unknown"
+    receipt("observation",makeCatalogObservation({...value,code,pid:runtime.pid})).catch(fatal)
   }
   function fatal(error){
     if(failed)return
     failed=true;runtime.stdin.pause();runtime.exitCode=1
     const detail=["protocol_state","catalog_invalid","wire_noncanonical","wire_input_limit","wire_frame_limit","wire_frame_count","wire_queue_limit","wire_output_limit","wire_closed","wire_incomplete"].includes(error?.message)?`_${error.message}`:""
     runtime.stderr.write(`catalog_session_failed${detail}\n`)
-    service?.close().finally(()=>runtime.exit(1))
+    observe({kind:"server_refused",code:error?.message??"unknown"})
+    observe({kind:"server_closing"})
+    Promise.resolve(service?.close()).then(()=>receiptWork).catch(()=>{}).finally(()=>runtime.exit(1))
   }
   async function finish(){
     if(closing||failed)return
@@ -59,6 +72,7 @@ export async function startCatalogServer(runtime=process){
     try{
       await service.close()
       if(service.guarded.failed())throw Error("wire_failed")
+      observe({kind:"server_closing"})
       await receipt("terminal",{reason:"stdin_eof",final_sequence:sequence+1})
       await promisify(fs.close)(3)
       loadHooks.deregister()
@@ -72,7 +86,7 @@ export async function startCatalogServer(runtime=process){
     loaded=await loadCatalogSnapshot({fd:4})
     await receipt("bootstrap",{...loaded.bootstrapReceipt,launcher_pid:runtime.ppid,cwd:runtime.cwd(),
       uid:firstUID,euid:firstEUID,env_version:2,module_closure:[...loadedModules.values()].sort((a,b)=>a.path.localeCompare(b.path))})
-    service=await serveCatalog({state:loaded.catalog,input:runtime.stdin,output:runtime.stdout,writeReceipt:receipt,onFailure:fatal})
+    service=await serveCatalog({state:loaded.catalog,input:runtime.stdin,output:runtime.stdout,writeReceipt:receipt,onFailure:fatal,onObservation:observe})
     runtime.stdin.once("end",finish);runtime.stdin.once("error",fatal)
     for(const signal of ["SIGTERM","SIGINT","SIGHUP"])runtime.once(signal,fatal)
     return {finish,fatal,receipt,service}
