@@ -45,7 +45,8 @@ function fixture() {
       create: async params => {
         calls.push({ method: "windows.create", params })
         const id = next++
-        const tab = { id: next++, windowId: id, active: true, url: params.url, title: "" }
+        const tab = { id: next++, windowId: id, active: true, url: params.url,
+          title: params.url.startsWith("data:") ? "Desk target marker" : "", status: "complete" }
         tabs.set(tab.id, tab)
         const value = { id, focused: params.focused, tabs: [tab] }
         windows.set(id, value)
@@ -431,6 +432,48 @@ test("unknown task popup create remains pending without a normal-window fallback
   assert.equal(retry.error.code, "NATIVE_CREATE_PENDING")
   assert.equal(calls.filter(call => call.method === "windows.create").length, count)
   assert.equal(calls.some(call => call.method === "tabs.create"), false)
+})
+
+test("task popup target is not published before its exact marker document commits", async () => {
+  const { extension, chrome, tabs } = await setup()
+  const createWindow = chrome.windows.create
+  let pendingTab
+  chrome.windows.create = async params => {
+    const result = await createWindow(params)
+    if (params.url.startsWith("data:")) {
+      pendingTab = tabs.get(result.tabs[0].id)
+      pendingTab.status = "loading"
+      pendingTab.title = ""
+    }
+    return result
+  }
+  let settled = false
+  const operation = create(extension).then(value => { settled = true; return value })
+  for (let i = 0; i < 20 && !pendingTab; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  assert.ok(pendingTab)
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(settled, false, "native target discovery must wait for the recorded marker commit")
+  pendingTab.status = "complete"
+  pendingTab.title = "Desk target marker"
+  const result = await operation
+  assert.equal(result.error, undefined)
+  assert.equal(result.result.tabId, pendingTab.id)
+})
+
+test("uncommitted task marker retains pending effects and refuses another create", async () => {
+  const { extension, chrome, tabs, calls } = await setup()
+  const createWindow = chrome.windows.create
+  chrome.windows.create = async params => {
+    const result = await createWindow(params)
+    if (params.url.startsWith("data:")) tabs.get(result.tabs[0].id).status = "loading"
+    return result
+  }
+  const initial = await create(extension, "uncommitted")
+  assert.equal(initial.error.code, "NATIVE_TARGET_UNREADY")
+  const count = calls.filter(call => call.method === "windows.create").length
+  const later = await create(extension, "after-uncommitted")
+  assert.equal(later.error.code, "NATIVE_CREATE_PENDING")
+  assert.equal(calls.filter(call => call.method === "windows.create").length, count)
 })
 
 test("task tabs must close before control and the same lease can reopen", async () => {

@@ -278,6 +278,18 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         throw refusal("NATIVE_CREATE_INDETERMINATE", "Native task window creation did not return exact independent routing")
       }
       lease.tabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId, sessions: new Set(), attached: false })
+      let markerReady = false
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const current = await ownTab(lease, tab.id)
+        if (current.url === markerUrl && current.status === "complete" && current.title === "Desk target marker") {
+          markerReady = true
+          break
+        }
+        await delay(50)
+      }
+      if (!markerReady) {
+        throw refusal("NATIVE_TARGET_UNREADY", "The exact recorded task marker did not confirm document readiness")
+      }
       const target = await targetInfo(tab.id)
       const control = await targetInfo(lease.controlTabId)
       const result = {
