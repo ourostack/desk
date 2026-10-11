@@ -439,7 +439,7 @@ test("init_manifest_shape_and_bounded_capture_matrix",async()=>{
     if(mode==="argvLimit")assert.equal(r.outcome.detail,"native_capture_limit")
   }
 })
-ownedHostTest("sdk_client_binding_and_run_preparation_failures_are_observed","posix",async(t)=>{
+ownedHostTest("sdk_client_binding_and_run_preparation_failures_are_observed","provenance",async(t)=>{
   assert.equal(typeof custody.boundClient,"function")
   assert.equal(typeof custody.CatalogClient,"function")
   const child=new EventEmitter(),history=[]
