@@ -44,7 +44,7 @@ for (const scenario of [
 ]) {
   test(`common startup dispatches only admitted authority: ${scenario.name}`, async (t) => {
     const root = tempRoot("desk-startup-authority-")
-    t.after(() => rmSync(root, { recursive: true, force: true }))
+    t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
     const controllerEvents = []
     const desk = await startInProcess({
       argv: ["--root", root, ...(scenario.raw === undefined ? [] : ["--person", scenario.raw])],
@@ -91,7 +91,7 @@ for (const scenario of [
 
 test("common startup rejects contradictory authority even from a runtime-provided admission implementation", async (t) => {
   const root = tempRoot("desk-custom-admission-")
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
   const started = await admitInProcess({
     argv: ["--root", root, "--person", "ari"], env: {},
     runtimeImporter: async () => ({
@@ -111,7 +111,7 @@ for (const scenario of [
 ]) {
   test(`prebuilt runtime admission ${scenario.authority.mode} under ${scenario.policy} policy`, async (t) => {
     const root = tempRoot("desk-runtime-authority-")
-    t.after(() => rmSync(root, { recursive: true, force: true }))
+    t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
     const events = []
     const started = await admitInProcess({
       argv: ["--root", root], env: {},
