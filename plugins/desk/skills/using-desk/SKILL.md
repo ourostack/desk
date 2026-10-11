@@ -67,4 +67,4 @@ Children are not assumed to rerun startup hooks, so every brief carries the outc
 
 ## The RFC
 
-The why is the Agentic Engineering V2 RFC, on the `Desk RFC:` line after this foundation; open it from any repository before you write, review or explain anything about Desk or its method (docs, sites, pitches, onboarding), not at every startup.
+The why is the Agentic Engineering V2 RFC, on the `Desk RFC:` line after this foundation; open it from any repository before you write about or explain Desk or its method for people (docs, sites, pitches, onboarding) or review such writing, not at every startup.

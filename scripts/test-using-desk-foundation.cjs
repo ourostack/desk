@@ -501,7 +501,8 @@ function main() {
     "Agentic Engineering V2 RFC",
     "`Desk RFC:` line",
     "from any repository",
-    "before you write, review or explain anything about Desk or its method",
+    "before you write about or explain Desk or its method for people",
+    "or review such writing",
     "not at every startup",
   ]);
   assert.doesNotMatch(
