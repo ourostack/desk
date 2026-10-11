@@ -871,7 +871,11 @@ test("R8 a desk bound through a symlink alias is the same desk: task lookup, rep
   const boots = async () => {
     let line
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      line = await runBootChecks({ host: "claude", env, launch: async () => {} })
+      // Identity/report/lock semantics are not a startup-budget benchmark.
+      // Keep real inventory/receipt checks; give the instrumented fixture its
+      // own finite observation window. Separate tests enforce boot deadlines.
+      line = await runBootChecks({ host: "claude", env, launch: async () => {},
+        totalBudgetMs: 10000, checkBudgets: { "workspace-tidy": 5000 }, inspectionBudgetMs: 4000 })
       if (!line.includes("budget exceeded")) break
     }
     return line
