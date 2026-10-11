@@ -1,0 +1,1 @@
+Refresh the [V2 evaluation packet](../docs/evaluation-packet.md) with separate cold-run gates, private evidence and exact-owned cleanup; align the [RFC browser status](../docs/agentic-engineering-v2-rfc.md#9-status) with the native real-profile contract.
