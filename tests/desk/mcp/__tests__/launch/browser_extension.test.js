@@ -515,6 +515,29 @@ test("control projects exact owned work windows on readback without changing pag
   assert.equal(tabs.get(second.result.tabId).title, "<img src=x onerror=alert(1)>")
 })
 
+test("restoration followed by purpose change preserves every recorded work-window entry", async () => {
+  const { extension, tabs } = await setup()
+  const first = await create(extension)
+  const later = await create(extension, "restore-projection-later")
+  tabs.get(first.result.tabId).title = "First work"
+  tabs.get(later.result.tabId).title = "Later work"
+  await extension.dispatch({ id: "projection-before-restore", leaseId: "lease-a", method: "target.readback" })
+  const expected = [
+    { tabId: first.result.tabId, windowId: first.result.windowId, title: "First work" },
+    { tabId: later.result.tabId, windowId: later.result.windowId, title: "Later work" },
+  ]
+  const restored = await extension.dispatch({ id: "projection-restore", leaseId: "lease-a", method: "lease.restore", params: {
+    profileToken: token, owner: "test-owner", work: "test-work", transportGeneration: "host-b",
+    windowId: first.result.controlWindowId, controlTabId: first.result.controlTabId, controlMarker: first.result.controlMarker,
+    targetTabs: expected.map(({ tabId, windowId }) => ({ tabId, windowId })),
+  } })
+  assert.equal(restored.error, undefined)
+  const purpose = await extension.dispatch({ id: "projection-purpose", leaseId: "lease-a", method: "purpose.set", params: { work: "Recovered work" } })
+  assert.equal(purpose.result.title, "Desk | test-owner | Recovered work")
+  const label = JSON.parse(decodeURIComponent(tabs.get(first.result.controlTabId).url.split("#")[1]))
+  assert.deepEqual(label.targets, expected)
+})
+
 test("control renders hostile and duplicate titles literally with their exact window identities", async () => {
   const keys = ["document", "location", "addEventListener"]
   const old = new Map(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))

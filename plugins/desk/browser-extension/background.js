@@ -167,12 +167,14 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       throw refusal("NATIVE_CONTROL_MISMATCH", "The recorded owner control belongs to a different lease")
     }
     const records = new Map([[control.id, { tabId: control.id, windowId: control.windowId, control: true }]])
+    const projection = []
     for (const record of params.targetTabs) {
       if (!integer(record.tabId) || !integer(record.windowId) || records.has(record.tabId)) {
         throw refusal("NATIVE_ROUTING_INVALID", "Native restoration contains duplicate or invalid Chrome identities")
       }
       const tab = await api.tabs.get(record.tabId)
       if (tab.windowId !== record.windowId) throw refusal("NATIVE_WINDOW_MISMATCH", "Recorded task routing has changed")
+      projection.push({ tabId: tab.id, windowId: tab.windowId, title: String(tab.title ?? "").slice(0, 240) })
       const prior = previous?.tabs.get(record.tabId)
       records.set(record.tabId, { ...record, sessions: new Set(), attached: false,
         detachPrior: Boolean(prior?.attached && prior.windowId === record.windowId) })
@@ -186,6 +188,7 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
     lease.controlTabId = params.controlTabId
     lease.controlMarker = params.controlMarker
     lease.tabs = records
+    lease.targetProjection = projection
     return { windowId: lease.windowId, controlTabId: lease.controlTabId }
   }
 
