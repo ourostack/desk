@@ -395,7 +395,7 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
           await recordNativeRouting({
             stateDir, leaseId, processIdentity: identity, marker: pending.marker, transportGeneration: generation,
             controlTargetId: virtualTarget(leaseId, created.controlTabId), controlTabId: created.controlTabId,
-            controlMarker: created.controlMarker, windowId: created.windowId,
+            controlMarker: created.controlMarker, windowId: created.controlWindowId,
             targetTabs: { [virtualTarget(leaseId, created.tabId)]: { tabId: created.tabId, windowId: created.windowId } },
           });
           await readTargets(leaseId);

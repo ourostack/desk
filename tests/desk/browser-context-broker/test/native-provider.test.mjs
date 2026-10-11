@@ -42,9 +42,9 @@ class Transport extends EventEmitter {
         lease.controlMarker = params.marker;
         lease.tabs.push({ tabId: lease.controlTabId, windowId: lease.windowId, control: true, title: 'owner', url: 'control' });
       }
-      const tab = { tabId: ++this.next, windowId: lease.windowId, url: params.markerUrl };
+      const tab = { tabId: ++this.next, windowId: ++this.next, url: params.markerUrl };
       lease.tabs.push(tab);
-      return { ...tab, controlTabId: lease.controlTabId, controlMarker: lease.controlMarker };
+      return { ...tab, controlWindowId: lease.windowId, controlTabId: lease.controlTabId, controlMarker: lease.controlMarker };
     }
     if (method === 'target.attach') return {};
     if (method === 'target.command') {

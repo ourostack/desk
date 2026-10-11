@@ -255,7 +255,7 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       lease.creates.set(params.marker, { pending: true })
       if (lease.controlTabId === undefined) {
         lease.controlMarker = params.marker
-        const window = await api.windows.create({ url: controlUrl(lease), focused: false, type: "normal" })
+        const window = await api.windows.create({ url: controlUrl(lease), focused: false, type: "popup" })
         if (!integer(window.id) || window.tabs?.length !== 1 || !integer(window.tabs[0].id)) {
           throw refusal("NATIVE_CREATE_INDETERMINATE", "Native window creation did not return exact Chrome identities")
         }
@@ -265,15 +265,17 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
         await labelControl(lease)
       }
       await ownTab(lease, lease.controlTabId, true)
-      const tab = await api.tabs.create({ windowId: lease.windowId, active: false, url: markerUrl })
-      if (!integer(tab.id) || tab.windowId !== lease.windowId) {
-        throw refusal("NATIVE_CREATE_INDETERMINATE", "Native tab creation did not return exact owner-window routing")
+      const window = await api.windows.create({ url: markerUrl, focused: false, type: "popup" })
+      const tab = window?.tabs?.[0]
+      if (!integer(window?.id) || window.tabs?.length !== 1 || !integer(tab?.id) ||
+          tab.windowId !== window.id || window.id === lease.windowId) {
+        throw refusal("NATIVE_CREATE_INDETERMINATE", "Native task window creation did not return exact independent routing")
       }
       lease.tabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId, sessions: new Set(), attached: false })
       const target = await targetInfo(tab.id)
       const control = await targetInfo(lease.controlTabId)
       const result = {
-        tabId: tab.id, targetId: target.id, windowId: tab.windowId, controlTabId: lease.controlTabId,
+        tabId: tab.id, targetId: target.id, windowId: tab.windowId, controlWindowId: lease.windowId, controlTabId: lease.controlTabId,
         controlTargetId: control.id, controlMarker: lease.controlMarker, markerUrl,
       }
       lease.creates.set(params.marker, result)
