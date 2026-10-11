@@ -17,6 +17,7 @@ appendFileSync(join(dir, "argv.log"), `${JSON.stringify(args)}\n`);
 const joined = args.join(" ");
 const appFile = join(dir, "app.json");
 const value = (flag) => args[args.indexOf(flag) + 1];
+const readyFile = join(dir, "ready-after");
 
 // Identities and role assignments, kept in cloud.json across one run's calls. Production's pull identity exists;
 // staging's exists with AcrPull on the registry unless FAKE_NO_STAGING_IDENTITY=1 or FAKE_NO_ACRPULL=1.
@@ -55,9 +56,25 @@ if (joined.includes("containerapp env show")) {
   }
   const app = JSON.parse(readFileSync(appFile, "utf8"));
   if (joined.includes("--query name")) console.log(app.name);
+  else if (value("--query") === "properties.latestReadyRevisionName") {
+    // FAKE_READY_AFTER_POLLS: the new revision becomes the ready one only after this many reads.
+    const left = existsSync(readyFile) ? Number(readFileSync(readyFile, "utf8")) : 0;
+    if (left > 0) {
+      writeFileSync(readyFile, String(left - 1));
+      if (left === 1) {
+        app.properties.latestReadyRevisionName = app.properties.latestRevisionName;
+        writeFileSync(appFile, JSON.stringify(app));
+      }
+    }
+    console.log(app.properties.latestReadyRevisionName ?? "");
+  } else if (/^properties(\.[A-Za-z]+)+$/.test(value("--query") ?? "")) console.log(value("--query").split(".").reduce((node, key) => node?.[key], app) ?? "");
   else if (joined.includes("customDomains[?name")) console.log("");
   else if (args.includes("json") && !args.includes("--query")) console.log(JSON.stringify(app));
   else console.log("");
+} else if (joined.includes("containerapp revision show")) {
+  const app = JSON.parse(readFileSync(appFile, "utf8"));
+  const pending = value("--revision") !== app.properties.latestReadyRevisionName;
+  console.log(process.env.FAKE_REVISION_STATE ?? (pending ? "Activating" : "Running"));
 } else if (joined.includes("containerapp identity assign")) {
   const app = JSON.parse(readFileSync(appFile, "utf8"));
   app.identity ??= { type: "UserAssigned", userAssignedIdentities: {} };
@@ -86,6 +103,12 @@ if (joined.includes("containerapp env show")) {
     process.exit(1);
   }
   const next = armPatch(current, sent).app;
+  // Every update makes a new revision. It becomes the ready one at once, after FAKE_READY_AFTER_POLLS reads, or, with
+  // FAKE_REVISION_STATE=Failed, never.
+  const updateCount = existsSync(join(dir, "updates")) ? readdirSync(join(dir, "updates")).length : 1;
+  next.properties.latestRevisionName = `${next.name}--u${updateCount}`;
+  if (process.env.FAKE_READY_AFTER_POLLS) writeFileSync(readyFile, process.env.FAKE_READY_AFTER_POLLS);
+  else if (process.env.FAKE_REVISION_STATE !== "Failed") next.properties.latestReadyRevisionName = next.properties.latestRevisionName;
   // A write that comes back pulling with another identity, for the check after the write.
   if (process.env.FAKE_UPDATE_REGISTRY_IDENTITY) for (const registry of next.properties.configuration.registries ?? []) registry.identity = process.env.FAKE_UPDATE_REGISTRY_IDENTITY;
   writeFileSync(appFile, JSON.stringify(next));
