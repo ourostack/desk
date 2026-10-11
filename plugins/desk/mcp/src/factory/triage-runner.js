@@ -10,7 +10,7 @@ import {isHeadlessFactorySession} from "./headless-flag.js"
 import {TRIAGE_RUNNER_STATES} from "./triage-schema.js"
 import {assertOutsideGitWorkspace} from "./os-protect.js"
 import {ownedServerLaunch,prepareOwnedCatalogRun,runOwnedCatalogNative,ownedSourceIdentity,authenticatedNativeRuns,
-  authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt} from "./triage-custody.js"
+  authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction} from "./triage-custody.js"
 import {catalogCanonical,closedObject,safeCatalogPath,catalogToolSchemas} from "./triage-catalog.js"
 
 const digest=value=>createHash("sha256").update(value).digest("hex")
@@ -380,14 +380,26 @@ async function runRegisteredTriage({env,inputDir,resultFile,workDir,qualificatio
     const signIn=await context.signIn({cli:chain.effective_argv[0],env,onChild,onChildExit})
     if(signIn.state!=="subscription"){await owned.close();return outcome(signIn.state)}
     if(!await owned.verifyPrepared()){await owned.close();return outcome("scope_changed")}
-    const currentIdentity=context.invocationIdentity({invocation:{command:chain.effective_argv[0],args:[...chain.effective_argv.slice(1),...policy.argv],
+    // Async sign-in/prepared checks can outlive the admitted chain. Recollect
+    // policy, then inspect the current chain without a yield before deriving
+    // the invocation. This is a launch boundary, not a per-tool/admin barrier.
+    const currentAdmission=await context.admission({cli:chain.effective_argv[0],env,argv:policy.argv})
+    const currentChain=context.chain({cli,env})
+    if(currentAdmission.state!=="admitted"||currentAdmission.fingerprint!==admission.fingerprint||
+      currentChain.state!=="inspected"||catalogCanonical(currentChain)!==catalogCanonical(chain)){
+      await owned.close();return outcome("scope_changed")
+    }
+    const currentIdentity=context.invocationIdentity({invocation:{command:currentChain.effective_argv[0],args:[...currentChain.effective_argv.slice(1),...policy.argv],
       cwd:owned.runDir,parent_env_sha256:fingerprint(childEnvironment(env)),owned_launch:owned.launch,prepared_sha256:owned.prepared.sha256,
-      catalog_sha256:owned.catalog.catalogSha256,brief_sha256:owned.catalog.briefSha256,record_refs_sha256:owned.catalog.recordRefsSha256},chain,cliMetadata:qualification.cliMetadata,env})
+      catalog_sha256:owned.catalog.catalogSha256,brief_sha256:owned.catalog.briefSha256,record_refs_sha256:owned.catalog.recordRefsSha256},chain:currentChain,cliMetadata:qualification.cliMetadata,env})
     if(currentIdentity.template_sha256!==qualification.invocationIdentities[0].template_sha256){await owned.close();return outcome("scope_changed")}
-    const run=await context.run({owned,command:chain.effective_argv[0],args:[...chain.effective_argv.slice(1),...policy.argv],env:childEnvironment(env),deadline,resultFile,onChild,onChildExit,spawn})
-    const after=await context.admission({cli:chain.effective_argv[0],env,argv:policy.argv})
-    if(after.state!=="admitted"||after.fingerprint!==admission.fingerprint)return outcome("scope_changed")
-    if(run.state!=="ran")return outcome(run.state==="scope_unqualified"?"scope_unqualified":["timeout","budget_exceeded"].includes(run.state)?run.state:"failed",{reason:"diagnostic_inadequate"})
+    const run=await context.run({owned,command:currentChain.effective_argv[0],args:[...currentChain.effective_argv.slice(1),...policy.argv],env:childEnvironment(env),deadline,resultFile,onChild,onChildExit,spawn})
+    const after=await context.admission({cli:currentChain.effective_argv[0],env,argv:policy.argv})
+    const afterChain=context.chain({cli,env})
+    if(after.state!=="admitted"||after.fingerprint!==currentAdmission.fingerprint||
+      afterChain.state!=="inspected"||catalogCanonical(afterChain)!==catalogCanonical(currentChain))return outcome("scope_changed")
+    if(run.state!=="ran")return outcome(run.state==="scope_unqualified"?"scope_unqualified":["timeout","budget_exceeded"].includes(run.state)?run.state:"failed",
+      {reason:"diagnostic_inadequate",cost_usd:Number.isFinite(run.cost_usd)&&run.cost_usd>=0?run.cost_usd:null})
     return outcome("ran",{resultFile,cost_usd:run.cost_usd})
   }catch{if(owned)await owned.close().catch(()=>{});return held("diagnostic_inadequate")}
 }
@@ -408,9 +420,11 @@ export function createNonacceptedTriageUnit(config){
   const data=JSON.parse(catalogCanonical(config)),failures=data.failures??{}
   closedObject(failures,[],["native","direct","read","write","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect",
     "source","prepare","policy","chain","admission","admissionIdentity","chainIdentity","signIn","prepared","invocation",
-    "run","postAdmission","postIdentity","throwRun","runTimeout","runBudget","runUnqualified","badSignIn","close"])
+    "run","postAdmission","postIdentity","throwRun","runTimeout","runBudget","runUnqualified","badSignIn","close",
+    "signInChainDrift","signInChainUnknown","runChainDrift","runChainUnknown","nativeMode",
+    "postExitAdmission","postExitIdentity","signInArgvDrift","runArgvDrift"])
   const records=new WeakMap(),documents=new Map(),stats={runs:0,closed:0},out=path.dirname(path.dirname(data.record.nativeReceipts[0].snapshotFile))
-  let admissionReads=0
+  let admissionReads=0,signedIn=false,hasRun=false
   const source=structuredClone(data.record.sourceIdentity),env=structuredClone(data.env)
   const context={
     records,
@@ -440,7 +454,12 @@ export function createNonacceptedTriageUnit(config){
       }
     },
     policy:request=>failures.policy?held("unsafe_permission_grant"):triagePolicy(request),
-    chain:()=>failures.chain?held("launch_chain_unknown"):{...structuredClone(data.chain),fingerprint:failures.chainIdentity?"f".repeat(64):data.chain.fingerprint},
+    chain:()=>{
+      if(failures.chain||(signedIn&&failures.signInChainUnknown)||(hasRun&&failures.runChainUnknown))return held("launch_chain_unknown")
+      const value={...structuredClone(data.chain),fingerprint:failures.chainIdentity||(signedIn&&failures.signInChainDrift)||(hasRun&&failures.runChainDrift)?"f".repeat(64):data.chain.fingerprint}
+      if((signedIn&&failures.signInArgvDrift)||(hasRun&&failures.runArgvDrift))value.effective_argv.push("--unit-drift")
+      return value
+    },
     async admission(){
       admissionReads++
       const value=structuredClone(data.admission)
@@ -448,15 +467,18 @@ export function createNonacceptedTriageUnit(config){
       if(failures.admissionIdentity)value.sources=[{kind:"managed",revision:"f".repeat(64)}]
       if(admissionReads>1&&failures.postAdmission)return held("effective_policy_unknown")
       if(admissionReads>1&&failures.postIdentity)value.fingerprint="changed-unit-admission"
+      if(admissionReads>2&&failures.postExitAdmission)return held("effective_policy_unknown")
+      if(admissionReads>2&&failures.postExitIdentity)value.fingerprint="changed-unit-admission"
       return value
     },
-    async signIn(){return {state:failures.badSignIn?"unit_invalid_state":failures.signIn?"no_credentials":"subscription"}},
+    async signIn(){signedIn=true;return {state:failures.badSignIn?"unit_invalid_state":failures.signIn?"no_credentials":"subscription"}},
     invocationIdentity(request){
       const identity=ownedInvocationIdentity(request)
       return failures.invocation?{...identity,template_sha256:"f".repeat(64)}:identity
     },
     async run({owned,resultFile}){
-      stats.runs++;await owned.close()
+      stats.runs++;hasRun=true;await owned.close()
+      if(failures.nativeMode)return (await runNonacceptedNativeTransaction({mode:failures.nativeMode})).outcome
       if(failures.throwRun)throw Error("unit_run_failed")
       return {state:failures.runTimeout?"timeout":failures.runBudget?"budget_exceeded":failures.runUnqualified?"scope_unqualified":failures.run?"failed":"ran",resultFile,cost_usd:0}
     },
@@ -476,7 +498,7 @@ export function createNonacceptedTriageUnit(config){
       return {authority:false,state:"unit_restored",outcome:await restoreQualification({recordFile:unitFile,env,...options},context)}
     },
     async run(qualification){
-      admissionReads=0
+      admissionReads=0;signedIn=false;hasRun=false
       const invocation=data.record.nativeReceipts[0].invocation
       return {authority:false,state:"unit_run",outcome:await runRegisteredTriage({qualification,env,inputDir:invocation.cwd,
         resultFile:path.join(invocation.cwd,"unit-nonaccepted.json"),deadline:Date.now()+HEADLESS_TIMEOUT_MS,clock:Date.now},context)}

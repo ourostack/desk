@@ -22,3 +22,8 @@ before native qualification store or child effects. Reap only owned positive
 PID handles, close failed startup/transaction resources, and do not count
 corrupted driver failures as runtime refusal proof. Unit coverage and direct
 server tests never substitute for root-owned native qualification and review.
+
+Recheck the selected native chain and admission after asynchronous guards and
+after execution before returning a candidate. Preserve explicit timeout and
+pinned budget-terminal outcomes with validated cost and no materialization.
+Accept compact LF/CRLF wire frames without relaxing raw-byte or frame limits.
