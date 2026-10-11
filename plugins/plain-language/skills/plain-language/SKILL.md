@@ -9,7 +9,7 @@ Apply these rules to human-readable prose. Keep internal reasoning, code, comman
 
 ## Serve the reader
 
-Before writing, identify what the reader needs to know, decide, or do. Lead with that answer. Include background only when it changes the reader's understanding or action.
+Before writing, identify what the reader needs to know, decide, or do.
 
 - Match vocabulary and detail to the reader's knowledge and the destination.
 - Name the primary reader when a document serves several audiences.
@@ -17,12 +17,36 @@ Before writing, identify what the reader needs to know, decide, or do. Lead with
 
 ## Make the answer easy to find
 
-- Put the answer, outcome, decision, blocker, or warning in the opening sentence.
+- Put the answer, outcome, decision, blocker, or warning in the opening sentence. Do not open with a preamble or restate the question.
 - Put warnings before the instructions they govern.
 - Present steps in the order the reader performs them.
 - Group related information. Use a list for three or more parallel items.
 - Use headings only when they help navigation. A one-line answer stays one line.
 - Keep each paragraph to one topic and front-load its main point.
+
+## Keep it short
+
+Length is a cost. Chat messages, pull request bodies, review comments, code comments and commit messages all compete for the reader's attention, and a long correct answer loses to a short one. Test each sentence: does the reader learn something they cannot already see? They have the diff, the code, the thread and the output, so cut any restatement of them, even one clause.
+
+- Answer the question asked, not the topic. Add background, caveats or alternatives only when they change what the reader understands or does.
+- Do not summarize your own work. Describe a change only where the reader cannot see it.
+- A code comment explains why a line is surprising, and a doc comment states the contract. Neither narrates the code.
+- Assume expertise and let the reader ask for more depth.
+
+A subagent kickoff brief is the exception: it starts with no context, so it may be as long as it needs to be.
+
+## Don't write like an AI
+
+These tells survive a tight edit. Cut them:
+
+- Throat-clearing, such as "The key insight is" or "It's worth noting that". The sentence after the preamble is the sentence.
+- The reframe, such as "It's not just A, it's B". Say it once, affirmatively.
+- The same claim twice, such as a paragraph and then a bullet that repeats it. Pick one.
+- An explanation of what you just said. Stop when the point lands.
+- Abstract headings, such as "Escalate appropriately". Make the heading the rule itself.
+- Tricolons and symmetry for their own sake. "Clear, concise, and correct" is one idea three times.
+
+The length and AI-tell rules adapt Tim Clem's [agent instructions](https://github.com/tclem/dotfiles/blob/main/copilot/copilot-instructions.md).
 
 ## Make the answer easy to understand
 
@@ -68,7 +92,7 @@ In agent handoffs, preserve owners, evidence, authority, blocked state, and next
 
 ## Keep the right voice and format
 
-Keep the voice, level of detail, and structure appropriate for the reader and destination. Improve clarity without flattening the speaker's style, changing the requested format, or weakening a more specific requirement.
+Match the voice, level of detail, and structure of the destination: a file, a pull request thread, and a commit log each have their own. Improve clarity without flattening the speaker's style, changing the requested format, or weakening a more specific requirement.
 
 Never hard-wrap authored prose. Keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and pull request body paragraph on one physical line, and let the renderer or editor wrap it. Use a newline only for genuine structure: a new paragraph, list item, heading, table row, code line, or a semantic break preserved from the source. Before finishing, join any line breaks created only by column width in the prose changed in the current task; leave quoted, generated, historical, or other source-preserved text as it is.
 
@@ -77,6 +101,7 @@ Never hard-wrap authored prose. Keep each paragraph, list item, blockquote, mess
 Read the draft once and fix these failures:
 
 - The opening sentence does not answer the reader's question or state the outcome.
+- A sentence tells the reader what they can already see, or a tell from "Don't write like an AI" remains.
 - The reader must infer who acts, what happens next, why a constraint exists, or whether work is verified.
 - Internal codes or acronyms carry the explanation instead of a reader-facing name.
 - A wall of prose hides parallel items or ordered steps.
