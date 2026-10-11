@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.288 — 2026-10-11
+
+Bound agent scratch storage before heavyweight allocations and at every retry. Browser qualification now requires explicit fixture byte/count limits, a free-space reserve, exact inactive disposable-profile cleanup and disk readback before delivery; compact proof survives without retaining whole regenerable profiles.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.287 — 2026-10-11
 
 Native browser work uses independently recorded, unfocused popup windows so
