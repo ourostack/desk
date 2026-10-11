@@ -171,7 +171,7 @@ const isTime = (text) => typeof text === "string" && ISO_TIME.test(text) && !Num
 // gateway's own reader checks the Ouro settings; a placeholder stands in for the Key Vault secret, which isn't here.
 export function checkIdentitySettings({ record, env, current = {}, now = Date.now() }) {
   const refuse = (problem) => {
-    throw new Error(`identity-${record.env}.json: ${problem} Nothing was written to the app.`);
+    throw new Error(`identity-${record.env}.json: ${problem} This update was not sent to the app.`);
   };
   try {
     readIdentity({ ...env, DESK_ENTRA_CLIENT_SECRET: "check-only" }, "https://desk.invalid");
@@ -192,6 +192,14 @@ export function checkIdentitySettings({ record, env, current = {}, now = Date.no
   if (Date.parse(cutoff) <= now && current.DESK_LEGACY_CUTOFF !== cutoff) {
     refuse(`legacyCutoff ${cutoff} is in the past, and the app holds ${current.DESK_LEGACY_CUTOFF ?? "no cutoff"}; setting it would end every legacy connector at once. Record a future cutoff.`);
   }
+}
+
+// The plan sets the cutoff 14 days after the release; a gap far from that is most likely a typo (re-review m3).
+export function cutoffGapWarning(record) {
+  if (!record.releasedAt || !record.legacyCutoff) return null;
+  const days = Math.round((Date.parse(record.legacyCutoff) - Date.parse(record.releasedAt)) / (24 * 3600 * 1000));
+  if (days >= 13 && days <= 15) return null;
+  return `WARNING: identity-${record.env}.json's legacyCutoff ${record.legacyCutoff} is ${days} days after releasedAt ${record.releasedAt}; the plan is 14 days. Check it before relying on it.`;
 }
 
 // The cutoff must be set within a day of the release (spec: 14 days after shipping); a forgotten one fails open.

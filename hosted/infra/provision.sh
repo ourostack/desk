@@ -9,7 +9,11 @@
 #   DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh
 #                                             # set the OAuth redirect allowlist (hosted/README.md); empty clears it
 #   DESK_GITHUB_SIGNIN=on|off hosted/infra/provision.sh
-#                                             # turn the GitHub sign-in fallback on or off; a rerun keeps the app's value
+#                                             # turn the GitHub sign-in fallback on or off; a rerun keeps the app's value.
+#                                             # Refused until identity-<env>.json is complete.
+#   REMOVE_OURO_SETTINGS=1 hosted/infra/provision.sh
+#                                             # take every Ouro sign-in setting off the app (GitHub sign-in for
+#                                             # DESK_ALLOWED_LOGINS again); secrets and identities stay
 #   STAGE=staging [IMAGE=<tag>] hosted/infra/provision.sh
 #                                             # the rehearsal app ouro-desk-hosted-staging (below)
 #
@@ -118,6 +122,10 @@ FEDERATED_NAME=ourostack-desk-main-ids
 FEDERATED_SUBJECT=repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main
 PUBLIC_URL_PASSED="${DESK_PUBLIC_URL:+1}"
 REDIRECTS_PASSED="${DESK_REDIRECTS+1}"
+case "${REMOVE_OURO_SETTINGS:-}" in
+  "" | 0 | 1) ;;
+  *) printf 'REMOVE_OURO_SETTINGS must be 1 or unset, not %s\n' "$REMOVE_OURO_SETTINGS" >&2; exit 1 ;;
+esac
 case "${DESK_GITHUB_SIGNIN:-}" in
   "" | on | off) ;;
   *) printf 'DESK_GITHUB_SIGNIN must be on or off, not %s\n' "$DESK_GITHUB_SIGNIN" >&2; exit 1 ;;
@@ -127,6 +135,8 @@ APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP_YAML="$REPO_ROOT/hosted/infra/app-yaml.mjs"
 IDENTITY_FILE="${IDENTITY_DIR:-$REPO_ROOT/hosted/infra}/identity-$IDENTITY_ENV.json"
+# REMOVE_OURO_SETTINGS=1 takes every Ouro setting off and applies no identity record.
+if [[ "${REMOVE_OURO_SETTINGS:-}" == 1 ]]; then IDENTITY_FILE=""; fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -300,7 +310,14 @@ build_update() {
     if [[ -n "$DESK_REDIRECTS" ]]; then args+=(--set-env "DESK_REDIRECTS=$DESK_REDIRECTS"); else args+=(--remove-env DESK_REDIRECTS); fi
   fi
   if [[ -n "${DESK_GITHUB_SIGNIN:-}" ]]; then args+=(--set-env "DESK_GITHUB_SIGNIN=$DESK_GITHUB_SIGNIN"); fi
-  if [[ -f "$IDENTITY_FILE" ]]; then args+=(--identity-record "$IDENTITY_FILE"); else say "No $(basename "$IDENTITY_FILE") yet; Ouro sign-in settings stay as they are" >&2; fi
+  args+=(--identity-env "$IDENTITY_ENV")
+  if [[ "${REMOVE_OURO_SETTINGS:-}" == 1 ]]; then
+    args+=(--remove-ouro)
+  elif [[ -f "$IDENTITY_FILE" ]]; then
+    args+=(--identity-record "$IDENTITY_FILE")
+  else
+    say "No identity-$IDENTITY_ENV.json yet; Ouro sign-in settings stay as they are" >&2
+  fi
   if [[ "$STAGE" == staging ]]; then args+=(--forbid-identity "$PROD_PULL_IDENTITY"); fi
   node "$APP_YAML" "${args[@]}"
 }
@@ -406,15 +423,15 @@ await_revision() {
     latest="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)"
     ready="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)"
     state="$(az_read containerapp revision show -n "$APP" -g "$RESOURCE_GROUP" --revision "$latest" --query properties.runningState -o tsv 2>/dev/null || true)"
-    case "$state" in
-      Failed | Degraded | Stopped)
-        printf '%s did not start (running state: %s); %s still serves. See its logs with az containerapp logs show -n %s -g %s --revision %s --subscription %s.\n' "$latest" "$state" "${ready:-no revision}" "$APP" "$RESOURCE_GROUP" "$latest" "$SUBSCRIPTION" >&2
-        exit 1
-        ;;
-    esac
+    # As hosted-deploy.yml: ready is enough, whatever the running state (a scaled-to-zero revision may not say
+    # Running); only Failed, while not ready, stops the wait early.
     if [[ -n "$latest" && "$latest" == "$ready" ]]; then
       say "Revision $latest is ready (running state: ${state:-unknown})"
       return
+    fi
+    if [[ "$state" == Failed ]]; then
+      printf '%s did not start (running state: %s); %s still serves. See its logs with az containerapp logs show -n %s -g %s --revision %s --subscription %s.\n' "$latest" "$state" "${ready:-no revision}" "$APP" "$RESOURCE_GROUP" "$latest" "$SUBSCRIPTION" >&2
+      exit 1
     fi
     if ((SECONDS >= deadline)); then
       printf '%s was not ready after %s seconds (running state: %s); %s still serves.\n' "${latest:-the new revision}" "${READY_TIMEOUT_SECONDS:-900}" "${state:-unknown}" "${ready:-no revision}" >&2

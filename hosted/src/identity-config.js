@@ -21,6 +21,8 @@ export const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\
 // IDENTITY_REQUIRED must be set; a partial set is refused, so a typo can't quietly leave the old sign-in running.
 const IDENTITY_REQUIRED = ["DESK_ENTRA_TENANT_ID", "DESK_ENTRA_SUBDOMAIN", "DESK_ENTRA_CLIENT_ID", "DESK_ENTRA_CLIENT_SECRET", "DESK_ACCOUNTS_ENDPOINT"];
 const IDENTITY_OPTIONAL = ["DESK_GITHUB_SIGNIN", "DESK_GITHUB_ACCOUNTS", "DESK_GITHUB_LOGINS", "DESK_LEGACY_CUTOFF"];
+// Every setting that turns Ouro sign-in on, plus the accounts store's identity: what provisioning removes to turn it off.
+export const OURO_SETTINGS = [...IDENTITY_REQUIRED, ...IDENTITY_OPTIONAL, "AZURE_CLIENT_ID"];
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ACCOUNT_ID = /^[A-Za-z0-9_.-]{1,128}$/;
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;

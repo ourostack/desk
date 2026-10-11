@@ -407,3 +407,54 @@ test("combined round: after an update the script waits until the new revision is
   const stuck = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_READY_AFTER_POLLS: "1000", READY_POLL_SECONDS: "0", READY_TIMEOUT_SECONDS: "0" }, record: completeRecord("test"), expectFailure: true });
   assert.match(stuck.output, /was not ready/);
 });
+
+// Round N-1: no Ouro setting reaches the app unless the whole set passes the gateway's own check.
+const OURO_NAMES = ["DESK_ENTRA_TENANT_ID", "DESK_ENTRA_SUBDOMAIN", "DESK_ENTRA_CLIENT_ID", "DESK_ENTRA_CLIENT_SECRET", "DESK_ACCOUNTS_ENDPOINT", "DESK_GITHUB_SIGNIN", "DESK_GITHUB_ACCOUNTS", "DESK_GITHUB_LOGINS", "DESK_LEGACY_CUTOFF", "AZURE_CLIENT_ID"];
+const todaysProduction = () => {
+  const app = structuredClone(shown);
+  app.name = "ouro-desk-hosted";
+  app.properties.template.containers[0].env = envOf(app).filter(({ name }) => !OURO_NAMES.includes(name));
+  envOf(app).find(({ name }) => name === "DESK_REPO").value = "arimendelow/desk";
+  return app;
+};
+
+test("round N-1: DESK_GITHUB_SIGNIN with an incomplete or missing identity record is refused before any write", (t) => {
+  const incomplete = { ...completeRecord("prod"), ari: null };
+  for (const [name, record] of [["incomplete record", incomplete], ["no record", undefined]]) {
+    const { argv, output } = runProvision(t, { app: todaysProduction(), env: { DESK_GITHUB_SIGNIN: "off" }, record, expectFailure: true });
+    assert.deepEqual(updates(argv), [], name);
+    assert.ok(!argv.some((args) => args.slice(0, 3).join(" ") === "containerapp identity assign"), name);
+    assert.match(output, /partly configured/, name);
+    assert.match(output, /DESK_GITHUB_SIGNIN applies only once identity-prod\.json is complete/, name);
+  }
+  // Without the variable, today's production reconciles as before and gains no Ouro setting.
+  const { documents } = runProvision(t, { app: todaysProduction(), record: incomplete });
+  assert.deepEqual(envOf(JSON.parse(documents[0])).filter(({ name }) => OURO_NAMES.includes(name)), []);
+});
+
+test("round N-1: REMOVE_OURO_SETTINGS=1 takes every Ouro setting off the app, ignores the record, and keeps everything else", (t) => {
+  const broken = todaysProduction();
+  envOf(broken).push({ name: "DESK_GITHUB_SIGNIN", value: "off" });
+  const full = runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") }).final;
+  for (const [name, app, env] of [["N-1's leftover", broken, {}], ["a full staging set", full, { STAGE: "staging" }]]) {
+    const { documents, argv } = runProvision(t, { app, env: { ...env, REMOVE_OURO_SETTINGS: "1" }, record: completeRecord(env.STAGE ? "test" : "prod") });
+    const written = envOf(JSON.parse(documents[0]));
+    assert.deepEqual(written.filter(({ name: setting }) => OURO_NAMES.includes(setting)), [], name);
+    for (const entry of envOf(app).filter(({ name: setting }) => !OURO_NAMES.includes(setting))) assert.deepEqual(written.find((candidate) => candidate.name === entry.name), entry, `${name}: ${entry.name}`);
+    assert.ok(!argv.some((args) => args.slice(0, 3).join(" ") === "containerapp identity assign"), name);
+  }
+  const both = runProvision(t, { app: broken, env: { REMOVE_OURO_SETTINGS: "1", DESK_GITHUB_SIGNIN: "on" }, expectFailure: true });
+  assert.deepEqual(updates(both.argv), []);
+});
+
+test("round N-1 m1: a ready revision passes whatever its running state, as in the deploy workflow", (t) => {
+  const { output } = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_REVISION_STATE: "Stopped" }, record: completeRecord("test") });
+  assert.match(output, /Revision \S+ is ready \(running state: Stopped\)/);
+});
+
+test("round N-1 m3: a cutoff that isn't about 14 days after releasedAt is written with a warning", (t) => {
+  const record = { ...completeRecord("test"), legacyCutoff: isoSeconds(Date.parse(RELEASED_AT) + 2 * DAY) };
+  const { output } = runProvision(t, { app: shown, env: { STAGE: "staging" }, record });
+  assert.match(output, /WARNING: .*legacyCutoff .* is 2 days after releasedAt/);
+  assert.ok(!/WARNING: .*legacyCutoff/.test(runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") }).output));
+});
