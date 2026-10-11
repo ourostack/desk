@@ -14,15 +14,20 @@ Read the RFC with an agent rather than alone: start a session and ask it to walk
 
 ## How the evaluation works
 
+**Packet refresh: October 11, 2026.** This is a procedure for a new evaluation, not a completed evaluation report. The native browser correction is recorded in [#330](https://github.com/ourostack/desk/pull/330), and its current installed behavior is described by [the real-profile contract](../skills/cdp-headed-browser/SKILL.md#the-real-browser-profile). Check the [carried release workflow](https://github.com/ourostack/desk/actions/workflows/desk-release.yml) and installed source during setup. CI results and earlier acceptance receipts are not a fresh-machine run of this packet. Every scenario below starts **unrun** for your host; only your observer's recorded outcomes can change that state ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)).
+
 - **You test the channel as it stands.** Install from the channel this packet names, `main` of `ourostack/desk`, never from a commit. Evaluators use the channel as it is when they run and record the commit they saw as evidence, never as something to hold the evaluation to ([RFC §5](agentic-engineering-v2-rfc.md#5-work-source-and-continuity)). Record it at the start with `git ls-remote https://github.com/ourostack/desk refs/heads/main`.
 - **One host per run.** Run the whole packet on one host, then again on the other if you use both.
 - **Everything under test is throwaway.** A new host profile, a new desk, and Desk's own state and cache, all made for this evaluation inside one folder, so the sessions under test see what a new user sees and never use or change anything you already have. A preflight check proves the session under test uses the throwaway desk before any scenario runs.
 - **`observer` watches; you and your agent do the work.** `observer` uses its release-evaluation skill, [`desk:evaluate-release`](../skills/evaluate-release/SKILL.md): it records each step's outcome with evidence, classifies each problem as a defect, a confusion or a gap, and reports without fixing anything. It never evaluates work it did and never certifies its own work ([observer's identity](../agents/observer.md)).
 - **Time is measured, not estimated.** Tell `observer` when you start and finish each scenario; it records the elapsed time from the clock or from host log timestamps, and records `unavailable` when it could not measure ([evaluate-release](../skills/evaluate-release/SKILL.md#time-each-scenario)).
+- **Human authority stays human.** Delegating engineering checks does not delegate credentials, consent to publish facts, approval to speak from your account, acceptance of the outcome or promotion. With no human present, the driver records those gates as `blocked`, never bypasses them ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off), [RFC §2](agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent)).
 
 ## Set up from nothing
 
 Do these steps in order: make the throwaway desk, set up one host, pass the preflight, then start `observer`.
+
+Before allocating profiles or the backup, record free space on the chosen working directory's filesystem and the size of the real Claude config directory. Choose a byte budget and free-space reserve for this run; if the backup or setup would exceed either, record setup as `blocked` rather than allocate it. Use a new project-local evaluation folder, not the system temporary directory. Keep the backup and raw host evidence private: they may contain credentials or transcripts, and must never be attached to an issue or committed ([evidence safety](../skills/evaluate-release/SKILL.md#hands-off), [cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)).
 
 **Every command block below fails closed.** Each block that writes runs in a subshell that starts with `set -eu` and stops unless `$EVAL` is set and, where a desk is touched, `git rev-parse --show-toplevel` is exactly `$EVAL/desk`. Everything they write stays inside `$EVAL`. In any new terminal, run `. <the printed $EVAL path>/env.sh` first; setup writes that file with every variable the evaluation needs.
 
@@ -31,9 +36,10 @@ Do these steps in order: make the throwaway desk, set up one host, pass the pref
 In a new terminal, create a throwaway folder holding a desk with a local remote, a scratch repository for the engineering work, a backup of your real Claude config directory (`$CLAUDE_CONFIG_DIR` if your shell sets it, otherwise `~/.claude`), the folders where Desk keeps its state and cache for this evaluation, and a binding that points Desk at the throwaway desk:
 
 ```sh
-export EVAL="$(cd "$(mktemp -d)" && pwd -P)/v2-eval"
+export EVAL="$(cd "$(mktemp -d "$PWD/.v2-evaluation.XXXXXX")" && pwd -P)/v2-eval"
 (
   set -eu
+  umask 077
   [ -n "$EVAL" ] && [ ! -e "$EVAL" ] || { echo "EVAL must name a new folder; stopping." >&2; exit 1; }
   mkdir -p "$EVAL/desk/_meta" "$EVAL/desk/_archive" "$EVAL/scratch" "$EVAL/state" "$EVAL/cache"
   REAL_CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -98,6 +104,8 @@ Start every session under test from `$EVAL/scratch`: a host project that is itse
 3. Point the overlay at the throwaway desk, never at your team's real shared workspace. The overlay's crew onboarding (`crew:join-crew`) normally clones your team's workspace and binds your writes to it ([crew](../../crew/README.md)); for this evaluation, bind `$EVAL/desk` instead. If the overlay binds its workspace through its own setting, flag or activation config, set that to `$EVAL/desk`: a root or activation config the launcher passes outranks `DESK_ACTIVATION_CONFIG` ([root resolution order](../mcp/src/util/paths.js)). If the overlay only binds a crew workspace, make its throwaway clone inside `$EVAL` from a remote you created there, and use that path in the preflight instead of `$EVAL/desk`.
 4. `cd "$EVAL/scratch"` and start a session with the overlay's worker agent.
 
+**Browser isolation is a separate gate.** `COPILOT_HOME`, `CLAUDE_CONFIG_DIR` and a throwaway desk do not isolate a plugin's `desk.browser` declaration: it selects an existing account profile through native preparation ([real-profile contract](../skills/cdp-headed-browser/SKILL.md#the-real-browser-profile), [native preparation](../mcp/native-messaging-prepare.mjs)). Inspect the installed chain before starting a session that loads it. If it selects a real profile, record this cold setup as `blocked` until an authorized, separately owned evaluation profile and its provider binding are available. Do not copy credentials, change the channel's declaration, load an extension into a shared profile, or restart the human's browser to make a throwaway run pass.
+
 **Good looks like** ([RFC §7](agentic-engineering-v2-rfc.md#7-getting-v2-and-staying-current), [RFC §9](agentic-engineering-v2-rfc.md#9-status)):
 
 - the launcher's own plugin listing, or the installed plugin folders under `$COPILOT_HOME` or the launcher's cache, show each plugin installed from its channel branch (`main` of `ourostack/desk` for Desk, Superpowers and Plain Language, as Desk's [launcher manifest](../agency.json) declares; the overlay's own channel for the overlay) and never from a commit;
@@ -129,7 +137,7 @@ Then start the session with a read-only first prompt: "Call `desk_status` and sh
 
 **If it names any other desk, stop the evaluation.** Run no scenario against that desk. Record a defect with the output as evidence, and file it ([evaluate-release](../skills/evaluate-release/SKILL.md#start-cold-on-the-named-host)).
 
-**What this cannot prevent:** Desk's startup hook runs its boot checks when a session starts, before your first prompt, and they can start a detached tidy of stale worktrees in the desk they resolve ([boot checks](../hooks/boot-checks.cjs)). On Claude Code, the pre-session check rules out a wrong binding before that happens. On a launcher, the in-session `desk_status` detects a wrong binding after startup rather than preventing it.
+**What this cannot prevent:** Desk's startup hook runs its boot checks when a session starts, before your first prompt, and can launch detached workspace-tidy work for the desk it resolves ([boot checks](../hooks/lib/boot-checks.cjs)). The current tidy requires fresh ownership and consumer evidence before removal; a listing is not deletion authority ([workspace tidy](workspace-tidy.md)). On Claude Code, the pre-session check rules out a wrong binding before that happens. On a launcher, the in-session `desk_status` detects a wrong binding after startup rather than preventing it. If you cannot prove the launcher isolates its activation configuration and cache before starting, record setup as `blocked`; do not try it against your real workspace.
 
 ### Start `observer`
 
@@ -147,6 +155,8 @@ Run `observer` in its own terminal, from its own working folder and its own prof
 Run them in order, all against the throwaway desk, from sessions started in `$EVAL/scratch`. For each scenario, tell `observer` when you start and when you finish. A step that says "in another terminal" means a new terminal where you first run `. <the printed EVAL path>/env.sh`.
 
 Scenarios marked **(lands by the evaluation)** exercise features that reach the channel before you run the evaluation. Their outcomes come from V2's design and are confirmed against the channel when each feature lands. If one has not landed when you run it, `observer` records a gap with the channel state as evidence ([evaluate-release](../skills/evaluate-release/SKILL.md#classify-every-problem)).
+
+For each host, keep an evidence index with one row per setup gate and scenario: source channel and installed versions, expected outcome, observed outcome, primary evidence, measured duration and `pass`, `fail`, `blocked` or `unavailable`. Start all seven scenario rows as **unrun**, distinct from an observed failure. Record historical receipts separately: a previous browser acceptance run, fixture test or other host's result never fills a row in this cold run ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)). Track fresh setup, foundation composition, recovery, desk organization, factory delivery and the kaizen check separately; a pass on one does not close the others.
 
 ### 1. Start new work: alignment, then ownership
 
@@ -185,7 +195,7 @@ Scenarios marked **(lands by the evaluation)** exercise features that reach the 
 
 ### 4. A desk that needs tidying (lands by the evaluation)
 
-**Do:** end the session. Right before this scenario, make the throwaway desk messy and clear its tidy record and any `desk-tidy-claim.*.json` or `desk-tidy-hold.json` in its `.git` folder, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). The block stops if the desk has no `git config user.name`; set one there first.
+**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first.
 
 ```sh
 ( set -eu
@@ -234,12 +244,13 @@ The throwaway desk's binding asks Desk to keep it on its `main` branch. Desk swi
     ```
 
 2. Start a new session from `$EVAL/scratch` and ask the agent to call `desk_status`.
-3. While that session is open, detach the desk again in another terminal:
+3. While that session is open but not writing, detach the desk again in another terminal. First confirm that no agent, tool call or detached task is writing to this throwaway checkout; if you cannot, record the step as `blocked` ([checkout ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)):
 
     ```sh
     ( set -eu
       . "${EVAL:?Run . <the printed EVAL path>/env.sh first}/env.sh"
       [ "$(git -C "$EVAL/desk" rev-parse --show-toplevel)" = "$EVAL/desk" ] || { echo "Not the throwaway desk; stopping." >&2; exit 1; }
+      [ -z "$(git -C "$EVAL/desk" status --porcelain)" ] || { echo "The desk has uncommitted changes; stopping." >&2; exit 1; }
       git -C "$EVAL/desk" switch -q --detach
     )
     ```
@@ -255,7 +266,7 @@ The throwaway desk's binding asks Desk to keep it on its `main` branch. Desk swi
 
 ### 6. A finished task reaches the factory (lands by the evaluation)
 
-This scenario depends on the public factory store `ourostack/factory` and on the transport that sends finished jobs to it. If either is not live when you run it, `observer` records a gap.
+This scenario depends on the factory store and transport for the trust boundary under test ([RFC §4](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work)). A personal run uses `ourostack/factory`; a company-overlay run uses its configured work store, never the public one. If the store or transport is not live when you run it, `observer` records a gap. With no human consent to contribution, record upload-dependent steps as `blocked`, not a transport failure.
 
 **Do:** start a fresh small outcome, let the agent finish it, and accept the result, so the agent marks its task done. If Desk asks whether to contribute factory data, answer as you would for real. Start a new session later.
 
@@ -263,22 +274,22 @@ This scenario depends on the public factory store `ourostack/factory` and on the
 
 - marking the task done does not wait for any upload;
 - contribution is opt-in and asked once;
-- a pull request with the job's facts arrives in `ourostack/factory`, passes the store's validation and merges;
+- a pull request with the job's facts arrives in the selected store, passes the store's validation and merges;
 - the store's `reports` branch has the job's report at `jobs/<job>.md`, and it answers four questions: what happened, what mattered, what was waste, what could not be seen;
 - the task card carries no report link, because only a desk known to be private links its report and the throwaway desk's remote is not on GitHub: the card records `factory_report_unavailable: desk_not_private`, and the `task_update` result carries the same field. To check the rule yourself, run `node mcp/scripts/factory.js job-link --store ourostack/factory --desk-remote "$(git -C "$EVAL/desk" remote get-url origin)" --desk "$EVAL/desk" --track <track> --slug <task>` from the installed Desk plugin folder (on Claude Code, under `$CLAUDE_CONFIG_DIR/plugins/cache/ourostack/desk/`) ([factory CLI](../mcp/scripts/factory.js)); it prints `{ "link": null, "reason": "desk_not_private" }`. Pass `--desk` so a card that was renamed or moved after it was created resolves to the same job as the card;
-- the published facts file carries no names and no dates or times of day, only durations.
+- public facts carry no identity, transcript text or times of day. Their permitted task-relative offsets and finish-day fields depend on whether the desk remote is public, private or unknown; check the publishing transform rather than treating every date as a leak ([publishing transform](../mcp/src/factory/publish.js), [RFC privacy contract](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work)).
 
 ### 7. A kaizen card's check (lands by the evaluation)
 
-This scenario depends on the kaizen loop in the factory store `ourostack/factory`. Its outcomes come from the V2 design's section 6, "Kaizen", which is not yet public; the RFC does not describe kaizen cards. If no card has completed its loop when you run it, `observer` records a gap.
+This scenario depends on the kaizen loop in the selected factory store. Earlier packet wording referred to the V2 design's section 6, "Kaizen", as not yet public; that restriction is historical. The [RFC's public factory contract](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work) now describes kaizen and andon. An automatic comparison, a statistical verdict and closure on a verified fix are different outcomes: the [curator](../skills/curator/SKILL.md) permits evidence-based closure when the comparison can structurally never become conclusive. If no automatic check is observable, `observer` records a gap; no statistical verdict is not itself a failure.
 
-**Do:** open the issues in `ourostack/factory` labeled `kaizen` and read a card that has completed its loop.
+**Do:** open the selected store's issues labeled `kaizen` and read a card with a shipped countermeasure and an automatic check. For a personal run, use `ourostack/factory`; keep work-store evidence private.
 
-**Good looks like** (V2 design, section 6, "Kaizen"):
+**Good looks like** ([RFC's factory contract](agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work), [the kaizen check](factory-local-capture.md)):
 
 - the card names the recurring waste it targets and the jobs that showed it, the pull request that shipped the countermeasure, the version it shipped in, and the measure expected to move and in which direction;
 - the store's build has commented a comparison of that measure between jobs before and after that version, with its uncertainty;
-- a verdict label appears only once the data clearly shows a change, or clearly shows none; until then the card shows the running comparison.
+- the result distinguishes a confirmed or not-confirmed statistical verdict from “not enough independent jobs yet” or “no clear change so far”; closure on a verified fix records that reason and is not presented as statistical confirmation.
 
 ## Record what you find
 
@@ -290,14 +301,17 @@ This scenario depends on the kaizen loop in the factory store `ourostack/factory
 
 ## Clean up
 
-Remove everything the evaluation made except the backup of your real Claude config directory. The block stops unless `$EVAL` looks like the throwaway folder:
+First end the sessions under test and any separate observer fixture sessions. Reconcile each exact owned process, browser lease, checkout and profile before deleting its files; a matching folder suffix or a clean Git status is not proof that no writer remains. Stop only exact owned process generations, never by process name. Preserve compact logs, screenshots, failure receipts and the per-host report outside the disposable roots; do not retain whole inactive profiles as evidence ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup), [observer cleanup](../skills/evaluate-release/SKILL.md#clean-up)).
+
+Compare your real Claude config directory with `$EVAL/claude-backup` while that private backup still exists; any unexpected change is a finding. If the original directory did not exist, verify it was not created rather than comparing against a nonexistent backup. After all owned writers and consumers are confirmed absent, this block removes only the environment file, not profiles or evidence:
 
 ```sh
 ( set -eu
   . "${EVAL:?Run . <the printed EVAL path>/env.sh first}/env.sh"
   case "$EVAL" in */v2-eval) ;; *) echo "EVAL does not look like the throwaway folder; stopping." >&2; exit 1 ;; esac
-  find "$EVAL" -mindepth 1 -maxdepth 1 ! -name claude-backup -exec rm -rf {} +
+  [ "$(git -C "$EVAL/desk" rev-parse --show-toplevel)" = "$EVAL/desk" ] || { echo "Not the throwaway desk; stopping." >&2; exit 1; }
+  rm -f "$EVAL/env.sh"
 )
 ```
 
-Then compare your real Claude config directory with the backup, for example `diff -rq "$REAL_CLAUDE_DIR" "$EVAL/claude-backup"`; only session logs, history and caches should differ, and any other difference is a finding. When you're satisfied, remove the folder with `rm -rf "$EVAL"` and close the terminals that sourced its `env.sh`. Keep the evidence folder. `observer` removes what it started and lists it in its report ([evaluate-release](../skills/evaluate-release/SKILL.md#clean-up)).
+Close the terminals that sourced `env.sh`. Remove only the exact evaluation roots whose ownership and absence of consumers you verified, including the backup once its comparison is complete; record each removed path, reclaimed space and an absence readback. If a resource is still needed or its ownership cannot be established, retain that exact resource with a named owner and cleanup trigger in the private report, and keep cleanup open. Keep the evidence folder. `observer` accounts for what it started separately ([observer cleanup](../skills/evaluate-release/SKILL.md#clean-up)).
