@@ -190,3 +190,176 @@ test("native preparation IPC keeps update outcomes session-free and preserves st
   await assert.rejects(native.prepareNativeMessaging({ mcpRoot: root, runtimeExecutable: process.execPath, update: true }),
     error => error.code === "NATIVE_UPDATE_ACTIVE_OWNERS")
 })
+
+test("native provider requests reject invalid capabilities and malformed or failed replies", async t => {
+  for (const endpoint of [
+    "https://127.0.0.1/provider/" + "a".repeat(64), "http://localhost/provider/" + "a".repeat(64),
+    "http://127.0.0.1/foreign", "http://user@127.0.0.1/provider/" + "a".repeat(64),
+    "http://127.0.0.1/provider/" + "a".repeat(64) + "?key=1",
+  ]) await assert.rejects(native.providerRequest(endpoint, "status"), /NATIVE_PROVIDER_ENDPOINT_INVALID/u)
+  let reply = "malformed", status = 200
+  const server = http.createServer((request, response) => { response.writeHead(status); response.end(reply) })
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
+  const endpoint = `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`
+  await assert.rejects(native.providerRequest(endpoint, "status"), /NATIVE_PROVIDER_RESPONSE_INVALID/u)
+  reply = '{"ok":false,"error":{"code":"EXACT_PROVIDER_REFUSAL"}}'
+  await assert.rejects(native.providerRequest(endpoint, "status"), error => error.code === "EXACT_PROVIDER_REFUSAL")
+  reply = '{"ok":true}'; status = 500
+  await assert.rejects(native.providerRequest(endpoint, "status"), error => error.code === "NATIVE_PROVIDER_REQUEST_FAILED")
+  reply = '{"ok":false,"error":{}}'; status = 200
+  await assert.rejects(native.providerRequest(endpoint, "status"), error => error.code === "NATIVE_PROVIDER_REQUEST_FAILED")
+  reply = "x".repeat(1048577)
+  await assert.rejects(native.providerRequest(endpoint, "status"), /NATIVE_RESPONSE_TOO_LARGE/u)
+})
+
+test("native provider timeout terminates only its exact pending request", async t => {
+  const request = new (require("node:events").EventEmitter)()
+  let destroyed
+  request.setTimeout = (ms, callback) => { assert.equal(ms, 30000); queueMicrotask(callback); return request }
+  request.destroy = error => { destroyed = error; request.emit("error", error) }
+  request.end = () => {}
+  t.mock.method(http, "request", () => request)
+  await assert.rejects(native.providerRequest("http://127.0.0.1/provider/" + "a".repeat(64), "status"), /NATIVE_PROVIDER_TIMEOUT/u)
+  assert.equal(destroyed.message, "NATIVE_PROVIDER_TIMEOUT")
+})
+
+test("native session refuses invalid acquisition, use before ownership, and partial cleanup", async () => {
+  const session = native.createNativeSession({
+    endpoint: "http://127.0.0.1/provider/" + "a".repeat(64),
+    request: async () => ({ owner: "agent" }),
+  })
+  assert.throws(() => session.environment(), /browser_native_session_unavailable/u)
+  assert.ok(session.secrets().length)
+  await session.release()
+  for (const owner of [null, "", " ", "x".repeat(161), "bad\nowner"]) {
+    await assert.rejects(session.setOwner(owner), /browser_owner_identity_missing/u)
+  }
+  await assert.rejects(session.setOwner("agent"), /NATIVE_ACQUIRE_RESPONSE_INVALID/u)
+  for (const outcome of [null, { cleared: false, released: false }]) {
+    const exact = native.createNativeSession({
+      endpoint: "http://127.0.0.1/provider/" + "a".repeat(64),
+      request: async operation => operation === "acquire"
+        ? { leaseId: "lease", owner: "agent", endpoint: "http://127.0.0.1/proxy" } : outcome,
+    })
+    await exact.setOwner("agent")
+    assert.equal((await exact.setOwner("agent")).leaseId, "lease")
+    const clear = exact.clear(async () => {})
+    assert.equal(exact.clear(async () => assert.fail("duplicate detach")), clear)
+    await assert.rejects(clear, /PARTIAL_CLEAR/u)
+    const release = exact.release()
+    assert.equal(exact.release(), release)
+    await assert.rejects(release, /PARTIAL_RELEASE/u)
+  }
+  const released = native.createNativeSession({
+    endpoint: "http://127.0.0.1/provider/" + "a".repeat(64),
+    request: async operation => operation === "acquire" ? { leaseId: "lease", owner: "agent", endpoint: "http://127.0.0.1/proxy" } : { released: true },
+  })
+  await released.setOwner("agent")
+  await released.release()
+  assert.equal((await released.release()).released, true)
+})
+
+test("native resume checks private readiness, source, attestation and exact restored identity", async t => {
+  const root = await mkTempRoot("native-resume-negative-")
+  const readyFile = path.join(root, "ready.json")
+  const identity = { pid: 123, startIdentity: "same", owner: "operator", executable: "/browser", profileRoot: "/profile" }
+  let response = { healthy: true, processIdentity: identity }, held, requests = 0
+  const server = http.createServer(async (request, reply) => {
+    let text = ""; for await (const bytes of request) text += bytes
+    const input = JSON.parse(text); requests++
+    if (input.operation === "acquire") reply.end(JSON.stringify({ ok: true, result: { leaseId: "lease", owner: "agent", endpoint: "http://127.0.0.1/proxy" } }))
+    else if (held) held = () => reply.end(JSON.stringify({ ok: true, result: response }))
+    else reply.end(JSON.stringify({ ok: true, result: response }))
+  })
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
+  const endpoint = `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`
+  const session = native.createNativeSession({ endpoint, readyFile, processIdentity: identity, extensionSourceDigest: "c".repeat(64) })
+  await session.setOwner("agent")
+  const write = value => writeFile(readyFile, JSON.stringify(value), { mode: 0o600 })
+  const ready = { version: 1, endpoint, processIdentity: identity, extensionSourceDigest: "c".repeat(64) }
+  await write(ready)
+  const resume = session.resume()
+  assert.equal(session.resume(), resume)
+  assert.equal((await resume).changed, false)
+  await write({ ...ready, extensionSourceDigest: "d".repeat(64) })
+  await assert.rejects(session.resume(), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
+  const noSource = native.createNativeSession({ endpoint, readyFile, processIdentity: identity })
+  await noSource.setOwner("agent")
+  await assert.rejects(noSource.resume(), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
+  await write(ready)
+  for (const value of [null, { healthy: false }, { healthy: true }, { healthy: true, processIdentity: { ...identity, owner: "foreign" } }]) {
+    response = value
+    await assert.rejects(session.resume(), error => error.code === "NATIVE_MEDIATOR_UNAVAILABLE")
+  }
+  response = { healthy: true, processIdentity: identity }
+  await write({ ...ready, endpoint: endpoint.replace("a".repeat(64), "b".repeat(64)) })
+  await assert.rejects(session.resume(), error => error.code === "NATIVE_RESUME_RESPONSE_INVALID")
+  await writeFile(readyFile, "not-json")
+  await assert.rejects(session.resume(), SyntaxError)
+  await require("node:fs").promises.chmod(readyFile, 0o644)
+  await assert.rejects(session.resume(), error => error.code === "NATIVE_READINESS_NOT_PRIVATE")
+  assert.ok(requests > 0)
+})
+
+test("native use queued immediately before release does not dispatch after retirement starts", async () => {
+  const calls = []
+  const session = native.createNativeSession({
+    endpoint: "http://127.0.0.1/provider/" + "a".repeat(64),
+    request: async operation => {
+      calls.push(operation)
+      return operation === "acquire" ? { leaseId: "lease", owner: "agent", endpoint: "http://127.0.0.1/proxy" }
+        : { released: true }
+    },
+  })
+  await session.setOwner("agent")
+  const queued = session.ensureWindow()
+  const release = session.release()
+  await assert.rejects(queued, /browser_native_session_unavailable/u)
+  await release
+  assert.deepEqual(calls, ["acquire", "release"])
+})
+
+test("native preparation IPC refuses non-JSON output and unsanitized child diagnostics", async () => {
+  const root = await mkTempRoot("native-prepare-ipc-failure-")
+  const file = path.join(root, "native-messaging-prepare.mjs")
+  await writeFile(file, 'process.stdin.resume();process.stdin.on("end",()=>process.stdout.write("not-json"))')
+  await assert.rejects(native.prepareNativeMessaging({ mcpRoot: root, runtimeExecutable: process.execPath, ignored: () => {} }),
+    /NATIVE_PREPARE_RESPONSE_INVALID/u)
+  await writeFile(file, 'process.stdin.resume();process.stdin.on("end",()=>{process.stderr.write("unknown private diagnostic");process.exitCode=1})')
+  await assert.rejects(native.prepareNativeMessaging({ mcpRoot: root, runtimeExecutable: process.execPath }), error => error.code === "NATIVE_PREPARE_FAILED")
+})
+
+test("an empty retained lease resumes the current provider before shutdown release after update", async t => {
+  const root = await mkTempRoot("native-empty-update-release-")
+  const readyFile = path.join(root, "ready.json")
+  const identity = { pid: 123, startIdentity: "same", owner: "operator", executable: "/browser", profileRoot: "/profile" }
+  const operations = []
+  const server = http.createServer(async (request, response) => {
+    let text = ""; for await (const chunk of request) text += chunk
+    const { operation, payload } = JSON.parse(text)
+    const replacement = request.url.endsWith("b".repeat(64))
+    operations.push({ operation, replacement })
+    let result
+    if (operation === "acquire") result = { leaseId: "lease", owner: payload.owner, endpoint: "http://127.0.0.1/proxy" }
+    else if (operation === "attest") result = { healthy: true, processIdentity: identity }
+    else if (operation === "resume") result = { leaseId: "lease", owner: "agent", endpoint: "http://127.0.0.1/new-proxy" }
+    else if (operation === "release" && replacement) result = { released: true }
+    else { response.writeHead(503); response.end('{"ok":false,"error":{"code":"STALE_PROVIDER"}}'); return }
+    response.end(JSON.stringify({ ok: true, result }))
+  })
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
+  const base = `http://127.0.0.1:${server.address().port}/provider/`
+  const session = native.createNativeSession({ endpoint: base + "a".repeat(64), readyFile,
+    processIdentity: identity, extensionSourceDigest: "c".repeat(64) })
+  await session.setOwner("agent")
+  await writeFile(readyFile, JSON.stringify({ version: 1, endpoint: base + "b".repeat(64),
+    processIdentity: identity, extensionSourceDigest: "c".repeat(64) }), { mode: 0o600 })
+  assert.equal((await session.release()).released, true)
+  assert.deepEqual(operations, [
+    { operation: "acquire", replacement: false }, { operation: "attest", replacement: true },
+    { operation: "resume", replacement: true }, { operation: "release", replacement: true },
+  ], "targetless shutdown after source update must not send release to the departed transport")
+})

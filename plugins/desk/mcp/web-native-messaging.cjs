@@ -152,7 +152,10 @@ function createNativeSession(options) {
     release: function () {
       if (released || (!acquired && !acquiring)) return Promise.resolve({ released: true });
       if (releasing) return releasing;
+      var session = this;
       releasing = Promise.resolve(acquiring).then(function () { return clearing; }).then(function () {
+        return options.readyFile ? session.resume() : null;
+      }).then(function () {
         return request("release", payload());
       }).then(function (result) {
         if (!result || result.released !== true) throw new Error("PARTIAL_RELEASE");

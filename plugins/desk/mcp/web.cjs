@@ -576,11 +576,6 @@ function reconnectFix(action) {
   return action + ", then reconnect the desk-web MCP server (in Claude Code run /mcp and reconnect desk-web; otherwise start a new session).";
 }
 
-// The fix for a problem the next browser call re-checks, so no reconnect is needed.
-function retryFix(action) {
-  return action + ", then call the browser tool again.";
-}
-
 function degraded(code, summary, fix) {
   return { status: "degraded", state: "degraded:" + code, code: code, summary: summary, fix: fix };
 }

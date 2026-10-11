@@ -225,8 +225,8 @@ function serve(options) {
       replacingChild = previous;
       var stopped = previous === null ? Promise.resolve() : new Promise(function (resolve, reject) {
         var timer = setTimeout(function () {
-          previous.kill("SIGTERM");
           reject(new Error("browser_client_detach_unconfirmed"));
+          previous.kill("SIGTERM");
         }, closeMs);
         previous.once("exit", function () { clearTimeout(timer); resolve(); });
         previous.stdin.end();

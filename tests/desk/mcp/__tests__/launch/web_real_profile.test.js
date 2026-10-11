@@ -1910,3 +1910,62 @@ test("the token is never written anywhere the launcher can print it", () => {
   const writes = sources.split("\n").filter((line) => /stderr\.write|stdout\.write/u.test(line))
   for (const line of writes) assert.doesNotMatch(line, /token/iu)
 })
+
+test("native update without a declaration and malformed update replies fail as one-shot outcomes", posixOnly, async () => {
+  for (const configuration of [{ declare: null }, { launch: {
+    nativeMessagingPrepare: async () => ({ updated: true, reconciliationRequired: false }),
+  } }]) {
+    const machine = await realMachine(configuration)
+    const stdin = new PassThrough(), stdout = new PassThrough(), exits = [], errors = []
+    let text = ""
+    stdout.on("data", bytes => { text += String(bytes) })
+    await browser.run({ ...machine.launchOptions, nativeUpdate: true, stdin, stdout,
+      stderr: { write: value => errors.push(value) }, exit: value => exits.push(value), signals: new EventEmitter() })
+    assert.deepEqual(exits, [1])
+    const result = JSON.parse(text)
+    assert.equal(result.status, "degraded")
+    assert.equal(result.code, configuration.declare === null ? "browser_declaration_missing" : "launch_failed")
+    assert.equal(machine.stub.spawns.length, 0)
+    assert.ok(errors.length)
+  }
+})
+
+test("native resume refusal is not converted into a replayed call and remains a cleanup diagnostic", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeMessagingPrepare = async options => {
+    const connection = await prepare(options)
+    connection.session.resume = () => Promise.reject(new Error("fixture-exact-resume-refused"))
+    return connection
+  }
+  const host = session(machine, { cleanupMs: 100 })
+  await host.handshake()
+  const reply = await host.call(2)
+  assert.equal(reply.result.isError, true)
+  assert.equal(JSON.parse(textOf(reply)).code, "browser_native_operation_unavailable")
+  assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
+  await host.close()
+})
+
+test("cancelled native rebind never replaces the MCP client or forwards the held caller operation", posixOnly, async () => {
+  let finish
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeMessagingPrepare = async options => {
+    const connection = await prepare(options)
+    let calls = 0
+    connection.session.resume = () => ++calls === 1 ? new Promise(resolve => { finish = resolve })
+      : Promise.resolve({ changed: false, endpoint: "http://127.0.0.1:1234/owned" })
+    return connection
+  }
+  const host = session(machine)
+  await host.handshake()
+  host.send({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } })
+  await host.wait(() => finish, "fresh native resume")
+  host.send({ method: "notifications/cancelled", params: { requestId: 2 } })
+  finish({ changed: true, endpoint: "http://127.0.0.1:1234/replacement" })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(machine.stub.spawns.length, 1)
+  assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
+  await host.close()
+})
