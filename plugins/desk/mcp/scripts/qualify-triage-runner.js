@@ -28,7 +28,8 @@ export async function writeSyntheticTriagePreparedInput({inputDir,fixture}){
   return writeTriagePreparedFile({inputDir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
 }
 export async function qualifyOwnedCatalog({launch,fixture,deadline,evidenceDir}){
-  try{if(launch!==undefined)closedObject(launch,["cli","env"])}
+  // A direct-only run passes no launch; any launch carries cli and env only.
+  try{closedObject({cli:undefined,env:undefined,...launch},["cli","env"])}
   catch{return {state:"blocked",reason:"policy_control_unsupported",record:null,directReceipts:[],nativeReceipts:[],
     resources:{out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]}}}
   return qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},realCatalogTransaction)

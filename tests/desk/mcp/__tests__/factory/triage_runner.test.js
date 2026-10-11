@@ -884,6 +884,10 @@ test("real_exports_refuse_caller_doctor_policy_reader_and_chain_resolver",async(
     const controls=await runner.collectTriageControls({cli:f.cli,env:f.env,argv:[],...extra})
     assert.deepEqual([controls.reason,controls.detail,controls.evidence],["policy_control_unsupported","caller_adapter",null])
   }
+  // Without adapters the real exports run their own fixed readers; this
+  // fixture's empty argv fails the fixed recipe before any doctor could start.
+  assert.equal((await runner.collectTriageAdmission({cli:f.cli,env:f.env,argv:[]})).state,"scope_unqualified")
+  assert.equal((await runner.collectTriageControls({cli:f.cli,env:f.env,argv:[]})).detail,"control_recipe")
   const resolver=()=>{called++;return f.resolveExec()}
   assert.equal(runner.inspectLaunchChain({cli:f.cli,env:f.env,resolveExec:resolver,readFile:()=>{called++;return Buffer.alloc(0)}}).state,"scope_unqualified",
     "the real export resolves the fixture engine itself and finds no supported chain")
