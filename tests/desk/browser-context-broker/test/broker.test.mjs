@@ -72,6 +72,30 @@ const recoverableConfig = {
   ],
 };
 
+test('GivenMediatedContext_WhenAcquired_ChainTravelsThroughRegistryAndLeaseInput', async () => {
+  const directory = await stateDir();
+  const browser = processIdentity(requestedDeclaration);
+  const entry = { pid: 101, startIdentity: 'entry', owner: 'operator', executable: '/opt/native', profileRoot: '/runtime', parentPid: browser.pid };
+  const runtime = { pid: 102, startIdentity: 'runtime', owner: 'operator', executable: '/opt/node', profileRoot: '/runtime', parentPid: entry.pid };
+  const mediated = { ...requestedDeclaration, mediation: { entryExecutable: entry.executable, runtimeExecutable: runtime.executable } };
+  const chain = [entry, runtime];
+  const observation = { contextId: mediated.id, endpoint: 'http://127.0.0.1:41000', processIdentity: browser, mediationChain: chain };
+  let input;
+  const result = await acquireLease({
+    config: { contexts: [mediated] },
+    request: { surface: 'work', identity: 'requested@example.test' },
+    stateDir: directory,
+    owner: 'test',
+    leaseCreator: async (value) => { input = value; return null; },
+    providerInvoker: async (operation) => operation === 'discover'
+      ? { found: true, observation }
+      : { healthy: true, endpoint: observation.endpoint, processIdentity: browser, endpointProcessIdentity: runtime, mediationChain: chain },
+  });
+  assert.deepEqual(result.acquired.mediationChain, chain);
+  assert.deepEqual(input.mediationChain, chain);
+  assert.deepEqual((await readRegistry(directory)).contexts[mediated.id].mediationChain, chain);
+});
+
 function processIdentity(declaration, pid = 100) {
   return {
     pid,

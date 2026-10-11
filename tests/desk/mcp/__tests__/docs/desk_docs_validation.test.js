@@ -77,7 +77,7 @@ function browserPolicyBody() {
     "Use status, doctor, and release for the exact lease.",
     "A lease exposes only its owned targets.",
     "A plugin's desk.browser declaration makes desk-web drive the real profile. Work only in that window's tabs, and call `browser_close` when done.",
-    "The bring-to-front rule does not apply to the one new window desk-web opens for you.",
+    "This includes the initial native-owned window: there is no first-window focus-stealing exception.",
   ].join("\n")
 }
 
@@ -281,6 +281,17 @@ test("MCP tool documentation is compared against the registry rather than a priv
     "plugins/desk/mcp/README.md must advertise 0 exposed tools",
     "plugins/desk/mcp/README.md must state all 0 tools are wired",
   ])
+})
+
+test("browser focus validation rejects an initial-window focus exception", () => {
+  const errors = []
+  docsValidator.validateBrowserFocusPolicy(errors, {
+    readFile: () => browserPolicyBody().replace(
+      "This includes the initial native-owned window: there is no first-window focus-stealing exception.",
+      "The bring-to-front rule does not apply to the one new window desk-web opens for you.",
+    ),
+  })
+  assert.ok(errors.some((error) => error.includes("focus")))
 })
 
 test("browser focus validation requires broker routing and rejects unsafe discovery or cleanup", () => {

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "goVersion": "1.27.1",
+  "sourceSha256": "1b4be91440204c29516869487ccb31c7c97bc851a79a8141267359aa1f8d9045",
+  "assets": {
+    "darwin-arm64": {
+      "sha256": "00f7c220c669f49331ef34000a406d2cf3014cfb3e402bca8b70263702bae3db"
+    },
+    "darwin-x64": {
+      "sha256": "11e35251f14271ad26c01967f220c9529046748954a17135fcce8bc82cbbfa2b"
+    },
+    "linux-arm": {
+      "sha256": "e56e95fef5f53dc9426260cc90a97f45d2fb6a2542b55da35e1bf33c58e558c9"
+    },
+    "linux-arm64": {
+      "sha256": "848d1fd5945fa5002fc8a46473cbea110adc4a2f4ab482ef06bc01a90d8a898c"
+    },
+    "linux-x64": {
+      "sha256": "14b8c9451db9980dcf5bed77cab03ad8a3df0721cbaec7b8fd0cfebb848f9bc0"
+    },
+    "win32-arm64": {
+      "sha256": "7c6d120bb467e574fcbeea99baddb03e3182233d067f906d1fbeaf9d1ffe07ac"
+    },
+    "win32-ia32": {
+      "sha256": "0102abf000b6d94b6abe5b84036f6a5c167a021f0da623d6d5fcf3b2570d4c34"
+    },
+    "win32-x64": {
+      "sha256": "51a1ed3c4e556d3d6caedd6a67d22c7f707a11913a615ca219aea0c493760925"
+    }
+  }
+}

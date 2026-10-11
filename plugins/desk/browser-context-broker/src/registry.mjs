@@ -11,12 +11,15 @@ const EMPTY_REGISTRY = Object.freeze({
 });
 
 export async function ensureStateDirectory(stateDir) {
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  const created = await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const metadata = await stat(stateDir);
   if (!metadata.isDirectory()) {
     throw new BrokerError('INVALID_STATE_DIRECTORY', 'Broker state path is not a directory');
   }
-  if ((metadata.mode & 0o077) !== 0) {
+  if (process.platform === 'win32') {
+    const { protectWindowsPaths } = await import('../../mcp/src/factory/windows-acl.js');
+    await protectWindowsPaths([{ path: stateDir, kind: 'directory', created: created !== undefined }], { label: 'desk_browser_state' });
+  } else if ((metadata.mode & 0o077) !== 0) {
     throw new BrokerError(
       'INSECURE_STATE_DIRECTORY',
       'Broker state directory must not be accessible by group or other users',
@@ -63,7 +66,10 @@ export async function writeRegistry(stateDir, registry) {
       mode: 0o600,
       flag: 'wx',
     });
-    await chmod(temporary, 0o600);
+    if (process.platform === 'win32') {
+      const { protectWindowsPaths } = await import('../../mcp/src/factory/windows-acl.js');
+      await protectWindowsPaths([{ path: temporary, kind: 'file', created: true }], { label: 'desk_browser_state' });
+    } else await chmod(temporary, 0o600);
     await rename(temporary, destination);
   } catch (error) {
     await unlink(temporary).catch(() => {});
@@ -81,13 +87,48 @@ function sameProcessIdentity(left, right) {
   );
 }
 
+function completeProcessIdentity(identity) {
+  return Number.isSafeInteger(identity?.pid) && identity.pid > 0 &&
+    ['startIdentity', 'owner', 'executable', 'profileRoot']
+      .every((key) => typeof identity[key] === 'string' && identity[key].length > 0);
+}
+
+function sameMediationChain(declaration, expected, actual, browser) {
+  return Array.isArray(expected) && expected.length === 2 &&
+    Array.isArray(actual) && actual.length === 2 &&
+    actual.every((hop, index) =>
+      completeProcessIdentity(hop) && completeProcessIdentity(expected[index]) &&
+      sameProcessIdentity(expected[index], hop) &&
+      expected[index].parentPid === hop.parentPid) &&
+    actual[0].executable === declaration.mediation?.entryExecutable &&
+    actual[1].executable === declaration.mediation?.runtimeExecutable &&
+    actual[0].parentPid === browser.pid &&
+    actual[1].parentPid === actual[0].pid;
+}
+
 export async function reconcileContext(declaration, observation, provider) {
   if (!observation) {
     return { status: 'absent', reason: 'NO_OBSERVATION', discardObservation: false };
   }
 
   const attestation = await provider('attest', { declaration, observation });
+  const mediated = Object.hasOwn(declaration, 'mediation');
   if (!attestation?.healthy) {
+    if (mediated && !(
+      attestation?.reason === 'PROCESS_ABSENT' &&
+      attestation.browserAbsence?.confirmed === true &&
+      completeProcessIdentity(observation.processIdentity) &&
+      sameProcessIdentity(
+        observation.processIdentity,
+        attestation.browserAbsence.expectedProcessIdentity,
+      )
+    )) {
+      return {
+        status: 'invalid',
+        reason: attestation?.reason ?? 'MEDIATOR_UNAVAILABLE',
+        discardObservation: false,
+      };
+    }
     return {
       status: 'absent',
       reason: attestation?.reason ?? 'ATTESTATION_UNHEALTHY',
@@ -101,22 +142,38 @@ export async function reconcileContext(declaration, observation, provider) {
   const matchesDeclaration =
     actual?.executable === declaration.launch?.executable &&
     actual?.profileRoot === declaration.launch?.profileRoot;
-  if (!sameProcessIdentity(expected, actual) || !matchesDeclaration) {
+  if (!sameProcessIdentity(expected, actual) || !matchesDeclaration ||
+      (mediated && (!completeProcessIdentity(expected) || !completeProcessIdentity(actual)))) {
     return {
       status: 'invalid',
       reason: 'PROCESS_IDENTITY_MISMATCH',
-      discardObservation: true,
+      discardObservation: !mediated,
     };
   }
 
-  if (
-    attestation.endpointProcessIdentity?.pid !== actual.pid ||
-    attestation.endpointProcessIdentity?.startIdentity !== actual.startIdentity
-  ) {
+  if (mediated && !sameMediationChain(
+    declaration,
+    observation.mediationChain,
+    attestation.mediationChain,
+    actual,
+  )) {
+    return {
+      status: 'invalid',
+      reason: 'MEDIATION_IDENTITY_MISMATCH',
+      discardObservation: false,
+    };
+  }
+
+  const endpointMatches = mediated
+    ? sameProcessIdentity(attestation.endpointProcessIdentity, attestation.mediationChain[1]) &&
+      attestation.endpointProcessIdentity.parentPid === attestation.mediationChain[1].parentPid
+    : attestation.endpointProcessIdentity?.pid === actual.pid &&
+      attestation.endpointProcessIdentity?.startIdentity === actual.startIdentity;
+  if (!endpointMatches) {
     return {
       status: 'invalid',
       reason: 'ENDPOINT_PROCESS_MISMATCH',
-      discardObservation: true,
+      discardObservation: !mediated,
     };
   }
 
@@ -124,6 +181,7 @@ export async function reconcileContext(declaration, observation, provider) {
     status: 'healthy',
     endpoint: attestation.endpoint,
     processIdentity: actual,
+    ...(mediated ? { mediationChain: structuredClone(attestation.mediationChain) } : {}),
     evidence: attestation.evidence,
     discardObservation: false,
   };

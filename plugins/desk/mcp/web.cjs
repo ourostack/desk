@@ -26,6 +26,7 @@ var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
 // Installed beside Playwright MCP only when a plugin declares a real browser profile, so a real-browser launch can read the Playwright Extension's token from the profile's LevelDB. It ships prebuilt N-API binaries, so one install serves every Node.
 var LEVEL_PACKAGE = "classic-level@1.4.1";
+var NATIVE_WS_PACKAGE = "ws@8.21.3";
 // Left in an install folder when the reader could not be installed (for example, no prebuilt binary for this platform), so the install is not repeated at every launch.
 var READER_UNAVAILABLE = "reader-unavailable";
 // A marker this old is tried again once, because one transient npm failure should not leave a machine without the reader until the next release.
@@ -347,7 +348,9 @@ function readInstall(root, dir) {
   var cli = path.join(modules, "@playwright", "mcp", bin);
   if (!exists(cli)) return null;
   var core = readJson(path.join(modules, "playwright-core", "package.json"));
-  var found = { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")) };
+  var found = { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null,
+    cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")),
+    nativeTransport: exists(path.join(modules, "ws", "package.json")) };
   if (found.reader) return found;
   var marker = path.join(root, dir, READER_UNAVAILABLE);
   if (exists(marker)) {
@@ -393,7 +396,7 @@ function install(tools, root, timeoutMs, withReader) {
   function run(packages) {
     return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock"].concat(packages), timeoutMs);
   }
-  var first = run(withReader ? [PACKAGE, LEVEL_PACKAGE] : [PACKAGE]);
+  var first = run(withReader ? [PACKAGE, LEVEL_PACKAGE, NATIVE_WS_PACKAGE] : [PACKAGE]);
   var done = !withReader ? first : first.then(function (result) {
     if (result.code === 0) return result;
     return run([PACKAGE]).then(function (alone) {
@@ -489,7 +492,7 @@ function scrub(text) {
 function ensureInstalled(tools, root, deadline, reader) {
   var installed = readInstalled(root);
   var retry = installed !== null && installed.unavailableAt !== undefined && tools.clock() - installed.unavailableAt > READER_RETRY_MS;
-  if (installed !== null && (!reader || (installed.reader && !retry))) return Promise.resolve({ installed: installed, fresh: false });
+  if (installed !== null && (!reader || (installed.reader && !retry && (installed.nativeTransport || installed.unavailableAt)))) return Promise.resolve({ installed: installed, fresh: false });
   // An install that only lacks the reader still works without it, so a failed or crowded retry keeps it.
   var current = installed === null ? null : { installed: installed, fresh: false };
   var lock = path.join(root, "refresh.lock");
@@ -544,7 +547,7 @@ function refresh(o) {
       var latest = view.code === 0 ? lastLine(view.stdout) : "";
       if (!latest) return { ok: false, error: npmError(view, "npm view") };
       var installed = readInstalled(root);
-      if (installed !== null && installed.version === latest) return { ok: true, version: latest, changed: false };
+      if (installed !== null && installed.version === latest && (!installed.reader || installed.nativeTransport || installed.unavailableAt)) return { ok: true, version: latest, changed: false };
       return install(tools, root, REFRESH_MS, installed !== null && installed.reader).then(function (result) {
         return result.ok ? { ok: true, version: result.installed.version, changed: true } : result;
       });
@@ -571,11 +574,6 @@ function startRefresh(o) {
 
 function reconnectFix(action) {
   return action + ", then reconnect the desk-web MCP server (in Claude Code run /mcp and reconnect desk-web; otherwise start a new session).";
-}
-
-// The fix for a problem the next browser call re-checks, so no reconnect is needed.
-function retryFix(action) {
-  return action + ", then call the browser tool again.";
 }
 
 function degraded(code, summary, fix) {
@@ -675,7 +673,17 @@ function failure(io, code, summary, fix) {
 }
 
 function fail(io, code, summary, fix) {
+  if (io.nativeUpdate) return finishNativeUpdate(io, failure(io, code, summary, fix), true);
   return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: failure(io, code, summary, fix) });
+}
+
+function finishNativeUpdate(io, result, failed) {
+  return new Promise(function (resolve) {
+    io.stdout.write(JSON.stringify(result) + "\n", function () {
+      io.exit(failed ? 1 : 0);
+      resolve();
+    });
+  });
 }
 
 // The tool list a first launch answers with before Playwright MCP is installed, and the Playwright MCP release it came from: a snapshot of Playwright MCP's own list, so the names and input schemas are the ones it exposes. Without a usable snapshot the degraded list stands in.
@@ -724,25 +732,42 @@ function start(o, io) {
     return fail(io, "browser_declaration_invalid", declaration.summary, reconnectFix("Fix the desk.browser setting in the plugin"));
   }
   var real = declaration.state === "declared";
+  if (o.nativeUpdate && !real) return fail(io, "browser_declaration_missing",
+    "A deliberate native update requires a declared browser profile", "Configure desk.browser before updating its native setup.");
   if (real && hasOption(args, ["--browser", "--executable-path", "--profile-dir-name", "--user-data-dir"])) {
     return fail(io, "browser_configuration_conflict",
       "A declared browser profile conflicts with caller-supplied browser, executable, profile or user-data options. No browser operation was forwarded.",
       "Use the declared profile without those competing options, or configure an explicit connection instead. This is not a permission override.");
   }
-  var attempt = null;
-  var nativeUsed = false;
-  var cleanupVerified = false;
-  var disposalFailed = false;
-  function disposeAttempt() {
-    if (attempt === null || disposalFailed) return;
-    try {
-      attempt.dispose();
-      attempt = null;
-    } catch (error) {
-      disposalFailed = true;
-      io.stderr.write("[web] browser_launch_attempt_cleanup_incomplete: " + describe(error) +
-        ". The exact native attempt is retained at " + attempt.env.DESK_BROWSER_RECEIPT + "; no cleanup was replayed.\n");
-    }
+  var nativeSession = null;
+  var nativeConnection = null;
+  var nativeLaunchConfiguration = null;
+  var nativeChildEndpoint = null;
+  var nativeTargetsPossible = false;
+  function detachNativeChild(api) {
+    return api.callTool("browser_close", {}, 10000).then(function (result) {
+      if (!result || result.isError) {
+        var error = new Error("browser_native_detach_unconfirmed");
+        error.code = "browser_native_detach_unconfirmed";
+        throw error;
+      }
+    });
+  }
+  function readyNativeChild(api, operation) {
+    return nativeSession.resume().then(function (resumed) {
+      if ((operation && operation.cancelled) || resumed.endpoint === nativeChildEndpoint) return;
+      return api.waitForPendingCalls(30000).then(function () {
+        if (operation && operation.cancelled) return;
+        var launch = Object.assign({}, nativeLaunchConfiguration);
+        launch.env = Object.assign({}, nativeLaunchConfiguration.env, nativeSession.environment());
+        launch.args = launchArgs(nativeConnection.args.concat(["--cdp-endpoint", resumed.endpoint]).concat(args), platform, env, fileExists, root);
+        launch.secrets = nativeLaunchConfiguration.secrets.concat(nativeSession.secrets());
+        return api.restartChild(launch).then(function () {
+          nativeLaunchConfiguration = launch;
+          nativeChildEndpoint = resumed.endpoint;
+        });
+      });
+    });
   }
   var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
@@ -773,28 +798,21 @@ function start(o, io) {
     }
     if (!real) return Promise.resolve(launching([], {}, []));
     var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
-    return realProfile.connect({
+    return either(o.nativeMessagingPrepare, require("./web-native-messaging.cjs").prepareNativeMessaging)({
       declaration: declaration, installed: installed, executable: executable,
-      platform: platform, env: env, homeDir: homeDir,
-      unavailable: degraded, reconnectFix: retryFix, requireModule: o.requireModule, tmpdir: o.tmpdir
+      platform: platform, env: env, homeDir: homeDir, root: root,
+      arch: either(o.arch, process.arch), runtimeExecutable: node,
+      mcpRoot: either(o.mcpRoot, __dirname), update: o.nativeUpdate === true
     }).then(function (connection) {
       if (connection.payload) return { retry: true, payload: failure(io, connection.payload.code, connection.payload.summary, connection.payload.fix) };
-      io.stderr.write("[web] driving the " + connection.app + " profile " + connection.profile + " through the Playwright Extension\n");
-      try {
-        attempt = either(o.nativeLaunch, nativeLaunch.prepare)({
-          mcpRoot: either(o.mcpRoot, __dirname), root: root,
-          executable: connection.executable, profile: connection.profile,
-          platform: platform, arch: either(o.arch, process.arch), env: env,
-          owner: nativeLaunch.ownerName(env, env.DESK_AGENT_NAME)
-        });
-      } catch (error) {
-        return { payload: failure(io, "browser_native_launch_unavailable",
-          "Desk could not prepare this session's direct browser-window launcher (" + describe(error) + "). No browser operation was forwarded.",
-          retryFix("Resolve the launch error, or refresh the Desk plugin if its native asset is missing or damaged. Do not borrow another window")) };
+      if (o.nativeUpdate) {
+        if (connection.updated !== true || connection.reconciliationRequired !== true) throw new Error("NATIVE_UPDATE_RESPONSE_INVALID");
+        return { nativeUpdate: { updated: true, reconciliationRequired: true, profile: connection.profile } };
       }
-      var outcome = launching(connection.args.concat(["--executable-path", attempt.file,
-        "--init-page", path.join(either(o.mcpRoot, __dirname), "scripts", "real-profile-page.cjs")]), Object.assign({}, connection.env, attempt.env), connection.secrets);
-      outcome.launch.clientInfo = { name: attempt.owner, version: "1" };
+      nativeConnection = connection;
+      nativeSession = connection.session;
+      io.stderr.write("[web] driving the declared " + connection.app + " profile " + connection.profile + " through native browser ownership\n");
+      var outcome = launching(connection.args, connection.env, connection.secrets);
       return outcome;
     });
   }
@@ -830,22 +848,23 @@ function start(o, io) {
       return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
     });
   }
-  // The official relay launches its connect URL through our native executable,
-  // so no holding page or last-active-window delay precedes the connection.
-  var own = real ? realProfile.ownTabs(function () {
-    return Promise.resolve().then(function () { return attempt.before(); }).then(null, function (error) {
-      var payload = degraded("browser_window_unavailable", "Desk could not open this session's browser window: " + describe(error) + ". The browser operation was not forwarded.", retryFix("Resolve the window-launch error. Do not use another window as a fallback"));
-      return { isError: true, content: [{ type: "text", text: JSON.stringify(payload) }] };
-    });
-  }, o.tabCallMs) : {};
+  if (o.nativeUpdate) return ready().then(function (outcome) {
+    return finishNativeUpdate(io, outcome.payload || outcome.nativeUpdate, Boolean(outcome.payload));
+  });
   // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return proxy.serve({
     onInitialize: !real ? undefined : function (launch, clientInfo) {
-      attempt.owner = nativeLaunch.ownerName(env, clientInfo && clientInfo.name || env.DESK_AGENT_NAME);
-      attempt.env.DESK_BROWSER_OWNER = attempt.owner;
-      launch.env.DESK_BROWSER_OWNER = attempt.owner;
-      launch.clientInfo.name = attempt.owner;
-      io.stderr.write("[web] browser owner: " + attempt.owner + "\n");
+      var owner = nativeLaunch.ownerName(env, clientInfo && clientInfo.name || env.DESK_AGENT_NAME);
+      return nativeSession.setOwner(owner).then(function (acquired) {
+        var extra = nativeSession.environment();
+        Object.keys(extra).forEach(function (key) { launch.env[key] = extra[key]; });
+        launch.args = launchArgs(nativeConnection.args.concat(["--cdp-endpoint", acquired.endpoint]).concat(args), platform, env, fileExists, root);
+        launch.secrets = nativeConnection.secrets.concat(nativeSession.secrets());
+        launch.clientInfo = { name: owner, version: "1" };
+        nativeLaunchConfiguration = launch;
+        nativeChildEndpoint = acquired.endpoint;
+        io.stderr.write("[web] browser owner: " + owner + "\n");
+      });
     },
     beforeCall: !real ? undefined : function (params, api, operation) {
       if (params.name === "browser_tabs" && params.arguments && params.arguments.action === "select") {
@@ -853,64 +872,45 @@ function start(o, io) {
           "Tab selection was not performed because it activates the browser window.",
           "Use browser_run_code_unsafe to resolve exactly one task page by a recorded URL or nonce within page.context().pages(), reject missing or ambiguous matches, and perform the action directly on that Page without bringToFront. This is action-scoped: subsequent ordinary tools still use the existing current tab. Do not transfer tab groups or borrow a browser-global tab.")) }] });
       }
-      return own.beforeCall(params, api, operation).then(function (result) {
-        if (params.name === "browser_close" && !result.isError) {
-          nativeUsed = false;
-          cleanupVerified = true;
-        } else if (operation && operation.cancelled) {
-          return result;
-        } else if (params.name !== "browser_close" && result === null) {
-          cleanupVerified = false;
-        }
-        return result;
+      var work = readyNativeChild(api, operation).then(function () {
+        if (operation && operation.cancelled) return null;
+        return params.name === "browser_close"
+          ? api.waitForPendingCalls(30000, operation).then(function () {
+            return nativeSession.clear(function () {
+              return nativeTargetsPossible ? detachNativeChild(api) : Promise.resolve();
+            });
+          }).then(function () {
+            nativeTargetsPossible = false;
+            return { content: [{ type: "text", text: "Closed this agent's exact browser targets and owner control." }] };
+          })
+          : (function () {
+              nativeTargetsPossible = true;
+              return nativeSession.ensureWindow(operation).then(function () { return null; });
+            })();
+      });
+      return work.then(null, function (error) {
+        return { isError: true, content: [{ type: "text", text: JSON.stringify(degraded(
+          error.code || "browser_native_operation_unavailable",
+          "The exact native browser operation could not be verified. No fallback operation was forwarded.",
+          "Retain owned-effect evidence and reconcile this lease before retrying. Do not borrow another window.")) }] };
       });
     },
-    mapResult: !real ? undefined : function (result) {
-      var receipt;
-      try {
-        receipt = attempt.read();
-      } catch (error) {
-        io.stderr.write("[web] browser launch receipt could not be verified: " + describe(error) + "\n");
-      }
-      if (receipt && receipt.status === "spawned") {
-        nativeUsed = true;
-        return result;
-      }
-      if (receipt && receipt.status === "refused") {
-        return { isError: true, content: [{ type: "text", text: JSON.stringify(degraded("browser_window_unavailable",
-          "The native browser launch was refused (" + receipt.code + ").",
-          retryFix("Resolve the launch error, call browser_close on this connection, then retry. Do not borrow another window"))) }] };
-      }
-      if (!receipt && result && result.isError) return result;
-      // Preserve the operation's actual response: a missing launch receipt is
-      // not proof that a completed operation can safely be replayed.
-      nativeUsed = true;
-      return { isError: true, content: (result && result.content || []).concat([{ type: "text", text: JSON.stringify(degraded("browser_native_launch_unverified",
-        "The browser returned an operation result, but Desk could not verify its native launch receipt. The result above is retained.",
-        "Do not replay the operation. Close this connection and reconcile its result before retrying.")) }]) };
-    },
-    afterCall: !real ? undefined : function (params, failed, operation) {
-      if (!nativeUsed && failed) {
-        try {
-          var receipt = attempt.read();
-          nativeUsed = Boolean(receipt && (receipt.status === "spawned" || receipt.status === "starting"));
-        } catch (error) {
-          io.stderr.write("[web] browser ownership remains uncertain after a failed operation: " + describe(error) + "\n");
-          nativeUsed = true;
-        }
-      }
-      own.afterCall(params, nativeUsed ? false : failed, operation);
-    },
-    cleanup: own.cleanup === undefined ? undefined : function (api) {
-      return own.cleanup(api).then(function (result) {
-        cleanupVerified = !result.isError;
-        if (result.isError) io.stderr.write("[web] browser_cleanup_incomplete: this session's tabs may remain open; their closure was not verified. Do not close another owner's window as a fallback.\n");
-        if (!result.isError && attempt !== null) {
-          disposeAttempt();
-        }
+    cleanup: !real ? undefined : function (api) {
+      if (!nativeSession) return Promise.resolve();
+      if (!api.childReady() || !nativeTargetsPossible) return nativeSession.release().then(null, function () {
+        io.stderr.write("[web] browser_cleanup_incomplete: native acquisition cleanup was not confirmed; exact lease evidence is retained.\n");
+      });
+      return nativeSession.resume().then(function () { return api.waitForPendingCalls(30000); }).then(function () {
+        return nativeSession.clear(function () { return detachNativeChild(api); });
+      }).then(function () {
+        nativeTargetsPossible = false;
+        return nativeSession.release();
+      }).then(null, function () {
+        io.stderr.write("[web] browser_cleanup_incomplete: exact native effects remain recorded; shared browser and other owners were not touched.\n");
       });
     },
-    cleanupMs: o.cleanupMs,
+    cleanupBeforeReady: real,
+    cleanupMs: o.cleanupMs === undefined && real ? 60000 : o.cleanupMs,
     stdin: io.stdin,
     stdout: io.stdout,
     stderr: io.stderr,
@@ -937,15 +937,13 @@ function start(o, io) {
       return degraded("browser_exited", "The browser ended (" + (signal ? "signal " + signal : "exit code " + code) + ")",
         reconnectFix("Call the browser tool again after reconnecting"));
     }
-  }).then(function () {
-    if (!nativeUsed || cleanupVerified) disposeAttempt();
   });
 }
 
 // Never throws or rejects: anything that goes wrong is degraded:launch_failed over the handshake above, which the
 // host reports as a connected but degraded server, never a failed one. Every option defaults to the real process.
 function run(o) {
-  var io = { stderr: either(o.stderr, process.stderr), stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), exit: either(o.exit, process.exit) };
+  var io = { stderr: either(o.stderr, process.stderr), stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), exit: either(o.exit, process.exit), nativeUpdate: o.nativeUpdate === true };
   function failed(error) {
     return fail(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin"));
   }
@@ -960,6 +958,7 @@ module.exports = {
   BROWSER_TOOL_NAMES: BROWSER_TOOL_NAMES,
   DEFAULT_ARGS: DEFAULT_ARGS,
   LEVEL_PACKAGE: LEVEL_PACKAGE,
+  NATIVE_WS_PACKAGE: NATIVE_WS_PACKAGE,
   NPM_ENV: NPM_ENV,
   PACKAGE: PACKAGE,
   REFRESH_FLAG: REFRESH_FLAG,
@@ -985,5 +984,6 @@ module.exports = {
 /* istanbul ignore next */
 if (require.main === module) {
   if (process.argv[2] === REFRESH_FLAG) refresh({ npmCli: process.argv[3] });
+  else if (process.argv[2] === "--desk-native-update") run({ nativeUpdate: true, args: [] });
   else run({});
 }

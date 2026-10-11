@@ -160,6 +160,12 @@ function scan(iterator, want) {
 
 // The extension's token in a profile, or null when the profile has none (the extension is not installed there). Reads a copy of `Local Storage/leveldb` made without its LOCK file and removes the copy before it answers, whatever happens. `deps.level` is the `classic-level` module.
 function readExtensionToken(profileDir, deps) {
+  var extensionId = deps.extensionId === undefined ? EXTENSION_ID : deps.extensionId;
+  var tokenKey = deps.tokenKey === undefined ? "auth-token" : deps.tokenKey;
+  if (typeof extensionId !== "string" || !/^[a-p]{32}$/.test(extensionId) ||
+      typeof tokenKey !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(tokenKey)) {
+    return Promise.reject(new Error("browser_token_identity_invalid"));
+  }
   var source = path.join(profileDir, "Local Storage", "leveldb");
   if (!fs.existsSync(source)) return Promise.resolve(null);
   var copy = fs.mkdtempSync(path.join(deps.tmpdir, "desk-web-ls-"));
@@ -175,7 +181,7 @@ function readExtensionToken(profileDir, deps) {
     });
     db = new deps.level.ClassicLevel(copy, { keyEncoding: "buffer", valueEncoding: "buffer", createIfMissing: false });
     iterator = db.iterator();
-    return scan(iterator, Buffer.from("_chrome-extension://" + EXTENSION_ID + "\u0000\u0001auth-token", "latin1"));
+    return scan(iterator, Buffer.from("_chrome-extension://" + extensionId + "\u0000\u0001" + tokenKey, "latin1"));
   }).then(function (token) {
     return shutdown().then(function () {
       return token;

@@ -14,8 +14,8 @@ import {
 } from '../src/leases.mjs';
 import { invokeProvider } from '../src/provider.mjs';
 import { readRegistry, reconcileContext } from '../src/registry.mjs';
+import { redactNativeSurface } from '../src/secret-surfaces.mjs';
 
-const SECRET_KEY = /(token|secret|password|cookie|authorization|environment|^env$)/i;
 const RECOVERABLE_REASONS = new Set([
   'ENDPOINT_UNAVAILABLE',
   'ENDPOINT_UNHEALTHY',
@@ -62,13 +62,7 @@ async function loadJson(file) {
 }
 
 function redact(value) {
-  if (Array.isArray(value)) return value.map(redact);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => !SECRET_KEY.test(key))
-      .map(([key, item]) => [key, redact(item)]),
-  );
+  return redactNativeSurface(value);
 }
 
 function providerFor(config) {
@@ -373,7 +367,7 @@ async function main() {
       ok: false,
       error: {
         code: brokerError.code,
-        message: brokerError.message,
+        message: redact(brokerError.message),
         details: redact(brokerError.details ?? {}),
       },
     };

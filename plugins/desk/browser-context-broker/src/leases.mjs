@@ -5,6 +5,7 @@ import { BrokerError } from './claims.mjs';
 import { withBrokerLock } from './lock.mjs';
 import { reconcileContext } from './registry.mjs';
 import { readRegistry, writeRegistry } from './registry.mjs';
+import { markerTargetUrl } from './markers.mjs';
 
 const PROCESS_START_IDENTITY = `${process.pid}:${Date.now() - Math.floor(process.uptime() * 1_000)}`;
 
@@ -98,6 +99,7 @@ async function reconcileLeaseContext({
       contextId: lease.contextId,
       endpoint: lease.rawEndpoint,
       processIdentity: lease.processIdentity,
+      ...(lease.mediationChain ? { mediationChain: lease.mediationChain } : {}),
     },
     providerInvoker,
   );
@@ -130,11 +132,6 @@ function errorDiagnostic(error) {
     message: error?.message ?? String(error),
     ...(error?.details ? { details: error.details } : {}),
   };
-}
-
-function markerTargetUrl(marker) {
-  const html = `<!doctype html><meta charset="utf-8"><title>Desk target marker</title><meta name="desk-target-marker" content="${marker}">`;
-  return `data:text/html,${encodeURIComponent(html)}`;
 }
 
 async function listTargets(rawEndpoint, cdpClientOptions) {
@@ -465,6 +462,7 @@ export async function closeOwnedTarget({
     lease.targetCloseFailures ??= {};
     if (result.closed) {
       lease.targetIds = lease.targetIds.filter((owned) => owned !== targetId);
+      if (lease.nativeRouting?.targetTabs) delete lease.nativeRouting.targetTabs[targetId];
       delete lease.targetCloseFailures[targetId];
     } else {
       lease.targetCloseFailures[targetId] = result.diagnostic;
@@ -564,7 +562,7 @@ async function recordTargetClosures(
   closedTargetIds,
   failedTargetIds,
   failureDiagnostics = {},
-  { retainReleasing = false } = {},
+  { retainReleasing = false, retainEmpty = false } = {},
 ) {
   return withBrokerLock(stateDir, async () => {
     const registry = await readRegistry(stateDir);
@@ -572,21 +570,32 @@ async function recordTargetClosures(
     if (!lease) throw new BrokerError('LEASE_NOT_FOUND', `Lease not found: ${leaseId}`, { leaseId });
     const closed = new Set(closedTargetIds);
     lease.targetIds = lease.targetIds.filter((targetId) => !closed.has(targetId));
+    for (const targetId of closedTargetIds) {
+      if (lease.nativeRouting?.targetTabs) delete lease.nativeRouting.targetTabs[targetId];
+    }
     lease.targetCloseFailures ??= {};
     for (const targetId of closedTargetIds) delete lease.targetCloseFailures[targetId];
     for (const targetId of failedTargetIds) {
       lease.targetCloseFailures[targetId] = failureDiagnostics[targetId];
     }
-    const released =
+    const fullyClosed =
       failedTargetIds.length === 0 &&
       lease.targetIds.length === 0 &&
       (lease.pendingTargetCreates?.length ?? 0) === 0;
+    const released = fullyClosed && !retainEmpty;
     if (released) delete registry.leases[leaseId];
+    else if (fullyClosed && retainEmpty) {
+      lease.releasing = false;
+      if (typeof lease.nativeRouting?.transportGeneration === 'string') {
+        lease.nativeRouting = { transportGeneration: lease.nativeRouting.transportGeneration, targetTabs: {} };
+      } else delete lease.nativeRouting;
+    }
     else if (!retainReleasing) lease.releasing = false;
     await writeRegistry(stateDir, registry);
     return {
       leaseId,
       released,
+      ...(retainEmpty ? { cleared: fullyClosed } : {}),
       closedTargetIds,
       failedTargetIds,
     };
@@ -607,6 +616,9 @@ export async function createLease({
   owner,
   rawEndpoint,
   processIdentity,
+  mediationChain,
+  providerBind,
+  deferInitialTarget = false,
   initialUrl = 'about:blank',
   ttlMs = 300_000,
   cdpClientOptions,
@@ -617,6 +629,10 @@ export async function createLease({
       'Lease creation requires an acquired endpoint and attested process identity',
     );
   }
+  if ((providerBind !== undefined && typeof providerBind !== 'function') ||
+      (deferInitialTarget && typeof providerBind !== 'function')) {
+    throw new BrokerError('INVALID_NATIVE_BINDING', 'Deferred native leases require an explicit provider binding');
+  }
   const now = new Date();
   const lease = {
     id: randomUUID(),
@@ -625,6 +641,7 @@ export async function createLease({
     owner,
     rawEndpoint,
     processIdentity: structuredClone(processIdentity),
+    ...(mediationChain ? { mediationChain: structuredClone(mediationChain) } : {}),
     proxyToken: randomBytes(32).toString('base64url'),
     targetIds: [],
     pendingTargetCreates: [],
@@ -647,13 +664,35 @@ export async function createLease({
       if (current.releasing) {
         throw new BrokerError('LEASE_RELEASING', `Lease is being released: ${lease.id}`);
       }
-      await createOwnedTarget({
-        stateDir,
-        leaseId: lease.id,
-        rawEndpoint,
-        params: { url: initialUrl },
-        cdpClientOptions,
-      });
+      if (providerBind) {
+        const binding = await providerBind({ lease: structuredClone(current) });
+        let endpoint;
+        try {
+          endpoint = new URL(binding?.rawEndpoint);
+        } catch {
+          throw new BrokerError('INVALID_NATIVE_BINDING', 'Native provider did not return a private loopback endpoint');
+        }
+        if (endpoint.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(endpoint.hostname) ||
+            endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
+            typeof binding.transportGeneration !== 'string' ||
+            !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u.test(binding.transportGeneration)) {
+          throw new BrokerError('INVALID_NATIVE_BINDING', 'Native provider binding requires a loopback endpoint and exact transport generation');
+        }
+        rawEndpoint = binding.rawEndpoint;
+        await mutateLease(stateDir, lease.id, record => {
+          record.rawEndpoint = rawEndpoint;
+          record.nativeRouting = { transportGeneration: binding.transportGeneration, targetTabs: {} };
+        });
+      }
+      if (!deferInitialTarget) {
+        await createOwnedTarget({
+          stateDir,
+          leaseId: lease.id,
+          rawEndpoint,
+          params: { url: initialUrl },
+          cdpClientOptions,
+        });
+      }
       return mutateLease(stateDir, lease.id, (record) => {
         if (record.releasing) {
           throw new BrokerError('LEASE_RELEASING', `Lease is being released: ${lease.id}`);
@@ -688,6 +727,112 @@ export async function createLease({
   }
 }
 
+export async function renewNativeLeaseBinding({ stateDir, leaseId, processIdentity, mediationChain, rawEndpoint, transportGeneration }) {
+  return mutateLease(stateDir, leaseId, lease => {
+    if (!sameProcessIdentity(lease.processIdentity, processIdentity) || !lease.nativeRouting ||
+        lease.pendingTargetCreates?.length || lease.releasing || typeof rawEndpoint !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u.test(transportGeneration ?? '') ||
+        !Array.isArray(mediationChain) || mediationChain.length !== 2) {
+      throw new BrokerError('NATIVE_RECOVERY_PENDING', 'Native binding renewal requires exact browser identity and resolved recorded effects');
+    }
+    lease.rawEndpoint = rawEndpoint;
+    lease.mediationChain = structuredClone(mediationChain);
+    lease.nativeRouting.transportGeneration = transportGeneration;
+    lease.heartbeatAt = new Date().toISOString();
+    lease.expiresAt = new Date(Date.now() + 300000).toISOString();
+  });
+}
+
+export async function recordLeasePurpose(stateDir, leaseId, work) {
+  if (work !== null && (typeof work !== 'string' || !work.trim() || work.length > 160 || /[\u0000-\u001f\u007f]/u.test(work))) {
+    throw new BrokerError('NATIVE_PURPOSE_INVALID', 'Native purpose requires a bounded non-sensitive label or null');
+  }
+  return mutateLease(stateDir, leaseId, lease => {
+    if (lease.releasing) throw new BrokerError('LEASE_RELEASING', 'Native purpose cannot change during release');
+    lease.work = work;
+  });
+}
+
+export async function recordNativeRouting({
+  stateDir, leaseId, processIdentity, marker, transportGeneration,
+  controlTargetId, controlTabId, controlMarker, windowId, targetTabs, openerTargetId,
+}) {
+  const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u.test(value);
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  if (!validId(controlTargetId) || !validId(controlMarker) ||
+      !positive(controlTabId) || !positive(windowId) || !targetTabs ||
+      typeof targetTabs !== 'object' || Array.isArray(targetTabs)) {
+    throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native routing requires exact control and task Chrome identities');
+  }
+  const incoming = Object.entries(targetTabs);
+  const seenTabs = new Set([controlTabId]);
+  for (const [targetId, route] of incoming) {
+    if (!validId(targetId) || targetId === controlTargetId ||
+        !positive(route?.tabId) || !positive(route?.windowId) || seenTabs.has(route.tabId)) {
+      throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native routing contains duplicate or incomplete target identities');
+    }
+    seenTabs.add(route.tabId);
+  }
+  return mutateLease(stateDir, leaseId, (lease, registry) => {
+    if (!positive(processIdentity?.pid) ||
+        ['startIdentity', 'owner', 'executable', 'profileRoot'].some(
+          key => typeof processIdentity?.[key] !== 'string' || !processIdentity[key].trim()) ||
+        !sameProcessIdentity(lease.processIdentity, processIdentity) ||
+        !validId(transportGeneration) || lease.nativeRouting?.transportGeneration !== transportGeneration) {
+      throw new BrokerError('NATIVE_ROUTING_GENERATION_MISMATCH', 'Native routing is not bound to this browser and mediator generation');
+    }
+    if (openerTargetId !== undefined) {
+      if (!validId(openerTargetId) || !lease.targetIds.includes(openerTargetId) ||
+          !lease.nativeRouting.targetTabs?.[openerTargetId] || incoming.length !== 1 ||
+          incoming[0][0] === openerTargetId) {
+        throw new BrokerError('NATIVE_POPUP_NOT_OWNED', 'Native popup routing requires an exact recorded task opener');
+      }
+    } else if (!(lease.pendingTargetCreates ?? []).some(pending => pending.marker === marker)) {
+      throw new BrokerError('NATIVE_CREATE_NOT_RECORDED', 'Native routing requires a previously recorded create marker');
+    }
+    const current = lease.nativeRouting;
+    if ((current.controlTargetId && current.controlTargetId !== controlTargetId) ||
+        (current.controlTabId && current.controlTabId !== controlTabId) ||
+        (current.windowId && current.windowId !== windowId) ||
+        (current.controlMarker && current.controlMarker !== controlMarker)) {
+      throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native routing cannot replace a still-recorded owner control');
+    }
+    const merged = { ...current.targetTabs };
+    for (const [targetId, route] of incoming) {
+      const previous = merged[targetId];
+      if (previous && (previous.tabId !== route.tabId || previous.windowId !== route.windowId)) {
+        throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native routing cannot move a recorded target');
+      }
+      merged[targetId] = { tabId: route.tabId, windowId: route.windowId,
+        ...(openerTargetId ? { openerTargetId } : {}) };
+    }
+    const allTabs = new Set([controlTabId]);
+    for (const route of Object.values(merged)) {
+      if (allTabs.has(route.tabId)) throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native task identities overlap');
+      allTabs.add(route.tabId);
+    }
+    if (allTabs.size > 50) throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native lease exceeds its target limit');
+    const targetIds = [controlTargetId, ...Object.keys(merged)];
+    for (const peer of Object.values(registry.leases)) {
+      if (peer.id === lease.id || !sameProcessIdentity(peer.processIdentity, lease.processIdentity)) continue;
+      const peerTabs = [
+        peer.nativeRouting?.controlTabId,
+        ...Object.values(peer.nativeRouting?.targetTabs ?? {}).map(route => route.tabId),
+      ];
+      if (targetIds.some(targetId => peer.targetIds?.includes(targetId)) ||
+          peerTabs.some(tabId => allTabs.has(tabId))) {
+        throw new BrokerError('NATIVE_ROUTING_CONFLICT', 'Native target or Chrome tab is already recorded for another lease');
+      }
+    }
+    lease.nativeRouting = {
+      transportGeneration, controlTargetId, controlTabId, controlMarker, windowId, targetTabs: merged,
+    };
+    for (const targetId of targetIds) {
+      if (!lease.targetIds.includes(targetId)) lease.targetIds.push(targetId);
+    }
+  });
+}
+
 export async function addOwnedTarget(stateDir, leaseId, targetId) {
   return mutateLease(stateDir, leaseId, (lease) => {
     if (lease.releasing) {
@@ -701,8 +846,38 @@ export async function addOwnedTarget(stateDir, leaseId, targetId) {
 export async function removeOwnedTarget(stateDir, leaseId, targetId) {
   return mutateLease(stateDir, leaseId, (lease) => {
     lease.targetIds = lease.targetIds.filter((owned) => owned !== targetId);
+    if (lease.nativeRouting?.targetTabs) delete lease.nativeRouting.targetTabs[targetId];
     if (lease.targetCloseFailures) delete lease.targetCloseFailures[targetId];
     lease.heartbeatAt = new Date().toISOString();
+  });
+}
+
+export async function recordNativeTargetClosed({ stateDir, leaseId, processIdentity, transportGeneration, tabId }) {
+  return withBrokerLock(stateDir, async () => {
+    const registry = await readRegistry(stateDir);
+    const lease = registry.leases[leaseId];
+    if (!lease) return false;
+    const routing = lease.nativeRouting;
+    if (!sameProcessIdentity(lease.processIdentity, processIdentity) || routing?.transportGeneration !== transportGeneration) {
+      throw new BrokerError('NATIVE_ROUTING_GENERATION_MISMATCH', 'Native closure belongs to another browser or transport generation');
+    }
+    const control = routing.controlTabId === tabId;
+    const targetId = control ? routing.controlTargetId
+      : Object.entries(routing.targetTabs ?? {}).find(([, route]) => route.tabId === tabId)?.[0];
+    if (!targetId || !lease.targetIds.includes(targetId)) return false;
+    lease.targetIds = lease.targetIds.filter(id => id !== targetId);
+    delete routing.targetTabs[targetId];
+    if (lease.targetCloseFailures) delete lease.targetCloseFailures[targetId];
+    if (control) {
+      delete routing.controlTargetId;
+      delete routing.controlTabId;
+      delete routing.controlMarker;
+    }
+    if (!lease.targetIds.length && !lease.pendingTargetCreates?.length) {
+      lease.nativeRouting = { transportGeneration, targetTabs: {} };
+    }
+    await writeRegistry(stateDir, registry);
+    return true;
   });
 }
 
@@ -745,13 +920,14 @@ export async function heartbeatLease(stateDir, leaseId, ttlMs = 300_000) {
   });
 }
 
-export async function releaseLease({
+async function settleLeaseTargets({
   stateDir,
   leaseId,
   declaration,
   providerInvoker,
   cdpClientOptions,
-}) {
+  providerUnbind,
+}, retainEmpty) {
   return withBrokerLock(
     stateDir,
     () => withLeaseOperation(stateDir, leaseId, async () => {
@@ -774,27 +950,37 @@ export async function releaseLease({
         );
       }
       const current = await readLease(stateDir, leaseId);
+      const control = current.nativeRouting?.controlTargetId;
+      if (control && !current.targetIds.includes(control)) {
+        throw new BrokerError('INVALID_NATIVE_ROUTING', 'The control target is not recorded to this lease', { leaseId });
+      }
+      const targetIds = control
+        ? [...current.targetIds.filter(targetId => targetId !== control), control]
+        : current.targetIds;
       const {
         closedTargetIds,
         failedTargetIds,
         failureDiagnostics,
       } = await closeOwnedTargets(
         lease.rawEndpoint,
-        current.targetIds,
+        targetIds,
         cdpClientOptions,
       );
+      if (!retainEmpty && failedTargetIds.length === 0 && providerUnbind) {
+        await providerUnbind({ lease: current, closedTargetIds });
+      }
       const result = await recordTargetClosures(
         stateDir,
         leaseId,
         closedTargetIds,
         failedTargetIds,
         failureDiagnostics,
-        { retainReleasing: true },
+        { retainReleasing: true, retainEmpty },
       );
-      if (!result.released) {
+      if (retainEmpty ? !result.cleared : !result.released) {
         throw new BrokerError(
-          'PARTIAL_RELEASE',
-          `Lease release incomplete: ${leaseId}`,
+          retainEmpty ? 'PARTIAL_CLEAR' : 'PARTIAL_RELEASE',
+          `Lease ${retainEmpty ? 'clear' : 'release'} incomplete: ${leaseId}`,
           {
             leaseId,
             failedTargetIds: result.failedTargetIds,
@@ -806,6 +992,14 @@ export async function releaseLease({
     }),
     { name: contextLockName(declaration.id) },
   );
+}
+
+export function releaseLease(options) {
+  return settleLeaseTargets(options, false);
+}
+
+export function clearLeaseTargets(options) {
+  return settleLeaseTargets(options, true);
 }
 
 export async function cleanupStaleLease({

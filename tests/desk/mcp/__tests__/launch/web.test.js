@@ -416,7 +416,9 @@ test("only a complete install counts as installed", async () => {
   touch(path.join(pkg, "package.json"), JSON.stringify({ version: "1", bin: "cli.js" }))
   assert.equal(browser.readInstalled(root), null, "no entry script")
   touch(path.join(pkg, "cli.js"))
-  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i"), reader: false })
+  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i"), reader: false, nativeTransport: false })
+  touch(path.join(root, "i", "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
+  assert.equal(browser.readInstalled(root).nativeTransport, true, "the separately installed native WebSocket transport is detected")
   touch(path.join(root, "i", "node_modules", "classic-level", "package.json"), "{}")
   assert.equal(browser.readInstalled(root).reader, true, "the token reader beside it")
   const marked = path.join(root, "j", "node_modules", "@playwright", "mcp")
@@ -1475,7 +1477,7 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-native-launch.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-native-launch.cjs", "web-native-artifacts.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")
@@ -1572,4 +1574,19 @@ test("sessions that start together install once and every one gets its first cal
   for (const answer of runs) assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
   assert.equal(npmCalls(fixture.log).filter((call) => call.args[0] === "install").length, 1)
   assert.equal(readdirSync(path.join(fixture.state, "installs")).length, 1)
+})
+
+test("unchanged maintained release preserves a native-ready install or a recorded optional-reader refusal", posixOnly, async () => {
+  for (const nativeReady of [true, false]) {
+    const m = await refreshMachine("desk-web-native-refresh-", { FAKE_NPM_VERSION: "0.0.81" })
+    preinstall(m.state)
+    if (nativeReady) {
+      touch(path.join(m.state, "installs/1-1-a/node_modules/classic-level/package.json"), "{}")
+      touch(path.join(m.state, "installs/1-1-a/node_modules/ws/package.json"), "{}")
+    } else {
+      touch(path.join(m.state, "installs/1-1-a/reader-unavailable"), "")
+    }
+    assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
+    assert.equal(m.calls().some(call => call.args[0] === "install"), false)
+  }
 })
