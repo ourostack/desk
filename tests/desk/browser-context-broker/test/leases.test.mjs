@@ -17,6 +17,7 @@ import {
   releaseLease,
   withLeaseOperation,
 } from '../../../../plugins/desk/browser-context-broker/src/leases.mjs';
+import * as leaseApi from '../../../../plugins/desk/browser-context-broker/src/leases.mjs';
 import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
 import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin } from './fixtures/settle.mjs';
@@ -67,6 +68,145 @@ function attestingProvider(operation, payload) {
     },
   });
 }
+
+test('GivenMediatedLease_WhenCreated_ChainIsPersistedAndAttestedForCleanup', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const entry = { pid: 701, startIdentity: 'entry', owner: 'operator', executable: '/opt/native', profileRoot: '/runtime', parentPid: processIdentity.pid };
+  const runtime = { pid: 702, startIdentity: 'runtime', owner: 'operator', executable: '/opt/node', profileRoot: '/runtime', parentPid: entry.pid };
+  const context = { ...declaration, mediation: { entryExecutable: entry.executable, runtimeExecutable: runtime.executable } };
+  const chain = [entry, runtime];
+  const lease = await createLease({ stateDir: directory, context, owner: 'agent', rawEndpoint: fake.endpoint, processIdentity, mediationChain: chain });
+  assert.deepEqual(lease.mediationChain, chain);
+  const released = await releaseLease({
+    stateDir: directory, leaseId: lease.id, declaration: context,
+    providerInvoker: async (operation, payload) => {
+      assert.equal(operation, 'attest');
+      assert.deepEqual(payload.observation.mediationChain, chain);
+      return { healthy: true, endpoint: fake.endpoint, processIdentity, endpointProcessIdentity: runtime, mediationChain: chain };
+    },
+  });
+  assert.equal(released.released, true);
+});
+
+test('GivenTwoLeases_WhenOneClears_EmptyLeaseAndOtherOwnerArePreserved', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const [first, peer] = await Promise.all(['first', 'peer'].map(owner => createLease({
+    stateDir: directory, context: declaration, owner, rawEndpoint: fake.endpoint, processIdentity,
+  })));
+  assert.equal(typeof leaseApi.clearLeaseTargets, 'function');
+  const result = await leaseApi.clearLeaseTargets({ stateDir: directory, leaseId: first.id, declaration, providerInvoker: attestingProvider });
+  assert.equal(result.cleared, true);
+  const registry = await readRegistry(directory);
+  assert.deepEqual(registry.leases[first.id].targetIds, []);
+  assert.deepEqual(registry.leases[peer.id].targetIds, peer.targetIds);
+  assert.equal(fake.targets.has(peer.targetIds[0]), true);
+  assert.equal(fake.targets.has('unowned-existing'), true);
+  await createOwnedTarget({ stateDir: directory, leaseId: first.id, rawEndpoint: fake.endpoint, params: { url: 'about:blank' } });
+  assert.equal((await readRegistry(directory)).leases[first.id].targetIds.length, 1);
+});
+
+test('GivenLeaseControl_WhenCleared_ControlClosesLastWithoutChangingLeaseIdentity', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({ stateDir: directory, context: declaration, owner: 'agent', rawEndpoint: fake.endpoint, processIdentity });
+  const controlId = lease.targetIds[0];
+  await createOwnedTarget({ stateDir: directory, leaseId: lease.id, rawEndpoint: fake.endpoint, params: { url: 'about:blank' } });
+  const registry = await readRegistry(directory);
+  registry.leases[lease.id].nativeRouting = { controlTargetId: controlId };
+  await writeRegistry(directory, registry);
+  assert.equal(typeof leaseApi.clearLeaseTargets, 'function');
+  await leaseApi.clearLeaseTargets({ stateDir: directory, leaseId: lease.id, declaration, providerInvoker: attestingProvider });
+  const closes = fake.methods.filter(value => value.method === 'Target.closeTarget');
+  assert.equal(closes.at(-1).params.targetId, controlId);
+  assert.equal((await readRegistry(directory)).leases[lease.id].id, lease.id);
+  assert.equal((await readRegistry(directory)).leases[lease.id].nativeRouting, undefined);
+});
+
+test('GivenMalformedMediatedBrowser_WhenAttested_EmptyIdentityCannotAuthorizeAccess', async () => {
+  const result = await import('../../../../plugins/desk/browser-context-broker/src/registry.mjs').then(({ reconcileContext }) =>
+    reconcileContext({ id: 'shared', launch: {}, mediation: {} }, { processIdentity: {} }, async () => ({
+      healthy: true, processIdentity: {}, mediationChain: [{}, {}], endpointProcessIdentity: {},
+    })));
+  assert.equal(result.status, 'invalid');
+  assert.equal(result.discardObservation, false);
+});
+
+test('GivenMediatedStaleLease_WhenMediatorIsGone_LiveBrowserTargetsStayRecorded', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const entry = { pid: 701, startIdentity: 'entry', owner: 'operator', executable: '/opt/native', profileRoot: '/runtime', parentPid: processIdentity.pid };
+  const runtime = { pid: 702, startIdentity: 'runtime', owner: 'operator', executable: '/opt/node', profileRoot: '/runtime', parentPid: entry.pid };
+  const context = { ...declaration, mediation: { entryExecutable: entry.executable, runtimeExecutable: runtime.executable } };
+  const lease = await createLease({ stateDir: directory, context, owner: 'agent', rawEndpoint: fake.endpoint, processIdentity, mediationChain: [entry, runtime] });
+  const registry = await readRegistry(directory);
+  registry.leases[lease.id].expiresAt = new Date(0).toISOString();
+  await writeRegistry(directory, registry);
+  await assert.rejects(cleanupStaleLease({
+    stateDir: directory, leaseId: lease.id, declaration: context,
+    providerInvoker: async () => ({ healthy: false, reason: 'MEDIATOR_UNAVAILABLE' }),
+  }), error => error.code === 'CONTEXT_DISCONNECTED');
+  const retained = (await readRegistry(directory)).leases[lease.id];
+  assert.deepEqual(retained.targetIds, lease.targetIds);
+  assert.equal(retained.releasing, false);
+  assert.equal(fake.targets.has(lease.targetIds[0]), true);
+});
+
+test('GivenMediatedStaleLease_WhenExactBrowserIsAbsent_NoReplacementTargetIsTouched', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const context = { ...declaration, mediation: { entryExecutable: '/opt/native', runtimeExecutable: '/opt/node' } };
+  const lease = await createLease({ stateDir: directory, context, owner: 'agent', rawEndpoint: fake.endpoint, processIdentity });
+  const registry = await readRegistry(directory);
+  registry.leases[lease.id].expiresAt = new Date(0).toISOString();
+  await writeRegistry(directory, registry);
+  const count = fake.methods.length;
+  const result = await cleanupStaleLease({
+    stateDir: directory, leaseId: lease.id, declaration: context,
+    providerInvoker: async () => ({ healthy: false, reason: 'PROCESS_ABSENT', browserAbsence: { expectedProcessIdentity: processIdentity, confirmed: true } }),
+  });
+  assert.equal(result.reason, 'OWNER_GENERATION_GONE');
+  assert.equal(fake.methods.length, count);
+  assert.deepEqual(result.unclosedTargetIds, lease.targetIds);
+});
+
+test('GivenUnverifiedClosure_WhenCleared_TargetAndRetryableStateAreRetained', async (t) => {
+  const fake = await startFakeCdpServer({ closeTarget: async () => ({ success: false }) });
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({ stateDir: directory, context: declaration, owner: 'agent', rawEndpoint: fake.endpoint, processIdentity });
+  assert.equal(typeof leaseApi.clearLeaseTargets, 'function');
+  await assert.rejects(
+    leaseApi.clearLeaseTargets({ stateDir: directory, leaseId: lease.id, declaration, providerInvoker: attestingProvider }),
+    error => error.code === 'PARTIAL_CLEAR',
+  );
+  const retained = (await readRegistry(directory)).leases[lease.id];
+  assert.deepEqual(retained.targetIds, lease.targetIds);
+  assert.equal(retained.releasing, true);
+});
+
+test('GivenUnownedControlReference_WhenCleared_NoUnownedTargetIsClosed', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({ stateDir: directory, context: declaration, owner: 'agent', rawEndpoint: fake.endpoint, processIdentity });
+  const registry = await readRegistry(directory);
+  registry.leases[lease.id].nativeRouting = { controlTargetId: 'unowned-existing' };
+  await writeRegistry(directory, registry);
+  assert.equal(typeof leaseApi.clearLeaseTargets, 'function');
+  await assert.rejects(
+    leaseApi.clearLeaseTargets({ stateDir: directory, leaseId: lease.id, declaration, providerInvoker: attestingProvider }),
+    error => error.code === 'INVALID_NATIVE_ROUTING',
+  );
+  assert.equal(fake.methods.some(value => value.method === 'Target.closeTarget'), false);
+  assert.equal(fake.targets.has('unowned-existing'), true);
+});
 
 test('N concurrent leases receive distinct initial targets and isolated target views', async () => {
   const fake = await startFakeCdpServer();

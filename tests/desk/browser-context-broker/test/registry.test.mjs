@@ -392,3 +392,133 @@ test('updating one context preserves unrelated registry records', async () => {
 
   assert.equal((await readRegistry(directory)).contexts.unrelated.endpoint, 'keep');
 });
+
+const entryIdentity = {
+  pid: 124,
+  startIdentity: 'entry-1',
+  owner: identity.owner,
+  executable: '/opt/desk-native',
+  profileRoot: '/runtime/desk',
+  parentPid: identity.pid,
+};
+const runtimeIdentity = {
+  pid: 125,
+  startIdentity: 'runtime-1',
+  owner: identity.owner,
+  executable: '/opt/node',
+  profileRoot: '/runtime/desk',
+  parentPid: entryIdentity.pid,
+};
+const mediatedDeclaration = {
+  ...declaration,
+  mediation: {
+    entryExecutable: entryIdentity.executable,
+    runtimeExecutable: runtimeIdentity.executable,
+  },
+};
+const mediatedObservation = {
+  contextId: declaration.id,
+  processIdentity: identity,
+  mediationChain: [entryIdentity, runtimeIdentity],
+};
+const mediatedAttestation = {
+  healthy: true,
+  endpoint: 'http://127.0.0.1:41000',
+  processIdentity: identity,
+  endpointProcessIdentity: runtimeIdentity,
+  mediationChain: [entryIdentity, runtimeIdentity],
+};
+
+test('GivenExactMediatedChain_WhenAttested_ReconcileAcceptsBrowserAndRuntime', async () => {
+  const result = await reconcileContext(
+    mediatedDeclaration,
+    mediatedObservation,
+    provider(mediatedAttestation),
+  );
+  assert.equal(result.status, 'healthy');
+  assert.deepEqual(result.processIdentity, identity);
+  assert.deepEqual(result.mediationChain, mediatedObservation.mediationChain);
+});
+
+for (const field of ['pid', 'startIdentity', 'owner', 'executable', 'profileRoot', 'parentPid']) {
+  for (const hop of [0, 1]) {
+    test(`GivenMediatedChain_WhenHop${hop}${field}Changes_ReconcileRejects`, async () => {
+      const chain = structuredClone(mediatedAttestation.mediationChain);
+      chain[hop][field] = typeof chain[hop][field] === 'number' ? 999 : 'changed';
+      const result = await reconcileContext(
+        mediatedDeclaration,
+        mediatedObservation,
+        provider({ ...mediatedAttestation, mediationChain: chain }),
+      );
+      assert.equal(result.status, 'invalid');
+      assert.equal(result.reason, 'MEDIATION_IDENTITY_MISMATCH');
+      assert.equal(result.discardObservation, false);
+    });
+  }
+}
+
+for (const chain of [undefined, [], [entryIdentity], [runtimeIdentity, entryIdentity]]) {
+  test(`GivenMediatedChain_WhenChain${chain?.length ?? 'Missing'}IsIncomplete_ReconcileRejects`, async () => {
+    const result = await reconcileContext(
+      mediatedDeclaration,
+      mediatedObservation,
+      provider({ ...mediatedAttestation, mediationChain: chain }),
+    );
+    assert.equal(result.status, 'invalid');
+    assert.equal(result.reason, 'MEDIATION_IDENTITY_MISMATCH');
+  });
+}
+
+test('GivenMediatedChain_WhenListenerIsNotRuntime_ReconcileRejects', async () => {
+  const result = await reconcileContext(
+    mediatedDeclaration,
+    mediatedObservation,
+    provider({ ...mediatedAttestation, endpointProcessIdentity: entryIdentity }),
+  );
+  assert.equal(result.status, 'invalid');
+  assert.equal(result.reason, 'ENDPOINT_PROCESS_MISMATCH');
+  assert.equal(result.discardObservation, false);
+});
+
+for (const reason of ['MEDIATOR_UNAVAILABLE', 'ENDPOINT_UNAVAILABLE', 'PROCESS_ABSENT']) {
+  test(`GivenLiveBrowser_When${reason}LacksAbsenceProof_ReconcileRetainsOwnership`, async () => {
+    const result = await reconcileContext(
+      mediatedDeclaration,
+      mediatedObservation,
+      provider({ healthy: false, reason }),
+    );
+    assert.equal(result.status, 'invalid');
+    assert.equal(result.reason, reason);
+    assert.equal(result.discardObservation, false);
+  });
+}
+
+test('GivenMediatedContext_WhenExactBrowserGenerationAbsent_ReconcileAllowsStaleRemoval', async () => {
+  const result = await reconcileContext(
+    mediatedDeclaration,
+    mediatedObservation,
+    provider({
+      healthy: false,
+      reason: 'PROCESS_ABSENT',
+      browserAbsence: { expectedProcessIdentity: identity, confirmed: true },
+    }),
+  );
+  assert.equal(result.status, 'absent');
+  assert.equal(result.discardObservation, true);
+});
+
+for (const absence of [
+  { expectedProcessIdentity: { ...identity, startIdentity: 'other' }, confirmed: true },
+  { expectedProcessIdentity: identity, confirmed: false },
+  { confirmed: true },
+]) {
+  test('GivenMediatedContext_WhenAbsenceProofIsNotExact_ReconcileRetainsOwnership', async () => {
+    const result = await reconcileContext(
+      mediatedDeclaration,
+      mediatedObservation,
+      provider({ healthy: false, reason: 'PROCESS_ABSENT', browserAbsence: absence }),
+    );
+    assert.equal(result.status, 'invalid');
+    assert.equal(result.discardObservation, false);
+  });
+}

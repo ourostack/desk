@@ -76,6 +76,7 @@ function publicResult(declaration, reconciled, recovery) {
     context: declaration,
     rawEndpoint: reconciled.endpoint,
     processIdentity: reconciled.processIdentity,
+    ...(reconciled.mediationChain ? { mediationChain: reconciled.mediationChain } : {}),
     recovery,
   };
 }
@@ -90,6 +91,7 @@ function observationRecord(declaration, reconciled) {
     claims: declaration.claims,
     endpoint: reconciled.endpoint,
     processIdentity: reconciled.processIdentity,
+    ...(reconciled.mediationChain ? { mediationChain: reconciled.mediationChain } : {}),
     lastAttestedAt: new Date().toISOString(),
     attestation: reconciled.evidence
       ? {
@@ -453,6 +455,7 @@ export async function acquireLease({
         owner,
         rawEndpoint: acquired.rawEndpoint,
         processIdentity: acquired.processIdentity,
+        ...(acquired.mediationChain ? { mediationChain: acquired.mediationChain } : {}),
         cdpClientOptions,
       });
       return { acquired, lease };

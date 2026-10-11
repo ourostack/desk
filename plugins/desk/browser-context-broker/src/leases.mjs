@@ -98,6 +98,7 @@ async function reconcileLeaseContext({
       contextId: lease.contextId,
       endpoint: lease.rawEndpoint,
       processIdentity: lease.processIdentity,
+      ...(lease.mediationChain ? { mediationChain: lease.mediationChain } : {}),
     },
     providerInvoker,
   );
@@ -564,7 +565,7 @@ async function recordTargetClosures(
   closedTargetIds,
   failedTargetIds,
   failureDiagnostics = {},
-  { retainReleasing = false } = {},
+  { retainReleasing = false, retainEmpty = false } = {},
 ) {
   return withBrokerLock(stateDir, async () => {
     const registry = await readRegistry(stateDir);
@@ -577,16 +578,22 @@ async function recordTargetClosures(
     for (const targetId of failedTargetIds) {
       lease.targetCloseFailures[targetId] = failureDiagnostics[targetId];
     }
-    const released =
+    const fullyClosed =
       failedTargetIds.length === 0 &&
       lease.targetIds.length === 0 &&
       (lease.pendingTargetCreates?.length ?? 0) === 0;
+    const released = fullyClosed && !retainEmpty;
     if (released) delete registry.leases[leaseId];
+    else if (fullyClosed && retainEmpty) {
+      lease.releasing = false;
+      delete lease.nativeRouting;
+    }
     else if (!retainReleasing) lease.releasing = false;
     await writeRegistry(stateDir, registry);
     return {
       leaseId,
       released,
+      ...(retainEmpty ? { cleared: fullyClosed } : {}),
       closedTargetIds,
       failedTargetIds,
     };
@@ -607,6 +614,7 @@ export async function createLease({
   owner,
   rawEndpoint,
   processIdentity,
+  mediationChain,
   initialUrl = 'about:blank',
   ttlMs = 300_000,
   cdpClientOptions,
@@ -625,6 +633,7 @@ export async function createLease({
     owner,
     rawEndpoint,
     processIdentity: structuredClone(processIdentity),
+    ...(mediationChain ? { mediationChain: structuredClone(mediationChain) } : {}),
     proxyToken: randomBytes(32).toString('base64url'),
     targetIds: [],
     pendingTargetCreates: [],
@@ -745,13 +754,13 @@ export async function heartbeatLease(stateDir, leaseId, ttlMs = 300_000) {
   });
 }
 
-export async function releaseLease({
+async function settleLeaseTargets({
   stateDir,
   leaseId,
   declaration,
   providerInvoker,
   cdpClientOptions,
-}) {
+}, retainEmpty) {
   return withBrokerLock(
     stateDir,
     () => withLeaseOperation(stateDir, leaseId, async () => {
@@ -774,13 +783,20 @@ export async function releaseLease({
         );
       }
       const current = await readLease(stateDir, leaseId);
+      const control = current.nativeRouting?.controlTargetId;
+      if (control && !current.targetIds.includes(control)) {
+        throw new BrokerError('INVALID_NATIVE_ROUTING', 'The control target is not recorded to this lease', { leaseId });
+      }
+      const targetIds = control
+        ? [...current.targetIds.filter(targetId => targetId !== control), control]
+        : current.targetIds;
       const {
         closedTargetIds,
         failedTargetIds,
         failureDiagnostics,
       } = await closeOwnedTargets(
         lease.rawEndpoint,
-        current.targetIds,
+        targetIds,
         cdpClientOptions,
       );
       const result = await recordTargetClosures(
@@ -789,12 +805,12 @@ export async function releaseLease({
         closedTargetIds,
         failedTargetIds,
         failureDiagnostics,
-        { retainReleasing: true },
+        { retainReleasing: true, retainEmpty },
       );
-      if (!result.released) {
+      if (retainEmpty ? !result.cleared : !result.released) {
         throw new BrokerError(
-          'PARTIAL_RELEASE',
-          `Lease release incomplete: ${leaseId}`,
+          retainEmpty ? 'PARTIAL_CLEAR' : 'PARTIAL_RELEASE',
+          `Lease ${retainEmpty ? 'clear' : 'release'} incomplete: ${leaseId}`,
           {
             leaseId,
             failedTargetIds: result.failedTargetIds,
@@ -806,6 +822,14 @@ export async function releaseLease({
     }),
     { name: contextLockName(declaration.id) },
   );
+}
+
+export function releaseLease(options) {
+  return settleLeaseTargets(options, false);
+}
+
+export function clearLeaseTargets(options) {
+  return settleLeaseTargets(options, true);
 }
 
 export async function cleanupStaleLease({
