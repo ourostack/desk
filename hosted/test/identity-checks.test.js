@@ -661,3 +661,57 @@ test("the workflow's permissions, checkout, and concurrency are pinned", () => {
   assert.match(check, /uses: actions\/checkout@v4\n\s+with:\n\s+persist-credentials: false/);
   assert.match(workflow, /\nconcurrency:\n {2}group: identity-checks\n {2}cancel-in-progress: false\n/);
 });
+
+// --- Task 7 re-review Minors (Task 8) ----------------------------------------------------------------------------
+
+test("Minor 1: a recorded Key ID that is null or missing never matches a provider that shows none, so nothing is sent", async (t) => {
+  // Graph may show the provider's keyId as null or leave it out; a record slot may be null or absent.
+  for (const [recorded, shown] of [["null", "null"], ["absent", "absent"], ["null", "absent"], ["absent", "null"]]) {
+    for (const slot of ["a", "b"]) {
+      const rec = record("test");
+      if (recorded === "null") rec.apple.keyIds[slot] = null;
+      else delete rec.apple.keyIds[slot];
+      const { go, cloud } = setup(t, { rec });
+      if (shown === "null") cloud.provider.keyId = null;
+      else delete cloud.provider.keyId;
+      const before = markerTag(cloud);
+      const result = await go({ renewApple: true });
+      assert.equal(result.results.find(({ check }) => check === "apple-renewal").code, "live-unknown", `${recorded}/${shown}/${slot}`);
+      assert.deepEqual(cloud.patches, [], "no PATCH when neither recorded Key ID is the provider's");
+      assert.equal(markerTag(cloud), before);
+    }
+  }
+});
+
+test("Minor 1: --record-apple-upload doesn't match a null recorded Key ID with a provider that shows none", async (t) => {
+  const rec = record("test", { outcome: "B" });
+  rec.apple.keyIds.b = null;
+  const { go, cloud } = setup(t, { rec });
+  delete cloud.vault["apple-siwa-active-test"];
+  cloud.provider.keyId = null;
+  const result = await go({ recordAppleUpload: "b" });
+  assert.equal(result.results.find(({ check }) => check === "apple-upload").code, "mismatch");
+  assert.deepEqual(cloud.sets, []);
+});
+
+test("Minor 2: a renewal date more than 5 minutes ahead is an alert; up to 5 minutes is clock skew", async (t) => {
+  const { go, cloud } = setup(t);
+  const code = async (ms) => {
+    cloud.vault["apple-siwa-active-test"].tags["apple-renewed-at"] = iso(NOW + ms);
+    return (await go()).results.find(({ check }) => check === "apple-secret-age").code;
+  };
+  assert.equal(await code(5 * 60 * 1000), "ok");
+  assert.equal(await code(5 * 60 * 1000 + 1000), "future");
+  assert.equal(await code(6 * 60 * 1000), "future");
+  assert.equal(await code(DAY), "future");
+});
+
+test("Minor 4: the Entra phrases name the credential Key Vault holds, not the newest one", async (t) => {
+  for (const [code, text] of Object.entries(ALERT_PHRASES["entra-client-secret"])) {
+    assert.doesNotMatch(text, /newest/, `${code}: ${text}`);
+  }
+  const { cloud, cli } = setup(t);
+  cloud.passwordCredentials[1].endDateTime = iso(NOW + 29 * DAY);
+  const { stderr } = await cli(["--env", "test"]);
+  assert.match(stderr, /entra-client-secret: the client secret Key Vault holds \(its key-id tag\) ends 2026-11-08, within 30 days/);
+});
