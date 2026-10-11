@@ -15,6 +15,12 @@ const shown = JSON.parse(readFileSync(new URL("./fixtures/containerapp-shown.jso
 const STAGING_URL = "https://ouro-desk-hosted-staging.blueflower-44af4710.eastus2.azurecontainerapps.io";
 const GATEWAY_IDENTITY = "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging";
 
+// Dates relative to today, so the record stays valid as time passes: released yesterday, cutoff 14 days after.
+const DAY = 24 * 3600 * 1000;
+const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+const RELEASED_AT = isoSeconds(Math.floor(Date.now() / 1000) * 1000 - DAY);
+const LEGACY_CUTOFF = isoSeconds(Date.parse(RELEASED_AT) + 14 * DAY);
+
 export const completeRecord = (env = "test") => ({
   env,
   tenant: { name: "ourobottest", subdomain: "ourobottest", id: "c12edfb6-c5ab-4bf8-b1d5-1f053311d396", domain: "ourobottest.onmicrosoft.com" },
@@ -22,8 +28,8 @@ export const completeRecord = (env = "test") => ({
   storage: { account: "stouroacctstest261e0b", endpoint: "https://stouroacctstest261e0b.table.core.windows.net" },
   gatewayIdentity: { name: "id-ouro-desk-hosted-staging", id: GATEWAY_IDENTITY, clientId: "33333333-3333-3333-3333-333333333333", principalId: "44444444-4444-4444-4444-444444444444" },
   ari: { accountId: "acct-ari-test", githubUserId: 16390116, githubLogin: "arimendelow" },
-  legacyCutoff: "2026-11-15T00:00:00Z",
-  releasedAt: "2026-11-01T00:00:00Z",
+  legacyCutoff: LEGACY_CUTOFF,
+  releasedAt: RELEASED_AT,
 });
 
 function runProvision(t, { app, env = {}, record, created, expectFailure = false } = {}) {
@@ -47,7 +53,8 @@ function runProvision(t, { app, env = {}, record, created, expectFailure = false
   else assert.equal(result.status, 0, result.stderr);
   // Both streams: a secret must appear in neither.
   const output = `${result.stdout}${result.stderr}`;
-  const argv = readFileSync(join(dir, "argv.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  // A script that stops before its first az call leaves no log.
+  const argv = existsSync(join(dir, "argv.log")) ? readFileSync(join(dir, "argv.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
   const updatesDir = join(dir, "updates");
   const documents = existsSync(updatesDir)
     ? readdirSync(updatesDir).sort((a, b) => parseInt(a) - parseInt(b)).map((name) => readFileSync(join(updatesDir, name), "utf8"))
@@ -132,7 +139,7 @@ test("the Ouro settings come from identity-<env>.json with the names readConfig 
   assert.equal(value("DESK_GITHUB_SIGNIN").value, "on");
   assert.equal(value("DESK_GITHUB_ACCOUNTS").value, "16390116=acct-ari-test");
   assert.equal(value("DESK_GITHUB_LOGINS").value, "16390116=arimendelow");
-  assert.equal(value("DESK_LEGACY_CUTOFF").value, "2026-11-15T00:00:00Z");
+  assert.equal(value("DESK_LEGACY_CUTOFF").value, LEGACY_CUTOFF);
   assert.equal(value("DESK_ALLOWED_LOGINS").value, "arimendelow");
   assert.deepEqual(value("DESK_CLIENT_KEY"), { name: "DESK_CLIENT_KEY", secretRef: "desk-client-key" });
   assert.deepEqual(secretsOf(written).find((secret) => secret.name === "entra-client-secret"), {
@@ -326,4 +333,77 @@ test("the check after a staging update refuses an app that came back pulling wit
   assert.match(output, /must not hold identity ouro-prod-services-mi after the write/);
   const other = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_UPDATE_REGISTRY_IDENTITY: "/subscriptions/s/resourceGroups/r/providers/Microsoft.ManagedIdentity/userAssignedIdentities/someone-else" }, expectFailure: true });
   assert.match(other.output, /pulls from ouroworkprodk2aumligevt3e\.azurecr\.io with someone-else, not id-ouro-desk-hosted-staging/);
+});
+
+// Combined fix round: bad settings never pass silently, DESK_GITHUB_SIGNIN keeps its value, and the script waits for
+// the revision its update made.
+const updates = (argv) => argv.filter((args) => args.slice(0, 2).join(" ") === "containerapp update");
+
+test("combined round: a legacy cutoff without a zone, not after releasedAt, or newly set in the past is refused before any update", (t) => {
+  const cases = {
+    "no zone": { legacyCutoff: LEGACY_CUTOFF.replace("Z", "") },
+    "not a time": { legacyCutoff: "next tuesday" },
+    "before releasedAt": { legacyCutoff: isoSeconds(Date.parse(RELEASED_AT) - DAY) },
+    "equal to releasedAt": { legacyCutoff: RELEASED_AT },
+    "releasedAt without a zone": { releasedAt: RELEASED_AT.replace("Z", "") },
+    "newly set in the past": { releasedAt: isoSeconds(Date.now() - 30 * DAY), legacyCutoff: isoSeconds(Date.now() - 16 * DAY) },
+  };
+  for (const [name, change] of Object.entries(cases)) {
+    const { argv, output } = runProvision(t, { app: shown, env: { STAGE: "staging" }, record: { ...completeRecord("test"), ...change }, expectFailure: true });
+    assert.deepEqual(updates(argv), [], name);
+    assert.match(output, /legacyCutoff|releasedAt|DESK_LEGACY_CUTOFF/, name);
+  }
+});
+
+test("combined round: a cutoff already on the app may be in the past, so a rerun after day 14 still works", (t) => {
+  const past = isoSeconds(Date.now() - 16 * DAY);
+  const app = structuredClone(shown);
+  envOf(app).push({ name: "DESK_LEGACY_CUTOFF", value: past });
+  const { documents } = runProvision(t, { app, env: { STAGE: "staging" }, record: { ...completeRecord("test"), releasedAt: isoSeconds(Date.now() - 30 * DAY), legacyCutoff: past } });
+  assert.equal(envOf(JSON.parse(documents[0])).find(({ name }) => name === "DESK_LEGACY_CUTOFF").value, past);
+});
+
+test("combined round: other Ouro settings the gateway would refuse stop the script before any update", (t) => {
+  const cases = {
+    "tenant id": (record) => { record.tenant.id = "ourobottest"; },
+    "gateway app id": (record) => { record.gatewayApp.appId = "not-a-guid"; },
+    "GitHub login": (record) => { record.ari.githubLogin = "ari mendelow"; },
+    "account id": (record) => { record.ari.accountId = "acct/ari"; },
+    "GitHub user id": (record) => { record.ari.githubUserId = "ari"; },
+    "accounts endpoint": (record) => { record.storage.endpoint = "http://stouroacctstest261e0b.table.core.windows.net"; },
+    "subdomain": (record) => { record.tenant.subdomain = "ourobot test"; },
+    "gateway identity client id": (record) => { record.gatewayIdentity.clientId = "id-ouro"; },
+  };
+  for (const [name, change] of Object.entries(cases)) {
+    const record = completeRecord("test");
+    change(record);
+    const { argv } = runProvision(t, { app: shown, env: { STAGE: "staging" }, record, expectFailure: true });
+    assert.deepEqual(updates(argv), [], name);
+  }
+});
+
+test("combined round: DESK_GITHUB_SIGNIN keeps the app's value unless it is passed, and only on or off is accepted", (t) => {
+  const app = structuredClone(shown);
+  envOf(app).push({ name: "DESK_GITHUB_SIGNIN", value: "off" });
+  const signIn = (written) => envOf(JSON.parse(written)).find(({ name }) => name === "DESK_GITHUB_SIGNIN")?.value;
+  assert.equal(signIn(runProvision(t, { app, env: { STAGE: "staging" }, record: completeRecord("test") }).documents[0]), "off");
+  assert.equal(signIn(runProvision(t, { app, env: { STAGE: "staging", DESK_GITHUB_SIGNIN: "on" }, record: completeRecord("test") }).documents[0]), "on");
+  const turnedOn = structuredClone(shown);
+  assert.equal(signIn(runProvision(t, { app: turnedOn, env: { STAGE: "staging" }, record: completeRecord("test") }).documents[0]), "on", "first turn-on defaults to on");
+  assert.equal(signIn(runProvision(t, { app: turnedOn, env: { STAGE: "staging", DESK_GITHUB_SIGNIN: "off" }, record: completeRecord("test") }).documents[0]), "off");
+  const bad = runProvision(t, { app, env: { STAGE: "staging", DESK_GITHUB_SIGNIN: "yes" }, record: completeRecord("test"), expectFailure: true });
+  assert.deepEqual(updates(bad.argv), []);
+  assert.match(bad.output, /DESK_GITHUB_SIGNIN must be on or off/);
+});
+
+test("combined round: after an update the script waits until the new revision is the ready one, and fails if it fails or never gets there", (t) => {
+  const ready = runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") });
+  assert.match(ready.output, /Revision \S+ is ready/);
+  const later = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_READY_AFTER_POLLS: "2", READY_POLL_SECONDS: "0" }, record: completeRecord("test") });
+  assert.match(later.output, /Revision \S+ is ready/);
+  assert.ok(later.argv.filter((args) => args.includes("properties.latestReadyRevisionName")).length >= 2, "it polled until ready");
+  const failed = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_REVISION_STATE: "Failed", READY_POLL_SECONDS: "0" }, record: completeRecord("test"), expectFailure: true });
+  assert.match(failed.output, /did not start/);
+  const stuck = runProvision(t, { app: shown, env: { STAGE: "staging", FAKE_READY_AFTER_POLLS: "1000", READY_POLL_SECONDS: "0", READY_TIMEOUT_SECONDS: "0" }, record: completeRecord("test"), expectFailure: true });
+  assert.match(stuck.output, /was not ready/);
 });

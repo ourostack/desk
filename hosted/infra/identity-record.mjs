@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fingerprint } from "../src/auth/seal.js";
+import { ISO_TIME, readIdentity } from "../src/identity-config.js";
 
 export const SUBSCRIPTION = "261e0bf1-934d-41ab-9295-229b0d254418";
 export const APPS_RESOURCE_GROUP = "rg-ouro-work-substrate";
@@ -125,7 +126,9 @@ export function saveRecord(record, dir) {
 // set until the record is complete, Ari's accountId included: a partial set
 // would stop the gateway at start (readConfig refuses one), and an empty
 // GitHub map would shut out Ari's legacy connector.
-export function identitySettings(record) {
+// `githubSignIn` is DESK_GITHUB_SIGNIN: the caller passes the operator's value, else the app's current one, so a
+// rerun never turns the GitHub fallback back on (final review Minor 4); "on" only when neither is set.
+export function identitySettings(record, { githubSignIn = "on" } = {}) {
   const none = { setEnv: {}, secretRefs: {}, keyVaultSecrets: {}, addIdentities: [] };
   const needed = {
     "tenant.id": record.tenant?.id,
@@ -146,7 +149,7 @@ export function identitySettings(record) {
     DESK_ENTRA_CLIENT_ID: record.gatewayApp.appId,
     DESK_ACCOUNTS_ENDPOINT: record.storage.endpoint,
     AZURE_CLIENT_ID: record.gatewayIdentity.clientId,
-    DESK_GITHUB_SIGNIN: "on",
+    DESK_GITHUB_SIGNIN: githubSignIn,
     DESK_GITHUB_ACCOUNTS: `${record.ari.githubUserId}=${record.ari.accountId}`,
     DESK_GITHUB_LOGINS: `${record.ari.githubUserId}=${record.ari.githubLogin}`,
   };
@@ -158,6 +161,37 @@ export function identitySettings(record) {
     addIdentities: [record.gatewayIdentity.id],
     missing: [],
   };
+}
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isTime = (text) => typeof text === "string" && ISO_TIME.test(text) && !Number.isNaN(Date.parse(text));
+
+// Refuses settings the gateway would refuse at start, or that would quietly do harm, before anything is written to the
+// app (final review finding 1). `env` is the gateway env the write would produce and `current` the app's env now. The
+// gateway's own reader checks the Ouro settings; a placeholder stands in for the Key Vault secret, which isn't here.
+export function checkIdentitySettings({ record, env, current = {}, now = Date.now() }) {
+  const refuse = (problem) => {
+    throw new Error(`identity-${record.env}.json: ${problem} Nothing was written to the app.`);
+  };
+  try {
+    readIdentity({ ...env, DESK_ENTRA_CLIENT_SECRET: "check-only" }, "https://desk.invalid");
+  } catch (error) {
+    refuse(`the gateway would refuse these settings and fail to start: ${error.message}`);
+  }
+  if (!/^https:\/\/[a-z0-9]{3,24}\.table\.core\.windows\.net\/?$/.test(record.storage.endpoint)) refuse(`storage.endpoint must be https://<account>.table.core.windows.net, not ${record.storage.endpoint}.`);
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/i.test(record.tenant.subdomain)) refuse(`tenant.subdomain must be the tenant's subdomain, such as ourobottest, not ${record.tenant.subdomain}.`);
+  if (!GUID.test(record.gatewayIdentity.clientId)) refuse("gatewayIdentity.clientId must be the identity's client id, a GUID.");
+  const released = record.releasedAt ?? null;
+  if (released !== null && !isTime(released)) refuse(`releasedAt must be an ISO time with its zone, such as 2026-11-01T00:00:00Z, not ${released}.`);
+  const cutoff = record.legacyCutoff ?? null;
+  if (cutoff === null) return;
+  if (!isTime(cutoff)) refuse(`legacyCutoff must be an ISO time with its zone, such as 2026-11-15T00:00:00Z, not ${cutoff}.`);
+  if (released !== null && Date.parse(cutoff) <= Date.parse(released)) refuse(`legacyCutoff ${cutoff} must be after releasedAt ${released}.`);
+  // A cutoff already on the app may have passed (a rerun after day 14); a new one in the past would end every legacy
+  // connector the moment the revision starts.
+  if (Date.parse(cutoff) <= now && current.DESK_LEGACY_CUTOFF !== cutoff) {
+    refuse(`legacyCutoff ${cutoff} is in the past, and the app holds ${current.DESK_LEGACY_CUTOFF ?? "no cutoff"}; setting it would end every legacy connector at once. Record a future cutoff.`);
+  }
 }
 
 // The cutoff must be set within a day of the release (spec: 14 days after shipping); a forgotten one fails open.

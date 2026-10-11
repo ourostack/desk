@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
+import { checkIdentitySettings, cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
 
 // `az containerapp show -o json`'s output, as text or already parsed.
 export function parseShown(shown) {
@@ -266,9 +266,12 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   for (const name of values["ensure-secret"]) if (!held.has(name)) setSecrets[name] = randomBytes(32).toString("hex");
   for (const name of values["ensure-placeholder"]) if (!held.has(name)) setSecrets[name] = "unset";
   const setEnv = Object.fromEntries(values["set-env"].map((text) => splitAssignment(text, "--set-env")));
+  if (setEnv.DESK_GITHUB_SIGNIN !== undefined && !["on", "off"].includes(setEnv.DESK_GITHUB_SIGNIN)) throw new Error("DESK_GITHUB_SIGNIN must be on or off.");
+  const current = Object.fromEntries((gatewayContainer(shown).env ?? []).filter((entry) => entry.value !== undefined).map((entry) => [entry.name, entry.value]));
   let identity = { setEnv: {}, secretRefs: {}, keyVaultSecrets: {}, addIdentities: [] };
   if (record) {
-    identity = identitySettings(record);
+    identity = identitySettings(record, { githubSignIn: setEnv.DESK_GITHUB_SIGNIN ?? current.DESK_GITHUB_SIGNIN ?? "on" });
+    if (!identity.missing.length) checkIdentitySettings({ record, env: { ...current, ...setEnv, ...identity.setEnv }, current, now });
     if (identity.missing.length) {
       note(`identity-${record.env}.json is incomplete (missing ${identity.missing.join(", ")}); the app's Ouro sign-in settings stay as they are.`);
     } else {

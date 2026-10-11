@@ -8,6 +8,8 @@
 #                                             # set the public URL (OAuth issuer, resource and GitHub callback)
 #   DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh
 #                                             # set the OAuth redirect allowlist (hosted/README.md); empty clears it
+#   DESK_GITHUB_SIGNIN=on|off hosted/infra/provision.sh
+#                                             # turn the GitHub sign-in fallback on or off; a rerun keeps the app's value
 #   STAGE=staging [IMAGE=<tag>] hosted/infra/provision.sh
 #                                             # the rehearsal app ouro-desk-hosted-staging (below)
 #
@@ -43,7 +45,12 @@
 # the Entra client secret as a Key Vault reference and the store through RBAC),
 # Ari's accountId for DESK_GITHUB_ACCOUNTS and DESK_GITHUB_LOGINS, and the legacy
 # cutoff, which is never recomputed here. Until the record is complete, Ouro
-# sign-in settings are left as they are. DESK_ALLOWED_LOGINS and every existing
+# sign-in settings are left as they are. The settings are checked first, with
+# the gateway's own reader, and a cutoff must have a zone, come after releasedAt
+# and, unless the app already holds it, lie in the future. DESK_GITHUB_SIGNIN is
+# "on" the first time and keeps the app's value after that unless it is passed.
+# After every update the script waits until the new revision is the ready one,
+# and fails if it doesn't start. DESK_ALLOWED_LOGINS and every existing
 # secret stay until the day-14 check.
 #
 # DESK_PUBLIC_URL: a create uses https://desk.ouro.bot unless it is passed. A rerun
@@ -111,6 +118,10 @@ FEDERATED_NAME=ourostack-desk-main-ids
 FEDERATED_SUBJECT=repo:ourostack@265728804/desk@1386529300:ref:refs/heads/main
 PUBLIC_URL_PASSED="${DESK_PUBLIC_URL:+1}"
 REDIRECTS_PASSED="${DESK_REDIRECTS+1}"
+case "${DESK_GITHUB_SIGNIN:-}" in
+  "" | on | off) ;;
+  *) printf 'DESK_GITHUB_SIGNIN must be on or off, not %s\n' "$DESK_GITHUB_SIGNIN" >&2; exit 1 ;;
+esac
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -288,6 +299,7 @@ build_update() {
   if [[ -n "$REDIRECTS_PASSED" ]]; then
     if [[ -n "$DESK_REDIRECTS" ]]; then args+=(--set-env "DESK_REDIRECTS=$DESK_REDIRECTS"); else args+=(--remove-env DESK_REDIRECTS); fi
   fi
+  if [[ -n "${DESK_GITHUB_SIGNIN:-}" ]]; then args+=(--set-env "DESK_GITHUB_SIGNIN=$DESK_GITHUB_SIGNIN"); fi
   if [[ -f "$IDENTITY_FILE" ]]; then args+=(--identity-record "$IDENTITY_FILE"); else say "No $(basename "$IDENTITY_FILE") yet; Ouro sign-in settings stay as they are" >&2; fi
   if [[ "$STAGE" == staging ]]; then args+=(--forbid-identity "$PROD_PULL_IDENTITY"); fi
   node "$APP_YAML" "${args[@]}"
@@ -382,6 +394,34 @@ reconcile_app() {
   az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/after.json"
   az_read containerapp secret list -n "$APP" -g "$RESOURCE_GROUP" -o json >"$work/secrets.json"
   node "$APP_YAML" --verify --before "$work/before.json" --after "$work/after.json" --secret-list "$work/secrets.json" ${identity_args[@]+"${identity_args[@]}"} ${stage_args[@]+"${stage_args[@]}"}
+  await_revision
+}
+
+# After an update, wait until the app's latest revision is its latest ready one, as hosted-deploy.yml does, so a
+# setting the gateway refuses at start fails this script instead of leaving the old revision serving unnoticed
+# (final review finding 1). READY_TIMEOUT_SECONDS and READY_POLL_SECONDS exist for the tests.
+await_revision() {
+  local deadline=$((SECONDS + ${READY_TIMEOUT_SECONDS:-900})) latest ready state
+  while :; do
+    latest="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)"
+    ready="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)"
+    state="$(az_read containerapp revision show -n "$APP" -g "$RESOURCE_GROUP" --revision "$latest" --query properties.runningState -o tsv 2>/dev/null || true)"
+    case "$state" in
+      Failed | Degraded | Stopped)
+        printf '%s did not start (running state: %s); %s still serves. See its logs with az containerapp logs show -n %s -g %s --revision %s --subscription %s.\n' "$latest" "$state" "${ready:-no revision}" "$APP" "$RESOURCE_GROUP" "$latest" "$SUBSCRIPTION" >&2
+        exit 1
+        ;;
+    esac
+    if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+      say "Revision $latest is ready (running state: ${state:-unknown})"
+      return
+    fi
+    if ((SECONDS >= deadline)); then
+      printf '%s was not ready after %s seconds (running state: %s); %s still serves.\n' "${latest:-the new revision}" "${READY_TIMEOUT_SECONDS:-900}" "${state:-unknown}" "${ready:-no revision}" >&2
+      exit 1
+    fi
+    sleep "${READY_POLL_SECONDS:-15}"
+  done
 }
 
 created_now=0
