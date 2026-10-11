@@ -558,7 +558,10 @@ test("lookups that never answer do not hold up another client's document, and ar
   assert.deepEqual(await Promise.all(hung), [undefined, undefined]);
   assert.deepEqual(logs.sort(), ["client refused: timeout client https://hung-1.example/client.json", "client refused: timeout client https://hung-2.example/client.json"]);
   assert.ok(dns.queries.includes("hung-1.example") && dns.queries.includes(HOST), "the gateway's own resolver asked the test DNS server");
-  // Cancelled at the deadline: no query goes out for the hung names afterwards.
+  // Cancelled at the deadline: no query goes out for the hung names afterwards. A retry sent in the
+  // same event-loop turn as the abort can reach the test DNS server just after it, so let in-flight
+  // packets land first; a resolver that kept querying would still add queries in the window below.
+  await new Promise((resolve) => setTimeout(resolve, 150));
   const asked = dns.queries.length;
   await new Promise((resolve) => setTimeout(resolve, 700));
   assert.equal(dns.queries.length, asked);
