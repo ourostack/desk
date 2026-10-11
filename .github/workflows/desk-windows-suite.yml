@@ -64,6 +64,10 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
+      - name: Install native broker dependencies
+        shell: pwsh
+        run: npm ci --prefix plugins/desk/browser-context-broker
+
       - name: Show the account this job runs as
         shell: pwsh
         run: |

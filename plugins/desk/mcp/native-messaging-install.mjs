@@ -24,7 +24,7 @@ export function registrationLocation({ platform, channel, userDataRoot }) {
   if (!['darwin', 'linux'].includes(platform) || !path.isAbsolute(userDataRoot ?? '')) {
     throw Object.assign(new Error('Native registration requires a supported platform and browser root'), { code: 'NATIVE_REGISTRATION_INVALID' });
   }
-  return { file: path.join(userDataRoot, 'NativeMessagingHosts', HOST + '.json') };
+  return { file: path.posix.join(userDataRoot, 'NativeMessagingHosts', HOST + '.json') };
 }
 
 export function nativeRegistryManifestPath(output, root) {

@@ -6,20 +6,24 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import http from "node:http"
 import { mkdir, writeFile } from "node:fs/promises"
+import { createRequire } from "node:module"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/native-messaging-prepare.mjs", import.meta.url)
+const profile = createRequire(import.meta.url)(path.join(mcpRoot, "web-real-profile.cjs"))
+const fixtureEnv = home => process.platform === "win32" ? { LOCALAPPDATA: home } : {}
+const fixtureProfile = home => profile.userDataDir("msedge", process.platform, fixtureEnv(home), home)
 
 test("declared native profile with no installed extension returns actionable setup without any browser launch", async () => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-messaging-prepare-")
-  const userDataRoot = path.join(homeDir, "Library/Application Support/Microsoft Edge")
+  const userDataRoot = fixtureProfile(homeDir)
   await mkdir(userDataRoot, { recursive: true })
   await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({ profile: { info_cache: { Default: { user_name: "fixture@example.test" } } } }))
   const extensionDirectory = path.join(homeDir, "owned/extension")
   const result = await prepareNativeMessaging({
     declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin", homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: {},
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => ({ stateDir: path.join(homeDir, "state"), extensionDirectory, extensionId: "bcejpajaingepdloiolbmbaflecgifbe" }),
   })
   assert.equal(result.payload.code, "browser_native_messaging_setup_required")
@@ -34,8 +38,8 @@ test("missing declared signed-in profile refuses before native installation", as
   let installed = false
   const result = await prepareNativeMessaging({
     declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin", homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: {},
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => { installed = true },
   })
   assert.equal(result.payload.code, "browser_profile_missing")
@@ -45,15 +49,15 @@ test("missing declared signed-in profile refuses before native installation", as
 test("changed native extension source requires deliberate update rather than a background reload", async () => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-messaging-update-refusal-")
-  const userDataRoot = path.join(homeDir, "Library/Application Support/Microsoft Edge")
+  const userDataRoot = fixtureProfile(homeDir)
   await mkdir(userDataRoot, { recursive: true })
   await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
     profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
   }))
   const result = await prepareNativeMessaging({
     declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin", homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: {},
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => { throw Object.assign(new Error("source changed"), { code: "NATIVE_EXTENSION_UPDATE_REQUIRED" }) },
   })
   assert.equal(result.payload.code, "browser_native_messaging_update_required")
@@ -64,7 +68,7 @@ test("changed native extension source requires deliberate update rather than a b
 test("installed source and running provider source must match before connection acquisition", async () => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-messaging-running-source-")
-  const userDataRoot = path.join(homeDir, "Library/Application Support/Microsoft Edge")
+  const userDataRoot = fixtureProfile(homeDir)
   await mkdir(userDataRoot, { recursive: true })
   await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
     profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
@@ -80,8 +84,8 @@ test("installed source and running provider source must match before connection 
   }), { mode: 0o600 })
   const result = await prepareNativeMessaging({
     declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin", homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: {},
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => ({ stateDir, extensionSourceDigest: "c".repeat(64) }),
   })
   assert.equal(result.payload.code, "browser_native_messaging_update_required",
@@ -92,7 +96,7 @@ test("installed source and running provider source must match before connection 
 test("explicit native setup update freshly attests existing provider and returns no private endpoint", async t => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-explicit-update-")
-  const userDataRoot = path.join(homeDir, "Library/Application Support/Microsoft Edge")
+  const userDataRoot = fixtureProfile(homeDir)
   await mkdir(userDataRoot, { recursive: true })
   await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
     profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
@@ -120,8 +124,8 @@ test("explicit native setup update freshly attests existing provider and returns
   JSON.stringify({ version: 1, endpoint, processIdentity: identity }), { mode: 0o600 })
   const result = await prepareNativeMessaging({
     update: true, declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin",
-    homeDir, root, mcpRoot, env: {},
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform,
+    homeDir, root, mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => { throw new Error("ordinary installer must not replace deliberate update") },
     updater: async options => {
       assert.equal(attested, true)
@@ -139,7 +143,7 @@ test("explicit native setup update freshly attests existing provider and returns
 test("unchanged extension digest cannot hide an older native runtime capsule", async t => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-running-runtime-")
-  const userDataRoot = path.join(homeDir, "Library/Application Support/Microsoft Edge")
+  const userDataRoot = fixtureProfile(homeDir)
   await mkdir(userDataRoot, { recursive: true })
   await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
     profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
@@ -167,8 +171,8 @@ test("unchanged extension digest cannot hide an older native runtime capsule", a
   }), { mode: 0o600 })
   const result = await prepareNativeMessaging({
     declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: "darwin", homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: {},
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => ({ stateDir, extensionSourceDigest: digest,
       executable: path.join(homeDir, "new-runtime/entry"), runtimeDirectory: path.join(homeDir, "new-runtime") }),
   })

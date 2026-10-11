@@ -1,13 +1,35 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkTempRoot } from "../_temp_roots.js"
+import { mkTempRoot as createTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import http from "node:http"
 import { mkdir, readFile, stat, writeFile, chmod, readdir, symlink, link } from "node:fs/promises"
+import { spawnSync } from "node:child_process"
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/native-messaging-install.mjs", import.meta.url)
+const ownRoots = []
+async function mkTempRoot(prefix) {
+  const root = await createTempRoot(prefix)
+  ownRoots.push(root)
+  return root
+}
+const reg = process.platform === "win32" ? path.join(process.env.SystemRoot, "System32/reg.exe") : null
+const registryKey = "HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.ourostack.desk.browser"
+if (reg) {
+  test.before(() => assert.equal(spawnSync(reg, ["query", registryKey, "/ve"], { encoding: "utf8" }).status, 1,
+    "never replace a pre-existing native registration on the test runner"))
+  test.afterEach(async () => {
+    const observed = spawnSync(reg, ["query", registryKey, "/ve"], { encoding: "utf8" })
+    if (observed.status === 1) return
+    assert.equal(observed.status, 0)
+    const file = observed.stdout.match(/REG_SZ\s+([^\r\n]+)/u)?.[1].trim()
+    assert.ok(file && ownRoots.some(root => path.resolve(file).startsWith(path.resolve(root) + path.sep)),
+      "remove only the exact registration created by this file's owned fixtures")
+    assert.equal(spawnSync(reg, ["delete", registryKey, "/f"], { encoding: "utf8" }).status, 0)
+  })
+}
 
 test("native registration locations follow browser user-data root or exact per-user Windows key", async () => {
   const { registrationLocation } = await import(moduleUrl)
@@ -41,7 +63,7 @@ test("private native install copies verified assets and stable extension without
   assert.equal(manifest.path, installed.executable)
   assert.deepEqual(manifest.allowed_origins, [native.extensionOrigin])
   assert.equal(manifest.type, "stdio")
-  assert.equal((await stat(installed.runtimeDirectory)).mode & 0o077, 0)
+  if (process.platform !== "win32") assert.equal((await stat(installed.runtimeDirectory)).mode & 0o077, 0)
   assert.equal((await stat(installed.executable)).mode & 0o777, process.platform === "win32" ? (await stat(installed.executable)).mode & 0o777 : 0o700)
   const repeated = await installNativeMessaging({
     mcpRoot, root: path.join(root, "owned"), userDataRoot, profile: "Default", channel: "msedge",
@@ -107,8 +129,10 @@ test("foreign native registration is refused instead of silently overwritten", a
   const root = await mkTempRoot("native-messaging-foreign-")
   const userDataRoot = path.join(root, "browser")
   await mkdir(path.join(userDataRoot, "NativeMessagingHosts"), { recursive: true })
-  await writeFile(path.join(userDataRoot, "NativeMessagingHosts", "com.ourostack.desk.browser.json"),
+  const foreignManifest = path.join(userDataRoot, "NativeMessagingHosts", "com.ourostack.desk.browser.json")
+  await writeFile(foreignManifest,
     JSON.stringify({ name: "com.ourostack.desk.browser", path: "/foreign/host", type: "stdio", allowed_origins: ["chrome-extension://foreign/"] }), { mode: 0o600 })
+  if (reg) assert.equal(spawnSync(reg, ["add", registryKey, "/ve", "/t", "REG_SZ", "/d", foreignManifest, "/f"]).status, 0)
   await assert.rejects(installNativeMessaging({
     mcpRoot, root: path.join(root, "owned"), userDataRoot, profile: "Default", channel: "msedge",
     browserExecutable: process.execPath, runtimeExecutable: process.execPath, levelModule: "/existing/level",
