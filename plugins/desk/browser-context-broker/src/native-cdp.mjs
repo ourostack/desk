@@ -7,7 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 import { BrokerError } from './claims.mjs';
 import { ensureStateDirectory, readRegistry } from './registry.mjs';
-import { recordNativeRouting } from './leases.mjs';
+import { recordNativeRouting, recordNativeTargetClosed } from './leases.mjs';
 import { redactNativeSurface } from './secret-surfaces.mjs';
 
 const ROOT_METHODS = new Set([
@@ -187,13 +187,17 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
     return `${origin}/native/${capabilityText}/${leaseId}`;
   }
 
-  async function unbindLease(leaseId) {
+  async function unbindLease(leaseId, { closedTargetIds = [] } = {}) {
     const lease = await leaseRecord(leaseId);
-    if (lease.targetIds.length || lease.pendingTargetCreates?.length) {
+    if (lease.targetIds.some(id => !closedTargetIds.includes(id)) || lease.pendingTargetCreates?.length) {
       throw new BrokerError('NATIVE_LEASE_NOT_EMPTY', 'Native lease still has owned targets or pending effects');
     }
-    await native(leaseId, 'lease.unbind');
+    const result = await native(leaseId, 'lease.unbind');
+    if (result?.unbound !== true) throw new BrokerError('NATIVE_UNBIND_UNCONFIRMED', 'Native lease retirement was not confirmed');
     bindings.delete(leaseId);
+    for (const peer of peers) {
+      if (peer.leaseId === leaseId) peer.socket.close(1000, 'Native lease released');
+    }
   }
 
   async function readTargets(leaseId) {
@@ -481,6 +485,29 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
     if (closed || !bindings.has(message?.leaseId)) return;
     const routeEvent = async () => {
       const lease = await leaseRecord(message.leaseId);
+      if (['target.closed', 'target.detached', 'target.routingLost'].includes(message.event)) {
+        const targetId = lease.nativeRouting?.controlTabId === message.tabId ? lease.nativeRouting.controlTargetId
+          : Object.entries(lease.nativeRouting?.targetTabs ?? {}).find(([, route]) => route.tabId === message.tabId)?.[0];
+        if (!targetId || !lease.targetIds.includes(targetId)) return;
+        if (message.event === 'target.closed') {
+          await recordNativeTargetClosed({
+            stateDir, leaseId: lease.id, processIdentity: identity, transportGeneration: generation, tabId: message.tabId,
+          });
+        }
+        for (const peer of peers) {
+          if (peer.leaseId !== lease.id || peer.socket.readyState !== WebSocket.OPEN) continue;
+          for (const [sessionId, session] of [...peer.sessions]) {
+            if (session.tabId !== message.tabId) continue;
+            peer.sessions.delete(sessionId);
+            peer.send({ method: 'Target.detachedFromTarget', params: { sessionId, targetId },
+              ...(session.parentSessionId ? { sessionId: session.parentSessionId } : {}) });
+          }
+          if (message.event === 'target.closed' && peer.discover && targetId !== lease.nativeRouting?.controlTargetId) {
+            peer.send({ method: 'Target.targetDestroyed', params: { targetId } });
+          }
+        }
+        return;
+      }
       if (message.event === 'target.popup') {
         const opener = Object.entries(lease.nativeRouting?.targetTabs ?? {})
           .find(([id, route]) => route.tabId === message.openerTabId && lease.targetIds.includes(id));

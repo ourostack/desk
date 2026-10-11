@@ -231,7 +231,8 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
           return { targetId: created.targetId, endpoint: proxies.get(lease.id).endpoint };
         });
       }
-      const options = { stateDir, leaseId: lease.id, declaration: context, providerInvoker: attestor };
+      const options = { stateDir, leaseId: lease.id, declaration: context, providerInvoker: attestor,
+        providerUnbind: ({ closedTargetIds }) => adapter.unbindLease(lease.id, { closedTargetIds }) };
       const result = operation === 'clear' ? await clearLeaseTargets(options) : await releaseLease(options);
       if (operation === 'release' && result.released) {
         await proxies.get(lease.id).close();

@@ -116,6 +116,35 @@ async function client(t, endpoint) {
   return connected;
 }
 
+for (const lifecycle of ['target.closed', 'target.detached', 'target.routingLost']) {
+  test(`GivenNative${lifecycle}_WhenTaskWasAttached_ClientLifecycleIsNotLost`, async t => {
+    const { server, transport, stateDir, lease } = await setup(t);
+    const created = await createOwnedTarget({ stateDir, leaseId: lease.id, rawEndpoint: server.endpointForLease(lease.id), params: { url: 'about:blank' } });
+    const connected = await client(t, server.endpointForLease(lease.id));
+    const { sessionId } = await connected.send('Target.attachToTarget', { targetId: created.targetId, flatten: true });
+    await connected.send('Target.setDiscoverTargets', { discover: true });
+    const events = [];
+    connected.on('event', event => events.push(event));
+    const tabId = (await readRegistry(stateDir)).leases[lease.id].nativeRouting.targetTabs[created.targetId].tabId;
+    if (lifecycle === 'target.closed') transport.leases.get(lease.id).tabs.delete(tabId);
+    transport.emit('event', { event: lifecycle, leaseId: lease.id, tabId, reason: 'canceled_by_user' });
+    const until = Date.now() + 500;
+    while (!events.some(event => event.method === 'Target.detachedFromTarget') && Date.now() < until) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.ok(events.some(event => event.method === 'Target.detachedFromTarget' && event.params.sessionId === sessionId));
+    const recorded = (await readRegistry(stateDir)).leases[lease.id];
+    if (lifecycle === 'target.closed') {
+      assert.ok(events.some(event => event.method === 'Target.targetDestroyed' && event.params.targetId === created.targetId));
+      assert.equal(recorded.targetIds.includes(created.targetId), false);
+    } else {
+      assert.equal(recorded.targetIds.includes(created.targetId), true, 'detachment or routing loss is not proof the task disappeared');
+    }
+    await assert.rejects(connected.send('Runtime.evaluate', { expression: '1' }, { sessionId }),
+      error => /session|owned|bound/u.test(error.message));
+  });
+}
+
 
 
 test('GivenNativeHttpConnectionPending_WhenAdapterCloses_OwnTransportIsTerminated', async t => {

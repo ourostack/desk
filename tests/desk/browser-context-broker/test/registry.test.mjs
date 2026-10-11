@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   chmod,
+  cp,
   mkdir,
   readdir,
   rm,
@@ -10,6 +11,7 @@ import {
 import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 import { withBrokerLock } from '../../../../plugins/desk/browser-context-broker/src/lock.mjs';
 import {
@@ -32,6 +34,94 @@ async function stateDir() {
 
 test.after(async () => {
   await rm(scratchRoot, { recursive: true, force: true });
+});
+
+test('GivenNativeWindowsLock_WhenUsingDefaultReader_PortableStartEvidenceIsUsed', async () => {
+  const directory = await stateDir();
+  const lockFile = new URL('../../../../plugins/desk/browser-context-broker/src/lock.mjs', import.meta.url).pathname;
+  const script = `
+    import vm from 'node:vm';
+    import fs from 'node:fs/promises';
+    const context = vm.createContext({ process: { pid: ${process.pid}, platform: 'win32' }, setTimeout, Date, console });
+    const module = new vm.SourceTextModule(await fs.readFile(${JSON.stringify(lockFile)}, 'utf8'), {
+      context, importModuleDynamically: async name => {
+        const exports = name.endsWith('/process-start.js') ? { readProcessStart: async () => 'windows-start' } : { protectWindowsPaths: async () => {} };
+        const dependency = new vm.SyntheticModule(Object.keys(exports), function () {
+          for (const [key, value] of Object.entries(exports)) this.setExport(key, value);
+        }, { context });
+        await dependency.link(() => {}); await dependency.evaluate(); return dependency;
+      },
+    });
+    await module.link(async name => {
+      let exports;
+      if (name === './registry.mjs') exports = { ensureStateDirectory: async () => {} };
+      else if (name.endsWith('/process-start.js')) exports = { readProcessStart: async () => 'windows-start' };
+      else if (name.endsWith('/windows-acl.js')) exports = { protectWindowsPaths: async () => {} };
+      else if (name === './claims.mjs') exports = { BrokerError: class extends Error { constructor(code, text) { super(text); this.code = code; } } };
+      else exports = await import(name);
+      return new vm.SyntheticModule(Object.keys(exports), function () {
+        for (const [key, value] of Object.entries(exports)) this.setExport(key, value);
+      }, { context });
+    });
+    await module.evaluate();
+    await module.namespace.withBrokerLock(${JSON.stringify(directory)}, () => console.log('WINDOWS_DEFAULT_LOCK_ENTERED'));
+  `;
+  const result = spawnSync(process.execPath, ['--experimental-vm-modules', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /WINDOWS_DEFAULT_LOCK_ENTERED/u);
+});
+
+test('GivenWindowsState_WhenPosixBitsAreNotPrivate_NativeAclVerificationIsRequired', async () => {
+  const directory = await stateDir();
+  await chmod(directory, 0o755);
+  const source = new URL('../../../../plugins/desk/browser-context-broker/src/registry.mjs', import.meta.url).pathname;
+  const script = `
+    import vm from 'node:vm';
+    import fs from 'node:fs/promises';
+    const context = vm.createContext({ process: { platform: 'win32' }, console });
+    const module = new vm.SourceTextModule(await fs.readFile(${JSON.stringify(source)}, 'utf8'), {
+      context, importModuleDynamically: async () => {
+        const dependency = new vm.SyntheticModule(['protectWindowsPaths'], function () {
+          this.setExport('protectWindowsPaths', async entries => {
+            if (entries.length !== 1 || entries[0].path !== ${JSON.stringify(directory)} || entries[0].kind !== 'directory') throw Error('Wrong private state path');
+            console.log('NATIVE_ACL_VERIFIED');
+          });
+        }, { context });
+        await dependency.link(() => {}); await dependency.evaluate(); return dependency;
+      },
+    });
+    await module.link(async name => {
+      let exports;
+      if (name.endsWith('/windows-acl.js')) exports = { protectWindowsPaths: async entries => {
+        if (entries.length !== 1 || entries[0].path !== ${JSON.stringify(directory)} || entries[0].kind !== 'directory')
+          throw Error('Wrong private state path');
+        console.log('NATIVE_ACL_VERIFIED');
+      } };
+      else if (name === './claims.mjs') exports = { BrokerError: class extends Error { constructor(code, text) { super(text); this.code = code; } } };
+      else exports = await import(name);
+      return new vm.SyntheticModule(Object.keys(exports), function () {
+        for (const [key, value] of Object.entries(exports)) this.setExport(key, value);
+      }, { context });
+    });
+    await module.evaluate();
+    await module.namespace.ensureStateDirectory(${JSON.stringify(directory)});
+  `;
+  const result = spawnSync(process.execPath, ['--experimental-vm-modules', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /NATIVE_ACL_VERIFIED/u);
+});
+
+test('GivenStandalonePosixBroker_WhenStateModuleLoads_WindowsRuntimeIsNotAnEagerDependency', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const directory = await stateDir();
+  const source = new URL('../../../../plugins/desk/browser-context-broker/src/', import.meta.url).pathname;
+  await mkdir(path.join(directory, 'src'), { mode: 0o700 });
+  for (const file of ['registry.mjs', 'claims.mjs']) await cp(path.join(source, file), path.join(directory, 'src', file));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { ensureStateDirectory } from ${JSON.stringify('file://' + path.join(directory, 'src/registry.mjs'))}; await ensureStateDirectory(${JSON.stringify(path.join(directory, 'state'))});`,
+  ], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 const declaration = {

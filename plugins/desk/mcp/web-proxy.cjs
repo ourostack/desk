@@ -133,6 +133,7 @@ function serve(options) {
     var own = {};
     var calls = {};
     var preparing = Object.create(null);
+    var operationOrder = 0;
     var cleaning = null;
     var launchInitialization = null;
     var pendingWaiters = [];
@@ -179,20 +180,30 @@ function serve(options) {
       });
     }
 
+    function hasPendingCalls(before) {
+      function earlier(entry) {
+        return entry && !entry.cancelled && (!before || entry.order < before.order);
+      }
+      return Object.keys(inflight).some(function (id) {
+        return earlier(calls[id] && calls[id].operation);
+      }) || Object.keys(preparing).some(function (id) {
+        return earlier(preparing[id]);
+      }) || queue.some(earlier);
+    }
+
     function pendingSettled() {
-      if (Object.keys(inflight).length !== 0) return;
-      var waiters = pendingWaiters;
-      pendingWaiters = [];
-      waiters.forEach(function (waiter) {
+      var settledWaiters = pendingWaiters.filter(function (waiter) { return !hasPendingCalls(waiter.before); });
+      pendingWaiters = pendingWaiters.filter(function (waiter) { return settledWaiters.indexOf(waiter) === -1; });
+      settledWaiters.forEach(function (waiter) {
         clearTimeout(waiter.timer);
         waiter.resolve();
       });
     }
 
-    function waitForPendingCalls(ms) {
-      if (Object.keys(inflight).length === 0) return Promise.resolve();
+    function waitForPendingCalls(ms, before) {
+      if (!hasPendingCalls(before)) return Promise.resolve();
       return new Promise(function (resolve, reject) {
-        var waiter = { resolve: resolve };
+        var waiter = { resolve: resolve, before: before };
         waiter.timer = setTimeout(function () {
           pendingWaiters = pendingWaiters.filter(function (candidate) { return candidate !== waiter; });
           var error = new Error("browser_operations_pending");
@@ -357,11 +368,15 @@ function serve(options) {
         return;
       }
       preparing[entry.id] = entry;
-      options.beforeCall(entry.params, api, entry).then(function (local) {
+      var operationApi = Object.create(api);
+      operationApi.waitForPendingCalls = function (ms) { return waitForPendingCalls(ms, entry); };
+      options.beforeCall(entry.params, operationApi, entry).then(function (local) {
         delete preparing[entry.id];
-        if (entry.cancelled) return;
-        if (local === null) dispatch(entry);
-        else send({ id: entry.id, result: local });
+        if (!entry.cancelled) {
+          if (local === null) dispatch(entry);
+          else send({ id: entry.id, result: local });
+        }
+        pendingSettled();
       });
     }
 
@@ -591,7 +606,7 @@ function serve(options) {
         retryable = false;
         track(options.retry());
       }
-      var entry = { id: id, params: params, childId: null, timer: null, ticker: null };
+      var entry = { id: id, params: params, order: ++operationOrder, childId: null, timer: null, ticker: null };
       if (childReady) {
         forward(entry);
         return;

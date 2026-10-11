@@ -18,6 +18,14 @@ test("native runtime lanes execute the real installed messaging configuration on
     "source-only builds do not prove the installer publishes configuration the real Go entry accepts")
 })
 
+test("native integration gates install the broker's committed dependencies before testing it", () => {
+  const jobs = read("desk-mcp-tests.yml").jobs
+  for (const name of ["desk-mcp-coverage-shards", "release-dry-run", "desk-runtime-packs"]) {
+    assert.ok(jobs[name].steps.some(step => step["working-directory"] === "plugins/desk/mcp" &&
+      step.run?.includes("npm ci --prefix ../browser-context-broker")), `${name} must install the broker lock, not rely on local node_modules`)
+  }
+})
+
 for (const name of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
   test(`${name} cancels superseded pull-request runs and lets main and dispatched runs finish`, () => {
     const { concurrency } = read(name)

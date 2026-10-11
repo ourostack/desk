@@ -161,12 +161,26 @@ test('GivenNativeTabAlreadyOwnedByPeer_WhenPublished_ConflictingIdentityIsRefuse
   const { directory, lease, routing } = await nativeRoutingFixture(t);
   const registry = await readRegistry(directory);
   registry.leases.peer = {
-    id: 'peer', targetIds: ['peer-task'],
+    id: 'peer', processIdentity, targetIds: ['peer-task'],
     nativeRouting: { controlTabId: 201, targetTabs: { 'peer-task': { tabId: 102, windowId: 200 } } },
   };
   await writeRegistry(directory, registry);
   await assert.rejects(leaseApi.recordNativeRouting(routing), error => error.code === 'NATIVE_ROUTING_CONFLICT');
   assert.deepEqual((await readRegistry(directory)).leases[lease.id].targetIds, []);
+});
+
+test('GivenRetainedOldBrowserRouting_WhenNewGenerationReusesTabNumbers_NoFalseConflict', async t => {
+  const { directory, lease, routing } = await nativeRoutingFixture(t);
+  const registry = await readRegistry(directory);
+  registry.leases.peer = {
+    id: 'peer', processIdentity: { ...processIdentity, startIdentity: 'old-browser' }, targetIds: ['peer-task'],
+    nativeRouting: { controlTabId: 101, targetTabs: { 'peer-task': { tabId: 102, windowId: 100 } } },
+  };
+  await writeRegistry(directory, registry);
+  await leaseApi.recordNativeRouting(routing);
+  const observed = await readRegistry(directory);
+  assert.deepEqual(observed.leases[lease.id].targetIds, ['native-control', 'native-task']);
+  assert.deepEqual(observed.leases.peer, registry.leases.peer, 'retain historical evidence without inheriting it');
 });
 
 function attestingProvider(operation, payload) {

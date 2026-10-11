@@ -889,7 +889,7 @@ function start(o, io) {
       var work = readyNativeChild(api, operation).then(function () {
         if (operation && operation.cancelled) return null;
         return params.name === "browser_close"
-          ? api.waitForPendingCalls(30000).then(function () {
+          ? api.waitForPendingCalls(30000, operation).then(function () {
             return nativeSession.clear(function () {
               return nativeTargetsPossible ? detachNativeChild(api) : Promise.resolve();
             });

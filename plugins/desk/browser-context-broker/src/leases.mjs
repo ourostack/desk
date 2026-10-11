@@ -814,7 +814,7 @@ export async function recordNativeRouting({
     if (allTabs.size > 50) throw new BrokerError('INVALID_NATIVE_ROUTING', 'Native lease exceeds its target limit');
     const targetIds = [controlTargetId, ...Object.keys(merged)];
     for (const peer of Object.values(registry.leases)) {
-      if (peer.id === lease.id) continue;
+      if (peer.id === lease.id || !sameProcessIdentity(peer.processIdentity, lease.processIdentity)) continue;
       const peerTabs = [
         peer.nativeRouting?.controlTabId,
         ...Object.values(peer.nativeRouting?.targetTabs ?? {}).map(route => route.tabId),
@@ -849,6 +849,35 @@ export async function removeOwnedTarget(stateDir, leaseId, targetId) {
     if (lease.nativeRouting?.targetTabs) delete lease.nativeRouting.targetTabs[targetId];
     if (lease.targetCloseFailures) delete lease.targetCloseFailures[targetId];
     lease.heartbeatAt = new Date().toISOString();
+  });
+}
+
+export async function recordNativeTargetClosed({ stateDir, leaseId, processIdentity, transportGeneration, tabId }) {
+  return withBrokerLock(stateDir, async () => {
+    const registry = await readRegistry(stateDir);
+    const lease = registry.leases[leaseId];
+    if (!lease) return false;
+    const routing = lease.nativeRouting;
+    if (!sameProcessIdentity(lease.processIdentity, processIdentity) || routing?.transportGeneration !== transportGeneration) {
+      throw new BrokerError('NATIVE_ROUTING_GENERATION_MISMATCH', 'Native closure belongs to another browser or transport generation');
+    }
+    const control = routing.controlTabId === tabId;
+    const targetId = control ? routing.controlTargetId
+      : Object.entries(routing.targetTabs ?? {}).find(([, route]) => route.tabId === tabId)?.[0];
+    if (!targetId || !lease.targetIds.includes(targetId)) return false;
+    lease.targetIds = lease.targetIds.filter(id => id !== targetId);
+    delete routing.targetTabs[targetId];
+    if (lease.targetCloseFailures) delete lease.targetCloseFailures[targetId];
+    if (control) {
+      delete routing.controlTargetId;
+      delete routing.controlTabId;
+      delete routing.controlMarker;
+    }
+    if (!lease.targetIds.length && !lease.pendingTargetCreates?.length) {
+      lease.nativeRouting = { transportGeneration, targetTabs: {} };
+    }
+    await writeRegistry(stateDir, registry);
+    return true;
   });
 }
 
@@ -897,6 +926,7 @@ async function settleLeaseTargets({
   declaration,
   providerInvoker,
   cdpClientOptions,
+  providerUnbind,
 }, retainEmpty) {
   return withBrokerLock(
     stateDir,
@@ -936,6 +966,9 @@ async function settleLeaseTargets({
         targetIds,
         cdpClientOptions,
       );
+      if (!retainEmpty && failedTargetIds.length === 0 && providerUnbind) {
+        await providerUnbind({ lease: current, closedTargetIds });
+      }
       const result = await recordTargetClosures(
         stateDir,
         leaseId,

@@ -66,10 +66,25 @@ class Transport extends EventEmitter {
       }
       return { closed: true };
     }
-    if (method === 'lease.unbind') return { unbound: true };
+    if (method === 'lease.unbind') {
+      if (lease.tabs.length) throw new Error('owned native tabs remain');
+      this.leases.delete(leaseId);
+      return { unbound: true };
+    }
     throw new Error('unexpected native method');
   }
 }
+
+test('GivenNativeLeaseReleased_WhenAllTargetsClose_TransportBindingAndSourceLeaseAreRetired', async t => {
+  const { service, transport } = await setup(t);
+  const acquired = await service.invoke('acquire', { owner: 'native-test-owner' });
+  await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: acquired.owner });
+  const result = await service.invoke('release', { leaseId: acquired.leaseId, owner: acquired.owner });
+  assert.equal(result.released, true);
+  assert.ok(transport.calls.some(call => call.leaseId === acquired.leaseId && call.method === 'lease.unbind'));
+  assert.equal(transport.leases.has(acquired.leaseId), false, 'permanent host cannot accumulate released native leases/create history');
+  assert.deepEqual((await service.invoke('status')).leases, []);
+});
 
 async function setup(t) {
   const { startNativeProvider } = await import(moduleUrl);

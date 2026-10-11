@@ -329,7 +329,7 @@ async function installNativeMessagingUnlocked({
   for (const name of ['package.json', ...await regularFiles(path.join(broker, 'src')).then(names => names.map(name => path.join('src', name))), 'bin/native-host.mjs']) {
     files.push({ source: path.join(broker, name), destination: path.join('plugins/desk/browser-context-broker', name) });
   }
-  for (const name of ['package.json', 'web-real-profile.cjs', 'src/readiness/process-start.js']) {
+  for (const name of ['package.json', 'web-real-profile.cjs', 'src/readiness/process-start.js', 'src/factory/windows-acl.js']) {
     files.push({ source: path.join(mcpRoot, name), destination: path.join('plugins/desk/mcp', name) });
   }
   for (const name of await regularFiles(wsModule)) {

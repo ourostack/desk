@@ -107,7 +107,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: plugins/desk/mcp
-        run: npm ci
+        run: |
+          npm ci
+          npm ci --prefix ../browser-context-broker
 
       - name: Run desk MCP coverage shard
         working-directory: plugins/desk/mcp
@@ -215,7 +217,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: plugins/desk/mcp
-        run: npm ci
+        run: |
+          npm ci
+          npm ci --prefix ../browser-context-broker
 
       - name: Build and check the release without keeping it
         run: scripts/build-and-check-release.sh --dry-run
@@ -479,7 +483,9 @@ jobs:
 
       - name: Install dependencies from the committed lock
         working-directory: plugins/desk/mcp
-        run: npm ci
+        run: |
+          npm ci
+          npm ci --prefix ../browser-context-broker
 
       - name: Set up the native browser launch build toolchain
         uses: actions/setup-go@v5

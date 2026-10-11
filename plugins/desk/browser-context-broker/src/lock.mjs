@@ -52,6 +52,12 @@ async function readProcessStartIdentity(pid) {
     if (!startIdentity) throw new Error('Process start identity is unavailable');
     return `darwin:${startIdentity}`;
   }
+  if (process.platform === 'win32') {
+    const { readProcessStart } = await import('../../mcp/src/readiness/process-start.js');
+    const identity = await readProcessStart(pid);
+    if (identity === null) throw new Error('Windows process start identity is unavailable');
+    return identity;
+  }
   throw new Error(`Process start identity is unsupported on ${process.platform}`);
 }
 
@@ -130,6 +136,10 @@ async function readLockEvidence(lockPath) {
 async function publishOwnerAtomically(lockPath, owner) {
   const temporaryPath = path.join(lockPath, `.owner-${owner.token}.tmp`);
   await writeFile(temporaryPath, JSON.stringify(owner), { mode: 0o600 });
+  if (process.platform === 'win32') {
+    const { protectWindowsPaths } = await import('../../mcp/src/factory/windows-acl.js');
+    await protectWindowsPaths([{ path: temporaryPath, kind: 'file', created: true }], { label: 'desk_browser_lock' });
+  }
   await rename(temporaryPath, path.join(lockPath, 'owner.json'));
 }
 
@@ -173,6 +183,7 @@ export async function withBrokerLock(stateDir, fn, options = {}) {
     try {
       await mkdir(lockPath, { mode: 0o700 });
       try {
+        await ensureStateDirectory(lockPath);
         await ownerPublisher(lockPath, {
           token,
           pid: process.pid,

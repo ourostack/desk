@@ -61,4 +61,4 @@ function artifactFamily(family, sourceFiles) {
   };
 }
 
-module.exports = { artifactFamily: artifactFamily };
+exports.artifactFamily = artifactFamily;

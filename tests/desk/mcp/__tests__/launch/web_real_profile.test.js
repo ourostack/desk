@@ -1417,6 +1417,29 @@ test("the actual proxy waits for a first in-flight response before confirming cl
   await host.close()
 })
 
+test("close waits for earlier window preparation before dispatch and exact cleanup", posixOnly, async () => {
+  let complete
+  const machine = await realMachine({ launch: {
+    nativeBefore: () => new Promise(resolve => { complete = resolve }),
+  } })
+  const host = session(machine)
+  await host.handshake()
+  const first = host.call(2)
+  await host.wait(() => complete, "earlier window preparation")
+  let closed = false
+  const closing = host.call(3, "browser_close").then(value => { closed = true; return value })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(closed, false, "preparing work is an earlier pending operation, not an empty connection")
+  assert.equal(machine.nativeState.calls.includes("clear"), false)
+  complete()
+  await first
+  assert.equal((await closing).result.isError, undefined)
+  assert.equal(machine.nativeState.created, false)
+  const events = machine.events
+  assert.ok(events.indexOf("child:tools/call browser_navigate") < events.indexOf("child:tools/call browser_close"))
+  await host.close()
+})
+
 test("a cancelled preparation is never dispatched after its asynchronous hook resolves", posixOnly, async () => {
   let complete
   const machine = await realMachine({ launch: {
