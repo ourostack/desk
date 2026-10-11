@@ -1,6 +1,6 @@
 ---
 name: cdp-headed-browser
-description: Invoke when the agent needs Playwright to drive a web UI behind an interactive authentication flow that a throwaway isolated browser cannot complete, when several agents need one persistent authenticated context without sharing tabs, or when the operator's existing Playwright MCP cannot reuse the required browser state. Covers claims-based context acquisition, lease-isolated CDP proxying, background-safe target creation, exact lease release, and broker status and recovery. Signed-in or authenticated browsing routes here. When no plugin declares a real browser profile, Desk's `desk-web` server is headless, isolated and signed out, and when one does, `desk-web` is already the operator's signed-in browser (see "The real browser profile"). Do NOT invoke for browser tasks where an isolated signed-out browser works, for unauthenticated scraping, or when the current Playwright MCP already has the signed-in state the task needs.
+description: Use when qualifying browser automation or creating disposable browser-test profiles, when interactive authentication requires a persistent browser, when agents share an authenticated context, or when Playwright cannot reuse the required browser state. Do not invoke for ordinary unauthenticated browsing that works in an isolated browser, or ordinary browsing whose current MCP already has the required signed-in state.
 ---
 
 # cdp-headed-browser
@@ -211,6 +211,16 @@ For an expired lease identified by `doctor`, use exact cleanup:
 Cleanup freshly attests the process generation recorded on that exact lease. If it is still the same live generation, cleanup closes the recorded targets and removes the lease. If the provider proves that original generation is absent or disconnected, cleanup removes the stale lease without connecting to the endpoint and reports the recorded targets as unclosed because their owner generation is gone. A live replacement or mismatched generation remains `CONTEXT_DISCONNECTED`; cleanup never follows it or touches its targets.
 
 Do not terminate browsers by executable name, profile-name pattern, or guessed process identifier. Context termination, when genuinely required, belongs to the attesting provider and must operate only on a process identity it proves it owns.
+
+### Disposable browser qualification profiles
+
+For browser testing, invoke this skill even when sign-in is not required. Before creating a fixture, record its exact disposable profile root separately from real/provider-owned authentication state, allocated bytes, host free space, maximum concurrent profile count, maximum total fixture bytes and minimum free-space reserve. Choose limits before the first allocation; include browser component downloads and other concurrent work in the headroom. Recheck actual allocation and free space before every attempt, and refuse another allocation if its expected growth would breach either limit or the reserve. Unknown growth calls for one bounded measured attempt, not repeated fresh profiles.
+
+After every successful or failed terminal attempt, preserve compact scripts, logs, screenshots and receipts, then remove that attempt's inactive disposable profile before allocating its replacement. Fresh-state comparisons can require several profiles simultaneously; bound their count and total bytes in advance and dispose of them when the comparison ends. Whole profiles are not necessary merely because evidence must survive or acceptance is pending.
+
+Before removal, verify the exact resolved path, ownership and disposable provenance; freshly verify no process uses it and no live or unverifiable profile lock remains. Unknown ownership or liveness means no deletion and no replacement allocation that breaches the budget. Never delete by broad prefix, glob or browser name; use exact scoped paths through an authorized filesystem operation. A private fixture can acquire authentication during testing: never export it as evidence, and deleting that proven disposable fixture does not authorize deleting the operator's persistent profile.
+
+Before delivery, read back profile absence, retained scratch bytes and host free space. Quitting a browser, moving data to Trash, or writing a future cleanup trigger does not prove space reclaimed. A specifically necessary retained fixture needs a bounded byte/count disposition, reason, owner and executable cleanup trigger; otherwise remove it now. Report unresolved cleanup as unfinished work, not completed browser cleanup.
 
 ## Failure modes
 
