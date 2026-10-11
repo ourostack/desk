@@ -13,7 +13,7 @@
 //     The next revision is always one past the remote high-water mark, and identities are kept after removal or withdrawal.
 //   - It builds the commit in a clean temporary worktree of the fetched remote main, on its own `desk-triage/<token>` branch, in
 //     owner-protected factory state. It stages only the two files, checks the complete staged list and bytes, and commits with a
-//     normal `git commit` under the narrow `DESK_TOOL_COMMIT=1` context, so the desk's hooks, including any chained policy, run on
+//     normal `git commit` under the card guard's narrow Desk-tool commit context, so the desk's hooks, including any chained policy, run on
 //     the candidate tree (not the live checkout). No hook bypass. A refusal, a time-out (the whole process group is killed), a
 //     changed hook policy or any extra committed path holds without a push.
 //   - It pushes the exact commit to `refs/heads/main` without force. A rejected push is retried once from a new fetch, with
@@ -31,6 +31,7 @@ import { PATTERNS } from "./schema.js"
 import { factoryStateRoot, gitBlobSha } from "./outbox.js"
 import { ensureOwnerOnlyDirectory, protectLeafFile } from "./os-protect.js"
 import { protectWindowsPaths } from "./windows-acl.js"
+import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
 import { defaultRulingPaths, safeDeskPath } from "./triage-basis.js"
 import {
   compareIdentities, protectedBasisRecord, triagePaths, validateSafeTriageReview, validateTriageAnnotation, validateTriageIdentities,
@@ -313,7 +314,7 @@ async function candidate(ctx, base, files, resources) {
   if (before === null) return hold("policy_unknown")
   if (before === "disabled") return hold("policy_refused")
   await ctx.step("before_commit")
-  const commit = await runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, DESK_TOOL_COMMIT: "1" })
+  const commit = await runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, [TOOL_COMMIT_ENV]: "1" })
   if (commit.timedOut) return hold("policy_unknown")
   if (commit.status !== 0) return hold("policy_refused")
   if ((await hookPolicy(ctx, record.path)) !== before) return hold("policy_unknown")
