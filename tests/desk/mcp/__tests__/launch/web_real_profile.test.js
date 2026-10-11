@@ -1938,7 +1938,7 @@ test("native resume refusal is not converted into a replayed call and remains a 
     connection.session.resume = () => Promise.reject(new Error("fixture-exact-resume-refused"))
     return connection
   }
-  const host = session(machine, { cleanupMs: 100 })
+  const host = session(machine, { cleanupMs: undefined })
   await host.handshake()
   const reply = await host.call(2)
   assert.equal(reply.result.isError, true)

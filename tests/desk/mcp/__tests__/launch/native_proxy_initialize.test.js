@@ -471,14 +471,21 @@ test("shutdown during MCP replacement refuses a new child after the old child ex
 
 test("cancellation of held startup work removes it before browser preparation", async () => {
   const stdin = new PassThrough(), stdout = new PassThrough(), messages = []
-  let ready
-  stdout.on("data", bytes => messages.push(String(bytes)))
+  let ready, progressed
+  const progress = new Promise(resolve => { progressed = resolve })
+  stdout.on("data", bytes => {
+    messages.push(String(bytes))
+    if (String(bytes).includes("notifications/progress")) progressed()
+  })
   const running = proxy.serve({
     stdin, stdout, stderr: { write() {} }, signals: new EventEmitter(), catalog: [],
-    ready: new Promise(resolve => { ready = resolve }), holdMs: 50,
+    ready: new Promise(resolve => { ready = resolve }), holdMs: 1000, progressMs: 5,
     timeoutPayload: { code: "startup-timeout" }, spawn: () => assert.fail("closed cancelled startup cannot spawn"),
   })
-  stdin.write(JSON.stringify({ id: 2, method: "tools/call", params: { name: "browser_navigate", arguments: {} } }) + "\n")
+  stdin.write(JSON.stringify({ id: 2, method: "tools/call", params: {
+    name: "browser_navigate", arguments: {}, _meta: { progressToken: "held-native-work" },
+  } }) + "\n")
+  await progress
   stdin.write(JSON.stringify({ method: "notifications/cancelled", params: { requestId: 2 } }) + "\n")
   stdin.end()
   ready({ payload: { code: "closed-startup" } })
@@ -522,4 +529,74 @@ test("MCP replacement cannot create a new client after the original spawn failed
   stdin.end(); await running
   assert.equal(spawns, 1, "transport replacement must not become an implicit initial-launch retry")
   assert.equal(errors.some(value => value.includes("browser_cleanup_incomplete")), false)
+})
+
+test("stale MCP streams cannot publish replies or diagnostics after successful replacement", async t => {
+  const fixture = await controlledProxy(t)
+  await fixture.wait(() => fixture.messages.some(message => message.id === 2))
+  const old = fixture.children[0]
+  await fixture.api().restartChild(fixture.launch)
+  const count = fixture.messages.length, errors = fixture.errors.length
+  old.stdout.write(JSON.stringify({ method: "notifications/message", params: { text: "stale-response" } }) + "\n")
+  old.stderr.write("stale-private-diagnostic\n")
+  assert.equal(fixture.messages.length, count)
+  assert.equal(fixture.errors.length, errors)
+})
+
+test("a pending internal MCP tool rejects when its child exits before answering", async t => {
+  const fixture = await controlledProxy(t)
+  await fixture.wait(() => fixture.messages.some(message => message.id === 2))
+  fixture.children[0].stdin.removeAllListeners("data")
+  const pending = fixture.api().callTool("browser_snapshot", {}, 1000)
+  await new Promise(setImmediate)
+  fixture.children[0].emit("exit", 1, null)
+  await assert.rejects(pending, /the browser ended/u)
+})
+
+test("a no-PID launch error with pending pre-child cleanup settles an already closed host", async () => {
+  const stdin = new PassThrough(), stdout = new PassThrough(), child = new EventEmitter()
+  stdout.resume()
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough()
+  let finishCleanup, started
+  const entered = new Promise(resolve => { started = resolve })
+  const running = proxy.serve({
+    stdin, stdout, stderr: { write() {} }, signals: new EventEmitter(), catalog: [],
+    ready: Promise.resolve({ launch: { node: process.execPath, indexFile: "/fixture", args: [], env: {} } }),
+    spawn: () => child, spawnPayload: error => ({ code: error.message }),
+    cleanupBeforeReady: true,
+    cleanup: () => { started(); return new Promise(resolve => { finishCleanup = resolve }) },
+  })
+  stdin.write(JSON.stringify({ id: 1, method: "initialize", params: {} }) + "\n")
+  await new Promise(resolve => setTimeout(resolve, 5))
+  child.emit("error", new Error("no-pid-cleanup-pending"))
+  await entered
+  stdin.end()
+  await new Promise(setImmediate)
+  finishCleanup()
+  await running
+})
+
+test("a dispatched native call receives an explicit failure hook when its child exits", async t => {
+  const failures = []
+  const fixture = await controlledProxy(t, { holdTools: true,
+    afterCall: (params, failed) => failures.push({ name: params.name, failed }) })
+  await fixture.wait(() => fixture.children[0].operations.length === 1)
+  fixture.children[0].emit("exit", 1, null)
+  assert.deepEqual(failures, [{ name: "browser_snapshot", failed: true }])
+  assert.equal(fixture.messages.find(message => message.id === 2).result.isError, true)
+})
+
+test("cancelling an exact prepared native operation invokes its failure hook without forwarding it", async t => {
+  let finish
+  const failures = []
+  const fixture = await controlledProxy(t, {
+    beforeCall: () => new Promise(resolve => { finish = resolve }),
+    afterCall: (params, failed) => failures.push({ name: params.name, failed }),
+  })
+  fixture.stdin.write(JSON.stringify({ method: "notifications/cancelled", params: { requestId: 2 } }) + "\n")
+  await new Promise(setImmediate)
+  assert.deepEqual(failures, [{ name: "browser_snapshot", failed: true }])
+  finish(null)
+  await new Promise(setImmediate)
+  assert.equal(fixture.children[0].operations.length, 0)
 })
