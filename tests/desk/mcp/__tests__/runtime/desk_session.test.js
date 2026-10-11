@@ -45,7 +45,9 @@ function headMemory() {
     async lstat(file) {
       if (state.mode === "stall_lstat") await new Promise(resolve => { state.release = resolve })
       if (state.mode === "missing") throw Object.assign(new Error("missing"), { code: "ENOENT" })
-      return stat(file.endsWith("/HEAD"))
+      // The session joins with the platform separator; Windows spells this
+      // path with backslashes, so compare the final component, not "/HEAD".
+      return stat(path.basename(file) === "HEAD")
     },
     async open(_file, flags) {
       state.opens += 1

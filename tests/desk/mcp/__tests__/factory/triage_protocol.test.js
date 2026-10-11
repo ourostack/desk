@@ -1,4 +1,5 @@
 import "../_isolated_env.mjs"
+import {ownedHostTest} from "./_owned_catalog_host.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { PassThrough } from "node:stream"
@@ -66,7 +67,7 @@ test("same_source_first_js_guards_refuse_unknown_or_drifted_identity",async()=>{
     assert.equal(await launcher.startCatalogLauncher(),null)
   }finally{process.exitCode=prior;process.stderr.write=write}
 })
-test("same_source_module_custody_is_bounded_and_nonselectable",async(t)=>{
+ownedHostTest("same_source_module_custody_is_bounded_and_nonselectable","posix",async(t)=>{
   const {catalogModuleLoad}=await import("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js")
   const root=new URL("../../../../../plugins/desk/mcp/",import.meta.url)
   const file=new URL("src/factory/triage-catalog.js",root),records=new Map()
@@ -85,7 +86,7 @@ test("same_source_module_custody_is_bounded_and_nonselectable",async(t)=>{
     assert.throws(()=>catalogModuleLoad(new Map(),root.pathname,file.href,{},()=>{}),{message:"module_custody"})
   }finally{fs.readFileSync=read;fs.realpathSync=realpath}
 })
-test("same_source_entry_failures_do_not_bootstrap_or_touch_profile",async()=>{
+ownedHostTest("same_source_entry_failures_do_not_bootstrap_or_touch_profile","posix",async()=>{
   const server=await import("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js")
   const launcher=await import("../../../../../plugins/desk/mcp/scripts/launch-triage-catalog.js")
   const uid=process.getuid(),env={LANG:"C",LC_ALL:"C",TZ:"UTC"}
@@ -112,7 +113,7 @@ test("same_source_entry_failures_do_not_bootstrap_or_touch_profile",async()=>{
   assert.equal(await launcher.startCatalogLauncher(invalidLauncher),null)
   assert.equal(invalidLauncher.exitCode,1)
 })
-test("same_source_unit_launcher_control_and_teardown_outcomes",async(t)=>{
+ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",async(t)=>{
   const {catalogLauncherEntry}=await import("../../../../../plugins/desk/mcp/scripts/launch-triage-catalog.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   for(const scenario of ["finish","native_eof","wrong_generation","wrong_event","extra_key","input_error","child_error","stderr_limit","parent_changed","signal","nonzero_exit",
@@ -206,7 +207,7 @@ test("same_source_unit_launcher_control_and_teardown_outcomes",async(t)=>{
     })
   }
 })
-test("instrumented_unit_server_uses_same_source_without_proof_authority",async(t)=>{
+ownedHostTest("instrumented_unit_server_uses_same_source_without_proof_authority","posix",async(t)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-server-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -271,7 +272,7 @@ test("wire_limits_and_lifecycle",async()=>{
     await guarded.close()
   }
 })
-test("same_source_unit_server_fatal_and_late_receipt_paths_are_closed",async(t)=>{
+ownedHostTest("same_source_unit_server_fatal_and_late_receipt_paths_are_closed","posix",async(t)=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   for(const scenario of ["known_fatal","unknown_fatal","guard_failed_on_close","duplicate_finish","receipt_count","receipt_frame"]){
     await t.test(scenario,async()=>{
@@ -690,7 +691,7 @@ test("closed_protocol_requests_stay_side_effect_free",async()=>{
   const defaults=await protocol.serveCatalog({state:defaultState,writeReceipt:async()=>{}})
   await defaults.close()
 })
-test("real_stdio_closed_manifest",async(t)=>{
+ownedHostTest("real_stdio_closed_manifest","provenance",async(t)=>{
   assert.equal(typeof custody.runDirectCatalog,"function")
   const result=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>result.cleanup?.())
@@ -699,7 +700,7 @@ test("real_stdio_closed_manifest",async(t)=>{
   assert.equal(result.custody.receipts.map(x=>x.event).join(","),"bootstrap,submit,terminal")
   assert.equal(result.responses.every(x=>x.ok),true)
 })
-test("real_unmodified_sdk_stdio_handshake",async(t)=>{
+ownedHostTest("real_unmodified_sdk_stdio_handshake","provenance",async(t)=>{
   const result=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>result.cleanup?.())
   assert.equal(result.state,"proved")
@@ -717,7 +718,7 @@ test("real_unmodified_sdk_stdio_handshake",async(t)=>{
   assert.equal(result.resources.trace.events.some(x=>x.event==="close"),true)
   assert.deepEqual(result.tools.map(x=>x.name),["evidence_read","evidence_search","evidence_list","candidate_submit"])
 })
-test("authenticated_first_wire_observations_are_not_submission_receipts",async(t)=>{
+ownedHostTest("authenticated_first_wire_observations_are_not_submission_receipts","provenance",async(t)=>{
   const result=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>result.cleanup?.())
   assert.equal(result.state,"proved")
@@ -732,7 +733,7 @@ test("authenticated_first_wire_observations_are_not_submission_receipts",async(t
   assert.equal(exit.payload.signal,null)
   assert.ok(result.custody.observations.every(x=>x.event==="observation"))
 })
-test("first_parser_refusal_is_observed_from_actual_server",async(t)=>{
+ownedHostTest("first_parser_refusal_is_observed_from_actual_server","provenance",async(t)=>{
   const raw='{"method":"initialize","params":{"protocolVersion":"unknown","capabilities":{},"clientInfo":{"name":"x","version":"1"}},"jsonrpc":"2.0","id":0}\n'
   const result=await custody.runCatalogWireCase({fixture,frames:[raw],deadline:Date.now()+5000})
   t.after(()=>result.cleanup?.())
@@ -777,7 +778,7 @@ test("original_split_wire_offsets_and_output_refusal_direction_are_observed",asy
   assert.equal(errorEvents.find(x=>x.kind==="write_complete").code,"write_failed")
   await third.close()
 })
-test("two_identical_stateful_histories",async(t)=>{
+ownedHostTest("two_identical_stateful_histories","provenance",async(t)=>{
   const a=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   const b=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>{a.cleanup?.();b.cleanup?.()})
@@ -788,7 +789,7 @@ test("two_identical_stateful_histories",async(t)=>{
   assert.throws(()=>custody.authenticatedDirectReceipts([custody.retainDirectReceipt(a),custody.retainDirectReceipt(b)]),
     {message:"direct_bundles_incomplete"})
 })
-test("real_wire_fatal_subcases_never_materialize",async(t)=>{
+ownedHostTest("real_wire_fatal_subcases_never_materialize","provenance",async(t)=>{
   assert.equal(typeof custody.runCatalogWireCase,"function")
   for(const [name,frames] of [
     ["duplicate_key",['{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}\n']],
@@ -807,7 +808,7 @@ test("real_wire_fatal_subcases_never_materialize",async(t)=>{
     assert.equal(result.resources.serverExited,true)
   })
 })
-test("real_frame_count_and_aggregate_restart_cases",async(t)=>{
+ownedHostTest("real_frame_count_and_aggregate_restart_cases","provenance",async(t)=>{
     const initialize={jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"triage_direct",version:"1"}}}
     const initialized={jsonrpc:"2.0",method:"notifications/initialized"}
     for(const [name,frames,detail]of [

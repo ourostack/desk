@@ -298,6 +298,15 @@ export function validateCatalogObservation(value){
     (["input_frame","output_frame"].includes(value.kind)&&(value.bytes===0||(!value.truncated&&raw.at(-1)!==10))))fail("observation_invalid")
   return true
 }
+// The one owned-catalog host split. Process provenance (ps lineage, start
+// identity and environment of the launcher/server) is pinned to Darwin. POSIX
+// private-file custody (uid, 0600/0700 modes, FIFOs, POSIX paths) exists on
+// every non-Windows host. An unsupported host launches nothing.
+export function ownedCatalogHostSupport(platform=process.platform){
+  const provenance=platform==="darwin"
+  return {platform,provenance,posixCustody:platform!=="win32",reason:provenance?null:"provenance_unsupported"}
+}
+const hostRefusal=()=>{const host=ownedCatalogHostSupport();return host.provenance?null:host.reason}
 export function ownedServerLaunch({runtime,launcher:launchFile,entry:entryFile,bootstrap,deadline}) {
   const exact=ownedCatalogEntries()
   if(runtime!==exact.runtime||launchFile!==exact.launcher||entryFile!==exact.entry)fail("launch_source")
@@ -332,7 +341,7 @@ function psIdentity(text,pid) {
 }
 export async function observeOwnedServer({nativePid,launcherPid,serverPid,generation,startIdentity,expected}) {
   try{
-    if(process.platform!=="darwin"||!hex.test(generation)||![launcherPid,serverPid].every(p=>Number.isSafeInteger(p)&&p>0))fail("provenance_unsupported")
+    if(hostRefusal()!==null||!hex.test(generation)||![launcherPid,serverPid].every(p=>Number.isSafeInteger(p)&&p>0))fail("provenance_unsupported")
     const server=psIdentity(await osCapture("/bin/ps",["-ww","-p",String(serverPid),"-o","pid=,ppid=,lstart=,command="],expected.deadline),serverPid)
     const launch=psIdentity(await osCapture("/bin/ps",["-ww","-p",String(launcherPid),"-o","pid=,ppid=,lstart=,command="],expected.deadline),launcherPid)
     if(server.ppid!==launcherPid||(nativePid!==undefined&&launch.ppid!==nativePid) ||
@@ -812,6 +821,13 @@ export async function prepareOwnedCatalogRun({inputDir,runDir,deadline}) {
 const realNativeRun=Object.freeze({lifecycle:runOwnedCatalogLifecycle,stat:fsNative.lstatSync,bytes:fsNative.readFileSync,
   materialize:materializeTriageSubmission,registry:nativeRuns})
 export async function runOwnedCatalogNative(options) {
+  const refused=hostRefusal()
+  if(refused!==null){
+    // Refuse before the native engine (and so any model turn) can start.
+    await options.owned.close()
+    return {state:"scope_unqualified",cost_usd:null,reason:refused,detail:refused,stream:{kind:"failed",stdout:"",truncated:false},
+      resources:{runDir:options.owned.runDir,pids:[],exited_pids:[],native_exit:null}}
+  }
   return runNativeTransaction(options,realNativeRun)
 }
 async function runNativeTransaction({owned,command,args,env,deadline,resultFile,onChild,onChildExit,spawn:spawnNative=spawn},context) {
@@ -1159,6 +1175,8 @@ export function createNonacceptedNativePair(config){
 }
 export {Client as CatalogClient}
 export async function runCatalogWireCase({fixture,frames,deadline}) {
+    const refused=hostRefusal()
+    if(refused!==null)return {state:"scope_unqualified",reason:refused,normalTerminal:false,resources:{pids:[],exited:[]},cleanup:async()=>{}}
     const dir=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"triage-wire-")));await fs.chmod(dir,0o700)
     const resources={dir,owner:"direct-parent",serverExited:false,pids:[],exited:[]}
     let owned,lifecycle,child,boot
@@ -1215,6 +1233,8 @@ export async function runCatalogWireCase({fixture,frames,deadline}) {
     }
 }
 export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
+  const refused=hostRefusal()
+  if(refused!==null)return {state:"scope_unqualified",reason:refused,resources:{pids:[],files:[]},cleanup:async()=>{}}
   if(typeof nodeModule.registerHooks!=="function")return {state:"scope_unqualified",reason:"runtime_provenance_unsupported",resources:{},cleanup:async()=>{}}
   const dir=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"triage-direct-")))
   await fs.chmod(dir,0o700)

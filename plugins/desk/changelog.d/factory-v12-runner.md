@@ -75,3 +75,10 @@ bootstrap. The launcher writes exit evidence only after its server closes.
 The live receipt reader now also rejects any later receipt from a server PID
 other than the bootstrapped one, matching the existing reload check.
 Direct compatibility and local gates remain distinct from native qualification.
+
+Owned-catalog launch now refuses with `provenance_unsupported` before any
+launcher, server or native engine starts on a host other than Darwin, instead
+of discovering the unsupported host after launch. Tests share one host split
+and assert that refusal elsewhere; real-engine unit checks need
+`DESK_TRIAGE_REAL_CLI=1`. The HEAD sampler test fake now matches the HEAD file
+by name, so Windows path separators no longer make every sample uncertain.

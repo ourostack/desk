@@ -1,6 +1,8 @@
 // Current owned-catalog policy and unchanged runtime/policy admission. Old
 // native-path/dual-mission tests are superseded, retained in Git history.
 import "../_isolated_env.mjs"
+import {ownedHostTest,realCliTest} from "./_owned_catalog_host.mjs"
+import {fileURLToPath} from "node:url"
 import {test} from "node:test"
 import assert from "node:assert/strict"
 import fsNative from "node:fs"
@@ -27,7 +29,7 @@ const readers={read:({cli}={})=>{
 const diagnostic=async()=>({kind:"closed",code:0,stdout:doctor,truncated:false})
 const fixedOff=()=>Object.fromEntries(["cc-plugin-responsive-mode","cc-plugin-diff","cc-plugin-you-should-know","cc-plugin-claude-test",
   "cc-plugin-plugin-authoring","cc-plugin-mods-guide","cc-plugin-mermaid","cc-plugin-agents-md","cc-plugin-telemetry"].map(n=>[n+"@builtin",false]))
-test("all_eleven_registered_ids_accounted",async(t)=>{
+ownedHostTest("all_eleven_registered_ids_accounted","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -63,7 +65,7 @@ test("nine_false_after_managed_fold_or_hold",async()=>{
   const unknown=await runner.runNonacceptedControlCollection({...input,sources:[{enabledPlugins:{"unreviewed@builtin":false}}]})
   assert.equal(unknown.outcome.state,"scope_unqualified");assert.equal(unknown.statistics.diagnostics,0)
 })
-test("availability_variants_cannot_enable_fixed_off_set",async()=>{
+realCliTest("availability_variants_cannot_enable_fixed_off_set","posix",async()=>{
   const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"))
   const registry=bytes.subarray(190345930,190348300)
   assert.equal(hash(registry),"0d44a3195cf29f26ba956f4a0b7ad8beea17cb6d19b3d4b89e273437513895e1")
@@ -100,7 +102,7 @@ test("availability_variants_cannot_enable_fixed_off_set",async()=>{
     }
   }
 })
-test("disabled_registration_consumers_no_activation",()=>{
+realCliTest("disabled_registration_consumers_no_activation","posix",()=>{
   const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"))
   const diff=bytes.subarray(222747175,222811837)
   assert.equal(hash(diff),"d6ff6dbf628c22298f8981c41908d000331c7046449df5ab2cc49c88d57c3e7f")
@@ -130,7 +132,7 @@ test("disabled_registration_consumers_no_activation",()=>{
   state.wantedSessions.add("fresh")
   descriptor.mcpServers;assert.equal(connect,1,"counterexample pins why fresh/no disabled consumer invocation matters")
 })
-test("fixed_set_recipe_source_drift_rejects_old_records",async(t)=>{
+realCliTest("fixed_set_recipe_source_drift_rejects_old_records","posix",async(t)=>{
   for(const version of [1,2,3,4])assert.throws(()=>runner.validateOwnedQualificationStructure({record:{version}}),
     {message:"qualification_structure"})
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
@@ -174,7 +176,7 @@ function pinnedSourceMemoryFD(t,cli,alter=()=>{}){
   syncBuiltinESMExports()
   t.after(()=>{t.mock.restoreAll();Object.assign(fsNative,{openSync:open,readSync:read,fstatSync:fstat,closeSync:close});syncBuiltinESMExports()})
 }
-test("restricted_recipe_exact_three_effective_off_values",async(t)=>{
+ownedHostTest("restricted_recipe_exact_three_effective_off_values","posix",async(t)=>{
   const f=await fixture(t)
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -346,7 +348,7 @@ test("registered_predicates_require_selected_off_values_not_declared_defaults",a
 })
 const otherBuiltinsOff=()=>Object.fromEntries(["cc-plugin-responsive-mode","cc-plugin-diff","cc-plugin-you-should-know","cc-plugin-claude-test",
   "cc-plugin-plugin-authoring","cc-plugin-mods-guide","cc-plugin-mermaid","cc-plugin-agents-md","cc-plugin-telemetry"].map(n=>[n+"@builtin",false]))
-test("tips_exhaustive_variants_noninteractive_and_replay",async()=>{
+realCliTest("tips_exhaustive_variants_noninteractive_and_replay","posix",async()=>{
   const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"))
   const span=(offset,length,sha)=>{
     const data=bytes.subarray(offset,offset+length);assert.equal(hash(data),sha);return data.toString()
@@ -389,7 +391,7 @@ test("tips_exhaustive_variants_noninteractive_and_replay",async()=>{
     assert.equal(r.productionAuthority,false)
   }
 })
-test("controller_absent_present_preserves_closed_authority",async()=>{
+realCliTest("controller_absent_present_preserves_closed_authority","posix",async()=>{
   const bytes=readFileSync(path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")).subarray(223038175,223043450)
   assert.equal(hash(bytes),"8cb36bf40b25f7fac035d04f7f73ab5854f33575f576baaf386a54aeb92e0f39")
   const text=bytes.toString(),body=text.slice(text.indexOf("function ue("),text.indexOf("var ge="))
@@ -420,7 +422,7 @@ test("controller_absent_present_preserves_closed_authority",async()=>{
     assert.equal(r.productionAuthority,false)
   }
 })
-test("tips_interactive_reuse_or_changed_closure_blocks",async(t)=>{
+realCliTest("tips_interactive_reuse_or_changed_closure_blocks","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -551,7 +553,7 @@ test("finite_control_rejections_preserve_named_boundary_and_no_authority",async(
 test("old_safe_mode_record_rejected",()=>{
   assert.throws(()=>runner.validateOwnedQualificationStructure({record:{version:2}}),{message:"qualification_structure"})
 })
-test("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory",async(t)=>{
+realCliTest("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory","posix",async(t)=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -643,7 +645,7 @@ test("control_structure_limits_path_identity_and_state_pairs",async()=>{
   valid.effective_sources_sha256=hash(catalog.catalogCanonical(valid.sources))
   assert.equal(runner.validateTriageControls(valid).ok,true)
 })
-test("source_bound_control_reader_safe_file_failure_matrix",async(t)=>{
+realCliTest("source_bound_control_reader_safe_file_failure_matrix","posix",async(t)=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -860,7 +862,7 @@ test("measurement_predicate_is_pure_while_real_guard_binds_actual_process",()=>{
   assert.equal(runner.qualificationEnvironment(explicit),explicit)
   assert.equal(runner.qualificationEnvironment(undefined),process.env,"reference identity only; no inherited values are read or emitted")
 })
-test("owned_only_actual_manifest_required",async(t)=>{
+ownedHostTest("owned_only_actual_manifest_required","posix",async(t)=>{
   const f=await fixture(t)
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -920,7 +922,8 @@ test("instrumented_native_qualifier_refuses_before_store_or_child_effects",async
 })
 test("qualifier_direct_entry_guards_are_measured_without_native_or_store_authority",async(t)=>{
   const f=await fixture(t),qualifier=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
-  const entry=new URL("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js",import.meta.url).pathname
+  // A file URL pathname is "/D:/..." on Windows; argv carries the platform path.
+  const entry=fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js",import.meta.url))
   assert.equal(await qualifier.qualifierEntry({argv:[process.execPath,"not-the-entry"]}),null)
   for(const args of [[],["--out",f.dir],["--out",f.dir,"--out",f.dir],
     ["--other",f.dir,"--cli",f.cli],["--out",f.dir,"--other",f.cli],
@@ -933,7 +936,7 @@ test("qualifier_direct_entry_guards_are_measured_without_native_or_store_authori
     assert.equal(fsNative.existsSync(path.join(f.dir,"never-created")),false)
   }
 })
-test("qualified_format_full_per_run_identity",async(t)=>{
+ownedHostTest("qualified_format_full_per_run_identity","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -973,7 +976,7 @@ test("qualified_format_full_per_run_identity",async(t)=>{
   assert.equal(identities[0].template_sha256,identities[1].template_sha256)
   assert.notEqual(identities[0].full_sha256,identities[1].full_sha256)
 })
-test("synthetic_record_structure_validation_never_issues_authority",async(t)=>{
+ownedHostTest("synthetic_record_structure_validation_never_issues_authority","posix",async(t)=>{
   const f=await fixture(t),custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -1234,7 +1237,7 @@ console.log(JSON.stringify({run:run.state,load:load.state,launches}));`
     assert.throws(()=>runner.validateOwnedQualificationStructure({record:changed,out,sourceIdentity,env}))
   }
 })
-test("isolated_document_reader_is_closed_and_never_issues_authority",async(t)=>{
+ownedHostTest("isolated_document_reader_is_closed_and_never_issues_authority","posix",async(t)=>{
   const dir=realpathSync(mkdtempSync(path.join(tmpdir(),"unaccepted-document-")));fsNative.chmodSync(dir,0o700)
   t.after(()=>rmSync(dir,{recursive:true,force:true}))
   const file=path.join(dir,"qualification.json"),value={state:"synthetic_nonaccepted",version:0}
@@ -1307,7 +1310,7 @@ test("launcher_or_engine_change_invalidates_qualification",async(t)=>{
   writeFileSync(f.cli,"engine revision two");assert.notEqual(runner.inspectLaunchChain(f).fingerprint,before.fingerprint)
   assert.equal(runner.inspectLaunchChain({...f,resolveExec:()=>null}).state,"scope_unqualified")
 })
-test("default_local_policy_matrix_reads_synthetic_documents_without_command_execution",async(t)=>{
+realCliTest("default_local_policy_matrix_reads_synthetic_documents_without_command_execution","posix",async(t)=>{
   const f=await fixture(t),realRead=fsNative.readFileSync,realList=fsNative.readdirSync
   const cli=path.join(process.env.DESK_TEST_REAL_HOME,".local","share","claude","versions","2.1.296")
   const platform=Object.getOwnPropertyDescriptor(process,"platform")
@@ -1479,7 +1482,7 @@ test("R6_1_default_reader_rejects_user_helpers_before_any_diagnostic",async(t)=>
   assert.equal((await runner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()}})).reason,"active_hook_or_helper")
   assert.equal(calls,0)
 })
-test("R6_1_native_platform_adapter_rejects_each_unverified_platform_dimension",async(t)=>{
+ownedHostTest("R6_1_native_platform_adapter_rejects_each_unverified_platform_dimension","posix",async(t)=>{
   const f=await fixture(t),realRead=fsNative.readFileSync,realPath=fsNative.realpathSync,realList=fsNative.readdirSync,realStat=fsNative.lstatSync,realOpen=fsNative.openSync
   const platform=Object.getOwnPropertyDescriptor(process,"platform"),arch=Object.getOwnPropertyDescriptor(process,"arch");let mode="valid"
   const binary=Buffer.alloc(192);binary.writeUInt32LE(0xfeedfacf);binary.writeUInt32LE(1,16);binary.writeUInt32LE(0xc,32);binary.writeUInt32LE(160,36);binary.writeUInt32LE(24,40);binary.write("/usr/lib/probe.dylib",56)

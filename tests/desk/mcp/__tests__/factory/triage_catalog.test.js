@@ -1,4 +1,5 @@
 import "../_isolated_env.mjs"
+import {ownedHostTest} from "./_owned_catalog_host.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
@@ -183,7 +184,7 @@ test("literal_search_truthful_truncation_and_multibyte_snippets",()=>{
   assert.ok(response.matches.every(x=>Buffer.byteLength(x.snippet)<=256&&!/[\ud800-\udfff]/u.test(x.snippet)))
   assert.equal(catalog.dispatchCatalogTool({name:"evidence_list",args:{},requestId:2,state:s}).result.next_cursor,20)
 })
-test("prepared_input_schema_roundtrips_into_sealed_catalog", async (t) => {
+ownedHostTest("prepared_input_schema_roundtrips_into_sealed_catalog","posix", async (t) => {
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"owned-catalog-")))
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));fs.chmodSync(dir,0o700)
   const wrote=await catalog.writeTriagePreparedFile({inputDir:dir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
@@ -196,7 +197,7 @@ test("prepared_input_schema_roundtrips_into_sealed_catalog", async (t) => {
   fs.chmodSync(wrote.path,0o600);fs.renameSync(wrote.path,wrote.path+".real");fs.symlinkSync(wrote.path+".real",wrote.path)
   await assert.rejects(catalog.readTriagePreparedFile({inputDir:dir}))
 })
-test("safe_prepared_files_refuse_shape_bytes_identity_and_drift",async(t)=>{
+ownedHostTest("safe_prepared_files_refuse_shape_bytes_identity_and_drift","posix",async(t)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"prepared-drift-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const write=()=>catalog.writeTriagePreparedFile({inputDir:dir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})

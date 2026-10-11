@@ -146,6 +146,20 @@ creation. The current implementation does not claim owned-catalog support for
 Node20 or silently substitute a weaker module inventory.
 See [preparation capability checks](../mcp/src/factory/triage-custody.js).
 
+Owned-catalog launch is supported only on Darwin, the one host with process
+provenance. `ownedCatalogHostSupport()` is the single host split: on any other
+host the direct lane, wire cases and native runs refuse with
+`provenance_unsupported` before spawning a launcher, server or native engine,
+so no model turn starts and no receipt exists. Linux keeps POSIX private-file
+custody (uid, owner-only modes, FIFOs); Windows has no POSIX owner and mode
+bits, so that custody refuses there too. Tests follow the same split through
+one shared helper and assert this refusal on an unsupported host instead of
+skipping. Unit tests that read the installed Claude Code 2.1.296 engine run
+only with `DESK_TRIAGE_REAL_CLI=1`; CI never depends on a host engine, and the
+real-engine checks belong to the qualifier run. See
+[host support](../mcp/src/factory/triage-custody.js) and
+[the test helper](../../../tests/desk/mcp/__tests__/factory/_owned_catalog_host.mjs).
+
 Launcher/server imports are inert, with ordinary direct-entry guards and the
 same source functions used by isolated unit coverage. Instrumentation is not
 admitted to production/direct/native clean environments. Fixed unit children
