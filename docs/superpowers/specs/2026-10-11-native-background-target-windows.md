@@ -2,7 +2,7 @@
 
 Date: 2026-10-11
 
-Status: proposed amendment; implementation requires design and plan approval.
+Status: design approved; implementation requires implementation-plan approval.
 
 ## Outcome and constraints
 
