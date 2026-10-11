@@ -89,7 +89,8 @@ const assertNoneOf = (text, secrets) => {
 };
 
 function withAppleKeyInVault(cloud, slot = "a") {
-  cloud.vault.secrets[`apple-siwa-key-${slot}-test`] = { value: APPLE_KEY, tags: {} };
+  // As --apple-key-file leaves it: tagged with its Key ID and fingerprint (Task 7 review C1).
+  cloud.vault.secrets[`apple-siwa-key-${slot}-test`] = { value: APPLE_KEY, tags: { "key-id": slot === "a" ? "KEYIDAAAAA" : "KEYIDBBBBB", fingerprint: fingerprint(APPLE_KEY) } };
   return cloud;
 }
 
@@ -159,8 +160,8 @@ test("plan() lists only the missing pieces for a given state", () => {
 
 // --- Apple key import -------------------------------------------------------------------------------------------
 
-function appleFile(dir) {
-  const file = join(dir, "AuthKey_KEYIDAAAAA.p8");
+function appleFile(dir, keyId = "KEYIDAAAAA") {
+  const file = join(dir, `AuthKey_${keyId}.p8`);
   writeFileSync(file, APPLE_KEY, { mode: 0o600 });
   return file;
 }
@@ -215,7 +216,7 @@ test("the file is kept when the write fails or with --keep-file", async (t) => {
   assert.ok(existsSync(secondFile));
 
   const third = setup(t);
-  const kept = appleFile(third.dir);
+  const kept = appleFile(third.dir, "KEYIDBBBBB");
   await third.go({ appleKeyFile: kept, appleKeySlot: "b", keepFile: true });
   assert.ok(existsSync(kept));
   assert.equal(third.cloud.vault.secrets["apple-siwa-key-b-test"].value, APPLE_KEY);
@@ -551,7 +552,7 @@ test("every subcommand's errors and logs hold no secret fixture", async (t) => {
 test("the command line takes the plan's flags", () => {
   assert.deepEqual(parseFlags(["--env", "test", "--dry-run", "--apple-key-file", "/k.p8", "--apple-key-slot", "a", "--keep-file"]), {
     env: "test",
-    flags: { dryRun: true, appleKeyFile: "/k.p8", appleKeySlot: "a", keepFile: true, seedAri: false, inviteAri: false, copyAppSecrets: false, clearAppSecrets: false, migrate: undefined, rotate: undefined, browserContext: undefined },
+    flags: { dryRun: true, appleKeyFile: "/k.p8", appleKeySlot: "a", keepFile: true, seedAri: false, inviteAri: false, copyAppSecrets: false, clearAppSecrets: false, migrate: undefined, rotate: undefined, browserContext: undefined, appleKeyId: undefined },
   });
   assert.equal(parseFlags(["--env", "prod", "--migrate", "client-key"]).flags.migrate, "client-key");
   assert.throws(() => parseFlags(["--env", "test", "--migrate", "signing-key"]), /--migrate client-key/);
@@ -673,7 +674,7 @@ test("M1: the Apple provider is created with slot b when slot a is tagged revoke
   const cloud = emptyCloud();
   const keyB = APPLE_KEY.replace("APPLEKEY", "BPPLEKEY");
   cloud.vault.secrets["apple-siwa-key-a-test"] = { value: APPLE_KEY, tags: { revoked: "2026-10-30" } };
-  cloud.vault.secrets["apple-siwa-key-b-test"] = { value: keyB, tags: {} };
+  cloud.vault.secrets["apple-siwa-key-b-test"] = { value: keyB, tags: { "key-id": "KEYIDBBBBB", fingerprint: fingerprint(keyB) } };
   const context = setup(t, { cloud });
   await context.go();
   const provider = cloud.graph.providers[0];
@@ -873,4 +874,51 @@ test("Task 7: creating the Apple provider records the live slot and apple-renewe
   const post = context.fake.calls.findIndex(({ args }) => args.join(" ").startsWith("rest --method post --url https://graph.microsoft.com/v1.0/identity/identityProviders"));
   const set = context.fake.calls.findIndex(({ args }) => args.includes("apple-siwa-active-test") && args.includes("set"));
   assert.ok(post !== -1 && set > post);
+});
+
+// --- Task 7 fix round 1 -------------------------------------------------------------------------------------------
+
+test("C1: an Apple key import tags the secret with the Key ID from the file name and the key's fingerprint, and records the Key ID", async (t) => {
+  const context = setup(t, { record: { apple: { outcome: "A", developerId: "TEAMID1234", serviceId: "bot.ouro.identity.test", appId: "bot.ouro.identity.testapp", keyIds: { a: null, b: "KEYIDBBBBB" } } } });
+  await context.go({ appleKeyFile: appleFile(context.dir, "KEYIDNEWAA"), appleKeySlot: "a" });
+  const tags = context.cloud.vault.secrets["apple-siwa-key-a-test"].tags;
+  assert.equal(tags["key-id"], "KEYIDNEWAA");
+  assert.equal(tags.fingerprint, fingerprint(APPLE_KEY));
+  assert.ok(tags["imported-at"]);
+  assert.equal(context.readRecord().apple.keyIds.a, "KEYIDNEWAA");
+  assert.match(context.logs.join("\n"), /apple\.keyIds\.a .*KEYIDNEWAA.*commit/);
+});
+
+test("C1: an import whose Key ID can't be read, disagrees with --apple-key-id, or is already the other slot's is refused before any write", async (t) => {
+  const unnamed = setup(t);
+  const file = join(unnamed.dir, "key.p8");
+  writeFileSync(file, APPLE_KEY, { mode: 0o600 });
+  await assert.rejects(unnamed.go({ appleKeyFile: file, appleKeySlot: "a" }), /--apple-key-id/);
+  const named = setup(t);
+  await named.go({ appleKeyFile: file, appleKeySlot: "a", appleKeyId: "KEYIDGIVEN" });
+  assert.equal(named.cloud.vault.secrets["apple-siwa-key-a-test"].tags["key-id"], "KEYIDGIVEN");
+  const disagree = setup(t);
+  await assert.rejects(disagree.go({ appleKeyFile: appleFile(disagree.dir, "KEYIDAAAAA"), appleKeySlot: "a", appleKeyId: "KEYIDOTHER" }), /KEYIDAAAAA.*KEYIDOTHER|KEYIDOTHER.*KEYIDAAAAA/);
+  const twice = setup(t);
+  await assert.rejects(twice.go({ appleKeyFile: appleFile(twice.dir, "KEYIDBBBBB"), appleKeySlot: "a" }), /slot b/);
+  for (const context of [disagree, twice]) assert.ok(!context.fake.calls.some(({ args }) => args[0] === "keyvault" && args[2] === "set"));
+});
+
+test("C1: the Apple provider is not created from a slot whose Key ID tag or fingerprint doesn't match", async (t) => {
+  for (const change of ["key-id", "fingerprint"]) {
+    const cloud = withAppleKeyInVault(emptyCloud());
+    if (change === "key-id") cloud.vault.secrets["apple-siwa-key-a-test"].tags["key-id"] = "KEYIDOTHER";
+    else cloud.vault.secrets["apple-siwa-key-a-test"].value = APPLE_KEY.replace("APPLEKEY", "SWAPPEDK");
+    const context = setup(t, { cloud });
+    await assert.rejects(context.go(), /doesn't match|does not match/);
+    assert.deepEqual(cloud.graph.providers, []);
+  }
+});
+
+test("I3: the gateway's client secret in Key Vault is tagged with the keyId of the credential it holds", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go();
+  const app = context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-desk-hosted");
+  assert.equal(app.passwordCredentials.length, 1);
+  assert.equal(context.cloud.vault.secrets["entra-client-secret-test"].tags["key-id"], app.passwordCredentials[0].keyId);
 });

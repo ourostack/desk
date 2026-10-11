@@ -6,7 +6,7 @@ name: Identity checks
 # Each env's job runs in the GitHub environment `identity` (deployments from main only, no required reviewers, which
 # would block a scheduled run) and signs in twice with OIDC:
 #   1. as the managed identity id-ouro-identity-checks, for Key Vault (key slots and the renewal tag) and the
-#      production Container App (the cutoff). Its federated credential trusts only
+#      production Container App (the cutoff, read through plain ARM, so no az extension is installed). Its federated credential trusts only
 #      repo:ourostack@265728804/desk@1386529300:environment:identity.
 #   2. as the ouro-identity-automation app in that env's Ouro tenant, for Graph (the gateway app's client-secret
 #      expiry and the Apple provider). It trusts the same subject. This sign-in becomes az's current account, and the
@@ -103,9 +103,6 @@ jobs:
           client-id: ${{ vars[matrix.automation] }}
           tenant-id: ${{ vars[matrix.tenant] }}
           allow-no-subscriptions: true
-
-      - name: Install the Container Apps extension
-        run: az extension add --name containerapp --upgrade --only-show-errors
 
       - name: Run the identity checks
         env:
