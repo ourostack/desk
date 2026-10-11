@@ -219,6 +219,33 @@ test("opposing bounds give a null direction with its reason, never a rounded fig
   assert.equal(partlyLabeled.production_ms.state, "measured")
 })
 
+test("every direction rule and fallback boundary is pinned: conflicts, undecided reasons, unsorted work, unplaced sessions and an open end past the last observation", () => {
+  // Overlapping, unsorted working spans count once.
+  const unsorted = derive([{ to: "done", offset_ms: 20 }], [], [[5, 10], [0, 6], [0, 4], [12, 15]])
+  assert.deepEqual([value(unsorted.production_ms), value(unsorted.active_in_production_ms)], [20, 13])
+  // An unplaced session (earlier work may be hidden: at least) against a delivery read from the card's last update (at most).
+  const placementPartial = { ...allWhole(), placement: { state: "partial", reasons: ["job_offsets_unavailable"], bound: "lower" } }
+  const conflict = derive([], [{ status: "done", offset_ms: 50 }], [[10, 20]], placementPartial)
+  assert.deepEqual([conflict.production_ms.reasons, conflict.production_ms.bound, conflict.production_ms.bound_reason], [["finish_from_card_update", "job_offsets_unavailable"], null, "bound_reasons_conflict"])
+  assert.deepEqual([conflict.active_in_production_ms.reasons, conflict.active_in_production_ms.bound], [["job_offsets_unavailable"], "lower"])
+  // Placement alone makes production and active time lower bounds.
+  const unplaced = derive([{ to: "done", offset_ms: 20 }], [], [[0, 10]], placementPartial)
+  assert.deepEqual([unplaced.production_ms.bound, unplaced.active_in_production_ms.bound], ["lower", "lower"])
+  // A reason with no decided direction fails closed on every figure it reaches.
+  const odd = derive([{ to: "done", offset_ms: 20 }], [], [[0, 10]], { ...allWhole(), activity: { state: "partial", reasons: ["reason_without_direction"], bound: null } })
+  for (const key of ["active_in_production_ms", "production_remainder_ms"]) assert.deepEqual([odd[key].bound, odd[key].bound_reason], [null, "bound_direction_undecided"], key)
+  // Labels from a shared session do not move working time: partial, exact as stated.
+  const shared = derive([{ to: "done", offset_ms: 20 }], [], [[0, 10]], { ...allWhole(), classification: { state: "partial", reasons: ["labels_from_shared_session"], bound: null } })
+  assert.deepEqual([shared.active_in_production_ms.bound, shared.active_in_production_ms.bound_reason], [null, "bound_not_moved"])
+  // Open, with work recorded past the latest observation: the episode runs to the end of that work, so far.
+  const pastObservation = derive([], [{ status: "processing", offset_ms: null }], [[0, 10]])
+  assert.deepEqual(pastObservation.production_periods.items, [{ start_ms: 0, end_ms: 10, start_basis: "recorded_activity", end_basis: "recorded_work_end", so_far: true }])
+  assert.deepEqual([pastObservation.production_ms.class, pastObservation.production_ms.reasons, pastObservation.production_ms.so_far], ["inferred", ["censored"], true])
+  // Cancelled with no timed lifecycle, and lost intervals with no recorded work at all: unavailable, with their own reasons.
+  assert.deepEqual(derive([], [{ status: "cancelled", offset_ms: null }], [[0, 10]]).production_ms.reasons, ["cancelled"])
+  assert.deepEqual(derive([{ to: "done", offset_ms: 20 }], [], [], { ...allWhole(), activity: { state: "partial", reasons: ["log_truncated"], bound: "lower" } }).production_ms.reasons, ["log_truncated"])
+})
+
 // --- the coverage adapter keeps capture, placement, labels and history apart -------------------------------------------------------
 
 test("coverage_adapter_does_not_substitute_labels_for_capture", () => {

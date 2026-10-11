@@ -827,6 +827,9 @@ test("a job page states each lifecycle clock with its state, basis and direction
   const late = lines(clocksOf("late_work"))
   assert.equal(late[2], "- Production time: not recorded (work was recorded after delivery without a recorded reopen).")
   assert.equal(late[5], "- Production periods: not recorded (work was recorded after delivery without a recorded reopen).")
+  // A partial figure its reasons do not move says so in words.
+  const notMoved = { ...clocksOf("reopened"), active_in_production_ms: { class: "measured", state: "partial", value: 2000, reasons: ["labels_from_shared_session"], basis: ["recorded_activity", "lifecycle_history"], bound: null, bound_reason: "bound_not_moved", so_far: false } }
+  assert.equal(lines(notMoved)[3], `- Recorded working time in production: 2000 ms (partial: ${REASON_TEXT.labels_from_shared_session}; basis: recorded activity, lifecycle history; ${REASON_TEXT.bound_not_moved}).`)
   // The legacy page is the same page without these six lines.
   const withClocks = renderJobMarkdown({ timeline, formulas, clocks: clocksOf("reopened") })
   assert.equal(withClocks.split("\n").filter((line) => !lines(clocksOf("reopened")).includes(line)).join("\n"), legacy)

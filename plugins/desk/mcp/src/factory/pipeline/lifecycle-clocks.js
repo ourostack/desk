@@ -128,10 +128,10 @@ export function lifecycleCoverage({ activity, placement, labels, history }) {
   const placed = placement.filter((session) => session.offset_ms !== null).length
   const historyReasons = []
   if (history.transitions.some((transition) => transition.offset_ms === null)) historyReasons.push("episode_boundary_not_recorded")
-  const sources = history.source_sessions ?? []
+  const sources = history.source_sessions
   const lost = history.sessions.some((session) => session.offset_ms === null)
-    || sources.some((source) => (source.unavailable ?? []).some((entry) => entry.field === "job_offsets"))
-    || sources.some((source) => (source.jobs ?? []).some((binding) => binding.job === history.job && binding.transitions.length >= LIMITS.jobTransitions))
+    || sources.some((source) => source.unavailable.some((entry) => entry.field === "job_offsets"))
+    || sources.some((source) => source.jobs.some((binding) => binding.job === history.job && binding.transitions.length >= LIMITS.jobTransitions))
   if (lost) historyReasons.push("episode_history_incomplete")
   return {
     activity: dimension(activity.state, activity.reasons),

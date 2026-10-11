@@ -477,7 +477,8 @@ function clockText(clock) {
 // The production periods in words, each on the job clock with what dates its ends.
 function periodsText(periods) {
   if (periods.state === "unavailable") return stateText(periods)
-  const items = periods.items.length === 0 ? "none" : periods.items.map((item) => `${item.start_ms} to ${item.end_ms} ms${item.so_far ? " so far" : ""} (${basisText(item.start_basis)} to ${basisText(item.end_basis)})`).join(", ")
+  // A period list that is not unavailable always holds at least one episode (`deriveLifecycleClocks`).
+  const items = periods.items.map((item) => `${item.start_ms} to ${item.end_ms} ms${item.so_far ? " so far" : ""} (${basisText(item.start_basis)} to ${basisText(item.end_basis)})`).join(", ")
   return `${items} (${stateText(periods, false)})`
 }
 
