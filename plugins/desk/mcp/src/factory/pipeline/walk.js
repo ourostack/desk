@@ -470,11 +470,12 @@ const isWaiting = isWaste("waiting")
 const isAgentsWorking = (stretch) => stretch.class === UNLABELED_CLASS
 
 /**
- * The job's working time on the job clock: each session's active intervals less that session's labeled waiting (the time its evaluator
- * found the work stopped, after the honest correction) and its ask-tool waits (`askIdle`: the agent was waiting on the operator's answer),
- * merged across sessions, so one session's wait never hides another's work.
+ * `workingSpans(timeline, stretches) -> [start, end][]`: the job's working time on the job clock: each session's active intervals less
+ * that session's labeled waiting (the time its evaluator found the work stopped, after the honest correction) and its ask-tool waits
+ * (`askIdle`: the agent was waiting on the operator's answer), merged across sessions, so one session's wait never hides another's work.
+ * The walk clips it to the lead window; the lifecycle clocks (`lifecycle-clocks.js`) read the same union inside production episodes.
  */
-function workingSpans(timeline, stretches) {
+export function workingSpans(timeline, stretches) {
   const bySession = new Map()
   for (const interval of timeline.intervals) {
     if (!ACTIVE_KINDS.has(interval.kind)) continue

@@ -803,3 +803,38 @@ test("the rollups page says a partial permission figure in words, from the atten
   const line = (reasons) => attentionPage(attentionOf({ state: "measured", value: 1 }, { permission: { state: "partial", decisions: 2, est_ms: 8000, reasons } })).split("\n").find((entry) => entry.startsWith("- Permission"))
   assert.match(line(["capped", "decision_not_estimable"]), /estimated at 8 seconds \(partial: it was cut to a size limit and some permission decisions could not be estimated, so this is a lower bound\)\.$/u)
 })
+
+test("a job page states each lifecycle clock with its state, basis and direction, and says the request was not recorded", () => {
+  const fixture = JSON.parse(readFileSync(path.join(here, "..", "fixtures", "v12-clocks.json"), "utf8"))
+  const timeline = buildJobTimeline(CLOSED, sessions)
+  const formulas = calculateFormulas(timeline)
+  const legacy = renderJobMarkdown({ timeline, formulas })
+  assert.doesNotMatch(legacy, /Production time|Queued before production/u)
+  const clocksOf = (id) => fixture.cases.find((c) => c.id === id).expected
+  const lines = (clocks) => renderJobMarkdown({ timeline, formulas, clocks }).split("\n").filter((line) => /^- (Recorded request|Queued before|Production|Recorded working time in)/u.test(line))
+  assert.deepEqual(lines(clocksOf("reopened")), [
+    "- Recorded request to delivery: not recorded (the original request was not recorded).",
+    "- Queued before production: not recorded (the original request was not recorded).",
+    "- Production time: 4000 ms (measured; basis: recorded activity, done transition, lifecycle history).",
+    "- Recorded working time in production: 2000 ms (measured; basis: recorded activity, lifecycle history).",
+    "- Production not recorded as active (not by itself idle time or waste): 2000 ms (measured, inferred evidence; basis: recorded activity, done transition, lifecycle history).",
+    "- Production periods: 0 to 2000 ms (recorded activity to done transition), 6000 to 8000 ms (recorded activity to done transition) (measured).",
+  ])
+  const opposing = lines(clocksOf("opposing_bounds"))
+  assert.equal(opposing[2], "- Production time: at least 6000 ms so far (partial: the job was still open when this was measured; basis: recorded activity, latest observation, lifecycle history).")
+  assert.match(opposing[4], /^- Production not recorded as active \(not by itself idle time or waste\): 4000 ms so far \(partial: .+; direction not known, because its reasons pull it both ways/u)
+  assert.equal(opposing[5], "- Production periods: 0 to 6000 ms so far (recorded activity to latest observation) (partial: the job was still open when this was measured).")
+  const late = lines(clocksOf("late_work"))
+  assert.equal(late[2], "- Production time: not recorded (work was recorded after delivery without a recorded reopen).")
+  assert.equal(late[5], "- Production periods: not recorded (work was recorded after delivery without a recorded reopen).")
+  // The legacy page is the same page without these six lines.
+  const withClocks = renderJobMarkdown({ timeline, formulas, clocks: clocksOf("reopened") })
+  assert.equal(withClocks.split("\n").filter((line) => !lines(clocksOf("reopened")).includes(line)).join("\n"), legacy)
+})
+
+test("the lifecycle clock reasons have plain words", () => {
+  for (const reason of ["original_request_not_recorded", "work_before_card", "late_work_without_reopen", "episode_boundary_not_recorded", "episode_history_incomplete"]) {
+    assert.equal(typeof REASON_TEXT[reason], "string", reason)
+    assert.ok(REPORT_ONLY_REASONS.includes(reason), reason)
+  }
+})

@@ -13,6 +13,7 @@ import { computeRollups, jobRecord, renderRollupsMarkdown, resolveLabels } from 
 import { sessionDetail, timelineAdditions } from "./stretches.js"
 import { buildTimelines } from "./timeline.js"
 import { causesRollup, jobWalk, stackupRollup, tasksRollup } from "./walk.js"
+import { jobLifecycleClocks } from "./lifecycle-clocks.js"
 import { isFactsPath, labelsPathParts, validatePr } from "./validate-pr.js"
 
 function compareText(left, right) {
@@ -181,11 +182,16 @@ function readStore(store) {
   return { sessions, labels, reports, records }
 }
 
-// What the Lean walk derives for each job, in the order of `reports`.
+// What the Lean walk derives for each job, in the order of `reports`, with the job's lifecycle clocks (`lifecycle-clocks.js`): one
+// envelope, published on the job file and on its task and stack-up rows, beside (never instead of) the legacy lead time.
 function walkStore({ labels, reports, records }) {
   return reports.map((report, index) => {
     const additions = timelineAdditions(report.timeline)
-    return { additions, walk: jobWalk({ ...report, additions }, labels, records[index].finished) }
+    const walk = jobWalk({ ...report, additions }, labels, records[index].finished)
+    const clocks = jobLifecycleClocks({ ...report, walk })
+    walk.task.clocks = clocks
+    walk.stackup.clocks = clocks
+    return { additions, walk, clocks }
   })
 }
 
@@ -247,9 +253,9 @@ export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET
     writeFileSync(path.join(temporary, "index.md"), renderIndexMarkdown(reports, buildCoverage(sessions)))
     reports.forEach(({ timeline, formulas }, reportIndex) => {
       const detailFiles = writeSessionDetails(path.join(temporary, "jobs"), timeline, labels, detailBudgetBytes)
-      const { additions, walk } = walks[reportIndex]
-      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline, additions, walk, detailFiles), formulas })}\n`)
-      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession }))
+      const { additions, walk, clocks } = walks[reportIndex]
+      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline, additions, walk, detailFiles), formulas, clocks })}\n`)
+      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession, clocks }))
     })
     writeRollups(path.join(temporary, "rollups"), rollups)
     replaceDirectory(temporary, out, rename)

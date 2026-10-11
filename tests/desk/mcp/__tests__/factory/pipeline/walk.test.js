@@ -10,7 +10,7 @@ import { normalizePublished, stableStringify } from "../../../../../../plugins/d
 import { computeRollups, jobRecord, resolveLabels } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
 import { AGENTS_WORKING, LONG_TOOL_CALL_MS, UNLABELED_CLASS, WAITED_ON, causeKey, compareFields, correctStretches, evidenceIntervals, sessionDetail, timelineAdditions, waitedOn } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/stretches.js"
 import { buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
-import { BOUND_DIRECTIONS, BURST_IDLE_GAP_MS, IDLE_WAITED_ON, REASON_CHANGE, bounded, causesRollup, figure, jobWalk, sessionAttribution, stackupRollup, tasksRollup } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
+import { BOUND_DIRECTIONS, BURST_IDLE_GAP_MS, IDLE_WAITED_ON, REASON_CHANGE, bounded, causesRollup, figure, jobWalk, sessionAttribution, stackupRollup, tasksRollup, workingSpans } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/walk.js"
 import { DETAIL_FILE_BUDGET_BYTES } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 
 const J = (digit) => digit.repeat(32)
@@ -1092,4 +1092,33 @@ test("other_task with lost intervals is an upper bound when the span has no unkn
   // The gap is the same span, so it says the same; a burst holds none of it.
   assert.equal(walk.gaps[0].idle_by_waited_on_ms.other_task.bound, "upper")
   assert.equal(walk.bursts[0].idle_by_waited_on_ms.other_task.bound, "upper")
+})
+
+// The lifecycle clocks read the same corrected working union the walk splits its lead window with, not a second classification of time.
+test("workingSpans is the one corrected working union the walk splits its window with: ask waits out, another worker's work in", () => {
+  const agents = [{ n: 0, parent: null, model: "model-alpha" }, { n: 1, parent: 0, model: "model-alpha" }]
+  const ask = { kind: "human_wait", agent: 0, start_ms: 10 * MIN, end_ms: 20 * MIN, stop: { end: "ask_question", asks: true, pending_agents: false } }
+  const session = normalizePublished({
+    schema: "desk.factory.published/4",
+    session: { host: "claude-code", id: S(901), host_version: "2.1.0", entrypoint: "cli", duration_ms: 40 * MIN, ended: true, end_reason: "complete" },
+    plugins: [{ name: "desk", version: "3.2.0-alpha.230" }],
+    models: [{ id: "model-alpha", requests: 1, tokens: { input: 1, output: 1, cache_read: 0, cache_write: 0, reasoning: null } }],
+    agents,
+    intervals: [
+      { kind: "turn", agent: 0, start_ms: 0, end_ms: 30 * MIN },
+      { kind: "tool", agent: 0, tool: "other", outcome: "ok", start_ms: 10 * MIN, end_ms: 20 * MIN },
+      ask,
+      { kind: "turn", agent: 1, start_ms: 12 * MIN, end_ms: 18 * MIN },
+    ],
+    counts: { tool_calls: {}, tool_failures: {}, tool_retries: 0, api_retries: 0, compactions: 0 },
+    refs: { prs: [], commits: [], private: { prs: 0, commits: 0 } },
+    jobs: [{ job: J("w"), basis: ["desk_tool"], session_offset_ms: 0, agents: [0, 1], transitions: [{ to: "processing", offset_ms: 0 }, { to: "done", offset_ms: 30 * MIN }], observed: { status: "done", offset_ms: 30 * MIN }, finished_on: "2026-10-07", finished_basis: "transition" }],
+    human_turns: [],
+    unavailable: [],
+  })
+  const { timeline, walk } = walkOf([session], [], J("w"))
+  const union = workingSpans(timeline, walk.stretches)
+  assert.deepEqual(union, [[0, 10 * MIN], [12 * MIN, 18 * MIN], [20 * MIN, 30 * MIN]])
+  assert.deepEqual(walk.working, union)
+  assert.equal(walk.task.working_ms.value, 26 * MIN)
 })
