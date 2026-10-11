@@ -15,13 +15,17 @@
 //     (`censored`); never to the reader's current time. A delivery seen only as the card's timed `done` observation (the card's last update,
 //     on or after the delivery) is an upper bound (`finish_from_card_update`); a `done` with no time at all runs to the end of the recorded
 //     work and is a lower bound (`finish_time_not_known`).
-//   - Work that starts after a delivery with no later recorded reopen before it leaves the production clocks unavailable
-//     (`late_work_without_reopen`): which episode it belongs to is not known. Work already under way when the `done` was recorded (the
-//     delivering turn's tail) is clipped at the delivery. A transition with no time (`episode_boundary_not_recorded`), a reopen seen only in
+//   - Work after a delivery with no later recorded reopen before it leaves the production clocks unavailable
+//     (`late_work_without_reopen`): which episode it belongs to is not known. It is read from the corrected working union and from the
+//     raw active intervals' starts. Only the delivering turn's tail, work already under way at the `done` that ends within the walk's
+//     15-minute short-gap threshold of it, is clipped at the delivery; a longer stretch, or any work starting after that tail, is late.
+//   - A delivered episode with no recorded work leaves production a lower bound (`no_active_intervals`): its time is not known. A job
+//     whose final `done` has no time is done, its last episode running to the end of its recorded work (`finish_time_not_known`). A transition with no time (`episode_boundary_not_recorded`), a reopen seen only in
 //     a later open observation (the same), lost or capped lifecycle history (`episode_history_incomplete`), a cancelled job, an unread
 //     status, unplaced sessions, unread activity or no recorded work at all each leave them unavailable with that reason: never a zero.
 //   - `active_in_production_ms` is the corrected working union (every worker of the task once, ask-tool and labeled waits out except where
-//     another worker works) inside the episodes. `production_remainder_ms` is production less that: not by itself idle time or waste.
+//     another worker works) inside the episodes; an episode ending at the card's last update makes it at most this too
+//     (`finish_from_card_update`). `production_remainder_ms` is production less that: not by itself idle time or waste.
 //     Where production is known, active plus remainder is production.
 //   - Coverage is joined per measure from four separate inputs (`lifecycleCoverage`): interval capture (`activity`), the labels' coverage
 //     (`classification`), session placement (`placement`) and lifecycle history (`history`). Labels never stand in for captured intervals.
@@ -31,7 +35,8 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
 import { LIMITS } from "../schema.js"
-import { BOUND_DIRECTIONS, REASON_CHANGE, workingSpans } from "./walk.js"
+import { ACTIVE_KINDS } from "./timeline.js"
+import { BOUND_DIRECTIONS, BURST_IDLE_GAP_MS, REASON_CHANGE, workingSpans } from "./walk.js"
 
 /** The duration clocks of `deriveLifecycleClocks`, in the store's order (ourostack/factory `site/src/format.js` `CLOCK_KEYS`). */
 export const CLOCK_KEYS = Object.freeze(["request_to_delivery_ms", "queue_ms", "production_ms", "active_in_production_ms", "production_remainder_ms"])
@@ -48,14 +53,23 @@ const compareText = (left, right) => Number(left > right) - Number(left < right)
 const sortedUnique = (values) => [...new Set(values)].sort(compareText)
 const orderedBasis = (values) => CLOCK_BASES.filter((basis) => values.includes(basis))
 
-// What each kind of change does to a production span: an open job and a delivery read from the end of the work make it longer, a
-// session that could not be placed may hide earlier work, and a delivery read from the card's last update makes it shorter.
-const PRODUCTION_PULLS = Object.freeze({ open: "lower", floor: "lower", unplaced: "lower", card_update: "upper" })
+// The kind of change each reason stands for: the walk's (`REASON_CHANGE`), and an episode with no recorded work, whose production time
+// is not known.
+const LIFECYCLE_CHANGE = Object.freeze({ ...REASON_CHANGE, no_active_intervals: "empty_episode" })
+// What each kind of change does to a production span: an open job, a delivery read from the end of the work and an episode with no
+// recorded work make it longer, a session that could not be placed may hide earlier work, and a delivery read from the card's last update
+// makes it shorter.
+const PRODUCTION_PULLS = Object.freeze({ open: "lower", floor: "lower", unplaced: "lower", card_update: "upper", empty_episode: "lower" })
+// The active time inside the episodes moves as recorded working time does, and is clipped to the same card-update end, so that end makes
+// it at most this too.
+const ACTIVE_PULLS = Object.freeze({ ...BOUND_DIRECTIONS.working, card_update: "upper" })
+// How long the turn that recorded a delivery may run on past it and still be clipped there: the walk's short-gap threshold.
+const DELIVERY_TAIL_MS = BURST_IDLE_GAP_MS
 const FLIP = Object.freeze({ lower: "upper", upper: "lower", both: "both", none: "none", [UNDECIDED]: UNDECIDED })
 const BOUND_REASON = Object.freeze({ both: "bound_reasons_conflict", none: "bound_not_moved", [UNDECIDED]: "bound_direction_undecided" })
 
 function directionOf(pulls, reasons) {
-  const changes = reasons.map((reason) => REASON_CHANGE[reason] ?? UNDECIDED)
+  const changes = reasons.map((reason) => LIFECYCLE_CHANGE[reason] ?? UNDECIDED)
   if (changes.includes(UNDECIDED)) return UNDECIDED
   const found = new Set(changes.map((change) => pulls[change]).filter((pull) => pull !== undefined))
   if (found.size === 0) return "none"
@@ -179,8 +193,8 @@ function lifecycle(timeline, working) {
       untimedDone = true
       open = false
     }
-  } else if (open && timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null) && closed.length === 0) {
-    // Seen done with no time, and nothing timed closed it: done, its delivery not dated.
+  } else if (open && timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null)) {
+    // Open by its timed lifecycle, but seen done with no time: done, its final delivery not dated.
     untimedDone = true
     open = false
   }
@@ -218,10 +232,16 @@ export function deriveLifecycleClocks({ timeline, working: inputWorking, coverag
   const windows = life.closed.map((entry) => ({ open: entry.open, close: entry.close, basis: entry.basis }))
   if (life.open) windows.push({ open: life.since, close: null, basis: null })
   else if (life.untimedDone) windows.push({ open: life.since, close: null, basis: "recorded_work_end" })
-  // Work that starts after a delivery and before the next opening (or with none after it) is late: its episode is not known.
+  // Work after a delivery and before the next opening (or with none after it) is late: its episode is not known. Only the delivering
+  // turn's tail, a stretch of work already under way at the delivery that ends within `DELIVERY_TAIL_MS` of it, is clipped there. Any
+  // other corrected work, or any raw active interval of the job, that starts after the delivery and that tail is late, so a long turn
+  // that runs on for hours past a delivery cannot hide its work.
+  const rawStarts = (timeline.intervals ?? []).filter((interval) => ACTIVE_KINDS.has(interval.kind)).map((interval) => interval.start_ms)
   const late = life.closed.some((entry, index) => {
     const next = windows[index + 1]?.open ?? Infinity
-    return working.some(([start]) => start >= entry.close && start < next)
+    const tailEnd = working.find(([start, end]) => start < entry.close && end > entry.close)?.[1] ?? entry.close
+    if (tailEnd - entry.close > DELIVERY_TAIL_MS) return true
+    return working.some(([start]) => start >= entry.close && start < next) || rawStarts.some((start) => start > tailEnd && start < next)
   })
   if (late) return unavailable(["late_work_without_reopen"])
   if (coverage.activity.state === "unavailable") return unavailable(coverage.activity.reasons)
@@ -233,11 +253,16 @@ export function deriveLifecycleClocks({ timeline, working: inputWorking, coverag
   )
   const items = []
   const endReasons = []
+  let emptyEpisode = false
   for (const window of windows) {
     // The window's recorded work: work under way at a reopen starts the episode at the reopen, and the delivering turn's tail after a
     // recorded delivery is not production.
     const inside = clip(working, window.open ?? -Infinity, window.close ?? Infinity)
-    if (inside.length === 0) continue
+    if (inside.length === 0) {
+      // A delivered episode with no recorded work: its production time is not known, so production is at least what remains.
+      if (window.basis !== null) emptyEpisode = true
+      continue
+    }
     const start = inside[0][0]
     let end = window.close
     let basis = window.basis
@@ -256,17 +281,20 @@ export function deriveLifecycleClocks({ timeline, working: inputWorking, coverag
   }
   if (items.length === 0) return unavailable(coverage.activity.state === "partial" ? coverage.activity.reasons : ["no_active_intervals"])
   if (life.open) endReasons.push(CENSORED)
+  if (emptyEpisode) endReasons.push("no_active_intervals")
 
   const placementReasons = coverage.placement.state === "partial" ? coverage.placement.reasons : []
   const productionReasons = [...endReasons, ...placementReasons]
   const activeReasons = [
+    // An episode ending at the card's last update clips the active time to that end too.
+    ...(items.some((item) => item.end_basis === "terminal_observation") ? ["finish_from_card_update"] : []),
     ...(coverage.activity.state === "partial" ? coverage.activity.reasons : []),
     ...placementReasons,
     // Labels refine working time only where some exist: none at all leaves every recorded moment counted as work, as the walk does.
     ...(coverage.classification.state === "partial" ? coverage.classification.reasons : []),
   ]
   const productionDirection = directionOf(PRODUCTION_PULLS, sortedUnique(productionReasons))
-  const activeDirection = directionOf(BOUND_DIRECTIONS.working, sortedUnique(activeReasons))
+  const activeDirection = directionOf(ACTIVE_PULLS, sortedUnique(activeReasons))
   const productionValue = items.reduce((sum, item) => sum + item.end_ms - item.start_ms, 0)
   const activeValue = items.reduce((sum, item) => sum + total(clip(working, item.start_ms, item.end_ms)), 0)
   const endBases = items.map((item) => item.end_basis)

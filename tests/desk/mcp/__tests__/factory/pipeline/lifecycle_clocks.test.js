@@ -119,6 +119,38 @@ test("the delivering turn's tail is not late work, and work under way at a reope
   assert.deepEqual([value(through.production_ms), value(through.active_in_production_ms), value(through.production_remainder_ms)], [50, 35, 15])
 })
 
+test("work crossing a delivery is late unless it is the delivering turn's short tail, read from raw interval starts too", () => {
+  const late = (clocks) => clocks.production_ms.state === "unavailable" && clocks.production_ms.reasons.includes("late_work_without_reopen")
+  // A stretch of work that runs 20 minutes past the delivery is not a tail: 17 hours of post-delivery work must not vanish.
+  assert.ok(late(derive([{ to: "done", offset_ms: 20 * MIN }], [], [[0, 40 * MIN]])))
+  // A tail within the 15-minute short-gap threshold is truncated at the delivery.
+  const tail = derive([{ to: "done", offset_ms: 20 * MIN }], [], [[0, 35 * MIN]])
+  assert.deepEqual([value(tail.production_ms), value(tail.active_in_production_ms), tail.production_ms.state], [20 * MIN, 20 * MIN, "measured"])
+  assert.ok(late(derive([{ to: "done", offset_ms: 20 * MIN }], [], [[0, 35 * MIN + 1]])))
+  // A raw active interval that starts after the tail (here inside a labeled wait the corrected union left out) is late work.
+  const raw = (start) => ({ transitions: [{ to: "done", offset_ms: 20 * MIN }], observations: [], intervals: [{ kind: "turn", start_ms: 0, end_ms: 21 * MIN }, { kind: "tool", start_ms: start, end_ms: start + MIN }] })
+  assert.ok(late(deriveLifecycleClocks({ timeline: raw(30 * MIN), working: [[0, 21 * MIN]], coverage: allWhole() })))
+  // One that starts inside the tail is part of the delivering turn; a wait interval is not work.
+  assert.equal(deriveLifecycleClocks({ timeline: raw(20 * MIN + 30_000), working: [[0, 21 * MIN]], coverage: allWhole() }).production_ms.state, "measured")
+  const waitAfter = { transitions: [{ to: "done", offset_ms: 20 * MIN }], observations: [], intervals: [{ kind: "human_wait", start_ms: 30 * MIN, end_ms: 40 * MIN }] }
+  assert.equal(deriveLifecycleClocks({ timeline: waitAfter, working: [[0, 20 * MIN]], coverage: allWhole() }).production_ms.state, "measured")
+})
+
+test("an episode with no recorded work is not dropped silently: production is at least this, and says why", () => {
+  const clocks = derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }, { to: "done", offset_ms: 200 }], [], [[10, 20]])
+  assert.deepEqual(clocks.production_ms, { class: "measured", state: "partial", value: 20, reasons: ["no_active_intervals"], basis: ["recorded_activity", "done_transition", "lifecycle_history"], bound: "lower", so_far: false })
+  assert.deepEqual(clocks.production_periods, { state: "partial", reasons: ["no_active_intervals"], items: [{ start_ms: 10, end_ms: 30, start_basis: "recorded_activity", end_basis: "done_transition", so_far: false }] })
+  assert.equal(clocks.active_in_production_ms.state, "measured")
+  assert.equal(clocks.production_remainder_ms.bound, "lower")
+})
+
+test("a reopened job whose final done has no time is done, bounded by its recorded work, not open so far", () => {
+  const clocks = derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [{ status: "done", offset_ms: null }], [[10, 20], [110, 120]])
+  assert.equal(clocks.production_ms.so_far, false)
+  assert.deepEqual([clocks.production_ms.reasons, clocks.production_ms.bound, clocks.production_ms.class], [["finish_time_not_known"], "lower", "inferred"])
+  assert.deepEqual(clocks.production_periods.items.map((p) => [p.start_ms, p.end_ms, p.end_basis, p.so_far]), [[10, 30, "done_transition", false], [110, 120, "recorded_work_end", false]])
+})
+
 // --- missing or late history is never exact --------------------------------------------------------------------------------------
 
 test("late_or_untimed_history_is_not_exact", () => {
@@ -163,7 +195,9 @@ test("a delivery seen only as a card observation or with no time at all is a bou
   assert.equal(untimed.production_periods.items[0].end_basis, "recorded_work_end")
   // The remainder takes the production's direction when the active time is whole.
   assert.equal(untimed.production_remainder_ms.bound, "lower")
-  assert.equal(observed.production_remainder_ms.bound, "upper")
+  // The active time is clipped to that same end, so it is at most this too; the remainder is pulled both ways.
+  assert.deepEqual([observed.active_in_production_ms.state, observed.active_in_production_ms.reasons, observed.active_in_production_ms.bound], ["partial", ["finish_from_card_update"], "upper"])
+  assert.deepEqual([observed.production_remainder_ms.bound, observed.production_remainder_ms.bound_reason], [null, "bound_reasons_conflict"])
 })
 
 test("the active and remainder clocks add up to production wherever production is known", () => {
@@ -227,7 +261,8 @@ test("every direction rule and fallback boundary is pinned: conflicts, undecided
   const placementPartial = { ...allWhole(), placement: { state: "partial", reasons: ["job_offsets_unavailable"], bound: "lower" } }
   const conflict = derive([], [{ status: "done", offset_ms: 50 }], [[10, 20]], placementPartial)
   assert.deepEqual([conflict.production_ms.reasons, conflict.production_ms.bound, conflict.production_ms.bound_reason], [["finish_from_card_update", "job_offsets_unavailable"], null, "bound_reasons_conflict"])
-  assert.deepEqual([conflict.active_in_production_ms.reasons, conflict.active_in_production_ms.bound], [["job_offsets_unavailable"], "lower"])
+  // Lost placement (at least) against the card-update end (at most): the active time has no direction either.
+  assert.deepEqual([conflict.active_in_production_ms.reasons, conflict.active_in_production_ms.bound, conflict.active_in_production_ms.bound_reason], [["finish_from_card_update", "job_offsets_unavailable"], null, "bound_reasons_conflict"])
   // Placement alone makes production and active time lower bounds.
   const unplaced = derive([{ to: "done", offset_ms: 20 }], [], [[0, 10]], placementPartial)
   assert.deepEqual([unplaced.production_ms.bound, unplaced.active_in_production_ms.bound], ["lower", "lower"])
@@ -389,6 +424,15 @@ test("worker_union_through_reports", () => {
   const zeroIdle = built([covered], J("c"))
   assert.equal(zeroIdle.report.clocks.active_in_production_ms.value, 30 * MIN)
   assert.deepEqual(zeroIdle.report.timeline.waits.map((entry) => [entry.start_ms, entry.end_ms, entry.next_prompt_ms]), [[10 * MIN, 20 * MIN, 0]])
+})
+
+test("a long turn running hours past the delivery with tool calls after it leaves production unavailable through the reports", () => {
+  const tools = Array.from({ length: 5 }, (_, i) => ({ kind: "tool", agent: 0, tool: "shell", outcome: "ok", start_ms: (40 + i * 20) * MIN, end_ms: (41 + i * 20) * MIN }))
+  const raw = rawFacts({ id: S(15), duration: 150 * MIN, intervals: [turn(0, 0, 150 * MIN), ...tools], jobs: [binding(J("f"), 0, { done: 30 * MIN })] })
+  const { report } = built([raw], J("f"))
+  assert.deepEqual([report.clocks.production_ms.state, report.clocks.production_ms.reasons], ["unavailable", ["late_work_without_reopen"]])
+  // The legacy lead time keeps its floor to the recorded work.
+  assert.equal(report.formulas.lead_time_ms.value, 150 * MIN)
 })
 
 test("an ask-tool pause is not recorded work unless another worker of the task works then", () => {
