@@ -120,12 +120,32 @@ test("a move away from done that the history cannot support is not read as a reo
   }
   // A timed move away from a done with no later done and no recorded work after it.
   contradictory(derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [], [[10, 20]], allWhole(), [{ offset_ms: 0, end_ms: 40 }, { offset_ms: 100, end_ms: 105 }]), "no work after the move")
-  // The real shape (job 346c8d5): the card's last update says done, and a session's move to processing 115 ms later is followed by
-  // its work. The card's latest timed state is still that done, which a real reopen would have changed, so no reopen is invented.
-  contradictory(derive([{ to: "processing", offset_ms: 2_844_115 }], [{ status: "done", offset_ms: 2_844_000 }], [[2_844_115, 5_707_615]], allWhole(), [{ offset_ms: -10_776_945, end_ms: 84_337_419 }]), "card still done")
+  // The card's last update, a second before a session's move to processing that its work follows, still says done: a real reopen
+  // would have changed it, so no reopen is invented.
+  contradictory(derive([{ to: "processing", offset_ms: 2_844_115 }], [{ status: "done", offset_ms: 2_843_000 }], [[2_844_115, 5_707_615]], allWhole(), [{ offset_ms: -10_776_945, end_ms: 84_337_419 }]), "card still done")
+  // The real shape (job 346c8d5): the card's done is in the same whole second as that move, so it may come after it, and the work that
+  // follows is after a delivery with no reopen: unavailable, not open.
+  const sameSecond = derive([{ to: "processing", offset_ms: 2_844_115 }], [{ status: "done", offset_ms: 2_844_000 }], [[2_844_115, 5_707_615]], allWhole(), [{ offset_ms: -10_776_945, end_ms: 84_337_419 }])
+  assert.deepEqual([sameSecond.production_ms.state, sameSecond.production_ms.reasons, sameSecond.production_ms.so_far], ["unavailable", ["late_work_without_reopen"], false])
   // A later timed observation that is not done supports the reopen: open, so far.
   const supported = derive([{ to: "done", offset_ms: 30 }, { to: "processing", offset_ms: 100 }], [{ status: "done", offset_ms: 30 }, { status: "processing", offset_ms: 120 }], [[10, 20], [110, 115]])
   assert.deepEqual([supported.production_ms.state, supported.production_ms.so_far, supported.production_ms.reasons], ["partial", true, ["censored"]])
+})
+
+test("a card observation's whole second is read after a transition in that second, so a genuine reopen is not called contradictory", () => {
+  // The card's last update is recorded to the whole second (100,000) and the session's reopen 115 ms into that second: the card moved
+  // with the reopen, so the reopen is timed and the job is open so far.
+  const reopen = derive([{ to: "done", offset_ms: 30_000 }, { to: "processing", offset_ms: 100_115 }], [{ status: "processing", offset_ms: 100_000 }], [[10_000, 20_000], [100_115, 110_000]], allWhole(), [{ offset_ms: 0, end_ms: 120_000 }])
+  assert.deepEqual([reopen.production_ms.state, reopen.production_ms.so_far, reopen.production_ms.reasons], ["partial", true, ["censored"]])
+  assert.deepEqual(reopen.production_periods.items.map((p) => [p.start_ms, p.end_ms, p.end_basis]), [[10_000, 30_000, "done_transition"], [100_115, 120_000, "latest_observation"]])
+  // A done transition and the card's done in the same second: the transition dates the delivery.
+  const done = derive([{ to: "done", offset_ms: 30_500 }], [{ status: "done", offset_ms: 30_000 }], [[10_000, 20_000]])
+  assert.deepEqual([done.production_ms.state, done.production_ms.value, done.production_periods.items[0].end_basis], ["measured", 20_500, "done_transition"])
+})
+
+test("an open job with no recorded work at all has no production clock, so far, never a zero", () => {
+  const clocks = derive([{ to: "processing", offset_ms: 0 }], [], [], allWhole(), [{ offset_ms: 0, end_ms: 50 }])
+  for (const key of ["production_ms", "active_in_production_ms", "production_remainder_ms"]) assert.deepEqual([clocks[key].state, clocks[key].reasons, clocks[key].so_far], ["unavailable", ["no_active_intervals"], true], key)
 })
 
 test("an untimed done observation closes a reopened job only when nothing timed and not terminal follows the reopen", () => {

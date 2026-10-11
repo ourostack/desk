@@ -23,7 +23,8 @@
 //     whose final `done` has no time, with nothing timed and not terminal after its last reopen, is done, its last episode running to the end
 //     of its recorded work (`finish_time_not_known`). A timed move away from a `done` with no later `done` is a reopen only when recorded
 //     work follows it and the card's latest timed observation is not still that `done`; otherwise the history contradicts itself and the
-//     clocks are unavailable, not open (`episode_boundary_not_recorded`). A transition with no time (`episode_boundary_not_recorded`), a reopen seen only in
+//     clocks are unavailable, not open (`episode_boundary_not_recorded`). A card observation on a whole second (the card's last update,
+//     recorded to the second) is ordered after any transition in that second. A transition with no time (`episode_boundary_not_recorded`), a reopen seen only in
 //     a later open observation (the same), lost or capped lifecycle history (`episode_history_incomplete`), a cancelled job, an unread
 //     status, unplaced sessions, unread activity or no recorded work at all each leave them unavailable with that reason: never a zero.
 //   - `active_in_production_ms` is the corrected working union (every worker of the task once, ask-tool and labeled waits out except where
@@ -158,13 +159,18 @@ export function lifecycleCoverage({ activity, placement, labels, history }) {
   }
 }
 
+// A card observation is the card's last update, recorded to the whole second: one on a whole second is read at the end of that second,
+// after any transition inside it.
+const SECOND_MS = 1000
+const observedOrder = (at) => (at % SECOND_MS === 0 ? at + SECOND_MS - 1 : at)
+
 // The job's lifecycle read from its timed transitions and timed observations, in job-clock order: its closed episodes' bounds
 // (`{ open, close, basis }`, `open` null for the first), whether it is open now, where an open stretch began, and whatever stops a split.
 function lifecycle(timeline, working) {
   const events = [
-    ...timeline.transitions.filter((entry) => entry.offset_ms !== null).map((entry) => ({ at: entry.offset_ms, status: entry.to, transition: true })),
-    ...timeline.observations.filter((entry) => entry.offset_ms !== null).map((entry) => ({ at: entry.offset_ms, status: entry.status, transition: false })),
-  ].sort((left, right) => left.at - right.at || Number(right.transition) - Number(left.transition))
+    ...timeline.transitions.filter((entry) => entry.offset_ms !== null).map((entry) => ({ at: entry.offset_ms, order: entry.offset_ms, status: entry.to, transition: true })),
+    ...timeline.observations.filter((entry) => entry.offset_ms !== null).map((entry) => ({ at: entry.offset_ms, order: observedOrder(entry.offset_ms), status: entry.status, transition: false })),
+  ].sort((left, right) => left.order - right.order || Number(right.transition) - Number(left.transition))
   const stops = []
   const closed = []
   let open = true
@@ -199,7 +205,7 @@ function lifecycle(timeline, working) {
       open = false
     }
   } else if (open && timeline.observations.some((entry) => entry.status === "done" && entry.offset_ms === null)
-    && !events.some((event) => since !== null && event.at > since && !TERMINAL.has(event.status))) {
+    && !events.some((event) => since !== null && event.order > since && !TERMINAL.has(event.status))) {
     // Open by its timed lifecycle, but seen done with no time, and nothing timed and not terminal after its last reopen: done, its final
     // delivery not dated.
     untimedDone = true
@@ -209,8 +215,8 @@ function lifecycle(timeline, working) {
     // A timed move away from a done, with no later done, is a reopen only when recorded work follows it and the card's latest timed state
     // is not still that done (a real reopen updates the card). Otherwise the history contradicts itself: no reopen is invented and the job
     // is not called open.
-    const lastObserved = events.filter((event) => !event.transition).at(-1)
-    const cardStillDone = lastObserved?.status === "done" && lastObserved.at <= since
+    // A done observation after the reopen would have closed the job again, so a last observation of done comes before the reopen.
+    const cardStillDone = events.filter((event) => !event.transition).at(-1)?.status === "done"
     if (cardStillDone || !working.some(([, end]) => end > since)) {
       stops.push("episode_boundary_not_recorded")
       open = false
