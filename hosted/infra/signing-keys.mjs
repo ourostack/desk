@@ -47,6 +47,8 @@ function parseKeysLine(text) {
     previous: fields.previous === "none" ? null : fields.previous,
     until: fields.until ?? null,
     revision: fields.revision,
+    // The Entra client secret's fingerprint, from images that log it with the Ouro tenant on.
+    ...(fields.entra ? { entra: fields.entra } : {}),
   };
 }
 
@@ -149,4 +151,27 @@ export function checkRotatedLine({ before, after }) {
   if (after.client !== before.client || after.clientFrom !== "DESK_CLIENT_KEY") {
     throw new Error(`The gateway's client key changed from ${before.client} to ${after.client} (from ${after.clientFrom}).`);
   }
+}
+
+// The emergency rotation for a signing key that may have leaked (Task 3 review M5). The ordinary rotation keeps the old
+// key accepted for 30 days and leaves the client key, a byte copy of the old signing key, in place, so a leaked key
+// would keep working. This one replaces both keys with new random ones and drops any previous key, overwriting its
+// secret, so nothing sealed with the leaked key is accepted: every client registers and signs in again. It needs no
+// logged line first, because it keeps nothing it read. `heldSecrets` are the app's secret names.
+export function emergencyChanges({ appEnv, heldSecrets, random = randomBytes }) {
+  const setSecrets = { "desk-signing-key": random(32).toString("hex"), "desk-client-key": random(32).toString("hex") };
+  if (heldSecrets.includes("desk-signing-key-previous")) setSecrets["desk-signing-key-previous"] = random(32).toString("hex");
+  const removeEnv = appEnv.map(({ name }) => name).filter((name) => name === "DESK_SIGNING_KEY_PREVIOUS" || name === "DESK_SIGNING_KEY_PREVIOUS_UNTIL");
+  return { setSecrets, secretRefs: { DESK_CLIENT_KEY: "desk-client-key" }, removeEnv };
+}
+
+// After an emergency rotation's restart: the gateway signs with the new key, reads the new client key from
+// DESK_CLIENT_KEY, and accepts no previous key.
+export function checkEmergencyLine({ changes, after }) {
+  if (!after) throw new Error("The gateway's keys startup line is missing; cannot confirm the emergency rotation.");
+  if (after.signing !== fingerprint(changes.setSecrets["desk-signing-key"])) throw new Error(`The gateway signs with ${after.signing}, not the new signing key.`);
+  if (after.client !== fingerprint(changes.setSecrets["desk-client-key"]) || after.clientFrom !== "DESK_CLIENT_KEY") {
+    throw new Error(`The gateway's client key is ${after.client} from ${after.clientFrom}, not the new client key from DESK_CLIENT_KEY.`);
+  }
+  if (after.previous) throw new Error(`The gateway still accepts a previous signing key (${after.previous}).`);
 }

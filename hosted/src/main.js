@@ -73,11 +73,13 @@ function readKeys(env) {
 // DESK_CLIENT_KEY and the fallback have the same fingerprint. `until` shows
 // how long the previous key stays accepted. `revision` is the Container App
 // revision (Azure sets CONTAINER_APP_REVISION), so a script reads the line of
-// the revision it restarted, not an older one.
-export function keysStartupLine({ signingKeys, clientKey, clientKeyFrom, revision }) {
+// the revision it restarted, not an older one. With the Ouro tenant, `entra` is the fingerprint of the Entra client
+// secret this revision read, so a secret rotation can tell the new secret from the old before deleting the old one.
+export function keysStartupLine({ signingKeys, clientKey, clientKeyFrom, revision, identity }) {
   const [current, previous] = signingKeys;
   const previousPart = previous ? `${fingerprint(previous.key)} until ${new Date(previous.until).toISOString()}` : "none";
-  return `keys: signing ${fingerprint(current.key)} client ${fingerprint(clientKey)} client-from ${clientKeyFrom} previous ${previousPart} revision ${revision ?? "unknown"}`;
+  const entraPart = identity?.clientSecret ? ` entra ${fingerprint(identity.clientSecret)}` : "";
+  return `keys: signing ${fingerprint(current.key)} client ${fingerprint(clientKey)} client-from ${clientKeyFrom} previous ${previousPart} revision ${revision ?? "unknown"}${entraPart}`;
 }
 
 // The Ouro tenant and the accounts store (spec items 9 to 13). Without any of their settings, as in today's

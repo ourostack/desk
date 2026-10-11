@@ -552,7 +552,7 @@ test("every subcommand's errors and logs hold no secret fixture", async (t) => {
 test("the command line takes the plan's flags", () => {
   assert.deepEqual(parseFlags(["--env", "test", "--dry-run", "--apple-key-file", "/k.p8", "--apple-key-slot", "a", "--keep-file"]), {
     env: "test",
-    flags: { dryRun: true, appleKeyFile: "/k.p8", appleKeySlot: "a", keepFile: true, seedAri: false, inviteAri: false, copyAppSecrets: false, clearAppSecrets: false, migrate: undefined, rotate: undefined, browserContext: undefined, appleKeyId: undefined },
+    flags: { dryRun: true, appleKeyFile: "/k.p8", appleKeySlot: "a", keepFile: true, seedAri: false, inviteAri: false, copyAppSecrets: false, clearAppSecrets: false, migrate: undefined, rotate: undefined, browserContext: undefined, appleKeyId: undefined, emergency: false },
   });
   assert.equal(parseFlags(["--env", "prod", "--migrate", "client-key"]).flags.migrate, "client-key");
   assert.throws(() => parseFlags(["--env", "test", "--migrate", "signing-key"]), /--migrate client-key/);
@@ -967,4 +967,152 @@ test("Minor 3: a file name whose Key ID isn't 10 capital letters or digits isn't
     await assert.rejects(context.go({ appleKeyFile: file, appleKeySlot: "a" }), /--apple-key-id/, name);
     assert.ok(!context.fake.calls.some(({ args }) => args[0] === "keyvault" && args[2] === "set"), name);
   }
+});
+
+// --- Task 8 review fix round 1 -----------------------------------------------------------------------------------
+
+const GW_APP_ID = "0c0c0c0c-0000-4000-8000-00000000000c";
+const GW_OBJECT_ID = "0b0b0b0b-0000-4000-8000-00000000000b";
+const OLD_ENTRA = "Gw~old.entra.secret.value";
+// The keys line a staging revision logs when it read `secret` as its Entra client secret, by the gateway's formatter.
+const entraLine = (revision, secret) =>
+  `2026-11-01T00:00:00Z desk-hosted: ${keysStartupLine(
+    readConfig({
+      DESK_SIGNING_KEY: SIGNING,
+      DESK_CLIENT_KEY: SIGNING,
+      DESK_ENTRA_TENANT_ID: TEST_TENANT,
+      DESK_ENTRA_SUBDOMAIN: "ourobottest",
+      DESK_ENTRA_CLIENT_ID: GW_APP_ID,
+      DESK_ENTRA_CLIENT_SECRET: secret,
+      DESK_ACCOUNTS_ENDPOINT: "https://stouroacctstest261e0b.table.core.windows.net",
+      CONTAINER_APP_REVISION: revision,
+    }),
+  )}`;
+
+// Staging with the Ouro settings, a gateway app holding one credential (k-old) that Key Vault's tag names, and a
+// revision that logged the old secret. `pickUp` says whether a restart makes the gateway read Key Vault's newest value.
+function entraRotation(t, { pickUp = true, tags = { "key-id": "k-old" }, credentials = [{ keyId: "k-old" }] } = {}) {
+  const context = setup(t, { record: { tenant: { name: "ourobottest", subdomain: "ourobottest", id: TEST_TENANT }, gatewayApp: { appId: GW_APP_ID, objectId: GW_OBJECT_ID } } });
+  const { cloud } = context;
+  cloud.graph.apps.push({ displayName: "ouro-desk-hosted", appId: GW_APP_ID, id: GW_OBJECT_ID, passwordCredentials: structuredClone(credentials), web: { redirectUris: [] }, federated: [] });
+  cloud.vault.secrets["entra-client-secret-test"] = { value: OLD_ENTRA, tags: structuredClone(tags) };
+  const staging = addStaging(cloud, { shown: KV_REF_SHOWN(), secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING }, logsLine: false });
+  const revision = staging.shown.properties.latestReadyRevisionName;
+  staging.logs.push({ revision, text: entraLine(revision, OLD_ENTRA) });
+  const state = { pickUp };
+  const runner = context.fake.runner;
+  const wrapped = async (cmd, args, options) => {
+    const result = await runner(cmd, args, options);
+    if (args.slice(0, 3).join(" ") === "containerapp revision restart" && state.pickUp) {
+      staging.logs.push({ revision: args[args.indexOf("--revision") + 1], text: entraLine(args[args.indexOf("--revision") + 1], cloud.vault.secrets["entra-client-secret-test"].value) });
+    }
+    return result;
+  };
+  const go = (flags = { rotate: "entra-secret" }) => context.go(flags, { runner: wrapped });
+  const credentialIds = () => cloud.graph.apps.find(({ appId }) => appId === GW_APP_ID).passwordCredentials.map(({ keyId }) => keyId);
+  const goWith = (runnerFor, flags = { rotate: "entra-secret" }) => context.go(flags, { runner: runnerFor });
+  return { ...context, staging, state, go, goWith, credentialIds };
+}
+
+test("review 1: --rotate entra-secret writes nothing when the reset fails or prints an empty secret, and removes what the reset added", async (t) => {
+  for (const failure of ["empty", "whitespace", "error"]) {
+    const rotation = entraRotation(t);
+    const runner = rotation.fake.runner;
+    const broken = async (cmd, args, options) => {
+      if (args.slice(0, 4).join(" ") === "ad app credential reset") {
+        if (failure === "error") throw Object.assign(new Error("az ad app credential reset failed"), { stderr: "ERROR: AADSTS530084" });
+        await runner(cmd, args, options);
+        return { stdout: failure === "empty" ? "\n" : "two words\n" };
+      }
+      return runner(cmd, args, options);
+    };
+    await assert.rejects(rotation.goWith(broken), /empty|whitespace|failed/, failure);
+    assert.equal(rotation.cloud.vault.secrets["entra-client-secret-test"].value, OLD_ENTRA, failure);
+    assert.deepEqual(rotation.cloud.vault.secrets["entra-client-secret-test"].tags, { "key-id": "k-old" }, failure);
+    assert.deepEqual(rotation.credentialIds(), ["k-old"], `${failure}: the added credential is removed again`);
+    assert.deepEqual(rotation.staging.restarts, [], failure);
+  }
+});
+
+test("review 1 and 2: --rotate entra-secret writes the new secret through stdin with both tags, and deletes the old credential only once the gateway logs the new fingerprint", async (t) => {
+  const rotation = entraRotation(t);
+  await rotation.go();
+  const secret = rotation.cloud.vault.secrets["entra-client-secret-test"];
+  assert.notEqual(secret.value, OLD_ENTRA);
+  const [added] = rotation.credentialIds();
+  assert.deepEqual(rotation.credentialIds(), [added], "only the new credential is left");
+  assert.notEqual(added, "k-old");
+  assert.deepEqual(secret.tags, { "key-id": added, "previous-key-id": "k-old" });
+  assert.equal(rotation.staging.restarts.length, 1);
+  const deleteIndex = rotation.fake.calls.findIndex(({ args }) => args.slice(0, 4).join(" ") === "ad app credential delete");
+  const restartIndex = rotation.fake.calls.findIndex(({ args }) => args.slice(0, 3).join(" ") === "containerapp revision restart");
+  assert.ok(restartIndex !== -1 && deleteIndex > restartIndex);
+  assert.match(rotation.logs.join("\n"), new RegExp(`logs entra ${fingerprint(secret.value)}`));
+  assertNoneOf(everythingShown(rotation), [secret.value, OLD_ENTRA]);
+});
+
+test("review 2: while the gateway still logs the old fingerprint the old credential is kept, and a later run finishes without adding another", async (t) => {
+  const rotation = entraRotation(t, { pickUp: false });
+  await assert.rejects(rotation.go(), /old credential k-old is kept/);
+  const [, added] = rotation.credentialIds();
+  assert.deepEqual(rotation.credentialIds(), ["k-old", added]);
+  // Later the platform has read the new version: the rerun confirms it and deletes the old credential.
+  rotation.state.pickUp = true;
+  await rotation.go();
+  assert.deepEqual(rotation.credentialIds(), [added]);
+  assert.equal(rotation.fake.calls.filter(({ args }) => args.slice(0, 4).join(" ") === "ad app credential reset").length, 1);
+});
+
+test("review 2: an image that logs no entra fingerprint can't confirm the rotation, so the old credential is kept", async (t) => {
+  const rotation = entraRotation(t, { pickUp: false });
+  const revision = rotation.staging.shown.properties.latestReadyRevisionName;
+  rotation.staging.logs.length = 0;
+  rotation.staging.logs.push({ revision, text: gatewayLine(rotation.staging) });
+  await assert.rejects(rotation.go(), /logs no entra fingerprint/);
+  assert.equal(rotation.credentialIds().length, 2);
+});
+
+test("review 11: the rotation refuses before any write when it can't tell which credential the gateway holds", async (t) => {
+  const rotation = entraRotation(t, { tags: {}, credentials: [{ keyId: "k-one" }, { keyId: "k-two" }] });
+  await assert.rejects(rotation.go(), /key-id/);
+  // Only the operator's own Key Vault role, which every vault read needs, may be written.
+  assert.deepEqual(writes(rotation.fake).filter(({ args }) => args.slice(0, 3).join(" ") !== "role assignment create"), []);
+  // With one credential on the app, an untagged secret can only be that one.
+  const single = entraRotation(t, { tags: {}, credentials: [{ keyId: "k-only" }] });
+  await single.go();
+  assert.equal(single.cloud.vault.secrets["entra-client-secret-test"].tags["previous-key-id"], "k-only");
+  assert.equal(single.credentialIds().length, 1);
+});
+
+test("review 1: the rotation refuses when az's current account isn't the env's tenant", async (t) => {
+  const rotation = entraRotation(t);
+  rotation.cloud.account.tenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+  await assert.rejects(rotation.go(), /az login --tenant/);
+  assert.deepEqual(writes(rotation.fake), []);
+});
+
+test("review 3: --rotate signing-key --emergency replaces both keys and drops the previous key, in production too, and confirms the startup line", async (t) => {
+  const context = setup(t, { env: "prod" });
+  const shown = { ...structuredClone(shownFixture), name: "ouro-desk-hosted" };
+  const app = addContainerApp(context.cloud, { name: "ouro-desk-hosted", shown, secrets: { ...APP_SECRETS, "desk-signing-key": SIGNING, "desk-client-key": SIGNING, "desk-signing-key-previous": "7".repeat(64) }, readYaml: (path) => readFileSync(path, "utf8") });
+  app.onUpdate = (updated) => {
+    const name = `ouro-desk-hosted--${String(Number(updated.shown.properties.latestReadyRevisionName.split("--")[1] ?? 0) + 1).padStart(7, "0")}`;
+    updated.shown.properties.latestReadyRevisionName = name;
+    updated.logs.push({ revision: name, text: gatewayLine(updated) });
+  };
+  await context.go({ rotate: "signing-key", emergency: true });
+  assert.notEqual(app.secrets["desk-signing-key"], SIGNING);
+  assert.notEqual(app.secrets["desk-client-key"], SIGNING);
+  assert.notEqual(app.secrets["desk-client-key"], app.secrets["desk-signing-key"]);
+  assert.notEqual(app.secrets["desk-signing-key-previous"], "7".repeat(64));
+  const env = app.shown.properties.template.containers[0].env.map(({ name }) => name);
+  assert.ok(!env.includes("DESK_SIGNING_KEY_PREVIOUS") && !env.includes("DESK_SIGNING_KEY_PREVIOUS_UNTIL"));
+  assert.ok(app.shown.properties.configuration.secrets.find(({ name }) => name === "entra-client-secret").keyVaultUrl);
+  assert.match(context.logs.join("\n"), /every client must register and sign in again/);
+  assertNoneOf(everythingShown(context), [SIGNING, app.secrets["desk-signing-key"], app.secrets["desk-client-key"]]);
+  // Without --emergency, production is still refused, and --emergency goes only with --rotate signing-key.
+  await assert.rejects(context.go({ rotate: "signing-key" }), /--env test/);
+  assert.throws(() => parseFlags(["--env", "prod", "--emergency"]), /--emergency/);
+  assert.equal(parseFlags(["--env", "prod", "--rotate", "signing-key", "--emergency"]).flags.emergency, true);
+  assert.equal(parseFlags(["--env", "prod", "--rotate", "entra-secret"]).flags.rotate, "entra-secret");
 });

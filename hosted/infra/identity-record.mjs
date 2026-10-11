@@ -85,6 +85,9 @@ export const appleActiveSetArgs = (env, renewedAt) => ["keyvault", "secret", "se
 // of the app credential it is. A fingerprint is an HMAC keyed by the key, so it is safe to store and log.
 export const KEY_ID_TAG = "key-id";
 export const FINGERPRINT_TAG = "fingerprint";
+// During a gateway client-secret rotation, the credential the new Key Vault version replaces; it is deleted only once
+// the gateway logs the new secret's fingerprint (provision-identity.mjs --rotate entra-secret).
+export const PREVIOUS_KEY_ID_TAG = "previous-key-id";
 // `revoked` counts by its presence, whatever its value (review minor 7): `--tags revoked=` still marks the slot.
 export const isRevoked = (tags) => Boolean(tags) && Object.hasOwn(tags, "revoked");
 // Why a slot's key can't be sent with the record's Key ID, or null. `value` is checked only when given.

@@ -633,3 +633,11 @@ test("with today's production env, sign-in, consent, tokens and routes behave ex
   const mcp = await fetch(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "{}" });
   assert.deepEqual((await mcp.json()).extra, { login: "arimendelow", userId: 16390116, name: "Ari" });
 });
+
+test("Task 8 review 2: with Ouro sign-in, the key startup line also carries the Entra client secret's fingerprint, never the secret", () => {
+  const line = keysStartupLine(readConfig({ ...FULL, ...IDENTITY, CONTAINER_APP_REVISION: "rev-1" }));
+  assert.ok(line.endsWith(` revision rev-1 entra ${fingerprint("entra-client-secret")}`), line);
+  assert.ok(!line.includes("entra-client-secret"));
+  // Without the Ouro tenant the line is as before, so older parsers and tests read it unchanged.
+  assert.ok(!keysStartupLine(readConfig(FULL)).includes(" entra "));
+});
