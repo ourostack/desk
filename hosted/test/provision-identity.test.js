@@ -291,7 +291,8 @@ test("the identity-checks identity gets exactly Key Vault Secrets Officer on the
   const automation = context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-identity-automation");
   assert.deepEqual(automation.federated.map(({ subject }) => subject), ["repo:ourostack@265728804/desk@1386529300:environment:identity"]);
   const sp = context.cloud.graph.sps.find(({ appId }) => appId === automation.appId);
-  assert.deepEqual(sp.appRoleAssignments, ["90db2b9a-d928-4d33-a4dd-8442ae3d41e4"]);
+  // IdentityProvider.ReadWrite.All for the Apple provider, and Application.Read.All for the gateway secret's expiry.
+  assert.deepEqual(sp.appRoleAssignments, ["90db2b9a-d928-4d33-a4dd-8442ae3d41e4", "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"]);
   // Staging's gateway has its own identity, with roles only on the test secret and the test accounts storage (I2).
   assert.equal(context.cloud.identities["id-ouro-desk-hosted"], undefined);
   const gateway = context.cloud.identities["id-ouro-desk-hosted-staging"];
@@ -810,10 +811,66 @@ test("N-m1: when listSecrets returns a Key Vault reference without a value, az's
   const before = structuredClone(fake.cloud.containerApps["ouro-desk-hosted-staging"].shown);
   await assert.rejects(go({ clearAppSecrets: true }), (error) => {
     assert.match(error.message, /listSecrets returned a Key Vault reference without a value/);
-    assert.match(error.message, /Nothing was sent; the app is unchanged/);
+    // updateApp sends nothing to the app before the update, so the message says exactly that and no more.
+    assert.match(error.message, /az stops there before sending the update, so none of this update's changes reached the app\. Nothing else was sent to the app before it in this step\./);
+    assert.ok(!/the app is unchanged/.test(error.message));
     assert.ok(!error.message.includes("Traceback"));
     return true;
   });
   assert.deepEqual(fake.cloud.containerApps["ouro-desk-hosted-staging"].shown, before);
   assert.deepEqual(fake.cloud.containerApps["ouro-desk-hosted-staging"].restarts, []);
+});
+
+// --- Task 7: the checks' Graph access, the Apple renewal record ---------------------------------------------------
+
+test("Task 7: an automation app holding only IdentityProvider.ReadWrite.All gains Application.Read.All with admin consent, and a rerun writes nothing", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  addContainerApp(context.cloud, { name: "ouro-desk-hosted-staging", shown: { ...shownFixture, id: "/apps/ouro-desk-hosted-staging" }, secrets: {} });
+  await context.go();
+  // Rewind the automation app to Task 2's grant: IdentityProvider.ReadWrite.All only.
+  const automation = context.cloud.graph.apps.find(({ displayName }) => displayName === "ouro-identity-automation");
+  const sp = context.cloud.graph.sps.find(({ appId }) => appId === automation.appId);
+  automation.requiredResourceAccess = [{ resourceAppId: "00000003-0000-0000-c000-000000000000", resourceAccess: [{ id: "90db2b9a-d928-4d33-a4dd-8442ae3d41e4", type: "Role" }] }];
+  sp.appRoleAssignments = ["90db2b9a-d928-4d33-a4dd-8442ae3d41e4"];
+  context.fake.calls.length = 0;
+  await context.go();
+  const written = writes(context.fake).map(({ args }) => args.join(" "));
+  assert.deepEqual(written, [
+    `ad app permission add --id ${automation.appId} --api 00000003-0000-0000-c000-000000000000 --api-permissions 9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30=Role`,
+    `ad app permission admin-consent --id ${automation.appId}`,
+  ]);
+  assert.ok(sp.appRoleAssignments.includes("9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"));
+  context.fake.calls.length = 0;
+  await context.go();
+  assert.deepEqual(writes(context.fake), []);
+});
+
+test("Task 7: a consented permission that was never granted is consented again without being added twice", () => {
+  const steps = plan({
+    env: "test",
+    state: {
+      tenant: { id: TEST_TENANT, name: "ourobottest" },
+      automationApp: {
+        appId: "app-1",
+        servicePrincipalId: "sp-1",
+        subjects: ["repo:ourostack@265728804/desk@1386529300:environment:identity"],
+        appRoles: ["90db2b9a-d928-4d33-a4dd-8442ae3d41e4"],
+        access: [{ resourceAppId: "00000003-0000-0000-c000-000000000000", resourceAccess: [{ id: "90db2b9a-d928-4d33-a4dd-8442ae3d41e4", type: "Role" }, { id: "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30", type: "Role" }] }],
+      },
+    },
+  });
+  const step = steps.find(({ name }) => name.startsWith("automation app "));
+  assert.equal(step.name, "automation app Application.Read.All");
+  assert.deepEqual(step.calls.map(({ args }) => args.slice(0, 4).join(" ")), ["ad app permission admin-consent"]);
+});
+
+test("Task 7: creating the Apple provider records the live slot and apple-renewed-at, after the POST", async (t) => {
+  const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
+  await context.go();
+  const marker = context.cloud.vault.secrets["apple-siwa-active-test"];
+  assert.equal(marker.value, "a");
+  assert.equal(marker.tags["apple-renewed-at"], new Date(NOW).toISOString());
+  const post = context.fake.calls.findIndex(({ args }) => args.join(" ").startsWith("rest --method post --url https://graph.microsoft.com/v1.0/identity/identityProviders"));
+  const set = context.fake.calls.findIndex(({ args }) => args.includes("apple-siwa-active-test") && args.includes("set"));
+  assert.ok(post !== -1 && set > post);
 });

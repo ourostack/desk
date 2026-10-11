@@ -49,8 +49,18 @@ const isKeyVaultReference = (secret) => Boolean(secret.keyVaultUrl);
 
 // az 2.77's YAML update fills each value-less secret from listSecrets and catches only a missing name: a Key Vault
 // reference that listSecrets returns without a value makes it fail with KeyError before it sends anything (re-review
-// N-m1). provision.sh prints the same text.
-export const KEY_VAULT_FILL_FAILURE = "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value'). Nothing was sent; the app is unchanged. Record this for the rehearsal; the update path needs a fix before this app can be updated again.";
+// N-m1). The message says only what is true: this update was not sent, but an earlier write in the same run (an
+// identity attach, or the app's creation) was, and stays (Task 2 re-review Minor). provision.sh builds the same text
+// from the same parts.
+export const KEY_VAULT_FILL_FAILURE = "az could not send the update: listSecrets returned a Key Vault reference without a value, which az 2.77's YAML update can't handle (KeyError: 'value').";
+export const KEY_VAULT_FILL_NOT_SENT = "az stops there before sending the update, so none of this update's changes reached the app.";
+export const KEY_VAULT_FILL_NOTHING_BEFORE = "Nothing else was sent to the app before it in this step.";
+export const KEY_VAULT_FILL_SENT_BEFORE = "Already sent to the app before it, and still in effect:";
+export const KEY_VAULT_FILL_NEXT = "Record this for the rehearsal; the update path needs a fix before this app can be updated again.";
+export function keyVaultFillFailure({ sentBefore = [] } = {}) {
+  const before = sentBefore.length ? `${KEY_VAULT_FILL_SENT_BEFORE} ${sentBefore.join("; ")}.` : KEY_VAULT_FILL_NOTHING_BEFORE;
+  return `${KEY_VAULT_FILL_FAILURE} ${KEY_VAULT_FILL_NOT_SENT} ${before} ${KEY_VAULT_FILL_NEXT}`;
+}
 export const isKeyVaultFillFailure = (stderr) => String(stderr ?? "").includes("KeyError: 'value'");
 
 // The one container the gateway runs in: the one named `gateway`, or the only one.
