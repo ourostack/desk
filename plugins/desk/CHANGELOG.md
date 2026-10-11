@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.290 — 2026-10-11
+
+The factory store playbook accepts bounded managed-user logins in maintainer
+permission lookups. It rejects malformed whole values, including newlines,
+while retaining permission-based authority and fail-closed API handling.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.289 — 2026-10-11
 
 Refresh the [V2 evaluation packet](../docs/evaluation-packet.md) with separate cold-run gates, private evidence and exact-owned cleanup; align the [RFC browser status](../docs/agentic-engineering-v2-rfc.md#9-status) with the native real-profile contract.
