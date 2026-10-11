@@ -1,5 +1,5 @@
 import "../_isolated_env.mjs"
-import {ownedHostTest} from "./_owned_catalog_host.mjs"
+import {ownedHostTest,ownedCatalogTest} from "./_owned_catalog_host.mjs"
 import {test} from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
@@ -14,11 +14,49 @@ import {createHmac,createHash} from "node:crypto"
 import {Client} from "@modelcontextprotocol/sdk/client/index.js"
 import {ReadBuffer,serializeMessage,deserializeMessage} from "@modelcontextprotocol/sdk/shared/stdio.js"
 const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js").catch(()=>({}))
+const realCustody=custody
 const fixture=JSON.parse(fs.readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
 test("owned_custody_discovery",()=>{
   for(const key of ["openCatalogBootstrap","loadCatalogSnapshot","ownedServerLaunch","materializeTriageSubmission","runDirectCatalog",
     "observeOwnedServer","verifyModuleClosure","readProtectedBytes","reapOwnedChild","validateNativeSubmissionEvidence"])
     assert.equal(typeof custody[key],"function",key)
+})
+test("nonaccepted_direct_qualification_requires_the_observer_double_facade",async()=>{
+  const q=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
+  for(const owned of [undefined,realCustody,{...realCustody,authority:true}])
+    await assert.rejects(q.runNonacceptedDirectQualification({owned,fixture,deadline:Date.now()+5000,evidenceDir:"/unused"}),{message:"unit_owned_catalog"})
+  const facade=custody.createNonacceptedOwnedCatalog()
+  assert.equal(facade.authority,false);assert.equal(Object.isFrozen(facade),true)
+  assert.throws(()=>facade.authenticatedDirectReceipts([]),{message:"direct_receipts_untrusted"})
+  assert.throws(()=>facade.authenticatedNativeRuns([]),{message:"native_runs_incomplete"})
+})
+ownedHostTest("observer_double_refuses_owned_processes_it_cannot_see_live","posix",async(t)=>{
+  const facade=custody.createNonacceptedOwnedCatalog(),kill=process.kill
+  // Signal 0 is the double's only liveness probe; every other signal is real.
+  t.mock.method(process,"kill",(pid,signal)=>{if(signal===0)throw Object.assign(Error("unit_not_live"),{code:"ESRCH"});return kill.call(process,pid,signal)})
+  const run=await facade.runDirectCatalog({fixture,deadline:Date.now()+8000})
+  t.mock.restoreAll()
+  await run.cleanup()
+  assert.equal(run.state,"failed");assert.equal(run.reason,"provenance_unsupported")
+})
+ownedHostTest("owned_launch_recipe_carries_the_darwin_encoding_only_on_darwin","posix",async(t)=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"owned-recipe-")));fs.chmodSync(dir,0o700)
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
+  const inputDir=path.join(dir,"input");fs.mkdirSync(inputDir,{mode:0o700})
+  await catalog.writeTriagePreparedFile({inputDir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
+  const owned=await custody.prepareOwnedCatalogRun({inputDir,runDir:path.join(dir,"run"),deadline:Date.now()+10000})
+  t.after(()=>owned.close())
+  const platform=Object.getOwnPropertyDescriptor(process,"platform")
+  try{
+    for(const value of ["darwin","linux"]){
+      Object.defineProperty(process,"platform",{...platform,value})
+      const launch=custody.ownedServerLaunch(owned.launch.identity)
+      const encoding=launch.args.filter(arg=>arg.startsWith("__CF_USER_TEXT_ENCODING="))
+      assert.deepEqual(encoding,value==="darwin"?[`__CF_USER_TEXT_ENCODING=0x${process.getuid().toString(16).toUpperCase()}:0:0`]:[])
+      assert.equal(launch.identity.platform,value)
+    }
+  }finally{Object.defineProperty(process,"platform",platform)}
 })
 test("nonaccepted_native_pair_registry_cannot_authorize_real_receipts",()=>{
   const item=(session,generation)=>({state:"ran",stream:{stdout:JSON.stringify({type:"system",subtype:"init",session_id:session})+"\n"},custody:{receipts:[{generation}]}})
@@ -439,7 +477,7 @@ test("init_manifest_shape_and_bounded_capture_matrix",async()=>{
     if(mode==="argvLimit")assert.equal(r.outcome.detail,"native_capture_limit")
   }
 })
-ownedHostTest("sdk_client_binding_and_run_preparation_failures_are_observed","provenance",async(t)=>{
+ownedCatalogTest("sdk_client_binding_and_run_preparation_failures_are_observed",async(t,custody)=>{
   assert.equal(typeof custody.boundClient,"function")
   assert.equal(typeof custody.CatalogClient,"function")
   const child=new EventEmitter(),history=[]
@@ -567,7 +605,7 @@ ownedHostTest("prepared_reader_is_closed_if_uid_drifts_before_launch_constructio
     assert.equal(reader.fd,-1,"a failed post-open launch identity must not leak the owned receipt reader")
   }finally{process.getuid=getuid;fs.promises.open=open;await reader?.close()}
 })
-ownedHostTest("actual_nonmodel_missing_executable_is_closed_without_unhandled_spawn_error","provenance",async(t)=>{
+ownedCatalogTest("actual_nonmodel_missing_executable_is_closed_without_unhandled_spawn_error",async(t,custody)=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-spawn-enoent-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
@@ -667,7 +705,7 @@ ownedHostTest("bootstrap_bindings_and_truncated_snapshot_fail_before_application
   await assert.rejects(module.loadCatalogSnapshot({fd}),{message:"snapshot_truncated"})
   assert.throws(()=>fs.fstatSync(fd),{code:"EBADF"})
 })
-ownedHostTest("actual_direct_driver_error_and_corrupted_peer_batches_close_owned_resources","provenance",async(t)=>{
+ownedCatalogTest("actual_direct_driver_error_and_corrupted_peer_batches_close_owned_resources",async(t,custody)=>{
   const originalSpawn=childProcess.spawn,originalRead=fs.promises.readFile
   for(const driver of ["wire","direct"]){
     for(const mode of ["invalid_fixture","snapshot_read","spawn_throw","child_error","stderr_small","stderr_limit",
@@ -865,7 +903,7 @@ ownedHostTest("unsupported_runtime_provenance_holds_before_preparation","posix",
     assert.equal(fs.existsSync(path.join(dir,"run")),false)
   }finally{moduleBuiltin.registerHooks=original;syncBuiltinESMExports()}
 })
-ownedHostTest("receipt_reader_before_writer_does_not_block","provenance",async(t)=>{
+ownedCatalogTest("receipt_reader_before_writer_does_not_block",async(t,custody)=>{
   const run=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>run.cleanup?.())
   assert.equal(run.state,"proved")
@@ -879,7 +917,7 @@ ownedHostTest("receipt_reader_before_writer_does_not_block","provenance",async(t
   assert.equal(run.custody.sourceCustodyUnchanged,true)
   assert.ok(run.resources.files.every(file=>fs.existsSync(file)),"inventory lists actual opened generation paths")
 })
-ownedHostTest("authentic_receipt_only","provenance",async(t)=>{
+ownedCatalogTest("authentic_receipt_only",async(t,custody)=>{
   const run=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>run.cleanup?.())
   assert.equal(run.state,"proved")
@@ -891,7 +929,7 @@ ownedHostTest("authentic_receipt_only","provenance",async(t)=>{
   const denied=await custody.materializeTriageSubmission({custody:fake,nativeStream:run.nativeStream,brief:fixture.brief,resultFile:file})
   assert.notEqual(denied.state,"ran");assert.equal(fs.existsSync(file),false)
 })
-ownedHostTest("restored_source_module_and_process_identity_drift_refuses","provenance",async(t)=>{
+ownedCatalogTest("restored_source_module_and_process_identity_drift_refuses",async(t,custody)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"direct-drift-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const run=await custody.runDirectCatalog({fixture,deadline:Date.now()+10000,evidenceDir:path.join(dir,"archive")})
@@ -979,7 +1017,7 @@ ownedHostTest("every_startup_phase_timeout_closes_owned_fds","posix",async(t)=>{
     }finally{fs.promises.open=original;await owned.close()}
   }
 })
-ownedHostTest("stopped_launcher_deadline_reaps_owned_generation","provenance",async(t)=>{
+ownedCatalogTest("stopped_launcher_deadline_reaps_owned_generation",async(t,custody)=>{
   const original=childProcess.spawn
   let ownedChild,closed=false
   childProcess.spawn=function(command,...args){
@@ -1004,6 +1042,7 @@ ownedHostTest("stopped_launcher_deadline_reaps_owned_generation","provenance",as
   assert.equal(closed,true,"return only after the stopped generation is reaped")
   assert.ok(Date.now()<=deadline+300)
 })
+// Stops the server from inside the Darwin ps observation, so it has no observer-double variant.
 ownedHostTest("stopped_server_after_observation_is_reaped_under_inherited_deadline","provenance",async(t)=>{
     const original=childProcess.spawn
     let stoppedServer
@@ -1142,7 +1181,7 @@ ownedHostTest("per_run_catalog_not_synthetic_freeze","posix",async(t)=>{
 test("native_server_not_a_separate_hash",async()=>{
   assert.equal(typeof custody.runOwnedCatalogNative,"function")
 })
-ownedHostTest("missing_bootstrap_reaps_native_before_return","provenance",async(t)=>{
+ownedCatalogTest("missing_bootstrap_reaps_native_before_return",async(t,custody)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"missing-bootstrap-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -1158,7 +1197,7 @@ ownedHostTest("missing_bootstrap_reaps_native_before_return","provenance",async(
   assert.deepEqual(run.resources.exited_pids,run.resources.pids)
   assert.ok(Date.now()<=deadline+300)
 })
-ownedHostTest("bounded_native_stdout_preserves_split_utf8","provenance",async(t)=>{
+ownedCatalogTest("bounded_native_stdout_preserves_split_utf8",async(t,custody)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"native-utf8-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -1172,7 +1211,7 @@ ownedHostTest("bounded_native_stdout_preserves_split_utf8","provenance",async(t)
   assert.equal(run.stream.stdout,'{"type":"result","is_error":true,"text":"🙂"}\n')
   assert.equal(fs.existsSync(path.join(dir,"unaccepted.json")),false)
 })
-ownedHostTest("failed_bootstrap_closes_late_acquired_control_handle","provenance",async(t)=>{
+ownedCatalogTest("failed_bootstrap_closes_late_acquired_control_handle",async(t,custody)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"late-control-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -1224,11 +1263,12 @@ ownedHostTest("early_qualifier_has_no_task5_dependency","posix",async(t)=>{
   assert.equal(raw.schema,"desk.factory.triage-prepared/1")
   assert.deepEqual(raw.record_refs,fixture.record_refs)
 })
-ownedHostTest("two_actual_direct_bundles_are_not_native_qualification","provenance",async(t)=>{
+ownedCatalogTest("two_actual_direct_bundles_are_not_native_qualification",async(t,custody)=>{
   const q=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"direct-qualifier-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
-  const result=await q.qualifyOwnedCatalog({fixture,deadline:Date.now()+60000,evidenceDir:path.join(dir,"evidence")})
+  const options={fixture,deadline:Date.now()+60000,evidenceDir:path.join(dir,"evidence")}
+  const result=custody.authority===false?await q.runNonacceptedDirectQualification({owned:custody,...options}):await q.qualifyOwnedCatalog(options)
   assert.equal(result.state,"direct_validated",JSON.stringify(result.record))
   assert.equal(result.directReceipts.length,2)
   assert.equal(result.nativeReceipts.length,0)
@@ -1252,6 +1292,13 @@ ownedHostTest("two_actual_direct_bundles_are_not_native_qualification","provenan
     assert.equal(fs.existsSync(receipt.snapshotArchive),true)
     assert.equal(receipt.custody.receipts.at(-1).event,"terminal")
     assert.equal(await custody.restoreDirectReceipt(structuredClone(receipt)),true)
+    if(custody.authority===false){
+      // Observer-double custody never restores into the real registries.
+      await assert.rejects(realCustody.restoreDirectReceipt(structuredClone(receipt)),{message:"restored_process_identity"})
+      assert.throws(()=>realCustody.retainDirectReceipt({...structuredClone(receipt),cleanup:()=>{}}),{message:"direct_receipt_untrusted"})
+      assert.throws(()=>realCustody.completeDirectBundle({receipt:structuredClone(receipt),cases:[],partial:structuredClone(receipt),fixture}),
+        {message:"direct_receipt_untrusted"})
+    }
     for(const mutate of [
       x=>{x.historySha256="f".repeat(64)},
       x=>{x.responses=[]},
@@ -1401,7 +1448,7 @@ await ended;await client.close()
   assert.equal(changed.reason,"diagnostic_inadequate")
   assert.equal(fs.existsSync(path.join(dir,"synthetic-drift-evidence")),false)
 })
-ownedHostTest("native_completion_terminates_server_and_receipt","provenance",async(t)=>{
+ownedCatalogTest("native_completion_terminates_server_and_receipt",async(t,custody)=>{
   const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"native-fixture-")));fs.chmodSync(dir,0o700)
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
@@ -1461,6 +1508,11 @@ await client.close()
   assert.equal(typeof custody.restoreNativeBundle,"function")
   const restored=JSON.parse(JSON.stringify(run))
   assert.equal(await custody.restoreNativeBundle(restored),true)
+  if(custody.authority===false){
+    // Observer-double custody never restores or authenticates as a real native run.
+    await assert.rejects(realCustody.restoreNativeBundle(structuredClone(run)),{message:"restored_process_identity"})
+    assert.throws(()=>realCustody.authenticatedNativeRuns([restored,restored]),{message:"native_run_untrusted"})
+  }
   const originalOpen=fs.promises.open
   let swapped=false
   fs.promises.open=async function(file,...args){

@@ -1,5 +1,5 @@
 import "../_isolated_env.mjs"
-import {ownedHostTest} from "./_owned_catalog_host.mjs"
+import {ownedHostTest,ownedCatalogTest} from "./_owned_catalog_host.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { PassThrough } from "node:stream"
@@ -691,7 +691,7 @@ test("closed_protocol_requests_stay_side_effect_free",async()=>{
   const defaults=await protocol.serveCatalog({state:defaultState,writeReceipt:async()=>{}})
   await defaults.close()
 })
-ownedHostTest("real_stdio_closed_manifest","provenance",async(t)=>{
+ownedCatalogTest("real_stdio_closed_manifest",async(t,custody)=>{
   assert.equal(typeof custody.runDirectCatalog,"function")
   const result=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>result.cleanup?.())
@@ -700,7 +700,7 @@ ownedHostTest("real_stdio_closed_manifest","provenance",async(t)=>{
   assert.equal(result.custody.receipts.map(x=>x.event).join(","),"bootstrap,submit,terminal")
   assert.equal(result.responses.every(x=>x.ok),true)
 })
-ownedHostTest("real_unmodified_sdk_stdio_handshake","provenance",async(t)=>{
+ownedCatalogTest("real_unmodified_sdk_stdio_handshake",async(t,custody)=>{
   const result=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>result.cleanup?.())
   assert.equal(result.state,"proved")
@@ -718,7 +718,7 @@ ownedHostTest("real_unmodified_sdk_stdio_handshake","provenance",async(t)=>{
   assert.equal(result.resources.trace.events.some(x=>x.event==="close"),true)
   assert.deepEqual(result.tools.map(x=>x.name),["evidence_read","evidence_search","evidence_list","candidate_submit"])
 })
-ownedHostTest("authenticated_first_wire_observations_are_not_submission_receipts","provenance",async(t)=>{
+ownedCatalogTest("authenticated_first_wire_observations_are_not_submission_receipts",async(t,custody)=>{
   const result=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>result.cleanup?.())
   assert.equal(result.state,"proved")
@@ -733,7 +733,7 @@ ownedHostTest("authenticated_first_wire_observations_are_not_submission_receipts
   assert.equal(exit.payload.signal,null)
   assert.ok(result.custody.observations.every(x=>x.event==="observation"))
 })
-ownedHostTest("first_parser_refusal_is_observed_from_actual_server","provenance",async(t)=>{
+ownedCatalogTest("first_parser_refusal_is_observed_from_actual_server",async(t,custody)=>{
   const raw='{"method":"initialize","params":{"protocolVersion":"unknown","capabilities":{},"clientInfo":{"name":"x","version":"1"}},"jsonrpc":"2.0","id":0}\n'
   const result=await custody.runCatalogWireCase({fixture,frames:[raw],deadline:Date.now()+5000})
   t.after(()=>result.cleanup?.())
@@ -778,7 +778,7 @@ test("original_split_wire_offsets_and_output_refusal_direction_are_observed",asy
   assert.equal(errorEvents.find(x=>x.kind==="write_complete").code,"write_failed")
   await third.close()
 })
-ownedHostTest("two_identical_stateful_histories","provenance",async(t)=>{
+ownedCatalogTest("two_identical_stateful_histories",async(t,custody)=>{
   const a=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   const b=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})
   t.after(()=>{a.cleanup?.();b.cleanup?.()})
@@ -789,7 +789,7 @@ ownedHostTest("two_identical_stateful_histories","provenance",async(t)=>{
   assert.throws(()=>custody.authenticatedDirectReceipts([custody.retainDirectReceipt(a),custody.retainDirectReceipt(b)]),
     {message:"direct_bundles_incomplete"})
 })
-ownedHostTest("real_wire_fatal_subcases_never_materialize","provenance",async(t)=>{
+ownedCatalogTest("real_wire_fatal_subcases_never_materialize",async(t,custody)=>{
   assert.equal(typeof custody.runCatalogWireCase,"function")
   for(const [name,frames] of [
     ["duplicate_key",['{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}\n']],
@@ -808,7 +808,7 @@ ownedHostTest("real_wire_fatal_subcases_never_materialize","provenance",async(t)
     assert.equal(result.resources.serverExited,true)
   })
 })
-ownedHostTest("real_frame_count_and_aggregate_restart_cases","provenance",async(t)=>{
+ownedCatalogTest("real_frame_count_and_aggregate_restart_cases",async(t,custody)=>{
     const initialize={jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"triage_direct",version:"1"}}}
     const initialized={jsonrpc:"2.0",method:"notifications/initialized"}
     for(const [name,frames,detail]of [

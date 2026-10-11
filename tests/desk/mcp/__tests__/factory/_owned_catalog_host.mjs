@@ -30,10 +30,12 @@ export async function assertOwnedHostRefusal(host = ownedHost) {
   assert.equal(direct.reason, "provenance_unsupported")
   assert.deepEqual(direct.resources.pids, [], "direct lane launched nothing")
   assert.equal(direct.custody, undefined, "no receipt materialized")
+  await direct.cleanup()
   const wire = await custody.runCatalogWireCase({ fixture, frames: [], deadline: Date.now() + 15000 })
   assert.equal(wire.state, "scope_unqualified")
   assert.equal(wire.reason, "provenance_unsupported")
   assert.deepEqual(wire.resources.pids, [], "wire case launched nothing")
+  await wire.cleanup()
   let closed = 0, spawned = 0
   const native = await custody.runOwnedCatalogNative({
     owned: { runDir: "unsupported-host", async close() { closed += 1 } },
@@ -68,3 +70,17 @@ export function ownedHostTest(name, need, fn, { realCli = false } = {}) {
   })
 }
 export const realCliTest = (name, need, fn) => ownedHostTest(name, need, fn, { realCli: true })
+
+// One owned-catalog custody scenario, run twice. The first variant uses the
+// production module and needs Darwin provenance (elsewhere it asserts the
+// refusal). The second runs the same scenario on every POSIX host through
+// createNonacceptedOwnedCatalog: the actual launcher, server, FIFOs and files,
+// with the Darwin ps observation replaced by the facade's observer double and
+// every registry private to the facade. fn receives the custody API to use.
+export function ownedCatalogTest(name, fn) {
+  ownedHostTest(name, "provenance", (t) => fn(t, custody))
+  ownedHostTest(`${name} [observer double]`, "posix", (t) => fn(t, observerDoubleCustody()))
+}
+export function observerDoubleCustody() {
+  return Object.freeze({ ...custody, ...custody.createNonacceptedOwnedCatalog() })
+}

@@ -384,8 +384,8 @@ export async function verifyModuleClosure(closure) {
     !["triage-catalog","triage-protocol","triage-custody"].every(name=>seen.has(fileURLToPath(new URL(`./${name}.js`,import.meta.url)))))fail("module_incomplete")
   return structuredClone(closure)
 }
-function validatedNativeSubmission({custody,nativeStream,brief}) {
-    const authority=trustedCustody.get(custody)
+function validatedNativeSubmission({custody,nativeStream,brief},context) {
+    const authority=context.custody.get(custody)
     if(!authority||catalogCanonical(custody)!==authority.seal)fail("custody_untrusted")
     return validateNativeSubmissionEvidence({custody,nativeStream,brief,records:authority.records})
 }
@@ -432,9 +432,12 @@ export function validateNativeSubmissionEvidence({custody,nativeStream,brief,rec
     if(final?.type!=="result"||final.subtype!=="success"||final.is_error!==false)fail("native_terminal")
     return {encoded,valid,authority:false}
 }
-export async function materializeTriageSubmission({custody,nativeStream,brief,resultFile}) {
+export async function materializeTriageSubmission(value) {
+  return materializeSubmission(value,realOwnedCustody)
+}
+async function materializeSubmission({custody,nativeStream,brief,resultFile},context) {
   try{
-    const {encoded,valid}=validatedNativeSubmission({custody,nativeStream,brief})
+    const {encoded,valid}=validatedNativeSubmission({custody,nativeStream,brief},context)
     await assertOutsideGitWorkspace(path.dirname(resultFile),{label:"triage",subject:"unaccepted candidate"})
     await safeCatalogPath(path.dirname(resultFile),"directory",0o700)
     const handle=await fs.open(resultFile,C.O_WRONLY|C.O_CREAT|C.O_EXCL|C.O_NOFOLLOW,0o600)
@@ -442,7 +445,7 @@ export async function materializeTriageSubmission({custody,nativeStream,brief,re
     return {state:"ran",resultFile,provisionalValid:valid.valid.length,provisionalRefused:valid.refused.length}
   }catch{return {state:"scope_unqualified",reason:"diagnostic_inadequate",provisionalValid:0,provisionalRefused:0}}
 }
-async function restoredCustody(custody,snapshotFile) {
+async function restoredCustody(custody,snapshotFile,context) {
   await assertOutsideGitWorkspace(path.dirname(snapshotFile),{label:"triage",subject:"custody"})
   const safe=await safeCatalogPath(snapshotFile)
   if(safe.size>6291456)fail("snapshot_limit")
@@ -488,16 +491,21 @@ async function restoredCustody(custody,snapshotFile) {
     observed.launch.command!==`${identity.runtime} ${identity.launcher} ${launch.args.slice(launch.args.indexOf("--entry")).join(" ")}`||
     (nativePid!==undefined&&observed.launch.ppid!==nativePid)||
     ![observed.server.start,observed.launch.start].every(value=>/^\w{3} \w{3}\s+\d+ \d\d:\d\d:\d\d \d{4}$/u.test(value))||
+    // A facade bundle carries the observer double's epoch start; real custody never restores it.
+    (context.refusesObserverDouble&&[observed.server.start,observed.launch.start].includes(NONACCEPTED_OBSERVER_START))||
     observed.environment_sha256!==catalogHash(`${identity.runtime} ${identity.entry} ${Object.entries(identity.cleanEnv).map(([key,value])=>`${key}=${value}`).join(" ")}`))fail("restored_process_identity")
   await verifyModuleClosure(custody.moduleClosure)
-  trustedCustody.set(custody,{seal:catalogCanonical(custody),records:snapshot.records})
+  context.custody.set(custody,{seal:catalogCanonical(custody),records:snapshot.records})
   return snapshot.brief
 }
 export async function restoreNativeBundle(bundle) {
+  return restoreNative(bundle,realOwnedCustody)
+}
+async function restoreNative(bundle,context) {
   if(bundle.state!=="ran"||bundle.resources.native_exit.code!==0||!bundle.resources.native_exit.stdio_closed||
     bundle.resources.server_exit_observed!==true||bundle.resources.receipt_eof_after_server_exit!==true||
     bundle.snapshotFile!==path.join(bundle.resources.runDir,"catalog.json"))fail("restored_native")
-  const brief=await restoredCustody(bundle.custody,bundle.snapshotFile)
+  const brief=await restoredCustody(bundle.custody,bundle.snapshotFile,context)
   const snapshot=JSON.parse(await readProtectedBytes(bundle.snapshotFile,6291456)),invocation=bundle.invocation,b=invocation.owned_launch.identity.bootstrap
   if(catalogCanonical(invocation.owned_launch)!==catalogCanonical(bundle.custody.launchIdentity)||
     invocation.catalog_sha256!==catalogHash(catalogCanonical(snapshot.records))||
@@ -506,15 +514,15 @@ export async function restoreNativeBundle(bundle) {
     b.expectedSha256!==bundle.custody.snapshotSha256||b.generation!==snapshot.generation||b.snapshotFile!==bundle.snapshotFile||
     invocation.owned_launch.nativePid!==bundle.resources.pids[0]||
     bundle.custody.observation.identity.launch.ppid!==bundle.resources.pids[0])fail("restored_invocation")
-  const {encoded}=validatedNativeSubmission({custody:bundle.custody,nativeStream:bundle.stream,brief})
+  const {encoded}=validatedNativeSubmission({custody:bundle.custody,nativeStream:bundle.stream,brief},context)
   await safeCatalogPath(bundle.resultFile)
   if((await fs.readFile(bundle.resultFile,"utf8"))!==encoded)fail("restored_result")
-  nativeRuns.set(bundle,catalogHash(catalogCanonical(bundle)))
+  context.native.set(bundle,catalogHash(catalogCanonical(bundle)))
   return true
 }
-async function restoreDirectHistory(bundle,fixture){
+async function restoreDirectHistory(bundle,fixture,context){
   if(bundle.state!=="proved"||!bundle.snapshotArchive)fail("restored_direct")
-  const brief=await restoredCustody(bundle.custody,bundle.snapshotArchive)
+  const brief=await restoredCustody(bundle.custody,bundle.snapshotArchive,context)
   const snapshot=JSON.parse(await readProtectedBytes(bundle.snapshotArchive,6291456))
   const expectedSnapshot=JSON.parse(prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,
     recordRefs:fixture.record_refs,generation:snapshot.generation}).snapshotBytes)
@@ -562,14 +570,17 @@ async function protectedProofJSON(file){
   return value
 }
 export async function restoreDirectReceipt(bundle) {
+  return restoreDirect(bundle,realOwnedCustody)
+}
+async function restoreDirect(bundle,context) {
   const fixture=JSON.parse(await fs.readFile(new URL("../../../../../tests/desk/mcp/__tests__/factory/fixtures/v12-owned-catalog.json",import.meta.url)))
-  await restoreDirectHistory(bundle,fixture)
+  await restoreDirectHistory(bundle,fixture,context)
   if(bundle.bundle){
     closedObject(bundle.bundle,["version","cases","partial"])
     const expected=catalogFatalCases(fixture),root=path.dirname(path.dirname(bundle.snapshotArchive)),prefix=path.basename(path.dirname(bundle.snapshotArchive))
     if(bundle.bundle.version!==1||bundle.bundle.cases.length!==expected.length||
       bundle.bundle.partial.snapshotArchive!==path.join(root,`${prefix}-partial`,"catalog.json"))fail("restored_bundle")
-    await restoreDirectHistory(bundle.bundle.partial,{...fixture,...fixture.histories.partial})
+    await restoreDirectHistory(bundle.bundle.partial,{...fixture,...fixture.histories.partial},context)
     for(const [i,item]of bundle.bundle.cases.entries()){
       closedObject(item,["name","descriptorSha256","proofSha256","resources","normalTerminal","state","reason"])
       if(item.name!==expected[i].name||item.descriptorSha256!==descriptorHash(expected[i].frames)||
@@ -586,16 +597,22 @@ export async function restoreDirectReceipt(bundle) {
         wireProofHash(proof)!==item.proofSha256||
         catalogCanonical(wireProofResources(proof.resources))!==catalogCanonical(item.resources))fail("restored_case_proof")
     }
-    directBundles.set(bundle,catalogHash(JSON.stringify(bundle)))
+    context.direct.bundles.set(bundle,catalogHash(JSON.stringify(bundle)))
   }
-  directRuns.set(bundle,catalogHash(JSON.stringify(bundle)))
+  context.direct.records.set(bundle,catalogHash(JSON.stringify(bundle)))
   return true
 }
 
 const realLifecycle=Object.freeze({readBytes:file=>fs.readFile(file),source:ownedSourceIdentity,
   verifyModules:verifyModuleClosure,observe:observeOwnedServer,openControl:openSafe,writeControl:boundedFdWrite,
   pump:fifoPump,live:ownedPidLive,closeFd:close,registry:trustedCustody,requireObservations:true})
-async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHandle,controlPath,deadline,clock=Date.now},context=realLifecycle) {
+// The production owned-catalog context, fixed lexically: Darwin host support,
+// ps provenance and the real custody/run registries. No option, environment
+// variable or file selects another; only createNonacceptedOwnedCatalog below
+// builds a different one, and its registries never reach these maps.
+const realOwnedCustody=Object.freeze({refusal:hostRefusal,lifecycle:realLifecycle,custody:trustedCustody,native:nativeRuns,direct:realDirectRegistry,
+  refusesObserverDouble:true})
+async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHandle,controlPath,deadline,clock=Date.now},context) {
   // The direct client and native path share this receipt/provenance controller.
   const receipts=[],observations=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
   const sourceBefore=await context.source()
@@ -818,17 +835,21 @@ export async function prepareOwnedCatalogRun({inputDir,runDir,deadline}) {
       return current.sha256===prepared.sha256&&catalogCanonical(current.identity)===catalogCanonical(prepared.identity)},
   }
 }
-const realNativeRun=Object.freeze({lifecycle:runOwnedCatalogLifecycle,stat:fsNative.lstatSync,bytes:fsNative.readFileSync,
+const ownedLifecycle=context=>value=>runOwnedCatalogLifecycle(value,context)
+const realNativeRun=Object.freeze({lifecycle:ownedLifecycle(realLifecycle),stat:fsNative.lstatSync,bytes:fsNative.readFileSync,
   materialize:materializeTriageSubmission,registry:nativeRuns})
 export async function runOwnedCatalogNative(options) {
-  const refused=hostRefusal()
+  return runOwnedNative(options,realOwnedCustody,realNativeRun)
+}
+async function runOwnedNative(options,owner,native) {
+  const refused=owner.refusal()
   if(refused!==null){
     // Refuse before the native engine (and so any model turn) can start.
     await options.owned.close()
     return {state:"scope_unqualified",cost_usd:null,reason:refused,detail:refused,stream:{kind:"failed",stdout:"",truncated:false},
       resources:{runDir:options.owned.runDir,pids:[],exited_pids:[],native_exit:null}}
   }
-  return runNativeTransaction(options,realNativeRun)
+  return runNativeTransaction(options,native)
 }
 async function runNativeTransaction({owned,command,args,env,deadline,resultFile,onChild,onChildExit,spawn:spawnNative=spawn},context) {
     let child,lifecycle,closed=false,ownsPID=false,exitCode=null,signal=null,nativeError=null,stdout="",stderr="",partial="",total=0,successSeen=false,cost=null,budgetExceeded=false
@@ -1174,8 +1195,11 @@ export function createNonacceptedNativePair(config){
   }})
 }
 export {Client as CatalogClient}
-export async function runCatalogWireCase({fixture,frames,deadline}) {
-    const refused=hostRefusal()
+export async function runCatalogWireCase(options) {
+  return runWireCase(options,realOwnedCustody)
+}
+async function runWireCase({fixture,frames,deadline},context) {
+    const refused=context.refusal()
     if(refused!==null)return {state:"scope_unqualified",reason:refused,normalTerminal:false,resources:{pids:[],exited:[]},cleanup:async()=>{}}
     const dir=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"triage-wire-")));await fs.chmod(dir,0o700)
     const resources={dir,owner:"direct-parent",serverExited:false,pids:[],exited:[]}
@@ -1185,7 +1209,7 @@ export async function runCatalogWireCase({fixture,frames,deadline}) {
       await writeTriagePreparedFile({inputDir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
       owned=await prepareOwnedCatalogRun({inputDir,runDir:path.join(dir,"run"),deadline})
       lifecycle=await runOwnedCatalogLifecycle({launch:owned.launch,receiptFd:owned.reader.handle.fd,receiptHandle:owned.reader.handle,
-        controlPath:owned.launch.identity.bootstrap.readyFifo,deadline})
+        controlPath:owned.launch.identity.bootstrap.readyFifo,deadline},context.lifecycle)
       child=spawn(owned.launch.command,owned.launch.args,{env:owned.launch.env,cwd:owned.launch.cwd,shell:false,stdio:["pipe","pipe","pipe"]})
       resources.pids.push(child.pid)
       let stdout="",stderr="",count=0,driverFailed=false
@@ -1222,7 +1246,7 @@ export async function runCatalogWireCase({fixture,frames,deadline}) {
       resources.observations=structuredClone(lifecycle.observations)
       const proof={state:!driverFailed&&ended.code!==0&&result.state!=="closed"&&resources.serverExited?"refused":"failed",
         descriptorSha256:descriptorHash(frames),normalTerminal:result.state==="closed",reason:result.reason,resources,cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
-      wireRuns.set(proof,catalogHash(JSON.stringify(proof)))
+      context.direct.wire.set(proof,catalogHash(JSON.stringify(proof)))
       return proof
     }catch(e){
       if(child&&!child.killed)child.kill("SIGTERM")
@@ -1232,8 +1256,11 @@ export async function runCatalogWireCase({fixture,frames,deadline}) {
       return {state:"failed",reason:e.message,normalTerminal:false,resources,cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
     }
 }
-export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
-  const refused=hostRefusal()
+export async function runDirectCatalog(options) {
+  return runDirect(options,realOwnedCustody)
+}
+async function runDirect({fixture,deadline,evidenceDir},context) {
+  const refused=context.refusal()
   if(refused!==null)return {state:"scope_unqualified",reason:refused,resources:{pids:[],files:[]},cleanup:async()=>{}}
   if(typeof nodeModule.registerHooks!=="function")return {state:"scope_unqualified",reason:"runtime_provenance_unsupported",resources:{},cleanup:async()=>{}}
   const dir=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"triage-direct-")))
@@ -1248,7 +1275,7 @@ export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
     resources.runDir=owned.runDir
     const launch=owned.launch,reader=owned.reader;fd=reader.handle
     // Begin pump before spawn. The server alone will acquire the write end.
-    lifecycle=await runOwnedCatalogLifecycle({launch,receiptFd:fd.fd,receiptHandle:fd,controlPath:launch.identity.bootstrap.readyFifo,deadline})
+    lifecycle=await runOwnedCatalogLifecycle({launch,receiptFd:fd.fd,receiptHandle:fd,controlPath:launch.identity.bootstrap.readyFifo,deadline},context.lifecycle)
     child=spawn(launch.command,launch.args,{env:launch.env,cwd:launch.cwd,stdio:["pipe","pipe","pipe"],shell:false})
     const closed=new Promise(resolve=>child.on("close",(code,signal)=>resolve({code,signal})))
     let stderr="";child.stderr.on("data",b=>{stderr+=b;resources.stderr=stderr;if(Buffer.byteLength(stderr)>65536)child.kill("SIGTERM")})
@@ -1289,7 +1316,7 @@ export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
       const {cleanup,...record}=proof
       await fs.writeFile(path.join(evidenceDir,"direct-proof.json"),catalogCanonical(record),{mode:0o600,flag:"wx"})
     }
-    directRuns.set(proof,catalogHash(JSON.stringify(proof)))
+    context.direct.records.set(proof,catalogHash(JSON.stringify(proof)))
     return proof
   }catch(e){
     if(child&&!child.killed)child.kill("SIGTERM")
@@ -1298,4 +1325,46 @@ export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
     await reapOwnedChild(child,deadline)
     return {state:"failed",reason:e.message,resources,cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
   }
+}
+// Provenance observer double for the NONACCEPTED facade only. It stands in for
+// Darwin ps lineage: both owned processes must be live, and the identity it
+// reports is the one the launch recipe expects, with a fixed epoch start that
+// no live Darwin observation produces. It never runs ps or reads /proc.
+const NONACCEPTED_OBSERVER_START="Thu Jan  1 00:00:00 1970"
+async function observeOwnedServerDouble({nativePid,launcherPid,serverPid,generation,expected}) {
+  if(![launcherPid,serverPid].every(pid=>Number.isSafeInteger(pid)&&pid>0&&ownedPidLive(pid)))return {ok:false,reason:"provenance_unsupported"}
+  const server={pid:serverPid,ppid:launcherPid,start:NONACCEPTED_OBSERVER_START,command:`${expected.runtime} ${expected.entry}`}
+  const launch={pid:launcherPid,ppid:nativePid??process.pid,start:NONACCEPTED_OBSERVER_START,
+    command:`${expected.runtime} ${expected.launcher} ${expected.launchArgs.join(" ")}`}
+  const allowed=`${expected.runtime} ${expected.entry} ${Object.entries(expected.cleanEnv).map(([k,v])=>`${k}=${v}`).join(" ")}`
+  return {ok:true,identity:{server,launch,generation,environment_sha256:catalogHash(allowed)}}
+}
+/** Test-owned NONACCEPTED owned-catalog facade. The same direct, wire, native,
+ * restore and materialize code runs against the actual launcher, server, FIFOs
+ * and files, with two substitutions only: host support is assumed and Darwin ps
+ * provenance is the observer double above. Every receipt, custody and run it
+ * issues lives in this facade's own fresh registries, so nothing it returns is
+ * accepted by retainDirectReceipt, completeDirectBundle, restoreDirectReceipt,
+ * restoreNativeBundle, materializeTriageSubmission or authenticated*Runs, and
+ * it cannot write qualification. Production code never calls it; no option,
+ * environment variable or file selects it. */
+export function createNonacceptedOwnedCatalog() {
+  const custody=new WeakMap(),native=new WeakMap()
+  const direct=Object.freeze({records:new WeakMap(),bundles:new WeakMap(),wire:new WeakMap()})
+  const lifecycle=Object.freeze({...realLifecycle,observe:observeOwnedServerDouble,registry:custody})
+  const context=Object.freeze({refusal:()=>null,lifecycle,custody,native,direct,refusesObserverDouble:false})
+  const nativeRun=Object.freeze({...realNativeRun,lifecycle:ownedLifecycle(lifecycle),
+    materialize:value=>materializeSubmission(value,context),registry:native})
+  return Object.freeze({authority:false,
+    runDirectCatalog:options=>runDirect(options,context),
+    runCatalogWireCase:options=>runWireCase(options,context),
+    runOwnedCatalogNative:options=>runOwnedNative(options,context,nativeRun),
+    retainDirectReceipt:proof=>retainRegisteredDirect(proof,direct),
+    completeDirectBundle:value=>completeRegisteredDirect(value,direct),
+    authenticatedDirectReceipts:records=>authenticateDirectRecords(records,direct),
+    authenticatedNativeRuns:runs=>authenticateNativePair(runs,native),
+    restoreDirectReceipt:bundle=>restoreDirect(bundle,context),
+    restoreNativeBundle:bundle=>restoreNative(bundle,context),
+    materializeTriageSubmission:value=>materializeSubmission(value,context),
+  })
 }

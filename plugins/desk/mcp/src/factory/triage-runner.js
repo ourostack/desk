@@ -200,27 +200,32 @@ export function validateTriageControls(e){
   try{assertTriageControls(e);return {ok:true,errors:[]}}
   catch(e){return {ok:false,errors:[e.message]}}
 }
-function verifyControlEngine(cli){
+function verifyControlEngine(cli,engine){
   const fd=fsNative.openSync(cli,fsNative.constants.O_RDONLY|fsNative.constants.O_NOFOLLOW)
   try{
     const before=fsNative.fstatSync(fd),hash=createHash("sha256"),buffer=Buffer.alloc(65536)
     if(!before.isFile())throw Error("engine_type")
     let n;while((n=fsNative.readSync(fd,buffer,0,buffer.length,null))>0)hash.update(buffer.subarray(0,n))
-    if(hash.digest("hex")!==POLICY_ENGINE_SHA)throw Error("engine_revision")
-    for(const [offset,length,sha]of [...CONTROL_FRAGMENTS,...Object.values(VARIANT_SPANS).flat(),...FIXED_SET_FRAGMENTS]){
+    if(hash.digest("hex")!==engine.sha256)throw Error("engine_revision")
+    for(const [offset,length,sha]of engine.spans){
       const bytes=Buffer.alloc(length)
       if(fsNative.readSync(fd,bytes,0,length,offset)!==length||digest(bytes)!==sha)throw Error("predicate_revision")
     }
     const after=fsNative.fstatSync(fd)
     if(before.dev!==after.dev||before.ino!==after.ino||before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw Error("engine_changed")
-    return {id:"s000",kind:"engine",revision_sha256:POLICY_ENGINE_SHA,path_identity:{path:cli,dev:before.dev,ino:before.ino,uid:before.uid,mode:before.mode&0o777,size:before.size}}
+    return {id:"s000",kind:"engine",revision_sha256:engine.sha256,path_identity:{path:cli,dev:before.dev,ino:before.ino,uid:before.uid,mode:before.mode&0o777,size:before.size}}
   }finally{fsNative.closeSync(fd)}
 }
 const CONTROL_HELPERS=["apiKeyHelper","awsAuthRefresh","awsCredentialExport","gcpAuthRefresh","otelHeadersHelper","proxyAuthHelper",
   "statusLine","subagentStatusLine","fileSuggestion","processWrapper","policyHelper","policyHelpers"]
-const CONTROL_SYSTEM_ROOT="/Library/Application Support/ClaudeCode"
-// The pinned managed loader is system-rooted, not the user's CLAUDE_CONFIG_DIR.
-const CONTROL_MANAGED_DATA_ROOT=path.join(CONTROL_SYSTEM_ROOT,".claude") // Never relocated by CLAUDE_CONFIG_DIR.
+// The production control host, fixed lexically and data only: the pinned
+// engine revision with its reviewed spans, and the Darwin managed roots. The
+// pinned managed loader is system-rooted, never relocated by CLAUDE_CONFIG_DIR.
+// No option, environment variable or file selects another host; only
+// createNonacceptedControlHost below builds one, with its own registry.
+const REAL_CONTROL_HOST=Object.freeze({
+  engine:Object.freeze({sha256:POLICY_ENGINE_SHA,spans:Object.freeze([...CONTROL_FRAGMENTS,...Object.values(VARIANT_SPANS).flat(),...FIXED_SET_FRAGMENTS])}),
+  system:"/Library/Application Support/ClaudeCode",preferences:"/Library/Managed Preferences"})
 function controlAncestors(file){
   if(!path.isAbsolute(file)||path.resolve(file)!==file)throw Error("control_path_ambiguous")
   const parents=[],parts=path.dirname(file).split(path.sep).filter(Boolean)
@@ -268,12 +273,12 @@ function safeControlBytes(file){
     return {bytes:null,identity:null,ancestors}
   }finally{if(fd!==undefined)fsNative.closeSync(fd)}
 }
-function selectedControlSources(env){
-  const base="/Library/Application Support/ClaudeCode",dir=path.join(base,"managed-settings.d")
+function selectedControlSources(env,host){
+  const base=host.system,dir=path.join(base,"managed-settings.d")
   if(process.platform!=="darwin")throw Error("control_host")
   const paths=[[path.join(base,"managed-settings.json"),"managed"],
-    ["/Library/Managed Preferences/"+userInfo().username+"/com.anthropic.claudecode.plist","os_policy"],
-    ["/Library/Managed Preferences/com.anthropic.claudecode.plist","os_policy"],
+    [path.join(host.preferences,userInfo().username,"com.anthropic.claudecode.plist"),"os_policy"],
+    [path.join(host.preferences,"com.anthropic.claudecode.plist"),"os_policy"],
     [path.join(base,"managed-mcp.json"),"managed"],
     [path.join(env.CLAUDE_CONFIG_DIR||path.join(env.HOME,".claude"),"remote-settings.json"),"remote_policy"]]
   try{
@@ -298,7 +303,8 @@ function requiredSelector(env,name){
   if(env[name]===undefined)return false
   return /^(?:1|true|yes|on)$/iu.test(env[name])?true:"unknown"
 }
-function collectManagedControlData(){
+function collectManagedControlData(host){
+  const managedData=path.join(host.system,".claude")
   const sources=[],instructions=[],visiting=new Set(),seen=new Set()
   let total=0,members=0
   const retain=(file,kind,observation,names)=>{
@@ -310,7 +316,7 @@ function collectManagedControlData(){
   }
   const load=(file,kind,depth=0,required=false)=>{
     if(depth>4)throw Error("control_import_depth")
-    if(!file.startsWith(CONTROL_SYSTEM_ROOT+"/")||path.resolve(file)!==file)throw Error("control_import_outside")
+    if(!file.startsWith(host.system+"/")||path.resolve(file)!==file)throw Error("control_import_outside")
     if(visiting.has(file))throw Error("control_import_cycle")
     if(seen.has(file))return
     if(members>=64)throw Error("control_closure_count")
@@ -371,9 +377,9 @@ function collectManagedControlData(){
     if(catalogCanonical(names)!==catalogCanonical(readdirSync(dir).sort())||
       catalogCanonical(ancestors)!==catalogCanonical(controlAncestors(path.join(dir,".selected"))))throw Error("control_source_changed")
   }
-  load(path.join(CONTROL_SYSTEM_ROOT,"CLAUDE.md"),"instruction")
-  directory(path.join(CONTROL_MANAGED_DATA_ROOT,"rules"),"instruction")
-  directory(path.join(CONTROL_MANAGED_DATA_ROOT,"agents"),"agent")
+  load(path.join(host.system,"CLAUDE.md"),"instruction")
+  directory(path.join(managedData,"rules"),"instruction")
+  directory(path.join(managedData,"agents"),"agent")
   return {instructions,memory:[],sources,total}
 }
 const OPTIONAL_BUILTINS=["cc-plugin-responsive-mode","cc-plugin-diff","cc-plugin-you-should-know","cc-plugin-claude-test",
@@ -516,20 +522,25 @@ async function collectControlsTransaction({cli,env,argv,deadline=Date.now()+1500
       capture:protectedControlCapture(stages,evidence,diagnostic)}
   }catch(e){return hold("effective_policy_unknown",e.message)}
 }
-const realControlContext=Object.freeze({registry:controlCollections,engine:(cli,env)=>{const source=verifyControlEngine(cli);verifyEngine(cli,env);return source},
-  sources:({env})=>selectedControlSources(env).map(([file,kind])=>readControlSource(file,kind,env)),
+const controlContextFor=(host,registry)=>Object.freeze({host,registry,
+  engine:(cli,env)=>{const source=verifyControlEngine(cli,host.engine);verifyEngine(cli,env);return source},
+  sources:({env})=>selectedControlSources(env,host).map(([file,kind])=>readControlSource(file,kind,env)),
   helperTiers:raw=>{
     if(!raw.every(({settings})=>validPolicyDocument(settings)&&Object.keys(settings).every(k=>
       ["permissions","disableAllHooks","disableSkillShellExecution","disableWorkflows","hooks","enabledPlugins","prependPlugins","appendPlugins"].includes(k))))return false
     checkedRegisteredSelection(raw)
     return true
   },
-  closure:({sources,settings})=>resolveRegisteredControls(sources,collectManagedControlData(),settings),
+  closure:({sources,settings})=>resolveRegisteredControls(sources,collectManagedControlData(host),settings),
   diagnostic:({cli,env,deadline,runDiagnostic})=>(runDiagnostic??(r=>runChild({...r,spawn:nodeSpawn})))({
     cmd:cli,args:["doctor"],opts:{cwd:"/",env:childEnvironment(env),stdio:["ignore","pipe","pipe"]},
     timeoutMs:Math.min(15000,Math.max(1,deadline-Date.now())),maxBytes:65536}),
 })
+const realControlContext=controlContextFor(REAL_CONTROL_HOST,controlCollections)
 export async function collectTriageControls(options){
+  return collectControls(options,realControlContext)
+}
+async function collectControls(options,context){
   try{
     const {argv}=options,config=JSON.parse(argv[argv.indexOf("--mcp-config")+1])
     closedObject(config,["mcpServers"]);closedObject(config.mcpServers,["triage_catalog"])
@@ -545,7 +556,23 @@ export async function collectTriageControls(options){
     if(policy.state!=="prepared"||catalogCanonical(policy.argv)!==catalogCanonical(argv))throw Error("control_recipe")
   }catch{return {...held("policy_control_unsupported"),detail:"control_recipe",evidence:null,fingerprint:null,
     capture:protectedControlCapture([{name:"recipe",observation:"unobserved",reason:"invalid_recipe"}],null)}}
-  return collectControlsTransaction(options,realControlContext)
+  return collectControlsTransaction(options,context)
+}
+/** Test-owned NONACCEPTED control host. The same control collection and local
+ * admission readers run against a caller-built engine pin (file SHA-256 plus
+ * [offset, length, SHA-256] spans) and managed roots, instead of the installed
+ * engine and /Library. Every collection lives in this facade's own registry,
+ * so hasCollectedTriageControls, admission and qualification never accept it.
+ * Production never calls it; no option, environment variable or file selects
+ * it. Platform and OS commands stay real: a caller off Darwin sets them up. */
+export function createNonacceptedControlHost(config){
+  closedObject(config,["engine","system","preferences"]);closedObject(config.engine,["sha256","spans"])
+  const {engine,system,preferences}=JSON.parse(catalogCanonical(config))
+  const registry=new WeakMap(),context=controlContextFor(Object.freeze({engine:Object.freeze(engine),system,preferences}),registry)
+  return Object.freeze({authority:false,
+    collectTriageControls:options=>collectControls(options,context),
+    collectTriageAdmission:options=>collectAdmission(options,context),
+    hasCollectedTriageControls:e=>collectedIn(e,registry)})
 }
 /** Same algorithm, fixed memory-only readers/registry; never authenticates in
  * controlCollections and cannot invoke OS/engine/helper/qualification code. */
@@ -708,8 +735,8 @@ function validPolicyDocument(v){
   }
   return true
 }
-function localPolicySources({cli,env,argv,remote_delivery}){
-  const system=process.platform==="darwin"?"/Library/Application Support/ClaudeCode":process.platform==="win32"?"C:\\Program Files\\ClaudeCode":"/etc/claude-code"
+function localPolicySources({cli,env,argv,remote_delivery},host){
+  const system=process.platform==="darwin"?host.system:process.platform==="win32"?"C:\\Program Files\\ClaudeCode":"/etc/claude-code"
   const files=[path.join(system,"managed-settings.json")]
   try{files.push(...readdirSync(path.join(system,"managed-settings.d")).filter(n=>n.endsWith(".json")&&!n.startsWith(".")).sort().map(n=>path.join(system,"managed-settings.d",n)))}catch(e){if(e.code!=="ENOENT")throw e}
   const readSource=(file,kind,parse=JSON.parse)=>{
@@ -726,24 +753,27 @@ function localPolicySources({cli,env,argv,remote_delivery}){
   const validationErrors=()=>sources.every(s=>validPolicyDocument(s.settings))?[]:["invalid_policy_document"]
   if(process.platform!=="darwin")return {complete:false,controller_invariant:false,sources,validation_errors:validationErrors()}
   for(const [file,kind]of [
-    ["/Library/Managed Preferences/"+userInfo().username+"/com.anthropic.claudecode.plist","os"],
-    ["/Library/Managed Preferences/com.anthropic.claudecode.plist","os"],
+    [path.join(host.preferences,userInfo().username,"com.anthropic.claudecode.plist"),"os"],
+    [path.join(host.preferences,"com.anthropic.claudecode.plist"),"os"],
     [path.join(system,"managed-mcp.json"),"managed"],
     [path.join(env.CLAUDE_CONFIG_DIR||path.join(env.HOME,".claude"),"remote-settings.json"),"remote"],
   ])sources.push(readSource(file,kind,bytes=>file.endsWith(".plist")?plistJson(bytes,env):JSON.parse(bytes)))
   const selected=argv.includes("--restricted")&&argv.includes("--safe-mode")&&argv.includes("--strict-mcp-config")
-  const known=digest(readFileSync(cli))===POLICY_ENGINE_SHA
+  const known=digest(readFileSync(cli))===host.engine.sha256
   if(known)verifyEngine(cli,env)
   const validation_errors=validationErrors(),remoteResolved=["not_applicable","no_configuration"].includes(remote_delivery)&&validPolicyDocument(sources.at(-1).settings)&&Object.keys(sources.at(-1).settings).length===0
   return {complete:Boolean(selected&&known&&remoteResolved&&validation_errors.length===0),controller_invariant:true,sources,validation_errors,
-    capabilities:selected&&known&&!validation_errors.length?{result_is_data_only:true,engine_sha256:POLICY_ENGINE_SHA}:null}
+    capabilities:selected&&known&&!validation_errors.length?{result_is_data_only:true,engine_sha256:host.engine.sha256}:null}
 }
-export async function collectTriageAdmission({cli,env,argv,runDiagnostic,policyReaders}){
+export async function collectTriageAdmission(options){
+  return collectAdmission(options,realControlContext)
+}
+async function collectAdmission({cli,env,argv,runDiagnostic,policyReaders},control){
   if(isHeadlessFactorySession(env))return held("policy_control_unsupported")
   if(billingVariableBlocks(env))return held("billing_unresolved")
   if(!policyReaders&&!(qualificationMeasurementActive()&&runDiagnostic)){
-    const controls=await collectTriageControls({cli,env,argv,runDiagnostic})
-    return admissionFromControls(controls,controlCollections)
+    const controls=await collectControls({cli,env,argv,runDiagnostic},control)
+    return admissionFromControls(controls,control.registry)
   }
   // Legacy synthetic reader tests cannot authorize the real revised recipe.
   // The real qualifier/runner require a current private control collection.
@@ -754,7 +784,7 @@ export async function collectTriageAdmission({cli,env,argv,runDiagnostic,policyR
     fingerprint:state==="admitted"?fingerprint({sources,remote_delivery,argv,capabilities,env:childEnvironment(env)}):null,
   })
   try{
-    const reader=policyReaders?.read??localPolicySources,request={cli,env:childEnvironment(env),argv}
+    const reader=policyReaders?.read??(request=>localPolicySources(request,control.host)),request={cli,env:childEnvironment(env),argv}
     const preflight=await reader(request)
     for(const s of preflight?.sources??[]){
       if(!validPolicyDocument(s.settings))return result("scope_unqualified","effective_policy_unknown",[],["invalid_policy_document"])

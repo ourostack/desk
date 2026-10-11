@@ -15,6 +15,7 @@ import childProcess from "node:child_process"
 import {runInNewContext} from "node:vm"
 import {different} from "../_file_identity.js"
 import * as runner from "../../../../../plugins/desk/mcp/src/factory/triage-runner.js"
+const realRunner=runner
 const hash=value=>createHash("sha256").update(value).digest("hex")
 const flags=["--restricted","--safe-mode","--permission-mode","--permission-prompts","--tools","--disable-slash-commands","--no-chrome","--no-session-persistence","--strict-mcp-config","--mcp-config","--settings","--max-budget-usd","--output-format","--verbose","--system-prompt","--allowedTools"]
 const metadata={host:"claude-code",flags}
@@ -175,6 +176,35 @@ function pinnedSourceMemoryFD(t,cli,alter=()=>{}){
   t.mock.method(fsNative,"closeSync",file=>file===fd?undefined:close(file))
   syncBuiltinESMExports()
   t.after(()=>{t.mock.restoreAll();Object.assign(fsNative,{openSync:open,readSync:read,fstatSync:fstat,closeSync:close});syncBuiltinESMExports()})
+}
+// One control-host scenario, run twice. The first variant reads the installed
+// Claude Code 2.1.296 engine and the Darwin /Library managed roots (real-binary
+// opt-in). The second runs the same readers on every POSIX host through
+// createNonacceptedControlHost: a synthetic engine file with its own pin, and
+// private managed roots, on a Darwin-labelled process with codesign answered
+// by the test. Its collections live only in that facade's registry.
+const REAL_ENGINE=path.join(process.env.DESK_TEST_REAL_HOME??"/unset",".local/share/claude/versions/2.1.296")
+function controlHostTest(name,fn){
+  realCliTest(name,"posix",t=>fn(t,{runner,cli:REAL_ENGINE,system:"/Library/Application Support/ClaudeCode",
+    preferences:"/Library/Managed Preferences",fragment:200633045,synthetic:false}))
+  ownedHostTest(`${name} [synthetic engine]`,"posix",async t=>{
+    const dir=realpathSync(mkdtempSync(path.join(tmpdir(),"control-host-")));fsNative.chmodSync(dir,0o700)
+    t.after(()=>rmSync(dir,{recursive:true,force:true}))
+    const library=path.join(dir,"Library");fsNative.mkdirSync(path.join(library,"Application Support"),{recursive:true,mode:0o700})
+    const bytes=Buffer.alloc(16384);for(let i=0;i<bytes.length;i++)bytes[i]=(i*31+7)%251
+    const cli=path.join(dir,"engine");writeFileSync(cli,bytes,{mode:0o700})
+    const spans=[[512,96],[4096,700],[12000,1500]].map(([offset,length])=>[offset,length,hash(bytes.subarray(offset,offset+length))])
+    const system=path.join(library,"Application Support","ClaudeCode"),preferences=path.join(library,"Managed Preferences")
+    const host=runner.createNonacceptedControlHost({engine:{sha256:hash(bytes),spans},system,preferences})
+    assert.equal(host.authority,false)
+    const platform=Object.getOwnPropertyDescriptor(process,"platform"),exec=childProcess.execFileSync
+    Object.defineProperty(process,"platform",{...platform,value:"darwin"})
+    t.mock.method(childProcess,"execFileSync",(command,args,options)=>command==="/usr/bin/codesign"?"":exec(command,args,options))
+    syncBuiltinESMExports()
+    t.after(()=>{Object.defineProperty(process,"platform",platform);childProcess.execFileSync=exec;syncBuiltinESMExports()})
+    await fn(t,{runner:Object.freeze({...runner,...host}),cli,system,preferences,fragment:spans[0][0],synthetic:true})
+    // Synthetic collections never reach the production registry.
+  })
 }
 ownedHostTest("restricted_recipe_exact_three_effective_off_values","posix",async(t)=>{
   const f=await fixture(t)
@@ -553,7 +583,7 @@ test("finite_control_rejections_preserve_named_boundary_and_no_authority",async(
 test("old_safe_mode_record_rejected",()=>{
   assert.throws(()=>runner.validateOwnedQualificationStructure({record:{version:2}}),{message:"qualification_structure"})
 })
-realCliTest("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory","posix",async(t)=>{
+controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory",async(t,{runner,cli:actual,synthetic})=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -561,7 +591,6 @@ realCliTest("real_control_collector_pins_source_and_collects_fixed_off_without_i
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"actual-control"),deadline:Date.now()+20000})
   t.after(()=>owned.close())
   const p=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
-  const actual=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296")
   pinnedSourceMemoryFD(t,actual)
   const env={HOME:f.dir}
   let calls=0
@@ -572,6 +601,7 @@ realCliTest("real_control_collector_pins_source_and_collects_fixed_off_without_i
   assert.equal(observed.evidence.controls.instructions_agents.state,"source_disabled")
   assert.equal(observed.evidence.controls.memory.state,"effective_off")
   assert.equal(runner.hasCollectedTriageControls(observed.evidence),true)
+  if(synthetic)assert.equal(realRunner.hasCollectedTriageControls(observed.evidence),false)
   assert.equal(observed.evidence.builtin_basis["cc-plugin-tips"].selection,"unobserved")
   assert.equal(observed.evidence.sources[0].path_identity.path,actual)
   const unknown=await runner.collectTriageControls({cli:f.cli,env,argv:p.argv,runDiagnostic:()=>{throw Error("no diagnostic")}})
@@ -645,7 +675,7 @@ test("control_structure_limits_path_identity_and_state_pairs",async()=>{
   valid.effective_sources_sha256=hash(catalog.catalogCanonical(valid.sources))
   assert.equal(runner.validateTriageControls(valid).ok,true)
 })
-realCliTest("source_bound_control_reader_safe_file_failure_matrix","posix",async(t)=>{
+controlHostTest("source_bound_control_reader_safe_file_failure_matrix",async(t,{runner,cli,system:managedRoot,preferences,fragment})=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const data=JSON.parse(readFileSync(new URL("./fixtures/v12-owned-catalog.json",import.meta.url)))
@@ -653,7 +683,7 @@ realCliTest("source_bound_control_reader_safe_file_failure_matrix","posix",async
   const owned=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,"control-files"),deadline:Date.now()+30000})
   t.after(()=>owned.close())
   const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:owned.launch})
-  const cli=path.join(process.env.DESK_TEST_REAL_HOME,".local/share/claude/versions/2.1.296"),env={HOME:f.dir}
+  const env={HOME:f.dir}
   const original={...Object.fromEntries(["lstatSync","openSync","readFileSync","readdirSync","fstatSync","readSync","closeSync"].map(k=>[k,fsNative[k]]))}
   const nativeBytes=readFileSync(cli),nativeStat=fsNative.lstatSync(cli),nativeFD=987654321
   let nativeCursor=0
@@ -662,12 +692,11 @@ realCliTest("source_bound_control_reader_safe_file_failure_matrix","posix",async
   const realFdStat=fsNative.fstatSync,realSyncRead=fsNative.readSync
   let mode="normal",opens=0,engineStats=0,ancestorReads=0,directoryReads=0
   const dataDir=path.join(f.dir,"data");fsNative.mkdirSync(dataDir,{mode:0o700})
-  const managedRoot="/Library/Application Support/ClaudeCode"
   const dataFile=file=>String(file).startsWith(managedRoot+"/")&&String(file).endsWith(".md")?path.join(dataDir,path.basename(String(file))):null
   const mappedDirectory=file=>mode.startsWith("dir")&&String(file).startsWith(managedRoot+"/.claude/")?
     path.join(dataDir,path.relative(managedRoot+"/.claude",String(file))):null
   const selected=file=>String(file)===managedRoot||String(file).startsWith(managedRoot+"/")||
-    String(file)==="/Library/Managed Preferences"||String(file).startsWith("/Library/Managed Preferences/")
+    String(file)===preferences||String(file).startsWith(preferences+"/")
   t.mock.method(fsNative,"lstatSync",(file,...args)=>{
     if(!selected(file))return realStat(file,...args)
     if(mappedDirectory(file)){
@@ -754,7 +783,7 @@ realCliTest("source_bound_control_reader_safe_file_failure_matrix","posix",async
         if(mode==="growth"){buffer.fill(32,offset,offset+length);n=length}
       }
     }
-    if(mode==="fragment"&&position===200633045&&n>0)buffer[0]^=1
+    if(mode==="fragment"&&position===fragment&&n>0)buffer[0]^=1
     return n
   })
   t.mock.method(fsNative,"closeSync",fd=>fd===nativeFD?undefined:original.closeSync(fd))
@@ -1310,9 +1339,8 @@ test("launcher_or_engine_change_invalidates_qualification",async(t)=>{
   writeFileSync(f.cli,"engine revision two");assert.notEqual(runner.inspectLaunchChain(f).fingerprint,before.fingerprint)
   assert.equal(runner.inspectLaunchChain({...f,resolveExec:()=>null}).state,"scope_unqualified")
 })
-realCliTest("default_local_policy_matrix_reads_synthetic_documents_without_command_execution","posix",async(t)=>{
+controlHostTest("default_local_policy_matrix_reads_synthetic_documents_without_command_execution",async(t,{runner,cli})=>{
   const f=await fixture(t),realRead=fsNative.readFileSync,realList=fsNative.readdirSync
-  const cli=path.join(process.env.DESK_TEST_REAL_HOME,".local","share","claude","versions","2.1.296")
   const platform=Object.getOwnPropertyDescriptor(process,"platform")
   let mode="valid",diagnostics=0,verifications=0
   assert.equal(fsNative.existsSync(cli),true,"this concrete host's already-selected installed source remains available")

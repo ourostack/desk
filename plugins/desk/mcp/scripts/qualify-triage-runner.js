@@ -288,6 +288,16 @@ export async function runNonacceptedNativeQualification(config){
       statistics:{...unit.statistics(),syntheticLaunches:resources.launches,syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,memoryEvidenceDocuments:documents.size}}
   }
 }
+/** NONACCEPTED direct-only qualification over a createNonacceptedOwnedCatalog()
+ * facade: the same transaction, protected evidence writes and direct/wire
+ * bundles, with that facade's observer double and private registries. It takes
+ * no launch, so native runs, sign-in and a qualified record are unreachable. */
+export async function runNonacceptedDirectQualification({owned,fixture,deadline,evidenceDir}){
+  if(owned?.authority!==false)throw Error("unit_owned_catalog")
+  const context=Object.freeze({...realCatalogTransaction,direct:owned.runDirectCatalog,retain:owned.retainDirectReceipt,
+    wire:owned.runCatalogWireCase,complete:owned.completeDirectBundle})
+  return {...await qualifyCatalogTransaction({fixture,deadline,evidenceDir},context),authority:false}
+}
 /** Complete shared workflow with isolated synthetic custody and memory only. */
 export async function runNonacceptedCatalogTransaction(config){
   closedObject(config,["record","env","admission","chain","fixture","phaseFailure"],["failures"])
