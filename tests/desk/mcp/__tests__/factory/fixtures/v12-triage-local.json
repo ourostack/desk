@@ -1,0 +1,53 @@
+{
+  "schema": "desk.factory.triage-local-fixture/1",
+  "note": "Synthetic local triage cases. No real canonical key, store, person, path or private payload. The private_candidate sentinels must never appear in any Git blob.",
+  "key": "andon:example-org/example-repo#101",
+  "related_key": "andon:example-org/example-repo#102",
+  "store": "Example-Org/Example-Store",
+  "safe_review": {
+    "route": "human_decision",
+    "gate": "irreversible",
+    "authority_code": "human_gate",
+    "summary_codes": ["source:andon", "route:human_decision", "gate:irreversible"],
+    "evidence": [{ "kind": "issue", "ref": "https://github.com/example-org/example-repo/issues/101", "revision": 3 }],
+    "related_keys": ["andon:example-org/example-repo#102"],
+    "duplicate_keys": [],
+    "producer_version": "1.4.0-alpha.6",
+    "rubric_version": 1,
+    "protected_result": "0123456789abcdef0123456789abcdef"
+  },
+  "invalid_reviews": [
+    { "name": "prose_field", "patch": { "decision": "Ship the private plan to the vendor" }, "code": "unknown_key" },
+    { "name": "summary_prose", "patch": { "summary_codes": ["source:andon", "route:human_decision", "gate:irreversible", "the vendor deal"] }, "code": "summary_code" },
+    { "name": "gate_without_human_route", "patch": { "route": "investigate", "authority_code": "investigation_only", "summary_codes": ["source:andon", "route:investigate", "gate:irreversible"] }, "code": "inconsistent" },
+    { "name": "agent_ready_without_scope", "patch": { "route": "agent_ready", "gate": null, "authority_code": "investigation_only", "summary_codes": ["source:andon", "route:agent_ready"] }, "code": "inconsistent" },
+    { "name": "local_path_pointer", "patch": { "evidence": [{ "kind": "issue", "ref": "/Users/someone/desk/AGENTS.md", "revision": 1 }] }, "code": "pointer" },
+    { "name": "private_digest_token", "patch": { "protected_result": "sha256:2f5d" }, "code": "pattern" },
+    { "name": "title_as_key", "patch": { "related_keys": ["Private title of a card"] }, "code": "pattern" },
+    { "name": "missing_route_code", "patch": { "summary_codes": ["source:andon", "gate:irreversible"] }, "code": "summary_codes" }
+  ],
+  "private_candidate": {
+    "result": {
+      "key": "andon:example-org/example-repo#101",
+      "basis": "candidate-basis-token-1",
+      "route": "human_decision",
+      "problem": "PRIVATE-TITLE-SENTINEL: the release pipeline drops signed builds",
+      "observed_impact": "PRIVATE-QUOTE-SENTINEL \"we lost the Friday release\"",
+      "unknowns": ["PRIVATE-UNKNOWN-SENTINEL"],
+      "next_step": "PRIVATE-NEXT-SENTINEL ask the owner",
+      "authority": { "code": "human_gate", "ruling_ids": [] },
+      "evidence": ["evidence:0", "evidence:1"],
+      "related": ["andon:example-org/example-repo#102"],
+      "duplicates": [],
+      "decision": "PRIVATE-DECISION-SENTINEL delete the old signing key",
+      "gate_reason": "irreversible",
+      "recommendation": "PRIVATE-RECOMMENDATION-SENTINEL rotate first",
+      "safe_continuation": "PRIVATE-CONTINUATION-SENTINEL keep collecting logs"
+    },
+    "sentinels": ["PRIVATE-TITLE-SENTINEL", "PRIVATE-QUOTE-SENTINEL", "PRIVATE-UNKNOWN-SENTINEL", "PRIVATE-NEXT-SENTINEL", "PRIVATE-DECISION-SENTINEL", "PRIVATE-RECOMMENDATION-SENTINEL", "PRIVATE-CONTINUATION-SENTINEL", "candidate-basis-token-1"],
+    "authorized_evidence": [
+      { "id": "evidence:0", "kind": "issue", "ref": "https://github.com/example-org/example-repo/issues/101", "revision": 3, "git_safe": true },
+      { "id": "evidence:1", "kind": "issue", "ref": "https://github.com/example-org/private-repo/issues/9", "revision": 1, "git_safe": false }
+    ]
+  }
+}
