@@ -102,6 +102,8 @@ jobs:
           else
             echo "current=false" >> "$GITHUB_OUTPUT"
             echo "$APP runs $current; deploying $image."
+            # The rollback target for this deploy (hosted/README.md, Rollback), kept on the run's summary page.
+            echo "Rollback target, the image before this deploy: \`$current\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Build the image
