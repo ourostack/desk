@@ -163,8 +163,19 @@ test("the check stops at its deadline", () => scratch(async ({ env, desk }) => {
   const cutOff = () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) }
   assert.throws(() => factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: Infinity, clock: () => 0, readRemote: cutOff }), { code: "boot_check_budget" }, "a remote read cut off by the deadline is an overrun, never a desk without a remote")
   const seen = []
-  factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: 99, clock: () => 0, readRemote: (options) => { seen.push(options); return null } })
+  const clock = () => 0
+  const identities = []
+  factoryBootCheck({
+    env, deskRoot: desk, now: NOW, deadline: 99, clock,
+    readRemote: (options) => { seen.push(options); return null },
+    resolveIdentity: (options) => { identities.push(options); return { track: options.track, slug: options.slug } },
+  })
+  assert.equal(seen.length, 1, "the remote reader must be reached")
   assert.equal(seen[0].deadline, 99, "the remote read shares the check's own deadline")
+  assert.equal(seen[0].clock, clock, "the remote read shares the check's clock")
+  assert.equal(identities.length, 1, "the identity reader must be reached")
+  assert.equal(identities[0].deadline, 99, "the identity read shares the check's own deadline")
+  assert.equal(identities[0].clock, clock, "the identity read shares the check's clock")
 }))
 
 test("a desk with a known remote computes the task tools' job IDs, and a folder the job ID refuses is skipped", () => scratch(async ({ env, desk }) => {

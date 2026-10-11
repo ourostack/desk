@@ -169,7 +169,7 @@ test("pure_native_evidence_validation_never_issues_custody_authority",()=>{
     const records=JSON.parse(prepared.snapshotBytes).records
     const names=["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>"mcp__triage_catalog__"+x)
     const receipt={receipt_id:"unit-receipt",candidate_sha256:catalog.catalogHash(catalog.catalogCanonical(fixture.candidate)),candidate:fixture.candidate}
-    const events=[{type:"system",subtype:"init",tools:names}]
+    const events=[{type:"system",subtype:"init",tools:names,mcp_servers:[{name:"triage_catalog",status:"connected"}]}]
     let n=0
     for(const record of records.filter(r=>r.id==="r000000"||r.kind==="card")){
       const id="unit-"+(++n)
@@ -196,6 +196,7 @@ test("pure_native_evidence_validation_never_issues_custody_authority",()=>{
     for(const mutate of [
       (v)=>v.custody.receipts=[],(v)=>v.custody.briefSha256="f".repeat(64),
       (_v,list)=>list.splice(0,1),(_v,list)=>list[0].tools.push("Bash"),
+      (_v,list)=>list[0].mcp_servers=[],(_v,list)=>list[0].mcp_servers[0].status="error",
       v=>v.nativeStream.kind="timeout",v=>v.nativeStream.code=1,v=>v.nativeStream.truncated=true,
       (_v,list)=>list[0].session_id="bad",(_v,list)=>list[1].session_id="22222222-2222-2222-2222-222222222222",
       (_v,list)=>list[1].uuid="bad",(_v,list)=>list[1].uuid=list[0].uuid,
@@ -309,6 +310,83 @@ test("nonaccepted_native_io_matrix_keeps_actual_registry_and_spawn_unreachable",
       if(!["normal","lateClose","noCost","emptyLines","stderrSmall"].includes(mode))assert.notEqual(result.outcome.state,"ran",mode)
       assert.throws(()=>custody.authenticatedNativeRuns([result.outcome,result.outcome]))
     })
+  }
+})
+test("empty_init_cancels_boot_failfast",async()=>{
+  const r=await custody.runNonacceptedNativeTransaction({mode:"emptyInit"})
+  assert.equal(r.outcome.detail,"native_manifest_empty")
+  assert.notEqual(r.outcome.state,"ran")
+  assert.equal(r.statistics.registered,false)
+  assert.equal(r.outcome.resources.native_exit.stdio_closed,true)
+})
+test("closed_native_without_boot_rejects",async()=>{
+  for(const mode of ["closedBeforeBoot","successBeforeBoot"]){
+    const r=await custody.runNonacceptedNativeTransaction({mode})
+    assert.equal(r.outcome.detail,"bootstrap_unestablished")
+    assert.notEqual(r.outcome.state,"ran")
+    assert.equal(r.statistics.registered,false)
+  }
+})
+test("failure_bundle_actual_argv_config_stderr",async()=>{
+  const r=await custody.runNonacceptedNativeTransaction({mode:"emptyInitStderr"})
+  assert.equal(r.outcome.evidence.channels.argv.observation,"present")
+  assert.equal(Buffer.from(r.outcome.evidence.stderr_base64,"base64").toString(),"unit-bounded-stderr")
+  assert.equal(r.outcome.evidence.channels.stderr.truncated,false)
+  assert.equal(r.outcome.evidence.channels.config.observation,"unobserved")
+  assert.equal(r.outcome.evidence.spawned,true)
+  assert.equal(r.authority,false)
+})
+test("failure_absent_vs_unobserved_and_immutable_attempt",async()=>{
+  const a=await custody.runNonacceptedNativeTransaction({mode:"emptyInit"})
+  const b=await custody.runNonacceptedNativeTransaction({mode:"spawnThrows"})
+  assert.equal(a.outcome.evidence.channels.stderr.observation,"observed_absent")
+  assert.equal(b.outcome.evidence.channels.stderr.observation,"unobserved")
+  assert.equal(a.statistics.actualFileOperations,0)
+  assert.equal(b.statistics.actualFileOperations,0)
+})
+test("capture_serialization_and_snapshot_exceptions_return_bounded_failed_observations",async()=>{
+  for(const mode of ["argvSerializationThrows","snapshotThrows","snapshotCircular","snapshotOverflow","snapshotTextLimit",
+    "snapshotReceiptShape","snapshotReceiptCount","snapshotResourcesLimit","snapshotControlFramesLimit","snapshotPumpLimit"]){
+    const r=await custody.runNonacceptedNativeTransaction({mode})
+    assert.equal(r.authority,false)
+    assert.notEqual(r.outcome.state,"ran",mode)
+    assert.equal(r.statistics.registered,false)
+    assert.ok(r.outcome.evidence.stages.length<=64)
+    assert.equal(r.outcome.evidence.capture_failure,mode==="argvSerializationThrows"?"argv_serialization":"lifecycle_capture")
+    assert.equal(r.outcome.evidence.channels.lifecycle.observation,"unobserved")
+    assert.equal(r.outcome.evidence.channels.receipts.observation,"unobserved")
+    if(mode==="argvSerializationThrows"){
+      assert.equal(r.outcome.evidence.spawn_attempted,false)
+      assert.equal(r.outcome.evidence.channels.argv.observation,"unobserved")
+    }else assert.equal(r.outcome.resources.native_exit.stdio_closed,true)
+  }
+  const impossible=await custody.runNonacceptedNativeTransaction({mode:"emptyInitSnapshotThrows"})
+  assert.equal(impossible.outcome.detail,"native_manifest_empty","capture failure must not erase the actual first startup refusal")
+  assert.equal(impossible.outcome.evidence.capture_failure,"lifecycle_capture")
+})
+test("failed_utf8_native_capture_keeps_actual_bytes_and_incomplete_stream_observation",async()=>{
+  const bad=await custody.runNonacceptedNativeTransaction({mode:"badUTF8"})
+  assert.equal(Buffer.from(bad.outcome.evidence.stdout_base64,"base64").at(-1),0xff)
+  assert.equal(bad.outcome.evidence.channels.stdout.observation,"present")
+  assert.equal(bad.outcome.evidence.channels.stdout.truncated,false)
+  const unstarted=await custody.runNonacceptedNativeTransaction({mode:"argvSerializationThrows"})
+  assert.equal(unstarted.outcome.evidence.channels.stdout.observation,"unobserved")
+  const empty=await custody.runNonacceptedNativeTransaction({mode:"closedBeforeBoot"})
+  assert.equal(empty.outcome.evidence.channels.stdout.observation,"observed_absent")
+  const missingPumpBytes=await custody.runNonacceptedNativeTransaction({mode:"snapshotPumpEmpty"})
+  assert.equal(missingPumpBytes.outcome.evidence.channels.receipts.observation,"unobserved")
+  assert.equal(missingPumpBytes.authority,false)
+})
+test("init_manifest_shape_and_bounded_capture_matrix",async()=>{
+  for(const mode of ["initMissing","initExtra","initDuplicate","successNoInit","argvLimit","abortThrows","configCapture","settingsCapture"]){
+    const r=await custody.runNonacceptedNativeTransaction({mode})
+    assert.equal(r.authority,false)
+    assert.equal(r.statistics.registered,false)
+    assert.notEqual(r.outcome.state,"ran")
+    assert.equal(r.outcome.resources.native_exit.stdio_closed,mode!=="argvLimit",mode)
+    if(mode==="configCapture")assert.equal(r.outcome.evidence.channels.config.observation,"present")
+    if(mode==="settingsCapture")assert.equal(r.outcome.evidence.channels.settings.observation,"present")
+    if(mode==="argvLimit")assert.equal(r.outcome.detail,"native_capture_limit")
   }
 })
 test("sdk_client_binding_and_run_preparation_failures_are_observed",async(t)=>{
@@ -650,6 +728,9 @@ test("fifo_partial_transient_writes_and_failure_limits_are_finite",async(t)=>{
       await pump.done
       assert.ok(failure);if(want)assert.equal(failure.message,want)
       await pump.stop()
+      const evidence=pump.diagnostic()
+      assert.equal(Buffer.from(evidence.raw_base64,"base64").toString("hex"),Buffer.from(data).subarray(0,options.maxBytes).toString("hex"))
+      assert.equal(evidence.truncated,Buffer.byteLength(data)>options.maxBytes)
     }
     let attempt=0,seen
     readImpl=async(fd,buffer)=>{
@@ -1133,7 +1214,7 @@ class FixedClient extends Client{request(value,schema,options){if(value.method==
 const client=new FixedClient({name:"mocked_unit_engine",version:"1"},{capabilities:{}})
 await client.connect(transport)
 const session=randomUUID(),emit=value=>console.log(JSON.stringify({...value,session_id:session,uuid:randomUUID()}))
-emit({type:"system",subtype:"init",tools:["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>"mcp__triage_catalog__"+x)})
+emit({type:"system",subtype:"init",tools:["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>"mcp__triage_catalog__"+x),mcp_servers:[{name:"triage_catalog",status:"connected"}]})
 let n=0
 async function call(name,input){const id="toolu_unit_"+(++n);emit({type:"assistant",message:{content:[{type:"tool_use",id,name:"mcp__triage_catalog__"+name,input}]}});const response=await client.callTool({name,arguments:input});emit({type:"user",message:{content:[{type:"tool_result",tool_use_id:id,is_error:response.isError===true,content:response.content}]}});return response.structuredContent}
 await call("evidence_read",{id:"r000000"})
@@ -1208,7 +1289,7 @@ class FixedClient extends Client {request(value,schema,options){if(value.method=
 const client=new FixedClient({name:"native_fixture",version:"1"},{capabilities:{}})
 await client.connect(transport)
 const session=randomUUID(),emit=value=>console.log(JSON.stringify({...value,session_id:session,uuid:randomUUID()}))
-emit({type:"system",subtype:"init",tools:["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>"mcp__triage_catalog__"+x)})
+emit({type:"system",subtype:"init",tools:["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>"mcp__triage_catalog__"+x),mcp_servers:[{name:"triage_catalog",status:"connected"}]})
 let id=100
 async function call(name,args){
  const nativeID="toolu_fixture_"+(++id)

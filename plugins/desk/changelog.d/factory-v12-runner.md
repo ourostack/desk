@@ -27,3 +27,37 @@ Recheck the selected native chain and admission after asynchronous guards and
 after execution before returning a candidate. Preserve explicit timeout and
 pinned budget-terminal outcomes with validated cost and no materialization.
 Accept compact LF/CRLF wire frames without relaxing raw-byte or frame limits.
+
+Revise the fixed restricted recipe to disable hooks, skill shell and workflows
+without the runner-selected safe-mode/stdio conflict. Preserve all externally
+required managed controls and subscription/auth/billing limits. Bind record v5
+to recipe v3 and ten source-linked control rows; retained JSON is not fresh
+parent admission. Unknown live builtin/module/controller/LSP composition remains
+a named no-launch hold, not installed-host qualification.
+
+Reject empty/mismatched native init or closed-without-bootstrap immediately,
+and retain bounded protected failed invocation/stderr/receipt observations.
+Neither synthetic controlled streams nor local gates enable native retries.
+
+Read selected managed data/imports with safe ancestor/identity checks and
+duplicate-key rejection. Resolve fixed registered-plugin off-values rather
+than treating absent configuration as effective inventory. The pinned
+E296/3 retains only tips unavailable/off/on and the fixed controller
+absent/present source-bound envelopes. Actual pin/seat stays unobserved;
+tips is executable but cannot activate under the exact fresh print/replay
+guard. Require the exact nine optional builtin IDs effectively OFF after
+current source/policy folding; never suppress required managed ON or assume
+all ON variants harmless. Pin registration/preselection/load consumers and
+preserve unobserved availability provenance. Controls /3, recipe3 and record5
+invalidate earlier proof; unknown external effects remain no-launch. Bound failed serialization,
+snapshot and output persistence; retain the first startup refusal and actual
+raw stream observations, and stop before a second launch if capture is lost.
+
+Reconcile the exact session-owned HEAD beside native notifications through
+bounded asynchronous no-follow samples. Coalesce dirty signals, invalidate
+stale branch freshness and retain authoritative Git/per-write checks, startup
+repair boundaries and generation-safe teardown. Logical sample expiry is
+uncertainty, not cancellation or branch authority.
+Enclose the initial and post-repair Git inspections in certain before/after
+HEAD observations. Reconcile native hints through the same bounded sample
+owner instead of treating delayed notifications as observed HEAD drift.
