@@ -20,6 +20,13 @@ const update = { track: "work", slug: "one", status: "processing" }
 const text = "---\nname: One\nstatus: drafting\n---\n\n# One\n"
 const payload = (result) => JSON.parse(result.content[0].text)
 const assertWritten = (result) => assert.notEqual(result.isError, true, JSON.stringify(result))
+// A loaded runner may legitimately re-elect B's controller (a write's 1 s controller ping can miss), so the
+// connections are A once, then only B: never A again after the session moved to B.
+const assertAThenOnlyB = (f, message) => {
+  assert.equal(f.connectedRoots[0], f.a, message)
+  assert.ok(f.connectedRoots.length > 1, message)
+  assert.ok(f.connectedRoots.slice(1).every((root) => root === f.b), `${message}: ${JSON.stringify(f.connectedRoots)}`)
+}
 function git(root, ...args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 5000 })
   assert.equal(result.status, 0, result.stderr)
@@ -360,7 +367,7 @@ test("actual protocol reconciles ready fallback A to late saved B before mutatio
   assert.equal(git(f.a, "rev-parse", "HEAD"), aHead)
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
   assert.equal(git(f.b, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
-  assert.deepEqual(f.connectedRoots, [f.a, f.b])
+  assertAThenOnlyB(f, "the session connects A, then only B")
   const record = JSON.parse(readFileSync(path.join(f.base, "session-state", "last-start", `${lastStartRootKey(f.b)}.json`), "utf8"))
   assert.equal(record.state, "ready")
   const status = await f.status()
@@ -469,7 +476,8 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     }
     assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
     assert.deepEqual([f.a, f.b].map((root) => readFileSync(f.card(root), "utf8")), cards)
-    assert.deepEqual(f.connectedRoots, [f.a, f.b], "no A authority/controller is acquired after losing B")
+    assertAThenOnlyB(f, "no A authority/controller is acquired after losing B")
+    const connectionsWhileLost = f.connectedRoots.length
     const status = payload(await f.call("desk_status", { detail: true }))
     assert.equal(status.code, "root_unavailable")
     assert.equal(status.write_scope, undefined, "no cached B ownership survives failed resolution")
@@ -477,7 +485,8 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     f.associate(f.b)
     assertWritten(await f.call("task_update", update))
     assert.equal(f.handle.session.context.root.root, f.b)
-    assert.deepEqual(f.connectedRoots, [f.a, f.b, f.b])
+    assertAThenOnlyB(f, "re-association reconnects only B")
+    assert.ok(f.connectedRoots.length > connectionsWhileLost, "the lost B controller is acquired again after re-association")
   })
 }
 
@@ -501,7 +510,7 @@ test("late recorded folder evidence can upgrade an initial home-folder guess", a
   assert.equal(f.handle.session.context.root.source, "host-project")
   assert.equal(readFileSync(f.card(f.a), "utf8"), text)
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
-  assert.deepEqual(f.connectedRoots, [f.a, f.b])
+  assertAThenOnlyB(f, "the upgraded session connects A, then only B")
 })
 
 test("late person policy cannot reuse fallback workspace authority", async (t) => {
