@@ -1,5 +1,16 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.287 — 2026-10-11
+
+Native browser work uses independently recorded, unfocused popup windows so
+successful local-page navigation does not activate Edge's normal-window surface.
+The owner control and bounded peer API identify each task's exact browser window
+without changing website titles. Page creation waits for bootstrap and ownership
+readiness before handing a page to callers; pending targets remain authoritative
+during failure reconciliation and exact cleanup.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.286 — 2026-10-11
 
 ### Cooperative native browser ownership
