@@ -491,12 +491,23 @@ jobs:
         working-directory: plugins/desk/mcp/native/browser-launch
         run: go test -count=1 -race ./...
 
+      - name: Test native browser messaging on this operating system
+        working-directory: plugins/desk/mcp/native/browser-messaging
+        run: go test -count=1 -race ./...
+
       - name: Reproduce and verify committed browser launch assets
         shell: bash
         run: |
           node plugins/desk/mcp/scripts/build-browser-launch-assets.cjs
           git diff --exit-code -- plugins/desk/mcp/artifacts/browser-launch
           node --test tests/desk/mcp/__tests__/launch/web_native_launch.test.js
+
+      - name: Reproduce and verify committed browser messaging assets
+        shell: bash
+        run: |
+          node plugins/desk/mcp/scripts/build-browser-messaging-assets.cjs
+          git diff --exit-code -- plugins/desk/mcp/artifacts/browser-messaging
+          node --test tests/desk/mcp/__tests__/launch/web_native_messaging.test.js
 
       - name: Build the native runtime dependency pack
         shell: bash

@@ -4,54 +4,17 @@ var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
 var childProcess = require("child_process");
-var TARGETS = ["darwin-arm64", "darwin-x64", "linux-arm", "linux-arm64", "linux-x64", "win32-arm64", "win32-ia32", "win32-x64"];
+var artifacts = require("./web-native-artifacts.cjs").artifactFamily("browser-launch");
+var TARGETS = artifacts.TARGETS;
 
 function error(code) {
   return new Error(code);
 }
 
-function sourceHash(root) {
-  var hash = crypto.createHash("sha256");
-  ["go.mod", "main.go"].forEach(function (name) {
-    hash.update(name + "\n");
-    hash.update(fs.readFileSync(path.join(root, "native", "browser-launch", name)));
-  });
-  return hash.digest("hex");
-}
-
-function manifest(root) {
-  var value = JSON.parse(fs.readFileSync(path.join(root, "artifacts", "browser-launch", "manifest.json"), "utf8"));
-  if (value.version !== 1 || value.sourceSha256 !== sourceHash(root) ||
-      JSON.stringify(Object.keys(value.assets).sort()) !== JSON.stringify(TARGETS.slice().sort())) {
-    throw error("browser_native_launch_integrity");
-  }
-  return value;
-}
-
-function checkAsset(file, sha256) {
-  var info = fs.lstatSync(file);
-  if (!info.isFile() || !/^[a-f0-9]{64}$/.test(sha256) ||
-      crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== sha256) {
-    throw error("browser_native_launch_integrity");
-  }
-}
-
-function selectAsset(root, platform, arch) {
-  var target = platform + "-" + arch;
-  if (TARGETS.indexOf(target) === -1) throw error("browser_native_launch_unsupported");
-  var value = manifest(root);
-  var file = path.join(root, "artifacts", "browser-launch", target, "desk-browser-launch" + (platform === "win32" ? ".exe" : ""));
-  checkAsset(file, value.assets[target].sha256);
-  return { file: file, sha256: value.assets[target].sha256 };
-}
-
-function verifyAssets(root) {
-  TARGETS.forEach(function (target) {
-    var parts = target.split("-");
-    selectAsset(root, parts[0], parts[1]);
-  });
-  return { targets: TARGETS.slice() };
-}
+var sourceHash = artifacts.sourceHash;
+var checkAsset = artifacts.checkAsset;
+var selectAsset = artifacts.selectAsset;
+var verifyAssets = artifacts.verifyAssets;
 
 function ownerName(env, host) {
   var session = env.DESK_SESSION_ID || env.COPILOT_AGENT_SESSION_ID || env.CLAUDE_CODE_SESSION_ID || "";
