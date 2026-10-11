@@ -989,6 +989,18 @@ test("actual native preparation resumes the same lease and replaces only MCP tra
   const userDataRoot = localState(path.join(machine.root, "home"),
     { "Profile 4": "fixture@microsoft.com" }, undefined, "msedge", process.platform)
   const profileRoot = path.join(userDataRoot, "Profile 4")
+  await fs.writeFile(path.join(machine.state, "installs/1-1-a/node_modules/classic-level/index.js"), `
+    exports.ClassicLevel = class {
+      iterator() {
+        let returned = false;
+        return { next: async () => returned ? undefined : (returned = true, [
+          Buffer.concat([Buffer.from("_chrome-extension://bcejpajaingepdloiolbmbaflecgifbe"), Buffer.from([0, 1]), Buffer.from("deskBrowserProfileToken")]),
+          Buffer.concat([Buffer.from([1]), Buffer.from("a".repeat(64))])
+        ]), close: async () => {} };
+      }
+      close() { return Promise.resolve(); }
+    };
+  `)
   const { installNativeMessaging } = await import("../../../../../plugins/desk/mcp/native-messaging-install.mjs")
   const owned = await installNativeMessaging({
     mcpRoot, root: path.join(machine.state, "native-owned"), userDataRoot, profile: "Profile 4", channel: "msedge",
@@ -996,6 +1008,7 @@ test("actual native preparation resumes the same lease and replaces only MCP tra
     levelModule: path.join(machine.state, "installs/1-1-a/node_modules/classic-level"),
     wsModule: path.join(machine.state, "installs/1-1-a/node_modules/ws"),
   })
+  assert.equal(JSON.parse(await fs.readFile(path.join(owned.runtimeDirectory, "provider-config.json"), "utf8")).expectedProfileToken, "a".repeat(64))
   const processIdentity = { pid: 700, startIdentity: "test-browser", owner: "operator", executable: browserExecutable, profileRoot }
   const entry = { pid: 701, parentPid: 700, startIdentity: "test-entry", owner: "operator", executable: owned.executable, profileRoot: owned.runtimeDirectory }
   const runtime = { pid: 702, parentPid: 701, startIdentity: "test-runtime", owner: "operator", executable: process.execPath, profileRoot: owned.runtimeDirectory }

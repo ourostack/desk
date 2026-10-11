@@ -307,6 +307,14 @@ async function installNativeMessagingUnlocked({
   const manifest = JSON.parse(await fs.readFile(path.join(extensionSource, 'manifest.json'), 'utf8'));
   const extensionId = createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest('hex').slice(0, 32)
     .replace(/[0-9a-f]/gu, value => String.fromCharCode(97 + Number.parseInt(value, 16)));
+  const profileReader = require(path.join(mcpRoot, 'web-real-profile.cjs'));
+  const expectedProfileToken = await profileReader.readExtensionToken(path.join(userDataRoot, profile), {
+    level: { get ClassicLevel() { return require(levelModule).ClassicLevel; } },
+    tmpdir: root, extensionId, tokenKey: 'deskBrowserProfileToken',
+  });
+  if (expectedProfileToken !== null && !/^[a-f0-9]{64}$/u.test(expectedProfileToken)) {
+    throw Object.assign(new Error('Selected profile contains an invalid native extension token'), { code: 'NATIVE_PROFILE_MISMATCH' });
+  }
   const registration = registrationLocation({ platform, channel, userDataRoot });
   let previous;
   if (registration.file) {
@@ -336,7 +344,7 @@ async function installNativeMessagingUnlocked({
     files.push({ source: path.join(wsModule, name), destination: path.join('plugins/desk/browser-context-broker/node_modules/ws', name) });
   }
   const hash = createHash('sha256').update(asset.sha256).update(runtimeExecutable).update(browserExecutable)
-    .update(userDataRoot).update(profile).update(levelModule);
+    .update(userDataRoot).update(profile).update(levelModule).update(expectedProfileToken ?? '');
   const bytes = new Map();
   for (const item of files) {
     const content = await fs.readFile(item.source);
@@ -361,7 +369,7 @@ async function installNativeMessagingUnlocked({
     extensionOrigin: `chrome-extension://${extensionId}/`,
   };
   const providerConfig = {
-    extensionOrigin: nativeConfig.extensionOrigin, extensionId, extensionSourceDigest, entryExecutable: executable,
+    extensionOrigin: nativeConfig.extensionOrigin, extensionId, extensionSourceDigest, expectedProfileToken, entryExecutable: executable,
     runtimeExecutable, browserExecutable, profileRoot: path.join(userDataRoot, profile),
     levelModule, stateDir: path.join(root, 'state'),
   };

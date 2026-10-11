@@ -12,6 +12,8 @@ const MAX_NATIVE_BYTES = 1_048_576;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const littleEndian = os.endianness() === 'LE';
 const execFileAsync = promisify(execFile);
+const DIAGNOSTIC_STAGES = new Set(['native-ancestry', 'profile-token', 'provider']);
+const DIAGNOSTIC_SYSCALLS = new Set(['open', 'read', 'write', 'copyfile', 'mkdir', 'listen', 'unlink', 'rename', 'stat', 'lstat', 'scandir', 'rmdir']);
 
 function messageObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -29,6 +31,18 @@ export function nativeDiagnosticLine(error, fallback) {
   return code + ': ' + reason;
 }
 
+export async function reportNativeDiagnostic({ stdout, stderr, stage }, error, fallback) {
+  stderr.write(nativeDiagnosticLine(error, fallback) + '\n');
+  if (stdout.destroyed) return { delivered: false };
+  const bytes = encodeNativeMessage({
+    event: 'diagnostic', code: nativeDiagnosticCode(error, fallback),
+    ...(DIAGNOSTIC_STAGES.has(stage) ? { stage } : {}),
+    ...(DIAGNOSTIC_SYSCALLS.has(error?.syscall) ? { syscall: error.syscall } : {}),
+  });
+  await new Promise((resolve, reject) => stdout.write(bytes, error => error ? reject(error) : resolve()));
+  return { delivered: true };
+}
+
 export function assertNativeReady(message, config) {
   if (message?.event !== 'ready' || message.protocolVersion !== 1 || message.extensionId !== config.extensionId) {
     throw new BrokerError('NATIVE_PROTOCOL_MISMATCH', 'Native readiness must identify the registered extension and protocol');
@@ -36,6 +50,12 @@ export function assertNativeReady(message, config) {
   if (!/^[a-f0-9]{64}$/u.test(config.extensionSourceDigest ?? '') ||
       message.sourceDigest !== config.extensionSourceDigest) {
     throw new BrokerError('NATIVE_EXTENSION_SOURCE_MISMATCH', 'Executed extension source does not match the verified native runtime');
+  }
+  if (!/^[a-f0-9]{64}$/u.test(config.expectedProfileToken ?? '')) {
+    throw new BrokerError('NATIVE_PROFILE_TOKEN_UNAVAILABLE', 'Ordinary native preparation must pin the selected profile before connection');
+  }
+  if (message.profileToken !== config.expectedProfileToken) {
+    throw new BrokerError('NATIVE_PROFILE_MISMATCH', 'Native readiness does not match the independently verified selected profile');
   }
 }
 

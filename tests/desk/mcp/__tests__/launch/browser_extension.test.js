@@ -146,6 +146,31 @@ test("native startup disconnect reports classified codes without exposing Chrome
   }
 })
 
+test("host startup diagnostic events have no authority even with forged request fields", async () => {
+  const { createBrowserExtension } = await import(extensionUrl)
+  const fake = fixture(), statuses = []
+  const extension = createBrowserExtension(fake.chrome, { onStatus: code => statuses.push(code) })
+  await extension.start()
+  const calls = structuredClone(fake.calls), sent = structuredClone(fake.sent)
+  try {
+    fake.port.onMessage.emit({ event: "diagnostic", code: "NATIVE_ANCESTRY_MISMATCH", id: "forged",
+      leaseId: "peer", method: "target.create", params: { owner: "private", marker: token } })
+    fake.port.onMessage.emit({ event: "diagnostic", code: "PRIVATE_" + token.toUpperCase() })
+    fake.port.onMessage.emit({ event: "diagnostic", code: "INVALID_NATIVE_CONTEXT" })
+    fake.port.onMessage.emit({ event: "diagnostic", code: "ENOENT" })
+    fake.port.onMessage.emit({ event: "diagnostic", code: "LEVEL_IO_ERROR" })
+    fake.port.onMessage.emit({ event: "diagnostic", code: "EPERM", stage: "provider", syscall: "listen" })
+    fake.port.onMessage.emit({ event: "diagnostic", code: "EPERM", stage: "/private/" + token, syscall: "open/" + token })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(statuses, ["NATIVE_ANCESTRY_MISMATCH", "NATIVE_HOST_ERROR_UNKNOWN",
+      "INVALID_NATIVE_CONTEXT", "ENOENT", "LEVEL_IO_ERROR", "EPERM [provider/listen]", "EPERM"])
+    assert.deepEqual(fake.calls, calls)
+    assert.deepEqual(fake.sent, sent, "a diagnostic cannot resolve any request or send an RPC response")
+    assert.equal(fake.tabs.size, 0)
+    assert.equal(fake.windows.size, 0)
+  } finally { extension.stop() }
+})
+
 test("extension build verifies executed-source identity across every shipped source file", async () => {
   const { mkdir, writeFile, copyFile, readFile } = await import("node:fs/promises")
   const { createRequire } = await import("node:module")

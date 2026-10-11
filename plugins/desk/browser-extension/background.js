@@ -19,6 +19,19 @@ const NATIVE_ERRORS = new Map([
   ["Invalid native messaging host name specified.", "NATIVE_HOST_NAME_INVALID"],
   ["Error when communicating with the native messaging host.", "NATIVE_HOST_IO_FAILED"],
 ])
+const NATIVE_DIAGNOSTICS = new Set([
+  "NATIVE_HOST_FAILED", "NATIVE_PROVIDER_START_FAILED", "NATIVE_PROFILE_MISMATCH", "NATIVE_PROFILE_TOKEN_UNAVAILABLE",
+  "NATIVE_ANCESTRY_MISMATCH", "NATIVE_ANCESTRY_INVALID", "NATIVE_ANCESTRY_UNSUPPORTED",
+  "NATIVE_ORIGIN_REFUSED", "NATIVE_PROTOCOL_MISMATCH", "NATIVE_EXTENSION_SOURCE_MISMATCH",
+  "NATIVE_BROWSER_VERSION_UNSUPPORTED", "NATIVE_TRANSPORT_CLOSED",
+  "INVALID_NATIVE_CONTEXT", "INVALID_NATIVE_TRANSPORT", "INVALID_STATE_DIRECTORY", "INSECURE_STATE_DIRECTORY",
+  "INVALID_REGISTRY", "BROKER_LOCK_TIMEOUT", "STALE_BROKER_LOCK", "INVALID_LOCK_NAME",
+  "ENOENT", "EACCES", "EPERM", "ENOTDIR", "EIO", "EEXIST", "EADDRINUSE",
+  "MODULE_NOT_FOUND", "ERR_MODULE_NOT_FOUND", "ERR_DLOPEN_FAILED",
+  "LEVEL_DATABASE_NOT_OPEN", "LEVEL_LOCKED", "LEVEL_IO_ERROR", "LEVEL_CORRUPTION",
+])
+const DIAGNOSTIC_STAGES = new Set(["native-ancestry", "profile-token", "provider"])
+const DIAGNOSTIC_SYSCALLS = new Set(["open", "read", "write", "copyfile", "mkdir", "listen", "unlink", "rename", "stat", "lstat", "scandir", "rmdir"])
 
 function refusal(code, message) {
   const error = new Error(message)
@@ -443,6 +456,13 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       const connected = api.runtime.connectNative(HOST)
       port = connected
       connected.onMessage.addListener(request => {
+        if (request?.event === "diagnostic") {
+          const context = [DIAGNOSTIC_STAGES.has(request.stage) ? request.stage : null,
+            DIAGNOSTIC_SYSCALLS.has(request.syscall) ? request.syscall : null].filter(Boolean)
+          const code = NATIVE_DIAGNOSTICS.has(request.code) ? request.code : "NATIVE_HOST_ERROR_UNKNOWN"
+          onStatus(code + (context.length ? " [" + context.join("/") + "]" : ""))
+          return
+        }
         dispatch(request).then(response => {
           if (port === connected) {
             publish(response)

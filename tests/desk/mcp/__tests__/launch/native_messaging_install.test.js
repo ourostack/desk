@@ -58,6 +58,50 @@ test("private native install copies verified assets and stable extension without
   }), error => error.code === "NATIVE_RUNTIME_INTEGRITY")
 })
 
+test("installer pins the actual selected extension token in a private immutable capsule instead of delegating profile reads", async () => {
+  const { installNativeMessaging } = await import(moduleUrl)
+  const root = await mkTempRoot("native-profile-pin-")
+  const userDataRoot = path.join(root, "browser"), owned = path.join(root, "owned")
+  const store = path.join(userDataRoot, "Default/Local Storage/leveldb")
+  const levelModule = path.join(root, "level.cjs")
+  const extensionId = "bcejpajaingepdloiolbmbaflecgifbe"
+  await mkdir(store, { recursive: true })
+  await writeFile(levelModule, `
+    const fs = require("node:fs"), path = require("node:path");
+    exports.ClassicLevel = class {
+      constructor(directory) { this.directory = directory; }
+      iterator() {
+        const rows = JSON.parse(fs.readFileSync(path.join(this.directory, "fixture.json"), "utf8")); let index = 0;
+        return { next: async () => {
+          const row = rows[index++];
+          return row && [Buffer.from(row.key, "latin1"), Buffer.concat([Buffer.from([1]), Buffer.from(row.token)])];
+        }, close: async () => {} };
+      }
+      close() { return Promise.resolve(); }
+    };
+  `)
+  const writeToken = token => writeFile(path.join(store, "fixture.json"), JSON.stringify([
+    { key: "_chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u0000\u0001deskBrowserProfileToken", token: "d".repeat(64) },
+    { key: "_chrome-extension://" + extensionId + "\u0000\u0001deskBrowserProfileToken", token },
+  ]))
+  const options = { mcpRoot, root: owned, userDataRoot, profile: "Default", channel: "msedge",
+    browserExecutable: process.execPath, runtimeExecutable: process.execPath, levelModule }
+  await writeToken("a".repeat(64))
+  const first = await installNativeMessaging(options)
+  const firstConfig = path.join(first.runtimeDirectory, "provider-config.json")
+  assert.equal(JSON.parse(await readFile(firstConfig, "utf8")).expectedProfileToken, "a".repeat(64))
+  if (process.platform !== "win32") assert.equal((await stat(firstConfig)).mode & 0o077, 0)
+  await writeToken("b".repeat(64))
+  const second = await installNativeMessaging(options)
+  assert.notEqual(second.runtimeDirectory, first.runtimeDirectory)
+  assert.equal(JSON.parse(await readFile(firstConfig, "utf8")).expectedProfileToken, "a".repeat(64))
+  assert.equal(JSON.parse(await readFile(path.join(second.runtimeDirectory, "provider-config.json"), "utf8")).expectedProfileToken, "b".repeat(64))
+  assert.equal(second.extensionDirectory, first.extensionDirectory)
+  assert.equal(second.extensionSourceDigest, first.extensionSourceDigest)
+  await writeToken("corrupt")
+  await assert.rejects(installNativeMessaging(options), error => error.code === "NATIVE_PROFILE_MISMATCH")
+})
+
 test("foreign native registration is refused instead of silently overwritten", async () => {
   const { installNativeMessaging } = await import(moduleUrl)
   const root = await mkTempRoot("native-messaging-foreign-")

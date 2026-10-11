@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import os from 'node:os';
 import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
 
 const moduleUrl = new URL('../../../../plugins/desk/browser-context-broker/src/native-host.mjs', import.meta.url);
 
@@ -32,6 +33,54 @@ test('GivenNativeStartupFailure_WhenDiagnosed_StableCodeIsRetainedWithoutPrivate
   assert.equal(nativeDiagnosticCode(new Error('private token'), 'NATIVE_HOST_FAILED'), 'NATIVE_HOST_FAILED');
 });
 
+test('native startup diagnostic frame reaches the receiver before its actual child process exits', async () => {
+  const { createNativeFramer } = await import(moduleUrl);
+  const messages = [];
+  const failures = [];
+  const framer = createNativeFramer({ onMessage: value => messages.push(value), onError: value => failures.push(value) });
+  const child = spawn(process.execPath, ['--input-type=module', '-e',
+    `import { reportNativeDiagnostic } from ${JSON.stringify(moduleUrl.href)};
+     await reportNativeDiagnostic({ stdout: process.stdout, stderr: process.stderr, stage: 'profile-token' },
+       { code: 'EPERM', syscall: 'copyfile', stage: 'private profile', message: 'private profile https://private/token' }, 'NATIVE_HOST_FAILED');
+     process.exitCode = 1;`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stdout.on('data', bytes => framer.push(bytes));
+  child.stderr.on('data', bytes => { stderr += bytes; });
+  const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+  framer.end();
+  assert.equal(code, 1);
+  assert.deepEqual(failures, []);
+  assert.deepEqual(messages, [{ event: 'diagnostic', code: 'EPERM', stage: 'profile-token', syscall: 'copyfile' }]);
+  assert.equal(stderr.trim(), 'EPERM');
+  assert.equal(JSON.stringify(messages).includes('private'), false);
+});
+
+test('native diagnostics omit unrecognized context instead of deriving it from error details', async () => {
+  const { reportNativeDiagnostic, createNativeFramer } = await import(moduleUrl);
+  const messages = [];
+  const framer = createNativeFramer({ onMessage: value => messages.push(value), onError: error => { throw error; } });
+  const stdout = new PassThrough(), stderr = new PassThrough();
+  stdout.on('data', bytes => framer.push(bytes));
+  await reportNativeDiagnostic({ stdout, stderr, stage: '/private/profile' },
+    { code: 'EPERM', syscall: 'open/private/profile', stage: 'provider' }, 'NATIVE_HOST_FAILED');
+  framer.end();
+  assert.deepEqual(messages, [{ event: 'diagnostic', code: 'EPERM' }]);
+});
+
+test('native startup diagnostics retain failure when the native output cannot accept a frame', async () => {
+  const { reportNativeDiagnostic } = await import(moduleUrl);
+  const stderr = new PassThrough();
+  let text = '';
+  stderr.on('data', value => { text += value; });
+  const stdout = { destroyed: true, write() { throw Error('must not write to a closed pipe'); } };
+  assert.deepEqual(await reportNativeDiagnostic({ stdout, stderr }, Error('private'), 'NATIVE_HOST_FAILED'),
+    { delivered: false });
+  const broken = { write(bytes, done) { done(Error('pipe failed')); } };
+  await assert.rejects(reportNativeDiagnostic({ stdout: broken, stderr }, Error('private'), 'NATIVE_HOST_FAILED'),
+    /pipe failed/u);
+  assert.equal(text.includes('private'), false);
+});
+
 test('GivenControlNavigationFailure_WhenDiagnosed_BoundedReasonRetainsNoUrlOrToken', async () => {
   const { nativeDiagnosticLine } = await import(moduleUrl);
   const result = nativeDiagnosticLine({
@@ -48,8 +97,8 @@ test('GivenControlNavigationFailure_WhenDiagnosed_BoundedReasonRetainsNoUrlOrTok
 
 test('GivenNativeReady_WhenExecutedExtensionSourceDiffers_ProviderCannotStart', async () => {
   const { assertNativeReady } = await import(moduleUrl);
-  const config = { extensionId: 'owned-extension', extensionSourceDigest: 'a'.repeat(64) };
-  const ready = { event: 'ready', protocolVersion: 1, extensionId: 'owned-extension', sourceDigest: 'a'.repeat(64) };
+  const config = { extensionId: 'owned-extension', extensionSourceDigest: 'a'.repeat(64), expectedProfileToken: 'c'.repeat(64) };
+  const ready = { event: 'ready', protocolVersion: 1, extensionId: 'owned-extension', sourceDigest: 'a'.repeat(64), profileToken: 'c'.repeat(64) };
   assert.doesNotThrow(() => assertNativeReady(ready, config));
   for (const sourceDigest of [undefined, '', 'b'.repeat(64)]) {
     assert.throws(() => assertNativeReady({ ...ready, sourceDigest }, config),
@@ -57,6 +106,22 @@ test('GivenNativeReady_WhenExecutedExtensionSourceDiffers_ProviderCannotStart', 
   }
   assert.throws(() => assertNativeReady({ ...ready, extensionId: 'foreign' }, config),
     error => error.code === 'NATIVE_PROTOCOL_MISMATCH');
+});
+
+test('native readiness requires the independently pinned selected-profile token without reading a profile', async () => {
+  const { assertNativeReady } = await import(moduleUrl);
+  const config = { extensionId: 'owned-extension', extensionSourceDigest: 'a'.repeat(64), expectedProfileToken: 'c'.repeat(64) };
+  const ready = { event: 'ready', protocolVersion: 1, extensionId: config.extensionId,
+    sourceDigest: config.extensionSourceDigest, profileToken: 'c'.repeat(64) };
+  assert.doesNotThrow(() => assertNativeReady(ready, config));
+  for (const expectedProfileToken of [undefined, null, '', 'corrupt']) {
+    assert.throws(() => assertNativeReady(ready, { ...config, expectedProfileToken }),
+      error => error.code === 'NATIVE_PROFILE_TOKEN_UNAVAILABLE');
+  }
+  for (const profileToken of [undefined, 'corrupt', 'd'.repeat(64)]) {
+    assert.throws(() => assertNativeReady({ ...ready, profileToken }, config),
+      error => error.code === 'NATIVE_PROFILE_MISMATCH');
+  }
 });
 
 test('GivenFragmentedUnicodeFrames_WhenPushed_FramerEmitsCompleteMessagesOnly', async () => {
@@ -151,6 +216,23 @@ const config = {
   onMessage: message => ({ id: message.id, result: message.params }),
 };
 const reader = async pid => [runtime, entry, browser].find(identity => identity.pid === pid);
+
+test('a correct pinned and claimed profile token cannot authorize foreign ancestry or another browser generation', async () => {
+  const { runNativeHost, assertNativeReady } = await import(moduleUrl);
+  const ready = { event: 'ready', protocolVersion: 1, extensionId: 'owned-extension',
+    sourceDigest: 'a'.repeat(64), profileToken: 'c'.repeat(64) };
+  const pin = { extensionId: ready.extensionId, extensionSourceDigest: ready.sourceDigest, expectedProfileToken: ready.profileToken };
+  assert.doesNotThrow(() => assertNativeReady(ready, pin));
+  for (const expectedBrowser of [{ ...browser, startIdentity: 'replacement' }, { ...browser, executable: '/foreign/browser' }]) {
+    const stdin = new PassThrough(), stdout = new PassThrough();
+    let dispatched = false;
+    stdin.end(frame(ready));
+    await assert.rejects(runNativeHost({ stdin, stdout, processReader: reader,
+      config: { ...config, ...pin, expectedBrowser, onMessage(message) { dispatched = true; assertNativeReady(message, pin); } } }),
+      error => error.code === 'NATIVE_ANCESTRY_MISMATCH');
+    assert.equal(dispatched, false);
+  }
+});
 
 test('GivenNativeHostAncestry_WhenRead_ReturnsRuntimeEntryAndBrowser', async () => {
   const { readNativeAncestry } = await import(moduleUrl);
