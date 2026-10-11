@@ -454,10 +454,11 @@ test("the workflow signs in twice: the checks identity for Azure, then the autom
   assert.match(workflow, /id-token: write/);
 });
 
-test("the workflow renews Apple only under outcome A, on the first of the month or by dispatch", () => {
+test("the workflow renews Apple only under outcome A, test on the 1st and prod on the 2nd, or by dispatch", () => {
   assert.match(workflow, /\.apple\?\.outcome/);
   assert.match(workflow, /if \[ "\$outcome" = A \]/);
-  assert.match(workflow, /date -u \+%d\)" = 01/);
+  assert.match(workflow, /renew_day=01\n\s+if \[ "\$ENV" = prod \]; then renew_day=02; fi/);
+  assert.match(workflow, /date -u \+%d\)" = "\$renew_day"/);
   assert.match(workflow, /--renew-apple/);
 });
 

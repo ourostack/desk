@@ -10,6 +10,8 @@ on:
       - "hosted/**"
       - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
+      - ".github/workflows/hosted-deploy.yml"
+      - ".github/workflows/identity-checks.yml"
   push:
     branches:
       - main
@@ -17,6 +19,8 @@ on:
       - "hosted/**"
       - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
+      - ".github/workflows/hosted-deploy.yml"
+      - ".github/workflows/identity-checks.yml"
   workflow_dispatch:
 
 concurrency:

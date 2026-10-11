@@ -61,7 +61,17 @@ The end-to-end test (`test/e2e.test.js`) runs the real gateway with the real Des
 cd hosted && DESK_E2E=1 npm test
 ```
 
-The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end test included, on each pull request and push that touches `hosted/`.
+The accounts store's tests also run against Azurite, the local Azure Storage emulator, when `DESK_AZURITE=1`. Without it, that half is skipped. Start Azurite in another terminal first; with `DESK_AZURITE=1` and no Azurite answering, the run fails rather than skipping:
+
+```sh
+cd hosted
+npx azurite-table --inMemoryPersistence --tableHost 127.0.0.1 --tablePort 10002
+DESK_AZURITE=1 npm test
+```
+
+Set `DESK_AZURITE_ENDPOINT` if Azurite listens somewhere other than `http://127.0.0.1:10002/devstoreaccount1`.
+
+The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end and Azurite tests included, on each pull request and push to main that touches `hosted/`, `plugins/desk/mcp/`, or the `hosted-tests.yml`, `hosted-deploy.yml` or `identity-checks.yml` workflows.
 
 ## Build the image
 
@@ -113,7 +123,7 @@ Do this for the test tenant and staging first (`--env test`, `STAGE=staging`), t
 9. **Add the settings to the app.** Run `hosted/infra/provision.sh` (`STAGE=staging hosted/infra/provision.sh` for test). Once the record is complete, Ari's `accountId` included, it attaches the gateway identity and sets the Ouro tenant settings, the Key Vault reference for `DESK_ENTRA_CLIENT_SECRET`, `DESK_GITHUB_SIGNIN`, and `DESK_GITHUB_ACCOUNTS` and `DESK_GITHUB_LOGINS` for Ari's GitHub user id. `DESK_GITHUB_SIGNIN` is `on` the first time; after that a rerun keeps the app's value unless you pass `DESK_GITHUB_SIGNIN=on` or `DESK_GITHUB_SIGNIN=off`. Until the record is complete, it leaves the Ouro settings as they are. `DESK_ALLOWED_LOGINS` stays. Before it writes, it checks the settings with the gateway's own reader and stops if the gateway would refuse one. After the update, it waits until the app's new revision is the ready one, and fails if the revision doesn't start, so a bad setting can't leave the old revision serving unnoticed.
 10. **Deploy, then set the legacy cutoff.** The deploy needs the settings from step 9 ([Deploy](#deploy) says why). Once the release is confirmed live, set `releasedAt` (that time) and `legacyCutoff` (14 days later, an ISO time with its zone) in `identity-prod.json`, run `hosted/infra/provision.sh` to set `DESK_LEGACY_CUTOFF`, and commit the file to main. A rerun never moves the cutoff, because `provision.sh` reads it from the file. `provision.sh` refuses a cutoff or `releasedAt` without a zone, a cutoff that isn't after `releasedAt`, and a new cutoff that is already in the past, because that would end Ari's legacy connector at once. A cutoff the app already holds may be in the past, so reruns after day 14 still work.
 11. **Invite Ari.** Run `node hosted/infra/provision-identity.mjs --env <env> --invite-ari`. Production's link lasts 24 hours and goes to `~/.ouro/invite-prod.url` (mode 0600), never to the screen. Pass `--browser-context <name>` and set `DESK_CDP_OPENER` to open it in the browser that will connect. Test links last 7 days and are printed.
-12. **Outcome A only: renew once.** Run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple`, so the Apple client secret has a recorded date at once instead of alerting daily until the first of the month.
+12. **Outcome A only: renew once.** Run `node hosted/infra/identity-checks.mjs --env <env> --renew-apple`, so the Apple client secret has a recorded date at once instead of alerting daily until the next scheduled renewal.
 
 Staging stays apart from production. It has its own gateway identity, `id-ouro-desk-hosted-staging`, which holds `AcrPull` on the registry and data roles only on `entra-client-secret-test` and the test accounts storage. It never holds production's pull identity `ouro-prod-services-mi`, and both scripts refuse a staging app that does. Production's GitHub App secrets reach staging only through `node hosted/infra/provision-identity.mjs --env test --copy-app-secrets`, for a rehearsal. Afterwards, `--env test --clear-app-secrets` writes `unset` over them.
 
@@ -170,7 +180,7 @@ The scripts and runbooks need two `az` sign-ins at once, and each kind of call g
 - `apple-secret-age`: the Apple client secret, which lasts six months from the `apple-renewed-at` tag on Key Vault secret `apple-siwa-active-<env>`, ends more than 30 days from now. No recorded date fails, and so does a date more than 5 minutes in the future.
 - `legacy-cutoff`, production only: `DESK_LEGACY_CUTOFF` is set on the revision that is serving, the app's latest ready revision, once `releasedAt` in `identity-prod.json` is more than a day old. With no `releasedAt` recorded, it must be set as soon as that revision maps GitHub accounts. The check reads the serving revision rather than the app's template, so a newer revision that never started doesn't count. An app with no ready revision fails the check.
 
-Under Apple outcome A the workflow also renews the Apple client secret on the first of each month. The issue holds only check names and dates, because the repository is public. To run the checks by hand, run `gh workflow run "Identity checks" -R ourostack/desk`. To run them locally, sign in as [az sign-ins](#az-sign-ins) says and run `node hosted/infra/identity-checks.mjs --env <env>`.
+Under Apple outcome A the workflow also renews the Apple client secret, for test on the 1st of each month and for production on the 2nd. The issue holds only check names and dates, because the repository is public. To run the checks by hand, run `gh workflow run "Identity checks" -R ourostack/desk`. To run them locally, sign in as [az sign-ins](#az-sign-ins) says and run `node hosted/infra/identity-checks.mjs --env <env>`.
 
 ## Secrets and rotation
 
@@ -236,7 +246,7 @@ After every import, commit `identity-<env>.json` to main through a small pull re
 
 #### Renew under outcome A
 
-The workflow renews on the first of each month, for both envs at once. To renew by hand, renew test first and production after one Apple sign-in in the test tenant works:
+The workflow renews test on the 1st of each month and production on the 2nd, so a renewal that breaks Apple sign-in shows in test a day before it reaches production. To renew by hand, renew test first and production after one Apple sign-in in the test tenant works:
 
 ```sh
 node hosted/infra/identity-checks.mjs --env test --renew-apple
@@ -245,7 +255,7 @@ node hosted/infra/identity-checks.mjs --env prod --renew-apple
 
 Don't use `gh workflow run "Identity checks" -f renew_apple=true` for this, because it renews test and production together.
 
-The renewal sends the other slot's key, but only when its tags prove it is the recorded key. It records the new date only after Graph accepts the change and the provider, read back, shows the new Key ID. If the other slot is revoked or missing, it sends the live slot again, keeps the old date and alerts, so the next step is to [replace the revoked key](#replace-a-revoked-apple-key). An Apple provider created without a recorded date gets one from its first renewal, so run one renewal right after setup rather than waiting for the first of the month.
+The renewal sends the other slot's key, but only when its tags prove it is the recorded key. It records the new date only after Graph accepts the change and the provider, read back, shows the new Key ID. If the other slot is revoked or missing, it sends the live slot again, keeps the old date and alerts, so the next step is to [replace the revoked key](#replace-a-revoked-apple-key). An Apple provider created without a recorded date gets one from its first renewal, so run one renewal right after setup rather than waiting for the scheduled one.
 
 #### Renew under outcome B
 
@@ -297,8 +307,9 @@ Never revoke the key the Apple provider uses: Apple sign-in breaks at once. Tag 
    az keyvault secret set-attributes --vault-name kv-ouro-identity-261e0b --name apple-siwa-key-<slot>-<env> --subscription 261e0bf1-934d-41ab-9295-229b0d254418 --tags revoked=true
    ```
    This command replaces all of the secret's tags, so it also drops `key-id` and `fingerprint`. Taking the `revoked` tag off again therefore doesn't make the key usable. If you tagged the wrong slot, import that key again.
-4. Revoke the key in the Apple Developer portal, under Certificates, Identifiers & Profiles, Keys.
-5. [Replace the revoked key](#replace-a-revoked-apple-key).
+4. Run step 1 again, right before you revoke. A renewal or an upload between step 2 and step 3 could have switched the provider back. Go on only when it still prints the other slot's Key ID. If it prints the Key ID of the slot you just tagged, don't revoke: switch the provider to the other slot as step 2 says, and check again. Under outcome A the renewal never sends a slot tagged `revoked`.
+5. Revoke the key in the Apple Developer portal, under Certificates, Identifiers & Profiles, Keys.
+6. [Replace the revoked key](#replace-a-revoked-apple-key).
 
 #### Replace a revoked Apple key
 
@@ -394,6 +405,8 @@ A rollback to the v1a image keeps Ari's legacy connector working because:
 - `DESK_ALLOWED_LOGINS` and every old secret stay on the app until day 14;
 - the client key is a byte-exact copy of the signing key, so registered clients stay valid;
 - tokens refreshed from Ari's legacy tokens keep v1a's claims, which the older image accepts.
+
+The exception is a rollback after an [emergency signing-key rotation](#if-the-signing-key-leaks). That rotation voids every token and gives the client key its own random value, so none of the reasons above holds: after the rollback, every client, Ari's included, registers and signs in again with GitHub, as an allowed login in `DESK_ALLOWED_LOGINS`.
 
 Every other connection must sign in again with GitHub after such a rollback: tokens from any Ouro sign-in, with Apple or an email code, and from the GitHub fallback carry an `accountId` instead of a login, and the v1a image refuses them.
 

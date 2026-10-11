@@ -81,8 +81,11 @@ jobs:
           set -euo pipefail
           outcome="$(node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log(r.apple?.outcome ?? "")' "hosted/infra/identity-$ENV.json")"
           renew=false
+          # Test renews on the 1st and production a day later, so a renewal that breaks sign-in shows in test first.
+          renew_day=01
+          if [ "$ENV" = prod ]; then renew_day=02; fi
           if [ "$outcome" = A ]; then
-            if [ "$EVENT" = schedule ] && [ "$(date -u +%d)" = 01 ]; then renew=true; fi
+            if [ "$EVENT" = schedule ] && [ "$(date -u +%d)" = "$renew_day" ]; then renew=true; fi
             if [ "$EVENT" = workflow_dispatch ] && [ "$RENEW_INPUT" = true ]; then renew=true; fi
           fi
           echo "Apple outcome for $ENV: ${outcome:-not recorded}; renewal: $renew"
