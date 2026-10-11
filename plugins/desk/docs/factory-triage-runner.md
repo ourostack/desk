@@ -19,7 +19,7 @@ See [the collector and policy reader](../mcp/src/factory/triage-runner.js).
 The retained macOS arm64 adapter verifies the installed Anthropic signature,
 Apple loader, sealed boot snapshot, SIP/authenticated root and actual shared-cache
 identities. Its policy reader is pinned to inspected installed bytes, including
-managed JSON/drop-ins, MDM plists, managed MCP and remote cache. Restricted/safe
+managed JSON/drop-ins, MDM plists, managed MCP and remote cache. Restricted
 mode does not excuse incompatible managed controls. Native invalid-settings
 diagnostics return fixed codes, not raw private policy. Other platforms or
 unknown source revisions remain holds; no installed engine is copied or patched.
@@ -28,14 +28,66 @@ See [launch-chain inspection](../mcp/src/factory/triage-runner.js).
 ## One fixed production mission and owned tool catalog
 
 The native invocation uses `--tools ""`, four exact `--allowedTools` approvals,
-restricted/safe mode, dontAsk/no prompts, no slash commands/Chrome/session
-persistence, strict MCP configuration, disabled hooks and the existing `$1`
+restricted mode, dontAsk/no prompts, no slash commands/Chrome/session
+persistence, strict MCP configuration, disabled hooks/skill shell/workflows and the existing `$1`
 ceiling. Inline settings deny native file/shell/agent/network tools. Its sole MCP
 server is `triage_catalog`; no generic `mcp__*` grant or blanket deny substitutes
 for its four reviewed names. Both system prompt and positional request are
 source-controlled normal-triage text; there is no alternate mission or arbitrary
 text selector. Prepared prose is never argv. See
 [the exact policy constructor](../mcp/src/factory/triage-runner.js).
+
+The revised fixed recipe removes only the runner-selected `--safe-mode`.
+Externally required safe/hermetic/simple policy or incompatible managed MCP
+policy still blocks before launch; environment filtering cannot erase that
+requirement. `--bare`, provider/auth changes and additional approvals are not
+alternatives.
+
+`collectTriageControls` binds the actual engine hash and finite `E296/3` source
+fragments to ten closed control rows in `desk.factory.triage-controls/3`.
+The parent collects selected sources before doctor, checks helper tiers,
+effective off-values and source drift, and retains live collection identity.
+The public validator checks structure only: parsed evidence and memory-only
+test collections never authorize a native launch.
+
+The reader checks non-symlink, safely owned ancestors and leaf identity,
+rejects duplicate JSON keys through the maintained safe YAML parser after
+strict JSON validation, and bounds selected managed instruction/rule/agent
+reads and named imports. Cycles, missing/outside imports, depth/count/byte
+overflow and ambiguous/executable frontmatter hold. It does not load JS or
+classify prose. Source-linked fixed registration predicates resolve selected
+managed plugin off-values and controller ordering; declared defaults and
+absent settings are not effective off receipts.
+
+Only `cc-plugin-tips` and `cc-plugin-sec-default@builtin` have exhaustive
+source-bound variant envelopes. Tips is an executable hooks module: its
+unavailable/off/on variants have the same nonactivation bound only under the
+exact fresh, noninteractive print entry and late-replay guard. The controller's
+absent/present envelope preserves the fixed authority limits only with closed
+external policy and continuation edges. Neither proves a live feature pin or
+seat: both basis entries explicitly retain `selection:"unobserved"`.
+Changed engine/guard/import/argv, interactive/reused sessions, unknown options,
+external modules or broader managed MCP configuration remain holds.
+
+Recipe version 3 adds only a fixed inline false map for nine optional builtins:
+responsive-mode, diff, you-should-know, claude-test, plugin-authoring, mods-guide,
+mermaid, agents-md and telemetry, each with its exact `cc-plugin-…@builtin` ID.
+Tips and security controller are never included in that map. Explicit false is
+resolved against the current selected managed policy before doctor; required
+ON, unsupported alias/options, unknown registration or ineffective suppression
+holds. False JSON by itself is not authority. The source-pinned E3/IUr/cEe
+enablement/fold/load chain keeps the nine out of executable module/skill/MCP
+consumers, and diff's registration-time preference carry is separately bound to
+fresh noninteractive non-desktop startup.
+
+The engine may still evaluate builtin availability or descriptor metadata.
+No exact feature value/provenance is inferred, queried or overridden. The
+claude-test conditional descriptor getter is accessed during registry metadata
+construction but cannot activate its fresh-session MCP branch; disabled
+consumer callbacks remain excluded. Defaults and installed-plugin lists are
+not effective-off receipts. Unknown composition cannot qualify or sign in/spawn
+a model. The pinned builtin-only LSP loader has a separately established
+nonexecuting path.
 
 | Tool | Closed operation |
 | --- | --- |
@@ -122,8 +174,11 @@ alone invokes native qualification after both independent reviews:
 node plugins/desk/mcp/scripts/qualify-triage-runner.js --cli /absolute/existing/engine --out /protected/evidence
 ```
 
-Evidence remains owner-only outside Git. The version-2 `owned_catalog_mcp`
-record rejects old native-path/probing records and unissued caller objects.
+Evidence remains owner-only outside Git. The version-3 `owned_catalog_mcp`
+record v5 binds recipe version 3, table E296/3, controls /3, both control
+collections and their closed builtin-basis hashes, exact optional false-map
+and eleven-ID registry hashes, and current effective source-fold identities.
+It rejects old safe-mode/native-path/probing records and unissued caller objects.
 Reusable invocation identity permits only seven typed per-run bindings:
 generation, snapshot path/hash, receipt/control FIFO paths, deadline and protected
 run directory. Every other command/flag/tool/settings/env/message byte stays
@@ -131,6 +186,22 @@ fixed. New authorized prepared content requires a fresh full handshake; the
 synthetic fixture is not a permanent production input freeze.
 See [qualifier](../mcp/scripts/qualify-triage-runner.js) and
 [record/identity verification](../mcp/src/factory/triage-runner.js).
+
+An observed empty/mismatched native init manifest rejects pending bootstrap
+immediately. A successful result or closed child without authenticated
+bootstrap also fails immediately; a watcher or deadline is not synchronous
+per-tool prevention. Failed transactions retain bounded protected invocation,
+inline config/settings, stderr and lifecycle/receipt evidence. Unobserved
+channels are distinct from fully observed empty channels. Old failed attempts
+remain failures and are never reconstructed as actual receipts.
+
+Invocation serialization and lifecycle snapshot exceptions are captured
+inside the transaction boundary. Captures retain bounded raw stdout/stderr
+and receipt bytes, including invalid UTF-8, with truthful optional-channel
+observations and stage receipts. A capture error never erases the first
+startup refusal. Missing protected stage persistence stops qualification
+before another launch; failed output creation or reload returns a bounded
+hold rather than an unhandled exception.
 
 Native/private submit proof requires the actual closed manifest, correlated
 prepared/card Reads, exact submitted bytes/receipt ID, one native session shared

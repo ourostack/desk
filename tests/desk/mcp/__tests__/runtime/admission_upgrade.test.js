@@ -119,7 +119,7 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   assert.deepEqual((await session.request("tools/list")).result.tools, before)
 })
 
-test("a HEAD change is noticed without a tool call: the .git/HEAD watch re-runs admission", async (t) => {
+test("a HEAD change is noticed without a tool call: the .git/HEAD watch or reconciliation re-runs admission", async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
   const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"] })
@@ -129,7 +129,7 @@ test("a HEAD change is noticed without a tool call: the .git/HEAD watch re-runs 
   writeFile(path.join(fixture.desk, "ops", "unpushed.md"), "unpushed\n")
   git(fixture.desk, "add", "-A")
   git(fixture.desk, "commit", "-m", "unpushed")
-  // No desk_status call: only the watch can move the recorded state.
+  // No desk_status call: only the real watch/reconciliation can move the recorded state.
   await waitFor(() => existsSync(path.join(fixture.stateDir, "last-start.json")) && readLastStart(fixture).state === "degraded:state_branch_detached")
   git(fixture.desk, "switch", "main")
   await waitFor(() => readLastStart(fixture).state === "ready")

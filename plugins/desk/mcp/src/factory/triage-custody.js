@@ -160,12 +160,16 @@ export async function boundedFdWrite(fd,bytes,deadline) {
 }
 export function fifoPump({fd,deadline,maxFrame,maxBytes,maxFrames,onFrame,onFailure}) {
   let stopped=false,partial=Buffer.alloc(0),total=0,count=0,zeroReads=0
+  const raw=Buffer.alloc(maxBytes)
+  let rawBytes=0
   const done=(async()=>{
     const buffer=Buffer.alloc(32768)
     while(!stopped&&Date.now()<deadline){
       try{
         const {bytesRead}=await read(fd,buffer,0,buffer.length,null)
         if(!bytesRead){zeroReads++;await sleep(10);continue}
+        const kept=Math.min(bytesRead,maxBytes-rawBytes)
+        buffer.copy(raw,rawBytes,0,kept);rawBytes+=kept
         total+=bytesRead;if(total>maxBytes)fail("fifo_total_limit")
         let offset=0
         while(offset<bytesRead){
@@ -182,7 +186,8 @@ export function fifoPump({fd,deadline,maxFrame,maxBytes,maxFrames,onFrame,onFail
       }catch(e){if(stopped)break;if(transient(e)){await sleep(10);continue}onFailure(e);break}
     }
   })()
-  return {stop:async()=>{stopped=true;await done},done,status:()=>({partial:partial.length,total,count,zeroReads})}
+  return {stop:async()=>{stopped=true;await done},done,status:()=>({partial:partial.length,total,count,zeroReads}),
+    diagnostic:()=>({partial_base64:partial.toString("base64"),raw_base64:raw.subarray(0,rawBytes).toString("base64"),truncated:total>maxBytes,total,count,zeroReads})}
 }
 async function openSafe(file,kind,flags,deadline) {
   const before=await safeCatalogPath(file,kind),mode=kind==="file"?0o600:0o600
@@ -335,12 +340,19 @@ function validatedNativeSubmission({custody,nativeStream,brief}) {
     return validateNativeSubmissionEvidence({custody,nativeStream,brief,records:authority.records})
 }
 // Pure evidence validation is deliberately not custody/registry issuance.
+function nativeManifestDetail(value){
+  if(!Array.isArray(value.tools)||!Array.isArray(value.mcp_servers))return "native_manifest_mismatch"
+  if(!value.tools.length||!value.mcp_servers.length)return "native_manifest_empty"
+  const expected=["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>`mcp__triage_catalog__${x}`).sort()
+  return catalogCanonical([...value.tools].sort())===catalogCanonical(expected)&&value.mcp_servers.length===1&&
+    value.mcp_servers[0]?.name==="triage_catalog"&&value.mcp_servers[0]?.status==="connected"?null:"native_manifest_mismatch"
+}
 export function validateNativeSubmissionEvidence({custody,nativeStream,brief,records}) {
     const submission=custody.receipts.find(r=>r.event==="submit")?.payload
     if(!submission||catalogHash(catalogCanonical(brief))!==custody.briefSha256)fail("custody_brief")
     const events=nativeStream.stdout.split("\n").filter(Boolean).map(x=>JSON.parse(x)),init=events.filter(x=>x.type==="system"&&x.subtype==="init")
     const toolNames=["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>`mcp__triage_catalog__${x}`).sort()
-    if(init.length!==1||catalogCanonical([...init[0].tools].sort())!==catalogCanonical(toolNames)||nativeStream.kind!=="closed"||nativeStream.code!==0||nativeStream.truncated)fail("native_manifest")
+    if(init.length!==1||nativeManifestDetail(init[0])||nativeStream.kind!=="closed"||nativeStream.code!==0||nativeStream.truncated)fail("native_manifest")
     if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(init[0].session_id)||
       events.some(x=>x.session_id!==init[0].session_id))fail("native_session")
     if(events.some(x=>!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(x.uuid))||
@@ -523,6 +535,7 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
   const receipts=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
   const sourceBefore=await context.source()
   let error=null,observation=null,control=null,terminal=false,moduleClosure=null,bootWork=null
+  const controlFrames=[]
   const resources={initialReceiptZeroRead:false,fdsClosed:false,launcherExit:null,serverExited:false}
   let bootResolve,bootReject;const boot=new Promise((r,j)=>{bootResolve=r;bootReject=j})
   // Caller awaits boot immediately; retain rejection handler during startup.
@@ -550,7 +563,8 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
           const acquired=await context.openControl(controlPath,"fifo",C.O_WRONLY|C.O_NONBLOCK,deadline)
           if(error||resources.fdsClosed){await acquired.handle.close();fail("lifecycle_aborted")}
           control=acquired
-          await context.writeControl(control.handle.fd,catalogCanonical({event:"ready",generation:snapshot.generation,server_pid:frame.server_pid})+"\n",deadline)
+          const wire=catalogCanonical({event:"ready",generation:snapshot.generation,server_pid:frame.server_pid})+"\n"
+          await context.writeControl(control.handle.fd,wire,deadline);controlFrames.push(wire)
           bootResolve(frame)
         })().catch(onFailure)
       }else if(frame.event==="terminal"){
@@ -567,10 +581,13 @@ async function runOwnedCatalogLifecycle({nativeChild,launch,receiptFd,receiptHan
     if(control)await control.handle.close()
   }
   return {boot,receipts,resources,
+    snapshot:()=>({receipts:[...receipts],observation,module_closure_sha256:moduleClosure?catalogHash(catalogCanonical(moduleClosure)):null,
+      control_frames:[...controlFrames],receipt_pump:pump.diagnostic?.()??null,terminal,error:error?.message??null,resources}),
     fail:onFailure,
     async finish(){
       if(control&&!terminal){
-        try{await context.writeControl(control.handle.fd,catalogCanonical({event:"finish",generation:snapshot.generation,server_pid:receipts[0].server_pid})+"\n",deadline)}
+        try{const wire=catalogCanonical({event:"finish",generation:snapshot.generation,server_pid:receipts[0].server_pid})+"\n"
+          await context.writeControl(control.handle.fd,wire,deadline);controlFrames.push(wire)}
         catch(e){if(e.code!=="EPIPE")onFailure(e)}
       }
     },
@@ -671,7 +688,7 @@ export async function runNonacceptedLifecycleTransaction(config){
     await controller.abort()
     statistics.registered=outcome.custody&&registry.has(outcome.custody)?1:0
   }catch(e){await controller.abort();outcome={state:"failed",reason:e.message}}
-  return {authority:false,outcome,statistics}
+  return {authority:false,outcome,statistics,evidence:controller.snapshot()}
 }
 export function boundClient(child,history) {
   const buffer=new ReadBuffer()
@@ -715,14 +732,56 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
     let timer,hard
     const decoder=new TextDecoder("utf-8",{fatal:true})
     const resources={runDir:owned.runDir,pids:[],exited_pids:[],native_exit:null}
+    let outcome,spawnAttempted=false,bootSeen=false,initSeen=false,stderrTotal=0,stderrKept=0
+    let argumentText,configText,settingsText,captureFailure=null,snapshot=null,snapshotObserved=false
+    const stages=[]
+    const stage=(name,observation)=>stages.push({name,observation,at_ms:Date.now()})
+    const stderrBuffer=Buffer.alloc(65536),stdoutBuffer=Buffer.alloc(1048576)
+    let stdoutKept=0
+    const returned=value=>(outcome=value)
+    const rejectStartup=detail=>{nativeError??=new Error(detail);lifecycle.fail(nativeError);if(ownsPID&&!closed)child.kill("SIGTERM")}
+    const captured=(text,observed,limit,truncated=false)=>{
+      if(!observed||typeof text!=="string"&&!Buffer.isBuffer(text))return {observation:"unobserved",truncated,reason:"not_observed"}
+      const bytes=Buffer.isBuffer(text)?text:Buffer.from(text),kept=bytes.subarray(0,limit)
+      return {observation:bytes.length?"present":"observed_absent",bytes:kept.length,sha256:catalogHash(kept),truncated:truncated||bytes.length>limit}
+    }
+    const observeSnapshot=()=>{
+      if(snapshotObserved)return
+      snapshotObserved=true
+      if(!lifecycle?.snapshot)return
+      try{
+        const value=lifecycle.snapshot(),text=catalogCanonical(value)
+        // Fixed private capture bounds; no arbitrary snapshot properties or
+        // unbounded stage/resource arrays can escape into an evidence bundle.
+        closedObject(value,["receipts","observation","resources"],["module_closure_sha256","control_frames","receipt_pump","terminal","error"])
+        if(Buffer.byteLength(text)>6291456||!Array.isArray(value.receipts)||value.receipts.length>4||
+          Object.keys(value.resources).length>64||value.control_frames&&value.control_frames.length>64)fail("native_capture_limit")
+        if(value.receipt_pump){
+          const raw=Buffer.from(value.receipt_pump.raw_base64??"","base64")
+          if(raw.length>2097152)fail("native_capture_limit")
+        }
+        snapshot=JSON.parse(text)
+      }catch{captureFailure="lifecycle_capture"}
+    }
     try{
+      stage("prepare_invocation","present")
+      try{
+        argumentText=JSON.stringify({command,args,cwd:owned.runDir})
+        configText=args.includes("--mcp-config")?args[args.indexOf("--mcp-config")+1]:undefined
+        settingsText=args.includes("--settings")?args[args.indexOf("--settings")+1]:undefined
+      }catch{captureFailure="argv_serialization";fail("native_capture_invalid")}
       if(!await owned.verifyPrepared())fail("prepared_changed")
+      stage("prepared_verification","present")
+      if(Buffer.byteLength(argumentText)>65536||[configText,settingsText].some(v=>typeof v==="string"&&Buffer.byteLength(v)>65536))fail("native_capture_limit")
       lifecycle=await context.lifecycle({launch:owned.launch,receiptFd:owned.reader.handle.fd,receiptHandle:owned.reader.handle,
         controlPath:owned.launch.identity.bootstrap.readyFifo,deadline})
+      stage("lifecycle","present")
       // Last prepared check is synchronous, with no yield before spawning.
       const before=context.stat(owned.prepared.path)
       if(before.dev!==owned.prepared.identity.dev||before.ino!==owned.prepared.identity.ino||
         catalogHash(context.bytes(owned.prepared.path))!==owned.prepared.sha256)fail("prepared_changed")
+      spawnAttempted=true
+      stage("spawn_attempt","present")
       child=spawnNative(command,args,{env,cwd:owned.runDir,shell:false,stdio:["ignore","pipe","pipe"]})
       ownsPID=Number.isSafeInteger(child.pid)&&child.pid>0
       // A failed spawn can expose a zero/unowned native process handle before
@@ -732,6 +791,7 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       child.on("close",(code,s)=>{
         try{stdout+=decoder.decode()}catch{nativeError=new Error("native_bad_utf8");lifecycle.fail(nativeError)}
         closed=true;exitCode=code;signal=s
+        if(!bootSeen)rejectStartup("bootstrap_unestablished")
         if(ownsPID){resources.exited_pids.push(child.pid);onChildExit?.(child.pid)}
       })
       if(!ownsPID)fail("native_pid_unknown")
@@ -740,6 +800,8 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       timer=setTimeout(()=>{nativeError=new Error("native_timeout");child.kill("SIGTERM");lifecycle.fail(nativeError)},Math.max(1,deadline-Date.now()-1000))
       hard=setTimeout(()=>{if(!closed){child.kill("SIGKILL");child.stdout.destroy();child.stderr.destroy()}},Math.max(1,deadline-Date.now()))
       child.stdout.on("data",chunk=>{
+        const kept=Math.min(chunk.length,stdoutBuffer.length-stdoutKept)
+        chunk.copy(stdoutBuffer,stdoutKept,0,kept);stdoutKept+=kept
         total+=chunk.length
         if(total>1048576){nativeError=new Error("native_output_limit");child.kill("SIGTERM");lifecycle.fail(nativeError);return}
         let text
@@ -750,9 +812,19 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
         for(const line of lines)if(line){
           try{
             const value=JSON.parse(line)
+            if(value.type==="system"&&value.subtype==="init"){
+              if(!initSeen)stage("native_init","present")
+              const detail=initSeen?"native_manifest_mismatch":nativeManifestDetail(value)
+              if(detail)rejectStartup(detail)
+              initSeen=true
+            }
             if(value.type==="result"){
               cost=Number.isFinite(value.total_cost_usd)&&value.total_cost_usd>=0?value.total_cost_usd:null
-              if(value.subtype==="success"&&value.is_error===false){successSeen=true;lifecycle.finish().catch(lifecycle.fail)}
+              if(value.subtype==="success"&&value.is_error===false){
+                if(!bootSeen)rejectStartup("bootstrap_unestablished")
+                else if(!initSeen)rejectStartup("native_manifest_mismatch")
+                else {successSeen=true;lifecycle.finish().catch(lifecycle.fail)}
+              }
               else{
                 // Pinned native error-result discriminator, never prose or a
                 // substring. Malformed/cost-unvalidated terminals stay failed.
@@ -764,30 +836,39 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
           }catch{nativeError=new Error("native_bad_stream");lifecycle.fail(nativeError);child.kill("SIGTERM")}
         }
       })
-      child.stderr.on("data",chunk=>{if(Buffer.byteLength(stderr)+chunk.length<=65536)stderr+=chunk;else{nativeError=new Error("native_stderr_limit");child.kill("SIGTERM");lifecycle.fail(nativeError)}})
-      child.on("exit",(code,s)=>{exitCode=code;signal=s;if(code===0)lifecycle.finish().catch(lifecycle.fail);else lifecycle.fail(new Error("native_exit"))})
+      child.stderr.on("data",chunk=>{
+        stderrTotal+=chunk.length
+        const count=Math.min(chunk.length,65536-stderrKept)
+        chunk.copy(stderrBuffer,stderrKept,0,count);stderrKept+=count
+        if(stderrTotal<=65536)stderr+=chunk
+        else{nativeError=new Error("native_stderr_limit");child.kill("SIGTERM");lifecycle.fail(nativeError)}
+      })
+      child.on("exit",(code,s)=>{exitCode=code;signal=s;if(!bootSeen)rejectStartup("bootstrap_unestablished");else if(code===0)lifecycle.finish().catch(lifecycle.fail);else lifecycle.fail(new Error("native_exit"))})
       await lifecycle.boot
+      bootSeen=true
+      stage("authenticated_bootstrap","present")
       const done=await lifecycle.complete()
       Object.assign(resources,done.resources)
       while(!closed&&Date.now()<deadline)await sleep(10)
       clearTimeout(timer);clearTimeout(hard)
       resources.native_exit={code:exitCode,signal,stdio_closed:closed}
       const stream={kind:closed?"closed":"timeout",code:exitCode,stdout,truncated:total>1048576}
-      if(nativeError||!closed||exitCode!==0||signal||!successSeen||done.state!=="closed"||!await owned.verifyPrepared())return {
+      if(nativeError||!closed||exitCode!==0||signal||!successSeen||!initSeen||done.state!=="closed"||!await owned.verifyPrepared())return returned({
         state:nativeError?.message==="native_timeout"||!closed?"timeout":budgetExceeded?"budget_exceeded":"failed",
-        cost_usd:cost,reason:nativeError?.message??done.reason??"native_incomplete",stream,resources}
+        cost_usd:cost,reason:"diagnostic_inadequate",detail:nativeError?.message??done.reason??"native_incomplete",stream,resources})
+      observeSnapshot()
+      if(captureFailure)fail("native_capture_invalid")
       const materialized=await context.materialize({custody:done.custody,nativeStream:stream,brief:owned.prepared.brief,resultFile})
       const run={...materialized,stream,custody:done.custody,resources,
         invocation:{command,args,cwd:owned.runDir,parent_env_sha256:catalogHash(catalogCanonical(env)),owned_launch:owned.launch,
           prepared_sha256:owned.prepared.sha256,catalog_sha256:owned.catalog.catalogSha256,brief_sha256:owned.catalog.briefSha256,record_refs_sha256:owned.catalog.recordRefsSha256},
         snapshotFile:owned.launch.identity.bootstrap.snapshotFile,cost_usd:cost}
-      if(run.state==="ran")context.registry.set(run,catalogHash(catalogCanonical(run)))
-      return run
+      return returned(run)
     }catch(e){
       if(child&&!closed&&ownsPID)child.kill("SIGTERM")
-      if(lifecycle)await lifecycle.abort();else await owned.close()
-      return {state:nativeError?.message==="native_timeout"?"timeout":budgetExceeded?"budget_exceeded":"scope_unqualified",
-        cost_usd:cost,reason:"diagnostic_inadequate",detail:e.message,stream:{kind:"failed",stdout,truncated:false},resources}
+      try{if(lifecycle)await lifecycle.abort();else await owned.close()}catch(cleanup){resources.cleanup_error=cleanup.message}
+      return returned({state:nativeError?.message==="native_timeout"?"timeout":budgetExceeded?"budget_exceeded":"scope_unqualified",
+        cost_usd:cost,reason:"diagnostic_inadequate",detail:nativeError?.message??e.message,stream:{kind:"failed",stdout,truncated:total>1048576},resources})
     }finally{
       // A rejected bootstrap must not return before its owned native process
       // has been reaped; timers belong to every path, not just normal closure.
@@ -799,6 +880,33 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       }
       clearTimeout(timer);clearTimeout(hard)
       resources.native_exit={code:exitCode,signal,stdio_closed:closed}
+      {
+        // Every try/catch exit uses returned(); snapshot all of them, including
+        // pre-spawn failures rather than conditioning evidence on success.
+        observeSnapshot()
+        stage("teardown",closed||!spawnAttempted?"present":"unobserved")
+        // Successful materialization checked capture above; failed paths
+        // retain their first refusal and record capture failure separately.
+        if(captureFailure)delete outcome.resultFile
+        const receiptText=snapshot?.receipt_pump?.raw_base64
+        const receiptBytes=typeof receiptText==="string"?Buffer.from(receiptText,"base64"):undefined
+        const lifecycleText=snapshot?catalogCanonical(Object.fromEntries(Object.entries(snapshot).filter(([key])=>!["receipts","receipt_pump"].includes(key)))):undefined
+        outcome.evidence={version:1,spawn_attempted:spawnAttempted,spawned:ownsPID,bootstrap:bootSeen?"present":"unobserved",init:initSeen?"present":"unobserved",
+          capture_failure:captureFailure,stages,
+          channels:{argv:captured(argumentText,spawnAttempted,65536),config:captured(configText,spawnAttempted&&args.includes("--mcp-config"),65536),
+            settings:captured(settingsText,spawnAttempted&&args.includes("--settings"),65536),
+            stderr:captured(stderrBuffer.subarray(0,stderrKept),Boolean(child)&&(closed||stderrKept>0),65536,stderrTotal>65536||Boolean(child)&&!closed),
+            stdout:captured(stdoutBuffer.subarray(0,stdoutKept),Boolean(child)&&(closed||stdoutKept>0),1048576,total>1048576||Boolean(child)&&!closed),
+            lifecycle:captured(lifecycleText,snapshot!==null,65536),
+            receipts:captured(receiptBytes,receiptBytes!==undefined,2097152,snapshot?.receipt_pump?.truncated??false)},
+          argv_base64:spawnAttempted?Buffer.from(argumentText).subarray(0,65536).toString("base64"):null,
+          config_base64:spawnAttempted&&args.includes("--mcp-config")&&typeof configText==="string"?Buffer.from(configText).subarray(0,65536).toString("base64"):null,
+          settings_base64:spawnAttempted&&args.includes("--settings")&&typeof settingsText==="string"?Buffer.from(settingsText).subarray(0,65536).toString("base64"):null,
+          stderr_base64:child?stderrBuffer.subarray(0,stderrKept).toString("base64"):null,
+          stdout_base64:child?stdoutBuffer.subarray(0,stdoutKept).toString("base64"):null,
+          receipts_base64:receiptBytes?.toString("base64")??null,lifecycle:snapshot,resources}
+        if(outcome.state==="ran")context.registry.set(outcome,catalogHash(catalogCanonical(outcome)))
+      }
     }
 }
 /** Fixed synthetic child, source and materializer. These adapters terminate in
@@ -810,7 +918,10 @@ export async function runNonacceptedNativeTransaction(config){
     "lifecycleThrows","spawnThrows","pidUnknown","outputLimit","badUTF8","badJSON","resultFailure","stderrLimit","childError",
     "closeBadUTF8","softTimeout","hardTimeout","noClose","timerAfterClose","noSuccess","nonzeroExit","signalExit","preparedFinal",
     "materializeRefused","completeThrows","abortStuck","finishReject",
-    "budget","budgetZero","budgetBadCost","budgetNegativeCost","budgetMissingCost","budgetWrongError","budgetProse","budgetCompleteThrows"].includes(mode))fail("unit_mode")
+    "budget","budgetZero","budgetBadCost","budgetNegativeCost","budgetMissingCost","budgetWrongError","budgetProse","budgetCompleteThrows",
+    "emptyInit","emptyInitStderr","closedBeforeBoot","successBeforeBoot","initMissing","initExtra","initDuplicate","successNoInit","argvLimit","abortThrows","configCapture","settingsCapture",
+    "argvSerializationThrows","snapshotThrows","snapshotCircular","snapshotOverflow","snapshotTextLimit","snapshotReceiptShape","snapshotReceiptCount",
+    "snapshotResourcesLimit","snapshotControlFramesLimit","snapshotPumpLimit","snapshotPumpEmpty","emptyInitSnapshotThrows"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualLaunches:0,actualFileOperations:0,closed:0,signals:[],registered:false}
   const child=new EventEmitter()
   Object.assign(child,{pid:mode==="pidUnknown"?0:500003,stdout:new PassThrough(),stderr:new PassThrough()})
@@ -822,10 +933,24 @@ export async function runNonacceptedNativeTransaction(config){
     if(mode==="lateClose")completeResolve(result())
     return Promise.resolve()
   }
-  const lifecycle={boot:Promise.resolve(),finish,fail(e){error=e;if(mode!=="timerAfterClose")completeResolve(result())},
+  let rejectBoot
+  const pendingBoot=["emptyInit","emptyInitStderr","emptyInitSnapshotThrows","closedBeforeBoot","successBeforeBoot","abortThrows","configCapture","settingsCapture"].includes(mode)
+  const boot=pendingBoot?new Promise((_resolve,reject)=>{rejectBoot=reject}):Promise.resolve()
+  boot.catch(()=>{})
+  const lifecycle={boot,finish,fail(e){error=e;rejectBoot?.(e);if(mode!=="timerAfterClose")completeResolve(result())},
+    snapshot(){
+      if(mode==="snapshotThrows"||mode==="emptyInitSnapshotThrows")throw Error("unit_snapshot_failed")
+      if(mode==="snapshotCircular"){const x={};x.self=x;return x}
+      return {receipts:mode==="snapshotReceiptShape"?null:mode==="snapshotReceiptCount"?Array(5).fill({}):[],observation:null,
+        resources:mode==="snapshotTextLimit"?{large:"x".repeat(6291457)}:mode==="snapshotResourcesLimit"?Object.fromEntries(Array.from({length:65},(_,i)=>[i,0])):{},
+        ...(mode==="snapshotControlFramesLimit"?{control_frames:Array(65).fill("")}:{}),
+        ...(mode==="snapshotPumpLimit"?{receipt_pump:{raw_base64:Buffer.alloc(2097153).toString("base64")}}:{}),
+        ...(mode==="snapshotPumpEmpty"?{receipt_pump:{}}:{}),
+        ...(mode==="snapshotOverflow"?{extra:"x".repeat(2097153)}:{})}
+    },
     async complete(){if(["completeThrows","abortStuck"].includes(mode))throw Error("unit_complete_failed");await complete;
       if(mode==="budgetCompleteThrows")throw Error("unit_complete_failed");return result()},
-    async abort(){error=Error("unit_abort");completeResolve(result())}}
+    async abort(){error=Error("unit_abort");completeResolve(result());if(mode==="abortThrows")throw Error("unit_abort_failed")}}
   const closeChild=(code=0,signal=null)=>{
     if(exited)return
     exited=true;child.emit("exit",code,signal);child.emit("close",code,signal)
@@ -855,6 +980,25 @@ export async function runNonacceptedNativeTransaction(config){
     if(mode==="spawnThrows")throw Error("unit_spawn_failed")
     emission=setTimeout(()=>{
       if(mode==="pidUnknown"){child.emit("error",Error("unit_failed_spawn"));closeChild(1);return}
+      if(mode==="closedBeforeBoot"){closeChild(0);return}
+      if(mode==="successBeforeBoot"){
+        child.stdout.write('{"type":"result","subtype":"success","is_error":false}\n')
+        closeChild(0);return
+      }
+      if(["emptyInit","emptyInitStderr","emptyInitSnapshotThrows","abortThrows","configCapture","settingsCapture"].includes(mode)){
+        if(mode==="emptyInitStderr")child.stderr.write("unit-bounded-stderr")
+        child.stdout.write('{"type":"system","subtype":"init","tools":[],"mcp_servers":[]}\n')
+        closeChild(0);return
+      }
+      if(mode!=="successNoInit"){
+        const init={type:"system",subtype:"init",
+          tools:["evidence_read","evidence_search","evidence_list","candidate_submit"].map(x=>`mcp__triage_catalog__${x}`),
+          mcp_servers:[{name:"triage_catalog",status:"connected"}]}
+        if(mode==="initMissing")delete init.tools
+        if(mode==="initExtra")init.tools.push("Bash")
+        child.stdout.write(JSON.stringify(init)+"\n")
+        if(mode==="initDuplicate")child.stdout.write(JSON.stringify(init)+"\n")
+      }
       if(["softTimeout","hardTimeout","noClose","abortStuck"].includes(mode))return
       if(mode==="outputLimit"){child.stdout.write(Buffer.alloc(1048577));return}
       if(mode==="badUTF8"){child.stdout.write(Buffer.from([0xff]));return}
@@ -885,7 +1029,9 @@ export async function runNonacceptedNativeTransaction(config){
   }
   let outcome
   try{
-    outcome=await runNativeTransaction({owned,command:"unit-memory-only",args:[],env:{},deadline,resultFile:"unit-memory-only",
+    const args=mode==="argvLimit"?["x".repeat(65537)]:mode==="configCapture"?["--mcp-config",'{"mcpServers":{}}']:mode==="settingsCapture"?["--settings","{}"]:[]
+    if(mode==="argvSerializationThrows")args.toJSON=()=>{throw Error("unit_argv_serialization")}
+    outcome=await runNativeTransaction({owned,command:"unit-memory-only",args,env:{},deadline,resultFile:"unit-memory-only",
       spawn:spawnSynthetic,onChild:()=>{},onChildExit:()=>{}},context)
   }finally{
     clearTimeout(emission);clearTimeout(late)

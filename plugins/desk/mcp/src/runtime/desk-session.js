@@ -11,7 +11,8 @@
 //
 // This module must not import anything from the runtime pack: it runs before the pack is restored.
 
-import { statSync, unwatchFile, watchFile } from "node:fs"
+import { statSync, unwatchFile, watchFile, promises as headFileSystem, constants as headConstants } from "node:fs"
+import { createHash } from "node:crypto"
 import * as path from "node:path"
 
 import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
@@ -23,7 +24,7 @@ import { deskSkill } from "./skills.js"
 import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
-import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
+import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
@@ -177,6 +178,7 @@ export function createDeskSession(deps) {
     statusRunLimitMs = STATUS_RUN_LIMIT_MS,
     controllerRecheckMs = CONTROLLER_RECHECK_MS,
     env = process.env,
+    headIO = headFileSystem,
   } = deps
   const hungPolicy = {
     misses: HUNG_MISSES,
@@ -190,6 +192,10 @@ export function createDeskSession(deps) {
   const focus = createFocusHolder()
   let headWatch = null
   let headTimer = null
+  let headBinding = null
+  let headSample = null
+  let headGeneration = 0
+  const headDescriptors = new Set()
   let disposed = false
   let unwatchController = null
   let hungOwner = null
@@ -330,8 +336,6 @@ export function createDeskSession(deps) {
   function forgetDesk() {
     forgetAuthority()
     closeHeadWatch()
-    if (headTimer !== null) clearTimeout(headTimer)
-    headTimer = null
     context.root = null
     context.stateBranch = null
     context.policyKey = null
@@ -458,20 +462,44 @@ export function createDeskSession(deps) {
     const startup = !context.startupDone && !headTriggered
     let branchProblem = null
     setPhase("inspecting_state_branch")
+    // Discover only the authoritative location before the first observation.
+    // The branch inspection below must be enclosed by two certain samples,
+    // including the first admission, not blessed by a later first baseline.
+    if (headBinding === null && isStateBranchName(activation.stateBranch)) {
+      const located = await git({ cwd: deskRoot, args: ["rev-parse", "--show-toplevel", "--absolute-git-dir"] })
+      if (disposed) return null
+      if (located.ok) {
+        const [, gitDir] = located.stdout.split(/\r?\n/u)
+        if (typeof gitDir === "string") bindHead(gitDir)
+      }
+    }
+    let observedHead = headBinding === null ? null : await sampleHead(headBinding)
     let inspection = await inspectStateBranch({ root: deskRoot, branch: activation.stateBranch, git })
     if (disposed) return null
     if (!inspection.ok && inspection.automatic && startup) {
       const repaired = await repairStateBranch({ inspection, git })
       if (repaired.repaired) {
         repairs.push(recordRepair(repaired.line))
+        // The owned startup switch intentionally changed HEAD. Enclose the
+        // final post-repair Git inspection in its own fresh interval.
+        observedHead = headBinding === null ? null : await sampleHead(headBinding)
         inspection = await inspectStateBranch({ root: deskRoot, branch: activation.stateBranch, git })
       } else {
         branchProblem = stateBranchProblem(inspection, { failedRepair: repaired, automatic: startup })
       }
     }
     if (!inspection.ok && branchProblem === null) branchProblem = stateBranchProblem(inspection, { automatic: startup })
+    const checkedHead = await watchHead(inspection.gitDir, observedHead?.certain === true)
+    if (disposed || context.root?.root !== deskRoot) return null
+    if (checkedHead !== null && (!checkedHead.certain || !observedHead?.certain ||
+        observedHead.identity !== checkedHead.identity)) {
+      inspection = { ...inspection, ok: false }
+      branchProblem = headUncertainOutcome()
+      if (checkedHead.certain && headBinding !== null) {
+        signalHead(headBinding, { certain: false, reason: "head_changed_during_inspection" })
+      }
+    }
     context.stateBranch = inspection
-    watchHead(inspection.gitDir)
 
     const onRepair = (repair) => repairs.push(recordRepair(`repaired: readiness state directory mode ${repair.from} → 700 (${repair.path})`))
     let controllerProblem = null
@@ -506,6 +534,9 @@ export function createDeskSession(deps) {
     if (branchProblem !== null) return { state: "degraded", ...branchProblem, repair }
     if (controllerProblem !== null) return { ...controllerProblem, repair }
     if (semanticProblem !== null) return { ...semanticProblem, repair }
+    // A signal can revoke this inspection while authority/semantic work is
+    // awaited. Only the queued, fresh Git attempt may restore readiness.
+    if (context.stateBranch.ok === false) return { state: "degraded", ...headUncertainOutcome(), repair }
     return { state: "ready", repair }
   }
 
@@ -664,17 +695,181 @@ export function createDeskSession(deps) {
       .finally(() => { checking = null })
   }
 
-  function watchHead(gitDir) {
-    if (disposed || headWatch?.gitDir === gitDir) return
-    closeHeadWatch()
-    if (typeof gitDir !== "string") return
+  const headUncertainOutcome = () => exceptionOutcome(new Error("HEAD freshness is unverified; authoritative Git inspection must settle a current observation"))
+  const currentHead = binding => !disposed && headBinding === binding && binding.generation === headGeneration
+  const statIdentity = stat => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs, stat.nlink].join(":")
+  async function readHead(binding) {
+    let descriptor = null
+    try {
+      const rootBefore = await headIO.lstat(binding.root)
+      const dirBefore = await headIO.lstat(binding.gitDir)
+      if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink() || !dirBefore.isDirectory() || dirBefore.isSymbolicLink())
+        throw new Error("head_destination")
+      const destination = [rootBefore.dev, rootBefore.ino, dirBefore.dev, dirBefore.ino].join(":")
+      if (binding.destination !== null && binding.destination !== destination) throw new Error("head_destination_changed")
+      const file = path.join(binding.gitDir, "HEAD")
+      const before = await headIO.lstat(file)
+      if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 4096) throw new Error("head_file")
+      if (!currentHead(binding)) throw new Error("head_cancelled")
+      const handle = await headIO.open(file, headConstants.O_RDONLY | headConstants.O_NOFOLLOW)
+      descriptor = { handle }; headDescriptors.add(descriptor)
+      if (!currentHead(binding)) throw new Error("head_cancelled")
+      if (statIdentity(await handle.stat()) !== statIdentity(before)) throw new Error("head_replaced")
+      const bytes = Buffer.alloc(4097)
+      let length = 0
+      while (length < bytes.length) {
+        const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length)
+        if (bytesRead === 0) break
+        length += bytesRead
+      }
+      if (length > 4096 || length !== before.size) throw new Error("head_size")
+      if (statIdentity(await handle.stat()) !== statIdentity(before) ||
+          statIdentity(await headIO.lstat(file)) !== statIdentity(before)) throw new Error("head_replaced")
+      const rootAfter = await headIO.lstat(binding.root), dirAfter = await headIO.lstat(binding.gitDir)
+      if ([rootAfter.dev, rootAfter.ino, dirAfter.dev, dirAfter.ino].join(":") !== destination ||
+          !rootAfter.isDirectory() || rootAfter.isSymbolicLink() || !dirAfter.isDirectory() || dirAfter.isSymbolicLink())
+        throw new Error("head_destination_changed")
+      if (!currentHead(binding)) throw new Error("head_cancelled")
+      binding.destination = destination
+      return { certain: true, identity: `${destination}:${statIdentity(before)}:${createHash("sha256").update(bytes.subarray(0, length)).digest("hex")}` }
+    } catch (error) {
+      return { certain: false, reason: error.code ?? error.message }
+    } finally {
+      if (descriptor !== null) {
+        try {
+          await descriptor.handle.close()
+          headDescriptors.delete(descriptor)
+        } catch {
+          return { certain: false, reason: "head_close_failed" }
+        }
+      }
+    }
+  }
+  async function sampleHead(binding) {
+    // A timeout is a freshness result, not cancellation of kernel work. One
+    // retained operation globally prevents overlap even across root rebinding.
+    if (headSample !== null || headDescriptors.size !== 0) return { certain: false, reason: "head_sample_pending" }
+    const pending = readHead(binding)
+    headSample = pending
+    let budget
+    const timeout = new Promise(resolve => {
+      budget = setTimeout(() => resolve({ certain: false, reason: "head_sample_budget" }), 500)
+      budget.unref?.()
+    })
+    // No new sample may replace this owner before its finalizer settles.
+    pending.finally(() => { headSample = null }).catch(() => {})
+    try { return await Promise.race([pending, timeout]) }
+    finally { clearTimeout(budget) }
+  }
+  function signalHead(binding, observation) {
+    // Callers fence awaited observations and native callbacks; closeHeadWatch
+    // cancels both session-owned timers before replacing this binding.
+    const key = observation.certain ? observation.identity : `uncertain:${observation.reason}`
+    if (binding.signal === key) return
+    binding.signal = key
+    binding.dirty = true
+    context.headTriggered = true
+    invalidateStatus()
+    if (context.stateBranch) context.stateBranch = { ...context.stateBranch, ok: false }
+    if (admission.snapshot().state === "ready") admission.fail(headUncertainOutcome())
+    requestHead(binding)
+  }
+  function requestHead(binding) {
+    if (!currentHead(binding) || binding.request !== null) return
+    binding.request = Promise.resolve().then(async () => {
+      while (currentHead(binding) && binding.dirty) {
+        binding.dirty = false
+        context.headTriggered = true
+        await admission.refresh({ force: true, waitMs: 1000 })
+        while (currentHead(binding) && admission.running) await admission.idle({ waitMs: 1000 })
+      }
+    }).catch(error => { if (currentHead(binding)) admission.fail(exceptionOutcome(error)) })
+      .finally(() => { binding.request = null })
+  }
+  function reconcileHead(binding) {
+    binding.resample = true
+    if (binding.observing) return binding.observing
+    binding.observing = Promise.resolve().then(async () => {
+      while (currentHead(binding) && binding.resample) {
+        binding.resample = false
+        // Native delivery is a hint, not a failed read. Wait for the one
+        // existing owner rather than manufacturing uncertainty or overlap.
+        if (headSample !== null) await headSample
+        if (!currentHead(binding)) break
+        const observed = await sampleHead(binding)
+        if (!currentHead(binding)) break
+        if (!observed.certain || observed.identity !== binding.verified) signalHead(binding, observed)
+      }
+    }).catch(error => { if (currentHead(binding)) admission.fail(exceptionOutcome(error)) })
+      .finally(() => { binding.observing = null })
+    return binding.observing
+  }
+  function armHead(binding) {
+    if (!currentHead(binding) || binding.timer !== null) return
+    if (headSample !== null) {
+      if (!binding.awaitingSample) {
+        binding.awaitingSample = true
+        headSample.finally(() => {
+          binding.awaitingSample = false
+          armHead(binding)
+        }).catch(() => {})
+      }
+      return
+    }
+    binding.timer = setTimeout(async () => {
+      binding.timer = null
+      await reconcileHead(binding)
+      armHead(binding)
+    }, 1000)
+    binding.timer.unref?.()
+  }
+  function bindHead(gitDir) {
+    if (headBinding === null || headBinding.gitDir !== gitDir || headBinding.root !== context.root.root) {
+      closeHeadWatch()
+      headBinding = { generation: ++headGeneration, root: context.root.root, gitDir, destination: null,
+        verified: null, signal: null, dirty: false, request: null, timer: null }
+    }
+    return headBinding
+  }
+  async function watchHead(gitDir, previousCertain) {
+    if (disposed) return null
+    if (typeof gitDir !== "string") {
+      if (previousCertain) {
+        closeHeadWatch()
+        return null
+      }
+      if (headBinding !== null) {
+        // A failed Git location is not "not a checkout" permission after
+        // an observed destination/HEAD uncertainty.
+        return { certain: false, reason: "head_location_unknown" }
+      }
+      return null
+    }
+    let binding = bindHead(gitDir)
+    let observation = await sampleHead(binding)
+    if (observation.reason === "head_destination_changed" && currentHead(binding)) {
+      // This is reached only after the current authoritative Git inspection.
+      // Same spelling is not same destination; discard old callbacks/timers.
+      closeHeadWatch()
+      headBinding = { generation: ++headGeneration, root: context.root.root, gitDir, destination: null,
+        verified: null, signal: null, dirty: false, request: null, timer: null }
+      binding = headBinding
+      observation = await sampleHead(binding)
+    }
+    if (!currentHead(binding)) return null
+    if (observation.certain) {
+      binding.verified = observation.identity
+      binding.signal = observation.identity
+    } else signalHead(binding, observation)
+    armHead(binding)
+    if (headWatch?.gitDir === gitDir) return observation
     try {
       const watcher = watch(gitDir, { persistent: false }, () => {
+        if (!currentHead(binding)) return
         if (headTimer !== null) clearTimeout(headTimer)
         headTimer = setTimeout(() => {
           headTimer = null
-          context.headTriggered = true
-          admission.refresh({ force: true, waitMs: 0 })
+          reconcileHead(binding)
         }, HEAD_DEBOUNCE_MS)
         headTimer.unref?.()
       })
@@ -682,9 +877,14 @@ export function createDeskSession(deps) {
     } catch (error) {
       log(`could not watch ${gitDir} for HEAD changes: ${error.message}`)
     }
+    return observation
   }
 
   function closeHeadWatch() {
+    headGeneration += 1
+    if (headBinding?.timer !== null) clearTimeout(headBinding?.timer)
+    headBinding = null
+    if (headTimer !== null) { clearTimeout(headTimer); headTimer = null }
     headWatch?.watcher.close()
     headWatch = null
   }
@@ -1130,16 +1330,19 @@ export function createDeskSession(deps) {
       unwatchController?.()
       unwatchController = null
       closeHeadWatch()
-      if (headTimer !== null) clearTimeout(headTimer)
       let attemptTimer
       const attemptStopped = Promise.race([
         attempt,
         new Promise((resolve) => { attemptTimer = setTimeout(resolve, deps.disposeAdmissionWaitMs ?? DISPOSE_ADMISSION_WAIT_MS) }),
       ]).finally(() => clearTimeout(attemptTimer))
-      // The controller closes as soon as operations and status readers are done, alongside the attempt wait, so the
-      // front door's shutdown limit is never spent waiting for admission first. A late attempt that acquires a
-      // controller after disposal closes it itself.
-      const retired = Promise.all([operationTail, statusReaderOutcome()]).then(async ([, retirementError]) => {
+      // The controller closes as soon as operations, the pending HEAD sample and status readers are done, alongside the
+      // attempt wait, so the front door's shutdown limit is never spent waiting for admission first. A late attempt that
+      // acquires a controller after disposal closes it itself.
+      const retired = Promise.all([operationTail, headSample, statusReaderOutcome()]).then(async ([, , retirementError]) => {
+        for (const descriptor of headDescriptors) {
+          await descriptor.handle.close()
+          headDescriptors.delete(descriptor)
+        }
         forgetController()
         await controllerClosesSettled()
         return retirementError
