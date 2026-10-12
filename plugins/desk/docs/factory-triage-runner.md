@@ -134,6 +134,8 @@ frame/aggregate/count limits remain enforced. A number token must name exactly t
 
 Up to 8 requests may be in flight or queued at once. `initialize` and `candidate_submit` run alone: each waits for in-flight requests to finish, and everything behind it waits for its response, so the receipt chain stays ordered. A request over the limit gets a JSON-RPC error (`-32000`, `catalog_busy`) for that request alone and the session stays open.
 
+Claude Code 2.1.296 probes a stdio server once with `server/discover` (protocol `2026-07-28`) before `initialize`. The server accepts that probe only as the first frame and only in the exact native shape: a string ID `server-discover-probe-<n>`, and `params._meta` holding exactly the protocol version `2026-07-28`, the bounded client info and the closed client capabilities. It answers the probe itself, never through the SDK, with a JSON-RPC method-not-found error (`-32601`), and records the answer as a `discover_answered` observation. The client reads that answer as a legacy peer and sends `initialize` with `2025-11-25` on the same process. A second probe, a probe after any other frame, or any other request before `initialize` still closes the session with `protocol_state`. A respawned server still cannot continue a session. The direct lane sends the recorded native probe bytes first, so both lanes cross the same handshake.
+
 Client offers `2025-06-18` or `2025-11-25` negotiate only `2025-06-18`.
 Bounded name/version and optional title/description/websiteUrl are inert data.
 Only closed roots/listChanged, empty elicitation form/url, and the exact optional

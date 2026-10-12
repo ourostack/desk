@@ -9,8 +9,10 @@ import { CATALOG_LIMITS, catalogCanonical, catalogHash, catalogToolSchemas, clos
 // At most this many requests may be in flight or queued. initialize and
 // candidate_submit run alone, so the submission receipt chain stays ordered.
 const IN_FLIGHT=8
-export const catalogProtocolIdentity=()=>({version:3,negotiated:"2025-06-18",
-  schema_sha256:catalogHash(catalogCanonical({version:3,depth:32,keys:1024,idBytes:64,inFlight:IN_FLIGHT,
+export const catalogProtocolIdentity=()=>({version:4,negotiated:"2025-06-18",
+  schema_sha256:catalogHash(catalogCanonical({version:4,depth:32,keys:1024,idBytes:64,inFlight:IN_FLIGHT,
+    discoverProbe:{position:"first_frame",max:1,id:"^server-discover-probe-[1-9][0-9]{0,8}$",protocolVersion:"2026-07-28",
+      meta:["protocolVersion","clientInfo","clientCapabilities"],answer:{code:-32601}},
     callMeta:{progressToken:"string<=128|safe_integer","claudecode/toolUseId":"string<=128"},
     cancelled:{requestId:"id",reason:"string<=1024",effect:"advisory"},
     offers:["2025-06-18","2025-11-25"],metadata:{name:128,version:128,title:256,description:1024,websiteUrl:2048},
@@ -64,16 +66,14 @@ const decimal=value=>{
   const digits=(whole+fraction).replace(/^0+/u,""),trimmed=digits.replace(/0+$/u,"")
   return trimmed?`${sign}${trimmed}e${Number(exponent)-fraction.length+digits.length-trimmed.length}`:"0"
 }
-export function validateCatalogInitialize(message){
-  requestIdentity(message)
-  closedObject(message,["jsonrpc","id","method","params"])
-  if(message.method!=="initialize")throw Error("protocol_state")
-  const p=closedObject(message.params,["protocolVersion","capabilities","clientInfo"])
-  if(!["2025-06-18","2025-11-25"].includes(p.protocolVersion))throw Error("protocol_state")
-  const info=closedObject(p.clientInfo,["name","version"],["title","description","websiteUrl"])
+const validateClientInfo=value=>{
+  const info=closedObject(value,["name","version"],["title","description","websiteUrl"])
   text(info.name,128,true);text(info.version,128,true)
   for(const [key,max]of [["title",256],["description",1024],["websiteUrl",2048]])if(Object.hasOwn(info,key))text(info[key],max)
-  const cap=closedObject(p.capabilities,[],["roots","elicitation","extensions"])
+  return info
+}
+const validateClientCapabilities=value=>{
+  const cap=closedObject(value,[],["roots","elicitation","extensions"])
   if(Object.hasOwn(cap,"roots")){
     closedObject(cap.roots,[],["listChanged"])
     if(Object.hasOwn(cap.roots,"listChanged")&&typeof cap.roots.listChanged!=="boolean")throw Error("catalog_invalid")
@@ -87,7 +87,32 @@ export function validateCatalogInitialize(message){
     const ui=closedObject(cap.extensions["io.modelcontextprotocol/ui"],["mimeTypes"])
     if(!Array.isArray(ui.mimeTypes)||ui.mimeTypes.length!==1||ui.mimeTypes[0]!=="text/html;profile=mcp-app")throw Error("catalog_invalid")
   }
+  return cap
+}
+export function validateCatalogInitialize(message){
+  requestIdentity(message)
+  closedObject(message,["jsonrpc","id","method","params"])
+  if(message.method!=="initialize")throw Error("protocol_state")
+  const p=closedObject(message.params,["protocolVersion","capabilities","clientInfo"])
+  if(!["2025-06-18","2025-11-25"].includes(p.protocolVersion))throw Error("protocol_state")
+  const info=validateClientInfo(p.clientInfo),cap=validateClientCapabilities(p.capabilities)
   return {offered:p.protocolVersion,negotiated:"2025-06-18",clientInfo:info,capabilities:cap}
+}
+// Claude Code 2.1.296 probes a stdio server once with server/discover before
+// initialize (protocol 2026-07-28). Only that exact shape is accepted, only
+// as the first frame. It is answered method-not-found, which the client
+// reads as a legacy peer and follows with initialize on the same process.
+const DISCOVER_PROBE_ERROR=Object.freeze({code:-32601,message:"Method not found"})
+function validateCatalogDiscoverProbe(message){
+  requestIdentity(message)
+  closedObject(message,["jsonrpc","id","method","params"])
+  if(message.method!=="server/discover"||typeof message.id!=="string"||!/^server-discover-probe-[1-9][0-9]{0,8}$/u.test(message.id))throw Error("protocol_state")
+  const p=closedObject(message.params,["_meta"])
+  const meta=closedObject(p._meta,["io.modelcontextprotocol/protocolVersion","io.modelcontextprotocol/clientInfo","io.modelcontextprotocol/clientCapabilities"])
+  if(meta["io.modelcontextprotocol/protocolVersion"]!=="2026-07-28")throw Error("protocol_state")
+  validateClientInfo(meta["io.modelcontextprotocol/clientInfo"])
+  validateClientCapabilities(meta["io.modelcontextprotocol/clientCapabilities"])
+  return message.id
 }
 // A bounded lexical walk, BEFORE JSON.parse: grammar, decoded-key uniqueness,
 // prototype/surrogate checks, and a numeric check that refuses any number
@@ -155,6 +180,7 @@ export function validateCatalogWireFrame(bytes){
   const originalMessage=JSON.parse(source)
   requestIdentity(originalMessage)
   if(originalMessage.method==="initialize")validateCatalogInitialize(originalMessage)
+  else if(originalMessage.method==="server/discover")validateCatalogDiscoverProbe(originalMessage)
   else if(originalMessage.method==="notifications/initialized"){
     closedObject(originalMessage,["jsonrpc","method"],["params"])
     if(originalMessage.params!==undefined)closedObject(originalMessage.params,[])
@@ -218,6 +244,15 @@ export function guardedCatalogTransport({input,output,onFailure,onMessage,onObse
     account(frame);busyWrites++
     output.write(frame,e=>{busyWrites--;if(e)failure(e,"output");else settle()})
   }
+  // The pre-initialize discover probe is answered here, never by the SDK, and
+  // its answer is recorded as its own observation.
+  const answerProbe=id=>{
+    const frame=Buffer.from(JSON.stringify({jsonrpc:"2.0",id,error:DISCOVER_PROBE_ERROR})+"\n")
+    account(frame)
+    onObservation?.({kind:"discover_answered",direction:"output",offset:totalOut-frame.length,bytes:frame})
+    busyWrites++
+    output.write(frame,e=>{busyWrites--;if(e)failure(e,"output");else settle()})
+  }
   const outgoing=new Writable({highWaterMark:32768,write(chunk,_encoding,callback){
     try {
       account(chunk)
@@ -251,6 +286,12 @@ export function guardedCatalogTransport({input,output,onFailure,onMessage,onObse
         const line=new TextDecoder("utf-8",{fatal:true}).decode(payload)
         const {originalMessage:message}=validateCatalogWireFrame(Buffer.from(line))
         partial=Buffer.alloc(0)
+        if(message.method==="server/discover"){
+          // Only as the first frame, so at most once and before initialize.
+          // The guard answers it; the server state never sees it.
+          if(framesIn!==1)throw new Error("protocol_state")
+          answerProbe(message.id);continue
+        }
         if(message.method==="notifications/cancelled"){
           // Advisory and never forwarded: an in-flight or sealed request
           // still completes; a queued read with that id is dropped.

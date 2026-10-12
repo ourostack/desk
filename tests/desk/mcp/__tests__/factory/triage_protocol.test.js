@@ -15,6 +15,10 @@ import {EventEmitter} from "node:events"
 const protocol=await import("../../../../../plugins/desk/mcp/src/factory/triage-protocol.js").catch(()=>({}))
 const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js").catch(()=>({}))
 const fixture=JSON.parse(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
+// The first input frame of native qualification attempt 3 (Claude Code
+// 2.1.296), copied from its observation receipt: 459 bytes, sha256 57c78d24...
+const RECORDED_PROBE=Buffer.from("eyJqc29ucnBjIjoiMi4wIiwiaWQiOiJzZXJ2ZXItZGlzY292ZXItcHJvYmUtMSIsIm1ldGhvZCI6InNlcnZlci9kaXNjb3ZlciIsInBhcmFtcyI6eyJfbWV0YSI6eyJpby5tb2RlbGNvbnRleHRwcm90b2NvbC9wcm90b2NvbFZlcnNpb24iOiIyMDI2LTA3LTI4IiwiaW8ubW9kZWxjb250ZXh0cHJvdG9jb2wvY2xpZW50SW5mbyI6eyJuYW1lIjoiY2xhdWRlLWNvZGUiLCJ0aXRsZSI6IkNsYXVkZSBDb2RlIiwidmVyc2lvbiI6IjIuMS4yOTYiLCJkZXNjcmlwdGlvbiI6IkFudGhyb3BpYydzIGFnZW50aWMgY29kaW5nIHRvb2wiLCJ3ZWJzaXRlVXJsIjoiaHR0cHM6Ly9jbGF1ZGUuY29tL2NsYXVkZS1jb2RlIn0sImlvLm1vZGVsY29udGV4dHByb3RvY29sL2NsaWVudENhcGFiaWxpdGllcyI6eyJyb290cyI6eyJsaXN0Q2hhbmdlZCI6dHJ1ZX0sImVsaWNpdGF0aW9uIjp7ImZvcm0iOnt9LCJ1cmwiOnt9fX19fX0K","base64")
+const PROBE_ANSWER='{"jsonrpc":"2.0","id":"server-discover-probe-1","error":{"code":-32601,"message":"Method not found"}}\n'
 // Only these synthetic unit children inherit the maintained ESM measurement
 // import. Actual env-i launcher/server bundles never use this helper.
 function unitMeasurementArgs(){
@@ -837,9 +841,14 @@ ownedCatalogTest("real_unmodified_sdk_stdio_handshake",async(t,custody)=>{
   }
   assert.equal(new Set(calls.map(x=>x.params._meta["claudecode/toolUseId"])).size,calls.length)
   assert.equal(result.resources.trace.version,2)
-  const first=result.resources.trace.events.find(x=>x.direction==="client_to_server")
-  const raw=Buffer.from(first.base64,"base64").toString()
+  // The direct lane mirrors native: the recorded discover probe goes first,
+  // then the SDK's own initialize on the same process.
+  const writes=result.resources.trace.events.filter(x=>x.direction==="client_to_server"&&x.event==="write")
+  assert.equal(Buffer.from(writes[0].base64,"base64").toString(),RECORDED_PROBE.toString())
+  const raw=Buffer.from(writes[1].base64,"base64").toString()
   assert.deepEqual(Object.keys(JSON.parse(raw)),["method","params","jsonrpc","id"])
+  assert.equal(JSON.parse(raw).method,"initialize")
+  assert.deepEqual(result.resources.wire.slice(0,2).map(x=>x.method),["server/discover","initialize"])
   assert.equal(result.resources.trace.events.some(x=>x.direction==="server_to_client"),true)
   assert.equal(result.resources.trace.events.some(x=>x.event==="write_complete"),true)
   assert.equal(result.resources.trace.events.some(x=>x.event==="close"),true)
@@ -851,10 +860,15 @@ ownedCatalogTest("authenticated_first_wire_observations_are_not_submission_recei
   assert.equal(result.state,"proved")
   assert.deepEqual(result.custody.receipts.map(x=>x.event),["bootstrap","submit","terminal"])
   assert.ok(Array.isArray(result.custody.observations))
-  const input=result.custody.observations.find(x=>x.payload.kind==="input_frame")
-  assert.equal(JSON.parse(Buffer.from(input.payload.base64,"base64")).method,"initialize")
-  const output=result.custody.observations.find(x=>x.payload.kind==="output_frame")
-  assert.equal(JSON.parse(Buffer.from(output.payload.base64,"base64")).result.protocolVersion,"2025-06-18")
+  const inputs=result.custody.observations.filter(x=>x.payload.kind==="input_frame")
+  assert.equal(Buffer.from(inputs[0].payload.base64,"base64").toString(),RECORDED_PROBE.toString())
+  assert.equal(JSON.parse(Buffer.from(inputs[1].payload.base64,"base64")).method,"initialize")
+  const answered=result.custody.observations.filter(x=>x.payload.kind==="discover_answered")
+  assert.equal(answered.length,1)
+  assert.equal(Buffer.from(answered[0].payload.base64,"base64").toString(),PROBE_ANSWER)
+  const outputs=result.custody.observations.filter(x=>x.payload.kind==="output_frame")
+  assert.equal(Buffer.from(outputs[0].payload.base64,"base64").toString(),PROBE_ANSWER)
+  assert.equal(JSON.parse(Buffer.from(outputs[1].payload.base64,"base64")).result.protocolVersion,"2025-06-18")
   const exit=result.custody.observations.find(x=>x.payload.kind==="launcher_exit")
   assert.equal(exit.payload.code,0)
   assert.equal(exit.payload.signal,null)
@@ -872,6 +886,97 @@ ownedCatalogTest("first_parser_refusal_is_observed_from_actual_server",async(t,c
   assert.equal(refused.payload.code,"protocol_state")
   const exit=result.resources.observations.find(x=>x.payload.kind==="launcher_exit")
   assert.equal(exit.payload.code,1)
+})
+test("recorded_native_discover_probe_is_the_only_accepted_probe_shape",()=>{
+  assert.equal(RECORDED_PROBE.length,459)
+  assert.equal(createHash("sha256").update(RECORDED_PROBE).digest("hex"),"57c78d24d7bcc7d53091bfdbd307c8eb1d1c783e43b7fe94110332d120029bb9")
+  assert.equal(serializeMessage(custody.NATIVE_DISCOVER_PROBE),RECORDED_PROBE.toString(),"direct lane sends the recorded bytes")
+  const line=RECORDED_PROBE.subarray(0,-1)
+  assert.equal(protocol.validateCatalogWireFrame(line).originalMessage.method,"server/discover")
+  const probe=()=>JSON.parse(line.toString())
+  const meta=value=>value.params._meta
+  for(const [name,mutate,code]of [
+    ["numeric_id",x=>{x.id=1},"protocol_state"],
+    ["zero_id",x=>{x.id="server-discover-probe-0"},"protocol_state"],
+    ["other_id",x=>{x.id="probe-1"},"protocol_state"],
+    ["no_id",x=>{delete x.id},"catalog_invalid"],
+    ["modern_version",x=>{meta(x)["io.modelcontextprotocol/protocolVersion"]="2026-12-01"},"protocol_state"],
+    ["legacy_version",x=>{meta(x)["io.modelcontextprotocol/protocolVersion"]="2025-06-18"},"protocol_state"],
+    ["extra_meta",x=>{meta(x)["io.modelcontextprotocol/other"]=1},"catalog_invalid"],
+    ["missing_capabilities",x=>{delete meta(x)["io.modelcontextprotocol/clientCapabilities"]},"catalog_invalid"],
+    ["extra_capability",x=>{meta(x)["io.modelcontextprotocol/clientCapabilities"].sampling={}},"catalog_invalid"],
+    ["extra_client_info",x=>{meta(x)["io.modelcontextprotocol/clientInfo"].icons=[]},"catalog_invalid"],
+    ["long_client_name",x=>{meta(x)["io.modelcontextprotocol/clientInfo"].name="x".repeat(129)},"catalog_invalid"],
+    ["extra_param",x=>{x.params.cursor="x"},"catalog_invalid"],
+    ["no_params",x=>{delete x.params},"catalog_invalid"],
+  ]){
+    const value=probe();mutate(value)
+    assert.throws(()=>protocol.validateCatalogWireFrame(Buffer.from(JSON.stringify(value))),{message:code},name)
+  }
+})
+test("discover_probe_is_answered_method_not_found_then_initialize_continues",async()=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const initialize={jsonrpc:"2.0",id:0,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{roots:{listChanged:true},elicitation:{form:{},url:{}}},
+    clientInfo:{name:"claude-code",title:"Claude Code",version:"2.1.296"}}}
+  const state=catalog.createCatalogState(JSON.parse(catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"a".repeat(64)}).snapshotBytes))
+  const input=new PassThrough(),output=new PassThrough(),events=[];let raw="",failure
+  output.on("data",x=>{raw+=x})
+  const service=await protocol.serveCatalog({state,input,output,onObservation:x=>events.push(x),onFailure:e=>{failure=e},writeReceipt:async()=>{throw Error("unexpected_receipt")}})
+  input.write(RECORDED_PROBE)
+  await new Promise(r=>setTimeout(r,10))
+  assert.equal(failure,undefined)
+  assert.equal(raw,PROBE_ANSWER,"answered before initialize, exactly once")
+  input.write(JSON.stringify(initialize)+"\n")
+  input.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n')
+  await new Promise(r=>setTimeout(r,20))
+  const replies=raw.trim().split("\n").map(x=>JSON.parse(x))
+  assert.equal(failure,undefined)
+  assert.equal(replies[1].result.protocolVersion,"2025-06-18")
+  assert.equal(replies[2].result.tools.length,4)
+  const answered=events.filter(x=>x.kind==="discover_answered")
+  assert.equal(answered.length,1)
+  assert.equal(answered[0].direction,"output");assert.equal(answered[0].offset,0);assert.equal(answered[0].bytes.toString(),PROBE_ANSWER)
+  assert.deepEqual(events.filter(x=>x.kind==="input_frame").map(x=>x.bytes.toString().includes("server/discover")),[true,false])
+  assert.equal(custody.validateCatalogObservation(custody.makeCatalogObservation({...answered[0],pid:1})),true)
+  for(const bad of [{code:"protocol_state"},{direction:"input"},{bytes:Buffer.alloc(0)},{bytes:Buffer.from("{}")}])
+    assert.throws(()=>custody.makeCatalogObservation({...answered[0],pid:1,...bad}),{message:"observation_invalid"})
+  await service.close()
+})
+test("discover_probe_anywhere_but_the_first_frame_is_fatal",async()=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const initialize={jsonrpc:"2.0",id:0,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{},clientInfo:{name:"claude-code",version:"2.1.296"}}}
+  const probe=RECORDED_PROBE.toString(),second=probe.replace("server-discover-probe-1","server-discover-probe-2")
+  const init=JSON.stringify(initialize)+"\n",initialized='{"jsonrpc":"2.0","method":"notifications/initialized"}\n'
+  for(const [name,frames,answers]of [
+    ["second_probe",[probe,second],1],
+    ["same_probe_twice",[probe,probe],1],
+    ["after_initialize",[init,probe],1],
+    ["after_initialized",[probe,init,initialized,second],2],
+    ["other_pre_initialize_request",['{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'],0],
+    ["other_pre_initialize_ping",['{"jsonrpc":"2.0","id":1,"method":"ping"}\n'],0],
+    ["unknown_pre_initialize_request",['{"jsonrpc":"2.0","id":"server-discover-probe-1","method":"server/listen"}\n'],0],
+  ]){
+    const state=catalog.createCatalogState(JSON.parse(catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"a".repeat(64)}).snapshotBytes))
+    const input=new PassThrough(),output=new PassThrough(),events=[];let raw="",failure
+    output.on("data",x=>{raw+=x})
+    const service=await protocol.serveCatalog({state,input,output,onObservation:x=>events.push(x),onFailure:e=>{failure??=e},writeReceipt:async()=>{throw Error("unexpected_receipt")}})
+    for(const frame of frames){input.write(frame);await new Promise(r=>setTimeout(r,10))}
+    assert.equal(failure?.message,"protocol_state",name)
+    assert.equal(raw.trim().split("\n").filter(Boolean).length,answers,name)
+    assert.ok(events.filter(x=>x.kind==="discover_answered").length<=1,name)
+    await service.close()
+  }
+})
+ownedCatalogTest("actual_server_answers_one_probe_and_refuses_a_second",async(t,custody)=>{
+  const second=RECORDED_PROBE.toString().replace("server-discover-probe-1","server-discover-probe-2")
+  const result=await custody.runCatalogWireCase({fixture,frames:[RECORDED_PROBE.toString(),second],deadline:Date.now()+5000})
+  t.after(()=>result.cleanup?.())
+  assert.equal(result.state,"refused")
+  const kinds=result.resources.observations.map(x=>x.payload.kind)
+  assert.equal(kinds.filter(x=>x==="discover_answered").length,1)
+  assert.equal(Buffer.from(result.resources.observations.find(x=>x.payload.kind==="discover_answered").payload.base64,"base64").toString(),PROBE_ANSWER)
+  assert.equal(result.resources.observations.find(x=>x.payload.kind==="parser_refused").payload.code,"protocol_state")
+  assert.deepEqual(kinds.slice(0,4),["input_frame","output_frame","discover_answered","input_frame"])
 })
 test("original_split_wire_offsets_and_output_refusal_direction_are_observed",async()=>{
   const input=new PassThrough(),output=new PassThrough(),events=[]

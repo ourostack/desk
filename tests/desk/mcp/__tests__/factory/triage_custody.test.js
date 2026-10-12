@@ -319,8 +319,15 @@ test("nonaccepted_lifecycle_matrix_reuses_controller_without_real_maps_or_fds",a
       serverPid:500009,catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,key:snapshot.receipt_key})
     const secondBoot=replacement("bootstrap",1,{...frames[0].payload,launcher_pid:500010})
     const secondObservation=replacement("observation",1,custody.makeCatalogObservation({kind:"input_frame",direction:"input",pid:500009,bytes:Buffer.from("{}\n")}))
+    // Native attempt 3: the first server answered (here) or refused the
+    // discover probe, then Claude Code respawned a second server.
+    const firstServer=(sequence,payload)=>custody.makeReceipt({event:"observation",sequence,payload,generation:snapshot.generation,
+      serverPid:frames[0].server_pid,catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,key:snapshot.receipt_key})
+    const probeAnswered=firstServer(1,custody.makeCatalogObservation({kind:"discover_answered",direction:"output",pid:frames[0].server_pid,
+      bytes:Buffer.from('{"jsonrpc":"2.0","id":"server-discover-probe-1","error":{"code":-32601,"message":"Method not found"}}\n')}))
     for(const [name,selected]of [
       ["second_bootstrap_same_sequence",[frames[0],secondBoot,...frames.slice(1)]],
+      ["second_bootstrap_after_probe",[frames[0],probeAnswered,secondBoot,...frames.slice(1)]],
       ["second_bootstrap_next_sequence",[frames[0],{...secondBoot,sequence:2},...frames.slice(1)]],
       ["replacement_after_submit",[frames[0],frames[1],{...secondBoot,sequence:3},frames[2]]],
       ["replacement_observation",[frames[0],secondObservation,...frames.slice(1)]],
@@ -545,6 +552,44 @@ ownedCatalogTest("sdk_client_binding_and_run_preparation_failures_are_observed",
     assert.equal(held.reason,"runtime_provenance_unsupported");await held.cleanup()
     await assert.rejects(custody.prepareOwnedCatalogRun({inputDir,runDir:path.join(dir,"run"),deadline:Date.now()+5000}),{message:"runtime_provenance_unsupported"})
   }finally{moduleBuiltin.registerHooks=hooks;syncBuiltinESMExports()}
+})
+test("direct_lane_discover_probe_precedes_initialize_and_fails_closed",async()=>{
+  const answer=id=>serializeMessage({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}})
+  const fake=()=>{const child=new EventEmitter();Object.assign(child,{pid:123,stdout:new PassThrough(),stdin:new PassThrough()});return child}
+  const written=child=>{const chunks=[];child.stdin.on("data",x=>chunks.push(x));return chunks}
+  // The answer is consumed; a request from the server during the probe and
+  // every later message still reach the SDK client.
+  const child=fake(),history=[],chunks=written(child),messages=[]
+  const transport=custody.boundClient(child,history,undefined,{probe:custody.NATIVE_DISCOVER_PROBE})
+  transport.onmessage=value=>messages.push(value)
+  const started=transport.start()
+  await new Promise(r=>setImmediate(r))
+  assert.equal(Buffer.concat(chunks).toString(),serializeMessage(custody.NATIVE_DISCOVER_PROBE))
+  child.stdout.write(serializeMessage({jsonrpc:"2.0",id:"server-discover-probe-1",method:"roots/list"}))
+  child.stdout.write(serializeMessage({jsonrpc:"2.0",id:"other",result:{}}))
+  child.stdout.write(answer("server-discover-probe-1"))
+  await started
+  child.stdout.write(answer("server-discover-probe-1"))
+  assert.deepEqual(messages.map(x=>x.method??x.id),["roots/list","other","server-discover-probe-1"])
+  assert.deepEqual(history.map(x=>x.method),["server/discover"])
+  child.stdout.destroy();child.stdin.destroy()
+  for(const [name,act,message,timeout]of [
+    ["wrong_code",child=>child.stdout.write(serializeMessage({jsonrpc:"2.0",id:"server-discover-probe-1",error:{code:-32600,message:"Method not found"}})),"discover_probe_answer"],
+    ["result",child=>child.stdout.write(serializeMessage({jsonrpc:"2.0",id:"server-discover-probe-1",result:{supportedVersions:["2026-07-28"]}})),"discover_probe_answer"],
+    ["closed",child=>child.emit("close",1,null),"discover_probe_closed"],
+    ["timeout",()=>{},"discover_probe_timeout",5],
+  ]){
+    const child=fake()
+    const transport=custody.boundClient(child,[],undefined,{probe:custody.NATIVE_DISCOVER_PROBE,probeTimeoutMs:timeout??5000})
+    transport.onclose=()=>{}
+    const started=transport.start()
+    await new Promise(r=>setImmediate(r));act(child)
+    await assert.rejects(started,{message},name)
+    child.stdout.destroy();child.stdin.destroy()
+  }
+  const failing=fake();failing.stdin.write=(_wire,callback)=>{callback(Error("unit_write_failed"));return false}
+  await assert.rejects(custody.boundClient(failing,[],undefined,{probe:custody.NATIVE_DISCOVER_PROBE,probeTimeoutMs:5}).start(),{message:"unit_write_failed"})
+  failing.stdout.destroy()
 })
 test("protected_first_wire_trace_bounded",async()=>{
   const child=new EventEmitter()

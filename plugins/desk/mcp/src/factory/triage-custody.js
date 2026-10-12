@@ -267,7 +267,7 @@ function verifyReceipt(receipt,key) {
     return mac===createHmac("sha256",Buffer.from(key,"hex")).update(catalogCanonical(body)).digest("hex")
   }catch{return false}
 }
-const observationKinds=["input_frame","output_frame","parser_refused","server_refused","write_complete","backpressure","input_end","server_closing","launcher_exit"]
+const observationKinds=["input_frame","output_frame","discover_answered","parser_refused","server_refused","write_complete","backpressure","input_end","server_closing","launcher_exit"]
 const observationCodes=["wire_noncanonical","catalog_invalid","protocol_state","wire_input_limit","wire_frame_limit",
   "wire_frame_count","wire_queue_limit","wire_output_limit","wire_closed","wire_incomplete","write_failed","unknown"]
 export function makeCatalogObservation({kind,direction="none",offset=0,bytes=Buffer.alloc(0),code=null,signal=null,blocked=null,pid=process.pid}){
@@ -296,12 +296,13 @@ export function validateCatalogObservation(value){
     if(value.direction!=="none"||value.bytes!==0||value.blocked!==null||
       (value.code!==null&&(!Number.isSafeInteger(value.code)||value.code<0||value.code>255)))fail("observation_invalid")
   }else if(value.signal!==null||(value.code!==null&&!observationCodes.includes(value.code)))fail("observation_invalid")
-  const input=value.kind==="input_frame"||value.kind==="input_end",output=["output_frame","write_complete","backpressure"].includes(value.kind)
+  const input=value.kind==="input_frame"||value.kind==="input_end",output=["output_frame","discover_answered","write_complete","backpressure"].includes(value.kind)
   if((input&&value.direction!=="input")||(output&&value.direction!=="output")||
     (value.kind==="server_closing"&&(value.direction!=="none"||value.code!==null))||
     (value.kind==="backpressure"?typeof value.blocked!=="boolean":value.blocked!==null)||
-    (!["input_frame","output_frame","parser_refused"].includes(value.kind)&&value.bytes!==0)||
-    (["input_frame","output_frame"].includes(value.kind)&&(value.bytes===0||(!value.truncated&&raw.at(-1)!==10))))fail("observation_invalid")
+    (value.kind==="discover_answered"&&value.code!==null)||
+    (!["input_frame","output_frame","discover_answered","parser_refused"].includes(value.kind)&&value.bytes!==0)||
+    (["input_frame","output_frame","discover_answered"].includes(value.kind)&&(value.bytes===0||(!value.truncated&&raw.at(-1)!==10))))fail("observation_invalid")
   return true
 }
 // The one owned-catalog host split. Process provenance (ps lineage, start
@@ -803,9 +804,16 @@ export async function runNonacceptedLifecycleTransaction(config){
   }catch(e){await controller.abort();outcome={state:"failed",reason:e.message}}
   return {authority:false,outcome,statistics,evidence:controller.snapshot()}
 }
-export function boundClient(child,history,trace={version:2,events:[],bytes:0,truncated:false}) {
+// The exact pre-initialize probe Claude Code 2.1.296 sent in native attempt 3.
+// The direct lane sends it first, so both lanes cross the same handshake.
+export const NATIVE_DISCOVER_PROBE=Object.freeze({jsonrpc:"2.0",id:"server-discover-probe-1",method:"server/discover",params:{_meta:{
+  "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+  "io.modelcontextprotocol/clientInfo":{name:"claude-code",title:"Claude Code",version:"2.1.296",description:"Anthropic's agentic coding tool",websiteUrl:"https://claude.com/claude-code"},
+  "io.modelcontextprotocol/clientCapabilities":{roots:{listChanged:true},elicitation:{form:{},url:{}}}}}})
+export function boundClient(child,history,trace={version:2,events:[],bytes:0,truncated:false},{probe=null,probeTimeoutMs=3000}={}) {
   const buffer=new ReadBuffer()
   const offsets={client_to_server:0,server_to_client:0}
+  let probing=null
   const observe=(event,direction,chunk,extra={})=>{
     const bytes=chunk?Buffer.from(chunk):Buffer.alloc(0),offset=offsets[direction]
     offsets[direction]+=bytes.length
@@ -814,15 +822,28 @@ export function boundClient(child,history,trace={version:2,events:[],bytes:0,tru
     trace.events.push({event,direction,pid:child.pid??null,generation:trace.generation??null,at_ms:Date.now(),offset,bytes:bytes.length,
       observation:bytes.length?"present":"observed_absent",sha256:catalogHash(bytes),base64:bytes.toString("base64"),...extra})
   }
+  const write=wire=>new Promise((resolve,reject)=>{
+    const flowing=child.stdin.write(wire,e=>{observe("write_complete","client_to_server",null,{error:e?.message??null});if(e)reject(e);else resolve()})
+    observe("backpressure","client_to_server",null,{blocked:!flowing})
+  })
   return {async start(){
-    child.stdout.on("data",chunk=>{observe("read","server_to_client",chunk);try{buffer.append(chunk);let value;while((value=buffer.readMessage())!==null)this.onmessage?.(value)}catch(e){observe("parser_error","server_to_client",null,{error:e.message});this.onerror?.(e)}})
+    child.stdout.on("data",chunk=>{observe("read","server_to_client",chunk);try{buffer.append(chunk);let value;while((value=buffer.readMessage())!==null){
+      // The probe's answer is consumed here and never reaches the SDK client.
+      if(probing&&!Object.hasOwn(value,"method")&&value.id===probing.id){const settle=probing;probing=null
+        if(catalogCanonical(value)===catalogCanonical({jsonrpc:"2.0",id:settle.id,error:{code:-32601,message:"Method not found"}}))settle.resolve()
+        else settle.reject(new Error("discover_probe_answer"))
+        continue}
+      this.onmessage?.(value)}}catch(e){observe("parser_error","server_to_client",null,{error:e.message});this.onerror?.(e)}})
     child.stdout.on("error",e=>{observe("read_error","server_to_client",null,{error:e.message});this.onerror?.(e)})
-    child.on("close",(code,signal)=>{observe("close","server_to_client",null,{code,signal});this.onclose?.()})
+    child.on("close",(code,signal)=>{observe("close","server_to_client",null,{code,signal});probing?.reject(new Error("discover_probe_closed"));probing=null;this.onclose?.()})
+    if(!probe)return
+    const wire=serializeMessage(probe);history.push(JSON.parse(wire));observe("write","client_to_server",wire)
+    let timer
+    const answered=new Promise((resolve,reject)=>{probing={id:probe.id,resolve,reject}
+      timer=setTimeout(()=>{probing=null;reject(new Error("discover_probe_timeout"))},probeTimeoutMs)})
+    try{await Promise.all([write(wire),answered])}finally{clearTimeout(timer);probing=null}
   },send(message){const wire=serializeMessage(message);history.push(JSON.parse(wire));observe("write","client_to_server",wire)
-    return new Promise((resolve,reject)=>{
-      const flowing=child.stdin.write(wire,e=>{observe("write_complete","client_to_server",null,{error:e?.message??null});if(e)reject(e);else resolve()})
-      observe("backpressure","client_to_server",null,{blocked:!flowing})
-    })},
+    return write(wire)},
   async close(){child.stdin.end()}}
 }
 export async function prepareOwnedCatalogRun({inputDir,runDir,deadline}) {
@@ -1302,7 +1323,7 @@ async function runDirect({fixture,deadline,evidenceDir},context) {
       {capabilities:{roots:{listChanged:true},elicitation:{}}})
     resources.wire=[]
     resources.trace={version:2,generation:owned.generation,events:[],bytes:0,truncated:false}
-    await client.connect(boundClient(child,resources.wire,resources.trace))
+    await client.connect(boundClient(child,resources.wire,resources.trace,{probe:NATIVE_DISCOVER_PROBE}))
     const tools=(await client.listTools()).tools,history=[],responses=[]
     // The native client's tools/call shape: Claude Code's tool-use id in
     // _meta, plus the progress token the SDK adds for an onprogress handler.
