@@ -200,6 +200,16 @@ Two timing windows remain and are documented rather than closed. First, between 
 
 These checks prove runtime confinement against the model child. They are not tamper-resistance against code running as the operator's own uid, which can modify Desk itself. Each real run therefore re-checks the launch chain, controls, sign-in, tool list and live receipts instead of trusting an earlier result.
 
+### Accepted limits
+
+These limits were reviewed and accepted. They are not open defects.
+
+- **The boundary is the model child, not the local user.** A process running as the operator's own uid can write a complete, self-consistent evidence directory, because restore verifies receipts with the key stored beside them. It can also swap the installed engine around exec time, because the native identity is a path, argv and file-hash check rather than an executable-image check. It can also pass structured `owned` and `fixture` inputs to the real exports. None of these can fake a live run. Each real run re-checks the chain, controls, sign-in, native init manifest and live receipts, and a different fixture fails at reload.
+- **Model provenance is not proved.** An allowlisted `HTTPS_PROXY` with `NODE_EXTRA_CA_CERTS` in the operator's environment could put a scripted model behind a genuine engine. Qualification proves the engine's tool surface, not where the model's answers came from.
+- **`notifications/cancelled` is advisory.** It never interrupts a request in flight. It never unseals or partially seals a submission. It only drops a read that is still queued.
+- **A SIGINT is a graceful close.** Claude Code's first SIGINT after ready closes the session with a `client_sigint` terminal receipt. A SIGINT from any process running as the same user looks the same, so it can end a run early. It can never make a run pass, because acceptance still needs a sealed submission, the matching native tool result and native success.
+- **The `server/discover` fallback is pinned to Claude Code 2.1.296.** The probe shape, the `-32601` answer and the probe timeout come from that engine's source. A native run is accepted only for the pinned 2.1.296 engine hash, and any other engine is refused before launch. A probe in any other shape, a probe that arrives late, or a client that does not fall back to `initialize` on the same process all close the session rather than pass.
+
 Fixed authenticated `observation` frames on the same private receipt FIFO retain
 first input/output bytes before parsing, refusal codes, write/backpressure and
 closure metadata. They have separate diagnostic ordinals and cannot advance or
