@@ -1297,6 +1297,23 @@ test("a switch repair whose admission fails names the error without a machine pa
   assert.match(doctored.summary, /cannot lock <redacted path>/u)
 })
 
+test("a switch repair whose admission is not ready without an error gives the summary and no diagnostic", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const scripted = scriptedGit(state)
+  // The switch reports success, but HEAD stays on the review branch, so admission is still not ready, with no exception behind it.
+  const git = (options) => {
+    const answer = scripted(options)
+    if (options.args[0] === "switch") state.branch = "review"
+    return answer
+  }
+  const { session } = await makeSession(t, { git, inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "degraded:state_branch_mismatch")
+  const doctored = payload(await session.callTool({ name: "desk_doctor", input: { repair: "switch_state_branch" } }))
+  assert.notEqual(doctored.state, "ready")
+  assert.equal(typeof doctored.summary, "string")
+  assert.equal(doctored.diagnostic, undefined)
+})
+
 test("a switch repair whose admission then fails says why, not only the degraded state", async (t) => {
   const state = { branch: "review", onRemote: true }
   const scripted = scriptedGit(state)
