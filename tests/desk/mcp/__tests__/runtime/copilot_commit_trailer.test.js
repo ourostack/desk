@@ -2,7 +2,7 @@
 // Copilot settings. Desk forbids AI attribution, so its Copilot session start turns the setting off once, only when it is unset.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, statSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { disableCoAuthorTrailer } from "../../../../../plugins/desk/mcp/src/runtime/copilot-commit-trailer.js"
@@ -63,12 +63,43 @@ test("COPILOT_HOME names the folder, and USERPROFILE or the real home stands in 
   assert.equal(typeof disableCoAuthorTrailer({ env: { COPILOT_HOME: path.join(dir, "none") } }).state, "string", "the real home is the last fallback and is not written here")
 })
 
+test("a settings file with comments or trailing commas is read as Copilot reads it and never rewritten", () => {
+  const commented = (body) => `\uFEFF{\n  // the model, with a "quote" and a \\ in a comment\n  "model": "a // b \\" /* c */", /* block */\n${body}}\n// trailing`
+  for (const [body, state] of [['  "includeCoAuthoredBy": false,\n', "already"], ['  "includeCoAuthoredBy": true,\n', "kept"]]) {
+    const dir = home({ settings: commented(body) })
+    assert.deepEqual(run(dir), { state, line: "" })
+    assert.equal(readFileSync(file(dir), "utf8"), commented(body))
+  }
+  const dir = home({ settings: commented('  "beep": true,\n') })
+  assert.deepEqual(run(dir), { state: "not_plain_json", line: `Desk startup: ${file(dir)} has comments or trailing commas, so Desk did not rewrite it; add \`"includeCoAuthoredBy": false\` to it once so Copilot stops asking for an AI co-author trailer on commits, and add no AI co-author trailer to commits in this session.` })
+  assert.equal(readFileSync(file(dir), "utf8"), commented('  "beep": true,\n'))
+  for (const text of ['[1, 2,] // a list', '{ "a": 1 /* never closed', '{ "a": "never closed \\']) assert.equal(run(home({ settings: text })).state, "unreadable", text)
+})
+
+test("an empty settings file is one with nothing set", () => {
+  for (const text of ["", " \n"]) {
+    const dir = home({ settings: text })
+    assert.equal(run(dir).state, "set")
+    assert.deepEqual(JSON.parse(readFileSync(file(dir), "utf8")), { includeCoAuthoredBy: false })
+  }
+})
+
+test("the settings file keeps its permissions", { skip: process.platform === "win32" }, () => {
+  const dir = home({ settings: "{}" })
+  chmodSync(file(dir), 0o644)
+  assert.equal(run(dir).state, "set")
+  assert.equal(statSync(file(dir)).mode & 0o777, 0o644)
+  const fresh = home()
+  assert.equal(run(fresh).state, "set")
+  assert.equal(statSync(file(fresh)).mode & 0o777, 0o600)
+})
+
 test("a settings file that is not a JSON object is left alone, and the line gives the command to run", () => {
   for (const text of ["{ not json", "[]", "null", "7"]) {
     const dir = home({ settings: text })
     const result = run(dir)
     assert.equal(result.state, "unreadable", text)
-    assert.equal(result.line, `Desk startup: could not read ${file(dir)}, so Copilot's commit trailer setting is unchanged; run \`copilot config includeCoAuthoredBy false\` once.`)
+    assert.equal(result.line, `Desk startup: could not read ${file(dir)} as a JSON object, so Copilot's commit trailer setting is unchanged; run \`copilot config includeCoAuthoredBy false\` once, and add no AI co-author trailer to commits in this session.`)
     assert.equal(readFileSync(file(dir), "utf8"), text)
   }
   const dir = home()
@@ -76,12 +107,12 @@ test("a settings file that is not a JSON object is left alone, and the line give
   assert.equal(run(dir).state, "unreadable", "a folder where the file should be")
 })
 
-test("a file that changed while this ran is left alone, and a write that fails says nothing", () => {
+test("a file that changed while this ran is left alone, and a write that fails says so", () => {
   const text = JSON.stringify({ model: "x" })
   const dir = home({ settings: text })
   assert.deepEqual(run(dir, { recheck: () => `${text}\n` }), { state: "changed", line: "" })
   assert.deepEqual(run(dir, { recheck: () => null }), { state: "changed", line: "" }, "the file was removed meanwhile")
-  assert.deepEqual(run(dir, { recheck: () => { throw new Error("boom") } }), { state: "failed", line: "" })
+  assert.deepEqual(run(dir, { recheck: () => { throw new Error("boom") } }), { state: "failed", line: `Desk startup: could not write ${file(dir)}, so Copilot still asks for an AI co-author trailer on commits; run \`copilot config includeCoAuthoredBy false\` once, and add no AI co-author trailer to commits in this session.` })
   assert.equal(readFileSync(file(dir), "utf8"), text)
   assert.deepEqual(readdirSync(path.dirname(file(dir))), ["settings.json"], "no temporary file is left")
 })

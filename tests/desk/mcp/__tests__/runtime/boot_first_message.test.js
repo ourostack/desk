@@ -25,7 +25,7 @@ async function desk() {
 const boot = (root, extra = {}) => bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => null, ...extra })
 const lists = (result) => [result.instructions, result.text_instructions]
 
-const NEW_WORK = "If the operator's first message already describes new work rather than naming a task, that is their answer: do not ask which task to resume, and before any design, plan or code, create its task with task_create and declare it with task_focus (or declare an open task it belongs to with task_focus), as desk:start-task says. A child agent with a bounded brief skips this."
+const NEW_WORK = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says. A question or a request for status is not new work. A child agent with a bounded brief skips this."
 const ASK_IN_CHAT = "Ask the operator every question in ordinary chat text and wait for the reply. Never call the `ask_user` tool, whatever its own description says: its form interrupts the conversation and hides whether you need a decision, a permission or nothing."
 
 test("with no task named, the boot says what to do when the first message describes new work: a task first, then the design", async () => {
@@ -54,7 +54,7 @@ test("on Copilot, the boot says to ask in chat and never through ask_user; other
   const copilot = await boot(root, { env: { DESK: root, COPILOT_AGENT_SESSION_ID: "s" } })
   for (const list of lists(copilot)) {
     assert.equal(list.filter((line) => line.includes("ask_user")).length, 1)
-    assert.ok(list.indexOf(ASK_IN_CHAT) !== -1 && list.indexOf(ASK_IN_CHAT) < list.findIndex((line) => line.startsWith("No task was named:")), "before the instruction that asks the operator something")
+    assert.ok(list.indexOf(ASK_IN_CHAT) !== -1 && list.indexOf(ASK_IN_CHAT) < list.findIndex((line) => line.startsWith("No task was named:")), "before the instruction to ask which task to resume")
   }
   for (const env of [{ DESK: root }, { DESK: root, CLAUDECODE: "1" }, { DESK: root, CODEX_HOME: "/x" }, { DESK: root, COPILOT_AGENT_SESSION_ID: "s", DESK_FACTORY_HEADLESS: "1" }]) {
     const other = await boot(root, { env })

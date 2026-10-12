@@ -90,7 +90,7 @@ function withStartupSandbox(body) {
     }
     const malformed = path.join(scratch, "bad-binding.json");
     fs.writeFileSync(malformed, "{");
-    const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: pluginRoot, PLUGIN_ROOT: pluginRoot };
+    const env = { ...process.env, HOME: home, USERPROFILE: home, COPILOT_HOME: path.join(home, ".copilot"), CLAUDE_PLUGIN_ROOT: pluginRoot, PLUGIN_ROOT: pluginRoot };
     for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
       delete env[key];
     }
