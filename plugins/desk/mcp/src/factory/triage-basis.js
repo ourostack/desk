@@ -12,7 +12,7 @@
 
 import { promises as fs, constants as fsConstants } from "node:fs"
 import * as path from "node:path"
-import { spawnSync } from "node:child_process"
+import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { MAX_CARD_FILES, cardFile, isClaimLive, readCards as readCardsDefault } from "../desk/improvement-cards.js"
 import { gitBlobSha, ownDeskVersion } from "./outbox.js"
@@ -25,14 +25,30 @@ const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/u
 const ALWAYS = ["investigation_only", "human_gate"]
 const SELF_DESCRIBING = /^(job|fingerprint|reconcile):/u
 const BLOB = /^[0-9a-f]{40}$/u
+// A hash is one small file through Git's own filters; a filter slower than this is not waited on.
+const HASH_TIMEOUT_MS = 2000
 
 // The Git blob id `bytes` would have if committed at `relative`: `git hash-object --path` applies the checkout's own clean filters
-// (line-ending conversion with core.autocrlf, .gitattributes), so a CRLF working copy of an LF blob still names that blob. Outside
-// Git, or if Git cannot run, the plain blob id of the bytes.
-function deskBlobSha(deskRoot, relative, bytes) {
-  const hashed = spawnSync("git", ["-C", deskRoot, "hash-object", `--path=${relative}`, "--stdin"], { input: bytes, timeout: 10_000, windowsHide: true, encoding: "utf8" })
-  const blob = hashed.status === 0 ? hashed.stdout.trim() : ""
-  return BLOB.test(blob) ? blob : gitBlobSha(bytes)
+// (line-ending conversion with core.autocrlf, .gitattributes), so a CRLF working copy of an LF blob still names that blob. Git
+// runs with the caller's environment (its Git settings, not this process's), asynchronously and bounded. Outside Git, if Git
+// cannot run, or past the bound, the plain blob id of the bytes: a revision that then differs only holds a write as stale.
+function deskBlobSha(deskRoot, relative, bytes, env) {
+  return new Promise((resolve) => {
+    const plain = () => resolve(gitBlobSha(bytes))
+    const child = execFile("git", ["-C", deskRoot, "hash-object", `--path=${relative}`, "--stdin"], { env: { ...env, GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, encoding: "utf8" }, (error, stdout) => {
+      clearTimeout(timer)
+      const blob = error ? "" : stdout.trim()
+      if (BLOB.test(blob)) resolve(blob)
+      else plain()
+    })
+    // Its own bound, not the close of Git's output, which a filter's leftover process could hold open.
+    const timer = setTimeout(() => {
+      child.kill()
+      plain()
+    }, HASH_TIMEOUT_MS)
+    child.stdin.on("error", plain)
+    child.stdin.end(bytes)
+  })
 }
 
 /** A desk-relative POSIX path made only of safe segments, or null. Never `..`, never absolute, never a backslash. */
@@ -79,7 +95,7 @@ export function defaultRulingPaths(personPrefix) {
  * cannot be read, makes the whole answer `authority_unknown`. `state` is `resolved` (at least one ruling), `unresolved` (none) or
  * `authority_unknown`.
  */
-export async function readRulings({ deskRoot, personPrefix, card, preparedEvidence = [] }) {
+export async function readRulings({ deskRoot, personPrefix, card, preparedEvidence = [], env = process.env }) {
   void card // The card does not select rulings by itself: only the parent's prepared evidence does.
   const unknown = { state: "authority_unknown", refs: [], scope: { codes: [...ALWAYS], plan_ids: [] } }
   if (!Array.isArray(preparedEvidence) || preparedEvidence.length > MAX_PREPARED) return unknown
@@ -96,7 +112,7 @@ export async function readRulings({ deskRoot, personPrefix, card, preparedEviden
     const read = await readRegular(deskRoot, ruling.id, MAX_RULING_BYTES)
     if (read.unreadable || (read.missing && ruling.required)) return unknown
     if (read.missing) continue
-    refs.push({ id: ruling.id, revision: deskBlobSha(deskRoot, ruling.id, read.bytes) })
+    refs.push({ id: ruling.id, revision: await deskBlobSha(deskRoot, ruling.id, read.bytes, env) })
     if (ruling.kind === "plan" || ruling.kind === "spec") plans.push(ruling.id)
   }
   if (refs.length === 0) return { state: "unresolved", refs, scope: { codes: [...ALWAYS], plan_ids: [] } }
@@ -129,7 +145,8 @@ function claimAt(card, now) {
 }
 
 /**
- * `readTriageBasis({deskRoot,personPrefix,key,now,readCards,evidence,readRulings}) -> {state,card,basis,briefEvidence,authority}`.
+ * `readTriageBasis({deskRoot,personPrefix,key,now,readCards,evidence,readRulings,env}) -> {state,card,basis,briefEvidence,authority}`.
+ * `env` is the caller's environment, whose Git settings decide how file bytes map to blob ids (default: this process's).
  *
  * `evidence` is `{prepared?, resolve?}`: `prepared` the parent's resolved ruling documents (see `readRulings`) and
  * `resolve(pointer, card) -> {revision, public:{kind,ref,revision}|null} | null` its evidence resolver. `state` is `ready`,
@@ -139,7 +156,7 @@ function claimAt(card, now) {
  * effective claim at `now` (so expiry alone changes it), every ruling revision, every evidence revision, and the rubric and
  * producer versions.
  */
-export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCards = readCardsDefault, evidence = {}, readRulings: rulingsReader = readRulings }) {
+export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCards = readCardsDefault, evidence = {}, readRulings: rulingsReader = readRulings, env = process.env }) {
   const canonical = canonicalCardPath(deskRoot, personPrefix, key)
   if (canonical === null) return { state: "source_unreadable", card: null, basis: null, briefEvidence: [], authority: { state: "authority_unknown", codes: [...ALWAYS], ruling_ids: [] } }
   const before = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
@@ -153,7 +170,7 @@ export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCa
   else if (!stable || (card !== null && after.bytes === undefined)) state = "source_unknown"
   else if (card === null) state = listing.truncated ? "source_unknown" : before.missing ? "card_missing" : "source_unreadable"
 
-  const rulings = card === null ? { state: "unresolved", refs: [], scope: { codes: [...ALWAYS], plan_ids: [] } } : await rulingsReader({ deskRoot, personPrefix, card, preparedEvidence: evidence.prepared ?? [] })
+  const rulings = card === null ? { state: "unresolved", refs: [], scope: { codes: [...ALWAYS], plan_ids: [] } } : await rulingsReader({ deskRoot, personPrefix, card, preparedEvidence: evidence.prepared ?? [], env })
   const resolve = evidence.resolve ?? resolveSelfDescribing
   const briefEvidence = []
   let evidenceKnown = true
@@ -173,7 +190,7 @@ export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCa
   const body = {
     key,
     canonical_path: canonical,
-    canonical_revision: after.bytes === undefined ? null : deskBlobSha(deskRoot, canonical, after.bytes),
+    canonical_revision: after.bytes === undefined ? null : await deskBlobSha(deskRoot, canonical, after.bytes, env),
     claim: claimAt(card, now),
     rulings: rulings.refs,
     evidence: briefEvidence.map(({ id, pointer, revision }) => ({ id, pointer, revision })),
@@ -192,7 +209,7 @@ export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCa
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
- * `checkTriageBasis({deskRoot,personPrefix,basis,now,readCards,evidence}) -> {state,reason}`: the mechanical recheck of a stored
+ * `checkTriageBasis({deskRoot,personPrefix,basis,now,readCards,evidence,env}) -> {state,reason}`: the mechanical recheck of a stored
  * protected basis against the desk as it is now, without an agent. It rereads the card bytes, the effective claim at `now`, every
  * ruling the basis named plus the default ruling paths (so a newly added ruling also counts), and every evidence pointer through
  * the LIVE resolver `evidence.resolve` (as in `readTriageBasis`; without one only self-describing pointers resolve), never the
@@ -202,9 +219,9 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
  * (claim state or expiry, so a renewal too), then unknown evidence, `authority_changed` (rulings or authority), `evidence_changed`
  * (an evidence revision) and `version_changed` (the rubric or Desk producer version).
  */
-export async function checkTriageBasis({ deskRoot, personPrefix, basis, now, readCards = readCardsDefault, evidence = {} }) {
+export async function checkTriageBasis({ deskRoot, personPrefix, basis, now, readCards = readCardsDefault, evidence = {}, env = process.env }) {
   const current = await readTriageBasis({
-    deskRoot, personPrefix, key: basis.key, now, readCards,
+    deskRoot, personPrefix, key: basis.key, now, readCards, env,
     evidence: {
       prepared: basis.rulings.filter((ruling) => !defaultRulingPaths(personPrefix).includes(ruling.id))
         .map((ruling) => ({ kind: basis.authority.plan_ids.includes(ruling.id) ? "plan" : "ruling", path: ruling.id })),
@@ -222,4 +239,19 @@ export async function checkTriageBasis({ deskRoot, personPrefix, basis, now, rea
   if (!same(fresh.evidence, basis.evidence)) return { state: "stale", reason: "evidence_changed" }
   if (fresh.rubric_version !== basis.rubric_version || fresh.producer_version !== basis.producer_version) return { state: "stale", reason: "version_changed" }
   return { state: "current", reason: null }
+}
+
+/**
+ * `readCanonicalCard({deskRoot,personPrefix,key,env,readCards}) -> {card,revision}|null`: the parsed card and the blob id of its
+ * exact bytes, read the same way `readTriageBasis` reads them (the bytes must not change around the canonical reader). Null when
+ * the card is absent, unreadable or changing. The writer uses it to hand the evidence resolver the card at publication.
+ */
+export async function readCanonicalCard({ deskRoot, personPrefix, key, env = process.env, readCards = readCardsDefault }) {
+  const canonical = canonicalCardPath(deskRoot, personPrefix, key)
+  const before = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
+  const listing = await readCards({ deskRoot, personPrefix, limit: MAX_CARD_FILES })
+  const after = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
+  const card = listing.cards.find((candidate) => candidate.key === key)
+  if (card === undefined || before.bytes === undefined || after.bytes === undefined || !before.bytes.equals(after.bytes)) return null
+  return { card, revision: await deskBlobSha(deskRoot, canonical, after.bytes, env) }
 }

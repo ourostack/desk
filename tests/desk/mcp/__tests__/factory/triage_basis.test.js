@@ -7,8 +7,10 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { MAX_CARD_FILES, cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { validateTriageResultBytes } from "../../../../../plugins/desk/mcp/src/factory/triage-schema.js"
 import {
-  canonicalCardPath, checkTriageBasis, defaultRulingPaths, readRulings, readTriageBasis, safeDeskPath,
+  canonicalCardPath, checkTriageBasis, defaultRulingPaths, readCanonicalCard, readRulings, readTriageBasis, safeDeskPath,
 } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
+import { gitBlobSha } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { spawnSync } from "node:child_process"
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/v12-triage-local.json", import.meta.url)))
 const KEY = fixture.key
@@ -262,15 +264,10 @@ test("rulings_are_read_only_from_validated_desk_paths", async () => {
     }
   }
 
-  // Where Git cannot run, a ruling's revision is the plain blob id of its bytes, the same id Git gives an unconverted file.
+  // Where Git cannot run (here the caller's PATH has no Git), a ruling's revision is the plain blob id of its bytes, the same id
+  // Git gives an unconverted file.
   const withGit = await readRulings({ deskRoot, personPrefix: "desks/ari", card })
-  const savedPath = process.env.PATH
-  process.env.PATH = path.join(deskRoot, "no-tools-here")
-  try {
-    assert.deepEqual((await readRulings({ deskRoot, personPrefix: "desks/ari", card })).refs, withGit.refs)
-  } finally {
-    process.env.PATH = savedPath
-  }
+  assert.deepEqual((await readRulings({ deskRoot, personPrefix: "desks/ari", card, env: { ...process.env, PATH: path.join(deskRoot, "no-tools-here") } })).refs, withGit.refs)
 
   for (const bad of ["", "a/../b", "/abs", "a\\b", "a//b", ".", "x".repeat(513), 7]) assert.equal(safeDeskPath(bad), null, String(bad))
   assert.equal(safeDeskPath("desks/ari/_meta/operator-rules.md"), "desks/ari/_meta/operator-rules.md")
@@ -287,4 +284,48 @@ test("unreadable_card_file_contents_are_unreadable", { skip: process.platform ==
   } finally {
     await fs.chmod(card, 0o600)
   }
+})
+
+test("ruling_revisions_use_the_callers_git_settings_within_a_bound", async () => {
+  const deskRoot = await mkTempRoot("triage-hash-")
+  const crlf = Buffer.from("Agents may fix factory defects.\r\n")
+  await fs.writeFile(path.join(deskRoot, "AGENTS.md"), crlf)
+  const card = { key: KEY }
+  const revision = async (env) => (await readRulings({ deskRoot, personPrefix: "", card, env })).refs[0].revision
+  // The caller's Git settings, not this process's, decide the blob: with line-ending conversion the CRLF bytes name the LF blob.
+  assert.equal(await revision(process.env), gitBlobSha(crlf))
+  assert.equal(await revision({ ...process.env, GIT_CONFIG_PARAMETERS: "'core.autocrlf'='true'" }), gitBlobSha(Buffer.from("Agents may fix factory defects.\n")))
+
+  // A clean filter slower than the bound is not waited on: the plain blob id comes back within it.
+  const repo = await mkTempRoot("triage-hash-slow-")
+  assert.equal(spawnSync("git", ["-C", repo, "init", "-q"]).status, 0)
+  await fs.writeFile(path.join(repo, ".gitattributes"), "AGENTS.md filter=slow\n")
+  await fs.writeFile(path.join(repo, "AGENTS.md"), crlf)
+  const started = Date.now()
+  const slow = await readRulings({ deskRoot: repo, personPrefix: "", card, env: { ...process.env, GIT_CONFIG_PARAMETERS: "'filter.slow.clean'='sleep 6 >/dev/null 2>&1; cat'" } })
+  const elapsed = Date.now() - started
+  assert.equal(slow.refs[0].revision, gitBlobSha(crlf))
+  assert.ok(elapsed >= 1900 && elapsed < 5000, `bounded at about two seconds, took ${elapsed} ms`)
+})
+
+test("canonical_card_is_read_only_when_stable", async () => {
+  const { deskRoot, card } = await desk()
+  const read = await readCanonicalCard({ deskRoot, personPrefix: "", key: KEY })
+  assert.equal(read.card.key, KEY)
+  assert.equal(read.revision, gitBlobSha(await fs.readFile(card)))
+  assert.equal(await readCanonicalCard({ deskRoot, personPrefix: "", key: "andon:example-org/example-repo#999" }), null, "absent")
+  const listed = async (args) => ({ ...(await readCards(args)), cards: [...(await readCards(args)).cards, { key: "andon:example-org/example-repo#999" }] })
+  assert.equal(await readCanonicalCard({ deskRoot, personPrefix: "", key: "andon:example-org/example-repo#999", readCards: listed }), null, "listed but no file")
+  const changing = async (args) => {
+    const listing = await readCards(args)
+    await fs.appendFile(card, "\n")
+    return listing
+  }
+  assert.equal(await readCanonicalCard({ deskRoot, personPrefix: "", key: KEY, readCards: changing }), null, "bytes changed around the reader")
+  const vanishing = async (args) => {
+    const listing = await readCards(args)
+    await fs.rename(card, `${card}.away`)
+    return listing
+  }
+  assert.equal(await readCanonicalCard({ deskRoot, personPrefix: "", key: KEY, readCards: vanishing }), null, "removed around the reader")
 })

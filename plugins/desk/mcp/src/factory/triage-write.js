@@ -23,7 +23,7 @@
 //     loser adoption and the basis check repeated. Then it fetches again and reads both blobs back.
 //   - It never resets, rebases, stashes or writes the live checkout, index or branch; the normal Desk sync later pulls the commit.
 //     The temporary worktree and branch are removed only when the worktree is still exactly clean; otherwise they are retained and
-//     reported, and the next call's recovery removes them. A resource that cannot be recovered blocks new ones with a stable alarm.
+//     reported (a file a hook left is never deleted), and block new resources with a stable alarm until they are recovered.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
 import { promises as fs, realpathSync } from "node:fs"
@@ -35,7 +35,7 @@ import { factoryStateRoot, gitBlobSha } from "./outbox.js"
 import { ensureOwnerOnlyDirectory, protectLeafFile } from "./os-protect.js"
 import { protectWindowsPaths } from "./windows-acl.js"
 import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
-import { defaultRulingPaths, resolveSelfDescribing, safeDeskPath } from "./triage-basis.js"
+import { defaultRulingPaths, readCanonicalCard, resolveSelfDescribing, safeDeskPath } from "./triage-basis.js"
 import {
   compareIdentities, protectedBasisRecord, readProtectedBasis, triagePaths, validateSafeTriageReview, validateTriageAnnotation,
   validateTriageIdentities,
@@ -254,14 +254,12 @@ async function onlyOwnChanges(ctx, record) {
   return entries.every((entry) => /^([AM][ M]|\?\?) /u.test(entry) && record.files.includes(entry.slice(3)))
 }
 
-// Removes the worktree and its branch. The call that made it removes it only when it holds nothing but its own files, so what a
-// hook left is retained and reported with that call's result; a later call's recovery (`force`) removes an exactly owned worktree
-// whatever it holds, since it lives in owner-protected factory state and nothing but this writer and its hooks wrote there.
+// Removes the worktree and its branch only when it holds nothing but its own files: a file a hook left there is never deleted.
 // Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
-async function release(ctx, record, resource, { force = false } = {}) {
+async function release(ctx, record, resource) {
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
-    const removed = (force || (await onlyOwnChanges(ctx, record))) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", "--force", record.path])).status === 0
+    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
     if (!removed) {
       resource.disposition = "retained"
       await saveRecord(ctx, { ...record, disposition: "retained" })
@@ -280,9 +278,9 @@ async function release(ctx, record, resource, { force = false } = {}) {
   return true
 }
 
-// A record left by an earlier call (a crash, or a worktree a hook left files in) is recovered first, without a person. Only
-// exactly owned records are touched; a foreign record, or an owned one whose removal fails, blocks new resources and the call
-// reports `RESOURCE_ALARM`.
+// A record left by an earlier call (a crash, or a removal that failed) is recovered first, without a person, when its worktree
+// holds only its own files. Only exactly owned records are touched. A foreign record, an owned worktree holding files a hook left
+// (kept, never deleted) or one whose removal fails blocks new resources, and the call reports `RESOURCE_ALARM`.
 async function recover(ctx, resources) {
   const dir = await opsDir(ctx)
   for (const name of (await fs.readdir(dir)).sort()) {
@@ -297,7 +295,7 @@ async function recover(ctx, resources) {
       record.ref === `desk-triage/${record.token}` && record.path === path.join(dir, record.token, "wt")
     const resource = { kind: "worktree", path: owned ? record.path : path.join(dir, name), ref: owned ? record.ref : null, owner: record?.owner ?? null, disposition: "retained" }
     resources.push(resource)
-    if (!owned || !(await release(ctx, record, resource, { force: true }))) return false
+    if (!owned || !(await release(ctx, record, resource))) return false
   }
   return true
 }
@@ -380,9 +378,12 @@ async function basisHolds(ctx, main, input, now) {
     if (!basis.rulings.some((ruling) => ruling.id === id) && (await blobAt(ctx, main, id)) !== null) return false
   }
   if (basis.claim.state === "live" && !(Date.parse(basis.claim.expires_at) > now.getTime())) return false
-  // Every evidence revision, resolved live now, not taken from the basis: a public issue edited since the review changes it.
+  // Every evidence revision, resolved live now, not taken from the basis: a public issue edited since the review changes it. The
+  // resolver gets the card as published, so the local card must be the expected blob, as `readTriageBasis` read it.
+  const read = await readCanonicalCard({ deskRoot: ctx.deskRoot, personPrefix: input.personPrefix, key: input.key, env: ctx.env })
+  if (read === null || read.revision !== basis.canonical_revision) return false
   for (const item of basis.evidence) {
-    const found = await Promise.resolve().then(() => input.resolve(item.pointer, null)).catch(() => null)
+    const found = await Promise.resolve().then(() => input.resolve(item.pointer, read.card)).catch(() => null)
     if (found?.revision !== item.revision) return false
   }
   return true
@@ -480,9 +481,10 @@ async function round(ctx, input, resources) {
  * `expectedBasis` is `readTriageBasis().basis` from the prepared local read. A review's `authority_code` must be one of
  * `expectedBasis.authority.codes`, and that authority must follow from the basis's own rulings; otherwise `policy_refused`, so an
  * agent-ready review is never written on a basis whose authority is unresolved or was revoked. `store` is `owner/repo`,
- * case-normalized. `evidence.resolve(pointer, null) -> {revision}|null` is the live evidence resolver (as in `readTriageBasis`;
- * without it only self-describing pointers resolve): every evidence revision of the basis is resolved again before the push and
- * after the readback, and any difference is `stale_basis`. `reason` is the invalidation's reason from `refreshTriage` (one of
+ * case-normalized. `evidence.resolve(pointer, card) -> {revision}|null` is the live evidence resolver (as in `readTriageBasis`,
+ * given the card whose bytes are the expected blob; without it only self-describing pointers resolve): every evidence revision of
+ * the basis is resolved again before the push and after the readback, and any difference, or a local card that is not the
+ * expected one, is `stale_basis`. `reason` is the invalidation's reason from `refreshTriage` (one of
  * `basis_changed`, `claim_changed`, `authority_changed`, `evidence_changed`, `version_changed`; default `basis_changed`) and is
  * refused for the other operations. `git` holds test and platform seams: `{spawn, timeoutMs, onStep(name), platform, aclRunner}`.
  *
@@ -494,9 +496,9 @@ async function round(ctx, input, resources) {
  * basis does not grant, or nothing to invalidate or withdraw), `policy_unknown` (a hook time-out, a changed hook policy or an
  * extra committed path) and `write_failed` (including a revision high-water mark that cannot advance). `id`, `revision` and `ack`
  * appear only when acknowledged or adopted. `resources` lists every temporary path and ref with its owner and disposition. A
- * worktree a hook left files in is retained by its own call and removed by the next call's recovery; only a resource that cannot
- * be recovered (a foreign record, or a removal that fails) makes a call `busy` with `alarm: "triage_resource_unrecoverable"`,
- * the stable code a loop raises, since every later write stays blocked until it is cleared.
+ * worktree holding files a hook left is kept, never deleted; it and any other resource that cannot be recovered (a foreign record,
+ * or a removal that fails) make every later call `busy` with `alarm: "triage_resource_unrecoverable"`, the stable code a loop
+ * raises, until it is cleared.
  */
 export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, store, expectedBasis, review, operation, now, git = {}, evidence = {}, reason }) {
   const resources = []

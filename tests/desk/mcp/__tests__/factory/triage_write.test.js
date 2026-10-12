@@ -281,6 +281,22 @@ test("changed_basis_during_push_holds_and_unrelated_advance_retries_once", async
   assert.equal((await publish(b, { evidence: {} })).state, "stale_basis", "no live resolver can answer for the issue")
   assert.equal((await publish(b, { evidence: { resolve: () => { throw new Error("offline") } } })).state, "stale_basis", "a failing resolver proves nothing")
   assert.equal(git(w.origin, ["rev-parse", "main"]), head, "nothing was pushed")
+  // The resolver is handed the card as published, as readTriageBasis hands it.
+  const seen = []
+  const recording = async (pointer, card) => {
+    seen.push(card?.key)
+    return resolveIssue(pointer)
+  }
+  assert.equal((await publish(b, { evidence: { resolve: recording }, git: { onStep: (name) => { if (name === "remote_read") throw new Error("stop") } } })).state, "write_failed")
+  assert.ok(seen.length > 0 && seen.every((key) => key === KEY), JSON.stringify(seen))
+  // A checkout behind the remote card cannot hand over the expected card: the basis read elsewhere does not hold here.
+  const c = w.clone(`c-${hex(3)}`)
+  await remoteChange(w, "behind", async (root) => {
+    const file = path.join(root, triagePaths(root, "", KEY).card)
+    await fs.writeFile(file, `${await fs.readFile(file, "utf8")}\n`)
+  })
+  git(b.deskRoot, ["pull", "-q"])
+  assert.equal((await publish(c, { expectedBasis: await basisFor(b) })).state, "stale_basis")
   let pushed = false
   const editedAfterPush = async (pointer) => (pushed ? edited(pointer) : resolveIssue(pointer))
   const late = await publish(b, {
@@ -553,14 +569,21 @@ test("changed_disabled_or_unreadable_policy_holds", async () => {
   assert.equal(left.state, "policy_unknown", "a file the hook left behind")
   const retained = left.resources.find((r) => r.kind === "worktree")
   assert.equal(retained.disposition, "retained", "the call that made it keeps what the hook left")
-  // The next call recovers the owned worktree by itself, whatever the hook left in it: no person has to clear it.
+  // A file a hook left is never deleted: the worktree is kept, and every later call is busy with the stable alarm code.
   await fs.writeFile(hook, "#!/bin/sh\nexit 0\n")
+  const blocked = await publish(a)
+  assert.equal(blocked.state, "busy", "an unrecovered resource blocks new ones")
+  assert.equal(blocked.alarm, RESOURCE_ALARM)
+  assert.equal(blocked.resources[0].path, retained.path)
+  assert.equal(blocked.resources[0].disposition, "retained")
+  assert.equal(await fs.readFile(path.join(retained.path, "leftover.txt"), "utf8"), "left\n", "the hook's file survives recovery")
+  assert.equal((await publish(a)).alarm, RESOURCE_ALARM, "still raised on the next call")
+  // Once the leftover is dealt with, the next call recovers the worktree by itself.
+  await fs.unlink(path.join(retained.path, "leftover.txt"))
   const recovered = await publish(a)
   assert.equal(recovered.state, "acknowledged", JSON.stringify(recovered))
   assert.equal(recovered.alarm, undefined)
-  assert.equal(recovered.resources[0].path, retained.path)
   assert.equal(recovered.resources[0].disposition, "removed")
-  await assert.rejects(fs.lstat(retained.path))
 
   git(a.deskRoot, ["config", "core.hooksPath", "/dev/null"])
   assert.equal((await publish(a, { review: { ...AGENT, protected_result: hex(16) } })).state, "policy_refused", "hooks turned off")

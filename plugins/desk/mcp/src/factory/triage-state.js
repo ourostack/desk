@@ -434,7 +434,7 @@ export async function refreshTriage({ env, deskRoot, personPrefix, now, readCard
     }
     if (annotation.attempt.state !== "reviewed") continue
     const stored = await readProtectedBasis(env, annotation.basis.protected_basis)
-    const check = stored === null ? null : await checkTriageBasis({ deskRoot, personPrefix, basis: stored, now, readCards, evidence })
+    const check = stored === null ? null : await checkTriageBasis({ deskRoot, personPrefix, basis: stored, now, readCards, evidence, env })
     if (check === null) changes.push({ key, operation: null, state: "stale", reason: "protected_basis_unavailable" })
     else if (check.state === "stale") changes.push({ key, operation: "invalidate", reason: check.reason })
     else if (check.state === "current") fresh.add(key)
