@@ -302,8 +302,8 @@ The loop's triage step launches only with a record that restores. The record liv
 ### For the operator
 
 ```sh
-node ~/.claude/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js triage-qualify --check
-node ~/.claude/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js triage-qualify
+node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js" triage-qualify --check
+node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js" triage-qualify
 ```
 
 - `--check` launches nothing. It prints what restore says now: `qualified`, `missing`, `stale` with a reason and whether qualifying again can clear it (`requalify`), or `damaged` with a reason. It waits for no one: while the loop worker or a qualification holds `loop-worker.running`, it answers `busy`.
