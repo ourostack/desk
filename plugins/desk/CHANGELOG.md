@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.300 — 2026-10-12
+
+Two Desk sessions in one process that start a readiness controller for the same desk at the same time are again admitted in the order they asked ([`mcp/src/readiness/controller-client.js`](mcp/src/readiness/controller-client.js)). Since the state folder create became asynchronous, each caller waited on its own create and whichever finished first became the owner. Callers for one folder now share one create.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.299 — 2026-10-12
 
 A Desk session no longer creates files or folders synchronously while it answers tool calls on Windows. It now writes `last-start.json` and the root's own start record with asynchronous I/O, one write at a time, keeping only the latest waiting record per root, and closing a session through its input stream waits for them ([`mcp/src/runtime/last-start.js`](mcp/src/runtime/last-start.js), [`mcp/src/runtime/desk-session.js`](mcp/src/runtime/desk-session.js), with `renameWithRetryAsync` in [`mcp/src/util/rename-retry.js`](mcp/src/util/rename-retry.js)). The readiness controller's state folder is now created with an asynchronous `mkdir` ([`mcp/src/readiness/controller-client.js`](mcp/src/readiness/controller-client.js)). On Windows runners, either synchronous create could wait 117 ms to over a second, and every `desk_status` call that arrived meanwhile waited with it. A start record can now land a few milliseconds after the tool call that reported its state. Readers in other processes, such as the boot checks, already read it later than that.
