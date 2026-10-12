@@ -119,13 +119,13 @@ function protocol(transport, deadline) {
   }
   return {
     notify(method) { send({ method }) },
-    async request(method, params) {
-      if (Date.now() >= deadline) throw failure("timeout")
+    async request(method, params, until = deadline) {
+      if (Date.now() >= until) throw failure("timeout")
       const id = ++sequence
       let timer
       try {
         return await new Promise((resolve, reject) => {
-          timer = setTimeout(() => reject(failure("timeout")), Math.max(1, deadline - Date.now()))
+          timer = setTimeout(() => reject(failure("timeout")), Math.max(1, until - Date.now()))
           pending.set(id, { resolve, reject })
           try { send({ id, method, params }) } catch (error) { reject(error) }
         })
@@ -180,7 +180,7 @@ function gitHead(root, env) {
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */
 export async function runRecovery({
   argv = process.argv.slice(2), env = process.env, cwd = process.cwd(),
-  input = process.stdin, launch = launchBootstrap, timeoutMs = 60000,
+  input = process.stdin, launch = launchBootstrap, timeoutMs = 60000, dispatchTimeoutMs = 60000,
 } = {}) {
   const report = {
     operation: null, requestedRoot: null, actualRoot: null,
@@ -287,7 +287,9 @@ export async function runRecovery({
 
     report.git.headBefore = gitHead(root, env)
     report.effects = { mutation: "unknown", commit: "unknown", push: "unknown" }
-    const response = await client.request("tools/call", { name: report.operation, arguments: payload })
+    // The dispatched call gets its own budget from the moment it is sent, so a slow startup never leaves the mutation too little
+    // time and turns an applied write into an unknown one.
+    const response = await client.request("tools/call", { name: report.operation, arguments: payload }, Date.now() + dispatchTimeoutMs)
     const result = toolPayload(response)
     report.result = redact(result, payload)
     report.git.headAfter = gitHead(root, env)

@@ -1,0 +1,1 @@
+Local recovery now gives the dispatched write its own 60 s budget, which starts when the call is sent ([`mcp/scripts/local-recovery.js`](mcp/scripts/local-recovery.js)). It used to share one deadline with startup, so a slow startup could leave the write too little time and turn a write the server had applied into an `unknown` result that needs a manual readback.

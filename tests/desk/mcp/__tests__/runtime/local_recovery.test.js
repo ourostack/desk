@@ -182,39 +182,62 @@ test("state-branch options cannot override undeclared branch policy", async () =
   assert.equal(git(root, "rev-parse", "HEAD"), head)
 })
 
-test("timeout after dispatch is unknown and is never resent", async () => {
-  const root = fixture()
-  let dispatches = 0
-  const launcher = async () => {
+// A fake server that answers every request, after `statusDelayMs` for desk_status, and answers task_update after `updateDelayMs`
+// (never, when it is null). It records each task_update it receives and applies an effect before answering.
+function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch }) {
+  return async () => {
     const toServer = new PassThrough()
     const fromServer = new PassThrough()
+    const reply = (id, result, delayMs) => setTimeout(() => fromServer.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n"), delayMs)
     toServer.on("data", (chunk) => {
       const request = JSON.parse(chunk.toString())
       if (!request.id) return
-      let result = {}
-      if (request.method === "tools/list") result = { tools: [{ name: "task_update" }] }
-      if (request.params?.name === "desk_status") result = { content: [{ type: "text", text: JSON.stringify({
+      if (request.method === "tools/list") return reply(request.id, { tools: [{ name: "task_update" }] }, 0)
+      if (request.params?.name === "desk_status") return reply(request.id, { content: [{ type: "text", text: JSON.stringify({
         state: "ready", root: { valid: true, path: root }, write_scope: { mode: "workspace", person: null, relative_path: "." },
         sync: "no remote configured",
-      }) }] }
+      }) }] }, statusDelayMs)
       if (request.params?.name === "task_update") {
-        dispatches++
-        writeFileSync(path.join(root, "applied.txt"), "effect before timeout")
+        onDispatch()
+        writeFileSync(path.join(root, "applied.txt"), "effect before answer")
+        if (updateDelayMs !== null) reply(request.id, { content: [{ type: "text", text: JSON.stringify({ status: "nothing_to_commit" }) }] }, updateDelayMs)
         return
       }
-      fromServer.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n")
+      reply(request.id, {}, 0)
     })
     return { input: toServer, output: fromServer, close: async () => toServer.end() }
   }
+}
+
+test("timeout after dispatch is unknown and is never resent", async () => {
+  const root = fixture()
+  let dispatches = 0
   const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
-  // The deadline covers the whole session, from initialize to the dispatched call. At 80 ms a loaded machine spent it before the
-  // dispatch, and the test saw no dispatch at all. This fake server never answers task_update, so the deadline still ends the call.
-  const result = await runRecovery({ argv: args(root), env: env(), cwd: root, input: input(update), launch: launcher, timeoutMs: 1000 })
+  // The dispatched call's own budget starts when it is sent, so a loaded machine's slow startup cannot spend it first.
+  const result = await runRecovery({
+    argv: args(root), env: env(), cwd: root, input: input(update), dispatchTimeoutMs: 80,
+    launch: fakeServer(root, { onDispatch: () => dispatches++ }),
+  })
   assert.equal(result.report.code, "timeout")
   assert.equal(result.report.effects.mutation, "unknown")
   assert.match(result.report.readback, /HEAD/u)
   assert.equal(dispatches, 1)
-  assert.equal(readFileSync(path.join(root, "applied.txt"), "utf8"), "effect before timeout")
+  assert.equal(readFileSync(path.join(root, "applied.txt"), "utf8"), "effect before answer")
+})
+
+test("a slow startup does not shorten the dispatched call's budget", async () => {
+  const root = fixture()
+  let dispatches = 0
+  const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  // Startup spends 300 of its 400 ms; the dispatched call then answers after 300 ms, inside its own 2 s budget. With one deadline
+  // for the whole session, the call would time out with an applied but unknown write.
+  const result = await runRecovery({
+    argv: args(root), env: env(), cwd: root, input: input(update), timeoutMs: 400, dispatchTimeoutMs: 2000,
+    launch: fakeServer(root, { statusDelayMs: 300, updateDelayMs: 300, onDispatch: () => dispatches++ }),
+  })
+  assert.equal(dispatches, 1)
+  assert.notEqual(result.report.code, "timeout", JSON.stringify(result.report))
+  assert.equal(result.report.effects.mutation, "reported_complete", JSON.stringify(result.report))
 })
 
 test("an already edited card is not falsely reported as committed", async () => {
