@@ -896,3 +896,32 @@ test("a rename that fails for good, or a readback that differs, launches nothing
     assert.deepEqual(await asideMidway.reserveAgentLaunch(env, { kind: "evaluate", now: today }), { state: "readback_mismatch" })
   }))
 })
+
+test("a triage qualification reserves and finishes both launches together", () => scratch(async (env, root) => {
+  const pair = await reserve(env, "triage", at(0, 9), { launches: 2 })
+  assert.equal(pair.state, "reserved")
+  assert.equal(pair.token.launches, 2)
+  let ledger = await ledgerOf(root)
+  assert.equal(ledger.spent, 2)
+  assert.equal(ledger.triage.launched, 2)
+  assert.deepEqual(ledger.windows, [0, 1, 0, 0], "it uses the window's one triage opportunity")
+  assert.deepEqual(await finishAgentLaunch(env, { token: pair.token, state: "failed", now: at(0, 9, 5) }), { state: "recorded" })
+  ledger = await ledgerOf(root)
+  assert.deepEqual(ledger.triage, { launched: 2, ran: 0, failed: 2, not_started: 0, finished_revision: pair.token.revision })
+  assert.deepEqual(await finishAgentLaunch(env, { token: pair.token, state: "ran", now: at(0, 9, 6) }), { state: "stale_token" }, "once")
+  assert.deepEqual(await finishAgentLaunch(env, { token: { ...pair.token, launches: undefined }, state: "ran", now: at(0, 9, 6) }), { state: "stale_token" })
+}))
+
+test("a qualification needs room for both launches", () => scratch(async (env, root) => {
+  await forge(env, root, { spent: 29 })
+  assert.deepEqual(await reserve(env, "triage", at(0, 9), { launches: 2 }), { state: "quota_exhausted", day: dayText(0), remaining: 0 })
+  const one = await reserve(env, "triage", at(0, 9))
+  assert.equal(one.state, "reserved", "a single triage launch still fits")
+  assert.equal(one.token.launches, undefined)
+}))
+
+test("launches is 1, or 2 for triage only", async () => {
+  await assert.rejects(reserveAgentLaunch({}, { kind: "evaluate", launches: 2, now: at(0, 1) }), TypeError)
+  await assert.rejects(reserveAgentLaunch({}, { kind: "triage", launches: 3, now: at(0, 1) }), TypeError)
+  await assert.rejects(finishAgentLaunch({}, { token: { kind: "triage", revision: 1, epoch: "x", day: "d", launches: 3 }, state: "ran", now: at(0, 1) }), TypeError)
+})
