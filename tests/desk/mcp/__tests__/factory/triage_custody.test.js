@@ -1021,20 +1021,35 @@ ownedCatalogTest("receipt_reader_before_writer_does_not_block",async(t,custody)=
 // through the nonaccepted facade.
 ownedHostTest("engine_stdio_close_sequence_seals_the_session_or_fails_closed","posix",async(t)=>{
   const custody=observerDoubleCustody()
-  for(const close of [{},{sigtermAfterMs:-1,sigkillAfterMs:400},{sigtermAfterMs:100,sigkillAfterMs:1001},{sigtermAfterMs:1.5,sigkillAfterMs:0}])
+  for(const close of [{},{sigtermAfterMs:-1,sigkillAfterMs:400},{sigtermAfterMs:100,sigkillAfterMs:1001},{sigtermAfterMs:1.5,sigkillAfterMs:0},
+    {sigtermAfterMs:100,sigkillAfterMs:400,finishOffsetMs:1001},{sigtermAfterMs:100,sigkillAfterMs:400,finishOffsetMs:-1001},
+    {sigtermAfterMs:100,sigkillAfterMs:400,finishOffsetMs:0.5},{sigtermAfterMs:100,sigkillAfterMs:400,other:0}])
     await assert.rejects(custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close}),/catalog_invalid|close_schedule/u)
   const run=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close:{sigtermAfterMs:100,sigkillAfterMs:400}})
   t.after(()=>run.cleanup?.())
   assert.equal(run.state,"proved",run.reason)
   assert.equal(run.custody.receipts[2].payload.reason,"client_sigint")
   assert.equal(run.resources.launcherExit,0);assert.equal(run.resources.serverExited,true)
+  // The native lane sends its finish frame when it sees the native result,
+  // within milliseconds of the engine's SIGINT on either side. Whichever
+  // close starts first, the other must not disturb it.
+  for(const finishOffsetMs of [-20,-12,-8,-4,-2,0,2,4,8,12,20]){
+    const raced=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close:{sigtermAfterMs:100,sigkillAfterMs:400,finishOffsetMs}})
+    t.after(()=>raced.cleanup?.())
+    assert.equal(raced.state,"proved",`${finishOffsetMs}: ${raced.reason}`)
+    assert.ok(["stdin_eof","client_sigint"].includes(raced.custody.receipts[2].payload.reason),String(finishOffsetMs))
+    // The engine's signals may reach the launcher after its last write; its
+    // authenticated exit observation still records the server's clean close.
+    assert.deepEqual(raced.custody.observations.filter(x=>x.payload.kind==="launcher_exit").map(x=>[x.payload.code,x.payload.signal]),[[0,null]])
+  }
   // A SIGTERM that can land before the terminal receipt is durable either
   // finds the session already sealed or fails it; it never passes unsealed.
   for(let i=0;i<3;i++){
     const late=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close:{sigtermAfterMs:0,sigkillAfterMs:0}})
     t.after(()=>late.cleanup?.())
     if(late.state==="failed")continue
-    assert.equal(late.state,"proved");assert.equal(late.custody.receipts[2].payload.reason,"client_sigint");assert.equal(late.resources.launcherExit,0)
+    assert.equal(late.state,"proved");assert.equal(late.custody.receipts[2].payload.reason,"client_sigint")
+    assert.deepEqual(late.custody.observations.filter(x=>x.payload.kind==="launcher_exit").map(x=>[x.payload.code,x.payload.signal]),[[0,null]])
   }
 })
 ownedCatalogTest("authentic_receipt_only",async(t,custody)=>{

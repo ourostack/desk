@@ -132,7 +132,7 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
   for(const scenario of ["finish","native_eof","wrong_generation","wrong_event","extra_key","input_error","child_error","stderr_limit","parent_changed","signal","nonzero_exit",
     "deadline","early_eof","pipe_error","redundant_epipe","stderr_small","readable_after_ready","spawn_throw",
     "wrong_cwd","uid_changed_after_first_js","close_listener_throw","parent_stable","snapshot_after_open_drift",
-    "sigint","sigint_during_close","sigint_then_sigterm_sealed","sigint_then_sigterm_unsealed","sigint_twice","sigint_before_ready","sighup"]){
+    "sigint","sigint_during_close","sigint_then_sigterm","sigint_then_sigterm_server_fails","sigint_then_failure_then_sigterm","sigint_twice","sigint_before_ready","sighup"]){
     await t.test(scenario,async()=>{
       const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-launcher-")));fs.chmodSync(dir,0o700)
       t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
@@ -152,14 +152,13 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
       const child=new EventEmitter();Object.assign(child,{pid:123456,stdin:new PassThrough(),stdout:new PassThrough(),stderr:new PassThrough()})
       let childClosed=false
       const close=(code,signal=null)=>{if(childClosed)return;childClosed=true;child.emit("close",code,signal)}
-      // The fake server closes 0 on a graceful SIGINT ("sigint") or on a
-      // SIGTERM after its terminal receipt ("..._sealed"); otherwise a
-      // signal closes it 1. Other SIGINT scenarios leave it running.
+      // The fake server closes 0 on a graceful SIGINT ("sigint"); other
+      // SIGINT scenarios leave it running. Any other signal closes it 1.
       const kills=[]
       child.kill=signal=>{
         kills.push(signal)
         if(signal==="SIGINT"){if(scenario==="sigint")queueMicrotask(()=>close(0));return true}
-        queueMicrotask(()=>close(signal==="SIGTERM"&&scenario==="sigint_then_sigterm_sealed"?0:1));return true
+        queueMicrotask(()=>close(1));return true
       }
       child.stdin.once("finish",()=>queueMicrotask(()=>close(0)))
       if(scenario==="close_listener_throw"){
@@ -217,7 +216,13 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
         if(scenario==="signal")runtime.emit("SIGTERM")
         if(scenario==="sigint")runtime.emit("SIGINT")
         if(scenario==="sigint_during_close"){await controller.endInput();runtime.emit("SIGINT")}
-        if(["sigint_then_sigterm_sealed","sigint_then_sigterm_unsealed"].includes(scenario)){runtime.emit("SIGINT");runtime.emit("SIGTERM")}
+        // A SIGTERM after the SIGINT is not forwarded: the launcher waits for
+        // the server's own close and exits with it.
+        if(["sigint_then_sigterm","sigint_then_sigterm_server_fails"].includes(scenario)){
+          runtime.emit("SIGINT");runtime.emit("SIGTERM");await new Promise(resolve=>setTimeout(resolve,30))
+          assert.deepEqual(kills,["SIGINT"],scenario);close(scenario==="sigint_then_sigterm"?0:1)
+        }
+        if(scenario==="sigint_then_failure_then_sigterm"){runtime.emit("SIGINT");child.emit("error",Error("synthetic"));runtime.emit("SIGTERM")}
         if(scenario==="sigint_twice"){runtime.emit("SIGINT");runtime.emit("SIGINT")}
         if(scenario==="sighup")runtime.emit("SIGHUP")
         if(scenario==="nonzero_exit")close(1)
@@ -230,9 +235,10 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
       while(!runtime.stdout.writableEnded&&Date.now()<stop)await new Promise(resolve=>setTimeout(resolve,10))
       assert.equal(runtime.stdout.writableEnded,true,"source must close pipes/timer/watch")
       assert.equal(runtime.exitCode,["finish","native_eof","redundant_epipe","stderr_small","readable_after_ready","parent_stable",
-        "sigint","sigint_during_close","sigint_then_sigterm_sealed"].includes(scenario)?0:1)
-      if(scenario.startsWith("sigint")&&scenario!=="sigint_before_ready")assert.equal(kills[0],"SIGINT",scenario)
-      if(scenario.startsWith("sigint_then_sigterm"))assert.deepEqual(kills.slice(0,2),["SIGINT","SIGTERM"],scenario)
+        "sigint","sigint_during_close","sigint_then_sigterm"].includes(scenario)?0:1)
+      // The launcher signals the server only while no close is under way.
+      if(scenario.startsWith("sigint")&&!["sigint_before_ready","sigint_during_close"].includes(scenario))assert.equal(kills[0],"SIGINT",scenario)
+      if(scenario==="sigint_during_close")assert.deepEqual(kills,[],scenario)
       assert.equal(fs.existsSync(path.join(dir,"qualification.json")),false)
       assert.equal(fs.existsSync(path.join(dir,"unaccepted.json")),false)
     })
@@ -391,19 +397,21 @@ if(!controller)process.exit(1)
 // Both signals in one tick: the SIGTERM lands before any receipt write.
 process.once("SIGUSR1",()=>{process.emit("SIGINT","SIGINT");process.emit("SIGTERM","SIGTERM")})
 process.once("beforeExit",()=>{process.exitCode=runtime.exitCode})
+// Every signal handler is installed: the test may signal now.
+const {writeSync,closeSync}=await import("node:fs");writeSync(5,"ready\\n");closeSync(5)
 `,{mode:0o600})
       const fd=fs.openSync(snapshotFile,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW)
-      const child=spawn(process.execPath,[...unitMeasurementArgs(),script],{cwd:new URL("../../../../../plugins/desk/mcp",import.meta.url),env:{...process.env},stdio:["pipe","pipe","pipe","pipe",fd]});fs.closeSync(fd)
+      const child=spawn(process.execPath,[...unitMeasurementArgs(),script],{cwd:new URL("../../../../../plugins/desk/mcp",import.meta.url),env:{...process.env},stdio:["pipe","pipe","pipe","pipe",fd,"pipe"]});fs.closeSync(fd)
       child.stdin.on("error",()=>{})
-      let stderr="",receipt=""
-      child.stdout.resume();child.stderr.on("data",chunk=>{stderr+=chunk});child.stdio[3].on("data",chunk=>{receipt+=chunk})
+      let stderr="",receipt="",ready=""
+      child.stdout.resume();child.stderr.on("data",chunk=>{stderr+=chunk});child.stdio[3].on("data",chunk=>{receipt+=chunk});child.stdio[5].on("data",chunk=>{ready+=chunk})
       const closed=new Promise(resolve=>child.once("close",(code,signal)=>resolve({code,signal})))
       const timer=setTimeout(()=>child.kill("SIGKILL"),8000)
       t.after(()=>{clearTimeout(timer);child.kill("SIGKILL")})
       const until=async predicate=>{const stop=Date.now()+4000;while(!predicate()&&child.exitCode===null&&Date.now()<stop)await new Promise(resolve=>setTimeout(resolve,10))}
       const terminal=()=>receipt.includes('"event":"terminal"')
-      await until(()=>receipt.includes("\n"))
-      await new Promise(resolve=>setTimeout(resolve,30))
+      await until(()=>ready==="ready\n")
+      assert.equal(ready,"ready\n",stderr)
       if(scenario==="sigint")child.kill("SIGINT")
       if(scenario==="sigint_then_sigterm_before_terminal")child.kill("SIGUSR1")
       if(scenario==="sigint_then_sigterm_after_terminal"){child.kill("SIGINT");await until(terminal);child.kill("SIGTERM")}

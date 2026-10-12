@@ -87,19 +87,20 @@ export async function startCatalogLauncher(runtime=process){
     // Claude Code closes a stdio server with SIGINT, then SIGTERM after 100 ms
     // and SIGKILL after 500 ms. The first SIGINT after the ready gate is a
     // graceful close: input stops and the server writes its terminal receipt
-    // with reason client_sigint. A SIGTERM after it goes to the server, which
-    // exits cleanly only if that receipt is already written. A repeated
-    // SIGINT, SIGHUP, or SIGTERM without a SIGINT before it stays fatal.
+    // with reason client_sigint. The launcher alone starts a server close, so
+    // it signals the server only while no close is under way; a signal that
+    // reached a server already exiting could kill it after its terminal.
+    // Once a close is under way the launcher forwards nothing and waits for
+    // the server. A repeated SIGINT, SIGHUP, or SIGTERM without a SIGINT
+    // before it stays fatal.
     runtime.once("SIGINT",()=>{
       runtime.once("SIGINT",fatalSignal)
       if(!finished||failed)return fatalSignal()
-      // A stdin-EOF close may already be under way; the server keeps that
-      // reason and only notes the SIGINT for a following SIGTERM.
       interrupted=true
-      if(!closing){closing=true;runtime.stdin.unpipe(child.stdin)}
-      child.kill("SIGINT")
+      if(closing)return
+      closing=true;runtime.stdin.unpipe(child.stdin);child.kill("SIGINT")
     })
-    runtime.once("SIGTERM",()=>{if(interrupted&&!failed)child.kill("SIGTERM");else fatalSignal()})
+    runtime.once("SIGTERM",()=>{if(!interrupted||failed)fatalSignal()})
     runtime.once("SIGHUP",fatalSignal)
     const parent=runtime.ppid,watch=setInterval(()=>{if(runtime.ppid!==parent)fatal()},100)
     child.once("close",()=>clearInterval(watch))

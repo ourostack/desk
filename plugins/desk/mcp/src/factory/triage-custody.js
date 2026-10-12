@@ -1337,11 +1337,14 @@ async function engineStdioClose(child,{sigtermAfterMs,sigkillAfterMs}){
   if(alive())child.kill("SIGKILL")
 }
 // close (nonaccepted facade only): replay engineStdioClose instead of the
-// stdin-EOF close the direct lane otherwise uses.
+// stdin-EOF close the direct lane otherwise uses. finishOffsetMs also sends
+// the qualifier's finish frame that many ms after the SIGINT (before it when
+// negative), as the native lane does when it sees the native result.
 async function runDirect({fixture,deadline,evidenceDir,close},context) {
   if(close!==undefined){
-    closedObject(close,["sigtermAfterMs","sigkillAfterMs"])
-    if(![close.sigtermAfterMs,close.sigkillAfterMs].every(ms=>Number.isSafeInteger(ms)&&ms>=0&&ms<=1000))fail("close_schedule")
+    closedObject(close,["sigtermAfterMs","sigkillAfterMs"],["finishOffsetMs"])
+    if(![close.sigtermAfterMs,close.sigkillAfterMs].every(ms=>Number.isSafeInteger(ms)&&ms>=0&&ms<=1000)||
+      !(close.finishOffsetMs===undefined||Number.isSafeInteger(close.finishOffsetMs)&&Math.abs(close.finishOffsetMs)<=1000))fail("close_schedule")
   }
   const refused=context.refusal()
   if(refused!==null)return {state:"scope_unqualified",reason:refused,resources:{pids:[],files:[]},cleanup:async()=>{}}
@@ -1363,7 +1366,14 @@ async function runDirect({fixture,deadline,evidenceDir,close},context) {
     const closed=new Promise(resolve=>child.on("close",(code,signal)=>resolve({code,signal})))
     let stderr="";child.stderr.on("data",b=>{stderr+=b;resources.stderr=stderr;if(Buffer.byteLength(stderr)>65536)child.kill("SIGTERM")})
     child.on("error",()=>lifecycle.abort())
-    child.on("exit",(code)=>{if(code!==0)lifecycle.fail(new Error("launcher_exit"))})
+    // The engine close replay judges the session as the native lane does.
+    // There the engine owns the launcher and signals it on its own schedule,
+    // which can land after the launcher's last write while Node tears the
+    // process down, so the launcher's own exit status is never seen; only
+    // its authenticated launcher_exit observation counts, and the lifecycle
+    // still requires it to record the server's clean close.
+    const launcherClosed=code=>code===0||close!==undefined
+    child.on("exit",code=>{if(!launcherClosed(code))lifecycle.fail(new Error("launcher_exit"))})
     const boot=await lifecycle.boot
     const client=new Client({name:"claude-code",title:"Claude Code",version:"2.1.296",
       description:"Anthropic's agentic coding tool",websiteUrl:"https://code.claude.com"},
@@ -1387,12 +1397,17 @@ async function runDirect({fixture,deadline,evidenceDir,close},context) {
     if(catalogCanonical(first)!==catalogCanonical(retry))fail("retry_changed")
     const conflict=structuredClone(fixture.candidate);conflict.results[0].problem="changed"
     await call("candidate_submit",{candidate:conflict},true)
-    if(close){child.stdin.on("error",Function.prototype);await engineStdioClose(child,close)}
-    else await lifecycle.finish()
+    if(close){
+      child.stdin.on("error",Function.prototype)
+      const offset=close.finishOffsetMs
+      if(offset===undefined)await engineStdioClose(child,close)
+      else if(offset<=0){await lifecycle.finish();await sleep(-offset);await engineStdioClose(child,close)}
+      else await Promise.all([engineStdioClose(child,close),sleep(offset).then(()=>lifecycle.finish())])
+    }else await lifecycle.finish()
     await client.close()
     const result=await lifecycle.complete(),exit=await closed
     result.resources.launcherExit=exit.code;    result.resources.serverExited=!ownedPidLive(boot.server_pid)
-    if(result.state!=="closed"||exit.code!==0||!result.resources.serverExited||!responses.every(x=>x.ok))fail(result.reason??"direct_failed")
+    if(result.state!=="closed"||!launcherClosed(exit.code)||!result.resources.serverExited||!responses.every(x=>x.ok))fail(result.reason??"direct_failed")
     if(!await owned.verifyPrepared())fail("prepared_changed")
     const proof={state:"proved",generation:owned.generation,tools,responses,historySha256:catalogHash(catalogCanonical(history)),custody:result.custody,
       resources:{...resources,...result.resources,stderr,state:"closed"},cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
