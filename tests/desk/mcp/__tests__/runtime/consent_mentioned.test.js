@@ -22,6 +22,8 @@ test("nothing is recorded until an agent says it did; the record is per store an
   assert.equal(consentMentioned(stateDir, STORE), true)
   assert.equal(consentMentioned(stateDir, "ourostack/other"), false, "another store has its own record")
   assert.deepEqual(noteConsentMentioned(stateDir, STORE, { now: () => "2026-10-13T00:00:00.000Z" }), { store: STORE, mentioned_at: "2026-10-12T16:26:41.000Z" }, "a second note keeps the first time")
+  assert.deepEqual(noteConsentMentioned(stateDir, "Ourostack/Factory-Intake", { now: () => "2026-10-14T00:00:00.000Z" }), { store: "Ourostack/Factory-Intake", mentioned_at: "2026-10-12T16:26:41.000Z" }, "another spelling of the store is the same store")
+  assert.equal(consentMentioned(stateDir, "OUROSTACK/factory-intake"), true)
   assert.match(noteConsentMentioned(stateDir, "ourostack/other").mentioned_at, /^\d{4}-\d{2}-\d{2}T/u, "the default clock is the real one")
 })
 
@@ -39,7 +41,7 @@ test("a record that cannot be read or is not this store's reads as not mentioned
   const stateDir = fresh()
   const file = mentionedFile(stateDir, STORE)
   mkdirSync(path.dirname(file), { recursive: true })
-  for (const text of ["not json", "null", "[]", JSON.stringify({ store: "someone/else", mentioned_at: "2026-10-12T00:00:00.000Z" }), JSON.stringify({ store: STORE }), JSON.stringify({ store: STORE, mentioned_at: "" })]) {
+  for (const text of ["not json", "null", "[]", JSON.stringify({ store: "someone/else", mentioned_at: "2026-10-12T00:00:00.000Z" }), JSON.stringify({ store: STORE }), JSON.stringify({ store: 7, mentioned_at: "2026-10-12T00:00:00.000Z" }), JSON.stringify({ store: STORE, mentioned_at: "" })]) {
     writeFileSync(file, text)
     assert.equal(consentMentioned(stateDir, STORE), false, text)
   }

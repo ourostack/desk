@@ -2,7 +2,7 @@
 //
 // The contribution question is asked once at setup (RFC section 4). The boot gives an interactive session the one sentence to say while
 // the store's decision is undecided, and "say it once" was only prose: every later session got the same instruction and said it again.
-// The agent that said the sentence now records it here (`factory.js consent --store <store> --mentioned yes`), and the boot of a later
+// The agent that says the sentence now records it here (`factory.js consent --store <store> --mentioned yes`), and the boot of a later
 // session tells its agent not to raise it. The record is made by the agent, not by the boot that gave the instruction, because a boot
 // cannot know the sentence was said: a session that ends before its work is done never reaches it.
 //
@@ -18,6 +18,8 @@ import { renameWithRetry } from "../util/rename-retry.js"
 export const CONSENT_MENTIONED_DIR = "factory-consent-mentioned"
 
 const hasText = (value) => typeof value === "string" && value.trim() !== ""
+// GitHub names, and the file names made from them on most desks' file systems, ignore case.
+const sameStore = (recorded, store) => typeof recorded === "string" && recorded.toLowerCase() === store.toLowerCase()
 const isStore = (store) => typeof store === "string" && PATTERNS.prRepo.test(store)
 
 /** The record for one store. `store` must already be a valid `<owner/repo>`. */
@@ -29,7 +31,7 @@ function readRecord(stateDir, store) {
   try {
     assertNotRealStateUnderTest(stateDir)
     const parsed = JSON.parse(readFileSync(mentionedFile(stateDir, store), "utf8"))
-    return parsed?.store === store && hasText(parsed.mentioned_at) ? { store, mentioned_at: parsed.mentioned_at } : null
+    return sameStore(parsed?.store, store) && hasText(parsed.mentioned_at) ? { store, mentioned_at: parsed.mentioned_at } : null
   } catch {
     return null
   }

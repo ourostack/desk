@@ -943,6 +943,7 @@ test("runConsentCommand records that the operator was told about a store, withou
   assert.equal(consentMentioned(resolveDeskStateDir({ env }), "ourostack/factory"), true)
   assert.deepEqual((await readConsent(env)).stores, {}, "no decision is recorded")
   await assert.rejects(() => runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "no"], env }), /Usage: factory\.js consent/u)
+  await assert.rejects(() => runConsentCommand({ argv: ["--mentioned", "yes"], env }), /Usage: factory\.js consent/u)
   await assert.rejects(() => runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "yes", "--contribute", "yes"], env }), /Usage: factory\.js consent/u)
   await assert.rejects(() => runConsentCommand({ argv: ["--store", "ourostack/factory", "--mentioned", "yes", "--account", "ari"], env }), /Usage: factory\.js consent/u)
   await assert.rejects(() => runConsentCommand({ argv: ["--store", "not a store", "--mentioned", "yes"], env }), /store must be <owner\/repo>/u)

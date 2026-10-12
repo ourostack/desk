@@ -128,7 +128,7 @@ test("unsigned deliveries and open improvement cards reach the operator's sessio
 test("the sentence about contributing is handed out until an agent records having said it; after that the boot says not to raise it", async () => {
   const root = await desk()
   const stateDir = resolveDeskStateDir({ env: { DESK: root }, homeDir: root })
-  const record = /Right after the reply that says it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again\./u
+  const record = /In the same turn, just before the reply that ends with it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never runs the command\./u
   const first = await boot(root)
   assert.match(first.instructions.find(isConsent), record)
   assert.match(first.text_instructions.at(-1), record)
