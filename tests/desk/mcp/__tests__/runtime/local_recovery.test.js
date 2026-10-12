@@ -132,7 +132,7 @@ for (const [name, value] of [
     assert.equal(readFileSync(path.join(root, "work/one/task.md"), "utf8"), before)
     assert.equal(git(root, "rev-parse", "HEAD"), head)
     assert.doesNotMatch(JSON.stringify(result.report), /SECRET_/u)
-    if (name !== "JSON") assert.equal(result.report.effects.mutation, "unknown", "isError alone cannot prove no write")
+    if (name !== "JSON") assert.equal(result.report.effects.mutation, "unknown", `isError alone cannot prove no write: ${JSON.stringify(result.report)}`)
   })
 }
 
