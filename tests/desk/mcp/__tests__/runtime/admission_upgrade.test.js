@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { installedNodesByMajor, mcpRoot } from "../launch/_mcp_handshake.js"
 import { git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
+import { controllerRecords, waitForProcessesGone } from "./_controller_exit.js"
 
 async function waitFor(predicate, { deadlineMs = 10000, intervalMs = 50 } = {}) {
   const deadline = Date.now() + deadlineMs
@@ -145,8 +146,14 @@ test("a lost readiness controller is re-elected in the background by the survivi
   t.after(() => second.close())
   assert.equal((await second.statusUntil(settled)).state, "ready")
   // The first session owns the controller; kill it the way a closed host session would.
+  const owned = controllerRecords([fixture.readinessHome]).filter((record) => record.parentPid === first.child.pid).map((record) => record.pid)
+  assert.equal(owned.length, 1, "the first session's controller child is on record")
   first.child.kill("SIGKILL")
   await new Promise((resolve) => first.child.once("exit", resolve))
+  // The controller child shuts down on its own once its parent's channel drops. Until it has exited, a write can still reach it and
+  // lose its recording as the controller goes away (canonical_write_recording_failed, connect ENOENT on main on 2026-10-07), which is
+  // a write during the loss, not after it.
+  await waitForProcessesGone(owned)
   const search = await second.call("desk_search", { query: "lighthouse" })
   assert.equal(search.isError, false)
   const write = await second.call("task_create", { track: "ops", slug: "after-owner-loss", title: "Survivor write" })
