@@ -159,7 +159,7 @@ test("commit failure remains partial and retains the real applied write", async 
   const head = git(root, "rev-parse", "HEAD")
   writeFileSync(path.join(root, ".git", "index.lock"), "fixture lock")
   const result = await recover(root)
-  assert.equal(result.exitCode, 2)
+  assert.equal(result.exitCode, 2, JSON.stringify(result.report))
   assert.equal(result.report.effects.commit, "failed")
   assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /status: processing/u)
   assert.equal(git(root, "rev-parse", "HEAD"), head)
