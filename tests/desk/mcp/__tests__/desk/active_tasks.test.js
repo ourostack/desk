@@ -86,4 +86,5 @@ test("activeTasks lists every card of a large track, in folder order when their 
   const listing = await activeTasks(root)
   assert.equal(listing.task_count, 40)
   assert.deepEqual(listing.tracks[0].tasks.map((task) => task.slug), slugs)
+  assert.deepEqual(listing.tracks[0].tasks.map((task) => task.title), slugs, "each folder is listed with its own card")
 })
