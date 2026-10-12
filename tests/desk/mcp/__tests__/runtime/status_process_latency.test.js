@@ -35,7 +35,13 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
   const from = new URL("../../../../../plugins/desk/mcp/package.json", import.meta.url).href
   writeFileSync(seam, `
     import { createRequire } from "node:module";
-    import { writeFileSync } from "node:fs";
+    import { renameSync, writeFileSync } from "node:fs";
+    // Written whole, by rename: a reader stopped mid-write must never leave an empty or partial marker behind.
+    const record = (value) => {
+      const temporary = ${JSON.stringify(marker)} + "." + process.pid;
+      writeFileSync(temporary, JSON.stringify(value));
+      renameSync(temporary, ${JSON.stringify(marker)});
+    };
     import fs from "node:fs";
     import { syncBuiltinESMExports } from "node:module";
     const Database = createRequire(${JSON.stringify(from)})("better-sqlite3");
@@ -44,7 +50,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     Database.prototype.prepare = function(...args) {
       if (!blocked && ${JSON.stringify(phase)} !== "rootStatus" && new Error().stack.includes(${JSON.stringify(phase)})) {
         blocked = true;
-        writeFileSync(${JSON.stringify(marker)}, JSON.stringify({pid: process.pid, root: this.name}));
+        record({pid: process.pid, root: this.name});
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
       }
       return original.apply(this, args);
@@ -53,7 +59,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     fs.existsSync = function(...args) {
       if (!blocked && ${JSON.stringify(phase)} === "rootStatus" && new Error().stack.includes("rootStatus")) {
         blocked = true;
-        writeFileSync(${JSON.stringify(marker)}, JSON.stringify({pid: process.pid, root: args[0]}));
+        record({pid: process.pid, root: args[0]});
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
       }
       return exists.apply(this, args);
@@ -131,6 +137,14 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
   await Promise.all([client.ping(), client.listTools()])
   const controlMs = Date.now() - controlStarted
   assert.ok(controlMs < 200, "actual process tools/list and ping exceeded cap")
+  // Every desk_status call starts a short revalidation of the binding and answers without waiting for it. A call that
+  // joins a revalidation which read the binding before it changed correctly reports A as current, so the change is made
+  // only once no revalidation is in flight: then every later attempt reads the new binding.
+  const idleDeadline = Date.now() + 15000
+  while ((await status()).admission.writes !== "available") {
+    assert.ok(Date.now() < idleDeadline, `admission never settled on A; ${stderr}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
   writeFileSync(config, JSON.stringify({ schema_version: 1, desk: { root: b, state_branch: "main" },
     desk_runtime: { semantic: "unsupported" } }))
   const second = await current(b)
