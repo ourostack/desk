@@ -58,6 +58,8 @@ const GATE_WAIT_MS = 10000
 const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
+// How long closing the session waits for a running admission attempt (Git in the desk, the runtime import) to finish, so a closed session has stopped touching the desk. Below the front door's shutdown limit, and bounded because an attempt can wait on something that never answers.
+const DISPOSE_ADMISSION_WAIT_MS = 2000
 // A status check that fails is repeated this many more times, this far apart, before the controller counts as lost. One failed request proves little: a busy controller or machine can miss a 2 s window, and a pipe can refuse one connection under load, while the controller is alive. A controller that is really gone fails every attempt, and a controller process that exits is reported at once by its exit event, so the repeats only delay a loss nothing else reported.
 const CONTROLLER_RECHECKS = 2
 const CONTROLLER_RECHECK_MS = 250
@@ -1052,13 +1054,24 @@ export function createDeskSession(deps) {
     dispose() {
       disposed = true
       invalidateStatus()
-      admission.dispose()
+      const attempt = admission.dispose()
       unwatchController?.()
       unwatchController = null
       closeHeadWatch()
       if (headTimer !== null) clearTimeout(headTimer)
-      return Promise.all([operationTail, statusReaderOutcome()]).then(async ([, retirementError]) => {
+      let attemptTimer
+      const attemptStopped = Promise.race([
+        attempt,
+        new Promise((resolve) => { attemptTimer = setTimeout(resolve, deps.disposeAdmissionWaitMs ?? DISPOSE_ADMISSION_WAIT_MS) }),
+      ]).finally(() => clearTimeout(attemptTimer))
+      // The controller closes as soon as operations and status readers are done, alongside the attempt wait, so the
+      // front door's shutdown limit is never spent waiting for admission first. A late attempt that acquires a
+      // controller after disposal closes it itself.
+      const retired = Promise.all([operationTail, statusReaderOutcome()]).then(async ([, retirementError]) => {
         await forgetController()
+        return retirementError
+      })
+      return Promise.all([retired, attemptStopped]).then(([retirementError]) => {
         if (retirementError) throw retirementError
       })
     },
