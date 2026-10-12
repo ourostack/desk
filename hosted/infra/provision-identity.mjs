@@ -1054,7 +1054,9 @@ async function clearAppSecrets(ctx) {
 // --- Signing keys (Task 3's checks in signing-keys.mjs, wired to the runner) --------------------------------------
 
 async function keysLine(ctx, app, revision) {
-  const text = await out(ctx, "az", ["containerapp", "logs", "show", ...appArgs(app), "--revision", revision, "--type", "console", "--tail", "500", "--format", "text", ...SUB]);
+  // 300 is the most az accepts (`--tail must be between 0 and 300`). These are the last 300 lines, so a revision that has
+  // logged more since it started no longer shows its keys line here (rehearsal open item for Task 10).
+  const text = await out(ctx, "az", ["containerapp", "logs", "show", ...appArgs(app), "--revision", revision, "--type", "console", "--tail", "300", "--format", "text", ...SUB]);
   return newestKeysLine(text, { revision });
 }
 
