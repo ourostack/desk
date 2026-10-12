@@ -19,9 +19,9 @@ for (const f of process.argv.slice(2)) {
   stretches.sort((a, b) => b.ms - a.ms)
   const total = (p.endTime - p.startTime) / 1000
   console.log(f.split(/[\\/]/).pop(), "total", Math.round(total))
-  for (const s of stretches.slice(0, 4).filter((s) => s.ms > 40)) {
-    const top = [...s.counts].sort((a, b) => b[1] - a[1]).slice(0, 2)
+  for (const s of stretches.slice(0, 3).filter((s) => s.ms > 60)) {
+    const top = [...s.counts].sort((a, b) => b[1] - a[1]).slice(0, 1)
     console.log(`  busy ${Math.round(s.ms)} ms`)
-    for (const [id, ms] of top) console.log(`    ${Math.round(ms)} ms in: ${stack(id).slice(0, 14).join(" < ")}`)
+    for (const [id, ms] of top) console.log(`    ${Math.round(ms)} ms in: ${stack(id).slice(0, 7).join(" < ")}`)
   }
 }
