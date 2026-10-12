@@ -12,6 +12,10 @@ import { setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/fa
 import { readTriagePreparedFile } from "../../../../../plugins/desk/mcp/src/factory/triage-catalog.js"
 
 export const STORE = "example-org/example-store"
+// The runner's prepared input lives in a folder checked by POSIX owner and mode, so no triage run can be prepared on Windows (where the
+// step stops at `unsupported_host` before preparing anything). Tests that need a run are skipped there with this reason; the step's own
+// Windows behavior is tested by the unsupported-host tests, which run everywhere.
+export const NEEDS_PREPARED_RUN = process.platform === "win32" ? "a triage run's prepared input needs POSIX owner-only modes, which NTFS does not keep; off macOS the step stops at unsupported_host, which is tested on every platform" : false
 export const KEYS = ["andon:example-org/example-repo#101", "andon:example-org/example-repo#102", "andon:example-org/example-repo#103"]
 export const SENTINELS = ["PRIVATE-PROBLEM-SENTINEL", "PRIVATE-IMPACT-SENTINEL", "PRIVATE-NEXT-SENTINEL", "PRIVATE-DECISION-SENTINEL", "PRIVATE-RECOMMENDATION-SENTINEL", "PRIVATE-CONTINUATION-SENTINEL", "PRIVATE-QUOTE-SENTINEL"]
 export const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue", ref: `https://github.com/example-org/example-repo/issues/${pointer.split("#")[1]}`, revision: 3 } })

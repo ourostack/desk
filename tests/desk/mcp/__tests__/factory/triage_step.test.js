@@ -12,7 +12,7 @@ import { prepareTriageCatalog, readTriagePreparedFile } from "../../../../../plu
 import { readTriageBasis } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
 import { refreshTriage, triagePaths } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
 import { QUALIFICATION_SEGMENTS, TRIAGE_BATCH_LIMIT, TRIAGE_RUN_MS, runTriageCommand, runTriageStep, writeTriagePreparedInput } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
-import { KEYS, SENTINELS, STORE, fakeRunner, git, pushDesk, qualifiedSeams, remoteBlobs, remoteJson, row, triageWorld } from "./_triage_world.js"
+import { KEYS, NEEDS_PREPARED_RUN, SENTINELS, STORE, fakeRunner, git, pushDesk, qualifiedSeams, remoteBlobs, remoteJson, row, triageWorld } from "./_triage_world.js"
 
 const T0 = Date.parse("2026-10-12T01:00:00.000Z")
 const HOUR = 3600 * 1000
@@ -32,7 +32,7 @@ async function editCard(w, key, fields) {
 }
 const claim = (expires) => ({ state: "claimed", claim: { claim_id: "3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60", claimed_at: at(-1).toISOString(), expires_at: expires.toISOString(), machine: "ab".repeat(8), session: null }, claim_log: [{ at: at(-1).toISOString(), machine: "ab".repeat(8) }] })
 
-test("valid_private_result_never_enters_git_review", async () => {
+test("valid_private_result_never_enters_git_review", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0) })
   const runner = fakeRunner(({ brief }) => brief.cards.map((card) => row(card, "human_decision")))
   const result = await step(w, { seams: qualifiedSeams({ runner }) })
@@ -70,7 +70,7 @@ test("valid_private_result_never_enters_git_review", async () => {
   assert.equal(status.loop.agent_launch_highwater.last_triage_at !== null, true, "the launch was reserved in the shared ledger")
 })
 
-test("partial_results_preserve_last_success", async () => {
+test("partial_results_preserve_last_success", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS })
   assert.equal((await step(w)).reviewed, 3)
   const before = Object.fromEntries(KEYS.map((key) => [key, annotation(w, key)]))
@@ -109,7 +109,7 @@ test("partial_results_preserve_last_success", async () => {
   assert.deepEqual(status.triage.counts, { reviewed: 3, refused: 0, deferred: 0, unreviewed: 0 })
 })
 
-test("claim_or_ruling_changes_after_submission_not_accepted", async () => {
+test("claim_or_ruling_changes_after_submission_not_accepted", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2) })
   const [a, b] = KEYS
   // A claim taken on one card while the child runs rejects only that card.
@@ -132,7 +132,7 @@ test("claim_or_ruling_changes_after_submission_not_accepted", async () => {
   assert.equal(annotation(w, a), null)
 })
 
-test("mechanical_pass_invalidates_without_agent", async () => {
+test("mechanical_pass_invalidates_without_agent", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS })
   const [a, b, c] = KEYS
   await editCard(w, b, claim(at(9)))
@@ -174,7 +174,7 @@ test("mechanical_pass_invalidates_without_agent", async () => {
   assert.ok(revision(c) > before)
 })
 
-test("prepared_writer_round_trips_through_the_runner_reader_and_splits_long_rulings", async () => {
+test("prepared_writer_round_trips_through_the_runner_reader_and_splits_long_rulings", { skip: NEEDS_PREPARED_RUN }, async () => {
   const long = `${"Rule line with words and a tab\tand a quote \" here.\n".repeat(900)}`
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1), agents: long })
   let seen
@@ -200,7 +200,7 @@ test("prepared_writer_round_trips_through_the_runner_reader_and_splits_long_ruli
   assert.deepEqual(read.brief, seen.brief)
 })
 
-test("the agent waits: cooldown, no time, unavailable host, missing or broken qualification, nothing to review", async () => {
+test("the agent waits: cooldown, no time, unavailable host, missing or broken qualification, nothing to review", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
   const untouched = qualifiedSeams({ runTriageChild: async () => assert.fail("no run") })
   // No time for a whole run before the deadline: nothing is reserved.
@@ -240,7 +240,7 @@ test("the agent waits: cooldown, no time, unavailable host, missing or broken qu
   assert.deepEqual([idle.result, idle.ok, idle.reviewed], ["nothing_to_review", true, 0])
 })
 
-test("ledger, preparation and runner failures are stated, never success", async () => {
+test("ledger, preparation and runner failures are stated, never success", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2), agents: "A ruling with a NUL \u0000 byte.\n" })
   const held = await step(w)
   assert.deepEqual([held.result, held.ok, held.launched], ["preparation_held", false, false])
@@ -262,7 +262,7 @@ test("ledger, preparation and runner failures are stated, never success", async 
   assert.deepEqual([damaged.result, damaged.ok], ["ledger_blocked", false])
 })
 
-test("a run whose writes are not acknowledged, a throwing runner and a deadline reached during acceptance", async () => {
+test("a run whose writes are not acknowledged, a throwing runner and a deadline reached during acceptance", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2) })
   const unacked = await step(w, { seams: qualifiedSeams({ publishOwnedTriage: async () => ({ state: "unacknowledged", resources: [] }) }) })
   assert.deepEqual([unacked.result, unacked.ok, unacked.reviewed, unacked.refused], ["write_incomplete", false, 0, 2])
@@ -286,7 +286,7 @@ test("a run whose writes are not acknowledged, a throwing runner and a deadline 
   assert.deepEqual([gone.result, gone.reviewed, gone.refused], ["ran", 0, 2])
 })
 
-test("the step's own guards: headless, no store, a failed or incomplete refresh, an unreadable status, the batch limit and a bad call", async () => {
+test("the step's own guards: headless, no store, a failed or incomplete refresh, an unreadable status, the batch limit and a bad call", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
   assert.equal((await runTriageStep({ ...w.env, DESK_FACTORY_HEADLESS: "1" }, { deskRoot: w.deskRoot, now: at(0), deadline: later() })).result, "headless_session")
   await assert.rejects(() => runTriageStep(w.env, { deskRoot: "relative", now: at(0), deadline: later() }), /deskRoot/u)
@@ -319,7 +319,7 @@ test("the step's own guards: headless, no store, a failed or incomplete refresh,
   assert.deepEqual([big.reviewed, big.deferred, big.unreviewed], [TRIAGE_BATCH_LIMIT, 2, 2])
 })
 
-test("an evaluation the slot deferred gets one continuation; none without a waiting evaluation", async () => {
+test("an evaluation the slot deferred gets one continuation; none without a waiting evaluation", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
   await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 2, ready_later: 0 } }))
   const first = await step(w, { generation: "gen-a" })
@@ -333,7 +333,7 @@ test("an evaluation the slot deferred gets one continuation; none without a wait
   assert.equal(refused.continuation, undefined)
 })
 
-test("runTriageCommand takes only --desk and --person-prefix, runs under the loop lock and kicks once for a new continuation", async () => {
+test("runTriageCommand takes only --desk and --person-prefix, runs under the loop lock and kicks once for a new continuation", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
   for (const argv of [[], ["--desk"], ["--desk", "relative"], ["--desk", w.deskRoot, "--store", STORE], ["--desk", w.deskRoot, "--desk", w.deskRoot], ["--desk", w.deskRoot, "--person-prefix", "../x"], "nope"]) {
     await assert.rejects(() => runTriageCommand({ argv, env: w.env, pluginVersion: "9.9.9" }), /Usage: factory\.js triage/u)
@@ -357,7 +357,7 @@ test("runTriageCommand takes only --desk and --person-prefix, runs under the loo
   assert.ok(readFileSync(path.join(w.deskRoot, "README.md"), "utf8").length > 0)
 })
 
-test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review, a deadline lost after the reservation, a candidate that is no file, and damaged attempts", async () => {
+test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review, a deadline lost after the reservation, a candidate that is no file, and damaged attempts", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2), agents: "" })
   const [a, b] = KEYS
   const never = async () => assert.fail("no run")
@@ -452,7 +452,7 @@ test("cards whose evidence the loop cannot resolve by itself are held and counte
   assert.deepEqual([status.triage.held, status.triage.eligible], [2, 0])
 })
 
-test("a second machine on the same desk: reviews it cannot recheck are not a fault, raise nothing, and are reviewed again where a run can start", async () => {
+test("a second machine on the same desk: reviews it cannot recheck are not a fault, raise nothing, and are reviewed again where a run can start", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2) })
   assert.equal((await step(w)).reviewed, 2)
   const before = Object.fromEntries(KEYS.slice(0, 2).map((key) => [key, annotation(w, key)]))
@@ -479,4 +479,30 @@ test("a second machine on the same desk: reviews it cannot recheck are not a fau
   assert.deepEqual([again.result, again.ok, again.reviewed], ["ran", true, 2], JSON.stringify(again))
   const settled = await step(second, { now: at(12), seams: qualifiedSeams({ runTriageChild: async () => assert.fail("no run") }) })
   assert.deepEqual([settled.result, (await readStatus(env)).triage.refresh.foreign], ["nothing_to_review", 0])
+})
+
+test("off macOS the step degrades cleanly: the refresh still runs, nothing is prepared, reserved or launched, and no failure is counted", async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2) })
+  const never = async () => assert.fail("nothing is prepared or launched")
+  // The host answer the custody module gives off macOS, and that module's own answer on this platform when it is not macOS.
+  const hosts = [async () => ({ provenance: false })]
+  if (process.platform !== "darwin") hosts.push(undefined)
+  for (const hostSupport of hosts) {
+    const { hostSupport: _injected, ...rest } = qualifiedSeams({ runTriageChild: never, reserveAgentLaunch: never, loadQualification: never })
+    const seams = hostSupport === undefined ? rest : { ...rest, hostSupport }
+    for (const hour of [0, 1, 2, 3]) {
+      const result = await step(w, { now: at(hour), seams })
+      assert.deepEqual(result, { ok: true, result: "runner_unavailable", launched: false, reviewed: null, refused: null, deferred: null, unreviewed: 2 })
+    }
+  }
+  const status = await readStatus(w.env)
+  assert.deepEqual(status.triage.runner, { state: "unsupported_host", reason: null, qualification: "not_checked" }, "the reason is visible")
+  assert.deepEqual([status.triage.refresh.changes, status.triage.refresh.held], [0, 0])
+  assert.deepEqual([status.loop.steps.triage.failures, status.loop.steps.triage.failures_in_a_row, status.loop.steps.triage.last_result], [0, 0, "runner_unavailable"])
+  assert.equal(status.loop.agent_launch_highwater, undefined, "no launch was reserved")
+  assert.equal(annotation(w, KEYS[0]), null)
+  assert.deepEqual(await fs.readdir(path.join(await factoryStateRoot(w.env), "triage")).catch(() => []), [], "no run folder was made")
+  // The end of a turn never starts a worker for a runner this host cannot start.
+  const { triageKickDue } = await import("../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js")
+  assert.equal(triageKickDue(status, at(48)), false)
 })

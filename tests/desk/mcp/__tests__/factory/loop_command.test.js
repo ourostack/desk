@@ -18,7 +18,7 @@ import { readWorker, WORKER_STATE_FILE } from "../../../../../plugins/desk/mcp/s
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { consumeEvaluationContinuation } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
 import { runTriageStep } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
-import { KEYS, qualifiedSeams, triageWorld } from "./_triage_world.js"
+import { KEYS, NEEDS_PREPARED_RUN, qualifiedSeams, triageWorld } from "./_triage_world.js"
 
 const STORE = "ourostack/factory"
 const MINUTE = 60 * 1000
@@ -633,7 +633,7 @@ test("requests that cannot be read make nothing due early", () => scratch(async 
   assert.equal(outcome.steps.evaluate, "skipped")
 }))
 
-test("one_agent_slot_and_one_continuation", async () => {
+test("one_agent_slot_and_one_continuation", { skip: NEEDS_PREPARED_RUN }, async () => {
   // The real triage step, shared ledger and continuation; only the runner custody and the other steps are fakes.
   const w = await triageWorld({ now: new Date(), keys: KEYS.slice(0, 1) })
   await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 2, ready_later: 0 } }))
@@ -671,7 +671,7 @@ test("one_agent_slot_and_one_continuation", async () => {
   assert.deepEqual(third.kicks, [])
 })
 
-test("prior_evaluation_failure_not_bypassed", async () => {
+test("prior_evaluation_failure_not_bypassed", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: new Date(), keys: KEYS.slice(0, 1) })
   await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 1, ready_later: 0 } }))
   const worker = async (over = {}) => {
