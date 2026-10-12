@@ -1734,3 +1734,78 @@ await client.close()
   try{await assert.rejects(custody.restoreNativeBundle(structuredClone(run)),{message:"restored_result"})}
   finally{fs.writeFileSync(resultFile,actualBytes)}
 })
+
+test("two module roots: the source tree and the folder Node resolves the SDK from, both closed to other accounts",async()=>{
+  const sep=path.sep,root=path.resolve(new URL("../../../../../plugins/desk/mcp/",import.meta.url).pathname)+sep
+  const roots=custody.ownedSourceRoots()
+  assert.equal(roots.source,root)
+  assert.ok(roots.deps.endsWith(`${sep}node_modules${sep}`)&&root.startsWith(path.dirname(roots.deps)+sep),"the dependency root is an ancestor's node_modules")
+  const sdk=`${sep}pack${sep}node_modules${sep}@modelcontextprotocol${sep}sdk${sep}dist${sep}server${sep}index.js`
+  assert.equal(custody.dependencyRootFor(`${sep}pack${sep}source-mirror${sep}h${sep}`,sdk),`${sep}pack${sep}node_modules${sep}`)
+  assert.throws(()=>custody.dependencyRootFor(`${sep}elsewhere${sep}`,sdk),{message:"dependency_root"},"a redirected resolution is refused")
+  assert.throws(()=>custody.dependencyRootFor(root,`${sep}x${sep}index.js`),{message:"dependency_root"})
+  assert.throws(()=>custody.ownedSourceRoots(undefined,{check:()=>{throw Error("source_root_unsafe")}}),{message:"source_root_unsafe"})
+  const open=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-open-root-")))
+  try{
+    custody.closedSourceRoot(open)
+    assert.throws(()=>custody.closedSourceRoot(open,process.getuid()+1),{message:"source_root_unsafe"},"another account's folder")
+    fs.chmodSync(open,0o777)
+    assert.throws(()=>custody.closedSourceRoot(open),{message:"source_root_unsafe"},"a world-writable folder")
+    fs.writeFileSync(path.join(open,"file"),"x")
+    assert.throws(()=>custody.closedSourceRoot(path.join(open,"file")),{message:"source_root_unsafe"})
+  }finally{fs.rmSync(open,{recursive:true,force:true})}
+  // Relocation: the same relative file under the current roots; the dependency root wins inside a checkout.
+  const from={source:`${sep}a${sep}mcp${sep}`,deps:`${sep}a${sep}mcp${sep}node_modules${sep}`},to={source:`${sep}b${sep}mirror${sep}`,deps:`${sep}b${sep}node_modules${sep}`}
+  assert.equal(custody.relocatedPath(`${sep}a${sep}mcp${sep}src${sep}x.js`,from,to),`${sep}b${sep}mirror${sep}src${sep}x.js`)
+  assert.equal(custody.relocatedPath(`${sep}a${sep}mcp${sep}node_modules${sep}y${sep}i.js`,from,to),`${sep}b${sep}node_modules${sep}y${sep}i.js`)
+  for(const file of [`${sep}c${sep}x.js`,`${sep}a${sep}mcp${sep}`,`${sep}a${sep}mcp${sep}..${sep}x.js`])assert.throws(()=>custody.relocatedPath(file,from,to),{message:"relocation"},file)
+  const closure=[{path:`${sep}a${sep}mcp${sep}src${sep}x.js`,sha256:"a".repeat(64),bytes:1}]
+  assert.deepEqual(custody.relocatedClosure(closure,from,to),[{...closure[0],path:`${sep}b${sep}mirror${sep}src${sep}x.js`}])
+  assert.deepEqual(custody.relocatedClosure([],from),[])
+  for(const bad of [{...from,extra:1},{source:"relative/",deps:from.deps},{source:from.source,deps:`${sep}a${sep}mcp${sep}node_modules`},{source:from.source,deps:`${sep}other${sep}node_modules${sep}`}]){
+    assert.throws(()=>custody.relocatedClosure(closure,bad,to))
+  }
+  // A recorded closure from another root verifies against the same bytes here.
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const files=["src/factory/triage-catalog.js","src/factory/triage-protocol.js","src/factory/triage-custody.js",...Array.from({length:7},(_,i)=>["src/factory/headless.js","src/factory/schema.js","src/factory/credential.js","src/factory/os-protect.js","src/factory/triage-schema.js","src/factory/published-schema.js","scripts/triage-catalog-server.js"][i])]
+  const sdkFile=fs.realpathSync(fileURLToPathSafe(import.meta.resolve("@modelcontextprotocol/sdk/server/index.js")))
+  const here=[...files.map(name=>root+name),sdkFile].map(file=>{const b=fs.readFileSync(file);return {path:file,sha256:catalog.catalogHash(b),bytes:b.length}})
+  const elsewhere={source:`${sep}qualified${sep}mcp${sep}`,deps:`${sep}qualified${sep}node_modules${sep}`}
+  const recorded=here.map(item=>({...item,path:item.path.startsWith(roots.deps)?elsewhere.deps+item.path.slice(roots.deps.length):elsewhere.source+item.path.slice(root.length)}))
+  assert.deepEqual(await custody.verifyModuleClosure(recorded,{from:elsewhere}),recorded)
+  // The parent's dependency packages, by content.
+  const identity=custody.ownedDependencyIdentity()
+  assert.equal(identity.version,1);assert.ok(identity.files>100);assert.match(identity.sha256,/^[a-f0-9]{64}$/u)
+  assert.deepEqual(custody.ownedDependencyIdentity(roots.deps),identity)
+  const fake=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-deps-")))+sep
+  try{
+    for(const name of custody.OWNED_DEPENDENCY_PACKAGES){fs.mkdirSync(path.join(fake,name,".bin"),{recursive:true});fs.writeFileSync(path.join(fake,name,"index.js"),name)}
+    fs.symlinkSync(path.join(fake,"zod","index.js"),path.join(fake,"zod",".bin","ignored"))
+    const first=custody.ownedDependencyIdentity(fake)
+    assert.equal(first.files,custody.OWNED_DEPENDENCY_PACKAGES.length)
+    fs.writeFileSync(path.join(fake,"zod","index.js"),"changed")
+    assert.notEqual(custody.ownedDependencyIdentity(fake).sha256,first.sha256,"one changed byte changes the identity")
+    fs.symlinkSync(path.join(fake,"zod","index.js"),path.join(fake,"zod","linked.js"))
+    assert.throws(()=>custody.ownedDependencyIdentity(fake),{message:"dependency_entry"})
+    fs.rmSync(path.join(fake,"zod"),{recursive:true});fs.writeFileSync(path.join(fake,"zod"),"file")
+    assert.throws(()=>custody.ownedDependencyIdentity(fake),{message:"dependency_entry"})
+  }finally{fs.rmSync(fake,{recursive:true,force:true})}
+  const server=await import("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js")
+  assert.deepEqual(server.catalogModuleRoots(),[roots.source,roots.deps])
+  assert.throws(()=>server.catalogModuleRoots(()=>`${sep}elsewhere${sep}node_modules${sep}@modelcontextprotocol${sep}sdk${sep}x.js`))
+})
+
+test("the identity lists every own file and dependency package the parent actually loads",async()=>{
+  // A load hook in a fresh process sees createRequire and dynamic imports too, not just import statements.
+  const root=path.resolve(new URL("../../../../../plugins/desk/mcp/",import.meta.url).pathname)+path.sep
+  const hook=`import {registerHooks} from "node:module";import {fileURLToPath} from "node:url";const seen=new Set();registerHooks({load(url,c,next){if(url.startsWith("file:"))seen.add(fileURLToPath(url));return next(url,c)}});process.on("exit",()=>process.stdout.write(JSON.stringify([...seen])))`
+  const entry=`await import(${JSON.stringify(root+"src/factory/triage-runner.js")});await import(${JSON.stringify(root+"scripts/qualify-triage-runner.js")});await import(${JSON.stringify(root+"src/factory/triage-home.js")})`
+  const out=childProcess.execFileSync(process.execPath,["--import",`data:text/javascript,${encodeURIComponent(hook)}`,"--input-type=module","-e",entry],{encoding:"utf8",env:{PATH:process.env.PATH,HOME:process.env.HOME}})
+  const loaded=JSON.parse(out),deps=custody.ownedSourceRoots().deps
+  const own=loaded.filter(file=>file.startsWith(root)&&!file.startsWith(deps)).map(file=>file.slice(root.length)).sort()
+  const packages=[...new Set(loaded.filter(file=>file.startsWith(deps)).map(file=>{const parts=file.slice(deps.length).split(path.sep);return parts[0].startsWith("@")?`${parts[0]}/${parts[1]}`:parts[0]}))].sort()
+  assert.deepEqual(own.filter(file=>!custody.OWNED_SOURCE_FILES.includes(file)),[],"an own module the parent loads is missing from OWNED_SOURCE_FILES")
+  assert.deepEqual(packages.filter(name=>!custody.OWNED_DEPENDENCY_PACKAGES.includes(name)),[],"a package the parent loads is missing from OWNED_DEPENDENCY_PACKAGES")
+  assert.ok(own.includes("src/factory/headless-flag.cjs"),"createRequire loads are seen")
+})
+function fileURLToPathSafe(url){return new URL(url).pathname}

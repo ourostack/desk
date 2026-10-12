@@ -5,7 +5,8 @@
 // while the window is unused and has not ended: an evaluation is allowed only while `spent + 1 <= 30 - protected`,
 // where `protected` counts the unused windows that end later than now. Triage needs an unused current window, six hours
 // since its last actual launch (`last_triage_at`, kept across days) and `spent < 30`, and uses that window. An unused
-// window returns to evaluation only when it ends. There is no separate triage allowance.
+// window returns to evaluation only when it ends. There is no separate triage allowance. A triage qualification reserves
+// its two model sessions as one triage opportunity (`launches: 2`), which needs `spent + 2 <= 30`.
 //
 // Three witnesses, each persisted on its own:
 //
@@ -221,17 +222,17 @@ function protectedWindows(ledger, nowMs) {
  * `quotaFor(ledger, kind, nowMs) -> { state, remaining }`: whether one more launch of `kind` fits in `ledger` (already rolled to `nowMs`'s day).
  * `state` is `ok`, `quota_exhausted`, `window_protected` (evaluation only), `window_used` or `triage_cooldown` (triage only).
  */
-export function quotaFor(ledger, kind, nowMs) {
+export function quotaFor(ledger, kind, nowMs, launches = 1) {
   if (kind === "evaluate") {
     const ceiling = DAILY_LAUNCHES - protectedWindows(ledger, nowMs)
     if (ledger.spent >= DAILY_LAUNCHES) return { state: "quota_exhausted", remaining: 0 }
     if (ledger.spent + 1 > ceiling) return { state: "window_protected", remaining: 0 }
     return { state: "ok", remaining: ceiling - ledger.spent - 1 }
   }
-  if (ledger.spent >= DAILY_LAUNCHES) return { state: "quota_exhausted", remaining: 0 }
+  if (ledger.spent + launches > DAILY_LAUNCHES) return { state: "quota_exhausted", remaining: 0 }
   if (ledger.windows[windowOf(nowMs)] !== 0) return { state: "window_used", remaining: 0 }
   if (ledger.last_triage_at !== null && nowMs - instantMs(ledger.last_triage_at) < TRIAGE_GAP_MS) return { state: "triage_cooldown", remaining: 0 }
-  return { state: "ok", remaining: DAILY_LAUNCHES - ledger.spent - 1 }
+  return { state: "ok", remaining: DAILY_LAUNCHES - ledger.spent - launches }
 }
 
 /**
@@ -584,26 +585,28 @@ export function createHeadlessLedger(seams = {}) {
   const io = { ...DEFAULT_IO, ...seams }
 
   /**
-   * `reserveAgentLaunch(env, { kind, generation, now, legacyEvaluator }) -> { state, token?, day?, remaining? }`: spends one launch of
-   * `kind` (`evaluate` or `triage`) before the caller starts it. `state` is `reserved` (with the token `finishAgentLaunch` takes, the
+   * `reserveAgentLaunch(env, { kind, generation, now, legacyEvaluator, launches }) -> { state, token?, day?, remaining? }`: spends one launch of
+   * `kind` (`evaluate` or `triage`) before the caller starts it, or two (`launches: 2`, triage only) for a triage qualification, which
+   * starts two model sessions in one window; the token then carries `launches: 2` and is finished once for both. `state` is `reserved` (with the token `finishAgentLaunch` takes, the
    * ledger's UTC day and the launches of that kind still allowed now), a quota refusal (`quota_exhausted`, `window_protected`,
    * `window_used`, `triage_cooldown`) or a state that blocks every launch (see the header). `legacyEvaluator` is the stored
    * `status.evaluator`, read only by the first migration. A reservation is never given back.
    */
-  async function reserveAgentLaunch(env, { kind, generation = null, now, legacyEvaluator } = {}) {
+  async function reserveAgentLaunch(env, { kind, generation = null, now, legacyEvaluator, launches = 1 } = {}) {
     if (!KINDS.has(kind)) throw new TypeError("kind: must be evaluate or triage")
+    if (launches !== 1 && (launches !== 2 || kind !== "triage")) throw new TypeError("launches: must be 1, or 2 for a triage qualification")
     requireGeneration(generation)
     const readMs = toMs(now, "now")
     return transact(io, env, { nowMs: readMs, legacyEvaluator }, (current, nowMs) => {
       const ledger = rollover(current, nowMs)
-      const quota = quotaFor(ledger, kind, nowMs)
+      const quota = quotaFor(ledger, kind, nowMs, launches)
       if (quota.state !== "ok") return { result: { state: quota.state, day: ledger.day, remaining: 0 } }
-      const target = { ...ledger, last_clock_ms: nowMs, spent: ledger.spent + 1, [kind]: { ...ledger[kind], launched: ledger[kind].launched + 1 } }
+      const target = { ...ledger, last_clock_ms: nowMs, spent: ledger.spent + launches, [kind]: { ...ledger[kind], launched: ledger[kind].launched + launches } }
       if (kind === "triage") {
         target.windows = ledger.windows.map((used, index) => (index === windowOf(nowMs) ? 1 : used))
         target.last_triage_at = new Date(nowMs).toISOString()
       }
-      return { target, result: { state: "reserved", token: { epoch: ledger.epoch, revision: current.revision + 1, kind, day: ledger.day }, day: ledger.day, remaining: quota.remaining } }
+      return { target, result: { state: "reserved", token: { epoch: ledger.epoch, revision: current.revision + 1, kind, day: ledger.day, ...(launches === 1 ? {} : { launches }) }, day: ledger.day, remaining: quota.remaining } }
     })
   }
 
@@ -614,7 +617,7 @@ export function createHeadlessLedger(seams = {}) {
    */
   async function finishAgentLaunch(env, { token, state, now } = {}) {
     if (!OUTCOMES.has(state)) throw new TypeError("state: must be ran, failed or not_started")
-    if (!isObject(token) || !KINDS.has(token.kind) || !Number.isSafeInteger(token.revision) || typeof token.epoch !== "string" || typeof token.day !== "string") throw new TypeError("token: must be a reservation token")
+    if (!isObject(token) || !KINDS.has(token.kind) || !Number.isSafeInteger(token.revision) || typeof token.epoch !== "string" || typeof token.day !== "string" || ![undefined, 2].includes(token.launches)) throw new TypeError("token: must be a reservation token")
     const readMs = toMs(now, "now")
     return transact(io, env, { nowMs: readMs }, (settled, nowMs) => {
       // Every write carries the current clock, so the record moves to today's UTC day first; a launch from an earlier day is closed.
@@ -622,8 +625,9 @@ export function createHeadlessLedger(seams = {}) {
       const counts = current[token.kind]
       if (token.epoch !== current.epoch || token.revision > settled.revision || token.revision <= counts.finished_revision) return { result: { state: "stale_token" } }
       if (token.day !== current.day) return { result: { state: "day_closed" } }
-      if (counts.ran + counts.failed + counts.not_started >= counts.launched) return { result: { state: "stale_token" } }
-      const target = { ...current, last_clock_ms: nowMs, [token.kind]: { ...counts, [state]: counts[state] + 1, finished_revision: token.revision } }
+      const launches = token.launches ?? 1
+      if (counts.ran + counts.failed + counts.not_started + launches > counts.launched) return { result: { state: "stale_token" } }
+      const target = { ...current, last_clock_ms: nowMs, [token.kind]: { ...counts, [state]: counts[state] + launches, finished_revision: token.revision } }
       return { target, result: { state: "recorded" } }
     })
   }

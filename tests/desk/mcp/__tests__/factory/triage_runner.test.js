@@ -630,7 +630,7 @@ controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_witho
     const linuxPolicy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:linuxLaunch})
     assert.equal((await runner.collectTriageControls({cli:actual,env,argv:linuxPolicy.argv,runDiagnostic:diagnostic})).detail,"control_host")
   }finally{Object.defineProperty(process,"platform",platform)}
-  assert.equal((await runner.collectTriageControls({cli:actual,env:{HOME:"relative"},argv:p.argv,runDiagnostic:diagnostic})).detail,"control_path_ambiguous")
+  assert.equal((await runner.collectTriageControls({cli:actual,env:{HOME:"relative"},argv:p.argv,runDiagnostic:diagnostic})).detail,"environment_unsafe")
   const brokenDiagnostic=await runner.collectTriageControls({cli:actual,env,argv:p.argv,
     runDiagnostic:async()=>({stdout:BigInt(1),stderr:null})})
   assert.equal(brokenDiagnostic.capture.channels.diagnostic.observation,"unobserved")
@@ -1003,7 +1003,7 @@ ownedHostTest("qualified_format_full_per_run_identity","posix",async(t)=>{
     const run=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,`identity-${i}`),deadline:Date.now()+15000})
     t.after(()=>run.close())
     const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:run.launch})
-    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical({HOME:f.dir,DESK_FACTORY_HEADLESS:"1"})),owned_launch:run.launch,
+    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment({HOME:f.dir}))),owned_launch:run.launch,
       prepared_sha256:run.prepared.sha256,catalog_sha256:run.catalog.catalogSha256,brief_sha256:run.catalog.briefSha256,record_refs_sha256:run.catalog.recordRefsSha256}
     const config={invocation,chain:{effective_argv:[f.cli]},cliMetadata:metadata,env:{HOME:f.dir}}
     const identity=runner.ownedInvocationIdentity(config);identities.push(identity)
@@ -1043,18 +1043,19 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
     const run=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(out,`native-${i}`),deadline:Date.now()+15000})
     t.after(()=>run.close())
     const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:run.launch})
-    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical({HOME:f.dir,DESK_FACTORY_HEADLESS:"1"})),owned_launch:run.launch,
+    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment({HOME:f.dir}))),owned_launch:run.launch,
       prepared_sha256:run.prepared.sha256,catalog_sha256:run.catalog.catalogSha256,brief_sha256:run.catalog.briefSha256,record_refs_sha256:run.catalog.recordRefsSha256}
-    nativeReceipts.push({snapshotFile:path.join(out,`native-${i}`,"catalog.json"),invocation,custody:{sourceIdentity}})
-    directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools})
+    nativeReceipts.push({snapshotFile:path.join(out,`native-${i}`,"catalog.json"),invocation,custody:{sourceIdentity,roots:custody.ownedSourceRoots(),moduleClosure:[]}})
+    directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools,custody:{roots:custody.ownedSourceRoots()}})
     invocationIdentities.push(runner.ownedInvocationIdentity({invocation,chain:{effective_argv:[f.cli]},cliMetadata:metadata,env}))
   }
   const collected=await runner.runNonacceptedControlCollection(controlInput()),controls=collected.outcome.evidence
   const control_history=nativeReceipts.map(run=>({...structuredClone(controls),recipe_sha256:hash(catalog.catalogCanonical({version:3,argv:run.invocation.args}))}))
   const registered=[...Object.keys(fixedOff()),"cc-plugin-tips@builtin","cc-plugin-sec-default@builtin"]
   const {catalogProtocolIdentity}=await import("../../../../../plugins/desk/mcp/src/factory/triage-protocol.js")
-  const synthetic={version:6,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
-    enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity,
+  const synthetic={version:7,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
+    enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:3,sourceIdentity,source_roots:custody.ownedSourceRoots(),
+    dependency_identity:custody.ownedDependencyIdentity(),environment_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment(env))),
     recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",
     optional_off_sha256:hash(catalog.catalogCanonical(fixedOff())),registered_set_sha256:hash(catalog.catalogCanonical(registered)),
     effective_off_sha256:hash(catalog.catalogCanonical(control_history.map(e=>({recipe:e.recipe_sha256,sources:e.effective_sources_sha256,
@@ -1080,7 +1081,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   const document=runner.prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission:{sources:[],remote_delivery:"not_applicable",controls:control_history[1],control_history},
     chain:{effective_argv:[f.cli],fingerprint:"b".repeat(64)},cliMetadata:metadata,cli:path.join(f.dir,"indirect-selector"),env})
   assert.equal(document.state,"unaccepted_document");assert.equal(document.authority,false)
-  assert.equal(document.record.version,6,"published protocol amendment invalidates record5")
+  assert.equal(document.record.version,7,"content-addressed identity invalidates record6")
   assert.equal(document.record.protocol_envelope_version,2,"record binds the finite reviewed protocol envelope")
   assert.equal(document.record.cli,f.cli,"record binds actual execution target, not original selector")
   const lateArgs=structuredClone(nativeReceipts),secondArgs=lateArgs[1].invocation.args
@@ -1171,7 +1172,60 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   assert.equal((await writeFailure.load()).outcome.state,"scope_unqualified")
   const cliMismatch=runner.createNonacceptedTriageUnit(unitConfig)
   await cliMismatch.save(document.record)
-  assert.equal((await cliMismatch.load({cli:"/synthetic/other"})).outcome.reason,"launch_chain_unknown")
+  assert.equal((await cliMismatch.load({cli:"/synthetic/other"})).outcome.reason,"diagnostic_inadequate")
+  assert.deepEqual((await cliMismatch.restore({cli:"/synthetic/other"})).outcome,{state:"stale",reason:"engine_mismatch",requalify:false})
+  // The classified restore: stale reasons with their requalify flag, damage kept apart.
+  const classify=async(failures,{record=document.record,edit,cli,extra}={})=>{
+    const isolated=runner.createNonacceptedTriageUnit({...unitConfig,...(extra??{}),failures})
+    const saved=structuredClone(record);edit?.(saved)
+    await isolated.save(saved)
+    if(saved.state==="blocked"&&!failures.noCapture)await isolated.saveDocument("failure-capture.json",{version:1})
+    return (await isolated.restore(cli?{cli}:{})).outcome
+  }
+  assert.equal((await classify({})).state,"qualified")
+  assert.deepEqual(await classify({host:true}),{state:"stale",reason:"host_unsupported",requalify:false})
+  const fresh=runner.createNonacceptedTriageUnit(unitConfig)
+  assert.deepEqual((await fresh.restore()).outcome,{state:"missing"})
+  assert.deepEqual(await classify({read:true}),{state:"damaged",reason:"unreadable"})
+  for(const [failure,reason,requalify]of [["source","source_changed",true],["dependencies","source_changed",true],["engineMoved","engine_changed",true],
+    ["engineGone","engine_unpinned",false],["closureChanged","source_changed",true],["chain","chain_unavailable",false],
+    ["chainIdentity","chain_changed",true],["admission","policy_blocked",false],["admissionIdentity","policy_changed",true]]){
+    assert.deepEqual(await classify({[failure]:true}),{state:"stale",reason,requalify},failure)
+  }
+  for(const [failure,reason]of [["closureInvalid","structure"],["restoreDirect","receipts"],["restoreNative","receipts"],["restoreAuthNative","receipts"]]){
+    assert.deepEqual(await classify({[failure]:true}),{state:"damaged",reason},failure)
+  }
+  assert.deepEqual(await classify({},{edit:r=>{r.sourceIdentity.runtime.sha256="f".repeat(64)}}),{state:"stale",reason:"runtime_changed",requalify:true})
+  assert.deepEqual(await classify({},{edit:r=>{r.control_evidence[0].engine_sha256="f".repeat(64)}}),{state:"stale",reason:"engine_changed",requalify:true})
+  assert.deepEqual(await classify({},{edit:r=>{r.environment_sha256="f".repeat(64)}}),{state:"stale",reason:"environment_changed",requalify:true})
+  assert.deepEqual(await classify({},{extra:{env:{HOME:"relative"}}}),{state:"stale",reason:"environment_unsafe",requalify:false})
+  for(const edit of [r=>{r.sourceIdentity.version=1},r=>{r.sourceIdentity=null},r=>{r.sourceIdentity.files=[]},r=>{r.sourceIdentity.runtime=null}]){
+    assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"structure"})
+  }
+  for(const edit of [r=>{r.extra=1},r=>{r.cli="relative"},r=>{r.control_evidence=null},r=>{r.predicate_table_sha256="f".repeat(64)},r=>{r.version=8}]){
+    assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"structure"})
+  }
+  const blocked={version:7,protocol_envelope_version:2,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
+  assert.deepEqual(await classify({},{record:blocked}),{state:"stale",reason:"qualification_failed",requalify:true})
+  assert.deepEqual(await classify({noCapture:true},{record:blocked}),{state:"damaged",reason:"structure"},"a failure without its capture is not ours")
+  for(const edit of [r=>{r.reason=1},r=>{r.extra=1},r=>{r.recipe_version=2},r=>{r.state="other"}]){
+    assert.deepEqual(await classify({},{record:blocked,edit}),{state:"damaged",reason:"structure"})
+  }
+  assert.deepEqual(await classify({},{record:{...blocked,version:6}}),{state:"stale",reason:"record_version",requalify:true})
+  const v6=structuredClone(document.record);v6.version=6
+  for(const key of ["source_roots","dependency_identity","environment_sha256"])delete v6[key]
+  assert.deepEqual(await classify({},{record:v6}),{state:"stale",reason:"record_version",requalify:true})
+  assert.deepEqual(await classify({},{record:{...v6,state:"other"}}),{state:"damaged",reason:"structure"})
+  assert.deepEqual(await classify({},{record:{...v6,extra:1}}),{state:"damaged",reason:"structure"},"an edited earlier record is damage, not staleness")
+  assert.deepEqual(await classify({},{record:{version:5}}),{state:"damaged",reason:"structure"})
+  assert.deepEqual(await classify({},{record:[]}),{state:"damaged",reason:"structure"})
+  assert.deepEqual(Object.entries(runner.TRIAGE_STALE_REASONS).filter(([,value])=>!value).map(([key])=>key).sort(),
+    ["chain_unavailable","engine_mismatch","engine_unpinned","environment_unsafe","host_unsupported","measurement_active","policy_blocked"])
+  // A production run must load the server modules that were qualified, and the same dependencies.
+  for(const failure of ["runClosure","dependencies"]){
+    const isolated=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
+    assert.equal((await isolated.run(isolated.seal().record)).outcome.state,"scope_changed",failure)
+  }
   const qualifier=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
   const memoryFlow=await qualifier.runNonacceptedQualifierTransaction(unitConfig)
   assert.equal(memoryFlow.authority,false)
@@ -1184,6 +1238,15 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   assert.equal(nativeUnit.statistics.syntheticLaunches,2)
   assert.equal(nativeUnit.statistics.syntheticAuthGenerations,2)
   assert.equal(nativeUnit.statistics.memoryDocuments,1)
+  assert.equal(nativeUnit.statistics.syntheticReservations,0)
+  const reservedUnit=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{reserve:"accept"}})
+  assert.equal(reservedUnit.outcome.state,"qualified")
+  assert.equal(reservedUnit.statistics.syntheticReservations,1,"both launches are reserved once, before the first")
+  assert.equal(reservedUnit.statistics.syntheticLaunches,2)
+  const refusedUnit=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{reserve:"refuse"}})
+  assert.equal(refusedUnit.outcome.state,"blocked")
+  assert.equal(refusedUnit.statistics.syntheticLaunches,0,"a refused ledger launches nothing")
+  assert.equal(refusedUnit.statistics.syntheticAuthGenerations,1,"the reservation follows the sign-in check")
   for(const failure of ["policy","chain","chainIdentity","admission","admissionIdentity","signIn","prepared","postAdmission","postIdentity","postExitAdmission","postExitIdentity","runChainUnknown","runChainDrift","native","direct","write","read"]){
     const refused=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{[failure]:true}})
     assert.equal(refused.authority,false)
@@ -1595,4 +1658,77 @@ test("R6_6_native_invalid_settings_diagnostic_never_admits_or_echoes_private_err
     const r=await adapterRunner.collectTriageAdmission({...f,argv:[],policyReaders:readers,runDiagnostic:async()=>({kind:"closed",code:0,stdout:doctor+`\n${label}\n- private raw policy value\n`})})
     assert.equal(r.state,"scope_unqualified");assert.deepEqual(r.validation_errors,["invalid_native_settings"]);assert.equal(JSON.stringify(r).includes("private raw policy"),false);assert.equal(r.capabilities,null)
   }
+})
+
+test("the child environment is built from fixed values and validated folders, never inherited",()=>{
+  const base=realpathSync(fsNative.mkdtempSync(path.join(tmpdir(),"desk-child-env-")))
+  const user={username:"unit-user",homedir:base},temp=()=>base,uid=process.getuid()
+  const built=runner.triageChildEnvironment({HOME:base,PATH:"/hostile",TERM:"xterm-256color",LC_ALL:"x",XDG_CONFIG_HOME:"/x",TMPDIR:"/hostile",
+    SHELL:"/bin/zsh",HTTPS_PROXY:"http://proxy.invalid",PRIVATE_SECRET:"not-for-child"},{user,temp,uid})
+  assert.deepEqual(built,{HOME:base,USER:"unit-user",LOGNAME:"unit-user",SHELL:"/bin/sh",PATH:"/usr/bin:/bin:/usr/sbin:/sbin",TERM:"dumb",
+    LANG:"en_US.UTF-8",TMPDIR:`${base}${path.sep}`,HTTPS_PROXY:"http://proxy.invalid",DESK_FACTORY_HEADLESS:"1"})
+  assert.deepEqual(runner.triageChildEnvironment({PATH:"/a"},{user,temp,uid}),runner.triageChildEnvironment({PATH:"/b",TERM:"vt100",HOME:""},{user,temp,uid}),
+    "HOME falls back to the account's own, and ambient PATH/TERM never change the result")
+  const config=path.join(base,"config");fsNative.mkdirSync(config,{mode:0o700})
+  assert.equal(runner.triageChildEnvironment({HOME:base,CLAUDE_CONFIG_DIR:config},{user,temp,uid}).CLAUDE_CONFIG_DIR,config)
+  const file=path.join(base,"file");writeFileSync(file,"x")
+  const open=path.join(base,"open");fsNative.mkdirSync(open,{mode:0o700});fsNative.chmodSync(open,0o775)
+  const shared=path.join(base,"shared");fsNative.mkdirSync(shared,{mode:0o700});fsNative.chmodSync(shared,0o750)
+  for(const [env,options]of [
+    [{HOME:"relative"},{}],[{HOME:`${base}/./x/..`},{}],[{HOME:path.join(base,"missing")},{}],[{HOME:file},{}],[{HOME:open},{}],
+    [{HOME:base},{uid:uid+1}],[{HOME:base},{temp:()=>undefined}],[{HOME:base},{temp:()=>"relative"}],[{HOME:base},{temp:()=>shared}],
+    [{HOME:base,CLAUDE_CONFIG_DIR:"relative"},{}],[{HOME:base,CLAUDE_CONFIG_DIR:`${config}/`},{}],[{HOME:base,CLAUDE_CONFIG_DIR:path.join(base,"missing")},{}],
+    [{HOME:base,CLAUDE_CONFIG_DIR:open},{}],
+  ])assert.throws(()=>runner.triageChildEnvironment(env,{user,temp,uid,...options}),{message:"environment_unsafe"},JSON.stringify(env))
+  assert.equal(runner.systemTempDirectory({platform:"linux"}),tmpdir())
+  const calls=[]
+  assert.equal(runner.systemTempDirectory({platform:"darwin",run:(...args)=>{calls.push(args);return {status:0,stdout:"/var/folders/unit/T/\n"}}}),"/var/folders/unit/T/")
+  assert.deepEqual(calls,[["/usr/bin/getconf",["DARWIN_USER_TEMP_DIR"],{env:{},encoding:"utf8",timeout:5000}]])
+  assert.throws(()=>runner.systemTempDirectory({platform:"darwin",run:()=>({status:1,stdout:""})}),{message:"environment_unsafe"})
+  rmSync(base,{recursive:true,force:true})
+})
+
+test("the pinned engine counts only by content, at a location no other account can change",async()=>{
+  const pin=(await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")).NATIVE_ENGINE_SHA256,uid=4242
+  const dir=(over={})=>({isDirectory:()=>true,isFile:()=>false,uid,mode:0o40755,...over})
+  const reg=(over={})=>({isDirectory:()=>false,isFile:()=>true,uid,mode:0o100755,...over})
+  const tree=(over={})=>file=>over[file]??(["/home/u/.local/bin/claude","/home/u/pinned/claude"].includes(file)||/\/\d+\.\d+\.\d+$/u.test(file)?reg():dir())
+  const ok=(file,over,hash=()=>pin)=>runner.pinnedEngineFile(file,{hash,uid,stat:tree(over)})
+  assert.equal(ok("/home/u/.local/bin/claude"),true)
+  assert.equal(ok("/home/u/.local/bin/claude",{"/":dir({uid:0})}),true,"root-owned folders are closed")
+  assert.equal(ok("/home/u/.local/bin/claude",{},()=>"0".repeat(64)),false,"other bytes")
+  for(const file of [null,"relative/claude","/home/u/../u/claude"])assert.equal(ok(file),false,String(file))
+  for(const over of [
+    {"/home/u/.local/bin/claude":reg({uid:7})},{"/home/u/.local/bin/claude":reg({mode:0o100775})},{"/home/u/.local/bin/claude":dir()},
+    {"/home/u/.local/bin":dir({mode:0o40777})},{"/home":dir({uid:7})},{"/home/u":reg()},
+  ])assert.equal(ok("/home/u/.local/bin/claude",over),false,JSON.stringify(Object.keys(over)))
+  assert.equal(runner.pinnedEngineFile("/x/claude",{hash:()=>pin,uid,stat:()=>{throw Error("ENOENT")}}),false)
+  const hashes={"/home/u/.local/share/claude/versions/2.1.296":pin}
+  const checks={hash:file=>hashes[file]??"0".repeat(64),uid,stat:tree()}
+  const user={homedir:"/home/u"},versions=()=>["2.1.294","2.1.296","2.1.297"]
+  assert.equal(runner.locatePinnedEngine({env:{},find:()=>"/nonexistent/claude",list:versions,user,...checks}),"/home/u/.local/share/claude/versions/2.1.296",
+    "an updated default falls back to the retained pinned build")
+  assert.equal(runner.locatePinnedEngine({env:{},preferred:["/home/u/pinned/claude"],find:()=>null,list:versions,user,...checks,hash:()=>pin}),"/home/u/pinned/claude")
+  assert.equal(runner.locatePinnedEngine({env:{},find:()=>{throw Error("unit")},list:()=>{throw Error("unit")},user,...checks}),null)
+  const linked=fsNative.mkdtempSync(path.join(tmpdir(),"desk-engine-"))
+  try{
+    writeFileSync(path.join(linked,"real"),"x");fsNative.symlinkSync(path.join(linked,"real"),path.join(linked,"claude"))
+    const target=realpathSync(path.join(linked,"real"))
+    assert.equal(runner.locatePinnedEngine({env:{},find:()=>path.join(linked,"claude"),list:()=>[],user,uid,
+      hash:file=>file===target?pin:"0",stat:file=>file===target?reg():dir()}),target,"the default selector is followed to its real file")
+  }finally{rmSync(linked,{recursive:true,force:true})}
+  assert.equal(runner.locatePinnedEngine({env:{},find:()=>null,list:()=>[]}),runner.locatePinnedEngine({env:{},find:()=>null,list:()=>[]}),"defaults are deterministic")
+})
+
+test("the qualifier takes an optional deadline and ledger callback, and reserves just before the first launch",async t=>{
+  const qualifier=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
+  const out=fsNative.mkdtempSync(path.join(tmpdir(),"desk-qualifier-options-"));t.after(()=>rmSync(out,{recursive:true,force:true}))
+  let reserved=0
+  for(const options of [{deadline:Date.now()+1000,reserve:async()=>{reserved++}},{}]){
+    const result=await qualifier.qualifyTriageRunner({out:path.join(out,"never"),cli:"/nonexistent/claude",env:{},...options})
+    assert.equal(result.state,"blocked","a measured test process never qualifies")
+  }
+  assert.equal(reserved,0)
+  const refused=await qualifier.qualifyOwnedCatalog({launch:{cli:"/x",env:{},reserve:"not a function"},fixture:{},deadline:Date.now()+1000,evidenceDir:out})
+  assert.equal(refused.reason,"policy_control_unsupported")
 })

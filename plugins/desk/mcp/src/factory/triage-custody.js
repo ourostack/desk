@@ -151,7 +151,81 @@ export function createNonacceptedDirectRegistry(config){
     authenticate(records){return {authority:false,valid:authenticateDirectRecords(records,context)}},
   })
 }
-const ownedCatalogEntries=()=>({entry,launcher,runtime:fsNative.realpathSync(process.execPath)})
+// The two module roots: this source root, and the node_modules folder that
+// Node's own resolver finds the MCP SDK in from it (inside the source root in
+// a checkout; the runtime pack beside an installed source mirror). Only an
+// ancestor's node_modules qualifies: the resolver walks up from here, so any
+// other location means the resolution was redirected.
+const SDK_SEGMENT=`${path.sep}node_modules${path.sep}@modelcontextprotocol${path.sep}sdk${path.sep}`
+export function dependencyRootFor(sourceRoot,resolved){
+  const at=resolved.lastIndexOf(SDK_SEGMENT)
+  if(at<0)fail("dependency_root")
+  const deps=resolved.slice(0,at+`${path.sep}node_modules${path.sep}`.length)
+  if(!sourceRoot.startsWith(path.dirname(deps)+path.sep))fail("dependency_root")
+  return deps
+}
+// Both roots must be directories owned by this account (or root) that no
+// group or other account can write into.
+export function closedSourceRoot(dir,uid=process.getuid?.()){
+  const s=fsNative.lstatSync(dir)
+  if(!s.isDirectory()||![uid,0].includes(s.uid)||(s.mode&0o022)!==0)fail("source_root_unsafe")
+}
+export function ownedSourceRoots(resolve=specifier=>fileURLToPath(import.meta.resolve(specifier)),{check=closedSourceRoot}={}){
+  const roots={source:expectedRoot,deps:dependencyRootFor(expectedRoot,resolve("@modelcontextprotocol/sdk/server/index.js"))}
+  check(roots.source);check(roots.deps)
+  return roots
+}
+// The packages the parent itself loads from the dependency root (gray-matter
+// for control frontmatter, the MCP SDK client for the direct lane, and what
+// they import). Their installed bytes are part of the record's identity; a
+// test traces the parent's loads and fails when this list misses one.
+export const OWNED_DEPENDENCY_PACKAGES=Object.freeze(["@modelcontextprotocol/sdk","ajv","ajv-formats","esprima","extend-shallow","fast-deep-equal",
+  "fast-uri","gray-matter","is-extendable","js-yaml","json-schema-traverse","kind-of","section-matter","strip-bom-string","zod","zod-to-json-schema"])
+/** `ownedDependencyIdentity(deps) -> {version, files, sha256}`: every file of `OWNED_DEPENDENCY_PACKAGES` under `deps`, by path relative to it. */
+export function ownedDependencyIdentity(deps=ownedSourceRoots().deps){
+  const entries=[]
+  const walk=dir=>{
+    for(const item of fsNative.readdirSync(dir,{withFileTypes:true})){
+      const file=path.join(dir,item.name)
+      if(item.isDirectory()){if(item.name!==".bin")walk(file);continue}
+      if(!item.isFile())fail("dependency_entry")
+      entries.push(`${file.slice(deps.length)}\0${catalogHash(fsNative.readFileSync(file))}`)
+    }
+  }
+  for(const name of OWNED_DEPENDENCY_PACKAGES){
+    const dir=path.join(deps,name)
+    if(!fsNative.lstatSync(dir).isDirectory())fail("dependency_entry")
+    walk(dir)
+  }
+  entries.sort()
+  return {version:1,files:entries.length,sha256:catalogHash(entries.join("\n"))}
+}
+/** `relocatedClosure(closure, from, to)`: a recorded module closure, as the same files under the current roots. */
+export function relocatedClosure(closure,from,to=ownedSourceRoots()){
+  validRoots(from);validRoots(to)
+  return closure.map(item=>({...item,path:relocatedPath(item.path,from,to)}))
+}
+const isRoot=value=>typeof value==="string"&&path.isAbsolute(value)&&value.endsWith(path.sep)&&path.resolve(value)+path.sep===value
+function validRoots(roots){
+  closedObject(roots,["source","deps"])
+  if(!isRoot(roots.source)||!isRoot(roots.deps)||!roots.source.startsWith(path.dirname(roots.deps)+path.sep))fail("source_roots")
+  return roots
+}
+// A recorded path under the recorded roots, as the same file under the current
+// roots (the more specific dependency root first, since a checkout's
+// node_modules lies inside its source root). Anything else refuses.
+export function relocatedPath(file,from,to){
+  for(const key of ["deps","source"]){
+    if(file.startsWith(from[key])){
+      const relative=file.slice(from[key].length)
+      if(relative===""||path.isAbsolute(relative)||relative.split(path.sep).includes(".."))fail("relocation")
+      return to[key]+relative
+    }
+  }
+  fail("relocation")
+}
+const ownedCatalogEntries=(sourceRoot=expectedRoot)=>({entry:path.join(sourceRoot,"scripts","triage-catalog-server.js"),
+  launcher:path.join(sourceRoot,"scripts","launch-triage-catalog.js"),runtime:fsNative.realpathSync(process.execPath)})
 export function ownedCatalogEnvironment({platform,uid,euid}) {
   if(!Number.isSafeInteger(uid)||uid<0||uid>4294967295||uid!==euid)fail("environment_identity")
   const env={LANG:"C",LC_ALL:"C",TZ:"UTC"}
@@ -328,8 +402,11 @@ export function ownedCatalogHostSupport(platform=process.platform){
   return {platform,provenance,posixCustody:platform!=="win32",reason:provenance?null:"provenance_unsupported"}
 }
 const hostRefusal=()=>{const host=ownedCatalogHostSupport();return host.provenance?null:host.reason}
-export function ownedServerLaunch({runtime,launcher:launchFile,entry:entryFile,bootstrap,deadline}) {
-  const exact=ownedCatalogEntries()
+// `sourceRoot` is given only when validating a recorded launch made from
+// another source root with identical content; every launch uses this root.
+export function ownedServerLaunch({runtime,launcher:launchFile,entry:entryFile,bootstrap,deadline,sourceRoot=expectedRoot}) {
+  if(!isRoot(sourceRoot))fail("launch_source")
+  const exact=ownedCatalogEntries(sourceRoot)
   if(runtime!==exact.runtime||launchFile!==exact.launcher||entryFile!==exact.entry)fail("launch_source")
   const dir=path.dirname(bootstrap.snapshotFile)
   const recipe=ownedCatalogEnvironment({platform:process.platform,uid:process.getuid?.(),euid:process.geteuid?.()})
@@ -384,29 +461,40 @@ export async function observeOwnedServer({nativePid,launcherPid,serverPid,genera
     return {ok:true,identity:{server,launch,...native,generation,environment_sha256:catalogHash(allowed)}}
   }catch(e){return {ok:false,reason:e.message}}
 }
+// The confinement-relevant source, by content: the runner's own modules and
+// scripts, the static relative-import closure they load in the parent, the
+// fixed qualification fixture and the dependency lock. Paths are relative to
+// the source root, so a release that leaves these bytes alone, installed at a
+// new path, keeps its qualification. The server's loaded module closure is
+// bound separately, per file, in every receipt.
+export const OWNED_SOURCE_FILES=Object.freeze(["package-lock.json","scripts/launch-triage-catalog.js","scripts/qualify-triage-runner.js","scripts/triage-catalog-server.js",
+  ...["credential","headless","headless-flag","os-protect","published-schema","schema","triage-catalog","triage-custody","triage-protocol",
+    "triage-runner","triage-schema"].map(name=>`src/factory/${name}.js`),"src/factory/headless-flag.cjs","src/factory/triage-home.js","src/factory/triage-qualify.js","src/factory/v12-owned-catalog.json"])
 export async function ownedSourceIdentity() {
-  const exact=ownedCatalogEntries(),files=[exact.runtime,"/usr/bin/env",exact.entry,exact.launcher,
-    ...["triage-catalog","triage-protocol","triage-custody","triage-runner"].map(x=>fileURLToPath(new URL(`./${x}.js`,import.meta.url))),QUALIFICATION_FIXTURE]
-  const hashes={}
-  for(const file of files)hashes[file]=catalogHash(await fs.readFile(file))
-  // The loaded SDK dependency closure must be independently observed by the
-  // parent, not inferred from package/lock labels. Unsupported closure is a
-  // concrete hold until its actual load ledger is available.
-  return {files:hashes,sdkRoot:path.join(expectedRoot,"node_modules","@modelcontextprotocol","sdk"),runtime:exact.runtime}
+  const exact=ownedCatalogEntries(),files={}
+  for(const file of OWNED_SOURCE_FILES)files[file]=catalogHash(await fs.readFile(path.join(expectedRoot,file)))
+  // The loaded SDK dependency closure is independently observed by the
+  // parent in each receipt, not inferred from package/lock labels.
+  return {version:2,files,runtime:{path:exact.runtime,sha256:catalogHash(await fs.readFile(exact.runtime))},
+    env_binary:catalogHash(await fs.readFile("/usr/bin/env"))}
 }
-export async function verifyModuleClosure(closure) {
+// `from` names the roots a recorded closure was loaded under; each file is
+// checked as the same relative file under the current roots.
+export async function verifyModuleClosure(closure,{from,roots=ownedSourceRoots()}={}) {
   if(!Array.isArray(closure)||closure.length<10||closure.length>512)fail("module_closure")
+  validRoots(roots);const recorded=from===undefined?roots:validRoots(from)
   const seen=new Set();let total=0
   for(const item of closure){
     closedObject(item,["path","sha256","bytes"])
-    if(typeof item.path!=="string"||!item.path.startsWith(expectedRoot)||seen.has(item.path)||
+    if(typeof item.path!=="string"||![recorded.source,recorded.deps].some(root=>item.path.startsWith(root))||seen.has(item.path)||
       !hex.test(item.sha256)||!Number.isSafeInteger(item.bytes)||item.bytes<0)fail("module_closure")
-    seen.add(item.path)
-    if(await fs.realpath(item.path)!==item.path)fail("module_symlink")
-    const bytes=await fs.readFile(item.path);total+=bytes.length
+    const current=relocatedPath(item.path,recorded,roots)
+    seen.add(current)
+    if(await fs.realpath(current)!==current)fail("module_symlink")
+    const bytes=await fs.readFile(current);total+=bytes.length
     if(total>64*1024*1024||bytes.length!==item.bytes||catalogHash(bytes)!==item.sha256)fail("module_changed")
   }
-  if(!closure.some(x=>x.path.includes("/@modelcontextprotocol/sdk/"))||
+  if(!closure.some(x=>x.path.startsWith(recorded.deps)&&x.path.includes(SDK_SEGMENT))||
     !["triage-catalog","triage-protocol","triage-custody"].every(name=>seen.has(fileURLToPath(new URL(`./${name}.js`,import.meta.url)))))fail("module_incomplete")
   return structuredClone(closure)
 }
@@ -505,9 +593,9 @@ async function restoredCustody(custody,snapshotFile,context) {
     !CATALOG_CLOSE_REASONS.includes(custody.receipts[2].payload.reason)||custody.receipts[2].payload.final_sequence!==3||
     custody.observation?.ok!==true||custody.observation.identity.server.pid!==custody.receipts[0].server_pid||
     custody.observation.identity.server.ppid!==custody.observation.identity.launch.pid)fail("restored_provenance")
-  const launch=custody.launchIdentity,identity=launch.identity
+  const launch=custody.launchIdentity,identity=launch.identity,roots=validRoots(custody.roots)
   const expected=ownedServerLaunch({runtime:identity.runtime,launcher:identity.launcher,entry:identity.entry,
-    bootstrap:identity.bootstrap,deadline:identity.deadline})
+    bootstrap:identity.bootstrap,deadline:identity.deadline,sourceRoot:roots.source})
   const {nativePid,...fixed}=launch
   const observed=custody.observation.identity,boot=custody.receipts[0].payload
   if(catalogCanonical(fixed)!==catalogCanonical(expected)||
@@ -521,7 +609,7 @@ async function restoredCustody(custody,snapshotFile,context) {
     // A facade bundle carries the observer double's epoch start; real custody never restores it.
     (context.refusesObserverDouble&&[observed.server.start,observed.launch.start].includes(NONACCEPTED_OBSERVER_START))||
     observed.environment_sha256!==catalogHash(`${identity.runtime} ${identity.entry} ${Object.entries(identity.cleanEnv).map(([key,value])=>`${key}=${value}`).join(" ")}`))fail("restored_process_identity")
-  await verifyModuleClosure(custody.moduleClosure)
+  await verifyModuleClosure(custody.moduleClosure,{from:roots})
   context.custody.set(custody,{seal:catalogCanonical(custody),records:snapshot.records})
   return snapshot.brief
 }
@@ -755,7 +843,7 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
       if(catalogCanonical(sourceBefore)!==catalogCanonical(sourceAfter)||
         catalogHash(await context.readBytes(launch.identity.bootstrap.snapshotFile))!==launch.identity.bootstrap.expectedSha256)fail("source_changed")
       await context.verifyModules(moduleClosure)
-      const custody={receipts,observations,observation:{...observation,ok:true},moduleClosure,sourceCustodyUnchanged:true,sourceIdentity:sourceAfter,
+      const custody={receipts,observations,observation:{...observation,ok:true},moduleClosure,roots:ownedSourceRoots(),sourceCustodyUnchanged:true,sourceIdentity:sourceAfter,
         briefSha256:catalogHash(catalogCanonical(snapshot.brief)),snapshotSha256:launch.identity.bootstrap.expectedSha256,launchIdentity:structuredClone(launch)}
       context.registry.set(custody,{seal:catalogCanonical(custody),records:snapshot.records})
       return {state:"closed",custody,resources}
