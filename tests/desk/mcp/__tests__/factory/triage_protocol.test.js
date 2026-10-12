@@ -884,8 +884,12 @@ ownedCatalogTest("first_parser_refusal_is_observed_from_actual_server",async(t,c
   assert.equal(first.payload.offset,0)
   const refused=result.resources.observations.find(x=>x.payload.kind==="parser_refused")
   assert.equal(refused.payload.code,"protocol_state")
+  // A refused session does not drain the receipt channel after the failure,
+  // so the launcher's own exit receipt may land after completion. The parent
+  // always sees the exit; accepted sessions still require the receipt.
+  assert.equal(result.resources.exit.code,1)
   const exit=result.resources.observations.find(x=>x.payload.kind==="launcher_exit")
-  assert.equal(exit.payload.code,1)
+  if(exit)assert.equal(exit.payload.code,1)
 })
 test("recorded_native_discover_probe_is_the_only_accepted_probe_shape",()=>{
   assert.equal(RECORDED_PROBE.length,459)
@@ -994,6 +998,7 @@ ownedCatalogTest("actual_server_answers_one_probe_and_refuses_a_second",async(t,
   assert.equal(Buffer.from(result.resources.observations.find(x=>x.payload.kind==="discover_answered").payload.base64,"base64").toString(),PROBE_ANSWER)
   assert.equal(result.resources.observations.find(x=>x.payload.kind==="parser_refused").payload.code,"protocol_state")
   assert.deepEqual(kinds.slice(0,4),["input_frame","output_frame","discover_answered","input_frame"])
+  assert.equal(result.resources.exit.code,1)
 })
 test("original_split_wire_offsets_and_output_refusal_direction_are_observed",async()=>{
   const input=new PassThrough(),output=new PassThrough(),events=[]
