@@ -103,7 +103,7 @@ const dayStart = (day) => Date.parse(`${day}T00:00:00.000Z`)
 const windowOf = (ms) => Math.floor((ms - dayStart(dayOf(ms))) / WINDOW_MS)
 const encode = (value) => `${JSON.stringify(value)}\n`
 const sum = (values) => values.reduce((total, value) => total + value, 0)
-const instantMs = (value) => (value === null ? null : Date.parse(value))
+const instantMs = (value) => Date.parse(value)
 
 // A stable text form, keys sorted, so two readings of the same value compare equal whatever order a writer used.
 function canonical(value) {
@@ -318,7 +318,7 @@ async function writeAtomic(io, root, name, bytes, label) {
   try {
     await renameRetry(io, tmp, file)
   } catch (error) {
-    await fsp.unlink(tmp).catch(() => {})
+    await fsp.rm(tmp, { force: true })
     throw error
   }
   await io.fault(`${label}_renamed`)

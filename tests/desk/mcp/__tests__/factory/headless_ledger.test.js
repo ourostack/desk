@@ -409,6 +409,26 @@ test("interruption at every transaction point: no refund, and recovery or a seal
     assert.equal((await ledgerOf(root)).spent, 30)
   }))
 
+  await t.test("a triage reservation that stops after its guard seals the day and keeps its triage clock", () => scratch(async (env, root) => {
+    assert.equal((await reserve(env, "triage", at(0, 1))).state, "reserved")
+    await faulty("guard_synced").reserveAgentLaunch(env, { kind: "triage", now: at(0, 7), legacyEvaluator: LEGACY })
+    assert.equal((await reserve(env, "evaluate", at(0, 8))).state, "quota_exhausted")
+    const ledger = await ledgerOf(root)
+    assert.equal(ledger.last_triage_at, new Date(at(0, 7)).toISOString(), "the crashed launch's time is witnessed, so its gap holds")
+    assert.deepEqual(ledger.windows, [1, 1, 0, 0])
+    assert.equal((await reserve(env, "triage", at(1, 0, 59))).state, "reserved", "the next day starts normally")
+  }))
+
+  await t.test("a later-day recovery that itself stops leaves an older-day guard that is still recovered", () => scratch(async (env, root) => {
+    await reserveMany(env, "evaluate", at(0, 9), 2)
+    await faulty("guard_synced").reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 10), legacyEvaluator: LEGACY })
+    // On the next day the recovery's own transaction stops after its pending mark: the guard is from the day before.
+    assert.deepEqual(await faulty("after_witness_pending").reserveAgentLaunch(env, { kind: "evaluate", now: at(1, 1) }), { state: "write_failed" })
+    assert.equal((await mark(env)).max_day, dayText(1))
+    assert.equal((await reserve(env, "evaluate", at(1, 2))).state, "quota_exhausted", "the pending day is sealed in turn")
+    assert.equal((await ledgerOf(root)).day, dayText(1))
+  }))
+
   await t.test("a recovery on a later UTC day starts that day with older tokens burned", () => scratch(async (env, root) => {
     await reserve(env, "evaluate", at(0, 8))
     const basis = { ...evaluationContinuationBasis({}), ready_now: 1 }
