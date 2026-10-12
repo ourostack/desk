@@ -1,6 +1,7 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
+import { removeWithRetry } from "../../util/remove-retry.js"
 import { renameWithRetry } from "../../util/rename-retry.js"
 
 import { validateLabelsBytes } from "../label-schema.js"
@@ -29,13 +30,13 @@ function existingEntry(filePath) {
   return lstatSync(filePath, { throwIfNoEntry: false }) ?? null
 }
 
-// Product code, so a rename Windows refuses for a moment (EPERM, EACCES or EBUSY while Defender or the indexer holds the fresh
+// Product code, so a removal or rename Windows refuses for a moment (EPERM, EACCES or EBUSY while Defender or the indexer holds the
 // directory) is retried briefly instead of failing the whole build.
 function replaceDirectory(source, destination, rename) {
   const stat = existingEntry(destination)
   if (stat !== null) {
     if (stat.isSymbolicLink()) throw new Error("factory build: outDir must not be a symlink")
-    rmSync(destination, { recursive: true, maxRetries: 5, retryDelay: 50 })
+    removeWithRetry(destination, { recursive: true })
   }
   rename(source, destination)
 }

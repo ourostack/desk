@@ -5,6 +5,7 @@ import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readdirSync, re
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { killAndWait } from "./_kill_and_wait.js"
+import { removeTree } from "./_remove_tree.js"
 
 const inside = (root, dir) => dir === root || dir.startsWith(root + path.sep)
 
@@ -65,7 +66,7 @@ export function removeFixtureAfter(t, root) {
     await reapProcessesUnder(root)
     try {
       // Windows holds a folder for a moment after the last process in it exits (virus scan, indexer), so retry longer there.
-      rmSync(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 40 : 5, retryDelay: process.platform === "win32" ? 250 : 100 })
+      await removeTree(root)
     } catch (error) {
       if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code)) throw error
       // Windows refuses to remove a folder that a process still has as its working folder or open, even once every file in it is gone: the runner's scanner and a Git child that has not yet released a repository do this. Remove what can be removed one entry at a time; a fixture that is left holding only empty folders (or is gone) is cleaned up for every purpose it has, and only a leftover file is a failure.

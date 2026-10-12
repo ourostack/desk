@@ -16,11 +16,12 @@
 
 import "./_isolated_env.mjs"
 import { randomBytes } from "node:crypto"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { after } from "node:test"
 import { fileURLToPath } from "node:url"
+import { removeTree } from "./_remove_tree.js"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..")
 const base = path.join(repoRoot, ".test-fake-real")
@@ -42,9 +43,7 @@ mkdirSync(base, { recursive: true })
 assertOutsideOsTmpdir(base)
 
 const ownedRoots = new Set()
-after(() => {
-  for (const root of ownedRoots) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-})
+after(() => Promise.all([...ownedRoots].map((root) => removeTree(root))))
 
 /**
  * Create and return a fixture directory that stands in for a "real" (non-temp) state home: writable on every CI

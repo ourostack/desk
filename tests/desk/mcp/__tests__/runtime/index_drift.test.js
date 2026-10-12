@@ -5,14 +5,15 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "../../../../../plugins/desk/mcp/src/runtime/index-drift.js"
+import { removeTree } from "../_remove_tree.js"
 
 function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-index-drift-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(root))
   const env = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid" }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS|GLOBAL))/u.test(key)) delete env[key]
   const spawnGit = (command, args) => {
@@ -40,7 +41,7 @@ test("snapshotStagedPaths reports exactly the currently staged paths", (t) => {
 
 test("snapshotStagedPaths never throws on a failing, timed-out or missing git, and reports null (not empty) — a failed read is unknown, not 'nothing staged'", (t) => {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-index-drift-notgit-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(root))
   const failingSpawnGit = () => ({ status: 128, stdout: "", stderr: "fatal: not a git repository" })
   assert.equal(snapshotStagedPaths({ root, spawnGit: failingSpawnGit }), null)
   const throwingSpawnGit = () => { throw new Error("git not found") }

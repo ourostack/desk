@@ -5,15 +5,16 @@
 // throwaway fixture directory, never the real HOME or XDG_STATE_HOME.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { DEFAULT_FILER_COOLDOWN_MS, shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
 import { mkFakeRealRoot } from "../_fake_real_root.js"
+import { removeTree } from "../_remove_tree.js"
 
 function fixtureEnv(t) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-filer-throttle-"))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(root))
   return { env: { HOME: root } }
 }
 
@@ -98,7 +99,7 @@ test("under a node:test run, a real (non-temp) state home is refused rather than
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for the
   // developer's real home, so a stamp landing here would be exactly the incident the guard exists to stop.
   const fakeReal = mkFakeRealRoot("desk-filer-throttle-fake-real-")
-  t.after(() => rmSync(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(fakeReal))
   assert.equal(shouldLaunchFiler({ env: { HOME: fakeReal }, mechanism: "desk-sync", signature: "boom" }), true, "still fails toward launching")
   assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
 })

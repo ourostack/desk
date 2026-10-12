@@ -11,11 +11,12 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { promises as fs, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTree } from "../_remove_tree.js"
 import { mkFakeRealRoot } from "../_fake_real_root.js"
 import { lastStartRootKey, resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
@@ -301,7 +302,7 @@ test("hostFromEnv names claude only when CLAUDE_PLUGIN_ROOT is a real value, els
 // `filer_throttle.test.js`'s own `fixtureEnv` exactly.
 function fixtureFilerEnv(t) {
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-sync-worker-filer-"))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(root))
   return { HOME: root }
 }
 
