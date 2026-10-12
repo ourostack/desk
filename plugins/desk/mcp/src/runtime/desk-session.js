@@ -21,7 +21,7 @@ import { redactMachineText } from "./argv-safe-reason.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
 import { hostedRefusal } from "./hosted.js"
 import { deskSkill } from "./skills.js"
-import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
+import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
@@ -254,13 +254,14 @@ export function createDeskSession(deps) {
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
 
+  // Written in order without the event loop waiting on the disk, so a slow file create on Windows never delays a tool call; dispose waits for them.
+  const lastStart = createLastStartWriter({
+    onError: (error) => log(`could not record last-start.json in ${deskStateDir}: ${error.message}`),
+  })
+
   function recordLastStart(snapshot) {
     if (disposed) return
-    try {
-      writeLastStart({ stateDir: deskStateDir, snapshot, root: context.root?.root ?? null })
-    } catch (error) {
-      log(`could not record last-start.json in ${deskStateDir}: ${error.message}`)
-    }
+    lastStart.record({ stateDir: deskStateDir, snapshot, root: context.root?.root ?? null })
   }
 
   const admission = createAdmission({
@@ -1325,6 +1326,8 @@ export function createDeskSession(deps) {
     callTool,
     recordException,
     start: () => admission.start(),
+    /** Resolves once every start record so far is written. For tests that read a record right after a state change; dispose waits on the writer itself. */
+    lastStartWritten: () => lastStart.written(),
     dispose() {
       disposed = true
       invalidateStatus()
@@ -1347,7 +1350,7 @@ export function createDeskSession(deps) {
         return retirementError
       })
       // An attempt that finished during the attempt wait may have closed a late controller; each close ends within the child's kill bound.
-      return Promise.all([retired, attemptStopped]).then(async ([retirementError]) => {
+      return Promise.all([retired, attemptStopped, lastStart.written()]).then(async ([retirementError]) => {
         await controllerClosesSettled()
         if (retirementError) throw retirementError
       })

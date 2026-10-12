@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { renameWithRetry } from "../../../../../plugins/desk/mcp/src/util/rename-retry.js"
+import { renameWithRetry, renameWithRetryAsync } from "../../../../../plugins/desk/mcp/src/util/rename-retry.js"
 
 const refuse = (code) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code })
 
@@ -60,4 +60,20 @@ test("with the real rename and real wait it moves a file", () => {
   let failures = 0
   renameWithRetry("a", "b", { platform: "win32", rename: () => { if (failures++ === 0) throw refuse("EBUSY") } })
   assert.equal(failures, 2, "the default wait sleeps for real and the second attempt runs")
+})
+
+test("the async form retries the same way, waits without blocking, and moves a real file with its defaults", async () => {
+  const { calls, rename } = flaky("EBUSY", Infinity)
+  const slept = []
+  await assert.rejects(renameWithRetryAsync("a.tmp", "a", { rename: async (...args) => rename(...args), sleep: async (ms) => { slept.push(ms) }, platform: "win32" }), { code: "EBUSY" })
+  assert.equal(calls.length, 10)
+  assert.deepEqual(slept, [25, 50, 75, 100, 125, 150, 175, 200, 200])
+  const once = flaky("EPERM", 1)
+  await renameWithRetryAsync("a.tmp", "a", { rename: async (...args) => once.rename(...args), platform: "win32" })
+  assert.equal(once.calls.length, 2, "the default wait is a real timer and the second attempt runs")
+  await assert.rejects(renameWithRetryAsync("a.tmp", "a", { rename: async () => { throw refuse("EPERM") }, sleep: () => assert.fail("no wait"), platform: "linux" }), { code: "EPERM" })
+  const root = mkdtempSync(path.join(os.tmpdir(), "desk-rename-retry-async-"))
+  writeFileSync(path.join(root, "a.tmp"), "y")
+  await renameWithRetryAsync(path.join(root, "a.tmp"), path.join(root, "a"))
+  assert.equal(readFileSync(path.join(root, "a"), "utf8"), "y")
 })
