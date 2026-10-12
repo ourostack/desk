@@ -816,7 +816,8 @@ export function createDeskSession(deps) {
       const run = joined ? statusRun : startStatusRun(input, signal)
       const outcome = await raceWithTimer(run.promise, Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
       if (run.generation !== contextGeneration) {
-        payload = baseDiagnostic(statusSnapshot())
+        payload = { ...baseDiagnostic(statusSnapshot()), detail_pending: true,
+          status_detail: "unavailable: the desk destination changed while this call ran, so its runtime status detail no longer applies; call desk_status again shortly" }
       } else if (!outcome.timedOut && outcome.value.error !== undefined) {
         const error = outcome.value.error
         payload = { ...payload, status_error: error instanceof Error ? error.message : String(error) }

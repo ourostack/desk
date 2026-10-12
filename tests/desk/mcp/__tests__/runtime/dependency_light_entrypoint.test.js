@@ -1000,7 +1000,8 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
         assert.equal(initialStatus.error, undefined)
         assert.equal(initialStatus.result.isError, undefined)
         const initialBody = JSON.parse(initialStatus.result.content[0].text)
-        assert.equal(initialBody.status, "ok")
+        // On Windows this has failed with status "error"; the body names which part of the runtime status failed.
+        assert.equal(initialBody.status, "ok", initialStatus.result.content[0].text)
         assert.equal(initialBody.runtime.loaded_from_source_mirror, true)
         embedding.release()
       },
