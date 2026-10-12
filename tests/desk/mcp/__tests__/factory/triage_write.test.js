@@ -22,6 +22,7 @@ const STORE = fixture.store
 const T0 = Date.parse("2026-10-11T12:00:00.000Z")
 const HOUR = 3600 * 1000
 const posix = process.platform !== "win32"
+const RESOURCE_ALARM = "triage_resource_unrecoverable"
 const hex = (n) => randomBytes(n).toString("hex")
 const slash = (p) => p.split(path.sep).join("/")
 const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue", ref: `https://github.com/example-org/example-repo/issues/${pointer.split("#")[1]}`, revision: 3 } })
@@ -34,7 +35,7 @@ function git(cwd, args, { allowFail = false } = {}) {
   return result.stdout.trim()
 }
 
-async function world() {
+async function world({ agents = true, attributes = null } = {}) {
   const base = await mkTempRoot("triage-write-")
   const origin = path.join(base, "origin.git")
   git(base, ["init", "-q", "--bare", origin])
@@ -43,7 +44,8 @@ async function world() {
   git(seed, ["init", "-q"])
   await fs.mkdir(path.join(seed, "_archive"))
   await fs.writeFile(path.join(seed, "_archive", ".keep"), "")
-  await fs.writeFile(path.join(seed, "AGENTS.md"), "Agents may fix factory defects in existing scope.\n")
+  if (agents) await fs.writeFile(path.join(seed, "AGENTS.md"), "Agents may fix factory defects in existing scope.\n")
+  if (attributes !== null) await fs.writeFile(path.join(seed, ".gitattributes"), attributes)
   await fs.writeFile(path.join(seed, "README.md"), "desk\n")
   for (const key of [KEY, fixture.related_key]) {
     const opened = await openImprovement({ deskRoot: seed, personPrefix: "", key, source: "andon", evidence: [`issue:${key.slice(6)}`], plugin: "desk", signal: null, now: T0 })
@@ -53,9 +55,9 @@ async function world() {
   git(seed, ["remote", "add", "origin", origin])
   git(seed, ["push", "-q", "-u", "origin", "main"])
   const clones = {}
-  const clone = (name) => {
+  const clone = (name, config = []) => {
     const deskRoot = path.join(base, name)
-    git(base, ["clone", "-q", origin, deskRoot])
+    git(base, ["clone", "-q", ...config, origin, deskRoot])
     configure(deskRoot)
     clones[name] = { name, deskRoot, env: { ...process.env, XDG_STATE_HOME: path.join(base, `${name}-state`) } }
     return clones[name]
@@ -82,6 +84,7 @@ async function publish(desk, overrides = {}) {
   return publishOwnedTriage({
     env: desk.env, deskRoot: desk.deskRoot, personPrefix: "", key: KEY, store: STORE,
     expectedBasis: overrides.expectedBasis ?? (await basisFor(desk)), review: { ...HUMAN, protected_result: hex(16) }, operation: "review", now: T0,
+    evidence: { resolve: resolveIssue },
     ...overrides,
   })
 }
@@ -161,6 +164,11 @@ test("simultaneous_assignment_requires_remote_ack", async () => {
   assert.equal(winner.ack.registry_blob, git(w.origin, ["rev-parse", `main:${paths.registry}`]))
   assert.equal(winner.ack.annotation_blob, git(w.origin, ["rev-parse", `main:${paths.annotation}`]))
   for (const result of [ra, rb]) assert.ok(result.resources.filter((r) => r.kind === "worktree").every((r) => r.disposition === "removed"), JSON.stringify(result.resources))
+  // The loser keeps its equivalent basis under the adopted review's token, so its own mechanical refresh can recheck the review.
+  const loser = ra.state === "adopted" ? a : b
+  const loserRefresh = await refreshTriage({ env: loser.env, deskRoot: loser.deskRoot, personPrefix: "", now: T0, evidence: { resolve: resolveIssue } })
+  assert.deepEqual(loserRefresh.changes, [], JSON.stringify(loserRefresh.changes))
+  assert.equal(loserRefresh.coverage.reviewed, 1)
 
   // Concurrent new revisions on the same ID converge to distinct revisions, never an equal-revision conflict.
   const gate2 = barrier(2)
@@ -264,6 +272,23 @@ test("changed_basis_during_push_holds_and_unrelated_advance_retries_once", async
     },
   })
   assert.equal(readback.state, "unacknowledged")
+
+  // Evidence revisions are resolved live at publication, not taken from the prepared basis.
+  git(b.deskRoot, ["pull", "-q"])
+  const head = git(w.origin, ["rev-parse", "main"])
+  const edited = async (pointer) => ({ ...(await resolveIssue(pointer)), revision: 4 })
+  assert.equal((await publish(b, { evidence: { resolve: edited } })).state, "stale_basis", "the public issue changed since the review")
+  assert.equal((await publish(b, { evidence: {} })).state, "stale_basis", "no live resolver can answer for the issue")
+  assert.equal((await publish(b, { evidence: { resolve: () => { throw new Error("offline") } } })).state, "stale_basis", "a failing resolver proves nothing")
+  assert.equal(git(w.origin, ["rev-parse", "main"]), head, "nothing was pushed")
+  let pushed = false
+  const editedAfterPush = async (pointer) => (pushed ? edited(pointer) : resolveIssue(pointer))
+  const late = await publish(b, {
+    review: { ...HUMAN, gate: "intent", summary_codes: ["source:andon", "route:human_decision", "gate:intent"], protected_result: hex(16) },
+    evidence: { resolve: editedAfterPush },
+    git: { onStep: (name) => { if (name === "pushed") pushed = true } },
+  })
+  assert.equal(late.state, "unacknowledged", "evidence that changed by readback is not acknowledged")
 })
 
 test("dirty_siblings_are_preserved_and_relevant_local_state_holds", async () => {
@@ -395,12 +420,16 @@ test("withdrawal_restart_and_reappearance_keep_identity_and_advance_revision", a
   assert.equal(first.state, "acknowledged")
   // Invalidation keeps the last valid review as stale context: a failed or changed review never becomes empty success.
   const prior = remoteJson(w.origin, paths.annotation).review
-  const invalidated = await publish(a, { operation: "invalidate", review: null })
+  // The invalidation records the refresh's own reason; one an invalidation cannot have, or a reason on another operation, is refused.
+  assert.equal((await publish(a, { operation: "invalidate", review: null, reason: "card_removed" })).state, "policy_refused")
+  assert.equal((await publish(a, { reason: "claim_changed" })).state, "policy_refused")
+  const invalidated = await publish(a, { operation: "invalidate", review: null, reason: "claim_changed" })
   assert.equal(invalidated.state, "acknowledged")
   assert.equal(invalidated.revision, 2)
   const staleAnnotation = remoteJson(w.origin, paths.annotation)
   assert.deepEqual(staleAnnotation.review, prior)
   assert.deepEqual(staleAnnotation.attempt.state, "stale")
+  assert.equal(staleAnnotation.attempt.reason, "claim_changed")
   assert.equal((await publish(a, { operation: "invalidate", review: null })).state, "adopted", "already stale on this basis")
   assert.equal((await publish(a, { review: null })).state, "policy_refused", "a refused review is never published")
   assert.equal(remoteJson(w.origin, paths.annotation).revision, 2)
@@ -435,7 +464,7 @@ test("withdrawal_restart_and_reappearance_keep_identity_and_advance_revision", a
   const other = await basisFor(a, { key: fixture.related_key })
   assert.equal((await publish(a, { key: fixture.related_key, expectedBasis: other, operation: "invalidate", review: null })).state, "policy_refused")
   // The mechanical refresh sees the acknowledged review as fresh on this host.
-  const fresh = await refreshTriage({ env: a.env, deskRoot: a.deskRoot, personPrefix: "", now: T0 + HOUR })
+  const fresh = await refreshTriage({ env: a.env, deskRoot: a.deskRoot, personPrefix: "", now: T0 + HOUR, evidence: { resolve: resolveIssue } })
   assert.equal(fresh.coverage.reviewed, 1)
 })
 
@@ -443,7 +472,7 @@ test("valid_private_result_never_enters_git_review", async () => {
   const w = await world()
   const a = w.clone("a")
   const basis = await basisFor(a)
-  const safe = toSafeTriageReview({ result: fixture.private_candidate.result, basis, authorizedEvidence: fixture.private_candidate.authorized_evidence, protectedToken: hex(16) })
+  const safe = toSafeTriageReview({ result: fixture.private_candidate.result, basis, authorizedEvidence: fixture.private_candidate.authorized_evidence, protectedToken: hex(16), briefKeys: [KEY, fixture.related_key] })
   assert.equal(safe.state, "safe")
   // A candidate is never accepted as a review.
   assert.equal((await publish(a, { review: fixture.private_candidate.result })).state, "policy_refused")
@@ -459,7 +488,7 @@ test("valid_private_result_never_enters_git_review", async () => {
   assert.deepEqual(git(w.origin, ["show", "--name-only", "--format=", commit]).split("\n").sort(), [paths.annotation, paths.registry].sort())
 })
 
-test("chained_commit_policy_refusal_prevents_ack", { skip: posix ? false : "POSIX shell hook fixture" }, async () => {
+test("chained_commit_policy_refusal_prevents_ack", async () => {
   const w = await world()
   const a = w.clone("a")
   const log = path.join(w.base, "hook.log")
@@ -482,7 +511,7 @@ test("chained_commit_policy_refusal_prevents_ack", { skip: posix ? false : "POSI
   }
 })
 
-test("policy_reads_candidate_tree_not_live_head", { skip: posix ? false : "POSIX shell hook fixture" }, async () => {
+test("policy_reads_candidate_tree_not_live_head", async () => {
   const w = await world()
   const a = w.clone("a")
   await writeHook(a, `if [ -e "$(git rev-parse --show-toplevel)/poison.txt" ]; then exit 1; fi\nexit 0`)
@@ -490,7 +519,7 @@ test("policy_reads_candidate_tree_not_live_head", { skip: posix ? false : "POSIX
   assert.equal((await publish(a)).state, "acknowledged")
 })
 
-test("policy_timeout_holds_without_bypass", { skip: posix ? false : "POSIX process groups" }, async () => {
+test("policy_timeout_holds_without_bypass", async () => {
   const w = await world()
   const a = w.clone("a")
   const pidFile = path.join(w.base, "hook.pid")
@@ -508,11 +537,11 @@ test("policy_timeout_holds_without_bypass", { skip: posix ? false : "POSIX proce
       alive = false
     }
   }
-  assert.equal(alive, false, "the hung hook's process was ended with its group")
+  assert.equal(alive, false, "the hung hook's process was ended with its group (its process tree on Windows)")
   assert.ok(result.resources.filter((r) => r.kind === "worktree").every((r) => r.disposition === "removed"), "only own staged files: removed")
 })
 
-test("changed_disabled_or_unreadable_policy_holds", { skip: posix ? false : "POSIX shell hook fixture" }, async () => {
+test("changed_disabled_or_unreadable_policy_holds", async () => {
   const w = await world()
   const a = w.clone("a")
   const hook = await writeHook(a, `echo "# touched" >> "$0"\nexit 0`)
@@ -523,15 +552,15 @@ test("changed_disabled_or_unreadable_policy_holds", { skip: posix ? false : "POS
   const left = await publish(a)
   assert.equal(left.state, "policy_unknown", "a file the hook left behind")
   const retained = left.resources.find((r) => r.kind === "worktree")
-  assert.equal(retained.disposition, "retained")
+  assert.equal(retained.disposition, "retained", "the call that made it keeps what the hook left")
+  // The next call recovers the owned worktree by itself, whatever the hook left in it: no person has to clear it.
   await fs.writeFile(hook, "#!/bin/sh\nexit 0\n")
-  const blocked = await publish(a)
-  assert.equal(blocked.state, "busy", "an unrecovered resource blocks new ones")
-  assert.equal(blocked.resources[0].path, retained.path)
-  await fs.unlink(path.join(retained.path, "leftover.txt"))
   const recovered = await publish(a)
-  assert.equal(recovered.state, "acknowledged")
+  assert.equal(recovered.state, "acknowledged", JSON.stringify(recovered))
+  assert.equal(recovered.alarm, undefined)
+  assert.equal(recovered.resources[0].path, retained.path)
   assert.equal(recovered.resources[0].disposition, "removed")
+  await assert.rejects(fs.lstat(retained.path))
 
   git(a.deskRoot, ["config", "core.hooksPath", "/dev/null"])
   assert.equal((await publish(a, { review: { ...AGENT, protected_result: hex(16) } })).state, "policy_refused", "hooks turned off")
@@ -539,10 +568,11 @@ test("changed_disabled_or_unreadable_policy_holds", { skip: posix ? false : "POS
   assert.equal((await publish(a, { review: { ...AGENT, protected_result: hex(16) } })).state, "policy_unknown", "a hooks folder that cannot be read")
   const hooks = path.join(w.base, "hooks")
   await fs.mkdir(path.join(hooks, "sub"), { recursive: true })
-  await fs.symlink("/nonexistent", path.join(hooks, "linked"))
+  // Links need privileges on Windows; a folder is enough there.
+  if (posix) await fs.symlink("/nonexistent", path.join(hooks, "linked"))
   git(a.deskRoot, ["config", "core.hooksPath", hooks])
   assert.equal((await publish(a, { review: { ...AGENT, protected_result: hex(16) } })).state, "acknowledged", "links and folders in the hooks folder are fingerprinted, not run")
-  if (process.getuid?.() !== 0) {
+  if (posix && process.getuid?.() !== 0) {
     await fs.writeFile(path.join(hooks, "secret"), "x", { mode: 0o000 })
     assert.equal((await publish(a, { review: { ...HUMAN, gate: "voice", summary_codes: ["source:andon", "route:human_decision", "gate:voice"], protected_result: hex(16) } })).state, "policy_unknown", "a hook file that cannot be read")
     await fs.chmod(path.join(hooks, "secret"), 0o600)
@@ -601,7 +631,7 @@ test("non_git_unsynchronized_busy_and_failed_git_calls_hold", async () => {
 
   const lock = await acquireSyncLock({ root: a.deskRoot, env: a.env })
   try {
-    assert.equal((await publish(a)).state, "busy")
+    assert.deepEqual(await publish(a), { state: "busy", resources: [] }, "a held lock is transient: no alarm")
   } finally {
     lock.release()
   }
@@ -626,6 +656,11 @@ test("non_git_unsynchronized_busy_and_failed_git_calls_hold", async () => {
   const retained = await publish(a, { review: { ...AGENT, protected_result: hex(16) }, git: { spawn: failing((args) => args[0] === "worktree" && args[1] === "remove") } })
   assert.equal(retained.state, "acknowledged")
   assert.equal(retained.resources.find((r) => r.kind === "worktree").disposition, "retained")
+  // While its removal keeps failing, every call is busy with the stable alarm code a loop raises.
+  const stuck = await publish(a, { review: { ...HUMAN, protected_result: hex(16) }, git: { spawn: failing((args) => args[0] === "worktree" && args[1] === "remove") } })
+  assert.equal(stuck.state, "busy")
+  assert.equal(stuck.alarm, RESOURCE_ALARM)
+  assert.equal(stuck.resources[0].disposition, "retained")
   const next = await publish(a, { review: { ...HUMAN, protected_result: hex(16) } })
   assert.equal(next.state, "acknowledged")
   assert.equal(next.resources[0].disposition, "removed", "recovered first")
@@ -647,6 +682,7 @@ test("foreign_or_vanished_operation_records", async () => {
   await fs.writeFile(path.join(ops, "README"), "not a record\n")
   const blocked = await publish(a)
   assert.equal(blocked.state, "busy")
+  assert.equal(blocked.alarm, RESOURCE_ALARM)
   assert.equal(blocked.resources[0].ref, null)
   await fs.writeFile(path.join(ops, `${"f".repeat(32)}.json`), "{not json")
   assert.equal((await publish(a)).state, "busy")
@@ -678,4 +714,70 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async () => {
   const timed = await publish({ ...a, env }, { review: { ...AGENT, protected_result: hex(16) }, git: { platform: "win32", aclRunner, spawn: slowPush, timeoutMs: 1000 } })
   assert.equal(timed.state, "unacknowledged")
   assert.ok(protectedPaths.some((p) => p.endsWith(".json") && p.includes(`${path.sep}basis${path.sep}`)))
+})
+
+test("authority_is_proved_at_the_git_boundary", async () => {
+  const w = await world()
+  const a = w.clone("a")
+  const before = await basisFor(a)
+  assert.ok(before.authority.codes.includes("existing_scope"))
+  const result = { ...fixture.private_candidate.result, route: "agent_ready", authority: { code: "existing_scope", ruling_ids: ["AGENTS.md"] }, decision: null, gate_reason: null, recommendation: null, safe_continuation: null }
+  const toSafe = (basis) => toSafeTriageReview({ result, basis, authorizedEvidence: [], protectedToken: hex(16), briefKeys: [KEY, fixture.related_key] })
+  const agentReady = toSafe(before)
+  assert.equal(agentReady.state, "safe")
+
+  // The ruling is revoked with the card bytes unchanged: the agent-ready review is refused on the fresh basis, and nothing is pushed.
+  await remoteChange(w, "revoke", (root) => fs.unlink(path.join(root, "AGENTS.md")))
+  git(a.deskRoot, ["pull", "-q"])
+  const head = git(w.origin, ["rev-parse", "main"])
+  const after = await basisFor(a)
+  assert.equal(after.canonical_revision, before.canonical_revision, "same card bytes")
+  assert.deepEqual(after.authority.codes, ["investigation_only", "human_gate"])
+  assert.deepEqual(toSafe(after), { state: "refused", review: null, errors: [{ code: "authority_unproved", path: "" }] })
+  assert.equal((await publish(a, { review: agentReady.review, expectedBasis: after })).state, "policy_refused")
+  assert.equal((await publish(a, { review: agentReady.review, expectedBasis: before })).state, "stale_basis", "the basis read before the revocation no longer holds")
+  assert.equal(git(w.origin, ["rev-parse", "main"]), head, "nothing was pushed")
+  assert.equal(remoteJson(w.origin, paths.registry), null)
+
+  // A basis that claims more authority than its rulings give is refused, whoever built it.
+  const forged = [
+    { ...after, authority: { ...after.authority, codes: ["existing_scope", ...after.authority.codes] } },
+    { ...before, authority: { ...before.authority, codes: ["approved_plan", ...before.authority.codes] } },
+    { ...before, authority: { ...before.authority, codes: ["approved_plan", ...before.authority.codes], plan_ids: ["plans/unread.md"] } },
+    { ...before, authority: { ...before.authority, codes: ["ship_it"] } },
+    { ...before, authority: null },
+    { ...before, authority: { codes: before.authority.codes } },
+    { ...before, evidence: [{ id: "evidence:0", pointer: "issue:x#1", revision: 0 }] },
+    { ...before, evidence: null },
+  ]
+  // Without a live resolver only self-describing evidence resolves, so the issue-backed basis does not hold.
+  assert.equal((await publishOwnedTriage({ env: a.env, deskRoot: a.deskRoot, personPrefix: "", key: KEY, store: STORE, expectedBasis: after, review: { ...HUMAN, protected_result: hex(16) }, operation: "review", now: T0 })).state, "stale_basis")
+  for (const expectedBasis of forged) assert.equal((await publish(a, { review: agentReady.review, expectedBasis })).state, "policy_refused", JSON.stringify(expectedBasis.authority))
+  // A human gate stays possible without a ruling.
+  assert.equal((await publish(a, { expectedBasis: after })).state, "acknowledged")
+})
+
+test("unresolved_authority_never_publishes_agent_ready", async () => {
+  const w = await world({ agents: false })
+  const a = w.clone("a")
+  const basis = await basisFor(a)
+  assert.equal(basis.authority.state, "unresolved")
+  assert.deepEqual(basis.authority.codes, ["investigation_only", "human_gate"])
+  const result = { ...fixture.private_candidate.result, route: "agent_ready", authority: { code: "existing_scope", ruling_ids: ["AGENTS.md"] }, decision: null, gate_reason: null, recommendation: null, safe_continuation: null }
+  assert.equal(toSafeTriageReview({ result, basis, authorizedEvidence: [], protectedToken: hex(16), briefKeys: [KEY] }).state, "refused")
+  assert.equal((await publish(a, { review: { ...AGENT, protected_result: hex(16) }, expectedBasis: basis })).state, "policy_refused")
+  assert.equal((await publish(a, { review: { ...AGENT, authority_code: "approved_plan", protected_result: hex(16) }, expectedBasis: basis })).state, "policy_refused")
+  assert.equal(remoteJson(w.origin, paths.registry), null, "nothing was pushed")
+})
+
+test("crlf_checkout_keeps_the_basis_git_would_commit", async () => {
+  // Cards keep their LF bytes (the card reader reads LF cards only); every other text file, AGENTS.md included, is converted.
+  const w = await world({ attributes: `${path.posix.dirname(paths.card)}/*.md -text\n` })
+  const a = w.clone("a", ["-c", "core.autocrlf=true"])
+  assert.match(await fs.readFile(path.join(a.deskRoot, "AGENTS.md"), "utf8"), /\r\n$/u, "the checkout converted AGENTS.md to CRLF")
+  const basis = await basisFor(a)
+  assert.equal(basis.rulings.find((ruling) => ruling.id === "AGENTS.md").revision, git(a.deskRoot, ["rev-parse", "HEAD:AGENTS.md"]))
+  assert.equal(basis.canonical_revision, git(a.deskRoot, ["rev-parse", `HEAD:${paths.card}`]))
+  const result = await publish(a, { expectedBasis: basis })
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
 })

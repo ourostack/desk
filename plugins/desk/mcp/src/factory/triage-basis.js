@@ -12,8 +12,9 @@
 
 import { promises as fs, constants as fsConstants } from "node:fs"
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { cardFile, isClaimLive, readCards as readCardsDefault } from "../desk/improvement-cards.js"
+import { MAX_CARD_FILES, cardFile, isClaimLive, readCards as readCardsDefault } from "../desk/improvement-cards.js"
 import { gitBlobSha, ownDeskVersion } from "./outbox.js"
 
 const RUBRIC_VERSION = 1
@@ -23,6 +24,16 @@ const MAX_PREPARED = 16
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/u
 const ALWAYS = ["investigation_only", "human_gate"]
 const SELF_DESCRIBING = /^(job|fingerprint|reconcile):/u
+const BLOB = /^[0-9a-f]{40}$/u
+
+// The Git blob id `bytes` would have if committed at `relative`: `git hash-object --path` applies the checkout's own clean filters
+// (line-ending conversion with core.autocrlf, .gitattributes), so a CRLF working copy of an LF blob still names that blob. Outside
+// Git, or if Git cannot run, the plain blob id of the bytes.
+function deskBlobSha(deskRoot, relative, bytes) {
+  const hashed = spawnSync("git", ["-C", deskRoot, "hash-object", `--path=${relative}`, "--stdin"], { input: bytes, timeout: 10_000, windowsHide: true, encoding: "utf8" })
+  const blob = hashed.status === 0 ? hashed.stdout.trim() : ""
+  return BLOB.test(blob) ? blob : gitBlobSha(bytes)
+}
 
 /** A desk-relative POSIX path made only of safe segments, or null. Never `..`, never absolute, never a backslash. */
 export function safeDeskPath(relative) {
@@ -85,7 +96,7 @@ export async function readRulings({ deskRoot, personPrefix, card, preparedEviden
     const read = await readRegular(deskRoot, ruling.id, MAX_RULING_BYTES)
     if (read.unreadable || (read.missing && ruling.required)) return unknown
     if (read.missing) continue
-    refs.push({ id: ruling.id, revision: gitBlobSha(read.bytes) })
+    refs.push({ id: ruling.id, revision: deskBlobSha(deskRoot, ruling.id, read.bytes) })
     if (ruling.kind === "plan" || ruling.kind === "spec") plans.push(ruling.id)
   }
   if (refs.length === 0) return { state: "unresolved", refs, scope: { codes: [...ALWAYS], plan_ids: [] } }
@@ -95,7 +106,7 @@ export async function readRulings({ deskRoot, personPrefix, card, preparedEviden
 // The default evidence resolver knows only pointers that name themselves (a job, a fingerprint, a reconcile class): their
 // revision is fixed at 1 and they are never public. An issue or pull request needs the parent's resolver, which alone can say
 // whether it is public and at which revision; without one it is unknown.
-async function resolveSelfDescribing(pointer) {
+export async function resolveSelfDescribing(pointer) {
   return SELF_DESCRIBING.test(pointer) ? { revision: 1, public: null } : null
 }
 
@@ -132,14 +143,15 @@ export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCa
   const canonical = canonicalCardPath(deskRoot, personPrefix, key)
   if (canonical === null) return { state: "source_unreadable", card: null, basis: null, briefEvidence: [], authority: { state: "authority_unknown", codes: [...ALWAYS], ruling_ids: [] } }
   const before = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
-  const listing = await readCards({ deskRoot, personPrefix })
+  // Up to the canonical folder's own cap, so a valid card past the default listing size is still found.
+  const listing = await readCards({ deskRoot, personPrefix, limit: MAX_CARD_FILES })
   const after = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
   const card = listing.cards.find((candidate) => candidate.key === key) ?? null
   const stable = before.missing === after.missing && (before.bytes === undefined || (after.bytes !== undefined && before.bytes.equals(after.bytes)))
   let state = "ready"
   if (listing.unreadable || (card === null && before.unreadable)) state = "source_unreadable"
   else if (!stable || (card !== null && after.bytes === undefined)) state = "source_unknown"
-  else if (card === null) state = before.missing ? (listing.truncated ? "source_unknown" : "card_missing") : "source_unreadable"
+  else if (card === null) state = listing.truncated ? "source_unknown" : before.missing ? "card_missing" : "source_unreadable"
 
   const rulings = card === null ? { state: "unresolved", refs: [], scope: { codes: [...ALWAYS], plan_ids: [] } } : await rulingsReader({ deskRoot, personPrefix, card, preparedEvidence: evidence.prepared ?? [] })
   const resolve = evidence.resolve ?? resolveSelfDescribing
@@ -161,7 +173,7 @@ export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCa
   const body = {
     key,
     canonical_path: canonical,
-    canonical_revision: after.bytes === undefined ? null : gitBlobSha(after.bytes),
+    canonical_revision: after.bytes === undefined ? null : deskBlobSha(deskRoot, canonical, after.bytes),
     claim: claimAt(card, now),
     rulings: rulings.refs,
     evidence: briefEvidence.map(({ id, pointer, revision }) => ({ id, pointer, revision })),
@@ -177,26 +189,37 @@ export async function readTriageBasis({ deskRoot, personPrefix, key, now, readCa
   return { state, card, basis, briefEvidence, authority }
 }
 
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
 /**
- * `checkTriageBasis({deskRoot,personPrefix,basis,now}) -> {state,reason}`: the mechanical recheck of a stored protected basis
- * against the desk as it is now, without an agent. `state` is `current`, `stale` (reason `basis_changed`, `claim_changed` or
- * `authority_changed`), `card_missing` or `source_unknown`. It rereads the card bytes, the effective claim at `now` and every
- * ruling the basis named plus the default ruling paths (so a newly added ruling also counts as a change).
+ * `checkTriageBasis({deskRoot,personPrefix,basis,now,readCards,evidence}) -> {state,reason}`: the mechanical recheck of a stored
+ * protected basis against the desk as it is now, without an agent. It rereads the card bytes, the effective claim at `now`, every
+ * ruling the basis named plus the default ruling paths (so a newly added ruling also counts), and every evidence pointer through
+ * the LIVE resolver `evidence.resolve` (as in `readTriageBasis`; without one only self-describing pointers resolve), never the
+ * stored revisions. `state` is `current`, `stale`, `card_missing` (reason `card_removed`), `source_unknown` (reason
+ * `source_incomplete`) or `evidence_unknown` (reason `evidence_unknown`: a pointer the resolver cannot answer now, so the review is
+ * not known to be current). A stale reason names the first difference, in this order: `basis_changed` (card bytes), `claim_changed`
+ * (claim state or expiry, so a renewal too), then unknown evidence, `authority_changed` (rulings or authority), `evidence_changed`
+ * (an evidence revision) and `version_changed` (the rubric or Desk producer version).
  */
-export async function checkTriageBasis({ deskRoot, personPrefix, basis, now, readCards = readCardsDefault }) {
+export async function checkTriageBasis({ deskRoot, personPrefix, basis, now, readCards = readCardsDefault, evidence = {} }) {
   const current = await readTriageBasis({
     deskRoot, personPrefix, key: basis.key, now, readCards,
     evidence: {
       prepared: basis.rulings.filter((ruling) => !defaultRulingPaths(personPrefix).includes(ruling.id))
         .map((ruling) => ({ kind: basis.authority.plan_ids.includes(ruling.id) ? "plan" : "ruling", path: ruling.id })),
-      resolve: async (pointer) => basis.evidence.find((item) => item.pointer === pointer) ?? null,
+      resolve: evidence.resolve,
     },
   })
   if (current.state === "card_missing") return { state: "card_missing", reason: "card_removed" }
   if (current.state === "source_unknown" || current.state === "source_unreadable") return { state: "source_unknown", reason: "source_incomplete" }
-  if (current.basis.canonical_revision !== basis.canonical_revision) return { state: "stale", reason: "basis_changed" }
-  if (current.basis.claim.state !== basis.claim.state) return { state: "stale", reason: "claim_changed" }
-  // Ruling bytes, a removed or added ruling, or a version change: the recommendation's authority is no longer the one reviewed.
-  if (current.basis.fingerprint !== basis.fingerprint) return { state: "stale", reason: "authority_changed" }
+  const fresh = current.basis
+  if (fresh.canonical_revision !== basis.canonical_revision) return { state: "stale", reason: "basis_changed" }
+  if (!same(fresh.claim, basis.claim)) return { state: "stale", reason: "claim_changed" }
+  // Unknown evidence also withholds authority, so it is reported before authority is compared.
+  if (current.state === "evidence_unknown") return { state: "evidence_unknown", reason: "evidence_unknown" }
+  if (!same(fresh.rulings, basis.rulings) || !same(fresh.authority, basis.authority)) return { state: "stale", reason: "authority_changed" }
+  if (!same(fresh.evidence, basis.evidence)) return { state: "stale", reason: "evidence_changed" }
+  if (fresh.rubric_version !== basis.rubric_version || fresh.producer_version !== basis.producer_version) return { state: "stale", reason: "version_changed" }
   return { state: "current", reason: null }
 }

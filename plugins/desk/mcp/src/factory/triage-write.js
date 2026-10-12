@@ -5,22 +5,25 @@
 // a freshly fetched remote `main`. A local commit, a push exit status or a scheduled push is never an acknowledgement.
 //
 // How (spec 7.2; plan "Identity acknowledgement and authority basis"):
+//   - It refuses a review whose authority code the expected basis does not grant, and a basis whose authority does not follow
+//     from its own rulings, before any Git call.
 //   - Under the existing sync lock, with `origin/main` as upstream, no merge in progress, no dirty or staged relevant path and no
 //     relevant local-only commit, it fetches `origin main` and checks the expected basis (card blob, every ruling blob, the
-//     default ruling paths and the effective claim at `now`) against the fetched remote tree. Any difference holds.
+//     default ruling paths, the effective claim at `now`, and every evidence revision resolved live) against the fetched remote
+//     tree. Any difference holds.
 //   - It reads the remote registry and annotation. A loser of a simultaneous first assignment adopts the acknowledged remote ID;
 //     it never commits or reports its own. A review that already satisfies the same basis is adopted with no new revision.
 //     The next revision is always one past the remote high-water mark, and identities are kept after removal or withdrawal.
 //   - It builds the commit in a clean temporary worktree of the fetched remote main, on its own `desk-triage/<token>` branch, in
 //     owner-protected factory state. It stages only the two files, checks the complete staged list and bytes, and commits with a
 //     normal `git commit` under the card guard's narrow Desk-tool commit context, so the desk's hooks, including any chained policy, run on
-//     the candidate tree (not the live checkout). No hook bypass. A refusal, a time-out (the whole process group is killed), a
-//     changed hook policy or any extra committed path holds without a push.
+//     the candidate tree (not the live checkout). No hook bypass. A refusal, a time-out (the whole process group is killed; the
+//     process tree on Windows), a changed hook policy or any extra committed path holds without a push.
 //   - It pushes the exact commit to `refs/heads/main` without force. A rejected push is retried once from a new fetch, with
 //     loser adoption and the basis check repeated. Then it fetches again and reads both blobs back.
 //   - It never resets, rebases, stashes or writes the live checkout, index or branch; the normal Desk sync later pulls the commit.
-//     The temporary worktree and branch are removed only when the worktree is still exactly clean; otherwise they are retained,
-//     reported, and block new resources until a later call recovers them.
+//     The temporary worktree and branch are removed only when the worktree is still exactly clean; otherwise they are retained and
+//     reported, and the next call's recovery removes them. A resource that cannot be recovered blocks new ones with a stable alarm.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
 import { promises as fs, realpathSync } from "node:fs"
@@ -32,9 +35,10 @@ import { factoryStateRoot, gitBlobSha } from "./outbox.js"
 import { ensureOwnerOnlyDirectory, protectLeafFile } from "./os-protect.js"
 import { protectWindowsPaths } from "./windows-acl.js"
 import { TOOL_COMMIT_ENV } from "../desk/card-commit-guard.js"
-import { defaultRulingPaths, safeDeskPath } from "./triage-basis.js"
+import { defaultRulingPaths, resolveSelfDescribing, safeDeskPath } from "./triage-basis.js"
 import {
-  compareIdentities, protectedBasisRecord, triagePaths, validateSafeTriageReview, validateTriageAnnotation, validateTriageIdentities,
+  compareIdentities, protectedBasisRecord, readProtectedBasis, triagePaths, validateSafeTriageReview, validateTriageAnnotation,
+  validateTriageIdentities,
 } from "./triage-state.js"
 
 const ANNOTATION_SCHEMA = "desk.factory.triage-local/1"
@@ -58,6 +62,11 @@ const OPERATIONS = {
   invalidate: { state: "stale", reason: "basis_changed" },
   withdraw: { state: "withdrawn", reason: "card_removed" },
 }
+// The reasons an invalidation may record: the mechanical check's own (`checkTriageBasis`), so Git keeps why a review went stale.
+const INVALIDATE_REASONS = ["basis_changed", "claim_changed", "authority_changed", "evidence_changed", "version_changed"]
+const AUTHORITY_CODES = ["existing_scope", "approved_plan", "investigation_only", "human_gate"]
+// The stable code a caller raises as an alarm: an earlier temporary resource this writer cannot remove blocks every later write.
+const RESOURCE_ALARM = "triage_resource_unrecoverable"
 
 const hex = (bytes) => randomBytes(bytes).toString("hex")
 // Whether a file-system step succeeded, without throwing: used where a missing or non-empty entry is an expected outcome.
@@ -145,11 +154,24 @@ function unsafeEnvironment(env) {
   return Object.keys(env).some((name) => name.toUpperCase().startsWith("GIT_") && !ALLOWED_GIT_ENV.has(name))
 }
 
+// The authority a basis grants must follow from its own rulings: existing scope needs a ruling, an approved plan a plan or spec
+// among them. A basis that claims more is refused, whoever built it.
+function authorityShape(basis) {
+  const { authority } = basis
+  if (authority === null || typeof authority !== "object" || !Array.isArray(authority.codes) || !Array.isArray(authority.plan_ids)) return false
+  const rulings = basis.rulings.map((ruling) => ruling.id)
+  return authority.codes.every((code) => AUTHORITY_CODES.includes(code)) &&
+    (!authority.codes.includes("existing_scope") || rulings.length > 0) &&
+    (!authority.codes.includes("approved_plan") || (authority.plan_ids.length > 0 && authority.plan_ids.every((id) => rulings.includes(id))))
+}
+
 function basisShape(basis, key, cardPath) {
   return basis !== null && typeof basis === "object" && basis.key === key && basis.canonical_path === cardPath &&
     (basis.canonical_revision === null || BLOB.test(basis.canonical_revision)) &&
     Array.isArray(basis.rulings) && basis.rulings.every((ruling) => safeDeskPath(ruling?.id) !== null && BLOB.test(ruling.revision)) &&
-    ["live", "expired", "none"].includes(basis.claim?.state) && Array.isArray(basis.public_evidence_revisions)
+    ["live", "expired", "none"].includes(basis.claim?.state) && Array.isArray(basis.public_evidence_revisions) &&
+    Array.isArray(basis.evidence) && basis.evidence.every((item) => typeof item?.pointer === "string" && Number.isSafeInteger(item.revision) && item.revision >= 1) &&
+    authorityShape(basis)
 }
 
 // The hook policy Git would apply in `cwd`: core.hooksPath and every entry of the hooks folder Git resolves, by name, kind, mode
@@ -232,12 +254,14 @@ async function onlyOwnChanges(ctx, record) {
   return entries.every((entry) => /^([AM][ M]|\?\?) /u.test(entry) && record.files.includes(entry.slice(3)))
 }
 
-// Removes the worktree and its branch only when it holds nothing but its own files. Returns whether everything was removed;
-// otherwise the record stays, marked retained, and reported.
-async function release(ctx, record, resource) {
+// Removes the worktree and its branch. The call that made it removes it only when it holds nothing but its own files, so what a
+// hook left is retained and reported with that call's result; a later call's recovery (`force`) removes an exactly owned worktree
+// whatever it holds, since it lives in owner-protected factory state and nothing but this writer and its hooks wrote there.
+// Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
+async function release(ctx, record, resource, { force = false } = {}) {
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
-    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
+    const removed = (force || (await onlyOwnChanges(ctx, record))) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", "--force", record.path])).status === 0
     if (!removed) {
       resource.disposition = "retained"
       await saveRecord(ctx, { ...record, disposition: "retained" })
@@ -256,8 +280,9 @@ async function release(ctx, record, resource) {
   return true
 }
 
-// A record left by an earlier call (a crash, or a worktree that was not clean) is recovered first. Only exactly owned records
-// are touched; one that cannot be recovered blocks new resources.
+// A record left by an earlier call (a crash, or a worktree a hook left files in) is recovered first, without a person. Only
+// exactly owned records are touched; a foreign record, or an owned one whose removal fails, blocks new resources and the call
+// reports `RESOURCE_ALARM`.
 async function recover(ctx, resources) {
   const dir = await opsDir(ctx)
   for (const name of (await fs.readdir(dir)).sort()) {
@@ -272,7 +297,7 @@ async function recover(ctx, resources) {
       record.ref === `desk-triage/${record.token}` && record.path === path.join(dir, record.token, "wt")
     const resource = { kind: "worktree", path: owned ? record.path : path.join(dir, name), ref: owned ? record.ref : null, owner: record?.owner ?? null, disposition: "retained" }
     resources.push(resource)
-    if (!owned || !(await release(ctx, record, resource))) return false
+    if (!owned || !(await release(ctx, record, resource, { force: true }))) return false
   }
   return true
 }
@@ -354,7 +379,21 @@ async function basisHolds(ctx, main, input, now) {
   for (const id of defaultRulingPaths(input.personPrefix)) {
     if (!basis.rulings.some((ruling) => ruling.id === id) && (await blobAt(ctx, main, id)) !== null) return false
   }
-  return !(basis.claim.state === "live" && !(Date.parse(basis.claim.expires_at) > now.getTime()))
+  if (basis.claim.state === "live" && !(Date.parse(basis.claim.expires_at) > now.getTime())) return false
+  // Every evidence revision, resolved live now, not taken from the basis: a public issue edited since the review changes it.
+  for (const item of basis.evidence) {
+    const found = await Promise.resolve().then(() => input.resolve(item.pointer, null)).catch(() => null)
+    if (found?.revision !== item.revision) return false
+  }
+  return true
+}
+
+// An adopted review was written by another host, so this host has no protected basis under its token. The equivalent expected
+// basis is kept under that token, so the mechanical refresh here can recheck the review instead of reporting it unavailable.
+async function keepProtectedBasis(ctx, token, basis, resources) {
+  if ((await readProtectedBasis(ctx.env, token)) !== null) return
+  const file = await writeProtectedTriageFile(ctx.env, ["basis", `${token}.json`], `${JSON.stringify(protectedBasisRecord(token, basis))}\n`, ctx.protectOptions)
+  resources.push({ kind: "protected_basis", path: file, ref: null, owner: process.pid, disposition: "retained" })
 }
 
 async function round(ctx, input, resources) {
@@ -378,7 +417,8 @@ async function round(ctx, input, resources) {
   if (entry !== undefined && (annotation === null || entry.revision > annotation.revision)) return hold("identity_conflict")
   if (operation !== "review" && (annotation === null || annotation.attempt.state === "withdrawn" && operation === "invalidate")) return hold("policy_refused")
 
-  const { state, reason } = OPERATIONS[operation]
+  const { state } = OPERATIONS[operation]
+  const reason = input.reason ?? OPERATIONS[operation].reason
   const target = {
     schema: ANNOTATION_SCHEMA,
     key,
@@ -397,6 +437,7 @@ async function round(ctx, input, resources) {
     registry_blob: await blobAt(ctx, commit, paths.registry), annotation_blob: await blobAt(ctx, commit, paths.annotation),
   })
   if (entry !== undefined && entry.revision === annotation.revision && sameContent(annotation, target)) {
+    await keepProtectedBasis(ctx, annotation.basis.protected_basis, input.expectedBasis, resources)
     return { result: { state: "adopted", id: entry.id, revision: entry.revision, ack: await ack(main), resources } }
   }
   const high = Math.max(annotation?.revision ?? 0, ...registry.entries.filter((candidate) => candidate.key === key).map((candidate) => candidate.revision))
@@ -432,23 +473,32 @@ async function round(ctx, input, resources) {
 }
 
 /**
- * `publishOwnedTriage({env,deskRoot,personPrefix,key,store,expectedBasis,review,operation,now,git}) -> {state,id?,revision?,ack?,resources}`.
+ * `publishOwnedTriage({env,deskRoot,personPrefix,key,store,expectedBasis,review,operation,now,git,evidence,reason}) -> {state,id?,revision?,ack?,resources,alarm?}`.
  *
  * `operation` is `review` (with a `validateSafeTriageReview`-valid `review`, never a candidate), `invalidate` (keep the last valid
  * review as stale context) or `withdraw` (the card is gone on a complete read; `expectedBasis.canonical_revision` is null).
- * `expectedBasis` is `readTriageBasis().basis` from the prepared local read. `store` is `owner/repo`, case-normalized.
- * `git` holds test and platform seams: `{spawn, timeoutMs, onStep(name), platform, aclRunner}`.
+ * `expectedBasis` is `readTriageBasis().basis` from the prepared local read. A review's `authority_code` must be one of
+ * `expectedBasis.authority.codes`, and that authority must follow from the basis's own rulings; otherwise `policy_refused`, so an
+ * agent-ready review is never written on a basis whose authority is unresolved or was revoked. `store` is `owner/repo`,
+ * case-normalized. `evidence.resolve(pointer, null) -> {revision}|null` is the live evidence resolver (as in `readTriageBasis`;
+ * without it only self-describing pointers resolve): every evidence revision of the basis is resolved again before the push and
+ * after the readback, and any difference is `stale_basis`. `reason` is the invalidation's reason from `refreshTriage` (one of
+ * `basis_changed`, `claim_changed`, `authority_changed`, `evidence_changed`, `version_changed`; default `basis_changed`) and is
+ * refused for the other operations. `git` holds test and platform seams: `{spawn, timeoutMs, onStep(name), platform, aclRunner}`.
  *
  * States: `acknowledged` (written and read back), `adopted` (the remote already holds this identity and review),
  * `stale_basis`, `identity_conflict` (damaged registry or annotation, or registry and annotation disagree),
  * `unacknowledged` (pushed or maybe pushed but not read back), `not_git`, `unsynchronized` (no `origin/main` upstream, a merge
  * in progress, dirty or local-only relevant paths, or no fetch), `unsafe_path`, `busy` (the sync lock, or an unrecovered earlier
- * resource), `policy_refused` (a refused commit hook, an unsafe environment, disabled hooks, an invalid input or nothing to
- * invalidate or withdraw), `policy_unknown` (a hook time-out, a changed hook policy or an extra committed path) and `write_failed`
- * (including a revision high-water mark that cannot advance). `id`, `revision` and `ack` appear only when acknowledged or adopted.
- * `resources` lists every temporary path and ref with its owner and disposition.
+ * resource), `policy_refused` (a refused commit hook, an unsafe environment, disabled hooks, an invalid input, authority the
+ * basis does not grant, or nothing to invalidate or withdraw), `policy_unknown` (a hook time-out, a changed hook policy or an
+ * extra committed path) and `write_failed` (including a revision high-water mark that cannot advance). `id`, `revision` and `ack`
+ * appear only when acknowledged or adopted. `resources` lists every temporary path and ref with its owner and disposition. A
+ * worktree a hook left files in is retained by its own call and removed by the next call's recovery; only a resource that cannot
+ * be recovered (a foreign record, or a removal that fails) makes a call `busy` with `alarm: "triage_resource_unrecoverable"`,
+ * the stable code a loop raises, since every later write stays blocked until it is cleared.
  */
-export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, store, expectedBasis, review, operation, now, git = {} }) {
+export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, store, expectedBasis, review, operation, now, git = {}, evidence = {}, reason }) {
   const resources = []
   const hold = (state) => ({ state, resources })
   if (!Object.hasOwn(OPERATIONS, operation)) return hold("policy_refused")
@@ -457,9 +507,11 @@ export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, sto
   const at = new Date(now)
   const reviewOk = operation === "review" ? validateSafeTriageReview(review).ok : review === null || review === undefined
   const expectMissing = operation === "withdraw"
-  if (!reviewOk || Number.isNaN(at.getTime()) || !basisShape(expectedBasis, key, paths.card) || expectMissing !== (expectedBasis.canonical_revision === null) || unsafeEnvironment(env)) {
+  const reasonOk = reason === undefined || (operation === "invalidate" && INVALIDATE_REASONS.includes(reason))
+  if (!reviewOk || !reasonOk || Number.isNaN(at.getTime()) || !basisShape(expectedBasis, key, paths.card) || expectMissing !== (expectedBasis.canonical_revision === null) || unsafeEnvironment(env)) {
     return hold("policy_refused")
   }
+  if (operation === "review" && !expectedBasis.authority.codes.includes(review.authority_code)) return hold("policy_refused")
   const ctx = {
     env,
     deskRoot,
@@ -483,8 +535,11 @@ export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, sto
   if (lock === null || lock.refused) return hold("busy")
   try {
     ctx.stateRoot = await factoryStateRoot(env, { deskRoot, platform: ctx.platform, runner: git.aclRunner })
-    if (!(await recover(ctx, resources))) return hold("busy")
-    const input = { paths, key, store: store.toLowerCase(), personPrefix, operation, review: operation === "review" ? review : null, expectedBasis, now: at }
+    if (!(await recover(ctx, resources))) return { state: "busy", alarm: RESOURCE_ALARM, resources }
+    const input = {
+      paths, key, store: store.toLowerCase(), personPrefix, operation, review: operation === "review" ? review : null, expectedBasis, now: at,
+      reason, resolve: evidence.resolve ?? resolveSelfDescribing,
+    }
     const first = await round(ctx, input, resources)
     if (first.result !== undefined) return first.result
     const second = await round(ctx, input, resources)

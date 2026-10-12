@@ -4,7 +4,7 @@ import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { randomUUID } from "node:crypto"
 import { mkTempRoot } from "../_temp_roots.js"
-import { cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { MAX_CARD_FILES, cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { validateTriageResultBytes } from "../../../../../plugins/desk/mcp/src/factory/triage-schema.js"
 import {
   canonicalCardPath, checkTriageBasis, defaultRulingPaths, readRulings, readTriageBasis, safeDeskPath,
@@ -64,21 +64,30 @@ test("authority_and_claim_are_live_inputs", async () => {
   assert.match(live.basis.canonical_revision, /^[0-9a-f]{40}$/u)
   assert.match(live.basis.fingerprint, /^[0-9a-f]{64}$/u)
   assert.deepEqual(live.basis.public_evidence_revisions, [{ kind: "issue", ref: "https://github.com/example-org/example-repo/issues/101", revision: 3 }])
-  assert.deepEqual((await checkTriageBasis({ deskRoot, personPrefix: "", basis: live.basis, now: T0 + 1000 })), { state: "current", reason: null })
+  const check = (basis, now, resolve = resolveIssue) => checkTriageBasis({ deskRoot, personPrefix: "", basis, now, evidence: { resolve } })
+  assert.deepEqual(await check(live.basis, T0 + 1000), { state: "current", reason: null })
+
+  // Evidence is rechecked live, never from the stored basis: a public issue edited since the review makes it stale, and without a
+  // resolver that can answer, the review is not known to be current.
+  assert.deepEqual(await check(live.basis, T0 + 1000, async (pointer) => ({ ...(await resolveIssue(pointer)), revision: 4 })), { state: "stale", reason: "evidence_changed" })
+  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "", basis: live.basis, now: T0 + 1000 }), { state: "evidence_unknown", reason: "evidence_unknown" })
+  // A Desk upgrade or a rubric change is a version change, never an authority change.
+  assert.deepEqual(await check({ ...live.basis, producer_version: "0.0.1" }, T0 + 1000), { state: "stale", reason: "version_changed" })
+  assert.deepEqual(await check({ ...live.basis, rubric_version: 0 }, T0 + 1000), { state: "stale", reason: "version_changed" })
 
   // The claim expires with the card bytes unchanged: effective ownership changes, so the basis does.
   const expired = await readTriageBasis({ deskRoot, personPrefix: "", key: KEY, now: T0 + 2 * HOUR, evidence: { resolve: resolveIssue } })
   assert.equal(expired.basis.canonical_revision, live.basis.canonical_revision, "same card bytes")
   assert.equal(expired.basis.claim.state, "expired")
   assert.notEqual(expired.basis.fingerprint, live.basis.fingerprint)
-  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "", basis: live.basis, now: T0 + 2 * HOUR }), { state: "stale", reason: "claim_changed" })
+  assert.deepEqual(await check(live.basis, T0 + 2 * HOUR), { state: "stale", reason: "claim_changed" })
 
   // Scope revoked in the ruling, card bytes unchanged: the basis is no longer the reviewed one.
   await fs.writeFile(path.join(deskRoot, "AGENTS.md"), "Factory defects now need the operator's approval.\n")
   const revoked = await readTriageBasis({ deskRoot, personPrefix: "", key: KEY, now: T0, evidence: { resolve: resolveIssue } })
   assert.equal(revoked.basis.canonical_revision, live.basis.canonical_revision)
   assert.notEqual(revoked.basis.fingerprint, live.basis.fingerprint)
-  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "", basis: live.basis, now: T0 + 1000 }), { state: "stale", reason: "authority_changed" })
+  assert.deepEqual(await check(live.basis, T0 + 1000), { state: "stale", reason: "authority_changed" })
   await fs.writeFile(path.join(deskRoot, "AGENTS.md"), agentsBytes)
 
   // No ruling at all: an investigation or a human gate only, never existing scope.
@@ -86,10 +95,17 @@ test("authority_and_claim_are_live_inputs", async () => {
   const none = await readTriageBasis({ deskRoot, personPrefix: "", key: KEY, now: T0, evidence: { resolve: resolveIssue } })
   assert.equal(none.state, "ready")
   assert.deepEqual(none.authority, { state: "unresolved", codes: ["investigation_only", "human_gate"], ruling_ids: [] })
-  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "", basis: live.basis, now: T0 + 1000 }), { state: "stale", reason: "authority_changed" })
+  assert.deepEqual(await check(live.basis, T0 + 1000), { state: "stale", reason: "authority_changed" })
   // A ruling that appears later also changes the basis that was read without it.
   await fs.rename(path.join(deskRoot, "AGENTS.moved"), path.join(deskRoot, "AGENTS.md"))
-  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "", basis: none.basis, now: T0 + 1000 }), { state: "stale", reason: "authority_changed" })
+  assert.deepEqual(await check(none.basis, T0 + 1000), { state: "stale", reason: "authority_changed" })
+
+  // A renewed claim (still live, later expiry) is a claim change, not an authority change.
+  await fs.writeFile(card, (await fs.readFile(card, "utf8")).replace(new Date(T0 + HOUR).toISOString(), new Date(T0 + 3 * HOUR).toISOString()))
+  assert.deepEqual(await check(live.basis, T0 + 1000), { state: "stale", reason: "basis_changed" }, "the card bytes changed with the renewal")
+  const renewed = await readTriageBasis({ deskRoot, personPrefix: "", key: KEY, now: T0, evidence: { resolve: resolveIssue } })
+  assert.deepEqual(await check({ ...renewed.basis, claim: live.basis.claim }, T0 + 1000), { state: "stale", reason: "claim_changed" })
+  await fs.writeFile(card, cardBytes)
 
   // Canonical file bytes and the claim are untouched by every read.
   assert.deepEqual(await fs.readFile(card), cardBytes)
@@ -157,6 +173,11 @@ test("missing_unreadable_or_incomplete_card_is_not_live", async () => {
 
   const truncated = await readTriageBasis({ deskRoot, personPrefix: "", key: "andon:example-org/example-repo#999", now: T0, readCards: async () => ({ cards: [], truncated: true, unreadable: false }) })
   assert.equal(truncated.state, "source_unknown", "a truncated read cannot prove removal")
+  // The card is read up to the folder's own cap; a present card past a truncated listing is unknown, not unreadable.
+  const limits = []
+  const pastLimit = await readTriageBasis({ deskRoot, personPrefix: "", key: KEY, now: T0, readCards: async (args) => { limits.push(args.limit); return { cards: [], truncated: true, unreadable: false } } })
+  assert.equal(pastLimit.state, "source_unknown")
+  assert.deepEqual(limits, [MAX_CARD_FILES])
   const folder = await readTriageBasis({ deskRoot, personPrefix: "", key: KEY, now: T0, readCards: async () => ({ cards: [], truncated: false, unreadable: true }) })
   assert.equal(folder.state, "source_unreadable")
   const badLocation = await readTriageBasis({ deskRoot, personPrefix: "../elsewhere", key: KEY, now: T0 })
@@ -212,7 +233,7 @@ test("rulings_are_read_only_from_validated_desk_paths", async () => {
   // A prepared non-plan ruling is part of the basis and is rechecked as a ruling.
   const withRuling = await readTriageBasis({ deskRoot, personPrefix: "desks/ari", key: KEY, now: T0, evidence: { prepared: [{ kind: "ruling", path: "specs/s.md" }], resolve: resolveIssue } })
   assert.deepEqual(withRuling.authority.codes, ["existing_scope", "investigation_only", "human_gate"])
-  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "desks/ari", basis: withRuling.basis, now: T0 }), { state: "current", reason: null })
+  assert.deepEqual(await checkTriageBasis({ deskRoot, personPrefix: "desks/ari", basis: withRuling.basis, now: T0, evidence: { resolve: resolveIssue } }), { state: "current", reason: null })
   const spec = await readRulings({ deskRoot, personPrefix: "desks/ari", card, preparedEvidence: [{ kind: "spec", path: "specs/s.md" }] })
   assert.deepEqual(spec.scope.plan_ids, ["specs/s.md"])
 
@@ -239,6 +260,16 @@ test("rulings_are_read_only_from_validated_desk_paths", async () => {
     } finally {
       await fs.chmod(path.join(deskRoot, "specs"), 0o700)
     }
+  }
+
+  // Where Git cannot run, a ruling's revision is the plain blob id of its bytes, the same id Git gives an unconverted file.
+  const withGit = await readRulings({ deskRoot, personPrefix: "desks/ari", card })
+  const savedPath = process.env.PATH
+  process.env.PATH = path.join(deskRoot, "no-tools-here")
+  try {
+    assert.deepEqual((await readRulings({ deskRoot, personPrefix: "desks/ari", card })).refs, withGit.refs)
+  } finally {
+    process.env.PATH = savedPath
   }
 
   for (const bad of ["", "a/../b", "/abs", "a\\b", "a//b", ".", "x".repeat(513), 7]) assert.equal(safeDeskPath(bad), null, String(bad))

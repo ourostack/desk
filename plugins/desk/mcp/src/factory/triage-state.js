@@ -31,8 +31,8 @@ const GATES = ["intent", "scope", "approval", "voice", "spend", "account", "irre
 const AUTHORITY = ["existing_scope", "approved_plan", "investigation_only", "human_gate"]
 const STATES = ["not_reviewed", "reviewed", "stale", "refused", "deferred", "withdrawn", "source_unknown"]
 const REASONS = [
-  "review_accepted", "basis_changed", "claim_changed", "authority_changed", "card_removed", "source_incomplete",
-  "review_refused", "deferred_by_limit", "protected_basis_unavailable",
+  "review_accepted", "basis_changed", "claim_changed", "authority_changed", "evidence_changed", "version_changed", "card_removed",
+  "source_incomplete", "review_refused", "deferred_by_limit", "protected_basis_unavailable",
 ]
 const NOT_AUTHORIZED = "detail_not_authorized_for_git"
 const SUMMARY_CODES = new Set([
@@ -99,15 +99,29 @@ export function validateSafeTriageReview(review) {
 }
 
 /**
- * `toSafeTriageReview({result,basis,authorizedEvidence,protectedToken}) -> {state:"safe"|"refused",review,errors?}`.
+ * `toSafeTriageReview({result,basis,authorizedEvidence,protectedToken,briefKeys}) -> {state:"safe"|"refused",review,errors?}`.
  * `result` is one already validated candidate row; `basis` the card's `readTriageBasis().basis`; `authorizedEvidence` the
  * parent's `[{id,kind,ref,revision,git_safe}]` where only `git_safe === true` entries with a public pointer shape may be kept;
- * `protectedToken` the random token under which the parent stored the full protected result. No result text is copied.
+ * `protectedToken` the random token under which the parent stored the full protected result; `briefKeys` the canonical keys of
+ * the brief the result answered. No result text is copied.
+ *
+ * This boundary proves authority itself rather than trusting the candidate check: the result's authority code must be one the
+ * basis allows (`basis.authority.codes`, which is only an investigation or a human gate unless the basis was ready with a
+ * ruling) and every ruling it cites must be one of the basis's rulings; otherwise `authority_unproved`. Every related or
+ * duplicate key must be a key of the brief; otherwise `related_unproved`, so key-shaped prose never reaches Git.
  */
-export function toSafeTriageReview({ result, basis, authorizedEvidence = [], protectedToken }) {
+export function toSafeTriageReview({ result, basis, authorizedEvidence = [], protectedToken, briefKeys = [] }) {
   const refuse = (code) => ({ state: "refused", review: null, errors: [{ code, path: "" }] })
   if (result === null || typeof result !== "object" || basis === null || typeof basis !== "object") return refuse("type")
   if (result.key !== basis.key) return refuse("key_mismatch")
+  const codes = Array.isArray(basis.authority?.codes) ? basis.authority.codes : []
+  const rulings = new Set((Array.isArray(basis.rulings) ? basis.rulings : []).map((ruling) => ruling?.id))
+  const cited = result.authority?.ruling_ids
+  if (!codes.includes(result.authority?.code) || !Array.isArray(cited) || !cited.every((id) => rulings.has(id))) return refuse("authority_unproved")
+  const related = [...new Set(Array.isArray(result.related) ? result.related : [])]
+  const duplicates = [...new Set((Array.isArray(result.duplicates) ? result.duplicates : []).map((duplicate) => duplicate?.key))]
+  const brief = new Set(Array.isArray(briefKeys) ? briefKeys : [])
+  if (![...related, ...duplicates].every((key) => brief.has(key))) return refuse("related_unproved")
   const allowed = new Map(authorizedEvidence.filter((item) => item?.git_safe === true).map((item) => [item.id, item]))
   const evidence = []
   let withheld = false
@@ -122,11 +136,11 @@ export function toSafeTriageReview({ result, basis, authorizedEvidence = [], pro
   const review = {
     route,
     gate,
-    authority_code: result.authority?.code,
+    authority_code: result.authority.code,
     summary_codes: [`source:${basis.key.slice(0, basis.key.indexOf(":"))}`, `route:${route}`, ...(gate === null ? [] : [`gate:${gate}`]), ...(withheld ? [NOT_AUTHORIZED] : [])],
     evidence: evidence.slice(0, 16),
-    related_keys: [...new Set(Array.isArray(result.related) ? result.related : [])],
-    duplicate_keys: [...new Set((Array.isArray(result.duplicates) ? result.duplicates : []).map((duplicate) => duplicate?.key))],
+    related_keys: related,
+    duplicate_keys: duplicates,
     producer_version: basis.producer_version,
     rubric_version: basis.rubric_version,
     protected_result: protectedToken,
@@ -342,9 +356,10 @@ function acknowledgedTree(deskRoot) {
 
 /**
  * `resolveAcknowledgedTriage({deskRoot,personPrefix,store,id,revision}) -> {state,key?,protected_result?}`.
- * Scans only the owned acknowledged registry. `resolved` needs this store's entry for `id` at exactly `revision` and a current
- * reviewed annotation; an older revision, or an annotation no longer reviewed, is `stale`; anything else (absent ID, another
- * store, a newer revision than acknowledged, a damaged registry) is `not_resolved`. It never guesses another card.
+ * Scans only the owned acknowledged registry. `resolved` needs this store's entry for `id` at exactly `revision`, and the card's
+ * annotation reviewed at that same revision (stores share one annotation, so a later revision written for another store is a
+ * different review); an older revision, an annotation at another revision or no longer reviewed is `stale`; anything else (absent
+ * ID, another store, a newer revision than acknowledged, a damaged registry) is `not_resolved`. It never guesses another card.
  */
 export function resolveAcknowledgedTriage({ deskRoot, personPrefix, store, id, revision }) {
   const none = { state: "not_resolved" }
@@ -358,7 +373,7 @@ export function resolveAcknowledgedTriage({ deskRoot, personPrefix, store, id, r
   const own = triagePaths(deskRoot, personPrefix, entry.key)
   const annotationBytes = tree.read(own.annotation)
   const annotation = annotationBytes === null ? undefined : validateTriageAnnotation(annotationBytes).value
-  if (revision < entry.revision || annotation?.attempt.state !== "reviewed") return { state: "stale", key: entry.key }
+  if (revision < entry.revision || annotation?.attempt.state !== "reviewed" || annotation.revision !== entry.revision) return { state: "stale", key: entry.key }
   return { state: "resolved", key: entry.key, protected_result: annotation.review.protected_result }
 }
 
@@ -385,19 +400,25 @@ export function readAcknowledgedAnnotations({ deskRoot, personPrefix }) {
 // The mechanical refresh.
 
 /**
- * `refreshTriage({env,deskRoot,personPrefix,now}) -> {state,changes,coverage}`. Mechanical and read-only: no agent, no write.
- * For each acknowledged annotation it rechecks the stored protected basis against the desk now (card bytes, the effective
- * claim at `now`, the rulings) and returns the change the loop must publish through `publishOwnedTriage`:
- *   - `{key, operation:"invalidate", reason}` for a reviewed annotation whose basis changed (stale, review kept as context);
+ * `refreshTriage({env,deskRoot,personPrefix,now,evidence}) -> {state,changes,coverage}`. Mechanical and read-only: no agent, no
+ * write. For each acknowledged annotation it rechecks the stored protected basis against the desk now (`checkTriageBasis`: card
+ * bytes, the effective claim at `now`, the rulings, and each evidence revision through the live resolver `evidence.resolve`) and
+ * returns the change the loop must publish through `publishOwnedTriage`:
+ *   - `{key, operation:"invalidate", reason}` for a reviewed annotation whose basis changed (stale, review kept as context); the
+ *     reason is the check's own (`basis_changed`, `claim_changed`, `authority_changed`, `evidence_changed`, `version_changed`) and
+ *     is passed to `publishOwnedTriage` as is;
  *   - `{key, operation:"withdraw", reason:"card_removed"}` only when a COMPLETE read lacks the card;
  *   - `{key, operation:null, state:"source_unknown", reason:"source_incomplete"}` when the read is truncated or unreadable, or the
  *     card's own file cannot be read: removal is never asserted from an incomplete source, and nothing is written;
+ *   - `{key, operation:null, state:"source_unknown", reason:"evidence_unknown"}` when an evidence pointer cannot be resolved now
+ *     (no live resolver for it): the review is not known to be current, and nothing is written;
  *   - `{key, operation:null, state:"stale", reason:"protected_basis_unavailable"}` when this host lacks the protected basis of a
  *     review (another host's): it is not assumed fresh here, and another host's review is not rewritten.
  * `state` is the scan (`complete`, `truncated` or `unreadable`). `coverage` counts reviewed and unreviewed open cards from the
- * annotations alone; refused and deferred counts belong to the loop's attempt record, so they are null here (unknown, not zero).
+ * annotations alone, and only from a complete scan: an unreadable or truncated scan has no count it can stand behind, so every
+ * count is null (unknown, never zero). Refused and deferred counts belong to the loop's attempt record, so they are always null.
  */
-export async function refreshTriage({ env, deskRoot, personPrefix, now, readCards = readCardsDefault }) {
+export async function refreshTriage({ env, deskRoot, personPrefix, now, readCards = readCardsDefault, evidence = {} }) {
   const listing = await readCards({ deskRoot, personPrefix })
   const scan = listing.unreadable ? "unreadable" : listing.truncated ? "truncated" : "complete"
   const { annotations } = readAcknowledgedAnnotations({ deskRoot, personPrefix })
@@ -413,24 +434,26 @@ export async function refreshTriage({ env, deskRoot, personPrefix, now, readCard
     }
     if (annotation.attempt.state !== "reviewed") continue
     const stored = await readProtectedBasis(env, annotation.basis.protected_basis)
-    const check = stored === null ? null : await checkTriageBasis({ deskRoot, personPrefix, basis: stored, now, readCards })
+    const check = stored === null ? null : await checkTriageBasis({ deskRoot, personPrefix, basis: stored, now, readCards, evidence })
     if (check === null) changes.push({ key, operation: null, state: "stale", reason: "protected_basis_unavailable" })
     else if (check.state === "stale") changes.push({ key, operation: "invalidate", reason: check.reason })
     else if (check.state === "current") fresh.add(key)
+    else if (check.state === "evidence_unknown") changes.push({ key, operation: null, state: "source_unknown", reason: "evidence_unknown" })
     else changes.push({ key, operation: null, state: "source_unknown", reason: "source_incomplete" })
   }
   const open = listing.cards.filter((card) => !card.state.startsWith("closed_"))
   const unreviewed = open.filter((card) => !fresh.has(card.key)).length
+  const complete = scan === "complete"
   return {
     state: scan,
     changes,
     coverage: {
       scan,
-      reviewed: open.length - unreviewed,
-      unreviewed: scan === "unreadable" ? null : unreviewed,
+      reviewed: complete ? open.length - unreviewed : null,
+      unreviewed: complete ? unreviewed : null,
       refused: null,
       deferred: null,
-      more_unreviewed: scan === "complete" ? unreviewed > 0 : null,
+      more_unreviewed: complete ? unreviewed > 0 : null,
     },
   }
 }

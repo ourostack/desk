@@ -112,9 +112,11 @@ test("valid_private_result_never_enters_git_review", () => {
   }
   const checked = validateTriageResultBytes(bytes({ schema: "desk.factory.triage-result/1", batch: brief.batch, rubric_version: 1, producer_version: "1.4.0", results: [result] }), { brief })
   assert.equal(checked.ok, true, "the private candidate is fully valid protected data")
-  const basis = { key: KEY, producer_version: "1.4.0-alpha.6", rubric_version: 1 }
+  const unresolved = { state: "unresolved", codes: ["investigation_only", "human_gate"], plan_ids: [] }
+  const basis = { key: KEY, producer_version: "1.4.0-alpha.6", rubric_version: 1, rulings: [], authority: unresolved }
+  const briefKeys = brief.cards.map((card) => card.key)
   const token = hex(16)
-  const safe = toSafeTriageReview({ result: checked.valid[0], basis, authorizedEvidence: fixture.private_candidate.authorized_evidence, protectedToken: token })
+  const safe = toSafeTriageReview({ result: checked.valid[0], basis, authorizedEvidence: fixture.private_candidate.authorized_evidence, protectedToken: token, briefKeys })
   assert.equal(safe.state, "safe")
   assert.deepEqual(safe.review, {
     route: "human_decision", gate: "irreversible", authority_code: "human_gate",
@@ -135,23 +137,40 @@ test("valid_private_result_never_enters_git_review", () => {
     [{ result: { ...result, key: fixture.related_key }, basis, protectedToken: token }, "key_mismatch"],
     [{ result: null, basis, protectedToken: token }, "type"],
     [{ result, basis: null, protectedToken: token }, "type"],
+    // The Git boundary proves authority itself: the code must be one the basis grants and every cited ruling one of its rulings.
+    [{ result: { ...result, route: "agent_ready", authority: { code: "existing_scope", ruling_ids: ["AGENTS.md"] }, gate_reason: null }, basis, protectedToken: token, briefKeys }, "authority_unproved"],
+    [{ result: { ...result, authority: { code: "human_gate", ruling_ids: ["AGENTS.md"] } }, basis, protectedToken: token, briefKeys }, "authority_unproved"],
+    [{ result: { ...result, authority: { code: "human_gate", ruling_ids: "AGENTS.md" } }, basis, protectedToken: token, briefKeys }, "authority_unproved"],
+    [{ result, basis: { key: KEY, producer_version: "1.4.0", rubric_version: 1 }, protectedToken: token, briefKeys }, "authority_unproved"],
+    // Related and duplicate keys must be keys of the brief, so key-shaped prose never reaches Git.
+    [{ result: { ...result, related: ["andon:ari-salary-raise-for-bob-is-secret"] }, basis, protectedToken: token, briefKeys }, "related_unproved"],
+    [{ result: { ...result, related: [], duplicates: [{ key: "andon:another-private-note" }] }, basis, protectedToken: token, briefKeys }, "related_unproved"],
+    [{ result, basis, protectedToken: token }, "related_unproved"],
   ]) assert.deepEqual(toSafeTriageReview(input), { state: "refused", review: null, errors: [{ code, path: "" }] })
-  const badToken = toSafeTriageReview({ result, basis, protectedToken: "private digest" })
+  // With a ruling in the basis, an agent-ready review citing it is safe.
+  const ruled = { ...basis, rulings: [{ id: "AGENTS.md", revision: "a".repeat(40) }], authority: { state: "resolved", codes: ["existing_scope", "investigation_only", "human_gate"], plan_ids: [] } }
+  const ready = toSafeTriageReview({ result: { ...result, route: "agent_ready", authority: { code: "existing_scope", ruling_ids: ["AGENTS.md"] }, gate_reason: null }, basis: ruled, protectedToken: token, briefKeys })
+  assert.equal(ready.state, "safe")
+  assert.equal(ready.review.authority_code, "existing_scope")
+  const badToken = toSafeTriageReview({ result, basis, protectedToken: "private digest", briefKeys })
   assert.equal(badToken.state, "refused")
   assert.equal(badToken.review, null)
   // Odd shapes in an unvalidated row are refused, never coerced into prose.
   const odd = toSafeTriageReview({ result: { key: KEY, route: "agent_ready", authority: null, evidence: "x", related: null, duplicates: null }, basis, protectedToken: token })
   assert.equal(odd.state, "refused")
+  const oddLists = toSafeTriageReview({ result: { key: KEY, route: "agent_ready", authority: { code: "human_gate", ruling_ids: [] }, evidence: "x", related: null, duplicates: null }, basis, protectedToken: token, briefKeys: "x" })
+  assert.equal(oddLists.state, "refused", "an agent-ready route under a human gate is inconsistent")
+  assert.equal(toSafeTriageReview({ result: { ...result, related: [], duplicates: [null] }, basis, protectedToken: token, briefKeys }).errors[0].code, "related_unproved")
   // An investigation keeps its authorized pointer and no gate.
   const investigate = toSafeTriageReview({
     result: { ...result, route: "investigate", authority: { code: "investigation_only", ruling_ids: [] }, evidence: ["evidence:0", "evidence:0"], related: [], duplicates: [{ key: fixture.related_key }], decision: null, gate_reason: null },
-    basis, authorizedEvidence: [...fixture.private_candidate.authorized_evidence, { id: "evidence:9", kind: "issue", ref: "not a url", revision: 1, git_safe: true }], protectedToken: token,
+    basis, authorizedEvidence: [...fixture.private_candidate.authorized_evidence, { id: "evidence:9", kind: "issue", ref: "not a url", revision: 1, git_safe: true }], protectedToken: token, briefKeys,
   })
   assert.equal(investigate.state, "safe")
   assert.deepEqual(investigate.review.summary_codes, ["source:andon", "route:investigate"])
   assert.equal(investigate.review.evidence.length, 1)
   assert.deepEqual(investigate.review.duplicate_keys, [fixture.related_key])
-  const withheld = toSafeTriageReview({ result: { ...result, evidence: ["evidence:9"] }, basis, authorizedEvidence: [{ id: "evidence:9", kind: "issue", ref: "not a url", revision: 1, git_safe: true }], protectedToken: token })
+  const withheld = toSafeTriageReview({ result: { ...result, evidence: ["evidence:9"] }, basis, authorizedEvidence: [{ id: "evidence:9", kind: "issue", ref: "not a url", revision: 1, git_safe: true }], protectedToken: token, briefKeys })
   assert.ok(withheld.review.summary_codes.includes("detail_not_authorized_for_git"))
 })
 
@@ -264,7 +283,8 @@ test("mechanical_refresh_invalidates_withdraws_or_holds_without_an_agent", async
   assert.equal(readAcknowledgedAnnotations({ deskRoot, personPrefix: "" }).source, "files")
   assert.deepEqual(await readProtectedBasis(env, fresh.token), fresh.basis)
 
-  const result = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0 + 2 * HOUR })
+  const evidence = { resolve: resolveIssue }
+  const result = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0 + 2 * HOUR, evidence })
   assert.equal(result.state, "complete")
   const byKey = Object.fromEntries(result.changes.map((change) => [change.key, change]))
   assert.deepEqual(byKey["andon:o/claimed#2"], { key: "andon:o/claimed#2", operation: "invalidate", reason: "claim_changed" })
@@ -275,19 +295,29 @@ test("mechanical_refresh_invalidates_withdraws_or_holds_without_an_agent", async
   assert.deepEqual(result.coverage, { scan: "complete", reviewed: 1, unreviewed: 4, refused: null, deferred: null, more_unreviewed: true })
   assert.equal(claimed.basis.claim.state, "live")
 
+  // Evidence is resolved live: a public issue edited since the review invalidates it, and without a resolver that can answer the
+  // review is not known to be current (not counted as reviewed, nothing written).
+  const bumped = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0, evidence: { resolve: async (pointer) => ({ ...(await resolveIssue(pointer)), revision: 4 }) } })
+  assert.deepEqual(bumped.changes.find((change) => change.key === "andon:o/fresh#1"), { key: "andon:o/fresh#1", operation: "invalidate", reason: "evidence_changed" })
+  const blind = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0 })
+  assert.deepEqual(blind.changes.find((change) => change.key === "andon:o/fresh#1"), { key: "andon:o/fresh#1", operation: null, state: "source_unknown", reason: "evidence_unknown" })
+  assert.equal(blind.coverage.reviewed, 0)
+
   // Revoked authority with identical card bytes invalidates the fresh one too.
   await fs.writeFile(path.join(deskRoot, "AGENTS.md"), "Scope revoked.\n")
-  const revoked = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0 })
+  const revoked = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0, evidence })
   assert.ok(revoked.changes.some((change) => change.key === "andon:o/fresh#1" && change.operation === "invalidate" && change.reason === "authority_changed"))
 
   // A truncated or unreadable read never asserts removal.
-  const truncated = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0, readCards: async (args) => ({ ...(await readCards(args)), truncated: true }) })
+  // Neither has a count it can stand behind: every coverage count is null (unknown), never a zero or a partial count.
+  const unknownCoverage = (scan) => ({ scan, reviewed: null, unreviewed: null, refused: null, deferred: null, more_unreviewed: null })
+  const truncated = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0, evidence, readCards: async (args) => ({ ...(await readCards(args)), truncated: true }) })
   assert.equal(truncated.state, "truncated")
   assert.ok(truncated.changes.every((change) => change.operation !== "withdraw"))
-  assert.equal(truncated.coverage.more_unreviewed, null)
+  assert.deepEqual(truncated.coverage, unknownCoverage("truncated"))
   const unreadable = await refreshTriage({ env, deskRoot, personPrefix: "", now: T0, readCards: async () => ({ cards: [], truncated: false, unreadable: true }) })
   assert.equal(unreadable.state, "unreadable")
-  assert.equal(unreadable.coverage.unreviewed, null)
+  assert.deepEqual(unreadable.coverage, unknownCoverage("unreadable"))
   assert.ok(unreadable.changes.every((change) => change.operation === null && change.state === "source_unknown"))
   // A card that vanishes between the listing and the basis check is unknown, not removed.
   const racing = await refreshTriage({
@@ -336,6 +366,14 @@ test("resolver_never_guesses_a_local_key", async () => {
   await fs.rename(path.join(deskRoot, paths.annotation), path.join(deskRoot, `${paths.annotation}.away`))
   assert.deepEqual(resolve({}), { state: "stale", key: KEY }, "an identity whose annotation is gone is not resolved")
   await fs.rename(path.join(deskRoot, `${paths.annotation}.away`), path.join(deskRoot, paths.annotation))
+  // Two stores share one annotation: store A acknowledged at revision 1, then store B at revision 2. Store A's revision 1 is a
+  // different, older review; it never resolves to store B's newer one.
+  const idB = hex(16)
+  const registryAB = { schema: "desk.factory.triage-identities/1", entries: [{ key: KEY, store: "example-org/example-store", id, revision: 1, public_basis: null }, { key: KEY, store: "example-org/store-b", id: idB, revision: 2, public_basis: null }] }
+  await fs.writeFile(path.join(deskRoot, paths.registry), bytes(registryAB))
+  await fs.writeFile(path.join(deskRoot, paths.annotation), bytes(annotationFor({ revision: 2, basis: { canonical_revision: "c".repeat(40), public_evidence_revisions: [] }, review })))
+  assert.deepEqual(resolve({ revision: 1 }), { state: "stale", key: KEY })
+  assert.deepEqual(resolve({ store: "example-org/store-b", id: idB, revision: 2 }), { state: "resolved", key: KEY, protected_result: protectedResult })
   await fs.writeFile(path.join(deskRoot, paths.registry), "{damaged")
   assert.deepEqual(resolve({}), { state: "not_resolved" })
   await fs.unlink(path.join(deskRoot, paths.registry))
