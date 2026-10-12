@@ -118,6 +118,21 @@ test("a results file whose shard number does not match its folder, or a file rep
   assert.match(sameShard.out, /name the same shard/u)
 })
 
+test("each shard is judged by its latest run attempt, so a passing rerun of a failed shard counts and a failing rerun is not hidden", () => {
+  const failed = { ...ok("b.test.js"), fail: 1 }
+  const shard1 = { "windows-standard-shard-1-attempt-1": { shard: "1/2", results: [ok("a.test.js")] } }
+  const rerunPassed = verdictOf({ ...shard1, "windows-standard-shard-2-attempt-1": { shard: "2/2", results: [failed] }, "windows-standard-shard-2-attempt-2": { shard: "2/2", results: [ok("b.test.js")] } }, 2)
+  assert.equal(rerunPassed.status, 0, rerunPassed.out)
+  const rerunFailed = verdictOf({ ...shard1, "windows-standard-shard-2-attempt-1": { shard: "2/2", results: [ok("b.test.js")] }, "windows-standard-shard-2-attempt-2": { shard: "2/2", results: [failed] } }, 2)
+  assert.equal(rerunFailed.status, 1)
+  assert.match(rerunFailed.out, /windows-standard-shard-2-attempt-2: b\.test\.js failed/u)
+  // Attempt 10 is later than attempt 9 (numbers, not text), and an unsuffixed folder counts as before every attempt.
+  const tenth = verdictOf({ ...shard1, "windows-standard-shard-2": { shard: "2/2", results: [failed] }, "windows-standard-shard-2-attempt-9": { shard: "2/2", results: [failed] }, "windows-standard-shard-2-attempt-10": { shard: "2/2", results: [ok("b.test.js")] } }, 2)
+  assert.equal(tenth.status, 0, tenth.out)
+  const wrong = verdictOf({ ...shard1, "windows-standard-shard-2-attempt-3": { shard: "1/2", results: [ok("b.test.js")] } }, 2)
+  assert.match(wrong.out, /windows-standard-shard-2-attempt-3: its results say shard 1\/2, not 2\/2/u)
+})
+
 test("a file that ran no tests fails, and a file whose tests were all skipped does not", () => {
   const none = (file) => ({ ...ok(file), pass: 0 })
   const empty = verdictOf(two([ok("a.test.js")], [none("b.test.js")]), 2)
@@ -135,4 +150,7 @@ test("the workflow has a single job named Windows suite that needs the shards an
   const workflow = readFileSync(path.resolve(path.dirname(runner), "..", "workflows", "desk-windows-suite.yml"), "utf8")
   assert.match(workflow, /name: Windows suite\n\s+needs: windows-suite\n\s+if: \$\{\{ always\(\) \}\}/u)
   assert.match(workflow, /windows-suite-verdict\.mjs shard-results 8/u)
+  // Each attempt keeps its own results; overwriting would lose the earlier attempt's evidence.
+  assert.match(workflow, /name: windows-\$\{\{ matrix\.mode \}\}-shard-\$\{\{ matrix\.shard \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u)
+  assert.doesNotMatch(workflow, /overwrite: true/u)
 })

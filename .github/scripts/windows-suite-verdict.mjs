@@ -1,6 +1,6 @@
 // Decides the Windows suite's verdict from the per-file results the standard-user shards uploaded, not from the shards' job conclusions.
 // Usage: node windows-suite-verdict.mjs <folder holding one results folder per shard> <expected shard count> [<tests folder> [<only regex>]]
-// Exit code: 0 only when every expected shard reported, each results file names the shard its folder says, the files reported across the shards are exactly the suite's test files, and every one passed and ran at least one test (passed, failed or skipped).
+// Exit code: 0 only when every expected shard reported (its latest run attempt counts), each results file names the shard its folder says, the files reported across the shards are exactly the suite's test files, and every one passed and ran at least one test (passed, failed or skipped).
 // The suite's files are found with the same code the shard runner uses (suite-files.mjs), so a shard that ran nothing, or a file no shard reported, is named and fails.
 import fs from "node:fs"
 import path from "node:path"
@@ -9,15 +9,27 @@ import { suiteFiles } from "./suite-files.mjs"
 
 const defaultTests = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "tests", "desk", "mcp", "__tests__")
 
+// Each run attempt uploads under its own name (`<name>-attempt-<n>`), so a rerun of only the failed shards keeps the earlier attempts' results. A shard is judged by its latest attempt; a folder without the suffix is attempt 0.
+function latestAttempts(folders) {
+  const latest = new Map()
+  for (const folder of folders) {
+    const [, base, attempt] = /^(.*?)(?:-attempt-(\d+))?$/u.exec(folder.name)
+    const seen = latest.get(base)
+    if (!seen || Number(attempt ?? 0) > seen.attempt) latest.set(base, { folder, attempt: Number(attempt ?? 0) })
+  }
+  return [...latest.values()].map((entry) => entry.folder)
+}
+
 export function verdict(root, expected, testsRoot = defaultTests, only = "") {
-  const folders = fs.existsSync(root) ? fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(root, e.name, "results.json"))) : []
+  const all = fs.existsSync(root) ? fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(root, e.name, "results.json"))) : []
+  const folders = latestAttempts(all)
   const problems = []
   if (folders.length !== expected) problems.push(`${folders.length} of ${expected} shards reported results`)
   const reported = new Map()
   const numbers = new Set()
   for (const folder of folders) {
     const { shard, results } = JSON.parse(fs.readFileSync(path.join(root, folder.name, "results.json"), "utf8"))
-    const named = /(\d+)$/u.exec(folder.name)?.[1]
+    const named = /(\d+)(?:-attempt-\d+)?$/u.exec(folder.name)?.[1]
     if (shard !== `${named}/${expected}`) problems.push(`${folder.name}: its results say shard ${shard}, not ${named}/${expected}`)
     numbers.add(named)
     for (const r of results) {
