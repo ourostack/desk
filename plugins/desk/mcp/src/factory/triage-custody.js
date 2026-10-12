@@ -26,6 +26,20 @@ const launcher=fileURLToPath(new URL("../../scripts/launch-triage-catalog.js",im
 const clean=Object.freeze({LANG:"C",LC_ALL:"C",TZ:"UTC"})
 const fail=code=>{throw new Error(code)}
 const hex=/^[a-f0-9]{64}$/u
+// The only accepted ways a catalog session closes: stdin EOF, or the native
+// client's first SIGINT (how Claude Code closes a stdio server off Windows).
+const CATALOG_CLOSE_REASONS=["stdin_eof","client_sigint"]
+// Claude Code 2.1.296 times its pre-initialize server/discover probe with
+// Math.min(3000, Math.floor(MCP_TIMEOUT/3)), MCP_TIMEOUT defaulting to 30000.
+// A probe that may have timed out leaves a 7-day legacy verdict in the
+// client's state, so a native run whose probe arrived that late fails.
+function nativeProbeTimeoutMs(env){
+  const value=Number(env.MCP_TIMEOUT),connect=env.MCP_TIMEOUT&&value>0?Math.min(value,2147483647):30000
+  return Math.min(3000,Math.floor(connect/3))
+}
+function probeFrame(observation){
+  try{return JSON.parse(Buffer.from(observation.payload.base64,"base64")).method==="server/discover"}catch{return false}
+}
 // The pinned Claude Code 2.1.296 engine. A real native run is accepted only
 // when ps shows that exact executable, started by this process with our argv.
 // The qualification fixture ships beside this module and is part of the
@@ -488,7 +502,7 @@ async function restoredCustody(custody,snapshotFile,context) {
   }
   if(!exitObserved||!["input_frame","output_frame"].every(kind=>custody.observations.some(x=>x.payload.kind===kind)))fail("restored_observation")
   if(custody.receipts[0].payload.snapshot_sha256!==custody.snapshotSha256||
-    custody.receipts[2].payload.reason!=="stdin_eof"||custody.receipts[2].payload.final_sequence!==3||
+    !CATALOG_CLOSE_REASONS.includes(custody.receipts[2].payload.reason)||custody.receipts[2].payload.final_sequence!==3||
     custody.observation?.ok!==true||custody.observation.identity.server.pid!==custody.receipts[0].server_pid||
     custody.observation.identity.server.ppid!==custody.observation.identity.launch.pid)fail("restored_provenance")
   const launch=custody.launchIdentity,identity=launch.identity
@@ -630,7 +644,7 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
   // The direct client and native path share this receipt/provenance controller.
   const receipts=[],observations=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
   const sourceBefore=await context.source()
-  let error=null,observation=null,control=null,terminal=false,moduleClosure=null,bootWork=null
+  let error=null,observation=null,control=null,terminal=false,moduleClosure=null,bootWork=null,nativeSpawn=null
   const controlFrames=[]
   const resources={initialReceiptZeroRead:false,fdsClosed:false,launcherExit:null,serverExited:false}
   let bootResolve,bootReject;const boot=new Promise((r,j)=>{bootResolve=r;bootReject=j})
@@ -650,7 +664,12 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
           if(launcherObserved||frame.sequence!==1||frame.payload.pid!==boot.payload.launcher_pid||context.live(boot.server_pid))fail("observation_identity")
           launcherObserved=true
         }else if(launcherObserved||frame.sequence!==++observedSequence||observedSequence>16||frame.payload.pid!==boot.server_pid)fail("observation_identity")
-        observations.push(frame);return
+        observations.push(frame)
+        // A refusing server or a failed launcher ends the session now, not at
+        // the deadline.
+        if(frame.payload.kind==="server_refused")onFailure(Error("server_refused"))
+        if(frame.payload.kind==="launcher_exit"&&(frame.payload.code!==0||frame.payload.signal!==null))onFailure(Error("launcher_exit_failed"))
+        return
       }
       // Every later receipt comes from the one bootstrapped server; a
       // replacement in the same generation never continues the session.
@@ -678,7 +697,7 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
           bootResolve(frame)
         })().catch(onFailure)
       }else if(frame.event==="terminal"){
-        if(frame.payload.reason!=="stdin_eof"||frame.payload.final_sequence!==frame.sequence)fail("terminal_invalid")
+        if(!CATALOG_CLOSE_REASONS.includes(frame.payload.reason)||frame.payload.final_sequence!==frame.sequence)fail("terminal_invalid")
         terminal=true
       }
     }})
@@ -694,6 +713,7 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
     snapshot:()=>({receipts:[...receipts],observations:[...observations],observation,module_closure_sha256:moduleClosure?catalogHash(catalogCanonical(moduleClosure)):null,
       control_frames:[...controlFrames],receipt_pump:pump.diagnostic?.()??null,terminal,error:error?.message??null,resources}),
     fail:onFailure,
+    nativeSpawned(at,env){nativeSpawn={at,timeoutMs:nativeProbeTimeoutMs(env)}},
     async finish(){
       if(control&&!terminal){
         try{const wire=catalogCanonical({event:"finish",generation:snapshot.generation,server_pid:receipts[0].server_pid})+"\n"
@@ -717,6 +737,11 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
         observations.find(x=>x.payload.kind==="launcher_exit").payload.code!==0||
         observations.find(x=>x.payload.kind==="launcher_exit").payload.signal!==null||
         !["input_frame","output_frame"].every(kind=>observations.some(x=>x.payload.kind===kind))))onFailure(Error("observation_missing"))
+      // The server reads the probe no earlier than the client sent it, so a
+      // probe read within the client's timeout of native spawn was answered
+      // in time.
+      const first=observations.find(x=>x.payload.kind==="input_frame")
+      if(nativeSpawn&&first&&probeFrame(first)&&first.payload.at_ms-nativeSpawn.at>=nativeSpawn.timeoutMs)onFailure(Error("native_probe_late"))
       clearTimeout(timer)
       resources.initialReceiptZeroRead=pump.status().zeroReads>0
       await closeOwned()
@@ -741,7 +766,8 @@ export async function runNonacceptedLifecycleTransaction(config){
   closedObject(config,["snapshot","launch","frames","mode"])
   const {snapshot,launch,frames,mode}=JSON.parse(catalogCanonical(config))
   if(!["normal","abort","abortKilled","abortAbsent","deadline","source","snapshot","modules","lateModules","observe",
-    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired"].includes(mode))fail("unit_mode")
+    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired",
+    "nativeSpawnedEarly","nativeSpawnedNow"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualFdOperations:0,actualLaunches:0,closed:0,killed:0,registered:0}
   let controller,reads=0,sources=0,modules=0,liveness=0,zeroReads=0,clockReads=0,releaseTerminal
   const deadline=Date.now()+1100
@@ -792,6 +818,8 @@ export async function runNonacceptedLifecycleTransaction(config){
     receiptHandle:mode==="normal"?{async close(){statistics.closed++}}:undefined,
     controlPath:"unit-memory-only",nativeChild,
     clock:()=>++clockReads>1&&["noTerminal","noReceiptEOF"].includes(mode)?deadline-999:Date.now()},context)
+  if(mode==="nativeSpawnedEarly")controller.nativeSpawned(0,{})
+  if(mode==="nativeSpawnedNow")controller.nativeSpawned(Date.now(),{MCP_TIMEOUT:"6000"})
   let outcome
   try{
     await controller.finish()
@@ -943,6 +971,7 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
         catalogHash(context.bytes(owned.prepared.path))!==owned.prepared.sha256)fail("prepared_changed")
       spawnAttempted=true
       stage("spawn_attempt","present")
+      lifecycle.nativeSpawned(Date.now(),env)
       child=spawnNative(command,args,{env,cwd:owned.runDir,shell:false,stdio:["ignore","pipe","pipe"]})
       ownsPID=Number.isSafeInteger(child.pid)&&child.pid>0
       // A failed spawn can expose a zero/unowned native process handle before
@@ -1098,7 +1127,7 @@ export async function runNonacceptedNativeTransaction(config){
   const pendingBoot=["emptyInit","emptyInitStderr","emptyInitSnapshotThrows","closedBeforeBoot","successBeforeBoot","abortThrows","configCapture","settingsCapture"].includes(mode)
   const boot=pendingBoot?new Promise((_resolve,reject)=>{rejectBoot=reject}):Promise.resolve()
   boot.catch(()=>{})
-  const lifecycle={boot,finish,fail(e){error=e;rejectBoot?.(e);if(mode!=="timerAfterClose")completeResolve(result())},
+  const lifecycle={boot,finish,nativeSpawned(){},fail(e){error=e;rejectBoot?.(e);if(mode!=="timerAfterClose")completeResolve(result())},
     snapshot(){
       if(mode==="snapshotThrows"||mode==="emptyInitSnapshotThrows")throw Error("unit_snapshot_failed")
       if(mode==="snapshotCircular"){const x={};x.self=x;return x}
@@ -1292,10 +1321,28 @@ async function runWireCase({fixture,frames,deadline},context) {
       return {state:"failed",reason:e.message,normalTerminal:false,resources,cleanup:()=>fs.rm(dir,{recursive:true,force:true})}
     }
 }
-export async function runDirectCatalog(options) {
-  return runDirect(options,realOwnedCustody)
+export async function runDirectCatalog({fixture,deadline,evidenceDir}) {
+  return runDirect({fixture,deadline,evidenceDir},realOwnedCustody)
 }
-async function runDirect({fixture,deadline,evidenceDir},context) {
+// Claude Code's close of a connected stdio server off Windows: SIGINT, then
+// SIGTERM if the process is still alive after sigtermAfterMs (100 in 2.1.296),
+// then SIGKILL if still alive sigkillAfterMs (400) later. It never ends stdin.
+async function engineStdioClose(child,{sigtermAfterMs,sigkillAfterMs}){
+  const alive=()=>child.exitCode===null&&child.signalCode===null
+  child.kill("SIGINT")
+  await sleep(sigtermAfterMs)
+  if(!alive())return
+  child.kill("SIGTERM")
+  await sleep(sigkillAfterMs)
+  if(alive())child.kill("SIGKILL")
+}
+// close (nonaccepted facade only): replay engineStdioClose instead of the
+// stdin-EOF close the direct lane otherwise uses.
+async function runDirect({fixture,deadline,evidenceDir,close},context) {
+  if(close!==undefined){
+    closedObject(close,["sigtermAfterMs","sigkillAfterMs"])
+    if(![close.sigtermAfterMs,close.sigkillAfterMs].every(ms=>Number.isSafeInteger(ms)&&ms>=0&&ms<=1000))fail("close_schedule")
+  }
   const refused=context.refusal()
   if(refused!==null)return {state:"scope_unqualified",reason:refused,resources:{pids:[],files:[]},cleanup:async()=>{}}
   if(typeof nodeModule.registerHooks!=="function")return {state:"scope_unqualified",reason:"runtime_provenance_unsupported",resources:{},cleanup:async()=>{}}
@@ -1340,7 +1387,9 @@ async function runDirect({fixture,deadline,evidenceDir},context) {
     if(catalogCanonical(first)!==catalogCanonical(retry))fail("retry_changed")
     const conflict=structuredClone(fixture.candidate);conflict.results[0].problem="changed"
     await call("candidate_submit",{candidate:conflict},true)
-    await lifecycle.finish();await client.close()
+    if(close){child.stdin.on("error",Function.prototype);await engineStdioClose(child,close)}
+    else await lifecycle.finish()
+    await client.close()
     const result=await lifecycle.complete(),exit=await closed
     result.resources.launcherExit=exit.code;    result.resources.serverExited=!ownedPidLive(boot.server_pid)
     if(result.state!=="closed"||exit.code!==0||!result.resources.serverExited||!responses.every(x=>x.ok))fail(result.reason??"direct_failed")

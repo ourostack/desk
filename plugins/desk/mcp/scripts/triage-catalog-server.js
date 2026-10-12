@@ -42,6 +42,9 @@ export async function startCatalogServer(runtime=process){
   const {catalogCanonical}=await import("../src/factory/triage-catalog.js")
   const {serveCatalog}=await import("../src/factory/triage-protocol.js")
   let service,loaded,sequence=0,observationSequence=0,failed=false,closing=false,receiptBytes=0,receiptWork=Promise.resolve()
+  // How the session closed: stdin EOF, or the client's first SIGINT (Claude
+  // Code closes a stdio server that way on macOS and Linux).
+  let closeReason="stdin_eof",interrupted=false,terminalWritten=false
   function receipt(event,payload){
     const work=receiptWork.then(async()=>{
     const ordinal=event==="observation"?++observationSequence:++sequence
@@ -76,12 +79,15 @@ export async function startCatalogServer(runtime=process){
     closing=true
     try{
       await service.close()
-      if(service.guarded.failed())throw Error("wire_failed")
+      // A fatal signal during the close wins: no terminal receipt after it.
+      if(failed||service.guarded.failed())throw Error("wire_failed")
       observe({kind:"server_closing"})
-      await receipt("terminal",{reason:"stdin_eof",final_sequence:sequence+1})
+      await receipt("terminal",{reason:closeReason,final_sequence:sequence+1})
+      terminalWritten=true
       await promisify(fs.close)(3)
       loadHooks.deregister()
-      runtime.stdout.end(()=>{runtime.exitCode=0})
+      // After a SIGINT close nothing ends stdin, so release it here.
+      runtime.stdout.end(()=>{runtime.exitCode=0;if(interrupted)runtime.stdin.destroy()})
     }catch{fatal()}
   }
   try{
@@ -93,7 +99,17 @@ export async function startCatalogServer(runtime=process){
       uid:firstUID,euid:firstEUID,env_version:2,module_closure:[...loadedModules.values()].sort((a,b)=>a.path.localeCompare(b.path))})
     service=await serveCatalog({state:loaded.catalog,input:runtime.stdin,output:runtime.stdout,writeReceipt:receipt,onFailure:fatal,onObservation:observe})
     runtime.stdin.once("end",finish);runtime.stdin.once("error",fatal)
-    for(const signal of ["SIGTERM","SIGINT","SIGHUP"])runtime.once(signal,fatal)
+    // The first SIGINT is the client's graceful close; a repeated SIGINT is
+    // fatal. A SIGTERM after it only ends the exit once the terminal receipt
+    // is written; otherwise SIGTERM and SIGHUP stay fatal.
+    runtime.once("SIGINT",()=>{
+      runtime.once("SIGINT",fatal)
+      interrupted=true
+      if(closing||failed)return
+      closeReason="client_sigint";finish()
+    })
+    runtime.once("SIGTERM",signal=>{if(interrupted&&terminalWritten&&!failed)runtime.exit(0);else fatal(signal)})
+    runtime.once("SIGHUP",fatal)
     return {finish,fatal,receipt,service}
   }catch{
     loadHooks.deregister()

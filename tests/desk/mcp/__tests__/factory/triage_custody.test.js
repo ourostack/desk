@@ -378,6 +378,42 @@ test("nonaccepted_lifecycle_matrix_reuses_controller_without_real_maps_or_fds",a
     const altered=[...frames.slice(0,2),frame("terminal",3,payload)]
     assert.equal((await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames:altered,mode:"normal"})).outcome.state,"failed")
   }
+  // The two accepted close reasons, exactly.
+  for(const [reason,state]of [["stdin_eof","closed"],["client_sigint","closed"],["client_sigterm","failed"],["sigint","failed"]]){
+    const altered=[...frames.slice(0,2),frame("terminal",3,{reason,final_sequence:3})]
+    assert.equal((await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames:altered,mode:"normal"})).outcome.state,state,reason)
+  }
+  // A refusing server or a failed launcher fails the session at once.
+  const refused=frame("observation",2,custody.makeCatalogObservation({kind:"server_refused",pid:500001,code:"unknown"}))
+  const failedExit=frame("observation",1,custody.makeCatalogObservation({kind:"launcher_exit",pid:500002,code:1}))
+  const signalExit=frame("observation",1,custody.makeCatalogObservation({kind:"launcher_exit",pid:500002,code:null,signal:"SIGKILL"}))
+  for(const [name,selected,reason]of [
+    ["server_refused",[frames[0],observation,refused,...frames.slice(1)],"server_refused"],
+    ["launcher_exit_code",[frames[0],observation,...frames.slice(1),failedExit],"launcher_exit_failed"],
+    ["launcher_exit_signal",[frames[0],observation,...frames.slice(1),signalExit],"launcher_exit_failed"],
+  ]){
+    const signed=selected.map(value=>{
+      const {mac,...body}=value
+      return {...body,mac:createHmac("sha256",Buffer.from(snapshot.receipt_key,"hex")).update(catalog.catalogCanonical(body)).digest("hex")}
+    })
+    const result=await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames:signed,mode:"normal"})
+    assert.equal(result.outcome.state,"failed",name);assert.equal(result.outcome.reason,reason,name)
+  }
+  // A native probe read at or after the client's probe timeout from native
+  // spawn may have timed out client-side, so that session fails closed.
+  const input=bytes=>frame("observation",1,custody.makeCatalogObservation({kind:"input_frame",direction:"input",pid:500001,bytes:Buffer.from(bytes)}))
+  const probe=input(JSON.stringify({jsonrpc:"2.0",id:"server-discover-probe-1",method:"server/discover",params:{}})+"\n")
+  for(const [name,first,mode,state,reason]of [
+    ["probe_late",probe,"nativeSpawnedEarly","failed","native_probe_late"],
+    ["probe_in_time",probe,"nativeSpawnedNow","closed",undefined],
+    ["initialize_first_late",input('{"jsonrpc":"2.0","id":0,"method":"initialize"}\n'),"nativeSpawnedEarly","closed",undefined],
+    ["unparsed_first_late",input("x\n"),"nativeSpawnedEarly","closed",undefined],
+    ["no_input_late",null,"nativeSpawnedEarly","closed",undefined],
+  ]){
+    const selected=first?[frames[0],first,...frames.slice(1)]:frames
+    const result=await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames:selected,mode})
+    assert.equal(result.outcome.state,state,name);assert.equal(result.outcome.reason,reason,name)
+  }
 })
 test("nonaccepted_native_io_matrix_keeps_actual_registry_and_spawn_unreachable",async(t)=>{
   await assert.rejects(custody.runNonacceptedNativeTransaction({mode:"unknown"}),{message:"unit_mode"})
@@ -978,6 +1014,28 @@ ownedCatalogTest("receipt_reader_before_writer_does_not_block",async(t,custody)=
   assert.equal(run.custody.observation.ok,true)
   assert.equal(run.custody.sourceCustodyUnchanged,true)
   assert.ok(run.resources.files.every(file=>fs.existsSync(file)),"inventory lists actual opened generation paths")
+})
+// Replays Claude Code 2.1.296's stdio close against the real launcher and
+// server: SIGINT, SIGTERM 100 ms later if alive, SIGKILL 400 ms after that.
+// The accepted runDirectCatalog takes no close schedule, so the replay runs
+// through the nonaccepted facade.
+ownedHostTest("engine_stdio_close_sequence_seals_the_session_or_fails_closed","posix",async(t)=>{
+  const custody=observerDoubleCustody()
+  for(const close of [{},{sigtermAfterMs:-1,sigkillAfterMs:400},{sigtermAfterMs:100,sigkillAfterMs:1001},{sigtermAfterMs:1.5,sigkillAfterMs:0}])
+    await assert.rejects(custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close}),/catalog_invalid|close_schedule/u)
+  const run=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close:{sigtermAfterMs:100,sigkillAfterMs:400}})
+  t.after(()=>run.cleanup?.())
+  assert.equal(run.state,"proved",run.reason)
+  assert.equal(run.custody.receipts[2].payload.reason,"client_sigint")
+  assert.equal(run.resources.launcherExit,0);assert.equal(run.resources.serverExited,true)
+  // A SIGTERM that can land before the terminal receipt is durable either
+  // finds the session already sealed or fails it; it never passes unsealed.
+  for(let i=0;i<3;i++){
+    const late=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000,close:{sigtermAfterMs:0,sigkillAfterMs:0}})
+    t.after(()=>late.cleanup?.())
+    if(late.state==="failed")continue
+    assert.equal(late.state,"proved");assert.equal(late.custody.receipts[2].payload.reason,"client_sigint");assert.equal(late.resources.launcherExit,0)
+  }
 })
 ownedCatalogTest("authentic_receipt_only",async(t,custody)=>{
   const run=await custody.runDirectCatalog({fixture,deadline:Date.now()+15000})

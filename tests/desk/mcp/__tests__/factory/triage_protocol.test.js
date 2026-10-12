@@ -131,7 +131,8 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   for(const scenario of ["finish","native_eof","wrong_generation","wrong_event","extra_key","input_error","child_error","stderr_limit","parent_changed","signal","nonzero_exit",
     "deadline","early_eof","pipe_error","redundant_epipe","stderr_small","readable_after_ready","spawn_throw",
-    "wrong_cwd","uid_changed_after_first_js","close_listener_throw","parent_stable","snapshot_after_open_drift"]){
+    "wrong_cwd","uid_changed_after_first_js","close_listener_throw","parent_stable","snapshot_after_open_drift",
+    "sigint","sigint_during_close","sigint_then_sigterm_sealed","sigint_then_sigterm_unsealed","sigint_twice","sigint_before_ready","sighup"]){
     await t.test(scenario,async()=>{
       const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-launcher-")));fs.chmodSync(dir,0o700)
       t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
@@ -151,7 +152,15 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
       const child=new EventEmitter();Object.assign(child,{pid:123456,stdin:new PassThrough(),stdout:new PassThrough(),stderr:new PassThrough()})
       let childClosed=false
       const close=(code,signal=null)=>{if(childClosed)return;childClosed=true;child.emit("close",code,signal)}
-      child.kill=()=>{queueMicrotask(()=>close(1));return true}
+      // The fake server closes 0 on a graceful SIGINT ("sigint") or on a
+      // SIGTERM after its terminal receipt ("..._sealed"); otherwise a
+      // signal closes it 1. Other SIGINT scenarios leave it running.
+      const kills=[]
+      child.kill=signal=>{
+        kills.push(signal)
+        if(signal==="SIGINT"){if(scenario==="sigint")queueMicrotask(()=>close(0));return true}
+        queueMicrotask(()=>close(signal==="SIGTERM"&&scenario==="sigint_then_sigterm_sealed"?0:1));return true
+      }
       child.stdin.once("finish",()=>queueMicrotask(()=>close(0)))
       if(scenario==="close_listener_throw"){
         const on=child.on.bind(child)
@@ -195,6 +204,7 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
       else if(scenario==="wrong_event")await send({...ready,event:"finish"})
       else if(scenario==="extra_key")await send({...ready,arbitrary:true})
       else if(scenario==="early_eof")runtime.stdin.end()
+      else if(scenario==="sigint_before_ready")runtime.emit("SIGINT")
       else{
         await send(ready)
         if(scenario==="finish"){await send({...ready,event:"finish"});await controller.endInput()}
@@ -205,6 +215,11 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
         if(scenario==="parent_changed")runtime.ppid++
         if(scenario==="parent_stable"){await new Promise(resolve=>setTimeout(resolve,150));await send({...ready,event:"finish"})}
         if(scenario==="signal")runtime.emit("SIGTERM")
+        if(scenario==="sigint")runtime.emit("SIGINT")
+        if(scenario==="sigint_during_close"){await controller.endInput();runtime.emit("SIGINT")}
+        if(["sigint_then_sigterm_sealed","sigint_then_sigterm_unsealed"].includes(scenario)){runtime.emit("SIGINT");runtime.emit("SIGTERM")}
+        if(scenario==="sigint_twice"){runtime.emit("SIGINT");runtime.emit("SIGINT")}
+        if(scenario==="sighup")runtime.emit("SIGHUP")
         if(scenario==="nonzero_exit")close(1)
         if(scenario==="pipe_error")child.stdin.emit("error",Object.assign(Error("synthetic_pipe"),{code:"EPIPE"}))
         if(scenario==="redundant_epipe"){await controller.endInput();child.stdin.emit("error",Object.assign(Error("synthetic_redundant"),{code:"EPIPE"}))}
@@ -214,7 +229,10 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
       const stop=Date.now()+2000
       while(!runtime.stdout.writableEnded&&Date.now()<stop)await new Promise(resolve=>setTimeout(resolve,10))
       assert.equal(runtime.stdout.writableEnded,true,"source must close pipes/timer/watch")
-      assert.equal(runtime.exitCode,["finish","native_eof","redundant_epipe","stderr_small","readable_after_ready","parent_stable"].includes(scenario)?0:1)
+      assert.equal(runtime.exitCode,["finish","native_eof","redundant_epipe","stderr_small","readable_after_ready","parent_stable",
+        "sigint","sigint_during_close","sigint_then_sigterm_sealed"].includes(scenario)?0:1)
+      if(scenario.startsWith("sigint")&&scenario!=="sigint_before_ready")assert.equal(kills[0],"SIGINT",scenario)
+      if(scenario.startsWith("sigint_then_sigterm"))assert.deepEqual(kills.slice(0,2),["SIGINT","SIGTERM"],scenario)
       assert.equal(fs.existsSync(path.join(dir,"qualification.json")),false)
       assert.equal(fs.existsSync(path.join(dir,"unaccepted.json")),false)
     })
@@ -337,6 +355,68 @@ process.once("beforeExit",()=>{process.exitCode=runtime.exitCode})
       if(scenario==="known_fatal")assert.equal(stderr,"catalog_session_failed_wire_output_limit\n")
       if(scenario==="unknown_fatal")assert.equal(stderr,"catalog_session_failed\n")
       assert.equal(fs.existsSync(path.join(dir,"qualification.json")),false)
+    })
+  }
+})
+ownedHostTest("same_source_unit_server_closes_on_client_sigint_and_keeps_other_signals_fatal","posix",async(t)=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  // hold delays the final stdout end, so a signal can land after the terminal
+  // receipt is written and before the process exits.
+  // After the terminal receipt the receipt descriptor is closed, so a later
+  // fatal signal shows as exit 1 and stderr, not as a refusal receipt.
+  for(const [scenario,hold,want]of [
+    ["sigint",false,{code:0,reason:"client_sigint",refused:false,failed:false}],
+    ["sigint_then_sigterm_before_terminal",false,{code:1,reason:null,refused:true,failed:true}],
+    ["sigint_then_sigterm_after_terminal",true,{code:0,reason:"client_sigint",refused:false,failed:false}],
+    ["sigint_twice_after_terminal",true,{code:1,reason:"client_sigint",refused:false,failed:true}],
+    ["sighup",false,{code:1,reason:null,refused:true,failed:true}],
+    ["stdin_eof_then_sigint",true,{code:0,reason:"stdin_eof",refused:false,failed:false}],
+    ["stdin_eof_then_sigterm",true,{code:1,reason:"stdin_eof",refused:false,failed:true}],
+  ]){
+    await t.test(scenario,async()=>{
+      const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-server-signal-")));fs.chmodSync(dir,0o700)
+      t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
+      const snapshot=catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"c".repeat(64)})
+      const snapshotFile=path.join(dir,"catalog.json");fs.writeFileSync(snapshotFile,snapshot.snapshotBytes,{mode:0o600})
+      const serverURL=new URL("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js",import.meta.url),script=path.join(dir,"signal-unit-server.mjs")
+      fs.writeFileSync(script,`
+import {catalogServerEntry} from ${JSON.stringify(serverURL.href)}
+const uid=process.getuid(),env={LANG:"C",LC_ALL:"C",TZ:"UTC"}
+if(process.platform==="darwin")env.__CF_USER_TEXT_ENCODING="0x"+uid.toString(16).toUpperCase()+":0:0"
+const runtime=Object.create(process)
+Object.assign(runtime,{env,argv:[process.execPath,${JSON.stringify(serverURL.pathname)}],cwd:()=>${JSON.stringify(dir)},once:process.once.bind(process),exit:process.exit.bind(process)})
+if(${hold}){const end=process.stdout.end.bind(process.stdout);process.stdout.end=callback=>{setTimeout(()=>end(callback),1500)}}
+const controller=await catalogServerEntry(runtime)
+if(!controller)process.exit(1)
+// Both signals in one tick: the SIGTERM lands before any receipt write.
+process.once("SIGUSR1",()=>{process.emit("SIGINT","SIGINT");process.emit("SIGTERM","SIGTERM")})
+process.once("beforeExit",()=>{process.exitCode=runtime.exitCode})
+`,{mode:0o600})
+      const fd=fs.openSync(snapshotFile,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW)
+      const child=spawn(process.execPath,[...unitMeasurementArgs(),script],{cwd:new URL("../../../../../plugins/desk/mcp",import.meta.url),env:{...process.env},stdio:["pipe","pipe","pipe","pipe",fd]});fs.closeSync(fd)
+      child.stdin.on("error",()=>{})
+      let stderr="",receipt=""
+      child.stdout.resume();child.stderr.on("data",chunk=>{stderr+=chunk});child.stdio[3].on("data",chunk=>{receipt+=chunk})
+      const closed=new Promise(resolve=>child.once("close",(code,signal)=>resolve({code,signal})))
+      const timer=setTimeout(()=>child.kill("SIGKILL"),8000)
+      t.after(()=>{clearTimeout(timer);child.kill("SIGKILL")})
+      const until=async predicate=>{const stop=Date.now()+4000;while(!predicate()&&child.exitCode===null&&Date.now()<stop)await new Promise(resolve=>setTimeout(resolve,10))}
+      const terminal=()=>receipt.includes('"event":"terminal"')
+      await until(()=>receipt.includes("\n"))
+      await new Promise(resolve=>setTimeout(resolve,30))
+      if(scenario==="sigint")child.kill("SIGINT")
+      if(scenario==="sigint_then_sigterm_before_terminal")child.kill("SIGUSR1")
+      if(scenario==="sigint_then_sigterm_after_terminal"){child.kill("SIGINT");await until(terminal);child.kill("SIGTERM")}
+      if(scenario==="sigint_twice_after_terminal"){child.kill("SIGINT");await until(terminal);child.kill("SIGINT")}
+      if(scenario==="sighup")child.kill("SIGHUP")
+      if(scenario==="stdin_eof_then_sigint"){child.stdin.end();await until(terminal);child.kill("SIGINT")}
+      if(scenario==="stdin_eof_then_sigterm"){child.stdin.end();await until(terminal);child.kill("SIGTERM")}
+      const exit=await closed;clearTimeout(timer)
+      assert.equal(exit.code,want.code,stderr)
+      const frames=receipt.trim().split("\n").map(line=>JSON.parse(line))
+      assert.equal(frames.find(frame=>frame.event==="terminal")?.payload.reason??null,want.reason)
+      assert.equal(frames.some(frame=>frame.event==="observation"&&frame.payload.kind==="server_refused"),want.refused)
+      assert.equal(stderr,want.failed?"catalog_session_failed\n":"")
     })
   }
 })

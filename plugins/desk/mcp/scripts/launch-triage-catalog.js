@@ -18,7 +18,7 @@ export async function startCatalogLauncher(runtime=process){
   const {openCatalogBootstrap,fifoPump,catalogBootstrapArguments,ownedCatalogEnvironment,validateOwnedCatalogEnvironment,
     readProtectedBytes,makeCatalogObservation,makeReceipt,boundedFdWrite}=await import("../src/factory/triage-custody.js")
   const {closedObject,catalogHash,catalogCanonical}=await import("../src/factory/triage-catalog.js")
-  let child,opened,pump,timer,closing=false,failed=false,finished=false,serverClosed=false,stage="arguments"
+  let child,opened,pump,timer,closing=false,failed=false,finished=false,serverClosed=false,interrupted=false,stage="arguments"
   function fatal(){
     if(failed)return
     failed=true
@@ -83,7 +83,24 @@ export async function startCatalogLauncher(runtime=process){
       runtime.stdin.off("readable",earlyReadable)
       runtime.stdout.end(()=>{runtime.exitCode=failed?1:0;runtime.stdin.destroy()})
     })
-    for(const signal of ["SIGTERM","SIGINT","SIGHUP"])runtime.once(signal,()=>{fatal();setTimeout(()=>child?.kill("SIGKILL"),100).unref()})
+    const fatalSignal=()=>{fatal();setTimeout(()=>child?.kill("SIGKILL"),100).unref()}
+    // Claude Code closes a stdio server with SIGINT, then SIGTERM after 100 ms
+    // and SIGKILL after 500 ms. The first SIGINT after the ready gate is a
+    // graceful close: input stops and the server writes its terminal receipt
+    // with reason client_sigint. A SIGTERM after it goes to the server, which
+    // exits cleanly only if that receipt is already written. A repeated
+    // SIGINT, SIGHUP, or SIGTERM without a SIGINT before it stays fatal.
+    runtime.once("SIGINT",()=>{
+      runtime.once("SIGINT",fatalSignal)
+      if(!finished||failed)return fatalSignal()
+      // A stdin-EOF close may already be under way; the server keeps that
+      // reason and only notes the SIGINT for a following SIGTERM.
+      interrupted=true
+      if(!closing){closing=true;runtime.stdin.unpipe(child.stdin)}
+      child.kill("SIGINT")
+    })
+    runtime.once("SIGTERM",()=>{if(interrupted&&!failed)child.kill("SIGTERM");else fatalSignal()})
+    runtime.once("SIGHUP",fatalSignal)
     const parent=runtime.ppid,watch=setInterval(()=>{if(runtime.ppid!==parent)fatal()},100)
     child.once("close",()=>clearInterval(watch))
     return {child,fatal,endInput}
