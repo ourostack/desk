@@ -132,7 +132,7 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
   for(const scenario of ["finish","native_eof","wrong_generation","wrong_event","extra_key","input_error","child_error","stderr_limit","parent_changed","signal","nonzero_exit",
     "deadline","early_eof","pipe_error","redundant_epipe","stderr_small","readable_after_ready","spawn_throw",
     "wrong_cwd","uid_changed_after_first_js","close_listener_throw","parent_stable","snapshot_after_open_drift",
-    "sigint","sigint_during_close","sigint_then_sigterm","sigint_then_sigterm_server_fails","sigint_then_failure_then_sigterm","sigint_twice","sigint_before_ready","sighup"]){
+    "sigint","sigint_during_close","sigint_then_sigterm","sigint_then_sigterm_server_fails","sigint_then_failure_then_sigterm","sigint_twice","sigint_before_ready","sighup","observation_write_fails"]){
     await t.test(scenario,async()=>{
       const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-launcher-")));fs.chmodSync(dir,0o700)
       t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
@@ -225,6 +225,9 @@ ownedHostTest("same_source_unit_launcher_control_and_teardown_outcomes","posix",
         if(scenario==="sigint_then_failure_then_sigterm"){runtime.emit("SIGINT");child.emit("error",Error("synthetic"));runtime.emit("SIGTERM")}
         if(scenario==="sigint_twice"){runtime.emit("SIGINT");runtime.emit("SIGINT")}
         if(scenario==="sighup")runtime.emit("SIGHUP")
+        // With no receipt reader left, the launcher's exit observation write
+        // fails after a clean server close, and the launcher fails.
+        if(scenario==="observation_write_fails"){await owned.close();await send({...ready,event:"finish"})}
         if(scenario==="nonzero_exit")close(1)
         if(scenario==="pipe_error")child.stdin.emit("error",Object.assign(Error("synthetic_pipe"),{code:"EPIPE"}))
         if(scenario==="redundant_epipe"){await controller.endInput();child.stdin.emit("error",Object.assign(Error("synthetic_redundant"),{code:"EPIPE"}))}

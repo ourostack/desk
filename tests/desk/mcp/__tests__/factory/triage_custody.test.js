@@ -466,7 +466,8 @@ test("refusal_after_bootstrap_stops_the_live_native_child_promptly",async()=>{
   assert.equal(result.authority,false)
   assert.equal(result.outcome.state,"failed")
   assert.equal(result.outcome.detail,"server_refused")
-  assert.equal(result.outcome.stream.kind,"failed")
+  // The stopped child's close is still observed before the run returns.
+  assert.equal(result.outcome.stream.kind,"closed")
   assert.deepEqual(result.statistics.signals,["SIGTERM"])
   assert.equal(result.outcome.resources.native_exit.stdio_closed,true)
 })

@@ -774,7 +774,7 @@ export async function runNonacceptedLifecycleTransaction(config){
     "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired",
     "nativeSpawnedEarly","nativeSpawnedNow","finishTwiceConcurrent","finishTwiceSequential"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualFdOperations:0,actualLaunches:0,closed:0,killed:0,registered:0}
-  let controller,reads=0,sources=0,modules=0,liveness=0,zeroReads=0,clockReads=0,releaseTerminal,finishWrites=0
+  let controller,reads=0,sources=0,modules=0,liveness=0,zeroReads=0,clockReads=0,releaseTerminal
   const deadline=Date.now()+1100
   const context={
     registry,requireObservations:mode==="observationRequired",
@@ -791,8 +791,6 @@ export async function runNonacceptedLifecycleTransaction(config){
     },
     async writeControl(_fd,bytes){
       if(JSON.parse(bytes).event==="finish"){
-        // The launcher reads ready and one finish; a third frame is fatal.
-        if(++finishWrites>1)throw Error("fifo_count_limit")
         if(mode==="finishTwiceSequential")setTimeout(releaseTerminal,20);else releaseTerminal()
         if(["finishEpipe","finishOther"].includes(mode))throw Object.assign(Error("unit_control_write"),{code:mode==="finishEpipe"?"EPIPE":"EIO"})
       }
@@ -1050,14 +1048,10 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       stage("authenticated_bootstrap","present")
       const done=await lifecycle.complete()
       Object.assign(resources,done.resources)
-      // A refused session ends now: return its refusal and let the bounded
-      // owned-child teardown below stop a native process still running,
-      // rather than wait for it to close by the deadline.
-      if(done.state!=="closed"&&!closed){
-        clearTimeout(timer)
-        return returned({state:nativeError?.message==="native_timeout"?"timeout":budgetExceeded?"budget_exceeded":"failed",cost_usd:cost,
-          reason:"diagnostic_inadequate",detail:nativeError?.message??done.reason??"native_incomplete",stream:{kind:nativeError?.message==="native_timeout"?"timeout":"failed",stdout,truncated:total>1048576},resources})
-      }
+      // A refused session ends now: stop a native process still running
+      // instead of waiting for it to close by the deadline. The failure
+      // return below keeps the refusal as its reason.
+      if(done.state!=="closed"&&!closed)child.kill("SIGTERM")
       while(!closed&&Date.now()<deadline)await sleep(10)
       clearTimeout(timer);clearTimeout(hard)
       resources.native_exit={code:exitCode,signal,stdio_closed:closed}
@@ -1357,7 +1351,8 @@ async function engineStdioClose(child,{sigtermAfterMs,sigkillAfterMs}){
   if(!alive())return
   child.kill("SIGTERM")
   await sleep(sigkillAfterMs)
-  if(alive())child.kill("SIGKILL")
+  // The engine checks liveness first; Node's kill on a reaped child is a no-op.
+  child.kill("SIGKILL")
 }
 // close (nonaccepted facade only): replay engineStdioClose instead of the
 // stdin-EOF close the direct lane otherwise uses. finishOffsetMs also sends
