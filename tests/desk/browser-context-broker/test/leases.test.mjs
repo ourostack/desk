@@ -1269,3 +1269,22 @@ test('stale cleanup records a silent close as failed and releases its operation 
   assert.equal(retried.released, true);
   assert.equal((await readRegistry(directory)).leases[lease.id], undefined);
 });
+
+test('a heartbeat that revives renews an expired lease, and never one being released', async t => {
+  const { createLease, heartbeatLease } = leaseApi;
+  const directory = await stateDir();
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const lease = await createLease({ stateDir: directory, context: declaration, owner: 'agent-revive', rawEndpoint: fake.endpoint, processIdentity });
+  const setLease = async change => {
+    const registry = await readRegistry(directory);
+    change(registry.leases[lease.id]);
+    await writeRegistry(directory, registry);
+  };
+  await setLease(value => { value.expiresAt = new Date(Date.now() - 1000).toISOString(); });
+  await assert.rejects(heartbeatLease(directory, lease.id), error => error.code === 'LEASE_EXPIRED');
+  await heartbeatLease(directory, lease.id, 300_000, { revive: true });
+  assert.ok(Date.parse((await readRegistry(directory)).leases[lease.id].expiresAt) > Date.now());
+  await setLease(value => { value.releasing = true; });
+  await assert.rejects(heartbeatLease(directory, lease.id, 300_000, { revive: true }), error => error.code === 'LEASE_RELEASING');
+});

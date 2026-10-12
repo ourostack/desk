@@ -115,6 +115,7 @@ function describeDiff(diff) {
 //
 // options.ready resolves { launch: { node, indexFile, args, env } } when Playwright MCP can start, or { payload } (a degraded payload) when it cannot; it never rejects.
 // options.beforeCall(params, api), when given, runs before each tools/call goes to the browser and resolves null to pass the call on, or a tool result to answer the call with instead (the call then never reaches the browser); it never rejects. options.afterCall(params, failed), when given, runs after the browser's answer to a call has been sent to the host; `failed` is true for an error answer. options.cleanup(api), when given, runs once the host is done (it closed stdin or sent a stop signal) and before the browser is told to stop; it never rejects and gets options.cleanupMs (default 8 seconds) to finish. `api.callTool(name, arguments, ms)` calls a browser tool on the proxy's own behalf and resolves its result, or rejects when it errors, times out or the browser ends. A launch's `secrets` (strings) are replaced with <redacted> in everything the proxy writes to the host or to stderr.
+// options.startOnFirstCall defers options.onInitialize and the browser client's start from the host's initialize to its first tools/call; when that deferred onInitialize rejects, the waiting calls are answered with options.initializePayload(error) and the next call tries again.
 // options.catalog is the tools/list answer, and options.catalogVersion names the Playwright MCP release it was taken from. options.retry() starts the install again and returns a new ready promise, and options.abort() ends a running install; options.progressMs sets the progress interval. options.timeoutPayload, options.spawnPayload(error) and options.exitPayload(code, signal) build the degraded payloads for a call that waited too long, a child that would not start and a child that ended.
 function serve(options) {
   var stdin = options.stdin;
@@ -150,6 +151,7 @@ function serve(options) {
     var initialized = false;
     var hostClientInfo = null;
     var pendingLaunch = null;
+    var deferredLaunch = null;
     var restarting = null;
     var replacingChild = null;
     var restartHandshake = null;
@@ -528,13 +530,31 @@ function serve(options) {
         startChild(launch);
         return;
       }
+      // With startOnFirstCall, a session that never calls a tool never runs onInitialize or starts the browser client.
+      if (options.startOnFirstCall && queue.length === 0) {
+        deferredLaunch = launch;
+        return;
+      }
+      var attempt = Object.assign({}, launch, { env: Object.assign({}, launch.env) });
       launchInitialization = Promise.resolve().then(function () {
-        return options.onInitialize(launch, hostClientInfo);
+        return options.onInitialize(attempt, hostClientInfo);
       });
       launchInitialization.then(function () {
-        if (!closed) startChild(launch);
+        if (!closed) startChild(attempt);
       }, function (error) {
-        fail(options.spawnPayload(error));
+        if (!options.startOnFirstCall) {
+          fail(options.spawnPayload(error));
+          return;
+        }
+        // A deferred start that fails answers only the calls waiting on it; the next call tries again.
+        var held = queue;
+        queue = [];
+        deferredLaunch = launch;
+        held.forEach(function (entry) {
+          release(entry);
+          send({ id: entry.id, result: callFailure(options.initializePayload(error)) });
+        });
+        pendingSettled();
       });
     }
 
@@ -613,6 +633,13 @@ function serve(options) {
       if (childReady) {
         forward(entry);
         return;
+      }
+      if (deferredLaunch !== null && child === null && !closed) {
+        var launch = deferredLaunch;
+        deferredLaunch = null;
+        queue.push(entry);
+        start(launch);
+        queue = queue.filter(function (other) { return other !== entry; });
       }
       entry.timer = setTimeout(function () {
         release(entry);
@@ -724,7 +751,14 @@ function serve(options) {
         });
         return;
       }
-      if (settled) cleanup().then(done);
+      if (settled) {
+        var neverStarted = deferredLaunch !== null;
+        cleanup().then(function () {
+          done();
+          // A session that never called the browser has no child whose exit would end this process, so it ends here.
+          if (neverStarted) options.exit(0);
+        });
+      }
     }
 
     stdin.setEncoding("utf8");

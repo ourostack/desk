@@ -52,6 +52,9 @@ function createNativeSession(options) {
   var clearing = null;
   var resuming = null;
   var request = options.request || function (operation, payload) { return providerRequest(providerEndpoint, operation, payload); };
+  var readyWaitMs = options.readyWaitMs === undefined ? 15000 : options.readyWaitMs;
+  var readyPollMs = options.readyPollMs === undefined ? 250 : options.readyPollMs;
+  var ownStart = null;
   function refusal(code) {
     var error = new Error(code);
     error.code = code;
@@ -61,6 +64,89 @@ function createNativeSession(options) {
     if (!acquired || released) throw new Error("browser_native_session_unavailable");
     return { leaseId: acquired.leaseId, owner: owner };
   }
+  // This process's start as the operating system reports it; the provider records this session's process only when it reads the
+  // same start, and later releases the lease once that process is gone.
+  function ownerProcess() {
+    if (!ownStart) {
+      ownStart = Promise.resolve().then(function () {
+        return options.readOwnStart ? options.readOwnStart(process.pid)
+          : import("./src/readiness/process-start.js").then(function (module) { return module.readProcessStart(process.pid); });
+      }).then(null, function () { return null; });
+    }
+    return ownStart.then(function (start) {
+      return typeof start === "string" ? { ownerPid: process.pid, ownerStart: start } : { ownerPid: process.pid };
+    });
+  }
+  function notRunning(cause) {
+    var missing = refusal("browser_native_provider_not_running");
+    var code = cause && (cause.code || cause.message);
+    missing.message = "The native browser provider is not running: its readiness file " + options.readyFile +
+      (!code || code === "ENOENT" ? " is missing." : " is present, but the provider does not answer (" + code + ").");
+    missing.readyFile = options.readyFile;
+    return missing;
+  }
+  // The provider writes its readiness file once it is up and removes it when it stops. The browser starts a new provider as soon
+  // as its extension reconnects, so a missing file is waited for, up to readyWaitMs, before the provider is named as not running.
+  function readReady() {
+    var fs = require("fs").promises;
+    var deadline = Date.now() + readyWaitMs;
+    function attempt() {
+      return fs.lstat(options.readyFile).then(null, function (failure) {
+        if (!failure || failure.code !== "ENOENT") throw failure;
+        if (Date.now() >= deadline) throw notRunning();
+        return new Promise(function (resolve) { setTimeout(resolve, readyPollMs); }).then(attempt);
+      });
+    }
+    return attempt().then(function (info) {
+      if (!info.isFile() || info.nlink !== 1 || info.size > 16384 ||
+          (process.platform !== "win32" && ((info.mode & 63) !== 0 || info.uid !== process.getuid()))) {
+        throw refusal("NATIVE_READINESS_NOT_PRIVATE");
+      }
+      return fs.readFile(options.readyFile, "utf8");
+    }).then(function (text) {
+      var ready = JSON.parse(text);
+      if (ready.version !== 1 || ["pid", "startIdentity", "owner", "executable", "profileRoot"].some(function (key) {
+        return !options.processIdentity || ready.processIdentity[key] !== options.processIdentity[key];
+      })) throw refusal("NATIVE_BROWSER_GENERATION_MISMATCH");
+      if (!/^[a-f0-9]{64}$/.test(options.extensionSourceDigest || "") ||
+          ready.extensionSourceDigest !== options.extensionSourceDigest) {
+        throw refusal("NATIVE_EXTENSION_SOURCE_MISMATCH");
+      }
+      var lease = acquired && !released ? { leaseId: acquired.leaseId, owner: owner } : {};
+      return providerRequest(ready.endpoint, "attest", Object.assign({ expectedProcessIdentity: options.processIdentity }, lease)).then(function (attested) {
+        if (!attested || attested.healthy !== true || ["pid", "startIdentity", "owner", "executable", "profileRoot"].some(function (key) {
+          return !attested.processIdentity || attested.processIdentity[key] !== options.processIdentity[key];
+        })) throw refusal("NATIVE_MEDIATOR_UNAVAILABLE");
+        return { endpoint: ready.endpoint, leaseBound: attested.leaseBound };
+      });
+    });
+  }
+  // A provider that stopped between its readiness file and the request is waited for once more, then named as not running.
+  function withProvider(step) {
+    return step().then(null, function (error) {
+      if (!error || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "NATIVE_PROVIDER_TIMEOUT", "browser_native_provider_not_running"]
+        .indexOf(error.code || error.message) === -1) throw error;
+      return step().then(null, function (again) {
+        if (again && ["ENOENT", "ECONNREFUSED", "ECONNRESET", "NATIVE_PROVIDER_TIMEOUT"].indexOf(again.code || again.message) !== -1) {
+          throw notRunning(again);
+        }
+        throw again;
+      });
+    });
+  }
+  function acquireAt(endpoint) {
+    return ownerProcess().then(function (session) {
+      return (options.request ? request : function (operation, input) { return providerRequest(endpoint, operation, input); })(
+        "acquire", Object.assign({ owner: owner }, session));
+    }).then(function (result) {
+      if (!result || typeof result.leaseId !== "string" || typeof result.endpoint !== "string" || result.owner !== owner) {
+        throw new Error("NATIVE_ACQUIRE_RESPONSE_INVALID");
+      }
+      providerEndpoint = endpoint;
+      acquired = result;
+      return acquired;
+    });
+  }
   return {
     setOwner: function (name) {
       if (typeof name !== "string" || !name.trim() || name.length > 160 || /[\x00-\x1f\x7f]/.test(name)) return Promise.reject(new Error("browser_owner_identity_missing"));
@@ -68,12 +154,15 @@ function createNativeSession(options) {
       if (acquired) return Promise.resolve(acquired);
       if (acquiring) return acquiring;
       owner = name;
-      acquiring = request("acquire", { owner: name }).then(function (result) {
-        if (!result || typeof result.leaseId !== "string" || typeof result.endpoint !== "string" || result.owner !== owner) {
-          throw new Error("NATIVE_ACQUIRE_RESPONSE_INVALID");
-        }
-        acquired = result;
-        return acquired;
+      // A lease is taken through the provider running now, which may not be the one that was running when the session connected.
+      acquiring = (options.readyFile ? withProvider(function () {
+        return readReady().then(function (ready) { return acquireAt(ready.endpoint); });
+      }) : acquireAt(providerEndpoint)).then(function (result) {
+        acquiring = null;
+        return result;
+      }, function (error) {
+        acquiring = null;
+        throw error;
       });
       return acquiring;
     },
@@ -87,30 +176,19 @@ function createNativeSession(options) {
         return require("url").parse(endpoint).pathname.split("/").filter(Boolean).pop();
       }).filter(function (value) { return typeof value === "string" && value.length >= 32; }));
     },
+    // Moves the session to the provider running now. A lease that provider no longer holds (released after its session looked
+    // gone, or not restorable) is replaced by a new one for the same owner, so the session carries on instead of failing.
     resume: function () {
       var current = payload();
       if (!options.readyFile) return Promise.resolve({ changed: false, endpoint: acquired.endpoint });
       if (resuming) return resuming;
-      var fs = require("fs").promises;
-      resuming = fs.lstat(options.readyFile).then(function (info) {
-        if (!info.isFile() || info.nlink !== 1 || info.size > 16384 ||
-            (process.platform !== "win32" && ((info.mode & 63) !== 0 || info.uid !== process.getuid()))) {
-          throw refusal("NATIVE_READINESS_NOT_PRIVATE");
-        }
-        return fs.readFile(options.readyFile, "utf8");
-      }).then(function (text) {
-        var ready = JSON.parse(text);
-        if (ready.version !== 1 || ["pid", "startIdentity", "owner", "executable", "profileRoot"].some(function (key) {
-          return !options.processIdentity || ready.processIdentity[key] !== options.processIdentity[key];
-        })) throw refusal("NATIVE_BROWSER_GENERATION_MISMATCH");
-        if (!/^[a-f0-9]{64}$/.test(options.extensionSourceDigest || "") ||
-            ready.extensionSourceDigest !== options.extensionSourceDigest) {
-          throw refusal("NATIVE_EXTENSION_SOURCE_MISMATCH");
-        }
-        return providerRequest(ready.endpoint, "attest", { expectedProcessIdentity: options.processIdentity }).then(function (attested) {
-          if (!attested || attested.healthy !== true || ["pid", "startIdentity", "owner", "executable", "profileRoot"].some(function (key) {
-            return !attested.processIdentity || attested.processIdentity[key] !== options.processIdentity[key];
-          })) throw refusal("NATIVE_MEDIATOR_UNAVAILABLE");
+      function replace(endpoint) {
+        acquired = null;
+        return acquireAt(endpoint).then(function (result) { return { changed: true, endpoint: result.endpoint }; });
+      }
+      resuming = withProvider(function () {
+        return readReady().then(function (ready) {
+          if (ready.leaseBound === false) return replace(ready.endpoint);
           if (ready.endpoint === providerEndpoint) return { changed: false, endpoint: acquired.endpoint };
           return providerRequest(ready.endpoint, "resume", Object.assign({}, current,
             { expectedProcessIdentity: options.processIdentity })).then(function (restored) {
@@ -119,6 +197,9 @@ function createNativeSession(options) {
             providerEndpoint = ready.endpoint;
             acquired = Object.assign({}, acquired, { endpoint: restored.endpoint });
             return { changed: true, endpoint: acquired.endpoint };
+          }, function (error) {
+            if (error && error.code === "NATIVE_LEASE_OWNER_MISMATCH") return replace(ready.endpoint);
+            throw error;
           });
         });
       }).then(function (result) {

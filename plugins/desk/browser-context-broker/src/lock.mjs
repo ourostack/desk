@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -177,7 +178,33 @@ async function publishOwnerAtomically(lockPath, owner) {
   await rename(temporaryPath, path.join(lockPath, 'owner.json'));
 }
 
+// Callers in one process wait for a lock in call order before they compete for its directory. Without this, every waiter in the
+// native provider polled the same directory at once and a burst of sessions starting together timed out on a lock that was only
+// ever busy, which capped how many could start. The timeout now measures only the wait for other processes.
+const queues = new Map();
+const held = new AsyncLocalStorage();
+
 export async function withBrokerLock(stateDir, fn, options = {}) {
+  const key = path.resolve(stateDir) + '\0' + (options.name ?? 'broker');
+  // A nested take of a lock this call chain already holds keeps the old behaviour, a timeout, instead of waiting on itself.
+  if (held.getStore()?.has(key)) return takeBrokerLock(stateDir, fn, options);
+  const previous = queues.get(key) ?? Promise.resolve();
+  let done;
+  const mine = new Promise(resolve => { done = resolve; });
+  const tail = previous.then(() => mine);
+  queues.set(key, tail);
+  await previous;
+  try {
+    const holding = new Set(held.getStore() ?? []);
+    holding.add(key);
+    return await held.run(holding, () => takeBrokerLock(stateDir, fn, options));
+  } finally {
+    done();
+    if (queues.get(key) === tail) queues.delete(key);
+  }
+}
+
+async function takeBrokerLock(stateDir, fn, options) {
   const {
     name = 'broker',
     timeoutMs = 5_000,

@@ -391,3 +391,292 @@ test('GivenUnreadableButLiveRecordedRuntime_WhenNewHostStarts_ReadinessIsNeverDi
     await started?.close();
   }
 });
+
+// 2026-10-12: the operator's registry held 82 leases, all hours past `expiresAt`, 81 of them never used (a session takes a lease when
+// it connects, whether or not it ever drives the browser). Every provider start restored and renewed all of them, and the provider
+// then died within seconds, so no readiness file existed and no session could use the browser.
+async function pileUp(t, { count = 81 } = {}) {
+  const { startNativeProvider } = await import(moduleUrl);
+  const { service, transport, stateDir } = await setup(t);
+  const idle = [];
+  for (let index = 0; index < count; index += 1) idle.push(await service.invoke('acquire', { owner: 'idle-owner-' + index }));
+  const used = await service.invoke('acquire', { owner: 'used-owner' });
+  await service.invoke('ensureWindow', { leaseId: used.leaseId, owner: 'used-owner' });
+  await service.close();
+  const registryFile = path.join(stateDir, 'registry.json');
+  const expire = async ids => {
+    const registry = JSON.parse(await readFile(registryFile, 'utf8'));
+    for (const id of ids) registry.leases[id].expiresAt = new Date(Date.now() - 600_000).toISOString();
+    await writeFile(registryFile, JSON.stringify(registry));
+  };
+  // Returns once the start and the sweep it begins have finished.
+  // A grace of zero judges an expired lease with tabs at once; the default waits one expiry period for its session to reconnect.
+  const restart = async ({ ownerGraceMs = 0 } = {}) => {
+    const started = await startNativeProvider({
+      stateDir, transport, contextIdentity: { ...contextIdentity, transportGeneration: 'native-host-2' }, ownerGraceMs,
+      processReader: async pid => [processIdentity, entry, runtime].find(identity => identity.pid === pid),
+    });
+    await started.sweep();
+    return started;
+  };
+  const leases = async () => JSON.parse(await readFile(registryFile, 'utf8')).leases;
+  return { transport, stateDir, idle, used, expire, restart, leases };
+}
+
+test('GivenTheIncidentRegistryOf82ExpiredLeases_WhenProviderStarts_ItIsReadyAndEveryAbandonedLeaseIsGone', async t => {
+  const { transport, idle, used, expire, restart, leases } = await pileUp(t);
+  await expire([...idle.map(lease => lease.leaseId), used.leaseId]);
+  const before = transport.calls.length;
+  const started = Date.now();
+  const replacement = await restart();
+  t.after(() => replacement.close());
+  assert.ok(Date.now() - started < 5_000);
+  assert.ok(JSON.parse(await readFile(replacement.readyFile, 'utf8')).endpoint, 'readiness is published');
+  const bound = transport.calls.slice(before).filter(call => call.method === 'lease.bind' || call.method === 'lease.restore');
+  assert.deepEqual(bound.map(call => call.leaseId), [used.leaseId], 'an expired lease that never touched the browser is not bound again');
+  assert.ok(transport.calls.slice(before).some(call => call.leaseId === used.leaseId && call.method === 'target.close'),
+    'the expired lease with a window is a session that is gone: its recorded tabs are closed');
+  assert.deepEqual(Object.keys(await leases()), []);
+});
+
+test('GivenALeaseWhoseControlTabIsGone_WhenProviderStarts_ThatLeaseIsSkippedAndTheProviderStillStarts', async t => {
+  const { transport, idle, used, restart, leases } = await pileUp(t, { count: 2 });
+  // The browser no longer has the lease's control tab (the operator closed the window while no provider ran).
+  transport.leases.delete(used.leaseId);
+  const expiry = (await leases())[used.leaseId].expiresAt;
+  const replacement = await restart();
+  t.after(() => replacement.close());
+  assert.equal(JSON.parse(await readFile(replacement.readyFile, 'utf8')).transportGeneration, 'native-host-2');
+  assert.deepEqual(Object.keys(await leases()).sort(), [...idle.map(lease => lease.leaseId), used.leaseId].sort(), 'the lease that could not be restored stays recorded, because its tabs may still exist');
+  assert.equal((await leases())[used.leaseId].expiresAt, expiry, 'and it is not renewed, so it expires and a later start removes it');
+  await assert.rejects(replacement.invoke('resume', { leaseId: used.leaseId, owner: 'used-owner', expectedProcessIdentity: processIdentity }));
+  const resumed = await replacement.invoke('resume', { leaseId: idle[0].leaseId, owner: 'idle-owner-0', expectedProcessIdentity: processIdentity });
+  assert.equal(resumed.leaseId, idle[0].leaseId);
+});
+
+test('GivenAnExpiredLeaseWithTabsThatCannotBeRestored_WhenProviderStarts_ItIsKeptAndRetriedNeverDropped', async t => {
+  const { transport, used, expire, restart, leases } = await pileUp(t, { count: 0 });
+  const lost = transport.leases.get(used.leaseId);
+  transport.leases.delete(used.leaseId);
+  await expire([used.leaseId]);
+  const replacement = await restart();
+  t.after(() => replacement.close());
+  assert.ok(JSON.parse(await readFile(replacement.readyFile, 'utf8')).endpoint, 'the start completes');
+  assert.deepEqual(Object.keys(await leases()), [used.leaseId], 'its tabs may still be open, so the record that can close them stays');
+  // The failure was transient: the next sweep restores the lease and, its session being gone, closes its tabs and releases it.
+  transport.leases.set(used.leaseId, lost);
+  await replacement.sweep();
+  assert.deepEqual(Object.keys(await leases()), []);
+  assert.ok(transport.calls.some(call => call.leaseId === used.leaseId && call.method === 'target.close'));
+});
+
+test('GivenLeasesWhoseSessionIsGone_WhenSwept_TheyAreReleasedAndTheirTabsClosed', async t => {
+  const { startNativeProvider } = await import(moduleUrl);
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), 'desk-native-provider-'));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  // Process starts as the operating system reports them; a session reports its own the same way.
+  const starts = new Map([[process.pid, 'start-self']]);
+  const transport = new Transport();
+  const service = await startNativeProvider({
+    stateDir, transport, contextIdentity,
+    processReader: async pid => [processIdentity, entry, runtime].find(identity => identity.pid === pid),
+    processStartReader: async pid => starts.get(pid) ?? null,
+  });
+  t.after(() => service.close());
+  const acquire = (owner, ownerPid, ownerStart = starts.get(ownerPid)) =>
+    service.invoke('acquire', { owner, ...(ownerPid === undefined ? {} : { ownerPid, ownerStart }) });
+  // Process ids that are not running here, so the signal probe cannot answer for them; only the start read can.
+  const [gone, withWindow, replaced, elsewhere] = [999_901, 999_903, 999_904, 999_905];
+  const live = process.pid;
+  starts.set(gone, 'start-gone');
+  starts.set(withWindow, 'start-window');
+  starts.set(replaced, 'start-replaced');
+  const a = await acquire('gone-session', gone);
+  const b = await acquire('live-session', live);
+  const c = await acquire('window-session', withWindow);
+  await service.invoke('ensureWindow', { leaseId: c.leaseId, owner: 'window-session' });
+  const d = await acquire('old-client-session');
+  const e = await acquire('replaced-session', replaced);
+  // A session in another process namespace reports a start this provider cannot confirm: its process is never judged.
+  const f = await acquire('other-namespace-session', elsewhere, 'start-in-a-container');
+  await assert.rejects(acquire('bad-pid', -1), error => error.code === 'NATIVE_OWNER_INVALID');
+  starts.set(gone, 'start-of-another-process');
+  starts.set(withWindow, 'start-of-yet-another-process');
+  starts.set(replaced, 'reused-pid');
+  // The replaced session's process id is in use by a live process with another start.
+  starts.set(elsewhere, 'start-of-an-unrelated-process');
+  await service.sweep();
+  const remaining = (await service.invoke('status')).leases.map(lease => lease.leaseId).sort();
+  assert.deepEqual(remaining, [b.leaseId, d.leaseId, f.leaseId].sort(),
+    'gone sessions are released, the one with a window included; a live one, an older client and an unconfirmed one stay');
+  assert.ok(transport.calls.some(call => call.leaseId === c.leaseId && call.method === 'target.close'), 'the dead session\'s tabs are closed');
+  for (const lease of [a, e]) assert.ok(transport.calls.some(call => call.leaseId === lease.leaseId && call.method === 'lease.unbind'));
+});
+
+test('GivenAnExpiredIdleLease_WhenSwept_ItIsReleasedAndAFailedReleaseIsRetriedNotLeftReleasing', async t => {
+  const { service, transport, stateDir } = await setup(t);
+  const stale = await service.invoke('acquire', { owner: 'stale-session' });
+  const stuck = await service.invoke('acquire', { owner: 'stuck-session' });
+  const registryFile = path.join(stateDir, 'registry.json');
+  const registry = JSON.parse(await readFile(registryFile, 'utf8'));
+  for (const id of [stale.leaseId, stuck.leaseId]) registry.leases[id].expiresAt = new Date(Date.now() - 1000).toISOString();
+  await writeFile(registryFile, JSON.stringify(registry));
+  const original = transport.request.bind(transport);
+  let answering = false;
+  transport.request = async message => {
+    if (message.method === 'lease.unbind' && message.leaseId === stuck.leaseId && !answering) throw new Error('the extension did not answer');
+    return original(message);
+  };
+  const started = Date.now();
+  const next = await service.invoke('acquire', { owner: 'next-session' });
+  assert.ok(Date.now() - started < 5_000, 'an acquire never waits for the sweep');
+  await service.sweep();
+  let remaining = (await service.invoke('status')).leases.map(lease => lease.leaseId);
+  assert.equal(remaining.includes(stale.leaseId), false);
+  assert.equal(remaining.includes(next.leaseId), true);
+  assert.equal(remaining.includes(stuck.leaseId), true);
+  answering = true;
+  await service.sweep();
+  remaining = (await service.invoke('status')).leases.map(lease => lease.leaseId);
+  assert.equal(remaining.includes(stuck.leaseId), false, 'the failed release is retried by the next sweep');
+});
+
+// 2026-10-12, 20:30Z: a lease whose heartbeat stopped while its provider was being replaced still recorded three tabs, and the
+// extension update gate counted it as an active owner, so the update was refused forever and the lease could never renew.
+test('GivenAnExpiredLeaseWithTabs_WhenAnUpdateIsPrepared_ItNeverHoldsTheUpdateBack', async t => {
+  const { transport, used, expire, restart } = await pileUp(t, { count: 0 });
+  await expire([used.leaseId]);
+  const replacement = await restart();
+  t.after(() => replacement.close());
+  transport.pause = () => {};
+  transport.resume = () => {};
+  const update = await replacement.invoke('prepareUpdate', { expectedProcessIdentity: processIdentity });
+  assert.equal(update.safe, true);
+  assert.ok(transport.calls.some(call => call.leaseId === used.leaseId && call.method === 'target.close'), 'its tabs were closed first');
+  await replacement.invoke('cancelUpdate', { updateToken: update.updateToken });
+});
+
+test('GivenAnExpiredOrphanLeaseThatCannotBeRestored_WhenAnUpdateIsPrepared_ItIsTrackedButNeverBlocks', async t => {
+  const { transport, used, expire, restart, leases } = await pileUp(t, { count: 0 });
+  transport.leases.delete(used.leaseId);
+  await expire([used.leaseId]);
+  const replacement = await restart();
+  t.after(() => replacement.close());
+  transport.pause = () => {};
+  transport.resume = () => {};
+  const update = await replacement.invoke('prepareUpdate', { expectedProcessIdentity: processIdentity });
+  assert.equal(update.safe, true);
+  assert.deepEqual(Object.keys(await leases()), [used.leaseId], 'the orphan stays recorded so a later sweep can still close its tabs');
+  await replacement.invoke('cancelUpdate', { updateToken: update.updateToken });
+});
+
+test('GivenALiveSessionWithTabs_WhenAnUpdateIsPrepared_ItStillBlocksTheUpdate', async t => {
+  const { service, transport } = await setup(t);
+  transport.pause = () => {};
+  transport.resume = () => {};
+  const acquired = await service.invoke('acquire', { owner: 'live-owner', ownerPid: process.pid });
+  await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: 'live-owner' });
+  await assert.rejects(service.invoke('prepareUpdate', { expectedProcessIdentity: processIdentity }),
+    error => error.code === 'NATIVE_UPDATE_ACTIVE_OWNERS');
+});
+
+// Ari's rule: there is no limit on how many sessions or tabs can be owned at once. Accumulation is fixed by cleanup, never by a cap.
+test('GivenManySessionsOwningTabsAtOnce_WhenEachAcquiresAndOpensItsWindow_NoneIsRefused', async t => {
+  const { service } = await setup(t);
+  const owners = await Promise.all(Array.from({ length: 150 }, (_, index) => service.invoke('acquire', { owner: 'owner-' + index })));
+  for (const acquired of owners) await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: acquired.owner });
+  assert.equal((await service.invoke('status')).leases.length, 150);
+});
+
+async function providerWith(t, options = {}) {
+  const { startNativeProvider } = await import(moduleUrl);
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), 'desk-native-provider-'));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const transport = new Transport();
+  transport.pause = () => {};
+  transport.resume = () => {};
+  const service = await startNativeProvider({
+    stateDir, transport, contextIdentity,
+    processReader: async pid => [processIdentity, entry, runtime].find(identity => identity.pid === pid), ...options,
+  });
+  t.after(() => service.close());
+  const registryFile = path.join(stateDir, 'registry.json');
+  const expire = async id => {
+    const registry = JSON.parse(await readFile(registryFile, 'utf8'));
+    registry.leases[id].expiresAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    await writeFile(registryFile, JSON.stringify(registry));
+  };
+  const leases = async () => JSON.parse(await readFile(registryFile, 'utf8')).leases;
+  return { service, transport, stateDir, expire, leases };
+}
+
+// Review of #372: a session killed before its process start could be confirmed was never cleaned up, and with tabs it held every
+// update back, because the proxy renewed its lease whether or not the session was alive.
+test('GivenAKilledSessionWhoseStartWasNeverConfirmed_WhenItsLeaseExpires_ItsTabsAreClosedAndUpdatesProceed', async t => {
+  const { service, transport, expire, leases } = await providerWith(t, { processStartReader: async () => null, ownerGraceMs: 0 });
+  const acquired = await service.invoke('acquire', { owner: 'killed-session', ownerPid: 999_907, ownerStart: 'darwin:2026-10-12T00:00:00.000Z' });
+  assert.equal((await leases())[acquired.leaseId].ownerProcess.confirmed, false);
+  await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: 'killed-session' });
+  // No client is connected, so nothing renews it; it expires.
+  await expire(acquired.leaseId);
+  const update = await service.invoke('prepareUpdate', { expectedProcessIdentity: processIdentity });
+  assert.equal(update.safe, true);
+  assert.ok(transport.calls.some(call => call.leaseId === acquired.leaseId && call.method === 'target.close'));
+  assert.deepEqual(Object.keys(await leases()), []);
+  await service.invoke('cancelUpdate', { updateToken: update.updateToken });
+});
+
+test('GivenAnExpiredLeaseWithTabsOfAnUnknownSession_WhenTheProviderHasJustStarted_ItWaitsForTheSessionToReconnect', async t => {
+  const { service, transport, expire, leases } = await providerWith(t, { ownerGraceMs: 200 });
+  const acquired = await service.invoke('acquire', { owner: 'reconnecting-session' });
+  await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: 'reconnecting-session' });
+  await expire(acquired.leaseId);
+  await service.sweep();
+  assert.ok((await leases())[acquired.leaseId], 'a session whose provider was just down keeps its tabs for one expiry period');
+  assert.equal(transport.calls.some(call => call.method === 'target.close'), false);
+  await new Promise(resolve => setTimeout(resolve, 250));
+  await service.sweep();
+  assert.equal((await leases())[acquired.leaseId], undefined, 'a session that never reconnected is gone');
+});
+
+test('GivenALiveSessionWhoseStartReadsDifferentlyButNotComparably_WhenSwept_ItIsNeverJudgedGone', async t => {
+  let start = 'linux:0b5e1c7a-0000-4000-8000-000000000000:4242';
+  const { service, transport } = await providerWith(t, { processStartReader: async () => start });
+  const acquired = await service.invoke('acquire', { owner: 'live-session', ownerPid: process.pid, ownerStart: start });
+  await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: 'live-session' });
+  // A read whose boot id failed under load.
+  start = 'linux:unknown-boot:4242';
+  await service.sweep();
+  assert.equal(transport.calls.some(call => call.method === 'target.close'), false);
+  assert.deepEqual((await service.invoke('status')).leases.map(lease => lease.leaseId), [acquired.leaseId]);
+});
+
+test('GivenAnUnconfirmedClaim_WhenItsStartReadsTheSameLater_TheSessionIsAlive', async t => {
+  let reads = 0;
+  const { service, expire, leases } = await providerWith(t, {
+    ownerGraceMs: 0, processStartReader: async () => (++reads === 1 ? null : 'darwin:2026-10-12T01:00:00.000Z'),
+  });
+  const acquired = await service.invoke('acquire', { owner: 'slow-read-session', ownerPid: process.pid, ownerStart: 'darwin:2026-10-12T01:00:00.000Z' });
+  await service.invoke('ensureWindow', { leaseId: acquired.leaseId, owner: 'slow-read-session' });
+  await expire(acquired.leaseId);
+  await service.sweep();
+  assert.ok((await leases())[acquired.leaseId], 'the claim now reads the same, so the session is alive and keeps its tabs');
+});
+
+test('GivenAnAbandonedOrphanWhoseTabsCannotBeReached_WhenAnHourPastExpiry_ItsRecordIsDropped', async t => {
+  const { startNativeProvider } = await import(moduleUrl);
+  const { transport, used, expire, restart, leases, stateDir } = await pileUp(t, { count: 0 });
+  transport.leases.delete(used.leaseId);
+  await expire([used.leaseId]);
+  const replacement = await restart();
+  t.after(() => replacement.close());
+  assert.deepEqual(Object.keys(await leases()), [used.leaseId], 'an hour has not passed since its expiry');
+  await replacement.close();
+  const later = await startNativeProvider({
+    stateDir, transport, contextIdentity: { ...contextIdentity, transportGeneration: 'native-host-3' }, ownerGraceMs: 0, orphanDropMs: 0,
+    processReader: async pid => [processIdentity, entry, runtime].find(identity => identity.pid === pid),
+  });
+  t.after(() => later.close());
+  await later.sweep();
+  assert.deepEqual(Object.keys(await leases()), []);
+});

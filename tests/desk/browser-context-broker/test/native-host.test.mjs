@@ -340,17 +340,63 @@ for (const stream of ['stdin', 'stdout']) {
   });
 }
 
-test('GivenNativeInputQueueOverflows_WhenRun_RefusesBeforeDispatch', async () => {
+// 2026-10-12, 20:50Z: a session opened Teams and the native host ended on the next call. A busy page sends hundreds of CDP events
+// in one read; the host failed its transport on the 257th queued message, and every session lost the browser with it.
+test('GivenABurstOfThousandsOfInboundEvents_WhenRun_EveryOneIsDispatchedInOrderAndTheHostStaysUp', async () => {
   const { runNativeHost } = await import(moduleUrl);
   const stdin = new PassThrough();
   const stdout = new PassThrough();
-  let effects = 0;
+  const seen = [];
   const running = runNativeHost({
-    stdin, stdout, config: { ...config, onMessage: () => { effects++; } }, processReader: reader,
+    stdin, stdout, processReader: reader,
+    config: { ...config, onMessage: async message => { seen.push(message.id); await new Promise(setImmediate); } },
   });
-  stdin.end(Buffer.concat(Array.from({ length: 257 }, (_, id) => frame({ id }))));
-  await assert.rejects(running, error => error.code === 'NATIVE_QUEUE_FULL');
-  assert.equal(effects, 0);
+  stdin.end(Buffer.concat(Array.from({ length: 5000 }, (_, id) => frame({ id, event: 'cdp' }))));
+  assert.deepEqual(await running, { closed: true });
+  assert.equal(seen.length, 5000);
+  assert.deepEqual(seen.slice(0, 3), [0, 1, 2]);
+  assert.equal(seen.at(-1), 4999);
+});
+
+test('GivenAnInboundMessageLargerThanOneMebibyte_WhenRun_ItIsDispatched', async () => {
+  const { runNativeHost } = await import(moduleUrl);
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  let size = 0;
+  const running = runNativeHost({
+    stdin, stdout, processReader: reader, config: { ...config, onMessage: message => { size = message.data.length; } },
+  });
+  const data = 'x'.repeat(3 * 1048576);
+  const body = Buffer.from(JSON.stringify({ id: 1, data }));
+  const header = Buffer.alloc(4);
+  header.writeUInt32LE(body.length);
+  stdin.end(Buffer.concat([header, body]));
+  assert.deepEqual(await running, { closed: true });
+  assert.equal(size, data.length, 'a screenshot or a busy page event can pass 1 MiB; Chrome sends up to 64 MiB');
+});
+
+test('GivenOneFailedAncestryRead_WhenPolled_TheTransportStaysUp', async () => {
+  const { runNativeHost } = await import(moduleUrl);
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  let failures = 0;
+  let polling = false;
+  const running = runNativeHost({
+    stdin, stdout, config, identityPollMs: 5,
+    processReader: async pid => {
+      if (pid === runtime.parentPid && failures < 2 && polling) {
+        failures++;
+        throw new Error('ps timed out under load');
+      }
+      return reader(pid);
+    },
+  });
+  await new Promise(setImmediate);
+  polling = true;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  stdin.end();
+  assert.deepEqual(await running, { closed: true });
+  assert.equal(failures, 2);
 });
 
 test('GivenTruncatedNativeInput_WhenEofArrives_ReportsIncompleteFrame', async () => {

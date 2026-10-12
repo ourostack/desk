@@ -741,6 +741,15 @@ function start(o, io) {
   }
   var nativeSession = null;
   var nativeConnection = null;
+  function nativeFailure(error) {
+    if (error && error.code === "browser_native_provider_not_running") {
+      return degraded(error.code, error.message + " No browser operation was forwarded.",
+        "The Desk extension in the signed-in browser starts the provider, and Desk waited for it. Check that the browser is running with the Desk extension enabled, then call the tool again. If the file stays missing while the browser runs, the provider is failing as it starts: that is a Desk fault, so report it as desk:desk-problem says. Do not borrow another window or profile.");
+    }
+    return degraded((error && error.code) || "browser_native_operation_unavailable",
+      "The exact native browser operation could not be verified. No fallback operation was forwarded.",
+      "Retain owned-effect evidence and reconcile this lease before retrying. Do not borrow another window.");
+  }
   var nativeLaunchConfiguration = null;
   var nativeChildEndpoint = null;
   var nativeTargetsPossible = false;
@@ -889,12 +898,13 @@ function start(o, io) {
             })();
       });
       return work.then(null, function (error) {
-        return { isError: true, content: [{ type: "text", text: JSON.stringify(degraded(
-          error.code || "browser_native_operation_unavailable",
-          "The exact native browser operation could not be verified. No fallback operation was forwarded.",
-          "Retain owned-effect evidence and reconcile this lease before retrying. Do not borrow another window.")) }] };
+        return { isError: true, content: [{ type: "text", text: JSON.stringify(nativeFailure(error)) }] };
       });
     },
+    // The lease is taken at the first browser call, not when the session connects, so a session that never uses the browser
+    // leaves nothing behind in the browser's registry.
+    startOnFirstCall: real,
+    initializePayload: nativeFailure,
     cleanup: !real ? undefined : function (api) {
       if (!nativeSession) return Promise.resolve();
       if (!api.childReady() || !nativeTargetsPossible) return nativeSession.release().then(null, function () {

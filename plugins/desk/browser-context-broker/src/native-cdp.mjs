@@ -172,13 +172,21 @@ export async function startNativeCdp({ transport, stateDir, contextIdentity, hos
       throw new BrokerError('INVALID_NATIVE_BINDING', 'Native lease binding does not match its recorded browser and owner');
     }
     const routing = lease.nativeRouting;
-    await native(leaseId, restore && routing?.controlTabId ? 'lease.restore' : 'lease.bind', {
-      profileToken: contextIdentity.profileToken, owner, work: lease.work ?? null, transportGeneration: generation,
-      ...(restore && routing?.controlTabId ? {
-        controlTabId: routing.controlTabId, windowId: routing.windowId, controlMarker: routing.controlMarker,
-        targetTabs: Object.values(routing.targetTabs),
-      } : {}),
-    });
+    try {
+      await native(leaseId, restore && routing?.controlTabId ? 'lease.restore' : 'lease.bind', {
+        profileToken: contextIdentity.profileToken, owner, work: lease.work ?? null, transportGeneration: generation,
+        ...(restore && routing?.controlTabId ? {
+          controlTabId: routing.controlTabId, windowId: routing.windowId, controlMarker: routing.controlMarker,
+          targetTabs: Object.values(routing.targetTabs),
+        } : {}),
+      });
+    } catch (error) {
+      // The extension's service worker outlives a native host, so after a host restart it still holds the leases the previous host
+      // bound. For a lease with nothing recorded in the browser that binding is exactly the one being restored; refusing it kept the
+      // provider from starting on 2026-10-12.
+      const idle = !lease.targetIds?.length && !routing?.controlTabId && !lease.pendingTargetCreates?.length && !lease.releasing;
+      if (!(restore && idle && error?.code === 'NATIVE_LEASE_ALREADY_BOUND')) throw error;
+    }
     bindings.set(leaseId, { owner });
     return { rawEndpoint: endpointForLease(leaseId), transportGeneration: generation };
   }

@@ -1415,3 +1415,28 @@ test('internal upstream create timeout releases the lock but preserves marker ev
   const persisted = (await readRegistry(directory)).leases[lease.id];
   assert.equal(persisted.pendingTargetCreates.length, 1);
 });
+
+// A native lease is renewed only while its session's client is connected, so a lease outlives its session by at most one expiry.
+test('a proxy that renews only while connected renews nothing until a client connects, and reports closing itself', async () => {
+  const fake = await startFakeCdpServer();
+  cleanups.push(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({ stateDir: directory, context: declaration, owner: 'agent-renew', rawEndpoint: fake.endpoint, processIdentity });
+  let beats = 0;
+  let failing = false;
+  let closed = 0;
+  const proxy = await startLeaseProxy({
+    stateDir: directory, leaseId: lease.id, declaration, providerInvoker: attestingProvider,
+    renewOnlyWhileConnected: true, heartbeatIntervalMs: 10,
+    heartbeatLeaseFn: async () => { beats++; if (failing) throw new Error('LEASE_RELEASING'); },
+    onClosed: () => { closed++; },
+  });
+  cleanups.push(() => proxy.close());
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(beats, 0, 'no client, no renewal');
+  const socket = await openSocket(proxy.webSocketEndpoint);
+  cleanups.push(async () => socket.close());
+  await waitFor(() => beats > 0, 'a connected client renews the lease');
+  failing = true;
+  await waitFor(() => closed === 1, 'a proxy that cannot renew its lease closes and says so');
+});

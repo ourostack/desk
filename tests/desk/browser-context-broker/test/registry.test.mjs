@@ -198,6 +198,26 @@ test('withBrokerLock serializes writers and removes its exact lock', async () =>
   assert.deepEqual(await readdir(directory), []);
 });
 
+// Waiters in one process used to poll the lock directory together and time out after 5 s however briefly it was held, so a burst
+// of sessions starting at once refused some of them.
+test('withBrokerLock admits waiters in one process in call order, however long they wait in all', async () => {
+  const directory = await stateDir();
+  const order = [];
+  const holds = Array.from({ length: 40 }, (_, index) => withBrokerLock(directory, async () => {
+    order.push(index);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }, { timeoutMs: 50 }));
+  await Promise.all(holds);
+  assert.deepEqual(order, Array.from({ length: 40 }, (_, index) => index));
+});
+
+test('withBrokerLock taken again inside its own holder times out instead of waiting on itself', async () => {
+  const directory = await stateDir();
+  await assert.rejects(withBrokerLock(directory, () => withBrokerLock(directory, async () => {}, { timeoutMs: 30 })),
+    (error) => error.code === 'BROKER_LOCK_TIMEOUT');
+  await withBrokerLock(directory, () => withBrokerLock(directory, async () => {}, { name: 'other' }));
+});
+
 test('withBrokerLock removes a just-created lock directory when owner publication fails', async () => {
   const directory = await stateDir();
   let entered = false;

@@ -614,6 +614,7 @@ export async function createLease({
   stateDir,
   context,
   owner,
+  ownerProcess,
   rawEndpoint,
   processIdentity,
   mediationChain,
@@ -639,6 +640,7 @@ export async function createLease({
     contextId: context.id,
     claims: context.claims ?? {},
     owner,
+    ...(ownerProcess ? { ownerProcess: structuredClone(ownerProcess) } : {}),
     rawEndpoint,
     processIdentity: structuredClone(processIdentity),
     ...(mediationChain ? { mediationChain: structuredClone(mediationChain) } : {}),
@@ -727,7 +729,7 @@ export async function createLease({
   }
 }
 
-export async function renewNativeLeaseBinding({ stateDir, leaseId, processIdentity, mediationChain, rawEndpoint, transportGeneration }) {
+export async function renewNativeLeaseBinding({ stateDir, leaseId, processIdentity, mediationChain, rawEndpoint, transportGeneration, extend = true }) {
   return mutateLease(stateDir, leaseId, lease => {
     if (!sameProcessIdentity(lease.processIdentity, processIdentity) || !lease.nativeRouting ||
         lease.pendingTargetCreates?.length || lease.releasing || typeof rawEndpoint !== 'string' ||
@@ -738,6 +740,8 @@ export async function renewNativeLeaseBinding({ stateDir, leaseId, processIdenti
     lease.rawEndpoint = rawEndpoint;
     lease.mediationChain = structuredClone(mediationChain);
     lease.nativeRouting.transportGeneration = transportGeneration;
+    // A lease rebound only to be released keeps its expiry, so it still reads as abandoned.
+    if (!extend) return;
     lease.heartbeatAt = new Date().toISOString();
     lease.expiresAt = new Date(Date.now() + 300000).toISOString();
   });
@@ -903,14 +907,15 @@ export async function recordProxy(stateDir, leaseId, endpoint) {
   });
 }
 
-export async function heartbeatLease(stateDir, leaseId, ttlMs = 300_000) {
+// `revive` renews an expired lease too: a native session whose client is connected is alive, whatever its expiry says.
+export async function heartbeatLease(stateDir, leaseId, ttlMs = 300_000, { revive = false } = {}) {
   return withLeaseOperation(stateDir, leaseId, () => {
     return mutateLease(stateDir, leaseId, (lease) => {
       if (lease.releasing) {
         throw new BrokerError('LEASE_RELEASING', `Lease is being released: ${leaseId}`);
       }
       const now = new Date();
-      if (Date.parse(lease.expiresAt) <= now.getTime()) {
+      if (!revive && Date.parse(lease.expiresAt) <= now.getTime()) {
         throw new BrokerError('LEASE_EXPIRED', `Lease has expired: ${leaseId}`);
       }
       lease.heartbeatAt = now.toISOString();
@@ -927,10 +932,15 @@ async function settleLeaseTargets({
   providerInvoker,
   cdpClientOptions,
   providerUnbind,
+  onlyIf,
 }, retainEmpty) {
   return withBrokerLock(
     stateDir,
     () => withLeaseOperation(stateDir, leaseId, async () => {
+      // A release on the lease owner's behalf (onlyIf) decides again here, under the lease's own lock, so it never races the owner.
+      if (onlyIf && !(await onlyIf(await readLease(stateDir, leaseId)))) {
+        return { leaseId, released: false, skipped: true, closedTargetIds: [], failedTargetIds: [] };
+      }
       await attestLeaseContext({ stateDir, leaseId, declaration, providerInvoker });
       const lease = await mutateLease(stateDir, leaseId, (record) => {
         record.releasing = true;

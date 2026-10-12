@@ -159,7 +159,11 @@ test("native session resumes only a new operation after exact fresh readiness an
   const session = native.createNativeSession({
     endpoint: base + "a".repeat(64), readyFile, processIdentity: identity, extensionSourceDigest: "c".repeat(64),
   })
+  await writeFile(readyFile, JSON.stringify({
+    version: 1, endpoint: base + "a".repeat(64), processIdentity: identity, extensionSourceDigest: "c".repeat(64),
+  }), { mode: 0o600 })
   await session.setOwner("agent")
+  calls.splice(0, calls.indexOf("acquire"))
   await assert.rejects(session.ensureWindow(), error => error.code === "ECONNRESET")
   assert.deepEqual(calls, ["acquire", "ensureWindow"], "lost effect must not be transparently resent")
   await writeFile(readyFile, JSON.stringify({
@@ -276,18 +280,17 @@ test("native resume checks private readiness, source, attestation and exact rest
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
   const endpoint = `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`
   const session = native.createNativeSession({ endpoint, readyFile, processIdentity: identity, extensionSourceDigest: "c".repeat(64) })
-  await session.setOwner("agent")
   const write = value => writeFile(readyFile, JSON.stringify(value), { mode: 0o600 })
   const ready = { version: 1, endpoint, processIdentity: identity, extensionSourceDigest: "c".repeat(64) }
   await write(ready)
+  await session.setOwner("agent")
   const resume = session.resume()
   assert.equal(session.resume(), resume)
   assert.equal((await resume).changed, false)
   await write({ ...ready, extensionSourceDigest: "d".repeat(64) })
   await assert.rejects(session.resume(), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
   const noSource = native.createNativeSession({ endpoint, readyFile, processIdentity: identity })
-  await noSource.setOwner("agent")
-  await assert.rejects(noSource.resume(), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
+  await assert.rejects(noSource.setOwner("agent"), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
   await write(ready)
   for (const value of [null, { healthy: false }, { healthy: true }, { healthy: true, processIdentity: { ...identity, owner: "foreign" } }]) {
     response = value
@@ -355,7 +358,10 @@ test("an empty retained lease resumes the current provider before shutdown relea
   const base = `http://127.0.0.1:${server.address().port}/provider/`
   const session = native.createNativeSession({ endpoint: base + "a".repeat(64), readyFile,
     processIdentity: identity, extensionSourceDigest: "c".repeat(64) })
+  await writeFile(readyFile, JSON.stringify({ version: 1, endpoint: base + "a".repeat(64),
+    processIdentity: identity, extensionSourceDigest: "c".repeat(64) }), { mode: 0o600 })
   await session.setOwner("agent")
+  operations.splice(0, operations.findIndex(entry => entry.operation === "acquire"))
   await writeFile(readyFile, JSON.stringify({ version: 1, endpoint: base + "b".repeat(64),
     processIdentity: identity, extensionSourceDigest: "c".repeat(64) }), { mode: 0o600 })
   assert.equal((await session.release()).released, true)
@@ -363,4 +369,144 @@ test("an empty retained lease resumes the current provider before shutdown relea
     { operation: "acquire", replacement: false }, { operation: "attest", replacement: true },
     { operation: "resume", replacement: true }, { operation: "release", replacement: true },
   ], "targetless shutdown after source update must not send release to the departed transport")
+})
+
+// 2026-10-12: the provider had died at startup, so its readiness file did not exist, and every browser call answered a bare
+// `degraded:ENOENT` with no path and no cause.
+const liveIdentity = { pid: 123, startIdentity: "same", owner: "operator", executable: "/browser", profileRoot: "/profile" }
+
+// A provider fixture: answers attest (with leaseBound for a named lease), acquire, resume and ensureWindow, and records each call.
+async function providerFixture(t, { leases = new Set(), refuseResume = false, resumeCode = "NATIVE_LEASE_OWNER_MISMATCH" } = {}) {
+  const calls = []
+  let next = 0
+  const server = http.createServer(async (request, response) => {
+    let text = ""; for await (const chunk of request) text += chunk
+    const { operation, payload } = JSON.parse(text)
+    calls.push({ operation, payload })
+    let result
+    if (operation === "attest") result = { healthy: true, processIdentity: liveIdentity,
+      ...(payload.leaseId ? { leaseBound: leases.has(payload.leaseId) } : {}) }
+    else if (operation === "acquire") {
+      const leaseId = "lease-" + ++next
+      leases.add(leaseId)
+      result = { leaseId, owner: payload.owner, endpoint: "http://127.0.0.1/proxy-" + leaseId }
+    } else if (operation === "resume") {
+      if (refuseResume || !leases.has(payload.leaseId)) {
+        response.writeHead(400)
+        response.end(JSON.stringify({ ok: false, error: { code: resumeCode } }))
+        return
+      }
+      result = { leaseId: payload.leaseId, owner: payload.owner, endpoint: "http://127.0.0.1/resumed-" + payload.leaseId }
+    } else result = { targetId: "t" }
+    response.end(JSON.stringify({ ok: true, result }))
+  })
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
+  return { calls, leases, endpoint: suffix => `http://127.0.0.1:${server.address().port}/provider/${suffix.repeat(64)}` }
+}
+
+async function readyFixture(name) {
+  const root = await mkTempRoot(name)
+  const readyFile = path.join(root, "native-provider.json")
+  const write = endpoint => writeFile(readyFile, JSON.stringify({ version: 1, endpoint, processIdentity: liveIdentity,
+    extensionSourceDigest: "c".repeat(64) }), { mode: 0o600 })
+  return { readyFile, write }
+}
+
+function sessionFor(readyFile, endpoint, extra = {}) {
+  return native.createNativeSession({ endpoint, readyFile, processIdentity: liveIdentity, extensionSourceDigest: "c".repeat(64),
+    readyWaitMs: 300, readyPollMs: 10, readOwnStart: async () => "own-start", ...extra })
+}
+
+test("a missing readiness file is waited for, then named as the provider not running, with the file's path", async t => {
+  const { readyFile } = await readyFixture("native-session-not-running-")
+  const provider = await providerFixture(t)
+  const session = sessionFor(readyFile, provider.endpoint("a"))
+  const started = Date.now()
+  await assert.rejects(session.setOwner("agent"), error => {
+    assert.equal(error.code, "browser_native_provider_not_running")
+    assert.equal(error.readyFile, readyFile)
+    assert.equal(error.message, "The native browser provider is not running: its readiness file " + readyFile + " is missing.")
+    return true
+  })
+  assert.ok(Date.now() - started >= 500, "it waited for the provider, and tried once more")
+  assert.deepEqual(provider.calls, [], "no lease was requested from a provider that is not running")
+})
+
+test("a provider that comes up while the session waits is used, and the session names its own process", async t => {
+  const { readyFile, write } = await readyFixture("native-session-late-provider-")
+  const provider = await providerFixture(t)
+  const session = sessionFor(readyFile, provider.endpoint("a"), { readyWaitMs: 5000 })
+  const acquiring = session.setOwner("agent")
+  setTimeout(() => write(provider.endpoint("b")), 100)
+  const acquired = await acquiring
+  assert.equal(acquired.leaseId, "lease-1")
+  assert.deepEqual(provider.calls.map(call => call.operation), ["attest", "acquire"])
+  assert.deepEqual(provider.calls[1].payload, { owner: "agent", ownerPid: process.pid, ownerStart: "own-start" })
+  assert.equal(session.environment().DESK_NATIVE_PROVIDER_URL, provider.endpoint("b"), "the lease is taken through the provider running now")
+})
+
+test("a session whose own start cannot be read still sends its process id", async t => {
+  const { readyFile, write } = await readyFixture("native-session-no-start-")
+  const provider = await providerFixture(t)
+  await write(provider.endpoint("a"))
+  await sessionFor(readyFile, provider.endpoint("a"), { readOwnStart: async () => { throw new Error("unreadable") } }).setOwner("agent")
+  assert.deepEqual(provider.calls[1].payload, { owner: "agent", ownerPid: process.pid })
+})
+
+test("a readiness file that cannot be read for another reason is not mistaken for a stopped provider", async t => {
+  const { readyFile } = await readyFixture("native-session-unreadable-")
+  const provider = await providerFixture(t)
+  await writeFile(readyFile, "a file where a folder is expected", { mode: 0o600 })
+  const session = sessionFor(path.join(readyFile, "ready.json"), provider.endpoint("a"))
+  await assert.rejects(session.setOwner("agent"), error => error.code === "ENOTDIR")
+  assert.deepEqual(provider.calls, [])
+})
+
+test("a provider that stopped after writing its readiness file is tried once more, then named as not running", async t => {
+  const { readyFile, write } = await readyFixture("native-session-refused-")
+  await write("http://127.0.0.1:9/provider/" + "a".repeat(64))
+  const session = sessionFor(readyFile, "http://127.0.0.1:9/provider/" + "a".repeat(64))
+  await assert.rejects(session.setOwner("agent"), error => error.code === "browser_native_provider_not_running" &&
+    error.message === "The native browser provider is not running: its readiness file " + readyFile +
+      " is present, but the provider does not answer (ECONNREFUSED).")
+})
+
+test("a session whose lease the provider no longer holds takes a new one instead of failing", async t => {
+  const { readyFile, write } = await readyFixture("native-session-reacquire-")
+  const provider = await providerFixture(t)
+  await write(provider.endpoint("a"))
+  const session = sessionFor(readyFile, provider.endpoint("a"))
+  const first = await session.setOwner("agent")
+  assert.deepEqual(await session.resume(), { changed: false, endpoint: first.endpoint })
+  provider.leases.delete(first.leaseId)
+  const resumed = await session.resume()
+  assert.deepEqual(resumed, { changed: true, endpoint: "http://127.0.0.1/proxy-lease-2" })
+  assert.equal(session.environment().DESK_NATIVE_LEASE_ID, "lease-2")
+  assert.equal(session.environment().DESK_BROWSER_OWNER, "agent", "the same owner")
+})
+
+test("a replacement provider that refuses the old lease gives the session a new lease", async t => {
+  const { readyFile, write } = await readyFixture("native-session-replacement-")
+  const provider = await providerFixture(t, { refuseResume: true })
+  await write(provider.endpoint("a"))
+  const session = sessionFor(readyFile, provider.endpoint("a"))
+  const first = await session.setOwner("agent")
+  await write(provider.endpoint("b"))
+  const resumed = await session.resume()
+  assert.equal(resumed.changed, true)
+  assert.notEqual(session.environment().DESK_NATIVE_LEASE_ID, first.leaseId)
+  assert.equal(session.environment().DESK_NATIVE_PROVIDER_URL, provider.endpoint("b"))
+  assert.ok(provider.calls.some(call => call.operation === "resume"))
+})
+
+test("a replacement provider that refuses the old lease for another reason is reported, not papered over", async t => {
+  const { readyFile, write } = await readyFixture("native-session-replacement-refusal-")
+  const provider = await providerFixture(t, { refuseResume: true, resumeCode: "NATIVE_EFFECT_PENDING" })
+  await write(provider.endpoint("a"))
+  const session = sessionFor(readyFile, provider.endpoint("a"))
+  const first = await session.setOwner("agent")
+  await write(provider.endpoint("b"))
+  await assert.rejects(session.resume(), error => error.code === "NATIVE_EFFECT_PENDING")
+  assert.equal(session.environment().DESK_NATIVE_LEASE_ID, first.leaseId, "its recorded effects are kept for reconciliation")
 })

@@ -13,6 +13,26 @@ function unavailable(code, summary, fix) {
   return { payload: { status: 'degraded', state: 'degraded:' + code, code, summary, fix } };
 }
 
+// The provider removes its readiness file when it stops, and the browser starts a new one when its extension reconnects, within a
+// few seconds. A missing file is waited for before anything is concluded from it.
+async function lstatWhenReady(file, { waitMs = 10_000, pollMs = 250 } = {}) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      return await fs.lstat(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT' || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+  }
+}
+
+function providerNotRunning(file) {
+  return unavailable('browser_native_provider_not_running',
+    `The native browser provider is not running: its readiness file ${file} is missing.`,
+    'The Desk extension in the signed-in browser starts the provider, and Desk waited for it. Check that the browser is running with the Desk extension enabled, then try again. If the file stays missing while the browser runs, the provider is failing as it starts: report it as desk:desk-problem says. Do not restart the shared browser.');
+}
+
 export async function prepareNativeMessaging(options) {
   const { declaration, installed, executable, platform, homeDir, root, mcpRoot, env = process.env } = options;
   if (!executable) return unavailable('browser_missing', 'The declared browser is not installed', 'Install the declared browser and reconnect desk-web.');
@@ -26,7 +46,13 @@ export async function prepareNativeMessaging(options) {
     const stateDir = path.join(root, 'native-owned/state');
     const file = path.join(stateDir, `native-provider-${createHash('sha256')
       .update(executable + '\0' + path.join(userDataRoot, selected)).digest('hex')}.json`);
-    const info = await fs.lstat(file);
+    let info;
+    try {
+      info = await lstatWhenReady(file, options.readyWait);
+    } catch (error) {
+      if (error.code === 'ENOENT') return providerNotRunning(file);
+      throw error;
+    }
     if (!info.isFile() || info.nlink !== 1 || info.size > 16384 ||
         (platform !== 'win32' && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid()))) {
       throw Object.assign(new Error('Native update readiness is not private'), { code: 'NATIVE_READINESS_NOT_PRIVATE' });
@@ -68,7 +94,7 @@ export async function prepareNativeMessaging(options) {
     .update(executable + '\0' + path.join(userDataRoot, selected)).digest('hex')}.json`);
   let ready;
   try {
-    const info = await fs.lstat(readyFile);
+    const info = await lstatWhenReady(readyFile, options.readyWait);
     if (!info.isFile() || info.size > 16384 || (platform !== 'win32' && (info.mode & 0o077) !== 0)) {
       throw new Error('NATIVE_READINESS_NOT_PRIVATE');
     }
@@ -103,7 +129,8 @@ export async function prepareNativeMessaging(options) {
       return unavailable('browser_native_messaging_unavailable', 'The native browser provider could not be verified',
         'Inspect the exact native setup and reconnect desk-web. No focusing fallback or browser-global attachment is permitted.');
     }
-    return unavailable('browser_native_messaging_setup_required', 'The native browser extension is not connected to the declared profile',
+    return unavailable('browser_native_messaging_setup_required', 'The native browser extension is not connected to the declared profile' +
+      (error.code === 'ENOENT' ? ` (the provider's readiness file ${readyFile} is missing)` : ''),
       'One-time developer setup: in the declared browser profile open its Extensions page, enable Developer mode, choose Load Unpacked and select ' +
       own.extensionDirectory + '. This is local sideloading, not an extension-store installation. Chrome/Edge 125 or newer is required. Reconnect desk-web; do not enable browser debugging or restart the shared browser.');
   }

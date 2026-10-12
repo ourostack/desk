@@ -4,11 +4,12 @@ import { open, lstat, unlink, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { BrokerError } from './claims.mjs';
-import { ensureStateDirectory, readRegistry } from './registry.mjs';
-import { createLease, createOwnedTarget, clearLeaseTargets, releaseLease, withLeaseOperation, recordLeasePurpose, renewNativeLeaseBinding } from './leases.mjs';
+import { ensureStateDirectory, readRegistry, writeRegistry } from './registry.mjs';
+import { createLease, createOwnedTarget, clearLeaseTargets, releaseLease, withLeaseOperation, recordLeasePurpose, renewNativeLeaseBinding, heartbeatLease } from './leases.mjs';
 import { startLeaseProxy } from './cdp-proxy.mjs';
 import { startNativeCdp } from './native-cdp.mjs';
 import { readNativeProcess } from './native-host.mjs';
+import { readProcessStart } from '../../mcp/src/readiness/process-start.js';
 import { redactNativeSurface } from './secret-surfaces.mjs';
 import { withBrokerLock } from './lock.mjs';
 
@@ -19,7 +20,11 @@ function sameIdentity(left, right) {
   return IDENTITY_KEYS.every(key => left?.[key] === right?.[key]);
 }
 
-export async function startNativeProvider({ stateDir, transport, contextIdentity, processReader = readNativeProcess }) {
+export async function startNativeProvider({
+  stateDir, transport, contextIdentity, processReader = readNativeProcess, processStartReader = readProcessStart,
+  sweepIntervalMs = 60_000, ownerGraceMs = 300_000, orphanDropMs = 3_600_000,
+}) {
+  const startedAt = Date.now();
   const major = Number(/(?:Chrome|Chromium|Edg)\/(\d+)\./u.exec(contextIdentity?.browserVersion ?? '')?.[1]);
   if (!Number.isSafeInteger(major) || major < 125) {
     throw new BrokerError('NATIVE_BROWSER_VERSION_UNSUPPORTED', 'Native Desk browser ownership requires Chrome or Edge 125 or newer');
@@ -48,6 +53,172 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
     launch: { executable: identity.executable, profileRoot: identity.profileRoot },
     mediation: { entryExecutable: chain[0].executable, runtimeExecutable: chain[1].executable },
   };
+  // A lease with nothing recorded in the browser: no owner window, no task tab, no create or release under way.
+  const recordsTabs = lease => lease.targetIds.length !== 0 || Boolean(lease.nativeRouting?.controlTabId) ||
+    Object.keys(lease.nativeRouting?.targetTabs ?? {}).length !== 0 || Boolean(lease.pendingTargetCreates?.length);
+  const holdsNothing = lease => !recordsTabs(lease) && !lease.releasing;
+  const expired = lease => !(Date.parse(lease.expiresAt) > Date.now());
+  const readStart = pid => Promise.resolve().then(() => processStartReader(pid)).catch(() => null);
+  // A start that names one process: a Linux read whose boot id failed is not comparable with one whose read succeeded.
+  const comparable = start => typeof start === 'string' && !start.includes(':unknown-boot:');
+  // The session process that took the lease, as the session reported it. `confirmed` records whether this provider read the same
+  // start; an unconfirmed claim may name a process in another namespace, so it can show the session alive but never gone.
+  // 'gone': the confirmed process has exited, or its process id now names a process with another comparable start; 'alive': the
+  // same start; 'unknown': nothing recorded, or nothing can be concluded now.
+  async function ownerState(lease) {
+    const recorded = lease.ownerProcess;
+    if (!Number.isSafeInteger(recorded?.pid) || typeof recorded.startIdentity !== 'string') return 'unknown';
+    let exited = false;
+    try {
+      process.kill(recorded.pid, 0);
+    } catch (error) {
+      exited = error.code === 'ESRCH';
+    }
+    if (recorded.confirmed === false) {
+      return !exited && await readStart(recorded.pid) === recorded.startIdentity ? 'alive' : 'unknown';
+    }
+    if (exited) return 'gone';
+    const current = await readStart(recorded.pid);
+    if (!comparable(current) || !comparable(recorded.startIdentity)) return 'unknown';
+    return current === recorded.startIdentity ? 'alive' : 'gone';
+  }
+  // A lease is abandoned when its session is gone. A session whose process cannot be judged is gone once its lease expires: the
+  // proxy renews a lease only while the session's browser client is connected to it. One whose lease still records tabs is judged
+  // only after this provider has run a full expiry period, so a live session whose provider was down for longer can reconnect.
+  async function abandoned(lease) {
+    const owner = await ownerState(lease);
+    return owner === 'gone' || (owner === 'unknown' && expired(lease) &&
+      (!recordsTabs(lease) || Date.now() - startedAt >= ownerGraceMs));
+  }
+  // Starts a lease's proxy. A proxy that closes itself, because its lease could not be renewed, is forgotten, so the session is
+  // told its lease is no longer bound and takes a new one.
+  async function startProxy(id) {
+    let proxy;
+    proxy = await startLeaseProxy({
+      stateDir, leaseId: id, declaration: context, providerInvoker: attestor, renewOnlyWhileConnected: true,
+      heartbeatLeaseFn: (dir, leaseId) => heartbeatLease(dir, leaseId, 300_000, { revive: true }),
+      onClosed: () => { if (proxies.get(id) === proxy) proxies.delete(id); },
+    });
+    return proxy;
+  }
+  // Leases between createLease and their proxy: not yet in `proxies`, but bound, so the sweep must not restore them.
+  const binding = new Set();
+  // Binds a recorded lease of this browser to this provider and starts its proxy. A release that a previous provider left half done
+  // (`releasing`, with no create in flight) is cleared first: no provider ran it, so nothing is in progress.
+  async function restoreLease(id, { forRelease = false } = {}) {
+    await withLeaseOperation(stateDir, id, async () => {
+      await withBrokerLock(stateDir, async () => {
+        const registry = await readRegistry(stateDir);
+        const current = registry.leases[id];
+        if (current?.releasing && !current.pendingTargetCreates?.length) {
+          current.releasing = false;
+          await writeRegistry(stateDir, registry);
+        }
+      });
+      const lease = (await readRegistry(stateDir)).leases[id];
+      if (!lease?.nativeRouting || lease.pendingTargetCreates?.length) {
+        throw new BrokerError('NATIVE_EFFECT_PENDING', 'A recorded create must reconcile before its lease can be restored');
+      }
+      const bound = await adapter.bindLease({ leaseId: id, owner: lease.owner, restore: true });
+      if (forRelease) boundForRelease.add(id);
+      await renewNativeLeaseBinding({
+        stateDir, leaseId: id, processIdentity: identity, mediationChain: chain,
+        rawEndpoint: bound.rawEndpoint, transportGeneration: contextIdentity.transportGeneration, extend: !forRelease,
+      });
+    });
+    if (!forRelease) proxies.set(id, await startProxy(id));
+  }
+  // Abandoned leases bound to this provider only so their recorded tabs can be closed; they get no proxy and are never renewed.
+  const boundForRelease = new Set();
+  // A session that is killed never releases its lease, so leases are swept after a start, every sweepIntervalMs and after every
+  // acquire (which never waits for it). An abandoned lease is released the way its session releases it at exit, closing exactly the
+  // owner window and task tabs recorded to it; the verdict is taken again under the lease's lock, so a session that is using its
+  // lease is never released from under it. A release that fails stays recorded, `releasing` included, and is retried by the next
+  // sweep. A lease of this browser that could not be restored is tried again, so a transient failure heals and its tabs can still
+  // be closed. Records of another browser generation are removed once expired: that browser and its tabs are gone.
+  let sweeping;
+  function sweep() {
+    sweeping ??= (async () => {
+      try {
+        const registry = await readRegistry(stateDir);
+        for (const recorded of Object.values(registry.leases)) {
+          if (closing || updateToken || disconnected) return;
+          if (recorded.contextId !== context.id || !sameIdentity(recorded.processIdentity, identity) ||
+              recorded.creating || binding.has(recorded.id)) continue;
+          try {
+            const gone = await abandoned(recorded);
+            if (binding.has(recorded.id)) continue;
+            if (!proxies.has(recorded.id) && !boundForRelease.has(recorded.id)) {
+              if (gone && holdsNothing(recorded)) continue;
+              try {
+                await restoreLease(recorded.id, { forRelease: gone });
+              } catch (error) {
+                // An abandoned record whose tabs could not be reached for an hour past its expiry is dropped: whatever it recorded is
+                // beyond this provider's reach, and keeping it would only retry forever.
+                if (gone && Date.now() - Date.parse(recorded.expiresAt) > orphanDropMs) {
+                  await dropRecord(recorded.id);
+                  continue;
+                }
+                throw error;
+              }
+            }
+            if (!gone) continue;
+            const result = await releaseLease({ stateDir, leaseId: recorded.id, declaration: context, providerInvoker: attestor,
+              onlyIf: abandoned, providerUnbind: ({ closedTargetIds }) => adapter.unbindLease(recorded.id, { closedTargetIds }) });
+            if (result.released) {
+              await proxies.get(recorded.id)?.close();
+              proxies.delete(recorded.id);
+              boundForRelease.delete(recorded.id);
+            }
+          } catch (error) {
+            process.stderr.write(`NATIVE_LEASE_SWEEP_DEFERRED ${error.code ?? 'UNKNOWN'}\n`);
+          }
+        }
+        if (!closing) await pruneRecords();
+      } catch (error) {
+        process.stderr.write(`NATIVE_LEASE_SWEEP_FAILED ${error.code ?? 'UNKNOWN'}\n`);
+      }
+    })().finally(() => { sweeping = undefined; });
+    return sweeping;
+  }
+  async function dropRecord(id) {
+    await withLeaseOperation(stateDir, id, () => withBrokerLock(stateDir, async () => {
+      const registry = await readRegistry(stateDir);
+      if (!registry.leases[id] || proxies.has(id) || binding.has(id)) return;
+      delete registry.leases[id];
+      await writeRegistry(stateDir, registry);
+      process.stderr.write('NATIVE_LEASE_ORPHAN_DROPPED\n');
+    }));
+  }
+  // Removes, under the broker lock, the records that cannot hold anything in this browser: an abandoned lease of this browser that
+  // holds nothing and is not bound here, and an expired lease of another browser generation.
+  async function pruneRecords() {
+    const candidates = [];
+    for (const lease of Object.values((await readRegistry(stateDir)).leases)) {
+      if (lease.contextId !== context.id || proxies.has(lease.id) || binding.has(lease.id) || boundForRelease.has(lease.id) ||
+          lease.creating) continue;
+      if (!sameIdentity(lease.processIdentity, identity) ? expired(lease) : holdsNothing(lease) && await abandoned(lease)) {
+        candidates.push(lease.id);
+      }
+    }
+    if (!candidates.length) return;
+    await withBrokerLock(stateDir, async () => {
+      const registry = await readRegistry(stateDir);
+      let removed = 0;
+      for (const id of candidates) {
+        const lease = registry.leases[id];
+        if (!lease || proxies.has(id) || binding.has(id) || boundForRelease.has(id) || lease.creating) continue;
+        const removable = sameIdentity(lease.processIdentity, identity)
+          ? holdsNothing(lease) && await abandoned(lease) : expired(lease);
+        if (!removable) continue;
+        delete registry.leases[id];
+        removed++;
+      }
+      if (removed) await writeRegistry(stateDir, registry);
+    });
+  }
+  const sweeper = setInterval(() => { sweep(); }, sweepIntervalMs);
+  sweeper.unref();
   const lost = () => { disconnected = true; };
   transport.on?.('close', lost);
 
@@ -71,12 +242,19 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
       if (updateToken || activeOperations !== 0 || typeof transport.pause !== 'function' || typeof transport.resume !== 'function') {
         throw new BrokerError('NATIVE_UPDATE_EFFECTS_PENDING', 'Native operations must settle before source update');
       }
+      // Release abandoned leases first, closing their recorded windows, so a session that is gone never holds an update back.
+      await sweep();
+      if (updateToken || activeOperations !== 0) {
+        throw new BrokerError('NATIVE_UPDATE_EFFECTS_PENDING', 'Native operations must settle before source update');
+      }
       updateToken = randomBytes(32).toString('hex');
       try {
         transport.pause();
         await withBrokerLock(stateDir, async () => {
           const registry = await readRegistry(stateDir);
-          const leases = Object.values(registry.leases).filter(lease => lease.contextId === context.id);
+          // An expired lease has no session renewing it through any provider: it is an orphan the sweep keeps retrying, not an
+          // owner, and counting it once kept an update refused forever (2026-10-12, 20:30Z).
+          const leases = Object.values(registry.leases).filter(lease => lease.contextId === context.id && !expired(lease));
           const activeOwners = leases.filter(lease => lease.targetIds.length || lease.nativeRouting?.controlTabId);
           if (activeOwners.length) {
             throw new BrokerError('NATIVE_UPDATE_ACTIVE_OWNERS', 'Deliberate extension reload must wait for exact owners to close their targets',
@@ -125,19 +303,36 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
           /[\u0000-\u001f\u007f]/u.test(payload.owner)) {
         throw new BrokerError('NATIVE_OWNER_INVALID', 'Native ownership requires a bounded nonempty label');
       }
+      if (payload.ownerPid !== undefined && (!Number.isSafeInteger(payload.ownerPid) || payload.ownerPid <= 0 ||
+          (payload.ownerStart !== undefined && (typeof payload.ownerStart !== 'string' || payload.ownerStart.length > 200)))) {
+        throw new BrokerError('NATIVE_OWNER_INVALID', 'Native ownership requires a valid session process id and start when given');
+      }
+      // The session's own process, confirmed when its start as read here matches the start the session read for itself.
+      const ownerProcess = typeof payload.ownerStart === 'string'
+        ? { pid: payload.ownerPid, startIdentity: payload.ownerStart,
+          confirmed: await readStart(payload.ownerPid) === payload.ownerStart } : undefined;
+      let created;
       const lease = await createLease({
-        stateDir, context, owner: payload.owner, processIdentity: identity, mediationChain: chain,
+        stateDir, context, owner: payload.owner, ownerProcess, processIdentity: identity, mediationChain: chain,
         rawEndpoint: endpoint, deferInitialTarget: true,
-        providerBind: ({ lease }) => adapter.bindLease({ leaseId: lease.id, owner: lease.owner }),
-      });
+        providerBind: ({ lease }) => {
+          created = lease.id;
+          binding.add(lease.id);
+          return adapter.bindLease({ leaseId: lease.id, owner: lease.owner });
+        },
+      }).finally(() => { if (created) binding.delete(created); });
+      binding.add(lease.id);
       let proxy;
       try {
-        proxy = await startLeaseProxy({ stateDir, leaseId: lease.id, declaration: context, providerInvoker: attestor });
+        proxy = await startProxy(lease.id);
       } catch (error) {
+        binding.delete(lease.id);
         await releaseLease({ stateDir, leaseId: lease.id, declaration: context, providerInvoker: attestor });
         throw error;
       }
       proxies.set(lease.id, proxy);
+      binding.delete(lease.id);
+      sweep();
       return { leaseId: lease.id, endpoint: proxy.endpoint, owner: lease.owner, contextId: context.id,
         processIdentity: identity, mediationChain: chain };
     }
@@ -259,10 +454,16 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
         return { healthy: false, reason: 'MEDIATOR_UNAVAILABLE' };
       }
     }
+    // A session that names its lease learns whether this provider still holds it, so it can take a new one instead of failing.
+    let leaseBound;
+    if (typeof payload.leaseId === 'string') {
+      const lease = (await readRegistry(stateDir)).leases[payload.leaseId];
+      leaseBound = Boolean(lease && lease.owner === payload.owner && proxies.has(lease.id));
+    }
     return {
       healthy: true, endpoint: endpoint,
       processIdentity: identity, endpointProcessIdentity: contextIdentity.endpointProcessIdentity,
-      mediationChain: chain,
+      mediationChain: chain, ...(leaseBound === undefined ? {} : { leaseBound }),
     };
   }
 
@@ -329,6 +530,8 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
     if (closing) return closing;
     closing = (async () => {
       disconnected = true;
+      clearInterval(sweeper);
+      await sweeping;
       transport.off?.('close', lost);
       server.closeAllConnections();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
@@ -390,21 +593,22 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
       }
       await unlink(readyFile);
   }
+  // Restores this browser's leases after a provider restart. An abandoned lease that holds nothing is not restored: restoring
+  // renews a lease, which kept every abandoned lease alive across restarts (82 of them on 2026-10-12); pruneRecords removes it. An
+  // abandoned lease with a window is left to the sweep after the start, which binds it without renewing it and closes that window.
+  // A lease that cannot be restored never stops the start: it stays recorded, unrenewed, and the sweep tries it again.
   async function restoreLeases() {
     const registry = await readRegistry(stateDir);
     for (const lease of Object.values(registry.leases)) {
-      if (lease.contextId !== context.id || !sameIdentity(lease.processIdentity, identity) ||
-          !lease.nativeRouting || lease.releasing || lease.pendingTargetCreates?.length) continue;
-      await withLeaseOperation(stateDir, lease.id, async () => {
-        const binding = await adapter.bindLease({ leaseId: lease.id, owner: lease.owner, restore: true });
-        await renewNativeLeaseBinding({
-          stateDir, leaseId: lease.id, processIdentity: identity, mediationChain: chain,
-          rawEndpoint: binding.rawEndpoint, transportGeneration: contextIdentity.transportGeneration,
-        });
-      });
-      const proxy = await startLeaseProxy({ stateDir, leaseId: lease.id, declaration: context, providerInvoker: attestor });
-      proxies.set(lease.id, proxy);
+      if (lease.contextId !== context.id || !sameIdentity(lease.processIdentity, identity)) continue;
+      if (await abandoned(lease)) continue;
+      try {
+        await restoreLease(lease.id);
+      } catch (error) {
+        process.stderr.write(`NATIVE_LEASE_NOT_RESTORED ${error.code ?? 'UNKNOWN'}\n`);
+      }
     }
+    await pruneRecords();
   }
   try {
     await withBrokerLock(stateDir, async () => {
@@ -429,5 +633,6 @@ export async function startNativeProvider({ stateDir, transport, contextIdentity
     await close();
     throw error;
   }
-  return Object.freeze({ readyFile, invoke, close });
+  sweep();
+  return Object.freeze({ readyFile, invoke, close, sweep });
 }

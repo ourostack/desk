@@ -25,8 +25,10 @@ test("declared native profile with no installed extension returns actionable set
     executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
     root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
     installer: async () => ({ stateDir: path.join(homeDir, "state"), extensionDirectory, extensionId: "bcejpajaingepdloiolbmbaflecgifbe" }),
+    readyWait: { waitMs: 50, pollMs: 10 },
   })
   assert.equal(result.payload.code, "browser_native_messaging_setup_required")
+  assert.match(result.payload.summary, /\(the provider's readiness file .+ is missing\)$/u, "the summary names the missing file")
   assert.equal(result.payload.fix.includes("Load Unpacked"), true)
   assert.equal(result.payload.fix.includes(extensionDirectory), true)
   assert.equal(result.args, undefined)
@@ -180,4 +182,37 @@ test("unchanged extension digest cannot hide an older native runtime capsule", a
     "backend-only upgrades cannot silently continue using an older native provider")
   assert.equal(result.args, undefined)
   assert.equal(attestations, 0, "a known source mismatch is refused before acquisition or browser effects")
+})
+
+// Issue 369: the deliberate update read the provider's readiness file with a bare lstat and answered `launch_failed ENOENT`.
+test("a deliberate update while the provider is not running names it, with the readiness file", async () => {
+  const { prepareNativeMessaging } = await import(moduleUrl)
+  const homeDir = await mkTempRoot("native-messaging-update-not-running-")
+  const userDataRoot = fixtureProfile(homeDir)
+  await mkdir(userDataRoot, { recursive: true })
+  await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({ profile: { info_cache: { Default: { user_name: "fixture@example.test" } } } }))
+  const result = await prepareNativeMessaging({
+    declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir), update: true, readyWait: { waitMs: 50, pollMs: 10 },
+    updater: async () => assert.fail("no update without a running provider"),
+  })
+  assert.equal(result.payload.code, "browser_native_provider_not_running")
+  assert.match(result.payload.summary, /native-owned[\\/]state[\\/]native-provider-[a-f0-9]{64}\.json is missing\.$/u)
+})
+
+// Windows reports a file standing where a folder belongs as missing, so only POSIX can tell the two apart.
+test("a deliberate update with an unreadable readiness path reports that failure, not a stopped provider", { skip: process.platform === "win32" }, async () => {
+  const { prepareNativeMessaging } = await import(moduleUrl)
+  const homeDir = await mkTempRoot("native-messaging-update-unreadable-")
+  const userDataRoot = fixtureProfile(homeDir)
+  await mkdir(userDataRoot, { recursive: true })
+  await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({ profile: { info_cache: { Default: { user_name: "fixture@example.test" } } } }))
+  await mkdir(path.join(homeDir, "owned"), { recursive: true })
+  await writeFile(path.join(homeDir, "owned", "native-owned"), "a file where the state folder belongs")
+  await assert.rejects(prepareNativeMessaging({
+    declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
+    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir), update: true, readyWait: { waitMs: 50, pollMs: 10 },
+  }), error => error.code === "ENOTDIR")
 })

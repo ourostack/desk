@@ -9,6 +9,17 @@ import { BrokerError } from './claims.mjs';
 import { readProcessStart, windowsPowerShellPath } from '../../mcp/src/readiness/process-start.js';
 
 const MAX_NATIVE_BYTES = 1_048_576;
+// Chrome sends a host messages of up to 64 MiB (a host may send only 1 MiB back). A screenshot or a busy page's CDP event can pass
+// 1 MiB, and refusing one ended the whole host and every session's browser with it.
+const MAX_INBOUND_BYTES = 64 * 1_048_576;
+// Inbound messages waiting for dispatch before input is paused, and the count at which it resumes. A page such as Teams sends
+// hundreds of CDP events in one read; a fixed cap that failed the transport on the 257th ended the host after a navigation.
+const QUEUE_PAUSE = 1024;
+const QUEUE_RESUME = 256;
+// Queued inbound bytes past which input is paused too, so large messages cannot pile up in memory.
+const QUEUE_PAUSE_BYTES = 64 * 1_048_576;
+// Consecutive failed ancestry reads tolerated before the transport is ended; a read that succeeds and differs ends it at once.
+const IDENTITY_READ_FAILURES = 3;
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const littleEndian = os.endianness() === 'LE';
 const execFileAsync = promisify(execFile);
@@ -213,19 +224,28 @@ async function observeNativeIdentity(processReader, pid) {
         }
         stdout.write(bytes, error => error ? failed(error) : sent());
       });
+      let paused = false;
+      let queuedBytes = 0;
       const framer = createNativeFramer({
         onError: fail,
-        onMessage(message) {
+        maxBytes: MAX_INBOUND_BYTES,
+        onMessage(message, size = 0) {
           pending++;
-          if (pending > 256) {
-            fail(new BrokerError('NATIVE_QUEUE_FULL', 'Native dispatch queue exceeded its bounded capacity'));
-            return;
+          queuedBytes += size;
+          if ((pending >= QUEUE_PAUSE || queuedBytes >= QUEUE_PAUSE_BYTES) && !paused) {
+            paused = true;
+            stdin.pause();
           }
           dispatch = dispatch.then(async () => {
             if (settled) return;
             const response = await config.onMessage(message, { send, chain });
             if (response !== undefined) await send(response);
             pending--;
+            queuedBytes -= size;
+            if (paused && pending <= QUEUE_RESUME && queuedBytes < QUEUE_PAUSE_BYTES / 4) {
+              paused = false;
+              stdin.resume();
+            }
           });
           dispatch.catch(fail);
         },
@@ -251,11 +271,20 @@ async function observeNativeIdentity(processReader, pid) {
       stdout.on('close', onOutputClose);
       stdin.on('data', onData);
       stdin.on('end', onEnd);
+      let failedReads = 0;
       identityTimer = setInterval(async () => {
         if (settled || checkingIdentity) return;
         checkingIdentity = true;
         try {
-          const current = await readNativeAncestry(config.pid ?? process.pid, { processReader });
+          let current;
+          try {
+            current = await readNativeAncestry(config.pid ?? process.pid, { processReader });
+            failedReads = 0;
+          } catch (error) {
+            // A slow or failed `ps` under load is not a changed ancestry; only repeated failures end the transport.
+            if (++failedReads < IDENTITY_READ_FAILURES) return;
+            throw error;
+          }
           if (current.some((identity, index) => ['pid', 'parentPid', 'startIdentity', 'owner', 'executable']
             .some(key => identity[key] !== chain[index][key]))) {
             throw new BrokerError('NATIVE_ANCESTRY_INVALID', 'Native transport lost its exact browser-entry-runtime ancestry');
@@ -274,7 +303,7 @@ async function observeNativeIdentity(processReader, pid) {
   }
 export function createNativeFramer({ onMessage, onError, maxBytes = MAX_NATIVE_BYTES }) {
   if (typeof onMessage !== 'function' || typeof onError !== 'function' ||
-      !Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > MAX_NATIVE_BYTES) {
+      !Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > MAX_INBOUND_BYTES) {
     throw new BrokerError('NATIVE_FRAME_INVALID_OPTIONS', 'Native framing requires bounded message and error handlers');
   }
   let header = Buffer.alloc(4);
@@ -334,10 +363,11 @@ export function createNativeFramer({ onMessage, onError, maxBytes = MAX_NATIVE_B
           fail('NATIVE_FRAME_INVALID_MESSAGE', 'Native messages must be JSON objects');
           return;
         }
+        const size = bodyBytes;
         headerBytes = 0;
         body = null;
         bodyBytes = 0;
-        onMessage(message);
+        onMessage(message, size);
       }
     },
     end() {

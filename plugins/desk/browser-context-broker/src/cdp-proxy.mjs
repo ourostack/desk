@@ -92,6 +92,10 @@ export async function startLeaseProxy({
   recordProxyFn = recordProxy,
   heartbeatLeaseFn = heartbeatLease,
   heartbeatIntervalMs = 10_000,
+  // Renew the lease only while a client is connected, so a lease outlives its session by at most one expiry period.
+  renewOnlyWhileConnected = false,
+  // Called once when the proxy closes itself because its lease could not be renewed.
+  onClosed,
 }) {
   const lease = await attestLeaseContext({
     stateDir,
@@ -566,9 +570,11 @@ export async function startLeaseProxy({
     throw error;
   }
   heartbeat = setInterval(() => {
+    if (renewOnlyWhileConnected && downstreamServer.clients.size === 0) return;
     heartbeatLeaseFn(stateDir, leaseId).catch(async () => {
       clearInterval(heartbeat);
       await close();
+      onClosed?.();
     });
   }, heartbeatIntervalMs);
   heartbeat.unref();

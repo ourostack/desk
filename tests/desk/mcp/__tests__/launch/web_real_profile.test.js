@@ -1257,7 +1257,6 @@ test("unknown cancellation IDs cannot mutate inherited objects or cancel future 
   const previous = Object.getOwnPropertyDescriptor(Object.prototype, "cancelled")
   try {
     await host.handshake()
-    await host.wait(() => machine.stub.spawns.length === 1, "the prepared child")
     host.send({ method: "notifications/cancelled", params: { requestId: "__proto__" } })
     assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, "cancelled"), previous)
     assert.equal((await host.call(2)).result.isError, undefined)
@@ -1638,7 +1637,9 @@ test("a session that never called the browser has no tabs and touches none", pos
   await host.handshake()
   await host.close()
   await host.wait(() => host.exits.length === 1, "the launcher to end")
-  assert.deepEqual(tabEvents(machine), ["child:stdin closed"])
+  assert.deepEqual(tabEvents(machine), [])
+  assert.equal(machine.stub.spawns.length, 0, "no browser client starts before the first browser call")
+  assert.deepEqual(machine.nativeState.calls, [], "and no lease is taken, so a session that never uses the browser leaves none behind")
   const signalled = await realMachine()
   const other = session(signalled)
   await other.handshake()
@@ -1944,6 +1945,27 @@ test("native update without a declaration and malformed update replies fail as o
   }
 })
 
+test("a provider that is not running is named in the answer with its readiness file, not as a bare ENOENT", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeMessagingPrepare = async options => {
+    const connection = await prepare(options)
+    connection.session.resume = () => Promise.reject(Object.assign(new Error("The native browser provider is not running: its readiness file /state/native-provider-abc.json is missing."),
+      { code: "browser_native_provider_not_running", readyFile: "/state/native-provider-abc.json" }))
+    return connection
+  }
+  const host = session(machine, { cleanupMs: undefined })
+  await host.handshake()
+  const reply = await host.call(2)
+  assert.equal(reply.result.isError, true)
+  const answer = JSON.parse(textOf(reply))
+  assert.equal(answer.state, "degraded:browser_native_provider_not_running")
+  assert.equal(answer.summary, "The native browser provider is not running: its readiness file /state/native-provider-abc.json is missing. No browser operation was forwarded.")
+  assert.match(answer.fix, /^The Desk extension in the signed-in browser starts the provider, and Desk waited for it\. Check that the browser is running with the Desk extension enabled, then call the tool again\./u)
+  assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
+  await host.close()
+})
+
 test("native resume refusal is not converted into a replayed call and remains a cleanup diagnostic", posixOnly, async () => {
   const machine = await realMachine()
   const prepare = machine.launchOptions.nativeMessagingPrepare
@@ -2021,5 +2043,53 @@ test("a cancelled native rebind waiting for earlier dispatched work cannot repla
   await new Promise(resolve => setTimeout(resolve, 10))
   assert.equal(machine.stub.spawns.length, 1)
   assert.equal(machine.events.includes("child:tools/call browser_snapshot"), false)
+  await host.close()
+})
+
+// 2026-10-12: ~80 quick sessions each took a lease when they connected, whether or not they used the browser.
+test("eighty sessions that connect and exit without a browser call take no lease, and the first call takes one", posixOnly, async () => {
+  const machines = await Promise.all(Array.from({ length: 80 }, () => realMachine()))
+  for (let start = 0; start < machines.length; start += 20) {
+    await Promise.all(machines.slice(start, start + 20).map(async machine => {
+      const host = session(machine)
+      await host.handshake()
+      await host.close()
+      await host.wait(() => host.exits.length === 1, "the launcher to end")
+    }))
+  }
+  assert.deepEqual(machines.flatMap(machine => machine.nativeState.calls), [])
+  const used = await realMachine()
+  const host = session(used)
+  await host.handshake()
+  assert.deepEqual(used.nativeState.calls, [])
+  assert.equal((await host.call(2)).result.isError, undefined)
+  assert.deepEqual(used.nativeState.calls.slice(0, 2), ["acquire", "ensureWindow"])
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+  assert.equal(used.nativeState.released, true)
+})
+
+test("a first browser call while the provider is down is answered by name, and the next call takes the lease", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  let down = true
+  machine.launchOptions.nativeMessagingPrepare = async options => {
+    const connection = await prepare(options)
+    const setOwner = connection.session.setOwner
+    connection.session.setOwner = name => down
+      ? Promise.reject(Object.assign(new Error("The native browser provider is not running: its readiness file /state/p.json is missing."),
+        { code: "browser_native_provider_not_running" }))
+      : setOwner(name)
+    return connection
+  }
+  const host = session(machine)
+  await host.handshake()
+  const first = await host.call(2)
+  assert.equal(first.result.isError, true)
+  assert.equal(JSON.parse(textOf(first)).state, "degraded:browser_native_provider_not_running")
+  assert.equal(machine.stub.spawns.length, 0)
+  down = false
+  assert.equal((await host.call(3)).result.isError, undefined, "the session recovers without reconnecting")
+  assert.equal(machine.stub.spawns.length, 1)
   await host.close()
 })
