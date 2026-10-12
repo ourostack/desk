@@ -172,7 +172,7 @@ export const TRIAGE_ENGINE_CARD = "triage_engine_unpinned"
  * Each stale reason, and whether qualifying again can fix it: a mirror of the qualification module's `TRIAGE_STALE_REASONS`, used only
  * while the loaded runtime exports none. The step branches on the runtime's own map when it has one.
  */
-export const TRIAGE_STALE_REASONS_MIRROR = Object.freeze({
+const TRIAGE_STALE_REASONS_MIRROR = Object.freeze({
   record_version: true, qualification_failed: true, source_changed: true, runtime_changed: true, engine_changed: true, engine_unpinned: false,
   engine_mismatch: false, environment_changed: true, chain_changed: true, policy_changed: true, host_unsupported: false, measurement_active: false,
 })
