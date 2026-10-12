@@ -1284,7 +1284,7 @@ contract("the evaluation packet's scenarios run against the throwaway desk with 
   const scenario = (number) => packet.split(`\n### ${number}. `, 2)[1].split(/\n### \d\. |\n## /u, 1)[0];
   assert.match(scenario(4), /organization\.json[\s\S]+hi-can-you-fix-the-login[\s\S]+status-notes\.md[\s\S]+`track_person_name`[\s\S]+`tidy_version: 1`/u);
   // Cold dry runs, 2026-10-12: the card guard refused the block's hand-made card, and the findings arrive through the startup tidy check.
-  assert.match(scenario(4), /DESK_TOOL_COMMIT=1 git -C "\$EVAL\/desk" commit[\s\S]+say only "hi"[\s\S]+startup tidy check finds the mess/u);
+  assert.match(scenario(4), /skips the desk's commit hook with `--no-verify`[\s\S]+git -C "\$EVAL\/desk" commit -q --no-verify[\s\S]+say only "hi"[\s\S]+startup tidy check finds the mess/u);
   assert.doesNotMatch(scenario(4), /\brm -|git -C "\$EVAL\/desk" rm\b/u, "the tidy scenario's block deletes nothing");
   assert.match(packet, /Run scenarios 1 to 3 in an interactive session, and every later step that reaches a human gate[^.]*\. A host's non-interactive prompt mode \(`-p`\)/u);
   // A block removes only what the packet's own blocks created: the one `rm` is the environment file.

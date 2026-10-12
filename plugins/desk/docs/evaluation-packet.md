@@ -209,7 +209,7 @@ For each host, keep an evidence index with one row per setup gate and scenario: 
 
 ### 4. A desk that needs tidying (lands by the evaluation)
 
-**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first. It deletes nothing: it moves the tidy record aside inside `$EVAL`. Desk's commit guard refuses a hand-made commit that changes a task card, so the block commits its hand-made card with `DESK_TOOL_COMMIT=1`, the guard's own deliberate override ([the card guard](../mcp/src/desk/card-commit-guard.js)). Use that override nowhere else.
+**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first. It deletes nothing: it moves the tidy record aside inside `$EVAL`. Desk's commit guard refuses a hand-made commit that changes a task card, and here the hand-made card is the mess, so the block's commit skips the desk's commit hook with `--no-verify` ([the card guard](../mcp/src/desk/card-commit-guard.js)). Skip the hook nowhere else.
 
 ```sh
 ( set -eu
@@ -228,7 +228,7 @@ For each host, keep an evidence index with one row per setup gate and scenario: 
   printf -- '---\nschema_version: 1\ntitle: Fix the login\nstatus: drafting\ncreated: "%s"\nupdated: "%s"\ntrack: %s\nrepos: []\n---\n' "$now" "$now" "$me" > "$EVAL/desk/$me/hi-can-you-fix-the-login/task.md"
   printf 'status notes\n' > "$EVAL/desk/status-notes.md"
   git -C "$EVAL/desk" add -A
-  DESK_TOOL_COMMIT=1 git -C "$EVAL/desk" commit -q -m "Make a mess for the tidy scenario"
+  git -C "$EVAL/desk" commit -q --no-verify -m "Make a mess for the tidy scenario"
   git -C "$EVAL/desk" push -q origin main
   echo "mess committed and pushed"
 )
