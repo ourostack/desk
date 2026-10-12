@@ -209,7 +209,7 @@ For each host, keep an evidence index with one row per setup gate and scenario: 
 
 ### 4. A desk that needs tidying (lands by the evaluation)
 
-**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first. It deletes nothing: it moves the tidy record aside inside `$EVAL`. Desk's commit guard refuses a hand-made commit that changes a task card, and here the hand-made card is the mess, so the block's commit skips the desk's commit hook with `--no-verify` ([the card guard](../mcp/src/desk/card-commit-guard.js)). Skip the hook nowhere else.
+**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first. It deletes nothing: it moves the tidy record aside inside `$EVAL`. The block writes no task card, because Desk's commit hook refuses a task card committed by hand ([the card guard](../mcp/src/desk/card-commit-guard.js)); the mess is made of files an ordinary commit accepts.
 
 ```sh
 ( set -eu
@@ -219,28 +219,28 @@ For each host, keep an evidence index with one row per setup gate and scenario: 
   me="$(git -C "$EVAL/desk" config user.name | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
   [ -n "$me" ] || { echo "Set git user.name in the throwaway desk first; stopping." >&2; exit 1; }
   [ ! -e "$EVAL/desk/$me" ] || { echo "The desk already has a $me folder; stopping." >&2; exit 1; }
+  [ ! -e "$EVAL/desk/hi-can-you-fix-the-login" ] || { echo "The desk already has a hi-can-you-fix-the-login folder; stopping." >&2; exit 1; }
   if [ -e "$EVAL/desk/_meta/organization.json" ]; then
     mv "$EVAL/desk/_meta/organization.json" "$(mktemp "$EVAL/tidy-record-before-scenario-4.XXXXXX")"
   fi
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  mkdir -p "$EVAL/desk/$me/hi-can-you-fix-the-login"
-  printf '# %s\n' "$me" > "$EVAL/desk/$me/track.md"
-  printf -- '---\nschema_version: 1\ntitle: Fix the login\nstatus: drafting\ncreated: "%s"\nupdated: "%s"\ntrack: %s\nrepos: []\n---\n' "$now" "$now" "$me" > "$EVAL/desk/$me/hi-can-you-fix-the-login/task.md"
+  mkdir -p "$EVAL/desk/$me" "$EVAL/desk/hi-can-you-fix-the-login"
+  printf -- '---\ntitle: %s\n---\n\n# %s\n' "$me" "$me" > "$EVAL/desk/$me/track.md"
+  printf -- '---\ntitle: Fix the login\n---\n\n# Fix the login\n' > "$EVAL/desk/hi-can-you-fix-the-login/track.md"
   printf 'status notes\n' > "$EVAL/desk/status-notes.md"
   git -C "$EVAL/desk" add -A
-  git -C "$EVAL/desk" commit -q --no-verify -m "Make a mess for the tidy scenario"
+  git -C "$EVAL/desk" commit -q -m "Make a mess for the tidy scenario"
   git -C "$EVAL/desk" push -q origin main
   echo "mess committed and pushed"
 )
 ```
 
-This adds a loose file at the desk root, a track named after you with no scope line, and a task named from a prompt, all committed and pushed. If the block stops because the desk has uncommitted changes, start a session, ask the agent to commit and push its desk changes, end it and run the block again.
+This adds a loose file at the desk root, a track named after you and a track named from a prompt, neither with a scope line, all committed and pushed. If the block stops because the desk has uncommitted changes, start a session, ask the agent to commit and push its desk changes, end it and run the block again.
 
 Then start a new session from `$EVAL/scratch` and say only "hi". Do not mention the desk or the tidy: the startup check has to find the mess by itself.
 
 **Good looks like** ([the doctor's organization checks](../mcp/src/desk/organization.js), [interaction-style](../skills/interaction-style/SKILL.md#2-organization-tidy-and-announce)):
 
-- the session's startup tidy check finds the mess, and startup tells the agent a tidy is pending and how to run it; the agent runs it before it answers your prompt, and you do not ask for it. If you ask the agent afterwards what it found, or to call `desk_doctor` before it tidies, the findings include `loose_file`, `track_missing_scope`, `track_person_name` and `name_prompt_like`;
+- the session's startup tidy check finds the mess, and startup tells the agent a tidy is pending and how to run it; the agent runs it before it answers your prompt, and you do not ask for it. If you ask the agent afterwards what it found, or to call `desk_doctor` before it tidies, the findings include `loose_file`, `track_missing_scope`, `track_empty`, `track_person_name` and `name_prompt_like`;
 - in its first reply the agent tidies without asking how you'd like it done, and announces it in one line in the spirit of "I'm going to tidy up my desk a bit: ... Say if you mind.";
 - every move goes through Git, so it can be undone, and nothing is deleted;
 - afterwards `desk_doctor` reports no organization findings, and `_meta/organization.json` records `tidy_version: 1`.
