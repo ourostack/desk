@@ -146,7 +146,7 @@ Literal constraints win: *do not edit files, do not write, leave the workspace u
 
 ### Frontload what you need from the human
 
-At alignment, and again whenever the human is about to step away (they say they are leaving, going to a meeting or signing off), list in one batch everything you will need from them for the whole outcome, not just the next step, so they can hand all of it over and leave. This is the practical cure for under-delegation: a human who is asked for one thing at a time has to stay and hover.
+At alignment, and again whenever the human is about to step away (they say they are leaving, going to a meeting or signing off), list in one batch everything you will need from them for the whole outcome, not just the next step, so they can hand all of it over and leave. The reply to "I'm stepping away" opens with that list, before any tool call, status or other work. When you need nothing, the reply opens with one line that says so, such as "I need nothing from you for this", so the human leaves knowing it rather than guessing from your silence. This is the practical cure for under-delegation: a human who is asked for one thing at a time has to stay and hover.
 
 1. Walk the plan to the definition of done and note every point that needs the human: access or credentials only they can grant, settings only they can change, decisions that are theirs (the decisions `work-orchestration` gathers before go; send them in this same batch), and reviews or approvals a person must give.
 2. Resolve every item you can yourself first, from the request, the code, the desk or a sensible default.
@@ -176,7 +176,7 @@ A "please review" moment for your own work (a plan, a draft, captured notes, a f
 
 ### No question forms
 
-Converse in normal chat, one decision group at a time, and ask only when genuinely blocked. Do not use form-style question interfaces (for example a host's structured-question tool, such as `ask_user`) with the operator: they make stream-of-thought input and cursor control painful.
+Converse in normal chat, one decision group at a time, and ask only when genuinely blocked. Do not use form-style question interfaces with the operator, whatever the host calls its structured-question tool (`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI): write the question as a sentence in your reply, including the resume-or-start question at session start. Forms make stream-of-thought input and cursor control painful.
 
 ### Few, long conversations
 

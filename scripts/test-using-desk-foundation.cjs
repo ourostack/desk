@@ -319,7 +319,8 @@ function main() {
     /gates: voice \(sent as them\), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority/u,
     /gather human input for the whole task with recommendations/iu,
     /bounded requests need one confirming sentence/iu,
-    /Frontload before they leave/iu,
+    // Cold dry runs, 2026-10-12: "Frontload before they leave" did not make the agent say what it needed, or that it needed nothing, when the human left.
+    /When they say they're leaving, open with your needs, even if none/u,
     /When the human opens conversation, stay; start nothing new on that topic until they close it or say go; approved background work may continue \(`interaction-style`\)/u,
     /size and time aren't stop reasons/iu,
     /group later decisions/iu,
@@ -413,7 +414,7 @@ function main() {
   ]);
 
   assertSectionPhrases(section(skill, "Cite every factual claim"), "using-desk Cite every factual claim", [
-    "Every factual claim you make to a human or an agent",
+    "Every factual claim to a human or an agent",
     "inline link to its primary source",
     "labeled inference or unverified",
     "`evidence-discipline` holds the procedure",
@@ -431,6 +432,7 @@ function main() {
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.
   assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
     "same durable task",
+    "name the evidence it invalidates",
     "implementation and review gates",
     "`work-orchestration` holds the procedure",
   ]);
@@ -444,6 +446,8 @@ function main() {
     "tests",
     "review evidence",
     "invalidated evidence",
+    "tell the human in your first reply after the change which earlier evidence it invalidates",
+    "or that it invalidates none",
     "unaffected authorized work moving",
     "implementation and review gates",
     "must not silently absorb contradictory scope",

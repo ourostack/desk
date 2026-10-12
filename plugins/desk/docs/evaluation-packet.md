@@ -14,11 +14,11 @@ Read the RFC with an agent rather than alone: start a session and ask it to walk
 
 ## How the evaluation works
 
-**Packet refresh: October 11, 2026.** This is a procedure for a new evaluation, not a completed evaluation report. The native browser correction is recorded in [#330](https://github.com/ourostack/desk/pull/330), and its current installed behavior is described by [the real-profile contract](../skills/cdp-headed-browser/SKILL.md#the-real-browser-profile). Check the [carried release workflow](https://github.com/ourostack/desk/actions/workflows/desk-release.yml) and installed source during setup. CI results and earlier acceptance receipts are not a fresh-machine run of this packet. Every scenario below starts **unrun** for your host; only your observer's recorded outcomes can change that state ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)).
+**Packet refresh: October 12, 2026.** This is a procedure for a new evaluation, not a completed evaluation report. The native browser correction is recorded in [#330](https://github.com/ourostack/desk/pull/330), and its current installed behavior is described by [the real-profile contract](../skills/cdp-headed-browser/SKILL.md#the-real-browser-profile). Check the [carried release workflow](https://github.com/ourostack/desk/actions/workflows/desk-release.yml) and installed source during setup. CI results and earlier acceptance receipts are not a fresh-machine run of this packet. Every scenario below starts **unrun** for your host; only your observer's recorded outcomes can change that state ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)).
 
 - **You test the channel as it stands.** Install from the channel this packet names, `main` of `ourostack/desk`, never from a commit. Evaluators use the channel as it is when they run and record the commit they saw as evidence, never as something to hold the evaluation to ([RFC §5](agentic-engineering-v2-rfc.md#5-work-source-and-continuity)). Record it at the start with `git ls-remote https://github.com/ourostack/desk refs/heads/main`.
 - **One host per run.** Run the whole packet on one host, then again on the other if you use both.
-- **Everything under test is throwaway.** A new host profile, a new desk, and Desk's own state and cache, all made for this evaluation inside one folder, so the sessions under test see what a new user sees and never use or change anything you already have. A preflight check proves the session under test uses the throwaway desk before any scenario runs.
+- **Everything under test is throwaway.** A new host profile, a new desk, and Desk's own state and cache, all made for this evaluation inside one folder, so the sessions under test see what a new user sees and never use or change anything you already have. A new profile is not empty once you sign in: the host can load what your account carries, such as connectors and synced plugins, so the preflight also checks which plugins loaded and which Desk tool answers. A preflight check proves the session under test uses the throwaway desk before any scenario runs.
 - **`observer` watches; you and your agent do the work.** `observer` uses its release-evaluation skill, [`desk:evaluate-release`](../skills/evaluate-release/SKILL.md): it records each step's outcome with evidence, classifies each problem as a defect, a confusion or a gap, and reports without fixing anything. It never evaluates work it did and never certifies its own work ([observer's identity](../agents/observer.md)).
 - **Time is measured, not estimated.** Tell `observer` when you start and finish each scenario; it records the elapsed time from the clock or from host log timestamps, and records `unavailable` when it could not measure ([evaluate-release](../skills/evaluate-release/SKILL.md#time-each-scenario)).
 - **Human authority stays human.** Delegating engineering checks does not delegate credentials, consent to publish facts, approval to speak from your account, acceptance of the outcome or promotion. With no human present, the driver records those gates as `blocked`, never bypasses them ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off), [RFC §2](agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent)).
@@ -27,13 +27,13 @@ Read the RFC with an agent rather than alone: start a session and ask it to walk
 
 Do these steps in order: make the throwaway desk, set up one host, pass the preflight, then start `observer`.
 
-Before allocating profiles or the backup, record free space on the chosen working directory's filesystem and the size of the real Claude config directory. Choose a byte budget and free-space reserve for this run; if the backup or setup would exceed either, record setup as `blocked` rather than allocate it. Use a new project-local evaluation folder, not the system temporary directory. Keep the backup and raw host evidence private: they may contain credentials or transcripts, and must never be attached to an issue or committed ([evidence safety](../skills/evaluate-release/SKILL.md#hands-off), [cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)).
+Before allocating profiles, record free space on the chosen working directory's filesystem. Choose a byte budget and free-space reserve for this run; if setup would exceed either, record setup as `blocked` rather than allocate it. Use a new project-local evaluation folder, not the system temporary directory. Keep the backup and raw host evidence private: they may contain credentials or transcripts, and must never be attached to an issue or committed ([evidence safety](../skills/evaluate-release/SKILL.md#hands-off), [cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)).
 
 **Every command block below fails closed.** Each block that writes runs in a subshell that starts with `set -eu` and stops unless `$EVAL` is set and, where a desk is touched, `git rev-parse --show-toplevel` is exactly `$EVAL/desk`. Everything they write stays inside `$EVAL`. In any new terminal, run `. <the printed $EVAL path>/env.sh` first; setup writes that file with every variable the evaluation needs.
 
 ### Make the throwaway desk
 
-In a new terminal, create a throwaway folder holding a desk with a local remote, a scratch repository for the engineering work, a backup of your real Claude config directory (`$CLAUDE_CONFIG_DIR` if your shell sets it, otherwise `~/.claude`), the folders where Desk keeps its state and cache for this evaluation, and a binding that points Desk at the throwaway desk:
+In a new terminal, create a throwaway folder holding a desk with a local remote, a scratch repository for the engineering work, a backup of the parts of your real Claude config directory that setup could change (the directory is `$CLAUDE_CONFIG_DIR` if your shell sets it, otherwise `~/.claude`), the folders where Desk keeps its state and cache for this evaluation, and a binding that points Desk at the throwaway desk:
 
 ```sh
 export EVAL="$(cd "$(mktemp -d "$PWD/.v2-evaluation.XXXXXX")" && pwd -P)/v2-eval"
@@ -43,7 +43,18 @@ export EVAL="$(cd "$(mktemp -d "$PWD/.v2-evaluation.XXXXXX")" && pwd -P)/v2-eval
   [ -n "$EVAL" ] && [ ! -e "$EVAL" ] || { echo "EVAL must name a new folder; stopping." >&2; exit 1; }
   mkdir -p "$EVAL/desk/_meta" "$EVAL/desk/_archive" "$EVAL/scratch" "$EVAL/state" "$EVAL/cache"
   REAL_CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  if [ -d "$REAL_CLAUDE_DIR" ]; then cp -R "$REAL_CLAUDE_DIR" "$EVAL/claude-backup"; fi
+  mkdir -p "$EVAL/claude-backup/plugins"
+  for part in CLAUDE.md settings.json plugins/installed_plugins.json plugins/known_marketplaces.json agents skills hooks; do
+    if [ -e "$REAL_CLAUDE_DIR/$part" ]; then cp -R "$REAL_CLAUDE_DIR/$part" "$EVAL/claude-backup/$part"; fi
+  done
+  if [ -d "$REAL_CLAUDE_DIR/projects" ]; then
+    find "$REAL_CLAUDE_DIR/projects" -mindepth 2 -maxdepth 2 -type d -name memory | while IFS= read -r memory; do
+      project="$(basename "$(dirname "$memory")")"
+      mkdir -p "$EVAL/claude-backup/projects/$project"
+      cp -R "$memory" "$EVAL/claude-backup/projects/$project/memory"
+    done
+  fi
+  ps -axo pid=,lstart=,comm= | awk '$NF ~ /(^|\/)claude$/' > "$EVAL/claude-sessions-before.txt" || true
   git -C "$EVAL/desk" init -q -b main
   [ "$(git -C "$EVAL/desk" rev-parse --show-toplevel)" = "$EVAL/desk" ] || { echo "Not the throwaway desk; stopping." >&2; exit 1; }
   touch "$EVAL/desk/_meta/.gitkeep" "$EVAL/desk/_archive/.gitkeep"
@@ -77,15 +88,15 @@ Why each piece is there:
 - `DESK_ACTIVATION_CONFIG` binds the throwaway desk on every host that honors it, and its `state_branch` keeps it on `main`. `DESK` names the same desk, so a binding that ever misses falls back to the throwaway desk rather than to a desk in your home folder ([root resolution order](../mcp/src/util/paths.js)).
 - `XDG_STATE_HOME` and `XDG_CACHE_HOME` give these sessions their own Desk state and cache: factory consent, session markers, outbox and readiness state all live under the state folder ([factory outbox](../mcp/src/factory/outbox.js), [start records](../mcp/src/runtime/last-start.js)), so the evaluation never reads or changes yours, and scenario 6 sees the one-time consent question for real.
 - `CLAUDE_CONFIG_DIR` and `COPILOT_HOME` give each host a fresh profile inside `$EVAL`.
-- `$EVAL/claude-backup` is a copy of your real Claude config directory, taken before anything else runs, so you can check it is unchanged at the end. `env.sh` records that directory as `REAL_CLAUDE_DIR`: the `CLAUDE_CONFIG_DIR` your shell had before setup, otherwise `~/.claude`.
+- `$EVAL/claude-backup` is a copy of the parts of your real Claude config directory that setup could change, taken before anything else runs: `CLAUDE.md`, `settings.json`, the two plugin registry files, and what you wrote under `agents/`, `skills/`, `hooks/` and `projects/*/memory/`. It leaves out transcripts, caches and credentials, which can run to gigabytes and change by the minute on a profile in use. `$EVAL/claude-sessions-before.txt` lists the Claude Code processes already running, so a change at the end can be attributed. `env.sh` records the real directory as `REAL_CLAUDE_DIR`: the `CLAUDE_CONFIG_DIR` your shell had before setup, otherwise `~/.claude`.
 
 Start every session under test from `$EVAL/scratch`: a host project that is itself a desk would bind that desk instead ([root resolution order](../mcp/src/util/paths.js)). Keep the printed `$EVAL` path; `observer` needs it. If you want pull requests in the engineering scenarios, use a throwaway GitHub repository of your own instead of `$EVAL/scratch`.
 
 ### Claude Code
 
-**Warning:** this packet requires the Desk release that contains the `SETUP.md` config-directory fix, in which every step of `SETUP.md` follows `CLAUDE_CONFIG_DIR`. Check with `claude plugin list`, or read the Desk [changelog](../CHANGELOG.md) for that fix. Before that release, [`SETUP.md`](../../../SETUP.md#claude-code) steps 2, 3 and 4 edit your real `~/.claude` even in a throwaway profile, and step 4 can move content out of `~/.claude/agents/`, `skills/`, `hooks/` and `projects/*/memory/`. The setup block above backs up your whole real Claude config directory (`$REAL_CLAUDE_DIR`) to `$EVAL/claude-backup` whatever version you get. Answer step 4's question with "move or remove nothing". Any edit to your real `~/.claude` is a finding.
+**Warning:** this packet requires the Desk release that contains the `SETUP.md` config-directory fix, in which every step of `SETUP.md` follows `CLAUDE_CONFIG_DIR`. Check with `claude plugin list`, or read the Desk [changelog](../CHANGELOG.md) for that fix. Before that release, [`SETUP.md`](../../../SETUP.md#claude-code) steps 2, 3 and 4 edit your real `~/.claude` even in a throwaway profile, and step 4 can move content out of `~/.claude/agents/`, `skills/`, `hooks/` and `projects/*/memory/`. The setup block above backs up every part of your real Claude config directory (`$REAL_CLAUDE_DIR`) that those steps can change to `$EVAL/claude-backup` whatever version you get. Answer step 4's question with "move or remove nothing". Any edit to your real `~/.claude` is a finding.
 
-1. In the terminal where you made the throwaway desk (its variables, including `CLAUDE_CONFIG_DIR`, are set), `cd "$EVAL/scratch"` and start `claude`. Sign in; the sign-in is yours, and `observer` records it as a human step ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off)).
+1. In the terminal where you made the throwaway desk (its variables, including `CLAUDE_CONFIG_DIR`, are set), `cd "$EVAL/scratch"` and start `claude`. Sign in; the sign-in is yours, and `observer` records it as a human step ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off)). Signing in can bring your account's connectors and synced plugins into this new profile. Leave them as they are and record what `claude plugin list` shows; the preflight checks that none of them answers for Desk.
 2. Give the agent the one link, https://github.com/ourostack/desk/blob/main/SETUP.md, and say "set this up".
 3. If setup asks which desk to use, answer: "Use the desk at `$EVAL/desk` (give the full path). Bind no other desk and create no remote." If it asks about moving existing content, answer "move or remove nothing".
 4. When setup asks for a new session, exit `claude` and run the pre-session check under [Preflight](#preflight-the-session-uses-the-throwaway-desk) before you start it.
@@ -95,12 +106,12 @@ Start every session under test from `$EVAL/scratch`: a host project that is itse
 - `claude plugin list` shows `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled, with a Desk release that contains the `SETUP.md` config-directory fix (check its entry in the Desk [changelog](../CHANGELOG.md));
 - the new session runs as `desk:worker` and the Desk foundation appears at startup;
 - `desk:session-start` runs and offers work to resume or start;
-- `$CLAUDE_CONFIG_DIR/CLAUDE.md` is only the thin pointer to the desk ([SETUP.md, step 4](../../../SETUP.md#4-make-claudeclaudemd-a-thin-pointer)), and your real Claude config directory (`$REAL_CLAUDE_DIR`) matches `$EVAL/claude-backup`.
+- `$CLAUDE_CONFIG_DIR/CLAUDE.md` is only the thin pointer to the desk ([SETUP.md, step 4](../../../SETUP.md#4-make-claudeclaudemd-a-thin-pointer)), and the backed-up parts of your real Claude config directory (`$REAL_CLAUDE_DIR`) match `$EVAL/claude-backup` (the check is under [Clean up](#clean-up)).
 
 ### A managed launcher with a company overlay
 
-1. In the terminal where you made the throwaway desk, `COPILOT_HOME` already points at `$EVAL/copilot-home` for the Copilot CLI, which keeps its sessions there ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)). If your launcher keeps its own home or cache folder under an environment variable, point that into `$EVAL` too, and add the export to `$EVAL/env.sh`.
-2. Do the crew install: install the company overlay's top-most plugin through the launcher, as the overlay's getting-started guide says. Its dependencies bring Desk, Superpowers and Plain Language from their channels ([RFC §7](agentic-engineering-v2-rfc.md#7-getting-v2-and-staying-current)). If your launcher refreshes only the plugin you name, install the Desk plugins explicitly with the same refresh policy.
+1. In the terminal where you made the throwaway desk, `COPILOT_HOME` already points at `$EVAL/copilot-home` for the Copilot CLI, which keeps its sessions there ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)). Isolate the launcher's own configuration too, and add each export to `$EVAL/env.sh`: point the variable that names its configuration into `$EVAL`, install into a launcher profile made for this run and select only that profile, so the run neither reads nor writes a launcher config file in your home folder. On Agency, `AGENCY_GLOBAL_CONFIG_PATH` is that variable and names a directory, not a file; `--profile-only <name>` selects the one profile, and `AGENCY_LOG_DIR` moves its logs. A launcher's shared download cache of plugins usually cannot be moved, and sharing it is acceptable: it holds copies of the channels, never your desk or a session's state. A shared cache can serve an older copy, so record the Desk version the first session reports; if it is behind the channel, refresh that cache entry the launcher's own way and record the finding.
+2. Do the crew install: install the company overlay's top-most plugin through the launcher, from the overlay's `v2-alpha` channel. Until promotion, an overlay's default branch and its getting-started guide still install V1, so name the `v2-alpha` branch in the install command and follow that branch's guide. Its dependencies bring Desk, Superpowers and Plain Language from their channels ([RFC §7](agentic-engineering-v2-rfc.md#7-getting-v2-and-staying-current)). If your launcher refreshes only the plugin you name, install the Desk plugins explicitly with the same refresh policy.
 3. Point the overlay at the throwaway desk, never at your team's real shared workspace. The overlay's crew onboarding (`crew:join-crew`) normally clones your team's workspace and binds your writes to it ([crew](../../crew/README.md)); for this evaluation, bind `$EVAL/desk` instead. If the overlay binds its workspace through its own setting, flag or activation config, set that to `$EVAL/desk`: a root or activation config the launcher passes outranks `DESK_ACTIVATION_CONFIG` ([root resolution order](../mcp/src/util/paths.js)). If the overlay only binds a crew workspace, make its throwaway clone inside `$EVAL` from a remote you created there, and use that path in the preflight instead of `$EVAL/desk`.
 4. `cd "$EVAL/scratch"` and start a session with the overlay's worker agent.
 
@@ -126,18 +137,19 @@ Before any scenario, prove that Desk binds the throwaway desk. Nothing else happ
 )
 ```
 
-Then start the session with a read-only first prompt: "Call `desk_status` and show me only the desk root and where it came from. Do nothing else."
+Then start the session with a read-only first prompt: "Call the installed Desk plugin's `desk_status` and show me only the desk root, where it came from and the full name of the tool that answered. Do nothing else."
 
 **On a managed launcher,** the launcher's own arguments decide the binding, so there is no pre-session check. Make the read-only `desk_status` prompt above your first prompt.
 
 **Good looks like** ([desk_status](../mcp/src/tools/status.js)):
 
 - on Claude Code, the check prints `"root"` exactly `$EVAL/desk` with `"source":"activation-config"`, and `desk_status` in the session agrees;
+- the tool that answered belongs to the installed plugin (on Claude Code its name starts with `mcp__plugin_desk_desk__`; on the Copilot CLI it is `desk-desk_status`). A Desk tool that comes from a connector on your account (on Claude Code its name starts with `mcp__claude_ai_`) reads your real hosted desk, not the throwaway one: if that one answered, or the agent used it at all, stop as below;
 - on a managed launcher, `desk_status` names exactly the throwaway desk or throwaway workspace clone you made inside `$EVAL`, whatever source it reports.
 
 **If it names any other desk, stop the evaluation.** Run no scenario against that desk. Record a defect with the output as evidence, and file it ([evaluate-release](../skills/evaluate-release/SKILL.md#start-cold-on-the-named-host)).
 
-**What this cannot prevent:** Desk's startup hook runs its boot checks when a session starts, before your first prompt, and can launch detached workspace-tidy work for the desk it resolves ([boot checks](../hooks/lib/boot-checks.cjs)). The current tidy requires fresh ownership and consumer evidence before removal; a listing is not deletion authority ([workspace tidy](workspace-tidy.md)). On Claude Code, the pre-session check rules out a wrong binding before that happens. On a launcher, the in-session `desk_status` detects a wrong binding after startup rather than preventing it. If you cannot prove the launcher isolates its activation configuration and cache before starting, record setup as `blocked`; do not try it against your real workspace.
+**What this cannot prevent:** Desk's startup hook runs its boot checks when a session starts, before your first prompt, and can launch detached workspace-tidy work for the desk it resolves ([boot checks](../hooks/lib/boot-checks.cjs)). The current tidy requires fresh ownership and consumer evidence before removal; a listing is not deletion authority ([workspace tidy](workspace-tidy.md)). On Claude Code, the pre-session check rules out a wrong binding before that happens. On a launcher, the in-session `desk_status` detects a wrong binding after startup rather than preventing it. Before starting on a launcher, prove four things point into `$EVAL`: the launcher's configuration, the host home (`COPILOT_HOME`), the desk or workspace binding, and Desk's state and cache (`XDG_STATE_HOME`, `XDG_CACHE_HOME`). If you cannot prove any one of them, record setup as `blocked`; do not try it against your real workspace. The launcher's shared download cache and logs are not on that list.
 
 ### Start `observer`
 
@@ -153,6 +165,8 @@ Run `observer` in its own terminal, from its own working folder and its own prof
 ## The scenarios
 
 Run them in order, all against the throwaway desk, from sessions started in `$EVAL/scratch`. For each scenario, tell `observer` when you start and when you finish. A step that says "in another terminal" means a new terminal where you first run `. <the printed EVAL path>/env.sh`.
+
+Run scenarios 1 to 3 in an interactive session. A host's non-interactive prompt mode (`-p`) can tell the agent that no user is present, and an agent told that has nobody to align with, so those scenarios would measure nothing. An agent dry run drives a real terminal for them instead ([evaluate-release](../skills/evaluate-release/SKILL.md#observe-a-dry-run)).
 
 Scenarios marked **(lands by the evaluation)** exercise features that reach the channel before you run the evaluation. Their outcomes come from V2's design and are confirmed against the channel when each feature lands. If one has not landed when you run it, `observer` records a gap with the channel state as evidence ([evaluate-release](../skills/evaluate-release/SKILL.md#classify-every-problem)).
 
@@ -195,32 +209,39 @@ For each host, keep an evidence index with one row per setup gate and scenario: 
 
 ### 4. A desk that needs tidying (lands by the evaluation)
 
-**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first.
+**Do:** end the session and confirm that its owned tidy processes have stopped. Right before this scenario, make the throwaway desk messy and clear only its completed tidy record, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). Do not delete claims or holds to force admission: if any remain, record the gate as `blocked` until their exact owner is reconciled ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup)). The block stops if the desk has no `git config user.name`; set one there first. It deletes nothing: it moves the tidy record aside inside `$EVAL`. Desk's commit guard refuses a hand-made commit that changes a task card, so the block commits its hand-made card with `DESK_TOOL_COMMIT=1`, the guard's own deliberate override ([the card guard](../mcp/src/desk/card-commit-guard.js)). Use that override nowhere else.
 
 ```sh
 ( set -eu
   . "${EVAL:?Run . <the printed EVAL path>/env.sh first}/env.sh"
   [ "$(git -C "$EVAL/desk" rev-parse --show-toplevel)" = "$EVAL/desk" ] || { echo "Not the throwaway desk; stopping." >&2; exit 1; }
-  git -C "$EVAL/desk" rm -q --ignore-unmatch _meta/organization.json
-  rm -f "$EVAL/desk/_meta/organization.json"
+  [ -z "$(git -C "$EVAL/desk" status --porcelain)" ] || { echo "The desk has uncommitted changes; stopping." >&2; exit 1; }
   me="$(git -C "$EVAL/desk" config user.name | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
   [ -n "$me" ] || { echo "Set git user.name in the throwaway desk first; stopping." >&2; exit 1; }
+  [ ! -e "$EVAL/desk/$me" ] || { echo "The desk already has a $me folder; stopping." >&2; exit 1; }
+  if [ -e "$EVAL/desk/_meta/organization.json" ]; then
+    mv "$EVAL/desk/_meta/organization.json" "$(mktemp "$EVAL/tidy-record-before-scenario-4.XXXXXX")"
+  fi
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   mkdir -p "$EVAL/desk/$me/hi-can-you-fix-the-login"
   printf '# %s\n' "$me" > "$EVAL/desk/$me/track.md"
-  printf -- '---\ntitle: Fix the login\nstatus: queued\n---\n' > "$EVAL/desk/$me/hi-can-you-fix-the-login/task.md"
+  printf -- '---\nschema_version: 1\ntitle: Fix the login\nstatus: drafting\ncreated: "%s"\nupdated: "%s"\ntrack: %s\nrepos: []\n---\n' "$now" "$now" "$me" > "$EVAL/desk/$me/hi-can-you-fix-the-login/task.md"
   printf 'status notes\n' > "$EVAL/desk/status-notes.md"
   git -C "$EVAL/desk" add -A
-  git -C "$EVAL/desk" commit -q -m "Make a mess for the tidy scenario"
+  DESK_TOOL_COMMIT=1 git -C "$EVAL/desk" commit -q -m "Make a mess for the tidy scenario"
   git -C "$EVAL/desk" push -q origin main
+  echo "mess committed and pushed"
 )
 ```
 
-This adds a loose file at the desk root, a track named after you with no scope line, and a task named from a prompt. Start a new session.
+This adds a loose file at the desk root, a track named after you with no scope line, and a task named from a prompt, all committed and pushed. If the block stops because the desk has uncommitted changes, start a session, ask the agent to commit and push its desk changes, end it and run the block again.
+
+Then start a new session from `$EVAL/scratch` and say only "hi". Do not mention the desk or the tidy: the startup check has to find the mess by itself.
 
 **Good looks like** ([the doctor's organization checks](../mcp/src/desk/organization.js), [interaction-style](../skills/interaction-style/SKILL.md#2-organization-tidy-and-announce)):
 
-- `desk_doctor` reports the findings, including `loose_file`, `track_missing_scope`, `track_person_name` and `name_prompt_like`;
-- the agent tidies without asking how you'd like it done, and announces it in one line in the spirit of "I'm going to tidy up my desk a bit: ... Say if you mind.";
+- the session's startup tidy check finds the mess and hands the agent its findings before your prompt is answered; you do not ask for it. If you ask the agent afterwards what it found, or to call `desk_doctor` before it tidies, the findings include `loose_file`, `track_missing_scope`, `track_person_name` and `name_prompt_like`;
+- in its first reply the agent tidies without asking how you'd like it done, and announces it in one line in the spirit of "I'm going to tidy up my desk a bit: ... Say if you mind.";
 - every move goes through Git, so it can be undone, and nothing is deleted;
 - afterwards `desk_doctor` reports no organization findings, and `_meta/organization.json` records `tidy_version: 1`.
 
@@ -303,7 +324,26 @@ This scenario depends on the kaizen loop in the selected factory store. Earlier 
 
 First end the sessions under test and any separate observer fixture sessions. Reconcile each exact owned process, browser lease, checkout and profile before deleting its files; a matching folder suffix or a clean Git status is not proof that no writer remains. Stop only exact owned process generations, never by process name. Preserve compact logs, screenshots, failure receipts and the per-host report outside the disposable roots; do not retain whole inactive profiles as evidence ([cleanup ownership](../skills/git-hygiene/SKILL.md#exact-owned-cleanup), [observer cleanup](../skills/evaluate-release/SKILL.md#clean-up)).
 
-Compare your real Claude config directory with `$EVAL/claude-backup` while that private backup still exists; any unexpected change is a finding. If the original directory did not exist, verify it was not created rather than comparing against a nonexistent backup. After all owned writers and consumers are confirmed absent, this block removes only the environment file, not profiles or evidence:
+Compare the backed-up parts of your real Claude config directory with `$EVAL/claude-backup` while that private backup still exists. This read-only block prints every difference, then the Claude Code processes that were running at setup and the ones running now:
+
+```sh
+( set -u
+  . "${EVAL:?Run . <the printed EVAL path>/env.sh first}/env.sh"
+  cd "$EVAL/claude-backup" || exit 1
+  for part in CLAUDE.md settings.json plugins/installed_plugins.json plugins/known_marketplaces.json agents skills hooks; do
+    if [ -e "$part" ] || [ -e "$REAL_CLAUDE_DIR/$part" ]; then diff -rq "$part" "$REAL_CLAUDE_DIR/$part"; fi
+  done
+  { [ ! -d projects ] || find projects -mindepth 2 -maxdepth 2 -type d -name memory
+    [ ! -d "$REAL_CLAUDE_DIR/projects" ] || (cd "$REAL_CLAUDE_DIR" && find projects -mindepth 2 -maxdepth 2 -type d -name memory)
+  } | sort -u | while IFS= read -r part; do diff -rq "$part" "$REAL_CLAUDE_DIR/$part"; done
+  echo "Claude Code processes at setup:"; cat "$EVAL/claude-sessions-before.txt"
+  echo "Claude Code processes now:"; ps -axo pid=,lstart=,comm= | awk '$NF ~ /(^|\/)claude$/'
+)
+```
+
+No output above the two process lists means nothing changed. A difference is a finding only when you can attribute it to the evaluation. If another Claude Code session was using your real profile during the run (it is in either process list), that session may have made the change, for example a plugin update or a settings edit: record the difference with both lists and mark its cause `unavailable` rather than blaming the evaluation. If your real directory did not exist at setup, verify it was not created.
+
+After all owned writers and consumers are confirmed absent, this block removes only the environment file, which the setup block created, not profiles or evidence:
 
 ```sh
 ( set -eu
