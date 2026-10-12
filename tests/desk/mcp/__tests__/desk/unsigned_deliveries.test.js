@@ -265,9 +265,9 @@ test("a card in flow form and a long frontmatter are read from the head of the f
 
 test("the boot instruction tells the agent to finish the request first and raise the tasks once, together", () => {
   const many = { count: 3, at_least: false, oldest_age_days: 9 }
-  assert.deepEqual(signoffInstructions(many, { noninteractive: false }), ["3 delivered tasks await sign-off, the oldest for 9 days. Finish what the operator asked first. Then raise them together, once, each as three lines (asked, delivered with proof, accept or send back), and record each answer with task_signoff. Do not raise them in a noninteractive session."])
+  assert.deepEqual(signoffInstructions(many, { noninteractive: false }), ["3 delivered tasks await sign-off, the oldest for 9 days. Finish what the operator asked first. Then raise them together, once, each as a validation receipt with proof and then accept or send back (evidence-discipline), and record each answer with task_signoff. Do not raise them in a noninteractive session."])
   const one = signoffInstructions({ count: 1, at_least: false, oldest_age_days: 1 }, { noninteractive: false })[0]
-  assert.equal(one, "1 delivered task awaits sign-off, the oldest for 1 day. Finish what the operator asked first. Then raise it, once, as three lines (asked, delivered with proof, accept or send back), and record the answer with task_signoff. Do not raise it in a noninteractive session.")
+  assert.equal(one, "1 delivered task awaits sign-off, the oldest for 1 day. Finish what the operator asked first. Then raise it, once, as a validation receipt with proof and then accept or send back (evidence-discipline), and record the answer with task_signoff. Do not raise it in a noninteractive session.")
   const cut = signoffInstructions({ count: 500, at_least: true, oldest_age_days: 30 }, { noninteractive: false })[0]
   assert.match(cut, /^at least 500 delivered tasks await sign-off, the oldest for at least 30 days\. /u)
   const cutOne = signoffInstructions({ count: 1, at_least: true, oldest_age_days: 2 }, { noninteractive: false })[0]

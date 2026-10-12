@@ -1144,7 +1144,7 @@ contract("each new sign-off paragraph in the other skills is pinned", () => {
   assert.match(read("archive-workflow/SKILL.md"), /^## Archiving a delivered task$/mu);
   assert.match(read("archive-workflow/SKILL.md"), /does not accept it[^\n]+`task_signoff` still finds it[^\n]+`unarchive: true`/u);
   assert.match(read("interaction-style/SKILL.md"), /^### The sign-off ask is the one closing question$/mu);
-  assert.match(read("interaction-style/SKILL.md"), /three lines[^\n]+ask it once, carry on without waiting[^\n]+`task_signoff` in a later turn/u);
+  assert.match(read("interaction-style/SKILL.md"), /validation receipt[^\n]+accept or send back\?[^\n]+ask it once, carry on without waiting[^\n]+`task_signoff` in a later turn/u);
   assert.match(read("session-resumption/SKILL.md"), /A task found at `done` is delivered[^\n]+Do not treat it as accepted[^\n]+`task_signoff` in a later turn/u);
   assert.match(read("session-start/SKILL.md"), /\*\*Delivered, awaiting sign-off\.\*\*[^\n]+`details\.md`/u);
   assert.match(read("session-start/details.md"), /^## Delivered tasks awaiting sign-off$/mu);

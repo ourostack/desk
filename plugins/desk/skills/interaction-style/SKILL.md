@@ -232,7 +232,7 @@ The operator will ask if they want more. Exception: a genuine fork per Section 6
 
 ### The sign-off ask is the one closing question
 
-A reply that delivers a task ends with the three lines (what was asked, what you delivered with its proof, accept or send back?). That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
+A reply that delivers a task ends with a validation receipt and then accept or send back? (`evidence-discipline`, "Validation receipt at delivery"). That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
 
 ### Ban these specific phrases (known Claude tics)
 

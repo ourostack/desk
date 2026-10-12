@@ -290,7 +290,7 @@ function main() {
 
   // The foundation says done is a delivery, tells the agent what to do at delivery, and tells a child never to record the answer.
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation says done is a delivery and names task_signoff", [
-    "Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered.",
+    "Done is a delivery, not an acceptance. When you deliver, end with a validation receipt with visual proof (`evidence-discipline`), then ask accept or send back? and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered.",
   ]);
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation tells a child agent never to call task_signoff", [
     "A child agent never calls task_signoff.",
