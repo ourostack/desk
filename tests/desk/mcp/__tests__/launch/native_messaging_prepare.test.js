@@ -48,7 +48,7 @@ test("missing declared signed-in profile refuses before native installation", as
   assert.equal(installed, false)
 })
 
-test("changed native extension source requires deliberate update rather than a background reload", async () => {
+test("extension source that no Desk release shipped is refused rather than driven", async () => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-messaging-update-refusal-")
   const userDataRoot = fixtureProfile(homeDir)
@@ -63,35 +63,7 @@ test("changed native extension source requires deliberate update rather than a b
     installer: async () => { throw Object.assign(new Error("source changed"), { code: "NATIVE_EXTENSION_UPDATE_REQUIRED" }) },
   })
   assert.equal(result.payload.code, "browser_native_messaging_update_required")
-  assert.match(result.payload.fix, /deliberate/u)
-  assert.equal(result.args, undefined)
-})
-
-test("installed source and running provider source must match before connection acquisition", async () => {
-  const { prepareNativeMessaging } = await import(moduleUrl)
-  const homeDir = await mkTempRoot("native-messaging-running-source-")
-  const userDataRoot = fixtureProfile(homeDir)
-  await mkdir(userDataRoot, { recursive: true })
-  await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
-    profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
-  }))
-  const stateDir = path.join(homeDir, "state")
-  await mkdir(stateDir, { mode: 0o700 })
-  const profileRoot = path.join(userDataRoot, "Default")
-  const readyFile = path.join(stateDir, "native-provider-" +
-    createHash("sha256").update(process.execPath + "\0" + profileRoot).digest("hex") + ".json")
-  await writeFile(readyFile, JSON.stringify({
-    version: 1, processIdentity: { executable: process.execPath, profileRoot },
-    endpoint: "http://127.0.0.1:1/provider/" + "a".repeat(64), extensionSourceDigest: "b".repeat(64),
-  }), { mode: 0o600 })
-  const result = await prepareNativeMessaging({
-    declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
-    installer: async () => ({ stateDir, extensionSourceDigest: "c".repeat(64) }),
-  })
-  assert.equal(result.payload.code, "browser_native_messaging_update_required",
-    "a different executed source must not be treated as merely missing connection setup")
+  assert.match(result.payload.fix, /cannot verify/u)
   assert.equal(result.args, undefined)
 })
 
@@ -142,49 +114,6 @@ test("explicit native setup update freshly attests existing provider and returns
   assert.equal(result.providerEndpoint, undefined)
 })
 
-test("unchanged extension digest cannot hide an older native runtime capsule", async t => {
-  const { prepareNativeMessaging } = await import(moduleUrl)
-  const homeDir = await mkTempRoot("native-running-runtime-")
-  const userDataRoot = fixtureProfile(homeDir)
-  await mkdir(userDataRoot, { recursive: true })
-  await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({
-    profile: { info_cache: { Default: { user_name: "fixture@example.test" } } },
-  }))
-  const stateDir = path.join(homeDir, "state")
-  await mkdir(stateDir, { mode: 0o700 })
-  let attestations = 0
-  const server = http.createServer((request, response) => {
-    attestations++
-    response.end(JSON.stringify({ ok: true, result: { healthy: true } }))
-  })
-  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
-  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
-  const endpoint = `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`
-  const profileRoot = path.join(userDataRoot, "Default")
-  const digest = "c".repeat(64)
-  await writeFile(path.join(stateDir, "native-provider-" +
-    createHash("sha256").update(process.execPath + "\0" + profileRoot).digest("hex") + ".json"), JSON.stringify({
-    version: 1, processIdentity: { executable: process.execPath, profileRoot },
-    endpoint, extensionSourceDigest: digest,
-    mediationChain: [
-      { executable: path.join(homeDir, "old-runtime/entry"), profileRoot: path.join(homeDir, "old-runtime") },
-      { executable: process.execPath, profileRoot: path.join(homeDir, "old-runtime") },
-    ],
-  }), { mode: 0o600 })
-  const result = await prepareNativeMessaging({
-    declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
-    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
-    root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir),
-    installer: async () => ({ stateDir, extensionSourceDigest: digest,
-      executable: path.join(homeDir, "new-runtime/entry"), runtimeDirectory: path.join(homeDir, "new-runtime") }),
-  })
-  assert.equal(result.payload?.code, "browser_native_messaging_update_required",
-    "backend-only upgrades cannot silently continue using an older native provider")
-  assert.equal(result.args, undefined)
-  assert.equal(attestations, 0, "a known source mismatch is refused before acquisition or browser effects")
-})
-
-// Issue 369: the deliberate update read the provider's readiness file with a bare lstat and answered `launch_failed ENOENT`.
 test("a deliberate update while the provider is not running names it, with the readiness file", async () => {
   const { prepareNativeMessaging } = await import(moduleUrl)
   const homeDir = await mkTempRoot("native-messaging-update-not-running-")
@@ -215,4 +144,59 @@ test("a deliberate update with an unreadable readiness path reports that failure
     executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir,
     root: path.join(homeDir, "owned"), mcpRoot, env: fixtureEnv(homeDir), update: true, readyWait: { waitMs: 50, pollMs: 10 },
   }), error => error.code === "ENOTDIR")
+})
+
+// Several Desk copies share one browser. A session never refuses the provider and extension the browser runs: it uses them, and an
+// update is pending only when this copy is newer than what runs.
+async function loadedScenario(t, { loaded = { capsule: "1".repeat(64), extension: "d".repeat(64) }, versions, ownVersion = "3.2.0-alpha.400",
+  loadedRuntimeOutside = false } = {}) {
+  const homeDir = await mkTempRoot("native-loaded-")
+  const userDataRoot = fixtureProfile(homeDir)
+  await mkdir(userDataRoot, { recursive: true })
+  await writeFile(path.join(userDataRoot, "Local State"), JSON.stringify({ profile: { info_cache: { Default: { user_name: "fixture@example.test" } } } }))
+  const root = path.join(homeDir, "owned")
+  const owned = path.join(root, "native-owned")
+  const stateDir = path.join(owned, "state")
+  await mkdir(stateDir, { recursive: true, mode: 0o700 })
+  if (versions) await writeFile(path.join(owned, "versions.json"), JSON.stringify({ version: 1, ...versions }), { mode: 0o600 })
+  const profileRoot = path.join(userDataRoot, "Default")
+  const identity = { executable: process.execPath, profileRoot, pid: 42, startIdentity: "browser" }
+  const server = http.createServer((request, response) => response.end(JSON.stringify({ ok: true, result: { healthy: true, processIdentity: identity } })))
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
+  const loadedRuntime = loadedRuntimeOutside ? path.join(homeDir, "elsewhere", loaded.capsule) : path.join(owned, "runtimes", loaded.capsule)
+  await writeFile(path.join(stateDir, "native-provider-" + createHash("sha256").update(process.execPath + "\0" + profileRoot).digest("hex") + ".json"),
+    JSON.stringify({ version: 1, processIdentity: identity, endpoint: `http://127.0.0.1:${server.address().port}/provider/${"a".repeat(64)}`,
+      extensionSourceDigest: loaded.extension, mediationChain: [
+        { executable: path.join(loadedRuntime, "desk-browser-messaging"), profileRoot: loadedRuntime },
+        { executable: process.execPath, profileRoot: loadedRuntime },
+      ] }), { mode: 0o600 })
+  const ownRuntime = path.join(owned, "runtimes", "2".repeat(64))
+  const { prepareNativeMessaging } = await import(moduleUrl)
+  return prepareNativeMessaging({
+    declaration: { channel: "msedge", domain: "example.test" }, installed: { dir: "/installed" },
+    executable: process.execPath, runtimeExecutable: process.execPath, platform: process.platform, homeDir, root, mcpRoot,
+    env: fixtureEnv(homeDir),
+    installer: async () => ({ stateDir, extensionSourceDigest: "c".repeat(64), deskVersion: ownVersion,
+      executable: path.join(ownRuntime, "desk-browser-messaging"), runtimeDirectory: ownRuntime }),
+  })
+}
+
+test("a session on a newer Desk copy uses the provider the browser runs and marks the update pending", async t => {
+  const result = await loadedScenario(t)
+  assert.equal(result.payload, undefined, "never update_required")
+  assert.ok(result.providerEndpoint)
+  assert.equal(result.updatePending, true)
+})
+
+test("a session on an older Desk copy uses the newer provider the browser runs and never updates it", async t => {
+  const result = await loadedScenario(t, { ownVersion: "3.2.0-alpha.300",
+    versions: { capsules: { ["1".repeat(64)]: "3.2.0-alpha.400" }, extensions: { ["d".repeat(64)]: "3.2.0-alpha.400" } } })
+  assert.equal(result.payload, undefined)
+  assert.equal(result.updatePending, false)
+})
+
+test("a loaded provider that does not run from this installation's runtimes is refused", async t => {
+  const result = await loadedScenario(t, { loadedRuntimeOutside: true })
+  assert.equal(result.payload.code, "browser_native_messaging_unavailable")
 })

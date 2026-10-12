@@ -441,3 +441,59 @@ test("explicit native update refuses a symlinked private root before gating or w
   assert.equal(gated, false)
   assert.equal(await readFile(path.join(external, "extension/manifest.json"), "utf8"), '{"key":"same","version":"1"}')
 })
+
+// An older Desk copy that started a session after a newer one pointed the browser's next native host back at its older runtime.
+test("native registration never moves to an older release's runtime", { skip: process.platform === "win32" }, async () => {
+  const { installNativeMessaging } = await import(moduleUrl)
+  const root = await mkTempRoot("native-messaging-monotonic-")
+  const owned = path.join(root, "owned")
+  const options = {
+    mcpRoot, root: owned, userDataRoot: path.join(root, "browser"), profile: "Default", channel: "msedge",
+    browserExecutable: process.execPath, runtimeExecutable: process.execPath, levelModule: "/existing/level",
+  }
+  const installed = await installNativeMessaging(options)
+  const own = JSON.parse(await readFile(installed.registration.file, "utf8"))
+  assert.equal(own.path, installed.executable)
+  const versions = JSON.parse(await readFile(path.join(owned, "versions.json"), "utf8"))
+  assert.equal(versions.capsules[installed.digest], installed.deskVersion)
+  assert.equal(versions.extensions[installed.extensionSourceDigest], installed.deskVersion)
+  // A newer release registered its own runtime since.
+  const newer = "f".repeat(64)
+  await mkdir(path.join(owned, "runtimes", newer), { recursive: true, mode: 0o700 })
+  await writeFile(installed.registration.file, JSON.stringify({ ...own, path: path.join(owned, "runtimes", newer, "desk-browser-messaging") }), { mode: 0o600 })
+  await writeFile(path.join(owned, "versions.json"), JSON.stringify({ ...versions, capsules: { ...versions.capsules, [newer]: "999.0.0" } }), { mode: 0o600 })
+  const older = await installNativeMessaging(options)
+  assert.equal(older.registrationKept, true)
+  assert.equal(JSON.parse(await readFile(installed.registration.file, "utf8")).path, path.join(owned, "runtimes", newer, "desk-browser-messaging"))
+  // A runtime that no release recorded is older, and is replaced.
+  await writeFile(path.join(owned, "versions.json"), JSON.stringify(versions), { mode: 0o600 })
+  const newest = await installNativeMessaging(options)
+  assert.equal(newest.registrationKept, undefined)
+  assert.equal(JSON.parse(await readFile(installed.registration.file, "utf8")).path, installed.executable)
+})
+
+test("another release's genuine extension source is kept and reported, not refused", async () => {
+  const { installNativeMessaging } = await import(moduleUrl)
+  const root = await mkTempRoot("native-messaging-other-release-")
+  const options = {
+    mcpRoot, root: path.join(root, "owned"), userDataRoot: path.join(root, "browser"), profile: "Default", channel: "msedge",
+    browserExecutable: process.execPath, runtimeExecutable: process.execPath, levelModule: "/existing/level",
+  }
+  const installed = await installNativeMessaging(options)
+  assert.equal(installed.extensionMatches, true)
+  // Rewrite one file and its declared digest, as another release's build would.
+  const files = []
+  for (const name of (await readdir(installed.extensionDirectory)).sort()) {
+    if (name === "source-digest.js") continue
+    let content = await readFile(path.join(installed.extensionDirectory, name))
+    if (name === "background.js") {
+      content = Buffer.concat([content, Buffer.from("\n// another release\n")])
+      await writeFile(path.join(installed.extensionDirectory, name), content)
+    }
+    files.push([name, createHash("sha256").update(content).digest("hex")])
+  }
+  const digest = createHash("sha256").update(JSON.stringify(files)).digest("hex")
+  await writeFile(path.join(installed.extensionDirectory, "source-digest.js"), `export const SOURCE_DIGEST = "${digest}";\n`)
+  const again = await installNativeMessaging(options)
+  assert.equal(again.extensionMatches, false)
+})

@@ -733,7 +733,7 @@ function start(o, io) {
   }
   var real = declaration.state === "declared";
   if (o.nativeUpdate && !real) return fail(io, "browser_declaration_missing",
-    "A deliberate native update requires a declared browser profile", "Configure desk.browser before updating its native setup.");
+    "A native update requires a declared browser profile", "Configure desk.browser before updating its native setup.");
   if (real && hasOption(args, ["--browser", "--executable-path", "--profile-dir-name", "--user-data-dir"])) {
     return fail(io, "browser_configuration_conflict",
       "A declared browser profile conflicts with caller-supplied browser, executable, profile or user-data options. No browser operation was forwarded.",
@@ -751,6 +751,33 @@ function start(o, io) {
       "Retain owned-effect evidence and reconcile this lease before retrying. Do not borrow another window.");
   }
   var nativeLaunchConfiguration = null;
+  // This Desk copy is newer than the provider or extension the browser runs. The browser keeps serving through what it runs, and
+  // the guarded update is tried every nativeUpdateMs: it waits while any session owns tabs or has an operation under way, reloads
+  // only the Desk extension, never the browser, and the sessions move to the new provider on their next call.
+  var nativeUpdateTimer = null;
+  function startNativeUpdate(update) {
+    if (nativeUpdateTimer) return;
+    var every = either(o.nativeUpdateMs, 60000);
+    function attempt() {
+      update().then(function (result) {
+        if (result && (result.updated === true || result.current === true)) {
+          io.stderr.write("[web] browser_native_update " + (result.updated ? "applied" : "already current") + "\n");
+          return;
+        }
+        schedule();
+      }, function (error) {
+        var code = (error && error.code) || "NATIVE_UPDATE_FAILED";
+        if (code === "NATIVE_UPDATE_WOULD_DOWNGRADE") return;
+        io.stderr.write("[web] browser_native_update waiting: " + code + "\n");
+        schedule();
+      });
+    }
+    function schedule() {
+      nativeUpdateTimer = setTimeout(attempt, every);
+      if (nativeUpdateTimer.unref) nativeUpdateTimer.unref();
+    }
+    schedule();
+  }
   var nativeChildEndpoint = null;
   var nativeTargetsPossible = false;
   function detachNativeChild(api) {
@@ -807,17 +834,23 @@ function start(o, io) {
     }
     if (!real) return Promise.resolve(launching([], {}, []));
     var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
-    return either(o.nativeMessagingPrepare, require("./web-native-messaging.cjs").prepareNativeMessaging)({
-      declaration: declaration, installed: installed, executable: executable,
-      platform: platform, env: env, homeDir: homeDir, root: root,
-      arch: either(o.arch, process.arch), runtimeExecutable: node,
-      mcpRoot: either(o.mcpRoot, __dirname), update: o.nativeUpdate === true
-    }).then(function (connection) {
+    var nativePrepare = either(o.nativeMessagingPrepare, require("./web-native-messaging.cjs").prepareNativeMessaging);
+    function nativeInput(update) {
+      return {
+        declaration: declaration, installed: installed, executable: executable,
+        platform: platform, env: env, homeDir: homeDir, root: root,
+        arch: either(o.arch, process.arch), runtimeExecutable: node,
+        mcpRoot: either(o.mcpRoot, __dirname), update: update
+      };
+    }
+    return nativePrepare(nativeInput(o.nativeUpdate === true)).then(function (connection) {
       if (connection.payload) return { retry: true, payload: failure(io, connection.payload.code, connection.payload.summary, connection.payload.fix) };
       if (o.nativeUpdate) {
+        if (connection.current === true) return { nativeUpdate: { updated: false, current: true, profile: connection.profile } };
         if (connection.updated !== true || connection.reconciliationRequired !== true) throw new Error("NATIVE_UPDATE_RESPONSE_INVALID");
         return { nativeUpdate: { updated: true, reconciliationRequired: true, profile: connection.profile } };
       }
+      if (connection.updatePending === true) startNativeUpdate(function () { return nativePrepare(nativeInput(true)); });
       nativeConnection = connection;
       nativeSession = connection.session;
       io.stderr.write("[web] driving the declared " + connection.app + " profile " + connection.profile + " through native browser ownership\n");

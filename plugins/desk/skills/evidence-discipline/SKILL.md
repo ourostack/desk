@@ -84,6 +84,12 @@ If any check fails, debug at the one-shot level before going infinite.
 - **Supervised-runner shape.** Registering the supervisor first, then watching the "task is running" surface and assuming green, while every iteration silently exits 1 because of a per-iter setup bug (token name wrong, encoding crash, principal denied, em-dash in prompt). The supervisor wrapper hides per-iteration failures behind the lie "the service is running."
 - **Polling-loop shape.** Backgrounding `until [ "$(<expr>)" = "<value>" ]; do sleep N; done` where `<expr>` references a CLI-tool field that doesn't exist (`gh pr checks --json conclusion` instead of `--json bucket` / `--json statusCheckRollup`). The comparison silently returns false forever; the operator's only signal is "this seems stuck" several minutes later. CI may have completed in seconds, but the broken comparison can't see it. The runaway is invisible from the outside — `Bash run_in_background: true` makes the failure mode worse, not better, because there's no visible output until the operator notices the stuck state.
 
+## Load tests never touch the operator's own machine state
+
+**One-sentence statement.** Load, soak and concurrency tests run in CI or against a throwaway browser profile and throwaway Desk state, never against the operator's real browser profile, desk or Desk state; proof on the operator's own machine is at most one short session that a single agent could have run.
+
+**Why.** Shared state on the operator's machine is used by every agent at once. On 2026-10-12, tab ownership piled up in the operator's own browser and stopped every agent's browser for most of the day ([the cdp-headed-browser testing rule](../cdp-headed-browser/SKILL.md#the-real-browser-profile)).
+
 ## Messages over models
 
 **One-sentence statement.** When a tool emits an explicit warning or error that names the fix, that message IS the fix — worker reads the message and applies the named action before theorizing about anything else.

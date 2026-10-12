@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { installNativeMessaging, updateNativeMessaging } from './native-messaging-install.mjs';
+import { compareVersions, readDeskVersion, readVersions, versionOf } from './native-messaging-versions.mjs';
 
 const require = createRequire(import.meta.url);
 const profile = require('./web-real-profile.cjs');
@@ -66,6 +67,17 @@ export async function prepareNativeMessaging(options) {
     if (attested.healthy !== true) {
       throw Object.assign(new Error('Native update requires a live exact provider'), { code: 'NATIVE_MEDIATOR_UNAVAILABLE' });
     }
+    // An update never moves the browser to an older release than the one it runs.
+    const versions = await readVersions(path.join(root, 'native-owned'));
+    const deskVersion = await readDeskVersion(mcpRoot);
+    const loadedRuntime = path.basename(ready.mediationChain?.[0]?.profileRoot ?? '');
+    const loadedCapsule = compareVersions(versionOf(versions, 'capsules', loadedRuntime), deskVersion);
+    const loadedExtension = compareVersions(versionOf(versions, 'extensions', ready.extensionSourceDigest), deskVersion);
+    if (loadedCapsule > 0 || loadedExtension > 0) {
+      throw Object.assign(new Error('The browser runs a newer Desk release than this copy'), { code: 'NATIVE_UPDATE_WOULD_DOWNGRADE' });
+    }
+    // Another session already moved the browser to this release.
+    if (loadedCapsule === 0 && loadedExtension === 0 && deskVersion !== null) return { updated: false, current: true, profile: selected };
     await (options.updater ?? updateNativeMessaging)({
       mcpRoot, root: path.join(root, 'native-owned'), userDataRoot, profile: selected, channel: declaration.channel,
       browserExecutable: executable, runtimeExecutable: options.runtimeExecutable,
@@ -78,18 +90,22 @@ export async function prepareNativeMessaging(options) {
   let own;
   try {
     own = await (options.installer ?? installNativeMessaging)({
-    mcpRoot, root: path.join(root, 'native-owned'), userDataRoot, profile: selected, channel: declaration.channel,
-    browserExecutable: executable, runtimeExecutable: options.runtimeExecutable,
-    levelModule: path.join(installed.dir, 'node_modules/classic-level'),
-    wsModule: path.join(installed.dir, 'node_modules/ws'), platform, arch: options.arch ?? process.arch,
+      mcpRoot, root: path.join(root, 'native-owned'), userDataRoot, profile: selected, channel: declaration.channel,
+      browserExecutable: executable, runtimeExecutable: options.runtimeExecutable,
+      levelModule: path.join(installed.dir, 'node_modules/classic-level'),
+      wsModule: path.join(installed.dir, 'node_modules/ws'), platform, arch: options.arch ?? process.arch,
     });
   } catch (error) {
-    if (['NATIVE_EXTENSION_UPDATE_REQUIRED', 'NATIVE_EXTENSION_RELOAD_REQUIRED'].includes(error.code)) {
-      return unavailable('browser_native_messaging_update_required', 'The installed native extension needs a deliberate verified update',
-        'Run the deliberate native setup update for this declared profile. It must quiesce exact owned effects, publish verified source, reload only our extension, and freshly attest the reconnected provider. Background refresh does not reload it; do not restart the shared browser.');
+    if (error.code === 'NATIVE_EXTENSION_UPDATE_REQUIRED') {
+      return unavailable('browser_native_messaging_update_required', 'The native extension folder holds source that no Desk release shipped',
+        'Desk does not drive a browser through extension source it cannot verify. Report it as desk:desk-problem says. Do not restart the shared browser.');
     }
     throw error;
   }
+  const versions = await readVersions(path.join(root, 'native-owned'));
+  // This Desk copy's runtime or extension is newer than what the browser runs: the automatic guarded update moves the browser to
+  // it once no session owns tabs. Until then the loaded provider serves this session. An older copy never updates a newer browser.
+  let updatePending = own.reloadPending === true;
   const readyFile = path.join(own.stateDir, `native-provider-${createHash('sha256')
     .update(executable + '\0' + path.join(userDataRoot, selected)).digest('hex')}.json`);
   let ready;
@@ -103,20 +119,27 @@ export async function prepareNativeMessaging(options) {
         ready.processIdentity?.profileRoot !== path.join(userDataRoot, selected)) {
       throw new Error('NATIVE_READINESS_PROFILE_MISMATCH');
     }
-    if (ready.extensionSourceDigest !== own.extensionSourceDigest || !/^[a-f0-9]{64}$/u.test(own.extensionSourceDigest ?? '')) {
-      return unavailable('browser_native_messaging_update_required', 'The running extension source differs from the verified installation',
-        'Complete the deliberate native extension update and fresh provider attestation for this exact profile. Do not reload it during background refresh or restart the shared browser.');
+    if (!/^[a-f0-9]{64}$/u.test(ready.extensionSourceDigest ?? '') || !/^[a-f0-9]{64}$/u.test(own.extensionSourceDigest ?? '')) {
+      throw new Error('NATIVE_EXTENSION_SOURCE_INVALID');
     }
+    if (ready.extensionSourceDigest !== own.extensionSourceDigest &&
+        compareVersions(own.deskVersion, versionOf(versions, 'extensions', ready.extensionSourceDigest)) > 0) updatePending = true;
     const paths = platform === 'win32' ? path.win32 : path;
     const normalize = value => typeof value === 'string' && paths.isAbsolute(value)
       ? (platform === 'win32' ? paths.resolve(value).toLowerCase() : paths.resolve(value)) : null;
     const chain = ready.mediationChain;
-    if (!normalize(own.executable) || !normalize(own.runtimeDirectory) || !Array.isArray(chain) || chain.length !== 2 ||
-        normalize(chain[0]?.executable) !== normalize(own.executable) ||
-        chain.some(identity => normalize(identity?.profileRoot) !== normalize(own.runtimeDirectory))) {
-      return unavailable('browser_native_messaging_update_required', 'The loaded native provider does not match the installed runtime capsule',
-        'Close all same-browser owners, then run the deliberate native update and freshly attest the provider. Backend-only upgrades also require this step. Do not restart the shared browser or reload while owners have live targets.');
+    // The loaded provider runs from one of this installation's runtime capsules, which may belong to another Desk copy.
+    const runtimes = normalize(path.join(root, 'native-owned', 'runtimes'));
+    const loadedRuntime = Array.isArray(chain) && chain.length === 2 ? normalize(chain[0]?.profileRoot) : null;
+    if (!normalize(own.executable) || !normalize(own.runtimeDirectory) || !runtimes || !loadedRuntime ||
+        paths.dirname(loadedRuntime) !== runtimes ||
+        normalize(chain[0]?.executable) !== normalize(paths.join(loadedRuntime, paths.basename(own.executable))) ||
+        chain.some(identity => normalize(identity?.profileRoot) !== loadedRuntime)) {
+      return unavailable('browser_native_messaging_unavailable', 'The loaded native provider does not run from this installation',
+        'Inspect the exact native setup and reconnect desk-web. No focusing fallback or browser-global attachment is permitted.');
     }
+    if (loadedRuntime !== normalize(own.runtimeDirectory) &&
+        compareVersions(own.deskVersion, versionOf(versions, 'capsules', paths.basename(loadedRuntime))) > 0) updatePending = true;
     const endpoint = new URL(ready.endpoint);
     if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' ||
         !/^\/provider\/[a-f0-9]{64}$/u.test(endpoint.pathname) || endpoint.search || endpoint.username || endpoint.password) {
@@ -136,7 +159,7 @@ export async function prepareNativeMessaging(options) {
   }
   return {
     providerEndpoint: ready.endpoint, readyFile, processIdentity: ready.processIdentity,
-    extensionSourceDigest: own.extensionSourceDigest,
+    extensionSourceDigest: ready.extensionSourceDigest, updatePending,
     profile: selected, app: declaration.channel === 'msedge' ? 'Microsoft Edge' : 'Google Chrome',
     args: ['--init-page', path.join(mcpRoot, 'scripts/native-owned-page.cjs')],
     env: {}, secrets: [ready.endpoint],

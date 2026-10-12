@@ -257,7 +257,7 @@ export async function startNativeProvider({
           const leases = Object.values(registry.leases).filter(lease => lease.contextId === context.id && !expired(lease));
           const activeOwners = leases.filter(lease => lease.targetIds.length || lease.nativeRouting?.controlTabId);
           if (activeOwners.length) {
-            throw new BrokerError('NATIVE_UPDATE_ACTIVE_OWNERS', 'Deliberate extension reload must wait for exact owners to close their targets',
+            throw new BrokerError('NATIVE_UPDATE_ACTIVE_OWNERS', 'The extension reload waits until no session owns tabs',
               { owners: activeOwners.map(lease => lease.owner) });
           }
           if (leases.some(lease => lease.releasing || lease.pendingTargetCreates?.length ||

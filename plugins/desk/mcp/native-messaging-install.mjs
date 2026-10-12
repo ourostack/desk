@@ -9,6 +9,7 @@ import { ensureOwnerOnlyDirectory, protectLeafFile } from './src/factory/os-prot
 import { protectWindowsPaths } from './src/factory/windows-acl.js';
 import { windowsPowerShellPath } from './src/readiness/process-start.js';
 import { withBrokerLock } from '../browser-context-broker/src/lock.mjs';
+import { compareVersions, readDeskVersion, readVersions, recordVersions, versionOf } from './native-messaging-versions.mjs';
 
 const require = createRequire(import.meta.url);
 const execute = promisify(execFile);
@@ -273,12 +274,10 @@ export async function installNativeMessaging(options) {
   }
   await privateDirectory(options.root, options.platform ?? process.platform);
   return withBrokerLock(options.root, async () => {
+    // A source publication whose reload never happened is completed by the automatic update; the browser keeps serving meanwhile.
     const recovered = await recoverExtensionSwap(path.join(options.root, 'extension'));
-    if (recovered) {
-      throw Object.assign(new Error('Native source publication recovered; deliberate reload and fresh attestation remain required'),
-        { code: 'NATIVE_EXTENSION_RELOAD_REQUIRED' });
-    }
-    return installNativeMessagingUnlocked(options);
+    const own = await installNativeMessagingUnlocked(options);
+    return recovered ? { ...own, reloadPending: true } : own;
   }, { name: 'native-extension-update' });
 }
 
@@ -433,22 +432,51 @@ async function installNativeMessagingUnlocked({
       await fs.writeFile(file, content, { mode: 0o600, flag: 'wx' });
     }
   }
+  // Another Desk copy's extension source in the stable folder is not a refusal: the browser keeps running what it loaded. An older
+  // copy's source is replaced by the automatic guarded update; a newer copy's is left alone.
+  let extensionMatches = true;
   for (const [name, content] of bytes) {
     if (!name.startsWith('extension' + path.sep)) continue;
     const file = path.join(root, name);
-    const info = await fs.lstat(file);
-    if (!info.isFile() || !(await fs.readFile(file)).equals(content)) {
-      throw Object.assign(new Error('Native extension source changed; a deliberate verified update and self-reload is required'),
-        { code: 'NATIVE_EXTENSION_UPDATE_REQUIRED' });
+    let info;
+    try {
+      info = await fs.lstat(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      extensionMatches = false;
+      continue;
     }
+    if (!info.isFile() || !(await fs.readFile(file)).equals(content)) extensionMatches = false;
   }
   const expectedExtensionFiles = [...bytes.keys()].filter(name => name.startsWith('extension' + path.sep))
     .map(name => name.slice('extension'.length + 1)).sort();
-  if (JSON.stringify(await regularFiles(extensionDirectory)) !== JSON.stringify(expectedExtensionFiles)) {
-    throw Object.assign(new Error('Native extension contains source outside the verified installation'),
-      { code: 'NATIVE_EXTENSION_UPDATE_REQUIRED' });
+  if (JSON.stringify(await regularFiles(extensionDirectory)) !== JSON.stringify(expectedExtensionFiles)) extensionMatches = false;
+  if (!extensionMatches) {
+    // Another release's genuine source declares the digest of its own files; anything else was changed by hand or corrupted.
+    const present = await directoryBytes(extensionDirectory);
+    const declared = /^export const SOURCE_DIGEST = "([a-f0-9]{64})";\n$/u.exec(present.get('source-digest.js')?.toString('utf8') ?? '')?.[1];
+    if (!declared || declared !== sourceDigest(new Map([...present].filter(([name]) => name !== 'source-digest.js')))) {
+      throw Object.assign(new Error('Native extension source does not match any Desk release'), { code: 'NATIVE_EXTENSION_UPDATE_REQUIRED' });
+    }
   }
+  const deskVersion = await readDeskVersion(mcpRoot);
+  const versions = await readVersions(root);
   await privateDirectory(path.join(root, 'state'), platform);
+  // The registration never moves to an older release: a newer Desk copy's runtime stays registered.
+  let registeredCapsule = previous?.path ? path.basename(path.dirname(path.resolve(previous.path))) : null;
+  if (platform === 'win32') {
+    // The registry names the registered capsule's own manifest file.
+    const reg = path.win32.join(path.win32.dirname(path.win32.dirname(path.win32.dirname(windowsPowerShellPath()))), 'reg.exe');
+    const current = await execute(reg, ['query', registration.registryKey, '/ve'], { windowsHide: true }).catch(() => ({ stdout: '' }));
+    registeredCapsule = current.stdout ? path.win32.basename(path.win32.dirname(nativeRegistryManifestPath(current.stdout, root))) : null;
+  }
+  const keepRegistration = registeredCapsule !== null && registeredCapsule !== digest &&
+    compareVersions(versionOf(versions, 'capsules', registeredCapsule), deskVersion) > 0;
+  await recordVersions(root, { capsule: digest, extension: extensionMatches ? extensionSourceDigest : null, deskVersion });
+  if (keepRegistration) {
+    return { executable, runtimeDirectory, extensionDirectory, extensionId, extensionSourceDigest, registration,
+      stateDir: path.join(root, 'state'), digest, deskVersion, extensionMatches, registrationKept: true };
+  }
   const hostManifest = { name: HOST, description: 'Desk cooperative browser ownership', path: executable, type: 'stdio', allowed_origins: [`chrome-extension://${extensionId}/`] };
   if (platform === 'win32') registration.file = path.join(runtimeDirectory, 'host-manifest.json');
   await fs.mkdir(path.dirname(registration.file), { recursive: true, mode: 0o700 });
@@ -483,5 +511,5 @@ async function installNativeMessagingUnlocked({
     throw Object.assign(new Error('Native registration did not confirm its exact executable and origin'), { code: 'NATIVE_REGISTRATION_UNCONFIRMED' });
   }
   return { executable, runtimeDirectory, extensionDirectory,
-    extensionId, extensionSourceDigest, registration, stateDir: path.join(root, 'state'), digest };
+    extensionId, extensionSourceDigest, registration, stateDir: path.join(root, 'state'), digest, deskVersion, extensionMatches };
 }

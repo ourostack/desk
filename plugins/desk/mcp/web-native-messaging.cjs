@@ -55,6 +55,9 @@ function createNativeSession(options) {
   var readyWaitMs = options.readyWaitMs === undefined ? 15000 : options.readyWaitMs;
   var readyPollMs = options.readyPollMs === undefined ? 250 : options.readyPollMs;
   var ownStart = null;
+  // The browser process this session drives. A browser of the same executable and profile that restarted is adopted, and the
+  // session takes a new lease from it; a different browser, profile or user is never adopted.
+  var identity = options.processIdentity;
   function refusal(code) {
     var error = new Error(code);
     error.code = code;
@@ -105,19 +108,21 @@ function createNativeSession(options) {
       return fs.readFile(options.readyFile, "utf8");
     }).then(function (text) {
       var ready = JSON.parse(text);
-      if (ready.version !== 1 || ["pid", "startIdentity", "owner", "executable", "profileRoot"].some(function (key) {
-        return !options.processIdentity || ready.processIdentity[key] !== options.processIdentity[key];
+      if (ready.version !== 1 || !identity || !ready.processIdentity || ["owner", "executable", "profileRoot"].some(function (key) {
+        return ready.processIdentity[key] !== identity[key];
       })) throw refusal("NATIVE_BROWSER_GENERATION_MISMATCH");
-      if (!/^[a-f0-9]{64}$/.test(options.extensionSourceDigest || "") ||
-          ready.extensionSourceDigest !== options.extensionSourceDigest) {
-        throw refusal("NATIVE_EXTENSION_SOURCE_MISMATCH");
-      }
-      var lease = acquired && !released ? { leaseId: acquired.leaseId, owner: owner } : {};
-      return providerRequest(ready.endpoint, "attest", Object.assign({ expectedProcessIdentity: options.processIdentity }, lease)).then(function (attested) {
+      // The extension that is loaded serves the session, even when this Desk copy ships another source: an older copy's source is
+      // replaced by the automatic update, and a newer one is never replaced by an older copy.
+      if (!/^[a-f0-9]{64}$/.test(ready.extensionSourceDigest || "")) throw refusal("NATIVE_EXTENSION_SOURCE_MISMATCH");
+      var browserChanged = ["pid", "startIdentity"].some(function (key) { return ready.processIdentity[key] !== identity[key]; });
+      var expected = browserChanged ? ready.processIdentity : identity;
+      var lease = acquired && !released && !browserChanged ? { leaseId: acquired.leaseId, owner: owner } : {};
+      return providerRequest(ready.endpoint, "attest", Object.assign({ expectedProcessIdentity: expected }, lease)).then(function (attested) {
         if (!attested || attested.healthy !== true || ["pid", "startIdentity", "owner", "executable", "profileRoot"].some(function (key) {
-          return !attested.processIdentity || attested.processIdentity[key] !== options.processIdentity[key];
+          return !attested.processIdentity || attested.processIdentity[key] !== expected[key];
         })) throw refusal("NATIVE_MEDIATOR_UNAVAILABLE");
-        return { endpoint: ready.endpoint, leaseBound: attested.leaseBound };
+        identity = expected;
+        return { endpoint: ready.endpoint, leaseBound: browserChanged ? false : attested.leaseBound };
       });
     });
   }
@@ -191,7 +196,7 @@ function createNativeSession(options) {
           if (ready.leaseBound === false) return replace(ready.endpoint);
           if (ready.endpoint === providerEndpoint) return { changed: false, endpoint: acquired.endpoint };
           return providerRequest(ready.endpoint, "resume", Object.assign({}, current,
-            { expectedProcessIdentity: options.processIdentity })).then(function (restored) {
+            { expectedProcessIdentity: identity })).then(function (restored) {
             if (!restored || restored.leaseId !== current.leaseId || restored.owner !== current.owner ||
                 typeof restored.endpoint !== "string") throw refusal("NATIVE_RESUME_RESPONSE_INVALID");
             providerEndpoint = ready.endpoint;
@@ -269,7 +274,7 @@ function prepareNativeMessaging(options) {
         var result;
         try { result = JSON.parse(stdout); }
         catch (failure) { reject(new Error("NATIVE_PREPARE_RESPONSE_INVALID")); return; }
-        if (!result.payload && result.updated !== true) result.session = createNativeSession({
+        if (!result.payload && result.updated !== true && result.current !== true) result.session = createNativeSession({
           endpoint: result.providerEndpoint, readyFile: result.readyFile,
           processIdentity: result.processIdentity, extensionSourceDigest: result.extensionSourceDigest
         });

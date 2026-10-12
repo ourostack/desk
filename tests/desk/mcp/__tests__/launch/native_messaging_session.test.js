@@ -177,10 +177,10 @@ test("native session resumes only a new operation after exact fresh readiness an
   assert.deepEqual(calls, ["acquire", "ensureWindow", "attest", "resume", "ensureWindow"])
   await writeFile(readyFile, JSON.stringify({
     version: 1, endpoint: base + "b".repeat(64),
-    processIdentity: { ...identity, startIdentity: "browser-replacement" }, extensionSourceDigest: "c".repeat(64),
+    processIdentity: { ...identity, profileRoot: "/another-profile" }, extensionSourceDigest: "c".repeat(64),
   }), { mode: 0o600 })
   await assert.rejects(session.resume(), error => error.code === "NATIVE_BROWSER_GENERATION_MISMATCH")
-  assert.equal(calls.length, 5, "different generation must fail before provider RPC")
+  assert.equal(calls.length, 5, "another profile must fail before provider RPC")
 })
 
 test("native preparation IPC keeps update outcomes session-free and preserves stable refusal codes", async () => {
@@ -287,10 +287,13 @@ test("native resume checks private readiness, source, attestation and exact rest
   const resume = session.resume()
   assert.equal(session.resume(), resume)
   assert.equal((await resume).changed, false)
+  // The loaded extension serves the session whichever Desk copy shipped it; only a malformed source identity is refused.
   await write({ ...ready, extensionSourceDigest: "d".repeat(64) })
+  assert.equal((await session.resume()).changed, false)
+  await write({ ...ready, extensionSourceDigest: "not-a-digest" })
   await assert.rejects(session.resume(), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
-  const noSource = native.createNativeSession({ endpoint, readyFile, processIdentity: identity })
-  await assert.rejects(noSource.setOwner("agent"), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
+  await write({ ...ready, extensionSourceDigest: undefined })
+  await assert.rejects(session.resume(), error => error.code === "NATIVE_EXTENSION_SOURCE_MISMATCH")
   await write(ready)
   for (const value of [null, { healthy: false }, { healthy: true }, { healthy: true, processIdentity: { ...identity, owner: "foreign" } }]) {
     response = value
@@ -379,12 +382,13 @@ const liveIdentity = { pid: 123, startIdentity: "same", owner: "operator", execu
 async function providerFixture(t, { leases = new Set(), refuseResume = false, resumeCode = "NATIVE_LEASE_OWNER_MISMATCH" } = {}) {
   const calls = []
   let next = 0
+  const state = { identity: liveIdentity }
   const server = http.createServer(async (request, response) => {
     let text = ""; for await (const chunk of request) text += chunk
     const { operation, payload } = JSON.parse(text)
     calls.push({ operation, payload })
     let result
-    if (operation === "attest") result = { healthy: true, processIdentity: liveIdentity,
+    if (operation === "attest") result = { healthy: true, processIdentity: state.identity,
       ...(payload.leaseId ? { leaseBound: leases.has(payload.leaseId) } : {}) }
     else if (operation === "acquire") {
       const leaseId = "lease-" + ++next
@@ -402,14 +406,15 @@ async function providerFixture(t, { leases = new Set(), refuseResume = false, re
   })
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve))
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
-  return { calls, leases, endpoint: suffix => `http://127.0.0.1:${server.address().port}/provider/${suffix.repeat(64)}` }
+  return { calls, leases, set identity(value) { state.identity = value },
+    endpoint: suffix => `http://127.0.0.1:${server.address().port}/provider/${suffix.repeat(64)}` }
 }
 
 async function readyFixture(name) {
   const root = await mkTempRoot(name)
   const readyFile = path.join(root, "native-provider.json")
-  const write = endpoint => writeFile(readyFile, JSON.stringify({ version: 1, endpoint, processIdentity: liveIdentity,
-    extensionSourceDigest: "c".repeat(64) }), { mode: 0o600 })
+  const write = (endpoint, extra = {}) => writeFile(readyFile, JSON.stringify({ version: 1, endpoint, processIdentity: liveIdentity,
+    extensionSourceDigest: "c".repeat(64), ...extra }), { mode: 0o600 })
   return { readyFile, write }
 }
 
@@ -509,4 +514,25 @@ test("a replacement provider that refuses the old lease for another reason is re
   await write(provider.endpoint("b"))
   await assert.rejects(session.resume(), error => error.code === "NATIVE_EFFECT_PENDING")
   assert.equal(session.environment().DESK_NATIVE_LEASE_ID, first.leaseId, "its recorded effects are kept for reconciliation")
+})
+
+// 2026-10-12, 22:18Z: after the browser's provider came back, sessions answered NATIVE_BROWSER_GENERATION_MISMATCH until their agent
+// restarted. A browser of the same executable and profile that restarted is adopted, and the session takes a new lease from it.
+test("a session whose browser restarted adopts it and takes a new lease, but never another profile or user", async t => {
+  const { readyFile, write } = await readyFixture("native-session-browser-restart-")
+  const provider = await providerFixture(t)
+  await write(provider.endpoint("a"))
+  const session = sessionFor(readyFile, provider.endpoint("a"))
+  const first = await session.setOwner("agent")
+  const restarted = { ...liveIdentity, pid: liveIdentity.pid + 1, startIdentity: "browser-after-restart" }
+  provider.identity = restarted
+  await write(provider.endpoint("b"), { processIdentity: restarted })
+  const resumed = await session.resume()
+  assert.equal(resumed.changed, true)
+  assert.notEqual(session.environment().DESK_NATIVE_LEASE_ID, first.leaseId)
+  assert.equal(session.environment().DESK_BROWSER_OWNER, "agent")
+  for (const foreign of [{ profileRoot: "/another-profile" }, { owner: "another-user" }, { executable: "/another-browser" }]) {
+    await write(provider.endpoint("b"), { processIdentity: { ...restarted, ...foreign } })
+    await assert.rejects(session.resume(), error => error.code === "NATIVE_BROWSER_GENERATION_MISMATCH")
+  }
 })

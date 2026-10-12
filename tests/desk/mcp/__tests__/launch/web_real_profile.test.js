@@ -1102,7 +1102,7 @@ test("native setup refusal never launches an official connect window or forwards
   }
 })
 
-test("deliberate native update is a one-shot command and never initializes an MCP browser client", posixOnly, async () => {
+test("the native update command is a one-shot command and never initializes an MCP browser client", posixOnly, async () => {
   let requested = false
   const machine = await realMachine({ launch: {
     nativeMessagingPrepare: async options => {
@@ -2092,4 +2092,76 @@ test("a first browser call while the provider is down is answered by name, and t
   assert.equal((await host.call(3)).result.isError, undefined, "the session recovers without reconnecting")
   assert.equal(machine.stub.spawns.length, 1)
   await host.close()
+})
+
+// Ari's rule: nothing may block a browser call, including an update. A session on a newer Desk copy keeps working through the
+// provider the browser runs, and the guarded update runs by itself, waiting while another session owns tabs.
+test("a session whose Desk copy is newer keeps working and applies the guarded update by itself once the browser is quiet", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  const updates = []
+  machine.launchOptions.nativeUpdateMs = 10
+  machine.launchOptions.nativeMessagingPrepare = async input => {
+    if (!input.update) return { ...(await prepare(input)), updatePending: true }
+    updates.push(updates.length)
+    if (updates.length === 1) throw Object.assign(new Error("NATIVE_UPDATE_ACTIVE_OWNERS"), { code: "NATIVE_UPDATE_ACTIVE_OWNERS" })
+    if (updates.length === 2) return { payload: { code: "browser_native_messaging_unavailable", summary: "Provider restarting", fix: "Wait" } }
+    if (updates.length === 3) return Promise.reject(new Error("unexpected"))
+    return { updated: true, reconciliationRequired: true, profile: "Profile 4" }
+  }
+  const host = session(machine)
+  await host.handshake()
+  assert.equal((await host.call(2)).result.isError, undefined, "the browser call is served while the update waits")
+  await host.wait(() => host.stderr.some(line => line.includes("browser_native_update applied")), "the update to apply")
+  assert.equal(updates.length, 4)
+  assert.ok(host.stderr.some(line => line.includes("browser_native_update waiting: NATIVE_UPDATE_ACTIVE_OWNERS")))
+  assert.ok(host.stderr.some(line => line.includes("browser_native_update waiting: NATIVE_UPDATE_FAILED")))
+  assert.equal((await host.call(3)).result.isError, undefined)
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+})
+
+test("a session never updates a browser that runs a newer Desk release", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  let updates = 0
+  machine.launchOptions.nativeUpdateMs = 10
+  machine.launchOptions.nativeMessagingPrepare = async input => {
+    if (!input.update) return { ...(await prepare(input)), updatePending: true }
+    updates++
+    throw Object.assign(new Error("NATIVE_UPDATE_WOULD_DOWNGRADE"), { code: "NATIVE_UPDATE_WOULD_DOWNGRADE" })
+  }
+  const host = session(machine)
+  await host.handshake()
+  assert.equal((await host.call(2)).result.isError, undefined)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(updates, 1, "a newer browser stops the attempts")
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
+})
+
+test("the native update command reports a browser that already runs this release", posixOnly, async () => {
+  const machine = await realMachine({ launch: { nativeMessagingPrepare: async () => ({ updated: false, current: true, profile: "Profile 4" }) } })
+  const stdout = new PassThrough()
+  let output = ""
+  const exits = []
+  stdout.on("data", bytes => { output += String(bytes) })
+  const stdin = new PassThrough()
+  stdin.end()
+  await browser.run({ ...machine.launchOptions, nativeUpdate: true, stdin, stdout, stderr: { write() {} }, exit: code => exits.push(code), signals: new EventEmitter() })
+  assert.deepEqual(JSON.parse(output), { updated: false, current: true, profile: "Profile 4" })
+  assert.deepEqual(exits, [0])
+})
+
+test("a session stops its update attempts once another session has moved the browser to its release", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeUpdateMs = 10
+  machine.launchOptions.nativeMessagingPrepare = async input => input.update ? { updated: false, current: true } : { ...(await prepare(input)), updatePending: true }
+  const host = session(machine)
+  await host.handshake()
+  assert.equal((await host.call(2)).result.isError, undefined)
+  await host.wait(() => host.stderr.some(line => line.includes("browser_native_update already current")), "the update attempt")
+  await host.close()
+  await host.wait(() => host.exits.length === 1, "the launcher to end")
 })
