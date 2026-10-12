@@ -153,19 +153,19 @@ test("boot counts due rows from the cards it reads, prints one line, and prints 
   const where = worktree("boot")
   await update(root, { resource: { identity: `worktree:${where}`, step: "api" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/boot", step: "api" } })
-  const quiet = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
+  const quiet = formatBootText({ status: "ready", active_tasks: (await activeTasks(root)) })
   assert.doesNotMatch(quiet, /Cleanup due|cleanup due/u)
-  assert.equal("cleanup_due_count" in activeTasks(root).tracks[0].tasks[0], false)
+  assert.equal("cleanup_due_count" in (await activeTasks(root)).tracks[0].tasks[0], false)
   await update(root, { step: { id: "api", evidence: PR } })
-  const [task] = activeTasks(root).tracks[0].tasks
+  const [task] = (await activeTasks(root)).tracks[0].tasks
   assert.equal(task.cleanup_due_count, 2)
-  const out = formatBootText({ status: "ready", active_tasks: activeTasks(root) })
+  const out = formatBootText({ status: "ready", active_tasks: (await activeTasks(root)) })
   assert.match(out, /- t\/chain[^\n]*\n[^\n]*next:[^\n]*\n  Steps: 1 of 1 delivered\n  cleanup due: 2\n/u)
   assert.match(out, /\nCleanup due: 2 items on 1 card \(see the task lines\)\n/u)
   assert.doesNotMatch(out, new RegExp(literal(where), "u"))
   await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/boot", disposition: "named transfer", details: "ari took it, acknowledged" } })
-  assert.doesNotMatch(formatBootText({ status: "ready", active_tasks: activeTasks(root) }), /Cleanup due/u)
+  assert.doesNotMatch(formatBootText({ status: "ready", active_tasks: (await activeTasks(root)) }), /Cleanup due/u)
 })
 
 test("the input is validated: identity forms, step on the card, disposition with details, unknown fields, an unreadable table", async () => {
@@ -224,18 +224,18 @@ const DONE = { status: "done", evidence: { kind: "steps" }, step: { id: "api", s
 
 test("a finished card still reminds, whether it stays in its folder or is archived, until its rows are dealt with", async () => {
   const { root, where } = await unfinished((root) => update(root, DONE))
-  const live = activeTasks(root)
+  const live = (await activeTasks(root))
   assert.deepEqual(live.cleanup, { items: 2, cards: 1, finished: [{ card: "t/chain", due: 2 }], more: 0 })
   assert.match(formatBootText({ status: "ready", active_tasks: live }), /\nCleanup due: 2 items on 1 card \(see the task lines\)\n- t\/chain \(finished\): 2 due\n/u)
   const archived = await task_archive({ deskRoot: root, input: { track: "t", slug: "chain" } })
   assert.deepEqual(archived.cleanup_due.map((item) => item.identity), [`worktree:${where}`, "branch:o/widgets#feat/idx"])
   assert.match(archived.cleanup_note, /Desk removes nothing/u)
-  assert.deepEqual(activeTasks(root).cleanup.finished, [{ card: "t/chain", due: 2 }])
+  assert.deepEqual((await activeTasks(root)).cleanup.finished, [{ card: "t/chain", due: 2 }])
   // The reminder is closed by recording each row, which reaches the archived card.
   await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
-  assert.equal(activeTasks(root).cleanup.items, 1)
+  assert.equal((await activeTasks(root)).cleanup.items, 1)
   await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "deleted" } })
-  assert.equal("cleanup" in activeTasks(root), false)
+  assert.equal("cleanup" in (await activeTasks(root)), false)
   assert.equal(JSON.parse(await fs.readFile(cleanupIndexPath(root), "utf8")).cards.length, 0)
   await assert.rejects(update(root, { note: "x" }), /task does not exist/u)
   await assert.rejects(update(root, { resource: { identity: "branch:o/widgets#feat/other" }, note: "x" }), /is archived, so a call can only record a disposition.*also has `note`/u)
@@ -244,7 +244,7 @@ test("a finished card still reminds, whether it stays in its folder or is archiv
 test("a live card that is not finished is counted once, from the scan, though it is indexed", async () => {
   const { root } = await unfinished(() => {})
   await update(root, { step: { id: "api", state: "dropped", reason: "no" } })
-  assert.deepEqual(activeTasks(root).cleanup, { items: 1, cards: 1, finished: [], more: 0 })
+  assert.deepEqual((await activeTasks(root)).cleanup, { items: 1, cards: 1, finished: [], more: 0 })
 })
 
 test("finishing the card lists every due row, not only the newly due ones", async () => {
@@ -257,33 +257,33 @@ test("finishing the card lists every due row, not only the newly due ones", asyn
 test("the cleanup index is per desk root and per machine: only listed cards are read, odd entries and files are ignored, and a card with nothing open or gone is dropped", async () => {
   const { root } = await unfinished((root) => update(root, DONE))
   const file = cleanupIndexPath(root)
-  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  assert.deepEqual((await readCleanupIndex(root)), ["t/chain"])
   await fs.writeFile(file, JSON.stringify({ cards: ["../x", "/abs", "", 7, "t/ghost", "t/chain"] }))
-  assert.deepEqual(readCleanupIndex(root), ["t/ghost", "t/chain"])
-  assert.deepEqual(activeTasks(root).cleanup.finished, [{ card: "t/chain", due: 2 }])
+  assert.deepEqual((await readCleanupIndex(root)), ["t/ghost", "t/chain"])
+  assert.deepEqual((await activeTasks(root)).cleanup.finished, [{ card: "t/chain", due: 2 }])
   for (const junk of ["not json", "{}", "null"]) {
     await fs.writeFile(file, junk)
-    assert.deepEqual(readCleanupIndex(root), [])
+    assert.deepEqual((await readCleanupIndex(root)), [])
   }
   await fs.rm(file)
-  assert.equal("cleanup" in activeTasks(root, { env: { ...process.env, XDG_STATE_HOME: path.join(scratch, "other-state") } }), false)
+  assert.equal("cleanup" in (await activeTasks(root, { env: { ...process.env, XDG_STATE_HOME: path.join(scratch, "other-state") } })), false)
   // A write starts again from a broken file, drops a gone card, and keeps the newest first.
   await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.writeFile(file, JSON.stringify({ cards: ["t/ghost", "t/chain"] }))
   await update(root, { resource: { identity: "branch:o/widgets#feat/more" } })
-  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  assert.deepEqual((await readCleanupIndex(root)), ["t/chain"])
   await fs.writeFile(file, "garbage")
   await update(root, { resource: { identity: "branch:o/widgets#feat/more2" } })
-  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  assert.deepEqual((await readCleanupIndex(root)), ["t/chain"])
 })
 
-test("recording a card keeps the desk spelling with `/` on every platform: an archived card is listed by its live folder, and a backslash spelling is never rewritten as the same card", () => {
+test("recording a card keeps the desk spelling with `/` on every platform: an archived card is listed by its live folder, and a backslash spelling is never rewritten as the same card", async () => {
   const root = mkdtempSync(path.join(scratch, "cleanup-spelling-"))
   recordCleanupCard(root, "t/_archive/chain", true)
-  assert.deepEqual(readCleanupIndex(root), ["t/chain"])
+  assert.deepEqual((await readCleanupIndex(root)), ["t/chain"])
   // A folder spelled with `\` is not the `/` card: a posix split would have to treat it as one name, so it is listed as written, never merged into or replaced by `t/chain`.
   recordCleanupCard(root, "t\\_archive\\other", true)
-  assert.deepEqual(readCleanupIndex(root), ["t\\_archive\\other"])
+  assert.deepEqual((await readCleanupIndex(root)), ["t\\_archive\\other"])
 })
 
 test("a state folder that cannot be written never fails the card write", async () => {
@@ -329,7 +329,7 @@ test("a write drops listed cards whose rows are all closed or that have no Resou
   await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "named transfer", details: "ari, acknowledged" } })
   await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: ["t/chain", "t/plain"] }))
   await task_update({ deskRoot: root, input: { track: "t", slug: "other", resource: { identity: "branch:o/widgets#feat/o" } } })
-  assert.deepEqual(readCleanupIndex(root), ["t/other"])
+  assert.deepEqual((await readCleanupIndex(root)), ["t/other"])
 })
 
 test("a listed finished card with nothing due adds nothing, and a resource call for a card that is nowhere is refused", async () => {
@@ -337,7 +337,7 @@ test("a listed finished card with nothing due adds nothing, and a resource call 
   await update(root, { resource: { identity: `worktree:${where}`, disposition: "removed-and-absent", details: "gone" } })
   await update(root, { resource: { identity: "branch:o/widgets#feat/idx", disposition: "removed-and-absent", details: "gone" } })
   await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: ["t/chain"] }))
-  assert.equal("cleanup" in activeTasks(root), false)
+  assert.equal("cleanup" in (await activeTasks(root)), false)
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "ghost", resource: { identity: "branch:o/widgets#x" } } }), /task does not exist at t\/ghost/u)
 })
 
@@ -383,19 +383,19 @@ test("every indexed card with an open row is kept, unfinished cards are skipped 
   }
   await fs.mkdir(path.dirname(cleanupIndexPath(root)), { recursive: true })
   await fs.writeFile(cleanupIndexPath(root), JSON.stringify({ cards: names }))
-  assert.equal(readCleanupIndex(root).length, 47)
-  const { cleanup } = activeTasks(root)
+  assert.equal((await readCleanupIndex(root)).length, 47)
+  const { cleanup } = (await activeTasks(root))
   assert.equal(cleanup.items, 22)
   assert.equal(cleanup.cards, 22)
   assert.equal(cleanup.finished.length, 20)
   assert.equal(cleanup.more, 2)
-  assert.match(formatBootText({ status: "ready", active_tasks: activeTasks(root) }), /\n- t\/fin-19 \(finished\): 1 due\n- and 2 more finished cards\n/u)
+  assert.match(formatBootText({ status: "ready", active_tasks: (await activeTasks(root)) }), /\n- t\/fin-19 \(finished\): 1 due\n- and 2 more finished cards\n/u)
   await fs.rm(path.join(root, "t", "fin-0"), { recursive: true })
-  assert.match(formatBootText({ status: "ready", active_tasks: activeTasks(root) }), /\n- and 1 more finished card\n/u)
+  assert.match(formatBootText({ status: "ready", active_tasks: (await activeTasks(root)) }), /\n- and 1 more finished card\n/u)
   // A write keeps every card that still has an open row, however many there are.
   await task_create({ deskRoot: root, input: { track: "t", slug: "new", title: "N", body: "x\n" } })
   await task_update({ deskRoot: root, input: { track: "t", slug: "new", resource: { identity: "branch:o/r#new" } } })
-  assert.equal(readCleanupIndex(root).length, 47)
+  assert.equal((await readCleanupIndex(root)).length, 47)
 })
 
 test("an archived card without frontmatter or without the row is handled, a state folder that cannot be written does not fail it, and a git desk commits the one cell", async () => {
