@@ -3,10 +3,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activation/failures.js"
-import { createDeskSession, requirementMet, toolRequirement } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
+import { createDeskSession, requirementMet, toolRequirement, watchGitHead } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
 import { lastStartRootKey } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -1260,6 +1260,28 @@ test("the .git/HEAD watch re-runs admission on HEAD changes only, never switches
   watchers[1].listener("rename", "HEAD")
   session.dispose()
   assert.equal(watchers[1].closed, true)
+})
+
+test("the default HEAD watch reports a HEAD that Git replaced by rename, and stops when closed", async (t) => {
+  const gitDir = path.join(await mkTempRoot("head-watch-"), ".git")
+  mkdirSync(gitDir, { recursive: true })
+  writeFileSync(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+  const events = []
+  const watcher = watchGitHead(gitDir, { persistent: false }, (event, filename) => events.push([event, filename]))
+  t.after(() => watcher.close())
+  // Git writes HEAD.lock and renames it over HEAD.
+  const replace = (content) => {
+    writeFileSync(path.join(gitDir, "HEAD.lock"), content)
+    renameSync(path.join(gitDir, "HEAD.lock"), path.join(gitDir, "HEAD"))
+  }
+  replace("0123456789abcdef0123456789abcdef01234567\n")
+  await waitUntil(() => events.length > 0)
+  assert.deepEqual(events[0], ["change", "HEAD"])
+  watcher.close()
+  const seen = events.length
+  replace("ref: refs/heads/other\n")
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  assert.equal(events.length, seen, "a closed watch reports nothing")
 })
 
 test("a root outside Git drops the HEAD watch", async (t) => {
