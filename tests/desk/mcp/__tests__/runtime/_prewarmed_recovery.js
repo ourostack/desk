@@ -66,6 +66,8 @@ const result = await runRecovery({
       await prewarm(transport, { root, marker: process.env.DESK_FIXTURE_DELAY_MARKER, evidence: process.env.DESK_FIXTURE_COMPLETED_STATUS })
       return transport
     } catch (error) {
+      // runRecovery reports a launch failure only as recovery_error; the test prints this stderr when the run fails.
+      process.stderr.write(`prewarm failed: ${error.message}\n`)
       await transport.close()
       throw error
     }
