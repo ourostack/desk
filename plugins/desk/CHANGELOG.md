@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.297 — 2026-10-12
+
+Waste evaluation and the coming improvement triage now share one crash-safe count of headless launches, inside the existing 30-a-day ceiling, instead of evaluation owning it alone. Each UTC six-hour window holds one triage opportunity that evaluation cannot take until the window ends unused, so both queues keep moving across days, and triage still waits six hours between actual launches. A launch is reserved before it starts and never given back. The count lives in a ledger, a guard and a high-water mark in the status file, written in that order and read back, so a crash at any point either seals that UTC day as spent or completes the reservation, a restored backup of the ledger or of the status file blocks launches rather than refunding them, and a reset status file seals that UTC day from the surviving ledger and resumes the next day. The evaluator keeps its own counts, attempt limits and failure gaps, and gains a `maxRuns` limit for the loop. A ledger block that does not clear with the next day is named on the "Factory evaluator" line at session start, and the docs say how to repair each one. Restoring all three files together is outside what one machine can detect, and Desk does not claim it. See [Shared launch ledger](docs/factory-local-capture.md#shared-launch-ledger).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.296 — 2026-10-12
 
 The factory report build and the coverage gate's shard bookkeeping now remove their folders with `removeWithRetry` ([`mcp/src/util/remove-retry.js`](mcp/src/util/remove-retry.js)), which retries EPERM, EACCES, EBUSY and ENOTEMPTY up to ten times over about a second, and counts a folder that is gone after a refused attempt as removed ([`mcp/src/factory/pipeline/build.js`](mcp/src/factory/pipeline/build.js), [`mcp/src/coverage/runner.js`](mcp/src/coverage/runner.js)). Both relied on `rmSync`'s own `maxRetries`, which Node 24.18 does not apply to a Windows access-denied, and whose wait is `i * retryDelay / 1000`, so a delay under a second was no wait on any platform.
