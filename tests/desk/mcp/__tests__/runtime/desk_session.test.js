@@ -3,12 +3,14 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, watch as nativeWatch } from "node:fs"
 import * as path from "node:path"
 import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activation/failures.js"
-import { createDeskSession, requirementMet, toolRequirement, watchGitHead } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
+import { createDeskSession, createFocusHolder, requirementMet, toolRequirement, watchGitHead } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
+import { runGit } from "../../../../../plugins/desk/mcp/src/runtime/state-branch.js"
 import { lastStartRootKey } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { makeGitDesk, git as fixtureGit, writeFile } from "./_admission_fixtures.js"
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 async function waitUntil(predicate) {
@@ -19,6 +21,66 @@ async function waitUntil(predicate) {
 }
 const payload = (result) => JSON.parse(result.content[0].text)
 const unsupported = { lexical: "required", semantic: "unsupported", write_authority: "workspace", authority_provider: null, root: "workspace" }
+
+test("session focus distinguishes undeclared from explicitly cleared", () => {
+  const focus = createFocusHolder()
+  assert.equal(focus.declared(), false)
+  focus.set({ track: "work", slug: "bounded" })
+  assert.deepEqual(focus.get(), { track: "work", slug: "bounded" })
+  assert.equal(focus.declared(), true)
+  focus.set(null)
+  assert.equal(focus.get(), null)
+  assert.equal(focus.declared(), true)
+})
+
+function headMemory() {
+  const state = { text: "ref: refs/heads/main\n", inode: 3, mode: null, opens: 0, closes: 0, reads: 0, active: 0, maxActive: 0, dirVersion: 0 }
+  const stat = file => ({
+    dev: 1, ino: file ? state.inode : 2 + state.dirVersion, mode: file ? 0o100600 : 0o40700,
+    size: file ? Buffer.byteLength(state.text) : 0, mtimeMs: 1, ctimeMs: 1, nlink: 1,
+    isDirectory: () => !file && state.mode !== "root_file", isFile: () => file,
+    isSymbolicLink: () => file ? state.mode === "symlink" : state.mode === "root_link",
+  })
+  const io = {
+    async lstat(file) {
+      if (state.mode === "stall_lstat") await new Promise(resolve => { state.release = resolve })
+      if (state.mode === "missing") throw Object.assign(new Error("missing"), { code: "ENOENT" })
+      // The session joins with the platform separator; Windows spells this
+      // path with backslashes, so compare the final component, not "/HEAD".
+      return stat(path.basename(file) === "HEAD")
+    },
+    async open(_file, flags) {
+      state.opens += 1
+      assert.ok(Number.isInteger(flags))
+      if (state.mode === "open_error") throw Object.assign(new Error("access"), { code: "EACCES" })
+      if (state.mode === "stall_open") await new Promise(resolve => { state.release = resolve })
+      return {
+        async stat() {
+          if (state.mode === "stat_error") throw new Error("stat_failed")
+          return { ...stat(true), ...(state.mode === "replaced" ? { ino: state.inode + 1 } : {}) }
+        },
+        async read(buffer, offset, length, position) {
+          state.reads += 1
+          state.active += 1; state.maxActive = Math.max(state.maxActive, state.active)
+          try {
+            if (state.mode === "stalled") await new Promise(resolve => { state.release = resolve })
+            state.onRead?.()
+            if (state.mode === "read_error") throw new Error("read_failed")
+            if (state.mode === "directory_race") state.dirVersion += 1
+            const bytes = Buffer.from(state.text), n = state.mode === "short_read" ? 0 : Math.max(0, Math.min(length, bytes.length - position))
+            bytes.copy(buffer, offset, position, position + n)
+            return { bytesRead: n }
+          } finally { state.active -= 1 }
+        },
+        async close() {
+          if (state.mode === "close_error") { state.mode = null; throw new Error("close_failed") }
+          state.closes += 1
+        },
+      }
+    },
+  }
+  return { state, io }
+}
 
 function fakeRuntime(overrides = {}) {
   const calls = []
@@ -52,11 +114,589 @@ async function makeSession(t, overrides = {}) {
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: (error) => ({ status: "setup_required", mode: "setup", summary: "no desk", remediation: [{ action: "run_first_run_bootstrap", message: "bootstrap" }], paths_tried: error.tried }),
     hung: { probe: async () => ({ state: "refused" }) },
+    // Existing scripted Git fixtures resolve /repo/.git. Model the selected
+    // HEAD reader too rather than trying to touch that nonexistent real path.
+    headIO: headMemory().io,
     ...overrides,
   })
   t.after(() => session.dispose())
   return { session, base, root, lines, runtime, log: () => lines.join("") }
 }
+
+  test("head_unchanged_no_git_poll_and_uncertainty_backoff", async (t) => {
+    const h = headMemory(), state = { branch: "main", onRemote: true }
+    let gitCalls = 0
+    const scripted = scriptedGit(state)
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: async options => { gitCalls += 1; return scripted(options) } })
+    await session.start()
+    const before = gitCalls
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.equal(gitCalls, before, "unchanged sampling is not Git polling")
+    h.state.mode = "missing"
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.notEqual(session.admission.snapshot().state, "ready")
+    const attempts = session.admission.snapshot().attempts
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.ok(session.admission.snapshot().attempts <= attempts + 2, "one uncertainty uses admission retry, not a forced storm")
+    h.state.mode = null
+    await waitUntil(() => session.admission.snapshot().state === "ready")
+    assert.equal(h.state.maxActive, 1)
+  })
+
+  test("head_sample_identity_and_read_failure_degrade", async (t) => {
+    for (const mode of ["missing", "symlink", "root_link", "root_file", "open_error", "stat_error", "replaced",
+      "read_error", "short_read", "directory_race", "close_error", "oversize", "postread_replacement"]) {
+      const h = headMemory()
+      h.state.mode = mode
+      if (mode === "oversize") h.state.text = "x".repeat(4097)
+      if (mode === "postread_replacement") h.state.onRead = () => { h.state.inode += 1 }
+      const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+        git: scriptedGit({ branch: "main", onRemote: true }) })
+      await session.start()
+      assert.notEqual(session.admission.snapshot().state, "ready", mode)
+      await session.dispose()
+      // A failed close is not retried: the descriptor is forgotten so later
+      // samples are not stuck behind it.
+      assert.equal(h.state.opens - (mode === "open_error" ? h.state.opens : 0) - (mode === "close_error" ? 1 : 0), h.state.closes, mode)
+    }
+  })
+
+  test("head_close_failure_clears_descriptor_and_dispose_releases_controller", async (t) => {
+    const h = headMemory()
+    h.state.mode = "close_error"
+    let controllerCloses = 0
+    const runtime = fakeRuntime({ connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } }, async close() { controllerCloses += 1 } }) })
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch, runtime,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    // The close failure resets the double; the next sample must not report
+    // head_sample_pending for the descriptor whose close failed.
+    await waitUntil(() => session.admission.snapshot().state === "ready")
+    await session.dispose()
+    assert.equal(controllerCloses, 1, "dispose releases the controller")
+    assert.equal(h.state.opens, h.state.closes + 1, "only the failed close is not counted")
+  })
+
+  test("head_sample_timeout_no_overlap", async (t) => {
+    const hostLifetime = setTimeout(() => {}, 5000)
+    t.after(() => clearTimeout(hostLifetime))
+    const h = headMemory()
+    h.state.mode = "stalled"
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    assert.notEqual(session.admission.snapshot().state, "ready")
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.equal(h.state.active, 1)
+    assert.equal(h.state.opens, 1, "logical expiry did not allow another underlying operation")
+    h.state.mode = null; h.state.release()
+    await session.dispose()
+    assert.equal(h.state.closes, 1)
+  })
+
+  test("head_sampler_dispose_and_stale_generation_no_mutation", async (t) => {
+    const h = headMemory(), callbacks = []
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    const before = session.admission.snapshot().attempts
+    await session.dispose()
+    callbacks[0]("change", "HEAD")
+    h.state.text = "changed"
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.equal(session.admission.snapshot().attempts, before)
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_same_path_directory_replacement_requires_new_binding", async (t) => {
+    const h = headMemory(), watchers = []
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      watch: () => { const watcher = Object.assign(new EventEmitter(), { closed: false, close() { this.closed = true } }); watchers.push(watcher); return watcher },
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    h.state.dirVersion += 1
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    await waitUntil(() => session.admission.snapshot().state === "ready")
+    assert.ok(watchers.length >= 2, "same spelling with a new identity needs a new lifetime")
+    assert.equal(watchers[0].closed, true)
+  })
+
+  test("head_pending_reader_disposal_closes_late_owned_handle", async (t) => {
+    for (const stage of ["stall_lstat", "stall_open", "stalled"]) {
+      const h = headMemory()
+      h.state.mode = stage
+      const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+        git: scriptedGit({ branch: "main", onRemote: true }) })
+      const started = session.start()
+      await waitUntil(() => Boolean(h.state.release))
+      const disposed = session.dispose()
+      h.state.mode = null; h.state.release()
+      await Promise.all([started, disposed])
+      assert.equal(h.state.opens, h.state.closes, stage)
+      assert.notEqual(session.admission.snapshot().state, "ready", "a cancelled reader cannot publish readiness")
+    }
+  })
+
+  test("head_changed_during_git_inspection_gets_one_followup", async (t) => {
+    const h = headMemory(), state = { branch: "main", onRemote: true }, callbacks = []
+    const scripted = scriptedGit(state)
+    let held = false, release, calls = 0
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
+      git: async options => {
+        if (held && options.args.includes("--absolute-git-dir")) {
+          calls += 1
+          await new Promise(resolve => { release = resolve })
+        }
+        return scripted(options)
+      } })
+    await session.start()
+    held = true
+    h.state.inode += 1
+    callbacks[0]("rename", "HEAD")
+    await waitUntil(() => Boolean(release))
+    h.state.inode += 1
+    held = false; release()
+    await waitUntil(() => session.admission.snapshot().state === "ready" && !session.admission.running)
+    assert.equal(calls, 1)
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_first_admission_movement_cannot_accept_new_baseline_for_old_git", async (t) => {
+    const h = headMemory(), state = { branch: "main", onRemote: false }, scripted = scriptedGit(state)
+    let moved = false
+    const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: options => {
+        const result = scripted(options)
+        if (!moved && options.args.join(" ") === "rev-parse --verify --quiet HEAD") {
+          moved = true
+          state.branch = "feature"
+          h.state.text = "ref: refs/heads/feature\n"; h.state.inode += 1
+        }
+        return result
+      } })
+    await session.start()
+    assert.notEqual(session.admission.snapshot().state, "ready", "old Git main cannot authorize a newly sampled feature HEAD")
+    assert.doesNotMatch(log(), /admission ready/u)
+    await waitUntil(() => session.admission.snapshot().state === "degraded:state_branch_mismatch")
+    assert.equal(state.branch, "feature", "the follow-up must not perform startup repair")
+    assert.equal(state.switches, undefined)
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_first_admission_requires_certain_before_observation", async (t) => {
+    const h = headMemory(), scripted = scriptedGit({ branch: "main", onRemote: true })
+    h.state.mode = "missing"
+    const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: options => {
+        const result = scripted(options)
+        if (options.args.join(" ") === "rev-parse --verify --quiet HEAD") h.state.mode = null
+        return result
+      } })
+    await session.start()
+    assert.notEqual(session.admission.snapshot().state, "ready", "a later certain sample cannot fill an unknown before interval")
+    assert.doesNotMatch(log(), /admission ready/u)
+    await waitUntil(() => session.admission.snapshot().state === "ready")
+  })
+
+  test("head_first_admission_stable_interval_preserves_git_authority", async (t) => {
+    const h = headMemory()
+    h.state.text = "ref: refs/heads/not-the-authority\n"
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    assert.equal(session.admission.snapshot().state, "ready")
+    assert.equal(session.context.stateBranch.head.branch, "main", "branch permission is Git-derived, not HEAD text")
+    assert.equal(h.state.opens, 2, "first admission owns before and after samples")
+    assert.equal(h.state.closes, 2)
+  })
+
+  test("head_first_unknown_location_cannot_grant_later_sampled_checkout", async (t) => {
+    for (const unavailable of [{ ok: false, stdout: "" }, { ok: true, stdout: "/repo" }]) {
+      const scripted = scriptedGit({ branch: "main", onRemote: true })
+      let first = true
+      const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, watch: quietWatch,
+        git: options => {
+          if (first) { first = false; return unavailable }
+          return scripted(options)
+        } })
+      await session.start()
+      assert.notEqual(session.admission.snapshot().state, "ready")
+      assert.doesNotMatch(log(), /admission ready/u)
+      await waitUntil(() => session.admission.snapshot().state === "ready")
+    }
+  })
+
+  test("head_first_after_sample_dispose_never_installs_watch", async (t) => {
+    const h = headMemory(), open = h.io.open
+    let release, watches = 0
+    h.io.open = async (...args) => {
+      if (h.state.opens === 1) await new Promise(resolve => { release = resolve })
+      return open(...args)
+    }
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      watch: () => { watches += 1; return quietWatch() } })
+    const started = session.start()
+    await waitUntil(() => Boolean(release))
+    const disposed = session.dispose()
+    release()
+    await Promise.all([started, disposed])
+    assert.equal(watches, 0)
+    assert.equal(h.state.opens, h.state.closes)
+    assert.notEqual(session.admission.snapshot().state, "ready")
+  })
+
+test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", async (t) => {
+  const fixture = await makeGitDesk("head-initial-race-")
+  fixtureGit(fixture.desk, "branch", "--track", "feature", "origin/feature")
+  let moved = false
+  const lines = []
+  const session = createDeskSession({
+    args: { person: null }, deskStateDir: fixture.stateDir, readinessStateHome: fixture.readinessHome,
+    resolveInputs: async () => inputs({ root: fixture.desk, stateBranch: "main" }),
+    loadRuntime: async () => ({ runtimeServer: fakeRuntime(), runtimeStatus: { state: "ready" } }),
+    stderr: { write: text => lines.push(text) },
+    watch: (dir, options) => nativeWatch(dir, options, () => {}), // native callback not delivered to session
+    git: async options => {
+      const result = await runGit(options)
+      if (!moved && options.args.join(" ") === "rev-parse --verify --quiet HEAD") {
+        moved = true
+        fixtureGit(fixture.desk, "switch", "feature")
+      }
+      return result
+    },
+  })
+  t.after(() => session.dispose())
+  await session.start()
+  assert.notEqual(session.admission.snapshot().state, "ready")
+  assert.doesNotMatch(lines.join(""), /admission ready/u)
+  await waitUntil(() => session.admission.snapshot().state === "degraded:state_branch_mismatch")
+  assert.equal(fixtureGit(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
+  assert.equal(JSON.parse(readFileSync(path.join(fixture.stateDir, "last-start.json"), "utf8")).state, "degraded:state_branch_mismatch")
+})
+
+  test("head_git_location_failure_after_uncertainty_never_grants_noncheckout", async (t) => {
+    const h = headMemory()
+    let located = true
+    const scripted = scriptedGit({ branch: "main", onRemote: true })
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: options => located ? scripted(options) : { ok: false, stdout: "" } })
+    await session.start()
+    located = false; h.state.mode = "missing"
+    await session.admission.refresh({ force: true })
+    assert.notEqual(session.admission.snapshot().state, "ready")
+    assert.equal(session.context.stateBranch.ok, false)
+  })
+
+  test("head_refresh_exception_and_late_rejection_stay_owned", async (t) => {
+    for (const late of [false, true]) {
+      const h = headMemory(), callbacks = []
+      const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+        watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
+        git: scriptedGit({ branch: "main", onRemote: true }) })
+      await session.start()
+      let reject, requested = false
+      session.admission.refresh = () => {
+        requested = true
+        return new Promise((_resolve, fail) => { reject = fail })
+      }
+      h.state.inode += 1
+      callbacks[0]("rename", "HEAD")
+      await waitUntil(() => requested)
+      if (late) await session.dispose()
+      reject(new Error("head_refresh_failed"))
+      await flush()
+      assert.equal(session.admission.snapshot().code, "admission_exception")
+      assert.equal(h.state.opens, h.state.closes)
+    }
+  })
+
+  test("head_sample_unexpected_parent_reader_failure_is_not_admission", async (t) => {
+    const h = headMemory()
+    h.io.lstat = async () => { throw { get code() { throw new Error("reader_observation_failed") } } }
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    assert.equal(session.admission.snapshot().code, "admission_exception")
+  })
+
+  test("head_change_during_authority_never_publishes_stale_ready", async (t) => {
+    const h = headMemory(), callbacks = []
+    let release
+    const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      runtime: fakeRuntime({ admitControlPlane: async () => {
+        await new Promise(resolve => { release = resolve })
+        return { authority: { mode: "workspace" }, controller: null }
+      } }) })
+    const started = session.start()
+    await waitUntil(() => Boolean(release))
+    h.state.mode = "missing"
+    callbacks[0]("rename", "HEAD")
+    await waitUntil(() => session.context.stateBranch.ok === false)
+    release()
+    await started
+    assert.notEqual(session.admission.snapshot().state, "ready")
+    assert.doesNotMatch(log(), /admission ready/u, "the occupied attempt must not transiently publish readiness")
+  })
+
+  test("head_native_unchanged_hint_never_revokes_verified_git_interval", async (t) => {
+    for (const occupied of [true, false]) {
+      const h = headMemory(), callbacks = []
+      let release, gitCalls = 0
+      const scripted = scriptedGit({ branch: "main", onRemote: true })
+      const { session, log } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+        git: options => { gitCalls += 1; return scripted(options) },
+        watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
+        runtime: fakeRuntime({ admitControlPlane: async () => {
+          if (occupied) await new Promise(resolve => { release = resolve })
+          return { authority: { mode: "workspace" }, controller: null }
+        } }) })
+      const started = session.start()
+      if (occupied) await waitUntil(() => Boolean(release)); else await started
+      const beforeGit = gitCalls, beforeSamples = h.state.opens
+      callbacks[0]("rename", "HEAD")
+      await waitUntil(() => h.state.opens > beforeSamples || session.context.stateBranch.ok === false)
+      assert.equal(session.context.stateBranch.ok, true, "a delayed hint of an already sampled HEAD is not observed drift")
+      if (occupied) release()
+      await started
+      assert.equal(session.admission.snapshot().state, "ready")
+      assert.doesNotMatch(log(), /degraded:admission_exception/u)
+      assert.equal(gitCalls, beforeGit, "unchanged safe reconciliation preserves existing Git authority, no new permission")
+    }
+  })
+
+  test("head_native_repeated_hints_share_held_sample_owner", async (t) => {
+    const h = headMemory(), callbacks = []
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() } })
+    await session.start()
+    const before = h.state.opens
+    h.state.inode += 1; h.state.mode = "stalled"
+    callbacks[0]("rename", "HEAD")
+    await waitUntil(() => Boolean(h.state.release))
+    for (let i = 0; i < 10; i += 1) callbacks[0]("rename", "HEAD")
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert.equal(h.state.opens, before + 1)
+    assert.equal(h.state.maxActive, 1)
+    h.state.mode = null; h.state.release()
+    await waitUntil(() => session.admission.snapshot().state === "ready" && !session.admission.running)
+    await session.dispose()
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_native_unexpected_reader_rejection_never_grants_readiness", async (t) => {
+    const h = headMemory(), callbacks = []
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() } })
+    await session.start()
+    h.io.lstat = async () => { throw { get code() { throw new Error("unexpected_native_read_failure") } } }
+    callbacks[0]("rename", "HEAD")
+    await waitUntil(() => session.admission.snapshot().code === "admission_exception")
+    assert.notEqual(session.admission.snapshot().state, "ready")
+    assert.match(session.admission.snapshot().summary, /unexpected_native_read_failure/u)
+  })
+
+  test("head_native_waiter_disposal_cancels_reconciliation_of_owned_pending_sample", async (t) => {
+    const h = headMemory(), callbacks = []
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() } })
+    await session.start()
+    h.state.mode = "stalled"
+    const refreshed = session.admission.refresh({ force: true })
+    await waitUntil(() => Boolean(h.state.release))
+    callbacks[0]("rename", "HEAD")
+    await new Promise(resolve => setTimeout(resolve, 150))
+    const attempts = session.admission.snapshot().attempts
+    const disposed = session.dispose()
+    h.state.mode = null; h.state.release()
+    await Promise.all([refreshed, disposed])
+    await flush()
+    assert.equal(session.admission.snapshot().attempts, attempts)
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_native_late_reader_rejection_after_dispose_cannot_mutate_state", async (t) => {
+    const h = headMemory(), callbacks = []
+    let release
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() } })
+    await session.start()
+    h.io.lstat = async () => {
+      await new Promise(resolve => { release = resolve })
+      throw { get code() { throw new Error("disposed_native_reader_failure") } }
+    }
+    callbacks[0]("rename", "HEAD")
+    await waitUntil(() => Boolean(release))
+    const attempts = session.admission.snapshot().attempts
+    const disposed = session.dispose()
+    release()
+    await assert.rejects(disposed, /disposed_native_reader_failure/u)
+    await flush()
+    assert.equal(session.admission.snapshot().attempts, attempts)
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_logically_expired_sample_late_rejection_has_owned_handlers", async (t) => {
+    const hostLifetime = setTimeout(() => {}, 5000)
+    t.after(() => clearTimeout(hostLifetime))
+    const h = headMemory()
+    let release
+    h.io.lstat = async () => {
+      await new Promise(resolve => { release = resolve })
+      throw { get code() { throw new Error("late_sample_rejected") } }
+    }
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    assert.notEqual(session.admission.snapshot().state, "ready")
+    const disposed = session.dispose()
+    release()
+    await assert.rejects(disposed, /late_sample_rejected/u)
+    await flush()
+    assert.equal(h.state.opens, 0)
+  })
+
+  test("head_timer_waits_for_existing_sample_and_owns_late_rejection", async (t) => {
+    const h = headMemory()
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    const before = h.state.opens
+    let release
+    t.after(() => release?.())
+    h.io.lstat = async () => {
+      await new Promise(resolve => { release = resolve })
+      throw { get code() { throw new Error("late_reader_failure") } }
+    }
+    const refreshed = session.admission.refresh({ force: true })
+    await waitUntil(() => Boolean(release))
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.equal(h.state.opens, before, "the timer cannot overlap the held metadata observation")
+    release()
+    await refreshed
+    await flush()
+    assert.notEqual(session.admission.snapshot().state, "ready")
+  })
+
+  test("head_sampler_late_observation_after_dispose_cannot_resurrect", async (t) => {
+    const h = headMemory()
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io, watch: quietWatch,
+      git: scriptedGit({ branch: "main", onRemote: true }) })
+    await session.start()
+    h.state.mode = "stalled"
+    await waitUntil(() => Boolean(h.state.release))
+    const before = session.admission.snapshot().attempts
+    const disposed = session.dispose()
+    h.state.mode = null; h.state.release()
+    await disposed
+    await flush()
+    assert.equal(session.admission.snapshot().attempts, before)
+    assert.equal(h.state.opens, h.state.closes)
+  })
+
+  test("head_dispose_during_startup_repair_never_binds_a_watcher", async (t) => {
+    const state = { branch: null, onRemote: true }, scripted = scriptedGit(state)
+    let release, watches = 0
+    const { session } = await makeSession(t, { inputs: { stateBranch: "main" },
+      watch: () => { watches += 1; return quietWatch() },
+      git: async options => {
+        if (options.args[0] === "switch") await new Promise(resolve => { release = resolve })
+        return scripted(options)
+      } })
+    const started = session.start()
+    await waitUntil(() => Boolean(release))
+    await session.dispose()
+    release()
+    await started
+    assert.equal(watches, 0)
+    assert.notEqual(session.admission.snapshot().state, "ready")
+  })
+
+  test("head_events_and_sampler_coalesce_one_followup", async (t) => {
+    const h = headMemory(), callbacks = []
+    let hold = false, release, active = 0, maxActive = 0, resolutions = 0
+    const { session, root } = await makeSession(t, { inputs: { stateBranch: "main" }, headIO: h.io,
+      watch: (_dir, _options, callback) => { callbacks.push(callback); return quietWatch() },
+      git: scriptedGit({ branch: "main", onRemote: true }),
+      resolveInputs: async () => {
+        resolutions += 1; active += 1; maxActive = Math.max(maxActive, active)
+        try { if (hold) await new Promise(resolve => { release = resolve }); return inputs({ root, stateBranch: "main" }) }
+        finally { active -= 1 }
+      } })
+    await session.start()
+    hold = true
+    h.state.inode += 1
+    for (let i = 0; i < 10; i += 1) callbacks[0]("change", "HEAD")
+    await waitUntil(() => Boolean(release))
+    const before = resolutions
+    h.state.inode += 1; h.state.text = "ref: refs/heads/main\n#changed"
+    for (let i = 0; i < 10; i += 1) callbacks[0]("change", "HEAD")
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    hold = false; release()
+    await waitUntil(() => !session.admission.running)
+    assert.equal(maxActive, 1)
+    assert.ok(resolutions <= before + 1, "native+sampler signals queue at most one latest follow-up")
+  })
+test("head_sampler_withheld_callback_authoritative_transition", async (t) => {
+  const fixture = await makeGitDesk("head-reconcile-")
+  let nativeCallbacks = 0
+  const watchers = []
+  const session = createDeskSession({
+    args: { person: null }, deskStateDir: fixture.stateDir, readinessStateHome: fixture.readinessHome,
+    resolveInputs: async () => inputs({ root: fixture.desk, stateBranch: "main" }),
+    loadRuntime: async () => ({ runtimeServer: fakeRuntime(), runtimeStatus: { state: "ready" } }),
+    watch: (dir, options) => {
+      const watcher = nativeWatch(dir, options, () => { nativeCallbacks += 1 }) // deliberately not delivered to session
+      watchers.push(watcher)
+      return watcher
+    },
+  })
+  t.after(() => session.dispose())
+  await session.start()
+  assert.equal(session.admission.snapshot().state, "ready")
+  let actionStarted
+  const waitRecorded = async (state) => {
+    const started = actionStarted
+    while (Date.now() - started < 10000) {
+      if (JSON.parse(readFileSync(path.join(fixture.stateDir, "last-start.json"), "utf8")).state === state) {
+        assert.ok(Date.now() - started < 10000)
+        t.diagnostic(JSON.stringify({ state, action_to_record_ms: Date.now() - started, native_callback_events: nativeCallbacks,
+          session_native_delivery: "withheld_at_real_watch_boundary" }))
+        return
+      }
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.fail(`no-tool-call reconciliation did not reach ${state}`)
+  }
+  actionStarted = Date.now()
+  fixtureGit(fixture.desk, "checkout", "--detach")
+  writeFile(path.join(fixture.desk, "ops", "unpushed.md"), "unpushed\n")
+  fixtureGit(fixture.desk, "add", "-A")
+  fixtureGit(fixture.desk, "commit", "-m", "unpushed")
+  await waitRecorded("degraded:state_branch_detached")
+  actionStarted = Date.now()
+  fixtureGit(fixture.desk, "switch", "main")
+  await waitRecorded("ready")
+  fixtureGit(fixture.desk, "branch", "--track", "feature", "origin/feature")
+  actionStarted = Date.now()
+  fixtureGit(fixture.desk, "switch", "feature")
+  await waitRecorded("degraded:state_branch_mismatch")
+  assert.equal(fixtureGit(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
+  actionStarted = Date.now()
+  fixtureGit(fixture.desk, "switch", "main")
+  await waitRecorded("ready")
+  await session.dispose()
+  assert.ok(watchers.every(watcher => watcher._handle === null))
+})
 
 test("tool requirements: status, doctor, reads, controller and writes", () => {
   assert.equal(toolRequirement("desk_status"), "status")
@@ -1463,25 +2103,27 @@ test("desk_doctor refuses switch_state_branch without a state branch, when unsaf
 
 test("the .git/HEAD watch re-runs admission once for a burst of changes, never switches, and a watch that cannot start is logged", async (t) => {
   const state = { branch: "main", onRemote: true }
+  const h = headMemory()
   const watchers = []
   const watch = (dir, options, listener) => {
     const watcher = Object.assign(new EventEmitter(), { dir, options, listener, closed: false, close() { this.closed = true } })
     watchers.push(watcher)
     return watcher
   }
-  const { session } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch })
+  const { session, log } = await makeSession(t, { git: scriptedGit(state), headIO: h.io, inputs: { stateBranch: "main" }, watch })
   await session.admission.refresh()
   assert.equal(watchers.length, 1)
   assert.equal(watchers[0].dir, "/repo/.git")
   assert.equal(watchers[0].options.persistent, false)
   const attempts = session.admission.snapshot().attempts
   state.branch = null
+  h.state.text = "abcdef1234567890\n"; h.state.inode += 1
   watchers[0].listener("change", "index")
   watchers[0].listener("rename", null)
   watchers[0].listener("rename", "HEAD")
   watchers[0].listener("rename", "HEAD")
   await new Promise((resolve) => setTimeout(resolve, 250))
-  assert.equal(session.admission.snapshot().attempts, attempts + 1, "debounced to one attempt")
+  assert.equal(session.admission.snapshot().attempts, attempts + 2, "one stale-ready invalidation and one debounced authoritative attempt")
   assert.equal(session.admission.snapshot().state, "degraded:state_branch_detached")
   assert.equal(state.switches, undefined, "a watched HEAD change never switches")
 

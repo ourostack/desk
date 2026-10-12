@@ -1,8 +1,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { createRequire } from "node:module"
+import { randomUUID, createHash } from "node:crypto"
+import * as net from "node:net"
 import * as path from "node:path"
 import { openDb, closeDb, indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { makeGitDesk, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
@@ -12,6 +14,211 @@ import { assertProcessesGone, controllerPids, processAlive, waitForProcessesGone
 const require = createRequire(import.meta.url)
 const posixOnly = process.platform === "win32" ? "POSIX signal semantics" : false
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function matchHeld(ack, arm, binding) {
+  if (!binding || !ack || ack.method !== "beginConvergence" ||
+      typeof binding.rpcId !== "string" || ack.rpcId !== binding.rpcId ||
+      !Number.isInteger(ack.bytes) || ack.bytes <= 0 ||
+      ["nonce", "ownerPid", "ownerGeneration", "sessionPid", "cycle", "mcpId", "document"].some(key =>
+        ack[key] !== arm[key] || binding[key] !== arm[key])) {
+    throw new Error("invalid held-work correlation")
+  }
+  return ack
+}
+
+function waitForHeld(held, result) {
+  return Promise.race([held, result.then(value => {
+    throw new Error(`target reindex settled before held work: ${JSON.stringify(value)}`)
+  })])
+}
+
+async function drainController(session) {
+  const result = await session.call("desk_reindex", { force: true })
+  assert.equal(result.isError, false, JSON.stringify(result.payload))
+  assert.equal(result.payload.status, "ok", JSON.stringify(result.payload))
+  assert.equal(result.payload.action, "controller_convergence", JSON.stringify(result.payload))
+  return result
+}
+
+test("controller drain rejects actual failure and incomplete acknowledgment shapes", async () => {
+  for (const result of [
+    { isError: true, payload: { message: "actual compaction failure" } },
+    { isError: false, payload: { status: "pending", action: "controller_convergence" } },
+    { isError: false, payload: { status: "ok", action: "not_convergence" } },
+  ]) {
+    await assert.rejects(drainController({ call: async () => result }))
+  }
+  const result = { isError: false, payload: { status: "ok", action: "controller_convergence" } }
+  assert.equal(await drainController({ call: async () => result }), result)
+  await assert.rejects(drainController({ call: async () => { throw new Error("actual drain rejection") } }),
+    /actual drain rejection/u)
+})
+
+// Generated only in the selected fixture. No product held hook or fake index:
+// the controller must enter its actual target-request async chain, finish an
+// actual Markdown read, then withhold that read's resolution until kill.
+async function rendezvousPreload(armFile, bindingFile) {
+  const { default: fs } = await import("node:fs")
+  const { default: net } = await import("node:net")
+  const { AsyncLocalStorage } = await import("node:async_hooks")
+  const { syncBuiltinESMExports } = await import("node:module")
+  const entry = process.argv[1] ?? ""
+  const controller = entry.endsWith("/readiness/controller-child.js")
+  const parent = entry.endsWith("/mcp/index.js")
+  if (!controller && !parent) return
+  const local = new AsyncLocalStorage()
+  const read = file => { try { return JSON.parse(fs.readFileSync(file, "utf8")) } catch { return null } }
+  const frame = chunk => {
+    try { return JSON.parse(String(chunk).trim()) } catch { return null }
+  }
+  if (parent) {
+    const emit = process.stdin.emit
+    process.stdin.emit = function (event, ...args) {
+      const message = event === "data" ? frame(args[0]) : null
+      if (message?.method === "tools/call" && message.params?.name === "desk_reindex") {
+        const arm = read(armFile)
+        if (arm?.mcpId === message.id && arm.sessionPid === process.pid) {
+          return local.run({ mcpId: message.id }, () => emit.call(this, event, ...args))
+        }
+      }
+      return emit.call(this, event, ...args)
+    }
+    const write = net.Socket.prototype.write
+    net.Socket.prototype.write = function (chunk, ...args) {
+      const message = frame(chunk), arm = read(armFile), context = local.getStore()
+      if (message?.method === "beginConvergence" && arm && context && arm.mcpId === context.mcpId &&
+          arm.sessionPid === process.pid) {
+        fs.writeFileSync(bindingFile, JSON.stringify({ ...arm, rpcId: message.id }), { mode: 0o600 })
+      }
+      return write.call(this, chunk, ...args)
+    }
+  } else {
+    const emit = net.Socket.prototype.emit
+    net.Socket.prototype.emit = function (event, ...args) {
+      const message = event === "data" ? frame(args[0]) : null
+      if (message?.method === "beginConvergence") {
+        return local.run({ rpcId: message.id, method: message.method }, () => emit.call(this, event, ...args))
+      }
+      return emit.call(this, event, ...args)
+    }
+    const realRead = fs.promises.readFile
+    fs.promises.readFile = async function (file, ...args) {
+      const bytes = await realRead.call(this, file, ...args)
+      const arm = read(armFile), binding = read(bindingFile), context = local.getStore()
+      if (!arm || arm.ownerPid !== process.pid || String(file) !== arm.document ||
+          binding?.nonce !== arm.nonce || binding?.rpcId !== context?.rpcId ||
+          context?.method !== "beginConvergence" || binding?.mcpId !== arm.mcpId) return bytes
+      await new Promise((resolve, reject) => {
+        const socket = net.createConnection({ host: "127.0.0.1", port: arm.port })
+        socket.once("connect", () => socket.write(JSON.stringify({ ...binding,
+          ownerPid: process.pid, method: context.method, bytes: Buffer.byteLength(bytes) }) + "\n"))
+        socket.once("data", data => {
+          if (String(data).trim() !== "release") reject(new Error("invalid fixture release"))
+          else resolve()
+          socket.end()
+        })
+        socket.once("error", reject)
+        socket.once("close", () => reject(new Error("fixture held-work channel closed")))
+      })
+      return bytes
+    }
+    syncBuiltinESMExports()
+  }
+}
+
+async function controllerRendezvous(t, fixture) {
+  const armFile = path.join(fixture.root, "kill-arm.json"), bindingFile = path.join(fixture.root, "kill-binding.json")
+  const preload = path.join(fixture.root, "kill-preload.mjs")
+  // The preserved coverage preload resolves its Babel plugins from cwd.
+  // Reuse the maintained installed dependencies in this isolated cwd, rather
+  // than stripping instrumentation or installing a second dependency set.
+  symlinkSync(path.resolve(path.dirname(require.resolve("@istanbuljs/esm-loader-hook")), "../.."),
+    path.join(fixture.root, "node_modules"), "dir")
+  writeFile(preload, `await (${rendezvousPreload.toString()})(${JSON.stringify(armFile)},${JSON.stringify(bindingFile)});\n`)
+  let arm = null, accept, reject, connection = null
+  const sockets = new Set()
+  const server = net.createServer(socket => {
+    sockets.add(socket); socket.once("close", () => sockets.delete(socket))
+    socket.on("error", error => reject(error))
+    let input = ""
+    socket.on("data", chunk => {
+      input += chunk
+      if (!input.includes("\n")) return
+      try {
+        const ack = JSON.parse(input.trim())
+        matchHeld(ack, arm, JSON.parse(readFileSync(bindingFile, "utf8")))
+        if (connection) throw new Error("duplicate held-work connection")
+        connection = socket; accept(ack)
+      } catch (error) { reject(error); socket.destroy() }
+    })
+  })
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve) })
+  const disarm = ({ killed = false } = {}) => {
+    rmSync(armFile, { force: true }); rmSync(bindingFile, { force: true })
+    for (const socket of sockets) {
+      if (killed) socket.destroy()
+      else socket.end("release\n")
+    }
+    connection = null; arm = null
+  }
+  t.after(async () => {
+    disarm()
+    for (const socket of sockets) socket.destroy()
+    await new Promise(resolve => server.close(resolve))
+  })
+  return {
+    env: { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import ${JSON.stringify(preload)}`].filter(Boolean).join(" "),
+      ...Object.fromEntries(["NYC_CONFIG", "NYC_CWD"].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) },
+    arm(session, owner, cycle) {
+      let completed = false
+      const held = new Promise((resolve, fail) => { accept = resolve; reject = fail })
+      arm = { nonce: randomUUID(), cycle, ownerPid: owner.pid,
+        ownerGeneration: createHash("sha256").update(owner.token).digest("hex"),
+        sessionPid: session.child.pid, port: server.address().port,
+        document: path.join(fixture.desk, "_meta", "tips", "entry-0.md") }
+      const write = session.child.stdin.write
+      session.child.stdin.write = function (chunk, ...args) {
+        const message = JSON.parse(String(chunk))
+        if (message.method === "tools/call" && message.params.name === "desk_reindex") {
+          arm.mcpId = message.id
+          writeFile(armFile, JSON.stringify(arm))
+        }
+        return write.call(this, chunk, ...args)
+      }
+      let result
+      try { result = session.call("desk_reindex", { force: true }).finally(() => { completed = true }) }
+      finally { session.child.stdin.write = write }
+      let budget
+      const deadline = new Promise((_resolve, fail) => { budget = setTimeout(() => fail(new Error("target held-work acknowledgment deadline")), 20000) })
+      return { result, completed: () => completed,
+        held: waitForHeld(Promise.race([held, deadline]), result).finally(() => clearTimeout(budget)),
+        verify: ack => {
+          assert.equal(connection?.destroyed, false, "the matched read is still held")
+          return matchHeld(ack, arm, JSON.parse(readFileSync(bindingFile, "utf8")))
+        } }
+    },
+    disarm,
+  }
+}
+
+test("controller rendezvous rejects wrong owner, background work and mismatched target IDs", () => {
+  const arm = { nonce: "cycle", ownerPid: 8, ownerGeneration: "generation", cycle: 1, mcpId: 17, document: "/fixture/doc.md" }
+  const binding = { ...arm, rpcId: "controller-request" }
+  const ack = { ...binding, method: "beginConvergence", bytes: 12 }
+  assert.equal(matchHeld(ack, arm, binding), ack)
+  for (const changed of [{ ownerPid: 9 }, { rpcId: null }, { rpcId: "background" },
+    { mcpId: 18 }, { ownerGeneration: "stale" }, { nonce: "old" }, { cycle: 0 }, { document: "/elsewhere" }, { method: "status" }]) {
+    assert.throws(() => matchHeld({ ...ack, ...changed }, arm, binding), /invalid held-work correlation/u)
+  }
+})
+
+test("controller rendezvous early settlement surfaces actual result and rejection", async () => {
+  const held = new Promise(() => {})
+  await assert.rejects(waitForHeld(held, Promise.resolve({ isError: true, payload: { message: "actual refusal" } })),
+    /actual refusal/u)
+  await assert.rejects(waitForHeld(held, Promise.reject(new Error("actual request rejection"))),
+    /actual request rejection/u)
+})
 
 async function until(predicate, message, timeout = 10000) {
   const deadline = Date.now() + timeout
@@ -208,17 +415,35 @@ test("reclaim_controller stops only a verified hung child while every MCP connec
 test("child death during a 6,000-document reindex re-elects and returns the owning connection to ready, twice", { skip: posixOnly, timeout: 180000 }, async (t) => {
   const fixture = await makeGitDesk("desk-controller-reindex-death-")
   populate(fixture)
-  const session = await readySession(t, fixture)
+  const rendezvous = await controllerRendezvous(t, fixture)
+  const session = await readySession(t, fixture, { env: rendezvous.env })
   for (let cycle = 0; cycle < 2; cycle += 1) {
+    // A successful recovery read may start new fenced reconciliation. Drain
+    // that real work while disarmed; it is not the later target's held proof.
+    rendezvous.disarm()
+    const drained = await drainController(session)
     const original = ownerRecord(fixture)
+    t.diagnostic(JSON.stringify({ cycle, drained: drained.payload, owner_after_drain: original.owner.pid }))
     assert.notEqual(original.owner.pid, session.child.pid, "only a separate controller may be killed")
     await removeDerivedIndex(fixture)
-    let completed = false
-    const reindex = session.call("desk_reindex", { force: true }).finally(() => { completed = true })
-    await until(() => existsSync(indexDbPath(fixture.desk)), "the child must enter the real index rebuild before it is killed", 20000)
-    assert.equal(completed, false, "the real reindex is still in flight when the controller dies")
-    process.kill(original.owner.pid, "SIGKILL")
-    const interrupted = await reindex
+    const request = rendezvous.arm(session, original.owner, cycle)
+    let interrupted
+    try {
+      const ack = await request.held
+      request.verify(ack)
+      const liveOwner = ownerRecord(fixture).owner
+      assert.equal(liveOwner.pid, ack.ownerPid)
+      assert.equal(createHash("sha256").update(liveOwner.token).digest("hex"), ack.ownerGeneration)
+      assert.equal(processAlive(ack.ownerPid), true)
+      assert.equal(request.completed(), false, "the real reindex is still in flight when the controller dies")
+      t.diagnostic(JSON.stringify({ cycle, held: ack, action: "kill_before_release" }))
+      process.kill(original.owner.pid, "SIGKILL")
+      rendezvous.disarm({ killed: true })
+      interrupted = await request.result
+    } finally {
+      rendezvous.disarm()
+      await request.result.catch(() => {})
+    }
     assert.equal(interrupted.isError, true, "an interrupted reindex is not reported as success")
     await assertConnected([session])
     const recovered = await session.statusUntil((status) => status.state === "ready" && status.readiness?.detail.convergence.status === "succeeded", { deadlineMs: 90000 })
