@@ -415,6 +415,11 @@ export function createFakeRunner(cloud = emptyCloud()) {
         return tsv(value);
       }
       if (joined.startsWith("containerapp secret list")) return json(app.shown.properties.configuration.secrets);
+      if (joined.startsWith("containerapp logs show")) {
+        // az refuses a tail outside 0 to 300 before it reads anything (rehearsal, 2026-10-12).
+        const tail = opt(args, "--tail");
+        if (tail !== undefined && !(Number(tail) >= 0 && Number(tail) <= 300)) throw new CallFailed("az containerapp logs show failed", "ERROR: --tail must be between 0 and 300.");
+      }
       if (joined.startsWith("containerapp logs show")) return { stdout: app.logs.filter((line) => line.revision === opt(args, "--revision")).map(({ text }) => text).join("\n") };
       if (joined.startsWith("containerapp update")) {
         const document = JSON.parse(app.readYaml(opt(args, "--yaml")));
