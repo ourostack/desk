@@ -12,7 +12,7 @@ import {TRIAGE_RUNNER_STATES} from "./triage-schema.js"
 import {assertOutsideGitWorkspace} from "./os-protect.js"
 import {ownedCatalogHostSupport,ownedServerLaunch,prepareOwnedCatalogRun,runOwnedCatalogNative,ownedSourceIdentity,authenticatedNativeRuns,
   authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction,NATIVE_ENGINE_SHA256,
-  ownedDependencyIdentity,ownedSourceRoots,relocatedClosure,verifyModuleClosure} from "./triage-custody.js"
+  ownedDependencyIdentity,ownedSourceRoots,relocatedClosure,relocatedPath,verifyModuleClosure} from "./triage-custody.js"
 import {catalogCanonical,closedObject,safeCatalogPath,catalogToolSchemas} from "./triage-catalog.js"
 import {catalogProtocolIdentity} from "./triage-protocol.js"
 
@@ -1131,13 +1131,24 @@ async function restoreQualification({recordFile,...config},context){
     const chain=context.chain({cli:record.cli,env})
     if(chain.state!=="inspected")return stale("chain_unavailable")
     if(chain.fingerprint!==record.chain_fingerprint)return stale("chain_changed")
-    const admission=await context.admission({cli:record.cli,env,argv:record.nativeReceipts[1].invocation.args})
+    const admission=await context.admission({cli:record.cli,env,argv:currentArgv(record,context.roots())})
     if(admission.state!=="admitted")return stale("policy_blocked")
     requireControlCollections([admission.controls],context.controlRecords)
     if(policySourceFingerprint(admission,env)!==record.policy_sources_fingerprint)return stale("policy_changed")
     context.records.set(record,{seal:fingerprint(record),identity:record.sourceIdentity,dependencies:record.dependency_identity})
     return {state:"qualified",qualification:record}
   }catch{return damaged("restore_failed")}
+}
+// The qualified invocation's argv as this install would launch it: the same
+// fixed policy built around the owned server under the current roots (the
+// admission reader accepts only a launch from this source root).
+function currentArgv(record,roots){
+  const invocation=record.nativeReceipts[1].invocation,raw=invocation.owned_launch,i=raw.identity
+  const server=ownedServerLaunch({runtime:i.runtime,launcher:relocatedPath(i.launcher,record.source_roots,roots),
+    entry:relocatedPath(i.entry,record.source_roots,roots),bootstrap:i.bootstrap,deadline:i.deadline,sourceRoot:roots.source})
+  // Structure validation already rebuilt this policy under the recorded root.
+  const {argv}=preparedPolicy({inputDir:raw.cwd,resultFile:path.join(raw.cwd,"unaccepted.json"),cliMetadata:record.cliMetadata,ownedServer:server},roots.source)
+  return [...invocation.args.slice(0,invocation.args.length-argv.length),...argv]
 }
 // The pinned engine build, by content. Claude Code keeps earlier builds in its
 // versions folder, so triage keeps its reviewed engine after an update while
