@@ -11,7 +11,8 @@
 //
 // This module must not import anything from the runtime pack: it runs before the pack is restored.
 
-import { watch as watchFileSystem } from "node:fs"
+import { EventEmitter } from "node:events"
+import { unwatchFile, watchFile } from "node:fs"
 import * as path from "node:path"
 
 import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
@@ -57,6 +58,8 @@ const GATE_WAIT_MS = 10000
 // How long task_focus waits for a session that is still admitting: short, because the call is a declaration, not work.
 const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
+// How often the HEAD watch checks .git/HEAD. A HEAD change is noticed within this time plus the debounce.
+const HEAD_POLL_MS = 250
 const WRITE_PING_MS = 1000
 // A status check that fails is repeated this many more times, this far apart, before the controller counts as lost. One failed request proves little: a busy controller or machine can miss a 2 s window, and a pipe can refuse one connection under load, while the controller is alive. A controller that is really gone fails every attempt, and a controller process that exits is reported at once by its exit event, so the repeats only delay a loss nothing else reported.
 const CONTROLLER_RECHECKS = 2
@@ -111,6 +114,14 @@ export function requirementMet(requirement, context) {
   return authorized && context.stateBranch?.ok !== false && !context.launcher?.blocksWrites
 }
 
+// The default HEAD watch polls .git/HEAD's metadata instead of watching the .git folder. A folder watch is closed synchronously on the event loop, and on macOS (FSEvents) closing one took from 0.5 s to over 2 s when a destination change dropped the old desk's watch, holding every desk_status call far past its 200 ms. Stopping a poll only stops a timer. Git replaces HEAD by renaming a lock file over it, and a poll by path follows each new file. Any change to HEAD's metadata is reported, through the same (event, filename) callback a folder watch uses, and the admission refresh it starts is debounced.
+export function watchGitHead(gitDir, options, listener) {
+  const head = path.join(gitDir, "HEAD")
+  const onChange = () => listener("change", "HEAD")
+  watchFile(head, { persistent: options.persistent, interval: HEAD_POLL_MS }, onChange)
+  return Object.assign(new EventEmitter(), { close() { unwatchFile(head, onChange) } })
+}
+
 /**
  * Build a session. `deps` carries everything index.js resolved or was given:
  * resolveInputs() (async; `{ root, activation }` or `{ rootError }` / `{ root, activationError }`), loadRuntime(activation) (async; `{ runtimeServer, runtimeStatus }` or `{ outcome }`), setupDiagnostic(error),
@@ -123,7 +134,7 @@ export function createDeskSession(deps) {
     readinessStateHome,
     deskStateDir,
     git = runGit,
-    watch = watchFileSystem,
+    watch = watchGitHead,
     timers,
     stderr = process.stderr,
     notifyToolsChanged = () => {},
