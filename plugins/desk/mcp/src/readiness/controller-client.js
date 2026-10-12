@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
+import { chmodSync, lstatSync, readFileSync, unlinkSync } from "node:fs"
+import { mkdir } from "node:fs/promises"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -67,7 +68,8 @@ export async function connectOrStartController({
   // `exceptionOutcome` for a code this specific). Matching that existing contract means throwing normally, not
   // inventing a new local return shape.
   assertNotRealStateUnderTest(stateDir, { env })
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  // Asynchronous: on Windows a directory create can wait on an antivirus scan for over a second, and this runs on the session's event loop while it answers tool calls.
+  await mkdir(stateDir, { recursive: true, mode: 0o700 })
   privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)
   const endpoint = await rendezvousEndpoint({ derived: deriveControllerEndpoint({ identity }), identity, stateDir })
