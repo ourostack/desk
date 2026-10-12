@@ -1046,7 +1046,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
     const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment({HOME:f.dir}))),owned_launch:run.launch,
       prepared_sha256:run.prepared.sha256,catalog_sha256:run.catalog.catalogSha256,brief_sha256:run.catalog.briefSha256,record_refs_sha256:run.catalog.recordRefsSha256}
     nativeReceipts.push({snapshotFile:path.join(out,`native-${i}`,"catalog.json"),invocation,custody:{sourceIdentity,roots:custody.ownedSourceRoots(),moduleClosure:[]}})
-    directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools,custody:{roots:custody.ownedSourceRoots()}})
+    directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools,custody:{sourceIdentity,roots:custody.ownedSourceRoots()}})
     invocationIdentities.push(runner.ownedInvocationIdentity({invocation,chain:{effective_argv:[f.cli]},cliMetadata:metadata,env}))
   }
   const collected=await runner.runNonacceptedControlCollection(controlInput()),controls=collected.outcome.evidence
@@ -1093,6 +1093,8 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
     chain:{state:"inspected",effective_argv:[f.cli],fingerprint:"b".repeat(64)}}
   const unit=runner.createNonacceptedTriageUnit(unitConfig)
   const sealed=unit.seal()
+  assert.match(sealed.record.host_seal,/^[a-f0-9]{64}$/u,"a registered record carries this host's seal")
+  const stored=unit.sealDocument(document.record)
   assert.equal(sealed.authority,false);assert.equal(sealed.state,"unit_registered")
   assert.equal(unit.lookup(sealed.record).registered,true)
   const successful=await unit.run(sealed.record)
@@ -1162,7 +1164,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   }
   for(const failure of ["read","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect","admission","admissionIdentity"]){
     const isolated=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
-    await isolated.save(document.record)
+    await isolated.save(stored)
     const refused=await isolated.load()
     assert.equal(refused.outcome.state,"scope_unqualified",failure)
     assert.equal(isolated.lookup(refused.outcome).registered,false)
@@ -1171,13 +1173,15 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   await assert.rejects(writeFailure.save(document.record))
   assert.equal((await writeFailure.load()).outcome.state,"scope_unqualified")
   const cliMismatch=runner.createNonacceptedTriageUnit(unitConfig)
-  await cliMismatch.save(document.record)
+  await cliMismatch.save(stored)
   assert.equal((await cliMismatch.load({cli:"/synthetic/other"})).outcome.reason,"diagnostic_inadequate")
   assert.deepEqual((await cliMismatch.restore({cli:"/synthetic/other"})).outcome,{state:"stale",reason:"engine_mismatch",requalify:false})
   // The classified restore: stale reasons with their requalify flag, damage kept apart.
-  const classify=async(failures,{record=document.record,edit,cli,extra}={})=>{
+  // `edit` changes the stored record after sealing (damage); `reseal` seals the edited record as this host would.
+  const classify=async(failures,{record=stored,edit,reseal,cli,extra}={})=>{
     const isolated=runner.createNonacceptedTriageUnit({...unitConfig,...(extra??{}),failures})
-    const saved=structuredClone(record);edit?.(saved)
+    let saved=structuredClone(record);edit?.(saved)
+    if(reseal)saved=isolated.sealDocument(saved)
     await isolated.save(saved)
     if(saved.state==="blocked"&&!failures.noCapture)await isolated.saveDocument("failure-capture.json",{version:1})
     return (await isolated.restore(cli?{cli}:{})).outcome
@@ -1187,25 +1191,52 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   const fresh=runner.createNonacceptedTriageUnit(unitConfig)
   assert.deepEqual((await fresh.restore()).outcome,{state:"missing"})
   assert.deepEqual(await classify({read:true}),{state:"damaged",reason:"unreadable"})
-  for(const [failure,reason,requalify]of [["source","source_changed",true],["dependencies","source_changed",true],["engineMoved","engine_changed",true],
-    ["engineGone","engine_unpinned",false],["closureChanged","source_changed",true],["chain","chain_unavailable",false],
-    ["chainIdentity","chain_changed",true],["admission","policy_blocked",false],["admissionIdentity","policy_changed",true]]){
+  for(const [failure,reason,requalify]of [["source","source_changed",true],["sourceGone","source_changed",true],
+    ["dependencies","source_changed",true],["dependenciesGone","source_changed",true],["runtime","runtime_changed",true],
+    ["engineMoved","engine_changed",true],["engineGone","engine_unpinned",false],["closureChanged","source_changed",true],
+    ["chain","chain_unavailable",false],["chainIdentity","chain_changed",true],["admission","policy_blocked",false],
+    ["admissionIdentity","policy_changed",true],["hostUnknown","host_unsupported",false],["rootUnsafe","root_unsafe",false],
+    ["sourceUnreadable","check_failed",false],["closureUnreadable","check_failed",false],["chainThrows","check_failed",false]]){
     assert.deepEqual(await classify({[failure]:true}),{state:"stale",reason,requalify},failure)
   }
-  for(const [failure,reason]of [["closureInvalid","structure"],["restoreDirect","receipts"],["restoreNative","receipts"],["restoreAuthNative","receipts"]]){
+  assert.equal((await classify({sourceFlicker:true})).state,"qualified","a file that vanishes once mid-read is read again")
+  // Relocated roots: restore admits the qualified invocation rebuilt under the current roots, not the recorded argv.
+  assert.equal((await classify({otherRoots:true})).state,"qualified","a byte-identical install at another path keeps the record")
+  const elsewhere=runner.createNonacceptedTriageUnit({...unitConfig,failures:{otherRoots:true}})
+  const misplaced=await elsewhere.run(elsewhere.seal().record)
+  assert.equal(misplaced.outcome.state,"scope_unqualified","the unit's admission refuses a launch that names another root")
+  assert.equal(elsewhere.statistics().runs,0)
+  for(const [failure,reason]of [["closureInvalid","structure"],["restoreDirect","receipts"],["restoreNative","receipts"],
+    ["restoreAuthNative","receipts"],["receiptFrames","receipts"],["foreignHost","seal"]]){
     assert.deepEqual(await classify({[failure]:true}),{state:"damaged",reason},failure)
   }
-  assert.deepEqual(await classify({chainThrows:true}),{state:"damaged",reason:"restore_failed"})
-  assert.deepEqual(await classify({},{edit:r=>{r.sourceIdentity.runtime.sha256="f".repeat(64)}}),{state:"stale",reason:"runtime_changed",requalify:true})
-  assert.deepEqual(await classify({},{edit:r=>{r.control_evidence[0].engine_sha256="f".repeat(64)}}),{state:"stale",reason:"engine_changed",requalify:true})
-  assert.deepEqual(await classify({},{edit:r=>{r.environment_sha256="f".repeat(64)}}),{state:"stale",reason:"environment_changed",requalify:true})
+  assert.deepEqual(await classify({},{record:document.record}),{state:"damaged",reason:"seal"},"an unsealed record is not this host's")
+  // Any edit to a sealed record is damage, never staleness: identity fields included.
+  for(const edit of [r=>{r.sourceIdentity.runtime.sha256="f".repeat(64)},r=>{r.control_evidence[0].engine_sha256="f".repeat(64)},
+    r=>{r.environment_sha256="f".repeat(64)},r=>{r.dependency_identity.sha256="f".repeat(64)},r=>{r.sourceIdentity.version=1},
+    r=>{r.predicate_table_sha256="f".repeat(64)}]){
+    assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"seal"},String(edit))
+  }
+  // A resealed record whose identity disagrees with its receipts is damage too.
+  for(const edit of [r=>{r.environment_sha256="f".repeat(64)},r=>{r.directReceipts[0].custody.sourceIdentity={...r.sourceIdentity,extra:1}},
+    r=>{r.nativeReceipts[1].custody.roots={...r.source_roots,source:"/elsewhere/"}},r=>{r.nativeReceipts[0].invocation.command="/synthetic/other"},
+    r=>{r.control_evidence[0].recipe_sha256="f".repeat(64)},r=>{r.control_evidence[1].engine_sha256="f".repeat(64)},
+    r=>{r.control_evidence=[r.control_evidence[0]]},r=>{r.directReceipts=[r.directReceipts[0]]}]){
+    assert.deepEqual(await classify({},{edit,reseal:true}),{state:"damaged",reason:"receipts"},String(edit))
+  }
+  // A coherent sealed record from an earlier engine pin is stale.
+  assert.deepEqual(await classify({},{edit:r=>{for(const e of r.control_evidence)e.engine_sha256="f".repeat(64)},reseal:true}),
+    {state:"stale",reason:"engine_changed",requalify:true})
+  assert.deepEqual(await classify({},{extra:{env:{...env,HTTPS_PROXY:"http://proxy.invalid:8080"}}}),{state:"stale",reason:"environment_changed",requalify:true})
   assert.deepEqual(await classify({},{extra:{env:{HOME:"relative"}}}),{state:"stale",reason:"environment_unsafe",requalify:false})
-  for(const edit of [r=>{r.sourceIdentity.version=1},r=>{r.sourceIdentity=null},r=>{r.sourceIdentity.files=[]},r=>{r.sourceIdentity.runtime=null}]){
+  const everywhere=change=>r=>{change(r);for(const run of [...r.directReceipts,...r.nativeReceipts])run.custody.sourceIdentity=r.sourceIdentity}
+  for(const change of [r=>{r.sourceIdentity.version=1},r=>{r.sourceIdentity=null},r=>{r.sourceIdentity.files=[]},r=>{r.sourceIdentity.runtime=null}]){
+    assert.deepEqual(await classify({},{edit:everywhere(change),reseal:true}),{state:"damaged",reason:"structure"})
+  }
+  for(const edit of [r=>{r.extra=1},r=>{r.cli="relative"},r=>{r.control_evidence=null},r=>{r.nativeReceipts=null},r=>{r.version=8}]){
     assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"structure"})
   }
-  for(const edit of [r=>{r.extra=1},r=>{r.cli="relative"},r=>{r.control_evidence=null},r=>{r.predicate_table_sha256="f".repeat(64)},r=>{r.version=8}]){
-    assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"structure"})
-  }
+  assert.deepEqual(await classify({},{edit:r=>{r.predicate_table_sha256="f".repeat(64)},reseal:true}),{state:"damaged",reason:"structure"})
   const blocked={version:7,protocol_envelope_version:2,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
   assert.deepEqual(await classify({},{record:blocked}),{state:"stale",reason:"qualification_failed",requalify:true})
   assert.deepEqual(await classify({noCapture:true},{record:blocked}),{state:"damaged",reason:"structure"},"a failure without its capture is not ours")
@@ -1221,7 +1252,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   assert.deepEqual(await classify({},{record:{version:5}}),{state:"damaged",reason:"structure"})
   assert.deepEqual(await classify({},{record:[]}),{state:"damaged",reason:"structure"})
   assert.deepEqual(Object.entries(runner.TRIAGE_STALE_REASONS).filter(([,value])=>!value).map(([key])=>key).sort(),
-    ["chain_unavailable","engine_mismatch","engine_unpinned","environment_unsafe","host_unsupported","measurement_active","policy_blocked"])
+    ["chain_unavailable","check_failed","engine_mismatch","engine_unpinned","environment_unsafe","host_unsupported","measurement_active","policy_blocked","root_unsafe"])
   // A production run must load the server modules that were qualified, and the same dependencies.
   for(const failure of ["runClosure","dependencies"]){
     const isolated=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
@@ -1690,14 +1721,15 @@ test("the child environment is built from fixed values and validated folders, ne
 })
 
 test("the pinned engine counts only by content, at a location no other account can change",async()=>{
-  const pin=(await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")).NATIVE_ENGINE_SHA256,uid=4242
+  const {NATIVE_ENGINE_SHA256:pin,NATIVE_ENGINE_BYTES:size}=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js"),uid=4242
   const dir=(over={})=>({isDirectory:()=>true,isFile:()=>false,uid,mode:0o40755,...over})
-  const reg=(over={})=>({isDirectory:()=>false,isFile:()=>true,uid,mode:0o100755,...over})
+  const reg=(over={})=>({isDirectory:()=>false,isFile:()=>true,uid,mode:0o100755,size,...over})
   const tree=(over={})=>file=>over[file]??(["/home/u/.local/bin/claude","/home/u/pinned/claude"].includes(file)||/\/\d+\.\d+\.\d+$/u.test(file)?reg():dir())
   const ok=(file,over,hash=()=>pin)=>runner.pinnedEngineFile(file,{hash,uid,stat:tree(over)})
   assert.equal(ok("/home/u/.local/bin/claude"),true)
   assert.equal(ok("/home/u/.local/bin/claude",{"/":dir({uid:0})}),true,"root-owned folders are closed")
   assert.equal(ok("/home/u/.local/bin/claude",{},()=>"0".repeat(64)),false,"other bytes")
+  assert.equal(ok("/home/u/.local/bin/claude",{"/home/u/.local/bin/claude":reg({size:size-1})},()=>{throw Error("must not hash")}),false,"another size is never hashed")
   for(const file of [null,"relative/claude","/home/u/../u/claude"])assert.equal(ok(file),false,String(file))
   for(const over of [
     {"/home/u/.local/bin/claude":reg({uid:7})},{"/home/u/.local/bin/claude":reg({mode:0o100775})},{"/home/u/.local/bin/claude":dir()},
@@ -1708,6 +1740,8 @@ test("the pinned engine counts only by content, at a location no other account c
   try{
     const file=path.join(realpathSync(bytes),"2.1.296");writeFileSync(file,Buffer.alloc(3*1048576+5,1))
     assert.equal(runner.pinnedEngineFile(file,{uid,stat:tree()}),false,"the real hash reads the whole file and finds other bytes")
+    assert.equal(runner.pinnedEngineFile(file,{uid}),false,"the real size check")
+    assert.equal(runner.pinnedEngineFile(file),false,"the real account, folders, size and hash")
   }finally{rmSync(bytes,{recursive:true,force:true})}
   const hashes={"/home/u/.local/share/claude/versions/2.1.296":pin}
   const checks={hash:file=>hashes[file]??"0".repeat(64),uid,stat:tree()}
@@ -1724,6 +1758,26 @@ test("the pinned engine counts only by content, at a location no other account c
       hash:file=>file===target?pin:"0",stat:file=>file===target?reg():dir()}),target,"the default selector is followed to its real file")
   }finally{rmSync(linked,{recursive:true,force:true})}
   assert.equal(runner.locatePinnedEngine({env:{},find:()=>null,list:()=>[]}),runner.locatePinnedEngine({env:{},find:()=>null,list:()=>[]}),"defaults are deterministic")
+})
+
+test("the host seal binds a record to this Mac's hardware UUID and account",()=>{
+  const uuid="01234567-89AB-CDEF-0123-456789ABCDEF",calls=[]
+  const run=(stdout,status=0)=>(...args)=>{calls.push(args);return {status,stdout}}
+  const ioreg=id=>`+-o J316sAP  <class IOPlatformExpertDevice>\n    "IOPlatformUUID" = "${id}"\n`
+  const record={version:7,state:"qualified",nested:{b:2,a:1}}
+  const seal=runner.hostRecordSeal(record,{run:run(ioreg(uuid)),uid:501})
+  assert.match(seal,/^[a-f0-9]{64}$/u)
+  assert.deepEqual(calls[0],["/usr/sbin/ioreg",["-rd1","-c","IOPlatformExpertDevice"],{env:{},encoding:"utf8",timeout:5000}])
+  assert.equal(runner.hostRecordSeal({...record,host_seal:seal},{run:run(ioreg(uuid)),uid:501}),seal,"the seal covers every field but itself")
+  assert.equal(runner.hostRecordSeal({nested:{a:1,b:2},state:"qualified",version:7},{run:run(ioreg(uuid)),uid:501}),seal,"over the canonical form")
+  assert.notEqual(runner.hostRecordSeal({...record,state:"edited"},{run:run(ioreg(uuid)),uid:501}),seal,"an edit")
+  assert.notEqual(runner.hostRecordSeal(record,{run:run(ioreg(uuid.replace("0","F"))),uid:501}),seal,"another Mac")
+  assert.notEqual(runner.hostRecordSeal(record,{run:run(ioreg(uuid)),uid:502}),seal,"another account")
+  for(const failing of [run(ioreg(uuid),1),run("no uuid here"),run(ioreg("not-a-uuid"))]){
+    assert.throws(()=>runner.hostRecordSeal(record,{run:failing,uid:501}),{message:"host_identity"})
+  }
+  if(process.platform==="darwin")assert.equal(runner.hostRecordSeal(record),runner.hostRecordSeal(record),"the real host answers the same seal")
+  else assert.throws(()=>runner.hostRecordSeal(record),{message:"host_identity"},"no ioreg elsewhere")
 })
 
 test("the qualifier takes an optional deadline and ledger callback, and reserves just before the first launch",async t=>{

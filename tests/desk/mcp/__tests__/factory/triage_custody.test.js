@@ -1745,6 +1745,11 @@ test("two module roots: the source tree and the folder Node resolves the SDK fro
   assert.throws(()=>custody.dependencyRootFor(`${sep}elsewhere${sep}`,sdk),{message:"dependency_root"},"a redirected resolution is refused")
   assert.throws(()=>custody.dependencyRootFor(root,`${sep}x${sep}index.js`),{message:"dependency_root"})
   assert.throws(()=>custody.ownedSourceRoots(undefined,{check:()=>{throw Error("source_root_unsafe")}}),{message:"source_root_unsafe"})
+  const checked=[]
+  assert.deepEqual(custody.ownedSourceRoots(undefined,{check:dir=>checked.push(dir)}),roots)
+  assert.deepEqual(checked,[roots.source,roots.deps],"both roots are checked")
+  assert.throws(()=>custody.ownedSourceRoots(undefined,{check:dir=>{if(dir===roots.deps)throw Error("source_root_unsafe")}}),{message:"source_root_unsafe"},
+    "an unsafe dependency root alone is refused")
   const open=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-open-root-")))
   try{
     custody.closedSourceRoot(open)
@@ -1799,14 +1804,51 @@ test("the identity lists every own file and dependency package the parent actual
   // A load hook in a fresh process sees createRequire and dynamic imports too, not just import statements.
   const root=path.resolve(new URL("../../../../../plugins/desk/mcp/",import.meta.url).pathname)+path.sep
   const hook=`import {registerHooks} from "node:module";import {fileURLToPath} from "node:url";const seen=new Set();registerHooks({load(url,c,next){if(url.startsWith("file:"))seen.add(fileURLToPath(url));return next(url,c)}});process.on("exit",()=>process.stdout.write(JSON.stringify([...seen])))`
-  const entry=`await import(${JSON.stringify(root+"src/factory/triage-runner.js")});await import(${JSON.stringify(root+"scripts/qualify-triage-runner.js")});await import(${JSON.stringify(root+"src/factory/triage-home.js")})`
-  const out=childProcess.execFileSync(process.execPath,["--import",`data:text/javascript,${encodeURIComponent(hook)}`,"--input-type=module","-e",entry],{encoding:"utf8",env:{PATH:process.env.PATH,HOME:process.env.HOME}})
-  const loaded=JSON.parse(out),deps=custody.ownedSourceRoots().deps
+  const trace=files=>JSON.parse(childProcess.execFileSync(process.execPath,["--import",`data:text/javascript,${encodeURIComponent(hook)}`,"--input-type=module","-e",
+    files.map(file=>`await import(${JSON.stringify(root+file)});`).join("")],{encoding:"utf8",env:{PATH:process.env.PATH,HOME:process.env.HOME}}))
+  // triage-qualify.js schedules qualification: the loop lock, the launch ledger and the factory state root. Those modules
+  // shape no child argv, environment, policy or catalog, so they and what they load are left out of the identity on purpose,
+  // and a change to them keeps the record. Only triage-qualify.js's own imports name them.
+  const SCHEDULING=["src/factory/evaluate-kick.js","src/factory/headless-ledger.js","src/factory/outbox.js","src/factory/process-lock.js"]
+  const qualifySource=fs.readFileSync(path.join(root,"src/factory/triage-qualify.js"),"utf8")
+  const imported=[...qualifySource.matchAll(/^import .* from "(\.{1,2}\/[^"]+)"$/gmu)].map(([,spec])=>path.relative(root,path.resolve(root,"src/factory",spec)))
+  assert.deepEqual(imported.filter(file=>!custody.OWNED_SOURCE_FILES.includes(file)).sort(),SCHEDULING,"triage-qualify.js imports only owned files and the named scheduling modules")
+  const loaded=trace(["src/factory/triage-runner.js","scripts/qualify-triage-runner.js","src/factory/triage-home.js","src/factory/triage-qualify.js"])
+  const scheduling=new Set(trace(SCHEDULING)),deps=custody.ownedSourceRoots().deps
   const own=loaded.filter(file=>file.startsWith(root)&&!file.startsWith(deps)).map(file=>file.slice(root.length)).sort()
   const packages=[...new Set(loaded.filter(file=>file.startsWith(deps)).map(file=>{const parts=file.slice(deps.length).split(path.sep);return parts[0].startsWith("@")?`${parts[0]}/${parts[1]}`:parts[0]}))].sort()
-  assert.deepEqual(own.filter(file=>!custody.OWNED_SOURCE_FILES.includes(file)),[],"an own module the parent loads is missing from OWNED_SOURCE_FILES")
+  assert.deepEqual(own.filter(file=>!custody.OWNED_SOURCE_FILES.includes(file)&&!scheduling.has(root+file)),[],"an own module the parent loads is missing from OWNED_SOURCE_FILES")
+  assert.ok(own.includes("src/factory/triage-qualify.js")&&own.some(file=>scheduling.has(root+file)))
   assert.deepEqual(packages.filter(name=>!custody.OWNED_DEPENDENCY_PACKAGES.includes(name)),[],"a package the parent loads is missing from OWNED_DEPENDENCY_PACKAGES")
   // Under nyc, its own require hook compiles CommonJS sources, so the load hook sees them only in a plain run.
   if(process.env.DESK_COVERAGE_RUNNER_CHILD!=="1")assert.ok(own.includes("src/factory/headless-flag.cjs"),"createRequire loads are seen")
 })
 function fileURLToPathSafe(url){return new URL(url).pathname}
+ownedHostTest("receipt_frames_authenticate_under_their_own_snapshot_key","posix",async(t)=>{
+  const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
+  const prepared=catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"a".repeat(64)})
+  const snapshot=JSON.parse(prepared.snapshotBytes)
+  const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"unit-receipt-frames-")));fs.chmodSync(dir,0o700)
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
+  const file=path.join(dir,"catalog.json");fs.writeFileSync(file,prepared.snapshotBytes,{mode:0o600})
+  const closure=[{path:"/unit/module.js",sha256:"a".repeat(64),bytes:1}]
+  const frame=(event,sequence,payload,key=snapshot.receipt_key,generation=snapshot.generation)=>custody.makeReceipt({event,sequence,payload,generation,
+    serverPid:500001,catalogSha256:prepared.catalogSha256,briefSha256:prepared.briefSha256,key})
+  const good={snapshotSha256:prepared.snapshotSha256,moduleClosure:closure,
+    receipts:[frame("bootstrap",1,{module_closure:closure}),frame("submit",2,{}),frame("terminal",3,{})],observations:[frame("observation",1,{})]}
+  assert.equal(await custody.authenticReceiptFrames(good,file),undefined)
+  for(const mutate of [
+    x=>{x.snapshotSha256="f".repeat(64)},
+    x=>{x.receipts=x.receipts.slice(1)},
+    x=>{x.receipts=null},
+    x=>{x.observations=null},
+    x=>{x.receipts[1].payload.extra=1},
+    x=>{x.observations[0]=frame("observation",1,{},"b".repeat(64))},
+    x=>{x.receipts[2]=frame("terminal",3,{},snapshot.receipt_key,"c".repeat(64))},
+    x=>{x.moduleClosure=[{...closure[0],bytes:2}]},
+  ]){
+    const changed=structuredClone(good);mutate(changed)
+    await assert.rejects(custody.authenticReceiptFrames(changed,file),{message:"receipt_frames"})
+  }
+  await assert.rejects(custody.authenticReceiptFrames(null,file),{message:"receipt_frames"})
+})

@@ -202,6 +202,9 @@ test("automatic qualification needs the worker's own lock and a reason qualifyin
   try {
     assert.equal((await qualify.autoQualifyTriage(ENV, { lock: { ...lock, token: "other" }, now: () => T0, deadline, impls })).reason, "lock_not_held")
     assert.equal((await qualify.autoQualifyTriage(ENV, { lock: { ...lock, token: 1 }, now: () => T0, deadline, impls })).reason, "lock_not_held")
+    const otherProcess = world(root, { readLock: async () => ({ token: lock.token, pid: process.pid + 1 }) })
+    assert.equal((await qualify.autoQualifyTriage(ENV, { lock, now: () => T0, deadline, impls: otherProcess.impls })).reason, "lock_not_held",
+      "the lock's token alone is not proof: this process must hold it")
     const unreadable = world(root, { readLock: async () => { throw new Error("unit") } })
     assert.equal((await qualify.autoQualifyTriage(ENV, { lock, now: () => T0, deadline, impls: unreadable.impls })).reason, "lock_not_held")
     assert.equal((await qualify.autoQualifyTriage(ENV, { lock, now: () => T0, deadline, impls: world(root, { host: () => false }).impls })).reason, "host_unsupported")
@@ -221,7 +224,7 @@ test("automatic qualification needs the worker's own lock and a reason qualifyin
     assert.deepEqual(result, { state: "qualified", reason: null, launched: true })
     assert.equal(calls.qualify[0].deadline, deadline)
     assert.deepEqual(calls.reserve[0], { kind: "triage", launches: 2, generation: "g1", now: T0, legacyEvaluator: { x: 1 } })
-    assert.deepEqual(await marker(root), { version: 1, day: "2030-03-10", started_at: new Date(T0).toISOString(), trigger: "missing", streak: 1, result: "qualified", reason: null })
+    assert.deepEqual(await marker(root), { version: 1, day: "2030-03-10", started_at: new Date(T0).toISOString(), trigger: "missing", streak: 0, result: "qualified", reason: null })
     // Once a UTC day.
     const again = await qualify.autoQualifyTriage(ENV, { lock, now: () => T0 + HOUR, deadline: T0 + 3 * HOUR, impls })
     assert.deepEqual(again, { state: "skipped", reason: "attempted_today", launched: false })
@@ -253,7 +256,7 @@ test("the automatic marker fails closed, gates the deadline and stops a repeatin
       const short = stale("runtime_changed")
       assert.equal((await qualify.autoQualifyTriage(ENV, { lock, now: () => T0 + 48 * HOUR, deadline, impls: short.impls })).reason, "no_time")
     }
-    // Three days in a row for the same host-side reason, then it stops.
+    // Day by day, one attempt each.
     let day = 48
     const attempt = async (reason, over = {}) => {
       const run = stale(reason)
@@ -262,19 +265,40 @@ test("the automatic marker fails closed, gates the deadline and stops a repeatin
       day += 24
       return result
     }
+    const failing = { qualify: async (options) => {
+      await options.reserve()
+      return { state: "blocked", reason: "launch_chain_unknown", resources: { launches: 2 } }
+    } }
+    // Successful requalifications never count: an OS update every few months keeps recovering.
+    for (let i = 0; i <= qualify.AUTO_STREAK_LIMIT; i++) {
+      assert.equal((await attempt("chain_changed")).state, "qualified", `success ${i + 1}`)
+      assert.equal((await marker(root)).streak, 0)
+    }
+    // Three failures in a row for the same host-side reason, then it stops.
     for (let streak = 1; streak <= qualify.AUTO_STREAK_LIMIT; streak++) {
-      assert.equal((await attempt("runtime_changed")).state, "qualified")
+      assert.equal((await attempt("runtime_changed", failing)).state, "failed")
       assert.equal((await marker(root)).streak, streak)
     }
     assert.deepEqual(await attempt("runtime_changed"), { state: "skipped", reason: "auto_suspended", launched: false, trigger: "runtime_changed" })
-    assert.equal((await attempt("source_changed")).state, "qualified", "a release-driven reason never counts")
-    assert.equal((await marker(root)).streak, 0)
-    assert.equal((await attempt("environment_changed")).state, "qualified")
+    assert.equal((await attempt("source_changed", failing)).state, "failed")
+    assert.equal((await marker(root)).streak, 0, "a release-driven reason never counts")
+    assert.equal((await attempt("environment_changed", failing)).state, "failed")
     assert.equal((await marker(root)).streak, 1, "another reason starts again")
-    // A refusal before the marker is not an attempt.
+    // An attempt that never finished counts as a failure.
+    await fs.writeFile(paths.marker, JSON.stringify({ ...(await marker(root)), streak: qualify.AUTO_STREAK_LIMIT, result: "started" }))
+    assert.equal((await attempt("environment_changed")).reason, "auto_suspended")
+    await fs.writeFile(paths.marker, JSON.stringify({ ...(await marker(root)), streak: 1, result: "failed" }))
+    // A refusal before the reservation, or by the ledger, is not an attempt: the marker and the day stay unused.
     const before = await marker(root)
     assert.equal((await attempt("environment_changed", { signIn: async () => ({ state: "no_credentials" }) })).reason, "no_credentials")
     assert.deepEqual(await marker(root), before)
+    const refusedDay = day
+    const ledger = await attempt("environment_changed", { reserve: async () => ({ state: "triage_cooldown" }), ...failing })
+    assert.deepEqual(ledger, { state: "refused", reason: "triage_cooldown", launched: false })
+    assert.deepEqual(await marker(root), before, "a ledger refusal neither uses the day nor counts")
+    day = refusedDay
+    assert.equal((await attempt("environment_changed")).state, "qualified", "the same day may try again after a ledger refusal")
+    assert.equal((await marker(root)).streak, 0)
   } finally {
     await releaseLock(lock)
   }

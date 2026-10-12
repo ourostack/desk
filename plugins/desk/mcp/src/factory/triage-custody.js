@@ -46,6 +46,8 @@ function probeFrame(observation){
 // owned source identity, so a changed fixture is a changed source.
 export const QUALIFICATION_FIXTURE=fileURLToPath(new URL("./v12-owned-catalog.json",import.meta.url))
 export const NATIVE_ENGINE_SHA256="c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+/** The pinned build's size in bytes: a cheap first test before its 240 MB are hashed. */
+export const NATIVE_ENGINE_BYTES=240664432
 export const ownedPidLive=pid=>{try{process.kill(pid,0);return true}catch(e){if(e.code==="ESRCH")return false;throw e}}
 export async function reapOwnedChild(child,deadline){
   if(!child||child.exitCode!==null||child.signalCode!==null||!Number.isSafeInteger(child.pid)||child.pid<=0)return
@@ -558,6 +560,18 @@ async function materializeSubmission({custody,nativeStream,brief,resultFile},con
     try{await handle.writeFile(encoded);await handle.sync()}finally{await handle.close()}
     return {state:"ran",resultFile,provisionalValid:valid.valid.length,provisionalRefused:valid.refused.length}
   }catch{return {state:"scope_unqualified",reason:"diagnostic_inadequate",provisionalValid:0,provisionalRefused:0}}
+}
+/**
+ * `authenticReceiptFrames(custody, snapshotFile)`: the receipts authenticate under their own snapshot's key, apart from whether
+ * this install still matches them. The snapshot is the one the custody names, every frame carries its key's MAC and generation,
+ * and the module closure the parent kept is the one the server signed in its bootstrap frame. Throws `receipt_frames`.
+ */
+export async function authenticReceiptFrames(custody,snapshotFile){
+  const bytes=await readProtectedBytes(snapshotFile,6291456),snapshot=JSON.parse(bytes)
+  if(catalogHash(bytes)!==custody?.snapshotSha256||!Array.isArray(custody.receipts)||custody.receipts.length!==3||
+    !Array.isArray(custody.observations)||
+    [...custody.receipts,...custody.observations].some(frame=>!verifyReceipt(frame,snapshot.receipt_key)||frame.generation!==snapshot.generation)||
+    catalogCanonical(custody.receipts[0].payload.module_closure)!==catalogCanonical(custody.moduleClosure))fail("receipt_frames")
 }
 async function restoredCustody(custody,snapshotFile,context) {
   await assertOutsideGitWorkspace(path.dirname(snapshotFile),{label:"triage",subject:"custody"})
