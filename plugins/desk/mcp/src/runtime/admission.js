@@ -173,10 +173,12 @@ export function createAdmission({
     get running() {
       return running !== null
     },
+    /** Stop scheduling attempts. Returns the attempt still running, if any (it never rejects), so a caller can wait until admission has stopped touching the desk. */
     dispose() {
       disposed = true
       if (timer !== null) timers.clearTimeout(timer)
       timer = null
+      return running ?? Promise.resolve(snapshot())
     },
   }
 }

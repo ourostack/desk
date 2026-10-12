@@ -295,6 +295,8 @@ test("status stays bounded while destination resolution is blocked, and disposal
     return { accepted: true, close() {} }
   } })
   const { session, base } = await makeSession(t, {
+    // The attempt is held on purpose; the late completion is what this test checks.
+    disposeAdmissionWaitMs: 0,
     runtime,
     resolveInputs: async () => {
       if (blocked) {
@@ -454,6 +456,8 @@ test("disposal while acquiring or reconnecting a controller closes the late cont
     let release
     let closed = 0
     const { session } = await makeSession(t, {
+      // The attempt is held on purpose; the late completion is what this test checks.
+      disposeAdmissionWaitMs: 0,
       runtime: fakeRuntime({ connectOrStartController: async () => {
         if (block) {
           entered = true
@@ -485,6 +489,8 @@ test("disposal during branch inspection cannot start a controller", async (t) =>
   let release
   let connects = 0
   const { session } = await makeSession(t, {
+    // The attempt is held on purpose; the late completion is what this test checks.
+    disposeAdmissionWaitMs: 0,
     inputs: { stateBranch: "main" },
     git: async () => {
       entered = true
@@ -561,6 +567,8 @@ test("focus refuses a settled root-resolution failure without invoking the runti
 test("a resolver rejection after disposal cannot publish a new last-start record", async (t) => {
   let reject
   const { session, base } = await makeSession(t, {
+    // The attempt is held on purpose; the late completion is what this test checks.
+    disposeAdmissionWaitMs: 0,
     resolveInputs: () => new Promise((resolve, fail) => { reject = fail }),
   })
   const pending = session.start()
@@ -1085,7 +1093,7 @@ test("disposing the session during the repeats ends the check without a verdict"
 
 test("refusals while admitting explain that Desk is still admitting", async (t) => {
   const timers = { setTimeout: (callback) => { setImmediate(callback); return 1 }, clearTimeout: () => {} }
-  const { session } = await makeSession(t, { timers, loadRuntime: () => new Promise(() => {}) })
+  const { session } = await makeSession(t, { timers, disposeAdmissionWaitMs: 0, loadRuntime: () => new Promise(() => {}) })
   const refused = payload(await session.callTool({ name: "desk_search" }))
   assert.equal(refused.code, "admitting")
   assert.match(refused.fix, /still admitting/u)
@@ -1688,6 +1696,91 @@ test("the root's own start record begins with admitting, and desk_status points 
   assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).admission.last_start, perRoot)
 })
 
+test("closing the session waits for a running admission attempt, so a closed session no longer touches the desk", async (t) => {
+  let release
+  let resolving = false
+  const { session, root } = await makeSession(t, {
+    resolveInputs: async () => {
+      resolving = true
+      await new Promise((resolve) => { release = resolve })
+      return inputs({ root })
+    },
+  })
+  void session.admission.refresh({ force: true, waitMs: 0 })
+  await waitUntil(() => resolving)
+  let closed = false
+  const closing = session.dispose().then(() => { closed = true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(closed, false, "close must not finish while the attempt is still running")
+  release()
+  await closing
+  assert.equal(session.admission.running, false)
+})
+
+test("closing the session resolves as soon as the running admission attempt finishes", async (t) => {
+  let release
+  let resolving = false
+  const { session, root } = await makeSession(t, {
+    resolveInputs: async () => {
+      resolving = true
+      await new Promise((resolve) => { release = resolve })
+      return inputs({ root })
+    },
+  })
+  void session.admission.refresh({ force: true, waitMs: 0 })
+  await waitUntil(() => resolving)
+  const closing = session.dispose()
+  setTimeout(() => release(), 20)
+  const started = Date.now()
+  await closing
+  assert.ok(Date.now() - started < 1000, "close follows the attempt, not the 2 s bound")
+  assert.equal(session.admission.running, false)
+})
+
+test("closing the session closes its controller at once, not after the admission attempt wait", async (t) => {
+  let hold = false
+  let closedAt = null
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => ({
+      accepted: true,
+      async status() { return { state: "READY" } },
+      close() { closedAt ??= Date.now() },
+    }),
+  })
+  const { session, root } = await makeSession(t, {
+    runtime,
+    disposeAdmissionWaitMs: 1000,
+    resolveInputs: () => (hold ? new Promise(() => {}) : Promise.resolve(inputs({ root }))),
+  })
+  await session.admission.refresh()
+  assert.equal(session.admission.snapshot().state, "ready")
+  assert.notEqual(session.context.admission?.controller, null)
+  // An attempt that never finishes is running when the session closes.
+  hold = true
+  void session.admission.refresh({ force: true, waitMs: 0 })
+  assert.equal(session.admission.running, true)
+  const started = Date.now()
+  await session.dispose()
+  const disposedMs = Date.now() - started
+  assert.notEqual(closedAt, null, "the controller was closed")
+  assert.ok(closedAt - started < 300, `the controller closed after ${closedAt - started} ms, not alongside the attempt wait`)
+  assert.ok(disposedMs >= 900, "close still waited for the attempt up to its bound")
+})
+
+test("closing the session stops waiting for an admission attempt that never finishes", async (t) => {
+  let resolving = false
+  const { session } = await makeSession(t, {
+    resolveInputs: () => { resolving = true; return new Promise(() => {}) },
+    disposeAdmissionWaitMs: 50,
+  })
+  void session.admission.refresh({ force: true, waitMs: 0 })
+  await waitUntil(() => resolving)
+  const started = Date.now()
+  await session.dispose()
+  assert.ok(Date.now() - started >= 40, "close waited for the attempt up to its bound")
+  assert.equal(session.admission.running, true, "the stuck attempt is left behind")
+})
+
 test("a controller whose close fails is still forgotten, and dispose closes the controller", async (t) => {
   const failing = await makeSession(t, { runtime: fakeRuntime({ connectOrStartController: async () => ({ accepted: true, close: async () => { throw new Error("already gone") } }) }) })
   await failing.session.admission.refresh()
@@ -1912,6 +2005,9 @@ test("with a state branch configured and HEAD on it, a write reaches the tool", 
 })
 
 test("desk_status names the step a running admission attempt is in, and clears it when the attempt ends", async (t) => {
+  // The status budget timers are unref'd by design; keep this test's loop alive while the runtime load is held.
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
   let release
   let reportPhase
   const { session } = await makeSession(t, {
