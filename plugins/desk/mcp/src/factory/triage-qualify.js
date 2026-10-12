@@ -5,10 +5,10 @@
 //   - `qualifyTriage(env)`: the supported command (`factory.js triage-qualify`). It takes the loop worker's lock, so no worker
 //     reads a half-written record, and qualifies whenever the record does not restore.
 //   - `autoQualifyTriage(env, { lock, deadline, ... })`: the loop worker, holding its own lock, when restore says `missing` or a
-//     `stale` reason that qualifying again can clear. At most one attempt starts per UTC day (the marker
-//     `triage/auto-qualify.json` is written before it starts, and a marker that cannot be read counts as today's attempt), at
-//     least 20 minutes must remain before the worker's deadline, and after three attempts in a row for the same reason it stops
-//     until the command succeeds.
+//     `stale` reason that qualifying again can clear. At most one attempt launches per UTC day (the marker
+//     `triage/auto-qualify.json` is written once the ledger has reserved the launches, and a marker that cannot be read counts as
+//     today's attempt), at least 20 minutes must remain before the worker's deadline, and after three failed attempts in a row
+//     for the same reason it stops until the command runs. A success, or a ledger refusal, does not count toward that.
 //
 // Before anything launches: a Darwin arm64 host, no headless session, no billing variable, no coverage or loader measurement,
 // the pinned engine installed at a location only this account can change, and a subscription sign-in. The two native launches
@@ -32,7 +32,7 @@ import { locatePinnedEngine, qualificationMeasurementActive, restoreTriageQualif
 
 /** The least time, before the worker's deadline, an automatic qualification needs (a full qualification took about 66 s). */
 const AUTO_MIN_REMAINING_MS = 20 * 60 * 1000
-/** Automatic attempts in a row for the same reason before automatic qualification stops for that reason. */
+/** Failed automatic attempts in a row for the same reason before automatic qualification stops for that reason. */
 export const AUTO_STREAK_LIMIT = 3
 // Reasons a new release or engine pin causes, not the host: these never count toward the streak.
 const STREAK_EXEMPT = new Set(["record_version", "source_changed", "engine_changed"])
@@ -190,23 +190,29 @@ export async function autoQualifyTriage(env, { lock, now = Date.now, deadline, g
     return answer("skipped", "attempted_today")
   }
   if (marker?.day === today) return answer("skipped", "attempted_today")
-  const streak = STREAK_EXEMPT.has(trigger) ? 0 : marker?.trigger === trigger ? marker.streak + 1 : 1
-  if (streak > AUTO_STREAK_LIMIT) return answer("skipped", "auto_suspended", { trigger })
+  // `streak` counts this trigger's failed attempts in a row; an attempt that never finished counts as failed.
+  const counted = !STREAK_EXEMPT.has(trigger)
+  const failures = counted && marker?.trigger === trigger && ["failed", "started"].includes(marker.result) ? marker.streak : 0
+  if (failures >= AUTO_STREAK_LIMIT) return answer("skipped", "auto_suspended", { trigger })
   if (!Number.isSafeInteger(deadline) || deadline - nowMs < AUTO_MIN_REMAINING_MS) return answer("skipped", "no_time")
-  const started = { version: 1, day: today, started_at: new Date(nowMs).toISOString(), trigger, streak, result: "started", reason: null }
+  const started = { version: 1, day: today, started_at: new Date(nowMs).toISOString(), trigger, streak: counted ? failures + 1 : 0, result: "started", reason: null }
   let attempted = false
-  const before = async () => {
+  // Written once the ledger has reserved the launches: a refusal before that (no engine, signed out, the ledger) is not an
+  // attempt, and the next due tick may try again.
+  const reserved = async () => {
     await impl.writeMarker(paths.marker, started)
     attempted = true
   }
-  const outcome = await qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, before }, impl)
-  // A refusal before the marker (no engine, signed out) is not an attempt; the next due tick may try again.
-  if (attempted) await impl.writeMarker(paths.marker, { ...started, result: outcome.state, reason: outcome.reason })
+  const outcome = await qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, reserved }, impl)
+  if (attempted) {
+    await impl.writeMarker(paths.marker, { ...started, streak: outcome.state === "failed" && counted ? failures + 1 : 0, result: outcome.state, reason: outcome.reason })
+  }
   return outcome
 }
 
-// The transaction under the lock: engine, sign-in, move-aside, qualifier, ledger. `before` runs once the preflight passed.
-async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, before = async () => {} }, impl) {
+// The transaction under the lock: engine, sign-in, move-aside, qualifier, ledger. `reserved` runs once the ledger reserved the
+// launches, before the first one; a throw there launches nothing.
+async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, reserved: onReserved = async () => {} }, impl) {
   const cli = impl.locate({ env })
   if (!cli) return answer("refused", "engine_unpinned")
   let childEnv
@@ -217,19 +223,19 @@ async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEva
   }
   const signIn = await impl.signIn({ cli, env: childEnv })
   if (signIn.state !== "subscription") return answer("refused", signIn.state)
-  await before()
   const nowMs = now()
   const aside = (await impl.exists(paths.out)) ? `${paths.out}.aside-${stamp(nowMs)}-${impl.random()}` : null
   if (aside) await impl.rename(paths.out, aside)
   let token = null
   let ledger = null
   const reserve = async () => {
-    const reserved = await impl.reserve(env, { kind: "triage", launches: 2, generation, now: now(), legacyEvaluator })
-    if (reserved.state !== "reserved") {
-      ledger = reserved.state
+    const reservation = await impl.reserve(env, { kind: "triage", launches: 2, generation, now: now(), legacyEvaluator })
+    if (reservation.state !== "reserved") {
+      ledger = reservation.state
       throw new Error("quota_refused")
     }
-    token = reserved.token
+    token = reservation.token
+    await onReserved()
   }
   let result
   try {

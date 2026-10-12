@@ -3,7 +3,7 @@
 import childProcess,{spawn as nodeSpawn} from "node:child_process"
 import fsNative,{readFileSync,realpathSync,lstatSync,readdirSync} from "node:fs"
 import {userInfo,tmpdir} from "node:os"
-import {createHash} from "node:crypto"
+import {createHash,createHmac} from "node:crypto"
 import matter from "gray-matter"
 import * as path from "node:path"
 import {billingVariableBlocks,findAgentCli,probeSignIn,runChild,HEADLESS_TIMEOUT_MS} from "./headless.js"
@@ -11,8 +11,8 @@ import {isHeadlessFactorySession} from "./headless-flag.js"
 import {TRIAGE_RUNNER_STATES} from "./triage-schema.js"
 import {assertOutsideGitWorkspace} from "./os-protect.js"
 import {ownedCatalogHostSupport,ownedServerLaunch,prepareOwnedCatalogRun,runOwnedCatalogNative,ownedSourceIdentity,authenticatedNativeRuns,
-  authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction,NATIVE_ENGINE_SHA256,
-  ownedDependencyIdentity,ownedSourceRoots,relocatedClosure,relocatedPath,verifyModuleClosure} from "./triage-custody.js"
+  authenticatedDirectReceipts,restoreNativeBundle,restoreDirectReceipt,runNonacceptedNativeTransaction,NATIVE_ENGINE_SHA256,NATIVE_ENGINE_BYTES,
+  ownedDependencyIdentity,ownedSourceRoots,relocatedClosure,relocatedPath,verifyModuleClosure,authenticReceiptFrames} from "./triage-custody.js"
 import {catalogCanonical,closedObject,safeCatalogPath,catalogToolSchemas} from "./triage-catalog.js"
 import {catalogProtocolIdentity} from "./triage-protocol.js"
 
@@ -937,12 +937,13 @@ function registerQualification({directReceipts,nativeReceipts,admission,chain,cl
   context.authenticateNative(nativeReceipts);context.authenticateDirect(directReceipts)
   requireControlCollections(admission.control_history,context.controlRecords)
   const {record}=prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission,chain,cliMetadata,cli,env,dependencies})
+  record.host_seal=context.hostSeal(record)
   context.records.set(record,{seal:fingerprint(record),identity:record.sourceIdentity,dependencies:record.dependency_identity})
   return record
 }
 export function prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission,chain,cliMetadata,env,dependencies}){
   const identity=nativeReceipts[0].custody.sourceIdentity,roots=nativeReceipts[0].custody.roots
-  if(catalogCanonical(identity)!==catalogCanonical(nativeReceipts[1].custody.sourceIdentity))throw Error("source_identity")
+  if([...directReceipts,...nativeReceipts].some(run=>catalogCanonical(run.custody.sourceIdentity)!==catalogCanonical(identity)))throw Error("source_identity")
   const invocationIdentities=nativeReceipts.map(run=>ownedInvocationIdentity({invocation:run.invocation,chain,cliMetadata,env,sourceRoot:roots?.source}))
   if(invocationIdentities[0].template_sha256!==invocationIdentities[1].template_sha256)throw Error("invocation_template")
   const record={version:QUALIFICATION_VERSION,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
@@ -962,7 +963,7 @@ export function prepareOwnedQualificationDocument({directReceipts,nativeReceipts
 const QUALIFIED_KEYS=Object.freeze(["version","protocol_envelope_version","protocol_identity","enforcement_scheme","state","env_recipe_version","sourceIdentity","source_roots","dependency_identity","environment_sha256","policy_sources_fingerprint","chain_fingerprint","directReceipts","nativeReceipts","cliMetadata","cli","format_fingerprint","resources","invocationIdentities","recipe_version","controls_schema","control_evidence","predicate_table_sha256","predicate_table","builtin_basis_sha256","optional_off_sha256","registered_set_sha256","effective_off_sha256"])
 export function validateOwnedQualificationStructure({record,out,sourceIdentity,env}){
   if(record?.version!==QUALIFICATION_VERSION)throw Error("qualification_structure")
-  closedObject(record,QUALIFIED_KEYS)
+  closedObject(record,QUALIFIED_KEYS,["host_seal"])
   closedObject(record.resources,["native_launches","direct_bundles"])
   closedObject(record.source_roots,["source","deps"])
   closedObject(record.dependency_identity,["version","files","sha256"])
@@ -1029,9 +1030,10 @@ export async function loadTriageQualification({recordFile,...config}){
  *   {state:"qualified",qualification}         the sealed record runTriageChild accepts
  *   {state:"missing"}                         no record is installed
  *   {state:"stale",reason,requalify}          an intact record that does not fit this install, engine, environment or policy
- *   {state:"damaged",reason}                  unreadable, non-canonical, malformed, or its receipts fail restoration
+ *   {state:"damaged",reason}                  unreadable, non-canonical, malformed, edited, sealed elsewhere, or its receipts fail
  * The stale reasons, each with its `requalify` flag (whether a new qualification on this host could clear it), are
- * `TRIAGE_STALE_REASONS`. The damaged reasons are unreadable, noncanonical, structure, receipts and restore_failed.
+ * `TRIAGE_STALE_REASONS`. The damaged reasons, all about the record's own bytes, are unreadable, noncanonical, structure, seal
+ * (edited, or sealed on another Mac or account) and receipts.
  */
 export async function restoreTriageQualification({recordFile,...config}){
   return restoreQualification({recordFile,...config},realTransaction)
@@ -1039,7 +1041,8 @@ export async function restoreTriageQualification({recordFile,...config}){
 // Every stale reason, and whether qualifying again on this host could clear it.
 export const TRIAGE_STALE_REASONS=Object.freeze({record_version:true,qualification_failed:true,source_changed:true,runtime_changed:true,
   engine_changed:true,engine_mismatch:false,engine_unpinned:false,environment_changed:true,environment_unsafe:false,chain_changed:true,
-  chain_unavailable:false,policy_changed:true,policy_blocked:false,host_unsupported:false,measurement_active:false})
+  chain_unavailable:false,policy_changed:true,policy_blocked:false,host_unsupported:false,measurement_active:false,root_unsafe:false,
+  check_failed:false})
 const stale=reason=>({state:"stale",reason,requalify:TRIAGE_STALE_REASONS[reason]})
 const damaged=reason=>({state:"damaged",reason})
 const BLOCKED_KEYS=["version","protocol_envelope_version","enforcement_scheme","recipe_version","controls_schema","predicate_table","state","reason"]
@@ -1063,13 +1066,49 @@ async function staleShape(record,out,context){
   }catch{return null}
   return null
 }
-// What of this install, engine and environment differs from a record whose
-// version-7 shape is closed. Nothing here launches or reads receipts.
-async function staleReason(record,env,cli,context){
-  const current=await context.source(),recorded=record.sourceIdentity
+/**
+ * `hostRecordSeal(record) -> hex`: the MAC that binds a qualified record to this Mac and account, over every field but the seal.
+ * The key is derived from the hardware UUID and the uid, so a record edited by hand or copied from another Mac fails it. Any
+ * process of this account can derive it: it marks records, it does not keep out a same-account writer.
+ */
+export function hostRecordSeal(record,{run=childProcess.spawnSync,uid=process.getuid?.()}={}){
+  const read=run("/usr/sbin/ioreg",["-rd1","-c","IOPlatformExpertDevice"],{env:{},encoding:"utf8",timeout:5000})
+  const id=read.status===0?/"IOPlatformUUID" = "([0-9A-F-]{36})"/u.exec(String(read.stdout))?.[1]:undefined
+  if(!id)throw Error("host_identity")
+  const {host_seal,...body}=record
+  const key=createHash("sha256").update(`desk.factory.triage-record/1\0${id}\0${uid}`).digest()
+  return createHmac("sha256",key).update(catalogCanonical(body)).digest("hex")
+}
+// The receipts authenticate under their own keys, and every identity the
+// record is keyed on is the one its receipts carry. The engine pin and the
+// dependency identity appear in no receipt; the host seal covers them.
+async function receiptsAgree(record,context){
+  const pairs=[...record.directReceipts.map(run=>[run,run.snapshotArchive]),...record.nativeReceipts.map(run=>[run,run.snapshotFile])]
+  if(pairs.length!==4)throw Error("receipt_count")
+  for(const [run,file]of pairs)await context.receiptFrames(run.custody,file)
+  if(pairs.some(([run])=>catalogCanonical(run.custody.sourceIdentity)!==catalogCanonical(record.sourceIdentity)||
+      catalogCanonical(run.custody.roots)!==catalogCanonical(record.source_roots))||
+    record.nativeReceipts.some((run,i)=>run.invocation.command!==record.cli||run.invocation.parent_env_sha256!==record.environment_sha256||
+      record.control_evidence[i]?.recipe_sha256!==fingerprint({version:3,argv:run.invocation.args})||
+      record.control_evidence[i].engine_sha256!==record.control_evidence[0].engine_sha256))throw Error("receipt_identity")
+}
+// This install's source identity. A file that vanishes mid-read (an update in
+// progress) is read once more; still missing, the source has changed (null).
+async function currentSource(context){
+  for(let attempt=0;;attempt++){
+    try{return await context.source()}
+    catch(e){if(e?.code!=="ENOENT")throw e;if(attempt)return null}
+  }
+}
+// What of this install, engine and environment differs from an authenticated
+// record. Nothing here launches or reads receipts.
+async function staleReason(record,current,env,cli,context){
+  const recorded=record.sourceIdentity
   if(!policyObject(recorded)||recorded.version!==2||!policyObject(recorded.files)||!policyObject(recorded.runtime))return "structure"
-  if(catalogCanonical(recorded.files)!==catalogCanonical(current.files)||recorded.env_binary!==current.env_binary)return "source_changed"
-  if(catalogCanonical(record.dependency_identity)!==catalogCanonical(context.dependencies()))return "source_changed"
+  if(current===null||catalogCanonical(recorded.files)!==catalogCanonical(current.files)||recorded.env_binary!==current.env_binary)return "source_changed"
+  let dependencies
+  try{dependencies=context.dependencies()}catch{return "source_changed"}
+  if(catalogCanonical(record.dependency_identity)!==catalogCanonical(dependencies))return "source_changed"
   if(catalogCanonical(recorded.runtime)!==catalogCanonical(current.runtime))return "runtime_changed"
   if(catalogCanonical(recorded)!==catalogCanonical(current))return "source_changed"
   if(record.control_evidence.some(e=>e?.engine_sha256!==POLICY_ENGINE_SHA))return "engine_changed"
@@ -1083,11 +1122,16 @@ async function staleReason(record,env,cli,context){
   return null
 }
 // Each receipt's server closure, file by file under the current roots: a
-// changed, missing or relinked module is a source change, not damage.
+// changed, missing or relinked module is a source change; a file this
+// account cannot read is a host condition; a closure the record cannot
+// state under these roots is damage.
 async function closureReason(record,context){
   for(const run of [...record.directReceipts,...record.nativeReceipts]){
     try{await context.closure(run.custody.moduleClosure,{from:run.custody.roots})}
-    catch(e){return e?.code==="ENOENT"||["module_changed","module_symlink"].includes(e?.message)?"source_changed":"structure"}
+    catch(e){
+      if(e?.code==="ENOENT"||["module_changed","module_symlink"].includes(e?.message))return "source_changed"
+      return e?.code?"check_failed":"structure"
+    }
   }
   return null
 }
@@ -1108,15 +1152,26 @@ async function restoreQualification({recordFile,...config},context){
     return reason?stale(reason):damaged("structure")
   }
   try{
-    closedObject(record,QUALIFIED_KEYS)
-    if(!Array.isArray(record.control_evidence)||typeof record.cli!=="string"||!path.isAbsolute(record.cli))return damaged("structure")
+    closedObject(record,QUALIFIED_KEYS,["host_seal"])
+    if(!Array.isArray(record.control_evidence)||typeof record.cli!=="string"||!path.isAbsolute(record.cli)||
+      !Array.isArray(record.directReceipts)||!Array.isArray(record.nativeReceipts))return damaged("structure")
   }catch{return damaged("structure")}
+  // Nothing about this install is compared until the record is shown to be
+  // one this Mac sealed, with receipts that authenticate and agree with it.
+  try{if(record.host_seal!==context.hostSeal(record))return damaged("seal")}
+  catch{return stale("host_unsupported")}
+  try{await receiptsAgree(record,context)}
+  catch{return damaged("receipts")}
+  try{context.roots()}
+  catch{return stale("root_unsafe")}
+  let current
   try{
-    const reason=await staleReason(record,env,config.cli,context)
+    current=await currentSource(context)
+    const reason=await staleReason(record,current,env,config.cli,context)
     if(reason==="structure")return damaged("structure")
     if(reason)return stale(reason)
-  }catch{return damaged("restore_failed")}
-  try{validateOwnedQualificationStructure({record,out,sourceIdentity:await context.source(),env})}
+  }catch{return stale("check_failed")}
+  try{validateOwnedQualificationStructure({record,out,sourceIdentity:current,env})}
   catch{return damaged("structure")}
   const closure=await closureReason(record,context)
   if(closure==="structure")return damaged("structure")
@@ -1137,7 +1192,7 @@ async function restoreQualification({recordFile,...config},context){
     if(policySourceFingerprint(admission,env)!==record.policy_sources_fingerprint)return stale("policy_changed")
     context.records.set(record,{seal:fingerprint(record),identity:record.sourceIdentity,dependencies:record.dependency_identity})
     return {state:"qualified",qualification:record}
-  }catch{return damaged("restore_failed")}
+  }catch{return stale("check_failed")}
 }
 // The qualified invocation's argv as this install would launch it: the same
 // fixed policy built around the owned server under the current roots (the
@@ -1166,11 +1221,12 @@ export function locatePinnedEngine({env,preferred=[],find=findAgentCli,list=read
   return null
 }
 /** `pinnedEngineFile(file) -> boolean`: `file` is the pinned build, at a location only this account or root can change. */
-export function pinnedEngineFile(file,{hash=fileSha256,uid=process.getuid?.(),stat=lstatSync}={}){
+export function pinnedEngineFile(file,{hash=fileSha256,uid=process.getuid?.(),stat=lstatSync,bytes=NATIVE_ENGINE_BYTES}={}){
   try{
     if(typeof file!=="string"||!path.isAbsolute(file)||path.resolve(file)!==file)return false
     const closed=s=>[uid,0].includes(s.uid)&&(s.mode&0o022)===0,s=stat(file)
-    if(!s.isFile()||!closed(s))return false
+    // Another build's size rules it out before its bytes are read.
+    if(!s.isFile()||!closed(s)||s.size!==bytes)return false
     for(let dir=path.dirname(file);;dir=path.dirname(dir)){
       const d=stat(dir)
       if(!d.isDirectory()||!closed(d))return false
@@ -1252,6 +1308,7 @@ async function runRegisteredTriage({env,inputDir,resultFile,workDir,qualificatio
 const realTransaction=Object.freeze({records:ownedQualificationRecords,controlRecords:controlCollections,
   host:ownedCatalogHostSupport,pinnedEngine:pinnedEngineFile,locateEngine:locatePinnedEngine,
   dependencies:ownedDependencyIdentity,closure:verifyModuleClosure,roots:ownedSourceRoots,capture:safeCatalogPath,
+  hostSeal:hostRecordSeal,receiptFrames:authenticReceiptFrames,
   authenticateNative:authenticatedNativeRuns,authenticateDirect:authenticatedDirectReceipts,
   readDocument:readTriageQualificationDocument,restoreDirect:restoreDirectReceipt,restoreNative:restoreNativeBundle,
   source:ownedSourceIdentity,resolveCLI:realpathSync,findCLI:findAgentCli,prepare:prepareOwnedCatalogRun,
@@ -1269,22 +1326,44 @@ export function createNonacceptedTriageUnit(config){
     "run","postAdmission","postIdentity","throwRun","runTimeout","runBudget","runUnqualified","badSignIn","close",
     "signInChainDrift","signInChainUnknown","runChainDrift","runChainUnknown","nativeMode",
     "postExitAdmission","postExitIdentity","signInArgvDrift","runArgvDrift",
-    "host","engineMoved","engineGone","dependencies","closureChanged","closureInvalid","runClosure","noCapture","reserve","chainThrows"])
+    "host","engineMoved","engineGone","dependencies","closureChanged","closureInvalid","runClosure","noCapture","reserve","chainThrows",
+    "foreignHost","hostUnknown","receiptFrames","rootUnsafe","runtime","sourceFlicker","sourceGone","sourceUnreadable","dependenciesGone",
+    "closureUnreadable","otherRoots"])
   const records=new WeakMap(),controlRecords=new WeakMap(),documents=new Map(),stats={runs:0,closed:0},out=path.dirname(path.dirname(data.record.nativeReceipts[0].snapshotFile))
   for(const e of data.admission.control_history??[])controlRecords.set(e,fingerprint(e))
   let admissionReads=0,signedIn=false,hasRun=false
   const source=structuredClone(data.record.sourceIdentity),env=structuredClone(data.env)
+  let sourceReads=0
+  const unitSeal=(record,host)=>{
+    const {host_seal,...body}=record
+    return createHmac("sha256",`unit-host-${host}`).update(catalogCanonical(body)).digest("hex")
+  }
+  // Another install of the same files: both roots moved by one folder.
+  const moved=root=>path.join(path.dirname(root),"unit-moved",path.basename(root),path.sep)
   const context={
     records,controlRecords,
     host:()=>({provenance:!failures.host}),
     pinnedEngine:()=>!failures.engineMoved&&!failures.engineGone,
     locateEngine:()=>failures.engineGone?null:data.record.cli,
-    dependencies:()=>failures.dependencies?{...data.record.dependency_identity,sha256:"f".repeat(64)}:structuredClone(data.record.dependency_identity),
+    dependencies:()=>{
+      if(failures.dependenciesGone)throw Object.assign(Error("unit_dependency_missing"),{code:"ENOENT"})
+      return failures.dependencies?{...data.record.dependency_identity,sha256:"f".repeat(64)}:structuredClone(data.record.dependency_identity)
+    },
     async closure(){
       if(failures.closureChanged)throw Error("module_changed")
       if(failures.closureInvalid)throw Error("module_closure")
+      if(failures.closureUnreadable)throw Object.assign(Error("unit_module_unreadable"),{code:"EACCES"})
     },
-    roots:()=>structuredClone(data.record.source_roots),
+    roots:()=>{
+      if(failures.rootUnsafe)throw Error("source_root_unsafe")
+      const roots=structuredClone(data.record.source_roots)
+      return failures.otherRoots?{source:moved(roots.source),deps:moved(roots.deps)}:roots
+    },
+    hostSeal:record=>{
+      if(failures.hostUnknown)throw Error("host_identity")
+      return unitSeal(record,failures.foreignHost?"other":"this")
+    },
+    async receiptFrames(){if(failures.receiptFrames)throw Error("receipt_frames")},
     async capture(file){if(failures.noCapture||!documents.has(file))throw Error("unit_capture_missing")},
     authenticateNative(receipts,restoring=false){
       if(failures.native||(restoring&&failures.restoreAuthNative)||receipts.length!==2)throw Error("unit_native_missing")
@@ -1299,7 +1378,13 @@ export function createNonacceptedTriageUnit(config){
     },
     async restoreDirect(){if(failures.restoreDirect)throw Error("unit_direct_replay_failed")},
     async restoreNative(){if(failures.restoreNative)throw Error("unit_native_replay_failed")},
-    async source(){return failures.source?{...source,unit_changed:true}:structuredClone(source)},
+    async source(){
+      sourceReads++
+      if(failures.sourceGone||(failures.sourceFlicker&&sourceReads===1))throw Object.assign(Error("unit_source_missing"),{code:"ENOENT"})
+      if(failures.sourceUnreadable)throw Object.assign(Error("unit_source_unreadable"),{code:"EACCES"})
+      if(failures.runtime)return {...structuredClone(source),runtime:{...source.runtime,sha256:"f".repeat(64)}}
+      return failures.source?{...source,unit_changed:true}:structuredClone(source)
+    },
     resolveCLI:value=>value,
     findCLI:()=>null,
     async prepare(){
@@ -1320,8 +1405,10 @@ export function createNonacceptedTriageUnit(config){
       if((signedIn&&failures.signInArgvDrift)||(hasRun&&failures.runArgvDrift))value.effective_argv.push("--unit-drift")
       return value
     },
-    async admission(){
+    async admission({argv}){
       admissionReads++
+      // The admission reader accepts only a launch from the current source root.
+      if(failures.otherRoots&&!JSON.stringify(argv).includes(`${context.roots().source}scripts/launch-triage-catalog.js`))return held("effective_policy_unknown")
       const value=structuredClone(data.admission)
       if(value.controls)controlRecords.set(value.controls,fingerprint(value.controls))
       if(failures.admission)return held("diagnostic_inadequate")
@@ -1364,6 +1451,8 @@ export function createNonacceptedTriageUnit(config){
       closedObject(options,[],["cli"])
       return {authority:false,state:"unit_restored",outcome:await restoreQualification({recordFile:unitFile,env,...options},context)}
     },
+    // A record as this unit's host would seal it, for tests that need a coherent record with other content.
+    sealDocument(record){return {...structuredClone(record),host_seal:unitSeal(record,"this")}},
     async saveDocument(name,value){documents.set(path.join(out,name),catalogCanonical(value));return {authority:false,state:"unit_memory_saved"}},
     async run(qualification){
       admissionReads=0;signedIn=false;hasRun=false

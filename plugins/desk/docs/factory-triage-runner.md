@@ -208,7 +208,7 @@ These limits were reviewed and accepted. They are not open defects.
 - **Model provenance is not proved.** An allowlisted `HTTPS_PROXY` with `NODE_EXTRA_CA_CERTS` in the operator's environment could put a scripted model behind a genuine engine. Qualification proves the engine's tool surface, not where the model's answers came from.
 - **`notifications/cancelled` is advisory.** It never interrupts a request in flight. It never unseals or partially seals a submission. It only drops a read that is still queued.
 - **A SIGINT is a graceful close.** Claude Code's first SIGINT after ready closes the session with a `client_sigint` terminal receipt. A SIGINT from any process running as the same user looks the same, so it can end a run early. It can never make a run pass, because acceptance still needs a sealed submission, the matching native tool result and native success.
-- **Two module roots trust the same uid.** The owned server and the parent load modules from the source tree and from the `node_modules` folder Node resolves the MCP SDK from (inside a checkout, or the runtime pack beside an installed source mirror). Both must be owned by this uid or root and closed to group and world writes. The runtime pack is checked against its archive hash only when it is extracted, so a same-uid writer can change a module there. A change after qualification is caught, because every loaded server module and every file of the parent's dependency packages is hashed in the record. A change before qualification is qualified with it.
+- **Two module roots trust the same uid.** The owned server and the parent load modules from the source tree and from the `node_modules` folder Node resolves the MCP SDK from (inside a checkout, or the runtime pack beside an installed source mirror). Those two folders themselves must be owned by this uid or root and closed to group and world writes; the files and subfolders inside them, and the folders above them, are not checked, so a group-writable subfolder (umask 002) is accepted. What they hold is bound by hash instead. The runtime pack is checked against its archive hash only when it is extracted, so a same-uid writer can change a module there. A change after qualification is caught, because every loaded server module and every file of the parent's dependency packages is hashed in the record. A change before qualification is qualified with it.
 - **HOME is inherited, validated and bound, not taken from passwd.** The design reviewer preferred the passwd home, so an ambient HOME could not select another home. We kept the inherited value: it must be an absolute, normalised directory owned by this uid with no group or world write, and it is part of the environment fingerprint, so a different HOME makes the record stale (`environment_changed`). Task 6 inherited HOME without these checks, and tests and operators that isolate HOME keep working.
 - **An operating-system update makes the record stale.** The chain fingerprint binds the macOS build and the dyld shared cache, so the record goes `stale/chain_changed` after an update, and the loop qualifies again within its once-a-day limit.
 - **The engine pin follows a retained build.** Triage keeps working after Claude Code updates only while the pinned 2.1.296 build stays in `~/.local/share/claude/versions/`. Whether that build updates itself when run with `-p` is not verified; each run re-checks its hash.
@@ -252,7 +252,9 @@ Reusable invocation identity permits only seven typed per-run bindings:
 generation, snapshot path/hash, receipt/control FIFO paths, deadline and protected
 run directory. Every other command/flag/tool/settings/env/message byte stays
 fixed. New authorized prepared content requires a fresh full handshake; the
-synthetic fixture is not a permanent production input freeze. That fixture ships beside the custody module as `v12-owned-catalog.json` and is part of the owned source identity, so tests read it there and a changed fixture is a changed source.
+synthetic fixture is not a permanent production input freeze. That fixture ships beside the custody module as `v12-owned-catalog.json` and is part of the owned source identity, so tests read it there and a changed fixture is a changed source. The record also carries `host_seal`, the seal described under "What makes a record stale".
+
+The owned source identity (`OWNED_SOURCE_FILES`) is every own file the runner, the qualifier, `triage-home.js` and `triage-qualify.js` load, except the scheduling modules `triage-qualify.js` imports (`evaluate-kick.js`, `headless-ledger.js`, `outbox.js`, `process-lock.js`) and what they load. Those decide when a qualification runs and how its launches are counted; they shape no child argv, environment, policy or catalog, so a change to them keeps the record. A test traces the loads and fails when either list falls behind.
 See [qualifier](../mcp/scripts/qualify-triage-runner.js) and
 [record/identity verification](../mcp/src/factory/triage-runner.js).
 
@@ -306,18 +308,18 @@ node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/ourostack/desk/<version>
 node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js" triage-qualify
 ```
 
-- `--check` launches nothing. It prints what restore says now: `qualified`, `missing`, `stale` with a reason and whether qualifying again can clear it (`requalify`), or `damaged` with a reason. It waits for no one: while the loop worker or a qualification holds `loop-worker.running`, it answers `busy`.
+- `--check` starts no model session. It runs the read-only checks restore needs (`claude doctor`, `codesign`, `diskutil`, `csrutil`, `plutil` and `ioreg`) and prints what restore says now: `qualified`, `missing`, `stale` with a reason and whether qualifying again can clear it (`requalify`), or `damaged` with a reason. It waits for no one: while the loop worker or a qualification holds `loop-worker.running`, it answers `busy`.
 - Without `--check`, the command qualifies when the record does not restore. It starts two real model sessions on the subscription (about a minute in all), reserved together as one triage opportunity in the shared launch ledger, so it refuses when the day's launches or the current window are used up. It refuses quietly on any host but macOS arm64, in a headless session, with a billing variable set, under coverage or loader measurement, without the pinned engine, or when signed out.
-- An earlier record is moved aside as `qualification.aside-<UTC stamp>-<hex>` and never deleted. Each is about 8 MB; you may move old asides to the Trash.
+- An earlier record is moved aside as `qualification.aside-<UTC stamp>-<hex>` and never deleted. Each is about 8 MB; the daily limit below caps the loop's own asides at about one a day, and you may move old asides to the Trash.
 - The command also clears an automatic suspension (below).
 
 ### What the loop does by itself
 
-When restore says `missing`, or `stale` with `requalify: true`, the loop worker qualifies once per UTC day at most (`autoQualifyTriage` in [triage-qualify.js](../mcp/src/factory/triage-qualify.js)), under its own lock and with at least 20 minutes left in its run. The marker `triage/auto-qualify.json` is written before the attempt starts, so a crash never retries the same day, and a marker that cannot be read counts as today's attempt. After three attempts in a row for the same host-side reason, automatic qualification stops for that reason and reports `auto_suspended` until `triage-qualify` runs. Reasons a release causes (`record_version`, `source_changed`, `engine_changed`) never count toward that limit. The two launches are reserved only after the qualifier's own chain, admission, control and sign-in checks pass, just before the first launch; a refusal there launches nothing and puts the earlier record back.
+When restore says `missing`, or `stale` with `requalify: true`, the loop worker qualifies once per UTC day at most (`autoQualifyTriage` in [triage-qualify.js](../mcp/src/factory/triage-qualify.js)), under its own lock and with at least 20 minutes left in its run. The two launches are reserved only after the qualifier's own chain, admission, control and sign-in checks pass, just before the first launch; a ledger refusal there launches nothing, puts the earlier record back and does not use up the day. The marker `triage/auto-qualify.json` is written as soon as the ledger has reserved the launches, so a crash after that never retries the same day, and a marker that cannot be read counts as today's attempt. After three failed attempts in a row for the same host-side reason (an attempt that never finished counts as failed), automatic qualification stops for that reason and reports `auto_suspended` until `triage-qualify` runs. A success resets the count, so a record that keeps recovering, for example after each macOS update, never suspends. Reasons a release causes (`record_version`, `source_changed`, `engine_changed`) never count.
 
 ### What makes a record stale
 
-The record is keyed on content, not on where Desk is installed, so a release with byte-identical files, a copy at another path, or a different ambient `PATH` or `TERM` keeps it. Restore answers ([restoreTriageQualification](../mcp/src/factory/triage-runner.js)), checking the cheap things first and launching nothing:
+The record is keyed on content, not on where Desk is installed, so a release with byte-identical files, a copy at another path, or a different ambient `PATH` or `TERM` keeps it. Before restore compares anything with this install, it proves the record is this Mac's own: a seal over the whole record, keyed on the hardware UUID and the account, must match, and the receipts must authenticate under their own keys and carry the record's source identity, roots, engine path, environment fingerprint and recipe. A record edited by hand, or copied from another Mac, is `damaged`, never stale. The seal and the receipt keys mark records; any process of this account could forge them, which stays out of scope. Restore then answers ([restoreTriageQualification](../mcp/src/factory/triage-runner.js)), checking the cheap things first and launching nothing:
 
 | Reason | What changed | Qualifying again helps |
 | --- | --- | --- |
@@ -334,9 +336,11 @@ The record is keyed on content, not on where Desk is installed, so a release wit
 | `chain_unavailable` | The launch chain could not be inspected | no |
 | `policy_changed` | Managed or user policy sources | yes |
 | `policy_blocked` | Policy no longer admits the fixed invocation | no |
-| `host_unsupported`, `measurement_active` | Not macOS, or coverage or loader measurement is active | no |
+| `root_unsafe` | The source folder or the `node_modules` folder the SDK resolves from is another account's, or group- or world-writable | no |
+| `check_failed` | A file could not be read, or a live check (launch chain, admission, controls) failed unexpectedly | no |
+| `host_unsupported`, `measurement_active` | Not macOS, the hardware UUID cannot be read, or coverage or loader measurement is active | no |
 
-A `damaged` record (unreadable, non-canonical, an unknown shape, receipts that fail restoration) is never treated as stale and never replaced automatically; `triage-qualify` moves it aside. `loadTriageQualification` keeps its earlier contract on top of restore.
+A file of the source that disappears while restore reads it (an update in progress) is read once more before it counts as `source_changed`. `damaged` is kept for records whose own bytes are wrong: `unreadable`, `noncanonical`, `structure`, `seal` (edited, or sealed on another Mac or account) and `receipts`. A damaged record is never replaced automatically; `triage-qualify` moves it aside. A failed qualification's blocked record and an earlier record version carry no seal; restore recognises them by their closed shape (a blocked record also needs its failure capture beside it), and qualifying again is what both need anyway. `loadTriageQualification` keeps its earlier contract on top of restore.
 
 ### The child environment
 
@@ -344,7 +348,7 @@ The engine, its sign-in probe, `doctor` and the OS readers get one constructed e
 
 ### The engine
 
-The pin stays: the reviewed byte ranges of Claude Code 2.1.296 back every control. The runner finds that build by content: the record's engine, then the default `claude`, then Claude Code's own versions folder. A candidate counts only as a regular file whose folders, up to `/`, only this account or root can change.
+The pin stays: the reviewed byte ranges of Claude Code 2.1.296 back every control. The runner finds that build by content: the record's engine, then the default `claude`, then Claude Code's own versions folder. A candidate counts only as a regular file of the pinned build's size (240,664,432 bytes, so other builds are never hashed) whose folders, up to `/`, only this account or root can change; then its 240 MB are hashed.
 
 ### Where the runner loads from
 
