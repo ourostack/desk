@@ -11,7 +11,7 @@
 //
 // This module must not import anything from the runtime pack: it runs before the pack is restored.
 
-import { watch as watchFileSystem } from "node:fs"
+import { statSync, unwatchFile, watchFile } from "node:fs"
 import * as path from "node:path"
 
 import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
@@ -57,6 +57,8 @@ const GATE_WAIT_MS = 10000
 // How long task_focus waits for a session that is still admitting: short, because the call is a declaration, not work.
 const FOCUS_WAIT_MS = 2000
 const HEAD_DEBOUNCE_MS = 100
+// How often the HEAD watch checks .git/HEAD. A HEAD change is noticed within this time plus the debounce.
+const HEAD_POLL_MS = 500
 const WRITE_PING_MS = 1000
 // How long closing the session waits for a running admission attempt (Git in the desk, the runtime import) to finish, so a closed session has stopped touching the desk. Below the front door's shutdown limit, and bounded because an attempt can wait on something that never answers.
 const DISPOSE_ADMISSION_WAIT_MS = 2000
@@ -113,6 +115,31 @@ export function requirementMet(requirement, context) {
   return authorized && context.stateBranch?.ok !== false && !context.launcher?.blocksWrites
 }
 
+// The default HEAD watch polls .git/HEAD's metadata instead of watching the .git folder. A folder watch is closed synchronously on the event loop, and on macOS (FSEvents) closing one took from 0.5 s to over 2 s when a destination change dropped the old desk's watch, holding every desk_status call far past its 200 ms. Stopping a poll only stops a timer. Git replaces HEAD by renaming a lock file over it, and a poll by path follows each new file. Any change to HEAD's metadata is reported through the same callback a folder watch uses, and the admission refresh it starts is debounced.
+// watchFile takes its first stat in the background, so a HEAD replaced before that stat would never be reported. The watch therefore takes its own baseline synchronously and, one interval later, reports a change if HEAD's inode or modification time no longer matches it.
+export function watchGitHead(gitDir, options, listener) {
+  const head = path.join(gitDir, "HEAD")
+  const identity = () => {
+    try {
+      const stats = statSync(head)
+      return `${stats.ino}:${stats.mtimeMs}`
+    } catch {
+      return "missing"
+    }
+  }
+  const baseline = identity()
+  const onChange = () => listener("change", "HEAD")
+  watchFile(head, { persistent: options.persistent, interval: HEAD_POLL_MS }, onChange)
+  const firstCheck = setTimeout(() => { if (identity() !== baseline) onChange() }, HEAD_POLL_MS)
+  firstCheck.unref()
+  return {
+    close() {
+      clearTimeout(firstCheck)
+      unwatchFile(head, onChange)
+    },
+  }
+}
+
 /**
  * Build a session. `deps` carries everything index.js resolved or was given:
  * resolveInputs() (async; `{ root, activation }` or `{ rootError }` / `{ root, activationError }`), loadRuntime(activation) (async; `{ runtimeServer, runtimeStatus }` or `{ outcome }`), setupDiagnostic(error),
@@ -125,7 +152,7 @@ export function createDeskSession(deps) {
     readinessStateHome,
     deskStateDir,
     git = runGit,
-    watch = watchFileSystem,
+    watch = watchGitHead,
     timers,
     stderr = process.stderr,
     notifyToolsChanged = () => {},
@@ -609,9 +636,7 @@ export function createDeskSession(deps) {
     closeHeadWatch()
     if (typeof gitDir !== "string") return
     try {
-      const watcher = watch(gitDir, { persistent: false }, (event, filename) => {
-        // Without a file name there is nothing to tell a HEAD change from index churn; the retries and desk_status still cover it.
-        if (filename !== "HEAD") return
+      const watcher = watch(gitDir, { persistent: false }, () => {
         if (headTimer !== null) clearTimeout(headTimer)
         headTimer = setTimeout(() => {
           headTimer = null
@@ -619,11 +644,6 @@ export function createDeskSession(deps) {
           admission.refresh({ force: true, waitMs: 0 })
         }, HEAD_DEBOUNCE_MS)
         headTimer.unref?.()
-      })
-      // A watcher that fails is dropped, so the next admission attempt creates a new one.
-      watcher.on("error", (error) => {
-        log(`the HEAD watch on ${gitDir} failed (${error?.message ?? error}); it is re-created on the next admission attempt`)
-        if (headWatch?.watcher === watcher) closeHeadWatch()
       })
       headWatch = { gitDir, watcher }
     } catch (error) {

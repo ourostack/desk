@@ -2,13 +2,18 @@ import "../_isolated_env.mjs"
 import childProcess from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
 import { pathToFileURL } from "node:url"
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import nativeFs from "node:fs"
 import Database from "better-sqlite3"
 import { main } from "../../../../../plugins/desk/mcp/index.js"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 
 const [seam, marker, phase = "inspectLocalDb"] = process.argv.slice(2)
+// Written whole, by rename, so a reader never sees an empty or partial marker.
+const record = (value) => {
+  writeFileSync(`${marker}.${process.pid}`, JSON.stringify(value))
+  renameSync(`${marker}.${process.pid}`, marker)
+}
 const children = new Set()
 const readers = new Set()
 let maxReaders = 0
@@ -29,13 +34,13 @@ syncBuiltinESMExports()
 const originalPrepare = Database.prototype.prepare
 Database.prototype.prepare = function(...args) {
   if (phase !== "rootStatus" && new Error().stack.includes(phase)) {
-    writeFileSync(marker, JSON.stringify({ pid: process.pid, root: "main-thread" }))
+    record({ pid: process.pid, root: "main-thread" })
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350)
   }
   const exists = nativeFs.existsSync
   nativeFs.existsSync = function(...args) {
     if (phase === "rootStatus" && new Error().stack.includes(phase)) {
-      writeFileSync(marker, JSON.stringify({ pid: process.pid, root: "main-thread" }))
+      record({ pid: process.pid, root: "main-thread" })
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350)
     }
     return exists.apply(this, args)
