@@ -2,7 +2,7 @@ import "../_isolated_env.mjs"
 import {ownedHostTest,ownedCatalogTest} from "./_owned_catalog_host.mjs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { PassThrough } from "node:stream"
+import { PassThrough, Writable } from "node:stream"
 import fs from "node:fs"
 import {spawnSync,spawn} from "node:child_process"
 import os from "node:os"
@@ -941,6 +941,23 @@ test("discover_probe_is_answered_method_not_found_then_initialize_continues",asy
   for(const bad of [{code:"protocol_state"},{direction:"input"},{bytes:Buffer.alloc(0)},{bytes:Buffer.from("{}")}])
     assert.throws(()=>custody.makeCatalogObservation({...answered[0],pid:1,...bad}),{message:"observation_invalid"})
   await service.close()
+})
+test("discover_probe_answer_write_failure_is_fatal_on_output",async()=>{
+  for(const observe of [true,false]){
+    const input=new PassThrough(),events=[],failures=[]
+    const output=new Writable({write(_chunk,_encoding,callback){callback(Error("unit_probe_write"))}})
+    output.on("error",()=>{})
+    const guarded=protocol.guardedCatalogTransport({input,output,onFailure:e=>failures.push(e),...(observe?{onObservation:x=>events.push(x)}:{})})
+    await guarded.transport.start()
+    input.write(RECORDED_PROBE)
+    await new Promise(r=>setTimeout(r,10))
+    assert.equal(failures[0]?.message,"unit_probe_write")
+    if(observe){
+      assert.equal(events.filter(x=>x.kind==="discover_answered").length,1)
+      assert.equal(events.find(x=>x.kind==="parser_refused").direction,"output")
+    }
+    await guarded.close()
+  }
 })
 test("discover_probe_anywhere_but_the_first_frame_is_fatal",async()=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
