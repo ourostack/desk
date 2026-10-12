@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce, withConsentLast } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { formatBootText } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { consentMentioned, noteConsentMentioned } from "../../../../../plugins/desk/mcp/src/runtime/consent-mentioned.js"
+import { resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 
 const bootSource = readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/runtime/boot.js", import.meta.url)), "utf8")
 
@@ -119,4 +121,43 @@ test("unsigned deliveries and open improvement cards reach the operator's sessio
     assert.match(list[signoff], /raise them together, once/u)
   }
   assert.match(formatBootText(result), /Delivered, awaiting sign-off:\n- ops\/shipped, 9 days, [^\n]*overdue\n- ops\/second, 3 days/u)
+})
+
+// Agency dry runs, 2026-10-12: one session said the contribution sentence twice and the next session said it again. The RFC's contract is
+// "asked once at setup", so the agent that says the sentence records it and no later boot hands the sentence out.
+test("the sentence about contributing is handed out until an agent records having said it; after that the boot says not to raise it", async () => {
+  const root = await desk()
+  const stateDir = resolveDeskStateDir({ env: { DESK: root }, homeDir: root })
+  const record = /Right after the reply that says it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again\./u
+  const first = await boot(root)
+  assert.match(first.instructions.find(isConsent), record)
+  assert.match(first.text_instructions.at(-1), record)
+  assert.equal(consentMentioned(stateDir, "ourostack/factory-intake"), false, "the boot itself records nothing: it cannot know the sentence was said")
+  assert.match((await boot(root)).text_instructions.at(-1), /"Desk can contribute measurement data/u, "so a second session still gets the sentence")
+
+  noteConsentMentioned(stateDir, "ourostack/factory-intake")
+  const later = await boot(root, { env: { DESK: root, CLAUDE_CODE_SESSION_ID: "another-session" } })
+  for (const list of [later.instructions, later.text_instructions]) {
+    assert.equal(list.filter(isConsent).length, 1)
+    assert.match(list.at(-1), /^Factory consent is undecided for ourostack\/factory-intake, and the operator was already told that Desk can contribute to it: do not raise it again\. Only if they say 'factory details' \(or ask what Desk sends\), follow "Factory consent" in .*skills.session-start.details\.md; the script is `node [^`]*mcp.scripts.factory\.js`\.$/u)
+    assert.doesNotMatch(list.join("\n"), /"Desk can contribute|want the details|--mentioned|--contribute/u)
+  }
+  assert.match(formatBootText(later).trimEnd().split("\n").at(-1), /do not raise it again/u)
+})
+
+test("a session with no operator, or a store that is decided or held, never reads the record", async () => {
+  const root = await desk()
+  const calls = []
+  const consentMentionedFn = (...args) => { calls.push(args); return true }
+  const headless = await boot(root, { env: { DESK: root, DESK_FACTORY_HEADLESS: "1" }, consentMentionedFn })
+  assert.ok(!headless.instructions.some(isConsent))
+  for (const consent of ["yes", "no", "held", "unreadable"]) {
+    const decided = await boot(root, { consentMentionedFn, factoryStatusFn: () => ({ ...UNDECIDED(), consent, store: consent === "held" ? null : UNDECIDED().store }) })
+    assert.ok(!decided.instructions.some(isConsent), consent)
+  }
+  assert.ok(!(await boot(root, { consentMentionedFn, factoryStatusFn: () => null })).instructions.some(isConsent))
+  assert.deepEqual(calls, [])
+  const asked = await boot(root, { consentMentionedFn })
+  assert.match(asked.instructions.at(-1), /do not raise it again/u)
+  assert.deepEqual(calls, [[resolveDeskStateDir({ env: { DESK: root }, homeDir: root }), "ourostack/factory-intake"]])
 })

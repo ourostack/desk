@@ -1025,7 +1025,10 @@ contract("session-start asks the factory contribution question once, in plain wo
   const source = text(bootSource);
   const step = source.slice(source.indexOf("const FACTORY_QUESTION"), source.indexOf("function buildInstructions"));
   assert.ok(step.includes("factory?.consent"), "the boot script builds the factory consent instruction");
-  assert.match(step, /consent !== "undecided"/u);
+  assert.match(step, /consent === "undecided" && !noninteractive/u);
+  // Once per store, not once per session: the agent that said the sentence records it, and a later boot says not to raise it.
+  assert.match(step, /consent --store \$\{store\} --mentioned yes/u);
+  assert.match(step, /the operator was already told that Desk can contribute to it: do not raise it again/u);
   assert.match(step, /never asked again|is never asked again/u);
   const question = step.split("\n", 2)[0];
   for (const published of ["durations", "counts", "tool kinds", "plugin and model versions", "public repositories"]) {
@@ -1040,7 +1043,7 @@ contract("session-start asks the factory contribution question once, in plain wo
   assert.match(step, /consent --store \$\{store\} --contribute no/u);
   assert.match(step, /a no is a decision too/u);
   assert.match(step, /never comes before the work the operator asked for[\s\S]+one short line at the end of your reply/u);
-  assert.match(step, /noninteractive\) return \[\]/u);
+  assert.match(step, /if \(!consentUndecided\(factory, noninteractive\)\) return \[\]/u);
   assert.doesNotMatch(step, /consent\.json/u, "the script records consent only through factory.js");
   assert.match(step, /never assume gh's active account/u);
   assert.match(step, /account --store \$\{store\}/u);
