@@ -210,7 +210,12 @@ test("late status completion cannot publish ownership from a previous desk", asy
   destination = path.join(base, "b")
   await session.admission.refresh({ force: true })
   complete()
-  assert.notEqual(payload(await oldStatus).root, path.join(base, "a"))
+  const old = payload(await oldStatus)
+  assert.notEqual(old.root, path.join(base, "a"))
+  // A ready answer without the runtime detail always says the detail is pending, so a client polls again instead of reading a
+  // ready status with no root as a missing desk.
+  assert.equal(old.detail_pending, true)
+  assert.match(old.status_detail, /^unavailable: the desk destination changed while this call ran/u)
   const fresh = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
   assert.equal(fresh.root, destination)
   assert.equal(fresh.status_detail_from, undefined, "A's cached timestamp cannot accompany a fresh B detail")
