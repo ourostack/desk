@@ -60,30 +60,52 @@ test("the repair log gets one line per repair", async () => {
   assert.equal(lines[0], "2026-09-25T01:00:00.000Z /desk repaired: detached HEAD → main (was abc)")
 })
 
-test("the session's writer writes records in call order, stamps each with its call time, and keeps going after a failure", async () => {
+test("the session's writer runs one write at a time, keeps the latest waiting record per root, writes the newest last, and keeps going after a failure", async () => {
   const written = []
   const errors = []
   let release
   const held = new Promise((resolve) => { release = resolve })
   const writer = createLastStartWriter({
     onError: (error) => errors.push(error.message),
-    write: async ({ snapshot, now }) => {
+    write: async ({ snapshot, root, now }) => {
       if (snapshot.state === "first") await held
       if (snapshot.state === "broken") throw new Error("disk full")
-      written.push([snapshot.state, now().toISOString()])
+      written.push([root ?? null, snapshot.state, now().toISOString()])
     },
   })
-  writer.record({ snapshot: { state: "first" } })
-  writer.record({ snapshot: { state: "broken" } })
-  writer.record({ snapshot: { state: "last" } })
+  writer.record({ snapshot: { state: "first" }, root: "/a" })
+  // Let the first write start (and hold); everything recorded now waits behind it.
+  await new Promise((resolve) => setImmediate(resolve))
+  writer.record({ snapshot: { state: "a-skipped" }, root: "/a" })
+  writer.record({ snapshot: { state: "broken" }, root: "/b" })
+  writer.record({ snapshot: { state: "shared" } })
+  writer.record({ snapshot: { state: "a-latest" }, root: "/a" })
   const recordedBy = Date.now()
   await new Promise((resolve) => setTimeout(resolve, 20))
-  assert.deepEqual(written, [], "a held write holds the ones after it")
+  assert.deepEqual(written, [], "a running write holds the ones after it")
   release()
   await writer.written()
-  assert.deepEqual(written.map(([state]) => state), ["first", "last"])
-  assert.ok(Date.parse(written[1][1]) <= recordedBy, "stamped when recorded, not 20 ms later when written")
+  assert.deepEqual(written.map(([root, state]) => [root, state]), [["/a", "first"], [null, "shared"], ["/a", "a-latest"]],
+    "the waiting /a record is replaced by the latest and, as the newest, written last")
+  assert.ok(Date.parse(written[2][2]) <= recordedBy, "stamped when recorded, not 20 ms later when written")
   assert.deepEqual(errors, ["disk full"])
+  // A record made while a write runs is still written, by the running drain or the next one.
+  writer.record({ snapshot: { state: "late" }, root: "/c" })
+  await writer.written()
+  assert.deepEqual(written.at(-1).slice(0, 2), ["/c", "late"])
+})
+
+test("an error report that itself throws does not stop the records after it", async () => {
+  const written = []
+  const writer = createLastStartWriter({
+    onError: () => { throw new Error("log closed") },
+    write: async ({ snapshot }) => { if (snapshot.state === "broken") throw new Error("disk full"); written.push(snapshot.state) },
+  })
+  writer.record({ snapshot: { state: "broken" } })
+  await writer.written()
+  writer.record({ snapshot: { state: "after" } })
+  await writer.written()
+  assert.deepEqual(written, ["after"])
 })
 
 test("the real writer leaves the record in place, and a failed write leaves no temporary file behind", async () => {

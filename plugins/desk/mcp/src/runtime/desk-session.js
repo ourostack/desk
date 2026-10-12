@@ -1124,7 +1124,7 @@ export function createDeskSession(deps) {
     callTool,
     recordException,
     start: () => admission.start(),
-    /** Resolves once every start record so far is written. */
+    /** Resolves once every start record so far is written. For tests that read a record right after a state change; dispose waits on the writer itself. */
     lastStartWritten: () => lastStart.written(),
     dispose() {
       disposed = true

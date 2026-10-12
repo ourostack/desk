@@ -67,15 +67,40 @@ export async function writeLastStart({ stateDir, snapshot, root = null, pid = pr
 }
 
 /**
- * A session's writer of its start records: each `record` is written after the ones before it, without the caller waiting, and `written()` resolves once every record so far is on disk.
+ * A session's writer of its start records: `record` returns at once, the writes run one at a time in the order recorded, and `written()` resolves once every record so far is on disk.
+ * Records waiting behind a running write are coalesced to the latest one per root: each file holds only the latest state, so a skipped intermediate record loses nothing, and closing a session waits for at most one record per root.
  * A failed write goes to `onError` and does not stop later ones. `updated_at` is when `record` was called, not when the write ran.
  */
 export function createLastStartWriter({ onError, write = writeLastStart }) {
+  // Keyed by root and re-inserted on every record, so iteration order is recency order and the newest record is written last, leaving it in the shared last-start.json.
+  const pending = new Map()
   let tail = Promise.resolve()
+  const report = (error) => {
+    try {
+      onError(error)
+    } catch {
+      // A failing error report must not stop the records after it.
+    }
+  }
+  const drain = async () => {
+    for (const [root, args] of pending) {
+      pending.delete(root)
+      try {
+        await write(args)
+      } catch (error) {
+        report(error)
+      }
+    }
+  }
   return {
     record(args) {
       const at = new Date()
-      tail = tail.then(() => write({ ...args, now: () => at })).then(() => {}, onError)
+      const root = args.root ?? null
+      const queued = pending.size > 0
+      pending.delete(root)
+      pending.set(root, { ...args, now: () => at })
+      // A drain already queued picks this record up; otherwise start one after the running write.
+      if (!queued) tail = tail.then(drain)
     },
     written: () => tail,
   }
