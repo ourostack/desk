@@ -87,7 +87,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     await client.close()
     child.stdin.end()
     assert.equal(await exited, 0, stderr)
-    { const { readdirSync } = await import("node:fs"); const dir = path.join(base, "prof"); const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes(`.${child.pid}.0.`)).map((f) => path.join(dir, f)) : []; const r = spawnSync(process.execPath, [fileURLToPath(new URL("./_diag_prof_runs.mjs", import.meta.url)), ...files], { encoding: "utf8" }); console.log("PROF " + phase + "\n" + r.stdout + r.stderr) }
+    { const { readdirSync } = await import("node:fs"); const dir = path.join(base, "prof"); const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes(`.${child.pid}.0.`)).map((f) => path.join(dir, f)) : []; const r = spawnSync(process.execPath, [fileURLToPath(new URL("./_diag_prof_runs.mjs", import.meta.url)), ...files], { encoding: "utf8" }); console.log("PROF " + phase + " " + r.stdout.replace(/\n\s*/g, " | ") + r.stderr) }
     assert.deepEqual(closedReport?.children, 0, "all exact-owned status readers and controllers must close")
     assert.equal(closedReport.maxReaders, 1, "status calls must never pile up concurrent reader processes")
     t.diagnostic(JSON.stringify({ owningMcpPid: child.pid, ownedChildrenAfterClose: closedReport.children,
@@ -98,7 +98,6 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
   const status = async () => {
     const start = Date.now()
     const response = await client.callTool({ name: "desk_status", arguments: { detail: true } })
-    const ms = Date.now() - start; process.stderr.write(`CALL ${phase} #${statusTimes.length} ${ms}ms ${String(JSON.parse(response.content[0].text).status_detail ?? "").slice(0,90)} state=${JSON.parse(response.content[0].text).state}\n`)
     assert.ok(Date.now() - start < 200, `actual process status exceeded cap: ${Date.now() - start} ms; ${stderr}`)
     statusTimes.push(Date.now() - start)
     return JSON.parse(response.content[0].text)
