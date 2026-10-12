@@ -397,9 +397,10 @@ for (const [operation, value, refused] of [
         statusObservedSince(state, { root: mcpRoot, since }), { deadlineMs: 15000 })
       const direct = await desk.call(operation, value)
       const local = await recover(localRoot, value, [], launch, operation)
-      assert.equal(direct.isError, refused)
+      assert.equal(direct.isError, refused, JSON.stringify(direct.payload))
       assert.equal(local.exitCode === 0, !refused, JSON.stringify(local.report))
-      assert.equal(local.report.result.status, direct.payload.status)
+      // A run that fails before the tool answers has no result; the report then names the code and the step that failed.
+      assert.equal(local.report.result?.status, direct.payload.status, JSON.stringify(local.report))
       assert.equal(git(localRoot, "show", "--format=", "--name-only", "HEAD"), git(mcpRoot, "show", "--format=", "--name-only", "HEAD"))
       if (refused) {
         assert.equal(readFileSync(path.join(localRoot, "work/one/task.md"), "utf8"), readFileSync(path.join(mcpRoot, "work/one/task.md"), "utf8"))
