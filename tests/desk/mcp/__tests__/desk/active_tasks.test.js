@@ -73,3 +73,17 @@ test("activeTasks on a missing folder lists nothing", async () => {
     tracks: [], task_count: 0, track_count: 0, redacted: { names: 0, titles: 0 },
   })
 })
+
+test("activeTasks lists every card of a large track, in folder order when their times are equal", async () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-active-tasks-large-")))
+  const slugs = Array.from({ length: 40 }, (_, index) => `task-${String(index).padStart(2, "0")}`)
+  // Written in reverse, with the first cards the largest, so neither creation order nor read time matches folder order.
+  for (const [index, slug] of [...slugs.entries()].reverse()) {
+    const dir = path.join(root, "big-track", slug)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, "task.md"), `---\ntitle: ${slug}\nstatus: implementing\nupdated: "2026-09-20T00:00:00Z"\n---\n${"x".repeat((40 - index) * 1500)}\n`)
+  }
+  const listing = await activeTasks(root)
+  assert.equal(listing.task_count, 40)
+  assert.deepEqual(listing.tracks[0].tasks.map((task) => task.slug), slugs)
+})

@@ -17,10 +17,11 @@
 // `cancelled`; within a track, tasks sort by `updated`, newest first, and
 // tracks by their newest task. Each card is read through one bounded read of
 // at most 64 KiB, and parsed with the doctor's frontmatter parser, so the
-// listing adds little to desk_status's time budget. Every read is
-// asynchronous: on Windows a single file read can wait on an antivirus scan
-// for over 100 ms, and desk_status runs this on the Desk session's event
-// loop, which must keep answering tool calls meanwhile. It is served from the
+// listing adds little to desk_status's time budget. The folder, card and
+// cleanup-index reads are asynchronous: on Windows a single file read can
+// wait on an antivirus scan for over 100 ms, and desk_status runs this on
+// the Desk session's event loop, which must keep answering tool calls
+// meanwhile. It is served from the
 // Desk MCP server rather than a script so hosts that gate shell commands do
 // not prompt for it at every session start.
 
@@ -182,8 +183,8 @@ async function finishedCleanup(deskRoot, env) {
 // Boot names this many finished cards; the rest are counted ("and N more"), never left out of the totals.
 const FINISHED_SHOWN = 20
 
-// null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
-async function readCardData(filePath) {
+// The card's first 64 KiB as text, or null when the card is missing or unreadable.
+async function readCardText(filePath) {
   let file
   try {
     file = await open(filePath, "r")
@@ -193,15 +194,35 @@ async function readCardData(filePath) {
   try {
     const buffer = Buffer.alloc(MAX_CARD_BYTES)
     const { bytesRead } = await file.read(buffer, 0, MAX_CARD_BYTES, 0)
-    try {
-      const parsed = parseFrontmatter(buffer.toString("utf8", 0, bytesRead))
-      return { data: parsed.data, content: parsed.content, truncated: bytesRead === MAX_CARD_BYTES }
-    } catch {
-      return { data: {}, content: "" }
-    }
+    return { text: buffer.toString("utf8", 0, bytesRead), truncated: bytesRead === MAX_CARD_BYTES }
   } finally {
     await file.close()
   }
+}
+
+// null for a card that was not read; `{ data: {}, content: "" }` when its frontmatter is malformed.
+function parseCard(raw) {
+  if (raw === null) return null
+  try {
+    const parsed = parseFrontmatter(raw.text)
+    return { data: parsed.data, content: parsed.content, truncated: raw.truncated }
+  } catch {
+    return { data: {}, content: "" }
+  }
+}
+
+const readCardData = async (filePath) => parseCard(await readCardText(filePath))
+
+// How many cards of a track are open at once. A whole track at once would need one file descriptor per card, and a card that fails to open reads as absent.
+const CARD_READS = 16
+
+// The raw cards of `files`, in the order given.
+async function readCardTexts(files) {
+  const texts = []
+  for (let start = 0; start < files.length; start += CARD_READS) {
+    texts.push(...await Promise.all(files.slice(start, start + CARD_READS).map(readCardText)))
+  }
+  return texts
 }
 
 function asText(value) {
@@ -240,10 +261,10 @@ async function scanDesk(deskRoot, scanRoot, desk, counts) {
     const trackDir = path.join(scanRoot, trackName)
     const tasks = []
     const taskNames = await listDirs(trackDir)
-    // A track's cards are read together; the results are used in folder order, as before.
-    const cards = await Promise.all(taskNames.map((taskName) => readCardData(path.join(trackDir, taskName, "task.md"))))
+    // A track's cards are read a few at a time, then parsed and used in folder order.
+    const texts = await readCardTexts(taskNames.map((taskName) => path.join(trackDir, taskName, "task.md")))
     for (const [index, taskName] of taskNames.entries()) {
-      const card = cards[index]
+      const card = parseCard(texts[index])
       if (card === null) continue
       const { data, content, truncated } = card
       const status = asText(data.status)
