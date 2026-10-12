@@ -259,13 +259,14 @@ async function checkCutoff(ctx) {
   const released = Number.isFinite(releasedAt);
   if (released && ctx.now - releasedAt <= DAY) return result("legacy-cutoff", "not-due", [day(releasedAt)]);
   try {
-    // The revision that serves now, not the app's template: a newer revision that never became ready (a bad setting,
+    // --subscription is needed: az's current account is the Ouro tenant here, which has no subscription to resolve --ids
+    // against (rehearsal, 2026-10-12). The revision that serves now, not the app's template: a newer revision that never became ready (a bad setting,
     // say) leaves the older one running without the cutoff.
     const id = `/subscriptions/${SUBSCRIPTION}/resourceGroups/${APPS_RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${ENVIRONMENTS.prod.app}`;
-    const revisions = await azJson(ctx, ["resource", "show", "--ids", id, "--api-version", APP_API_VERSION, "--query", "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}", "-o", "json"]);
+    const revisions = await azJson(ctx, ["resource", "show", "--ids", id, "--api-version", APP_API_VERSION, "--query", "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}", "-o", "json", ...SUB]);
     if (!revisions?.ready) return result("legacy-cutoff", "no-ready-revision");
     // Only the names of env vars that hold a value or a secret reference leave az; no value does.
-    const names = (await azJson(ctx, ["resource", "show", "--ids", `${id}/revisions/${revisions.ready}`, "--api-version", APP_API_VERSION, "--query", "properties.template.containers[].env[] | [?value || secretRef].name", "-o", "json"])) ?? [];
+    const names = (await azJson(ctx, ["resource", "show", "--ids", `${id}/revisions/${revisions.ready}`, "--api-version", APP_API_VERSION, "--query", "properties.template.containers[].env[] | [?value || secretRef].name", "-o", "json", ...SUB])) ?? [];
     if (names.includes("DESK_LEGACY_CUTOFF")) return result("legacy-cutoff", "ok");
     if (!names.includes("DESK_GITHUB_ACCOUNTS")) return result("legacy-cutoff", released ? "no-mappings" : "not-released", released ? [day(releasedAt)] : []);
     if (!released) return result("legacy-cutoff", "unreleased-mapped");
