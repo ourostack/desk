@@ -627,6 +627,40 @@ test("task_update commits a card that is still untracked, as the pre-commit hook
   assert.equal(gitStatus(root), "")
 })
 
+// A card Git holds as a conflict (a sync whose stash would not go back, `autostash_pop_conflict`) still has the conflict markers in it:
+// committing it would publish them and mark the conflict resolved.
+test("task_update does not commit a card that Git holds as a conflict, and says why", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
+  const filePath = path.join(root, "t", "book-flights", "task.md")
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8" })
+  await fs.appendFile(filePath, "\nfrom this machine\n")
+  assert.equal(git("stash").status, 0)
+  await fs.appendFile(filePath, "\nfrom another machine\n")
+  assert.equal(git("commit", "-q", "--no-verify", "-am", "theirs").status, 0)
+  assert.notEqual(git("stash", "pop").status, 0, "the stash does not go back cleanly")
+  assert.match(gitStatus(root), /^UU t\/book-flights\/task\.md/u)
+  const head = git("rev-parse", "HEAD").stdout
+
+  const calls = []
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "carried on" }, schedulePush: (opts) => calls.push(opts) })
+
+  assert.equal(result.status, "updated")
+  assert.deepEqual(result.commit, { status: "failed", reason: "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again." })
+  assert.equal("desk_commit" in result, false)
+  assert.equal("included_uncommitted_changes" in result, false)
+  assert.equal(git("rev-parse", "HEAD").stdout, head, "no commit was made")
+  assert.match(gitStatus(root), /^UU t\/book-flights\/task\.md/u, "the conflict is not marked resolved")
+  assert.match(await fs.readFile(filePath, "utf8"), /carried on/u, "the write itself is kept")
+  assert.deepEqual(calls, [], "no push is scheduled")
+
+  // When Git cannot say whether the card is unmerged, the commit is tried and Git's own answer is reported.
+  const blind = (cmd, args, opts) => (args.includes("ls-files") && args.includes("-u") ? { status: 1, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts))
+  const tried = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "again" }, spawnGit: blind, schedulePush: () => {} })
+  assert.notEqual(tried.commit?.reason, result.commit.reason)
+})
+
 test("task_update says nothing about uncommitted changes for a clean card, or when the commit fails", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

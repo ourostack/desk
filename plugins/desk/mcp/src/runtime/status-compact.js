@@ -62,7 +62,7 @@ function notesFor(payload, search) {
   }
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
   if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}.`)
-  // What Desk repaired by itself when this session started (the checkout switched back to the state branch, for example), in the repair log's own words: the agent was not there to see it.
+  // The latest thing Desk repaired by itself in this session (at its start, the checkout switched back to the state branch, for example), in the repair log's own words: the agent was not there to see it.
   if (typeof payload.repair === "string") notes.push(payload.repair)
   return notes
 }

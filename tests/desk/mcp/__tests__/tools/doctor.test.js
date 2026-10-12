@@ -284,8 +284,8 @@ test("desk_doctor reports a stale quarantine entry instead of failing on it", as
 
 test("the organization section lists every code the organization checks can return, and still prints one it does not know", () => {
   const source = readFileSync(new URL("../../../../../plugins/desk/mcp/src/desk/organization.js", import.meta.url), "utf8")
-  const returned = [...new Set([...source.matchAll(/\bcode: "([a-z_]+)"/gu)].map((match) => match[1]))].sort()
-  assert.ok(returned.includes("stale_quarantine") && returned.includes("loose_file"), "the scan reads the finding codes")
+  const returned = [...new Set([...source.matchAll(/\bcode: "([a-z_]+)"|\breturn "((?:name|track)_[a-z_]+)"/gu)].map((match) => match[1] ?? match[2]))].sort()
+  assert.ok(["stale_quarantine", "loose_file", "name_shape", "track_person_name"].every((code) => returned.includes(code)), "the scan reads the finding codes")
   assert.deepEqual(returned.filter((code) => !ORGANIZATION_CODES.includes(code)), [], "a code the checks return is missing from desk_doctor's list")
   const section = organizationSection([
     { code: "a_code_added_later", path: "somewhere", hint: "look" },

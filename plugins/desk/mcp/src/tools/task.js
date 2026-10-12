@@ -24,7 +24,7 @@ import {
 } from "../util/fm.js"
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
-import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnmergedPath, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
@@ -450,6 +450,7 @@ function relPath(deskRoot, absPath) {
 
 // Said by task_update when the card it committed was already changed or untracked before the call.
 const INCLUDED_CHANGES_NOTE = "This card already held uncommitted changes before this call (an earlier commit that failed, a card taken out of a hand commit, or an edit made outside Desk's tools); this commit includes them."
+const CONFLICTED_CARD_REASON = "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again."
 
 // On a Git desk, task_signoff and the archived-card resource write stage the
 // task.md they write (M4-5 fix round 4) only when the file held no unstaged
@@ -815,7 +816,8 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  *   }
  *
  * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
- * Git desk stages it when it held no unstaged changes before the write.
+ * Git desk commits it, with any uncommitted changes it already held, unless
+ * Git holds the card as a conflict.
  *
  * Preserves: `schema_version`, `created`. Always refreshes `updated` to now.
  *
@@ -839,7 +841,7 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * On a Git desk, also commits exactly the file it staged (M4-6 Part 2). A
  * commit failure never loses the write: it comes back as `commit: { status:
  * "failed", reason }` on the result, omitted entirely on a normal, silent
- * success, when the file was already dirty, or on a non-Git desk.
+ * success or on a non-Git desk.
  *
  * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, included_uncommitted_changes?, factory_report?, factory_report_unavailable? } (`included_uncommitted_changes` says the card was already changed or untracked before this call and the commit took that along; `factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
  * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
@@ -1059,7 +1061,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
 
   // task_update commits the card even when it already held uncommitted changes: the desk's pre-commit hook lets a card in only through Desk's tools and sends the agent here, so skipping the commit would leave the card with no way in. The answer says when the commit took such changes along.
-  const stage = isGitRepository(path.dirname(filePath), spawnGit)
+  // The one exception is a card Git holds as a conflict: staging it would mark the conflict resolved and publish its markers.
+  const onGit = isGitRepository(path.dirname(filePath), spawnGit)
+  const conflicted = onGit && hasUnmergedPath(path.dirname(filePath), [path.basename(filePath)], spawnGit)
+  const stage = onGit && !conflicted
   const heldChanges = stage && hasUnstagedWork(path.dirname(filePath), [path.basename(filePath)], spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
   await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
@@ -1073,7 +1078,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
-  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
+  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON } : undefined
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   if (stage && !commit) schedulePush({ root: deskRoot })
