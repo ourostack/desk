@@ -644,7 +644,7 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
   // The direct client and native path share this receipt/provenance controller.
   const receipts=[],observations=[],snapshot=JSON.parse(await context.readBytes(launch.identity.bootstrap.snapshotFile))
   const sourceBefore=await context.source()
-  let error=null,observation=null,control=null,terminal=false,moduleClosure=null,bootWork=null,nativeSpawn=null
+  let error=null,observation=null,control=null,terminal=false,moduleClosure=null,bootWork=null,nativeSpawn=null,finishing=null
   const controlFrames=[]
   const resources={initialReceiptZeroRead:false,fdsClosed:false,launcherExit:null,serverExited:false}
   let bootResolve,bootReject;const boot=new Promise((r,j)=>{bootResolve=r;bootReject=j})
@@ -714,12 +714,17 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
       control_frames:[...controlFrames],receipt_pump:pump.diagnostic?.()??null,terminal,error:error?.message??null,resources}),
     fail:onFailure,
     nativeSpawned(at,env){nativeSpawn={at,timeoutMs:nativeProbeTimeoutMs(env)}},
-    async finish(){
-      if(control&&!terminal){
+    // The native caller asks to finish on both the success result and a zero
+    // exit, in either order and possibly before the terminal drains. Only one
+    // finish frame may follow ready (the launcher allows two control frames),
+    // so the first request that can write is the only one that does.
+    finish(){
+      if(!finishing&&control&&!terminal)finishing=(async()=>{
         try{const wire=catalogCanonical({event:"finish",generation:snapshot.generation,server_pid:receipts[0].server_pid})+"\n"
           await context.writeControl(control.handle.fd,wire,deadline);controlFrames.push(wire)}
         catch(e){if(e.code!=="EPIPE")onFailure(e)}
-      }
+      })()
+      return finishing??Promise.resolve()
     },
     async complete(){
       while(!terminal&&!error&&clock()<deadline-1000)await sleep(10)
@@ -767,9 +772,9 @@ export async function runNonacceptedLifecycleTransaction(config){
   const {snapshot,launch,frames,mode}=JSON.parse(catalogCanonical(config))
   if(!["normal","abort","abortKilled","abortAbsent","deadline","source","snapshot","modules","lateModules","observe",
     "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired",
-    "nativeSpawnedEarly","nativeSpawnedNow"].includes(mode))fail("unit_mode")
+    "nativeSpawnedEarly","nativeSpawnedNow","finishTwiceConcurrent","finishTwiceSequential"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualFdOperations:0,actualLaunches:0,closed:0,killed:0,registered:0}
-  let controller,reads=0,sources=0,modules=0,liveness=0,zeroReads=0,clockReads=0,releaseTerminal
+  let controller,reads=0,sources=0,modules=0,liveness=0,zeroReads=0,clockReads=0,releaseTerminal,finishWrites=0
   const deadline=Date.now()+1100
   const context={
     registry,requireObservations:mode==="observationRequired",
@@ -786,7 +791,9 @@ export async function runNonacceptedLifecycleTransaction(config){
     },
     async writeControl(_fd,bytes){
       if(JSON.parse(bytes).event==="finish"){
-        releaseTerminal()
+        // The launcher reads ready and one finish; a third frame is fatal.
+        if(++finishWrites>1)throw Error("fifo_count_limit")
+        if(mode==="finishTwiceSequential")setTimeout(releaseTerminal,20);else releaseTerminal()
         if(["finishEpipe","finishOther"].includes(mode))throw Object.assign(Error("unit_control_write"),{code:mode==="finishEpipe"?"EPIPE":"EIO"})
       }
     },
@@ -800,7 +807,7 @@ export async function runNonacceptedLifecycleTransaction(config){
             if(stopped)break
             if(frame.event==="terminal"){
               if(mode==="noTerminal")continue
-              if(["finishNormal","finishEpipe","finishOther"].includes(mode))await new Promise(resolve=>{releaseTerminal=resolve})
+              if(["finishNormal","finishEpipe","finishOther","finishTwiceConcurrent","finishTwiceSequential"].includes(mode))await new Promise(resolve=>{releaseTerminal=resolve})
             }
             await options.onFrame(frame);count++
           }
@@ -825,6 +832,10 @@ export async function runNonacceptedLifecycleTransaction(config){
     await controller.finish()
     if(mode.startsWith("abort")&&!["abortObserve","abortOpen"].includes(mode))await controller.abort()
     else if(mode!=="deadline")await controller.boot.catch(()=>{})
+    // A success result and a zero exit both ask to finish before the terminal
+    // drains: at once, or one after the other's write.
+    if(mode==="finishTwiceConcurrent")await Promise.all([controller.finish(),controller.finish()])
+    if(mode==="finishTwiceSequential")await controller.finish()
     await controller.finish()
     outcome=await controller.complete()
     await controller.abort()
@@ -1039,6 +1050,14 @@ async function runNativeTransaction({owned,command,args,env,deadline,resultFile,
       stage("authenticated_bootstrap","present")
       const done=await lifecycle.complete()
       Object.assign(resources,done.resources)
+      // A refused session ends now: return its refusal and let the bounded
+      // owned-child teardown below stop a native process still running,
+      // rather than wait for it to close by the deadline.
+      if(done.state!=="closed"&&!closed){
+        clearTimeout(timer)
+        return returned({state:nativeError?.message==="native_timeout"?"timeout":budgetExceeded?"budget_exceeded":"failed",cost_usd:cost,
+          reason:"diagnostic_inadequate",detail:nativeError?.message??done.reason??"native_incomplete",stream:{kind:nativeError?.message==="native_timeout"?"timeout":"failed",stdout,truncated:total>1048576},resources})
+      }
       while(!closed&&Date.now()<deadline)await sleep(10)
       clearTimeout(timer);clearTimeout(hard)
       resources.native_exit={code:exitCode,signal,stdio_closed:closed}
@@ -1111,12 +1130,13 @@ export async function runNonacceptedNativeTransaction(config){
     "budget","budgetZero","budgetBadCost","budgetNegativeCost","budgetMissingCost","budgetWrongError","budgetProse","budgetCompleteThrows",
     "emptyInit","emptyInitStderr","closedBeforeBoot","successBeforeBoot","initMissing","initExtra","initDuplicate","successNoInit","argvLimit","abortThrows","configCapture","settingsCapture",
     "argvSerializationThrows","snapshotThrows","snapshotCircular","snapshotOverflow","snapshotTextLimit","snapshotReceiptShape","snapshotReceiptCount",
-    "snapshotResourcesLimit","snapshotControlFramesLimit","snapshotObservationShape","snapshotObservationLimit","snapshotPumpLimit","snapshotPumpEmpty","emptyInitSnapshotThrows"].includes(mode))fail("unit_mode")
+    "snapshotResourcesLimit","snapshotControlFramesLimit","snapshotObservationShape","snapshotObservationLimit","snapshotPumpLimit","snapshotPumpEmpty","emptyInitSnapshotThrows",
+    "refusedAfterBoot"].includes(mode))fail("unit_mode")
   const registry=new WeakMap(),statistics={actualLaunches:0,actualFileOperations:0,closed:0,signals:[],registered:false}
   const child=new EventEmitter()
   Object.assign(child,{pid:mode==="pidUnknown"?0:500003,stdout:new PassThrough(),stderr:new PassThrough()})
   let exited=false,verifyReads=0,error,completeResolve
-  const result=()=>({state:error?"failed":"closed",reason:mode==="nonzeroExit"?"unit_exit":undefined,custody:{unit:true},resources:{}})
+  const result=()=>({state:error?"failed":"closed",reason:mode==="nonzeroExit"?"unit_exit":mode==="refusedAfterBoot"?error?.message:undefined,custody:{unit:true},resources:{}})
   const complete=new Promise(resolve=>{completeResolve=resolve})
   const finish=()=>{
     if(mode==="finishReject")return Promise.reject(Error("unit_finish_rejected"))
@@ -1191,6 +1211,9 @@ export async function runNonacceptedNativeTransaction(config){
         if(mode==="initDuplicate")child.stdout.write(JSON.stringify(init)+"\n")
       }
       if(["softTimeout","hardTimeout","noClose","abortStuck"].includes(mode))return
+      // An authenticated refusal after bootstrap while the native process is
+      // still running with stdout open.
+      if(mode==="refusedAfterBoot"){lifecycle.fail(Error("server_refused"));return}
       if(mode==="outputLimit"){child.stdout.write(Buffer.alloc(1048577));return}
       if(mode==="badUTF8"){child.stdout.write(Buffer.from([0xff]));return}
       if(mode==="badJSON"){child.stdout.write("{\n");return}

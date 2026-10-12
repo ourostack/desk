@@ -345,13 +345,16 @@ test("nonaccepted_lifecycle_matrix_reuses_controller_without_real_maps_or_fds",a
   })
   await assert.rejects(custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames,mode:"unknown"}),{message:"unit_mode"})
   for(const mode of ["normal","abort","abortKilled","abortAbsent","deadline","source","snapshot","modules","lateModules","observe",
-    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired"]){
+    "abortObserve","abortOpen","finishNormal","finishEpipe","finishOther","noReceiptEOF","serverPending","partial","noTerminal","observationRequired",
+    "finishTwiceConcurrent","finishTwiceSequential"]){
     await t.test(mode,async()=>{
       const result=await custody.runNonacceptedLifecycleTransaction({snapshot,launch,frames,mode})
       assert.equal(result.authority,false)
       assert.equal(result.statistics.actualFdOperations,0)
       assert.equal(result.statistics.actualLaunches,0)
-      assert.equal(result.outcome.state,["normal","finishNormal","finishEpipe","serverPending"].includes(mode)?"closed":"failed",mode)
+      assert.equal(result.outcome.state,["normal","finishNormal","finishEpipe","serverPending","finishTwiceConcurrent","finishTwiceSequential"].includes(mode)?"closed":"failed",mode)
+      // Two finish requests before the terminal drains still send one frame.
+      if(mode.startsWith("finishTwice"))assert.equal(result.evidence.control_frames.filter(x=>JSON.parse(x).event==="finish").length,1,mode)
       if(result.outcome.custody){
         const denied=await custody.materializeTriageSubmission({custody:result.outcome.custody,nativeStream:{},brief:fixture.brief,resultFile:"/unit/must-never-open"})
         assert.equal(denied.state,"scope_unqualified","synthetic controller state never enters actual custody authority")
@@ -453,6 +456,19 @@ test("nonaccepted_native_io_matrix_keeps_actual_registry_and_spawn_unreachable",
       assert.throws(()=>custody.authenticatedNativeRuns([result.outcome,result.outcome]))
     })
   }
+})
+// An authenticated refusal after bootstrap returns that refusal at once and
+// stops the native process still running, instead of waiting for the deadline.
+test("refusal_after_bootstrap_stops_the_live_native_child_promptly",async()=>{
+  const started=Date.now()
+  const result=await custody.runNonacceptedNativeTransaction({mode:"refusedAfterBoot"})
+  assert.ok(Date.now()-started<700,`returned after ${Date.now()-started} ms`)
+  assert.equal(result.authority,false)
+  assert.equal(result.outcome.state,"failed")
+  assert.equal(result.outcome.detail,"server_refused")
+  assert.equal(result.outcome.stream.kind,"failed")
+  assert.deepEqual(result.statistics.signals,["SIGTERM"])
+  assert.equal(result.outcome.resources.native_exit.stdio_closed,true)
 })
 test("empty_init_cancels_boot_failfast",async()=>{
   const r=await custody.runNonacceptedNativeTransaction({mode:"emptyInit"})

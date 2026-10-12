@@ -100,8 +100,10 @@ export async function startCatalogServer(runtime=process){
     service=await serveCatalog({state:loaded.catalog,input:runtime.stdin,output:runtime.stdout,writeReceipt:receipt,onFailure:fatal,onObservation:observe})
     runtime.stdin.once("end",finish);runtime.stdin.once("error",fatal)
     // The first SIGINT is the client's graceful close; a repeated SIGINT is
-    // fatal. A SIGTERM after it only ends the exit once the terminal receipt
-    // is written; otherwise SIGTERM and SIGHUP stay fatal.
+    // fatal. The launcher never forwards SIGTERM, so a SIGTERM reaches the
+    // server only from outside; as a backstop it ends the exit cleanly only
+    // once the terminal receipt is written, and otherwise SIGTERM and SIGHUP
+    // stay fatal.
     runtime.once("SIGINT",()=>{
       runtime.once("SIGINT",fatal)
       interrupted=true
