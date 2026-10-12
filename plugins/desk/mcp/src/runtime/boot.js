@@ -90,6 +90,7 @@ import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-r
 import { deferredToolsHint } from "../util/deferred-tools.js"
 import { recordUnsigned, signoffInstructions } from "../desk/unsigned-deliveries.js"
 import { noteSignoffListed } from "./signoff-listed.js"
+import { consentMentioned } from "./consent-mentioned.js"
 import { resolveDeskStateDir } from "./last-start.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -888,13 +889,28 @@ export function improvementInstructions(summary) {
   return out
 }
 
-function factoryInstructions(factory, pluginRoot, { noninteractive }) {
-  // No operator to ask: say nothing, record nothing. The next interactive session asks.
-  if (factory?.consent !== "undecided" || noninteractive) return []
+// Whether the boot has a consent line at all: only for an undecided store, and never with no operator to ask (say nothing, record
+// nothing; the next interactive session asks).
+const consentUndecided = (factory, noninteractive) => factory?.consent === "undecided" && !noninteractive
+
+// The command an agent runs when it tells the operator about the store, so that the boot of a later session does not hand the sentence
+// out again (`consent-mentioned.js`). A reply ends the turn, so the command comes before the reply that carries the sentence; a command
+// that fails costs nothing but a repeat in a later session, so it is never retried and never raised with the operator.
+const mentionedStep = (store, cli) => `In the same turn, just before the reply that ends with it, run \`node ${cli} consent --store ${store} --mentioned yes\`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it. If you already said the sentence in this session, do not say it again. A child agent never says it and never runs the command.`
+
+// The whole consent block once the operator was told: the question is asked once at setup, so nothing is raised again.
+function factoryMentionedLine(factory, pluginRoot) {
+  const details = path.join(pluginRoot, "skills", "session-start", "details.md")
+  return `Factory consent is undecided for ${factory.store}, and the operator was already told that Desk can contribute to it: do not raise it again. Only if they say 'factory details' (or ask what Desk sends), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+}
+
+function factoryInstructions(factory, pluginRoot, { noninteractive, mentioned }) {
+  if (!consentUndecided(factory, noninteractive)) return []
+  if (mentioned) return [factoryMentionedLine(factory, pluginRoot)]
   const store = factory.store
   const cli = path.join(pluginRoot, "mcp", "scripts", "factory.js")
   return [
-    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. Afterwards raise it at most once, as one short line at the end of your reply ("Desk can contribute measurement data about your finished tasks to ${store}; want the details?"), never as its own decision group, and only if the operator is in the conversation. If they say yes to hearing it, find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
+    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. Afterwards raise it at most once, as one short line at the end of your reply ("Desk can contribute measurement data about your finished tasks to ${store}; want the details?"), never as its own decision group, and only if the operator is in the conversation. ${mentionedStep(store, cli)} If they say yes to hearing it, find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
     `With result account_found, ask this, naming that account as the login: "${FACTORY_QUESTION(store, "<login>")}" With no_account_can_deliver, do not ask: say in one line that no signed-in GitHub account can open pull requests on ${store} (give each account's reason), and that signing in a personal account with \`gh auth login\` lets a later session ask.`,
     `Record the answer only with \`node ${cli} consent --store ${store} --contribute yes --account <login>\` or \`node ${cli} consent --store ${store} --contribute no\`; a no is a decision too and is never asked again.`,
   ]
@@ -1033,7 +1049,7 @@ function remoteRepoInstruction(names, root) {
 function factoryTextLine(factory, pluginRoot) {
   const store = factory.store
   const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." Say it once, and ask nothing. Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." Say it once, and ask nothing. ${mentionedStep(store, path.join(pluginRoot, "mcp", "scripts", "factory.js"))} Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
 }
 
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot
@@ -1099,7 +1115,8 @@ function buildInstructionItems(ctx) {
 // question to answer first: no consent line on that boot.
 function consentItems(ctx) {
   if (needsOperator(ctx) !== null) return []
-  return factoryInstructions(ctx.factory, ctx.pluginRoot, { noninteractive: ctx.noninteractive }).map((text, index) => ({ text, plain: index === 0 ? factoryTextLine(ctx.factory, ctx.pluginRoot) : null }))
+  const mentioned = ctx.consentMentioned === true
+  return factoryInstructions(ctx.factory, ctx.pluginRoot, { noninteractive: ctx.noninteractive, mentioned }).map((text, index) => ({ text, plain: index > 0 ? null : mentioned ? text : factoryTextLine(ctx.factory, ctx.pluginRoot) }))
 }
 
 /** The one join of a boot's instructions: `consent` after every other line. Both boots (`--json` and text) are built through it, so consent is the boot's last instruction whatever a producer adds. */
@@ -1184,6 +1201,7 @@ export async function bootOnce({
   nestedCards = NESTED_CARD_FIELDS,
   unsignedFn = recordUnsigned,
   signoffListedFn = noteSignoffListed,
+  consentMentionedFn = consentMentioned,
 } = {}) {
   const gh = ghArg ?? ghRunner({ env })
   const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
@@ -1410,7 +1428,9 @@ export async function bootOnce({
   const staleFinding = await staleDesk
   const releaseFinding = await releaseAlert
   const status = healthWord(degraded)
-  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement }
+  // Whether an agent on this machine already told the operator about the undecided store: then no session raises it again.
+  const consentWasMentioned = consentUndecided(factory, isNoninteractive(env)) && consentMentionedFn(resolveDeskStateDir({ env, homeDir }), factory.store)
+  const instructionContext = { root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, platform, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList, syncSummaryText, unsigned, signoffSeen, improvement, consentMentioned: consentWasMentioned }
   const instructions = buildInstructions(instructionContext)
   return {
     boot_complete: true,
