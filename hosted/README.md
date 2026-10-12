@@ -151,7 +151,7 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 | Key Vault | `kv-ouro-identity-261e0b`, in resource group `rg-ouro-identity` | Holds the gateway's Entra client secret and the Apple keys, with access granted per secret. It was made with the tenants; the scripts never create it. |
 | Accounts store | Storage accounts `stouroaccounts261e0b` (prod) and `stouroacctstest261e0b` (test) | Tables `accounts`, `identities`, `invites` and `bindings`. Shared keys are off, so it is reached only through Entra roles. |
 | Gateway identity | `id-ouro-desk-hosted` (prod), `id-ouro-desk-hosted-staging` (staging) | Reads its env's Entra client secret and accounts store. Staging's also pulls staging's images. |
-| Checks identity | `id-ouro-identity-checks` | The identity checks' Azure identity: `Key Vault Secrets Officer` on the vault and `Reader` on both Container Apps. |
+| Checks identity | `id-ouro-identity-checks` | The identity checks' Azure identity, with roles on single secrets, never the whole vault: `Key Vault Secrets User` on each env's `entra-client-secret-<env>`, `apple-siwa-key-a-<env>` and `apple-siwa-key-b-<env>`, `Key Vault Secrets Officer` on `apple-siwa-active-<env>` (the renewal writes it), and `Reader` on both Container Apps. `provision-identity.mjs` grants a secret's role on the first run after the secret exists. |
 | GitHub environment | `identity`, on ourostack/desk | Allows deployments from main only, and holds the variables the identity checks workflow reads. |
 
 `node hosted/infra/provision-identity.mjs --env test|prod` takes one action at a time:
