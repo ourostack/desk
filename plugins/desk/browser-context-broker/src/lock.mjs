@@ -67,18 +67,29 @@ async function readProcessStartIdentity(pid) {
  * while the next one returns in well under a second, and without an identity the lock cannot be taken at all.
  */
 export function ownIdentityReader(read, { pid = process.pid } = {}) {
-  let known;
-  return async () => {
-    if (known) return known;
-    let identity;
+  // Concurrent first acquisitions share one read; a read that fails is forgotten so the next acquisition reads again.
+  let pending;
+  async function attempt() {
     try {
-      identity = await read(pid);
+      const identity = await read(pid);
+      if (identity) return identity;
     } catch {
-      identity = undefined;
+      // Read once more below.
     }
-    if (!identity) identity = await read(pid);
-    if (identity) known = identity;
-    return identity;
+    return read(pid);
+  }
+  return () => {
+    pending ??= attempt().then(
+      (identity) => {
+        if (!identity) pending = undefined;
+        return identity;
+      },
+      (error) => {
+        pending = undefined;
+        throw error;
+      },
+    );
+    return pending;
   };
 }
 
@@ -173,6 +184,9 @@ export async function withBrokerLock(stateDir, fn, options = {}) {
     pollMs = 10,
     staleMs = 30_000,
     processIdentityReader = readProcessStartIdentity,
+    readOwnIdentity = processIdentityReader === readProcessStartIdentity
+      ? readOwnStartIdentity
+      : () => processIdentityReader(process.pid),
     ownerPublisher = publishOwnerAtomically,
   } = options;
   if (!/^[A-Za-z0-9._-]+$/u.test(name)) {
@@ -183,12 +197,9 @@ export async function withBrokerLock(stateDir, fn, options = {}) {
   await ensureStateDirectory(stateDir);
   const lockPath = path.join(stateDir, `${name}.lock`);
   const token = randomUUID();
-  const readOwn = processIdentityReader === readProcessStartIdentity
-    ? readOwnStartIdentity
-    : () => processIdentityReader(process.pid);
   let startIdentity;
   try {
-    startIdentity = await readOwn();
+    startIdentity = await readOwnIdentity();
   } catch (cause) {
     throw new BrokerError(
       'BROKER_LOCK_IDENTITY_UNAVAILABLE',

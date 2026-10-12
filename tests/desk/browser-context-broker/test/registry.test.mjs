@@ -394,6 +394,55 @@ test('an own start identity that cannot be read twice is reported, and not kept'
   assert.equal(reads, 3);
 });
 
+test('concurrent first lock acquisitions share one own identity read', async () => {
+  const directory = await stateDir();
+  let reads = 0;
+  const readOwnIdentity = ownIdentityReader(async () => {
+    reads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return 'shared-generation';
+  });
+  const entered = [];
+  await Promise.all(['first', 'second', 'third'].map((label) => withBrokerLock(directory, async () => {
+    entered.push(label);
+  }, { name: label, readOwnIdentity })));
+  await withBrokerLock(directory, async () => entered.push('later'), { readOwnIdentity });
+
+  assert.equal(reads, 1);
+  assert.deepEqual(entered.sort(), ['first', 'later', 'second', 'third']);
+});
+
+test('the lock wait starts after a slow own identity read', async () => {
+  const directory = await stateDir();
+  const lockPath = path.join(directory, 'broker.lock');
+  await mkdir(lockPath, { mode: 0o700 });
+  await writeFile(
+    path.join(lockPath, 'owner.json'),
+    JSON.stringify({
+      token: 'held',
+      pid: process.pid,
+      startIdentity: 'holder-generation',
+      createdAt: new Date().toISOString(),
+    }),
+    { mode: 0o600 },
+  );
+  const started = Date.now();
+
+  await assert.rejects(
+    withBrokerLock(directory, async () => {}, {
+      timeoutMs: 150,
+      pollMs: 5,
+      readOwnIdentity: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return 'waiting-generation';
+      },
+    }),
+    (error) => error.code === 'BROKER_LOCK_TIMEOUT',
+  );
+  // 200 ms reading, then the whole 150 ms wait. Counting the read against the wait would give up after about 200 ms.
+  assert.ok(Date.now() - started >= 340, `gave up after ${Date.now() - started} ms`);
+});
+
 test('readRegistry rejects a state directory accessible by other users', async () => {
   const directory = await stateDir();
   await chmod(directory, 0o755);
