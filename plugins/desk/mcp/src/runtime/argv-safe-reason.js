@@ -38,6 +38,11 @@ import { redactCredentialLikeText } from "../util/redact.js"
 const ABSOLUTE_PATH = /(?:~(?:[\\/][^\s"'`)\]]*)?|\/(?:Users|home|var|tmp|private|mnt|opt|etc)\/[^\s"'`)\]]*|[A-Za-z]:\\[^\s"'`)\]]*)/gu
 const ARGV_REASON_MAX = 300
 
+/** Credentials and absolute machine paths redacted; desk-relative paths and line breaks kept. */
+export function redactMachineText(text) {
+  return redactCredentialLikeText(typeof text === "string" ? text : String(text ?? "")).replace(ABSOLUTE_PATH, "<redacted path>")
+}
+
 /**
  * `argvSafeReason(text) -> string`: never throws -- a non-string input
  * renders as its own `String(...)` form first.
@@ -45,8 +50,6 @@ const ARGV_REASON_MAX = 300
 export function argvSafeReason(text) {
   const raw = typeof text === "string" ? text : String(text ?? "")
   const deskPathsCollapsed = redactDeskRelativePaths(raw)
-  const credentialsRedacted = redactCredentialLikeText(deskPathsCollapsed)
-  const pathsStripped = credentialsRedacted.replace(ABSOLUTE_PATH, "<redacted path>")
-  const oneLine = pathsStripped.replace(/\s+/gu, " ").trim()
+  const oneLine = redactMachineText(deskPathsCollapsed).replace(/\s+/gu, " ").trim()
   return oneLine.length > ARGV_REASON_MAX ? `${oneLine.slice(0, ARGV_REASON_MAX)}…` : oneLine
 }

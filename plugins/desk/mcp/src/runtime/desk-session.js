@@ -16,6 +16,7 @@ import * as path from "node:path"
 
 import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
 import { createAdmission, exceptionOutcome } from "./admission.js"
+import { redactMachineText } from "./argv-safe-reason.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
 import { hostedRefusal } from "./hosted.js"
 import { deskSkill } from "./skills.js"
@@ -148,6 +149,18 @@ export function watchGitHead(gitDir, options, listener) {
  * resolveInputs() (async; `{ root, activation }` or `{ rootError }` / `{ root, activationError }`), loadRuntime(activation) (async; `{ runtimeServer, runtimeStatus }` or `{ outcome }`), setupDiagnostic(error),
  * args, authorityProviders, readinessStateHome, deskStateDir, git, watch, timers, stderr, notifyToolsChanged, launcher, hung.
  */
+function switchFailureReason(snapshot) {
+  const observed = snapshot.diagnostic?.observed
+  return {
+    summary: redactMachineText(snapshot.summary),
+    ...(observed ? { diagnostic: { observed: {
+      name: observed.name,
+      message: redactMachineText(observed.message),
+      ...(observed.failure_code ? { failure_code: observed.failure_code } : {}),
+    } } } : {}),
+  }
+}
+
 export function createDeskSession(deps) {
   const {
     args,
@@ -989,8 +1002,10 @@ export function createDeskSession(deps) {
     context.pendingRepairs.push(recordRepair(repaired.line))
     release()
     const snapshot = await admission.refresh({ force: true, waitMs: GATE_WAIT_MS })
-    // When admission after the switch is not ready, say why: the summary and diagnostic name an exception's message.
-    const why = snapshot.state === "ready" ? {} : { summary: snapshot.summary, diagnostic: snapshot.diagnostic }
+    // When admission after the switch is not ready, say why. The answer is often pasted into a public report, so it
+    // carries only the error's name, message and code, with credentials and machine paths redacted; desk_status
+    // {detail:true} keeps the full diagnostic.
+    const why = snapshot.state === "ready" ? {} : switchFailureReason(snapshot)
     return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix, ...why })
   }
 
