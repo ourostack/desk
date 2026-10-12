@@ -1912,6 +1912,9 @@ test("with a state branch configured and HEAD on it, a write reaches the tool", 
 })
 
 test("desk_status names the step a running admission attempt is in, and clears it when the attempt ends", async (t) => {
+  // The status budget timers are unref'd by design; keep this test's loop alive while the runtime load is held.
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
   let release
   let reportPhase
   const { session } = await makeSession(t, {
