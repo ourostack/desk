@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.294 — 2026-10-12
+
+A write or read no longer comes back refused as `admitting` from a session that is already admitted. A background admission attempt, such as the one a `.git/HEAD` change or a retry on the backoff starts, could begin after a tool call passed its own admission check and before the call's turn to dispatch; the call then refused with "Desk is still admitting" although the session reported `ready`. The call now joins that attempt and checks admission again, at most three times and only while its usual admission wait lasts (when that wait is spent, it refuses as before), and it still never dispatches while an attempt is running ([`src/runtime/desk-session.js`](mcp/src/runtime/desk-session.js)).
+
+A `desk_status` call that is still computing when the desk destination changes now answers `detail_pending: true` with a `status_detail` that says so ([`mcp/src/runtime/desk-session.js`](mcp/src/runtime/desk-session.js)). It used to answer `ready` with no root and no pending mark, which a client such as local recovery read as a missing desk and refused with `actual_root_unavailable` instead of asking again.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.293 — 2026-10-12
 
 Factory triage now has local annotation state and acknowledged identity, still with no producer enabled. Desk reads an improvement card's authority basis from its exact bytes, its effective claim, the desk's rulings and resolved evidence, so a revoked ruling or an expired claim makes an earlier recommendation stale even when the card file is unchanged. A mechanical refresh reports what to invalidate, withdraw or hold without an agent, and card selection tries never-attempted cards before retries, so failing cards cannot starve a new one. Safe Git reviews keep only fixed codes, authorized public pointers and keys of the brief, never candidate prose, and the Git boundary itself refuses a review whose authority the current basis does not grant. Evidence revisions are rechecked live before a write and in the refresh, and coverage is unknown, never zero, when the card scan is incomplete. Public annotation IDs and revisions are assigned only through an acknowledged write: a normal hooked commit in a clean temporary worktree, a non-force push, and an exact readback from the remote. A concurrent loser adopts the winner's ID. See [Local triage annotations and acknowledged identity](docs/factory-local-capture.md#local-triage-annotations-and-acknowledged-identity).
