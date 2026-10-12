@@ -37,9 +37,22 @@ test("the retry is bounded: ten attempts, a capped wait between them, then the l
   assert.deepEqual(slept, [25, 50, 75, 100, 125, 150, 175, 200, 200])
 })
 
+test("a target refused with EBUSY that is then gone counts as removed", () => {
+  const codes = ["EBUSY", "ENOENT"]
+  const calls = []
+  removeWithRetry("dir", { recursive: true, remove: (target) => { calls.push(target); throw refuse(codes.shift()) }, sleep: () => {} })
+  assert.equal(calls.length, 2)
+})
+
+test("a missing target is removed with force and an error without it, as rmSync answers", () => {
+  const missing = () => { throw refuse("ENOENT") }
+  removeWithRetry("dir", { force: true, remove: missing, sleep: () => assert.fail("no wait") })
+  assert.throws(() => removeWithRetry("dir", { remove: missing, sleep: () => assert.fail("no wait") }), { code: "ENOENT" })
+})
+
 test("any other error is thrown at once", () => {
-  const { calls, remove } = flaky("ENOENT", Infinity)
-  assert.throws(() => removeWithRetry("dir", { remove, sleep: () => assert.fail("no wait") }), { code: "ENOENT" })
+  const { calls, remove } = flaky("EISDIR", Infinity)
+  assert.throws(() => removeWithRetry("dir", { remove, sleep: () => assert.fail("no wait") }), { code: "EISDIR" })
   assert.equal(calls.length, 1)
 })
 

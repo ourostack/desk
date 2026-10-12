@@ -17,7 +17,8 @@ function sleepSync(ms) {
  * removeWithRetry(target, { recursive, force, remove, sleep }) -> void
  *
  * `rmSync(target, { recursive, force })`, plus up to ten attempts spread over about a second (1.1 s of waiting in all) when the
- * removal is refused with EPERM, EACCES, EBUSY or ENOTEMPTY. Every other error, and the last transient one, is thrown unchanged.
+ * removal is refused with EPERM, EACCES, EBUSY or ENOTEMPTY. A target that is gone after a refused attempt counts as removed, as a
+ * missing one does with `force`. Every other error, and the last transient one, is thrown unchanged.
  */
 export function removeWithRetry(target, { recursive = false, force = false, remove = rmSync, sleep = sleepSync } = {}) {
   for (let attempt = 1; ; attempt += 1) {
@@ -25,6 +26,8 @@ export function removeWithRetry(target, { recursive = false, force = false, remo
       remove(target, { recursive, force })
       return
     } catch (error) {
+      // Gone is removed: a folder can be refused once and then disappear (Windows), and `force` asks for exactly this.
+      if (error.code === "ENOENT" && (force || attempt > 1)) return
       if (!TRANSIENT.has(error.code) || attempt >= ATTEMPTS) throw error
       sleep(Math.min(STEP_MS * attempt, CAP_MS))
     }
