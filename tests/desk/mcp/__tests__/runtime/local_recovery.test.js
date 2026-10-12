@@ -207,7 +207,9 @@ test("timeout after dispatch is unknown and is never resent", async () => {
     return { input: toServer, output: fromServer, close: async () => toServer.end() }
   }
   const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
-  const result = await runRecovery({ argv: args(root), env: env(), cwd: root, input: input(update), launch: launcher, timeoutMs: 80 })
+  // The deadline covers the whole session, from initialize to the dispatched call. At 80 ms a loaded machine spent it before the
+  // dispatch, and the test saw no dispatch at all. This fake server never answers task_update, so the deadline still ends the call.
+  const result = await runRecovery({ argv: args(root), env: env(), cwd: root, input: input(update), launch: launcher, timeoutMs: 1000 })
   assert.equal(result.report.code, "timeout")
   assert.equal(result.report.effects.mutation, "unknown")
   assert.match(result.report.readback, /HEAD/u)
@@ -419,7 +421,7 @@ if (threads.isMainThread) {
       if (status.admission) appendFileSync(${JSON.stringify(statusEvidence)}, JSON.stringify({
         state: status.state, writes: status.admission.writes,
         detail: status.status_detail, from: status.status_detail_from,
-        pending: status.detail_pending, root: status.root?.path,
+        pending: status.detail_pending, root: status.root?.path, scope: status.write_scope?.mode ?? null, at: new Date().toISOString(),
       }) + "\\n");
     } catch {}
     return write(chunk, ...rest);
@@ -458,13 +460,17 @@ if (threads.isMainThread) {
       assert.equal(report.preflight.statusDetail, "cached_in_owned_session")
       assert.ok(Date.parse(report.preflight.statusDetailFrom) > 0)
       const observed = readFileSync(statusEvidence, "utf8").trim().split("\n").map(JSON.parse)
-      const pending = observed.find((status) => status.detail?.includes("Destination verification is pending") &&
-        status.detail.startsWith("cached:"))
-      assert.ok(pending, "the actual bootstrap must publish a completed same-context detail while resolution is pending")
+      // Several pending-marked details can be answered while resolution is delayed, and the client keeps polling until a ready status
+      // also passes its write-scope check, so its preflight need not be the first one: on Linux CI it was one computed about 0.7 s
+      // later. The preflight must be one of the pending-marked details answered after the prewarm finished.
+      const answered = observed.filter((status) => Date.parse(status.at) >= Date.parse(completed.completedObservedAt) &&
+        status.detail?.includes("Destination verification is pending") && status.detail.startsWith("cached:"))
+      assert.ok(answered.length > 0, "the actual bootstrap must publish a completed same-context detail while resolution is pending")
+      const pending = answered.find((status) => status.from === report.preflight.statusDetailFrom)
+      assert.ok(pending, `the preflight must use a pending-marked detail: ${JSON.stringify({ preflight: report.preflight, answered })}`)
       assert.equal(pending.writes, "refused")
       assert.equal(pending.root, root)
       assert.ok(Date.parse(pending.from) > 0)
-      assert.equal(report.preflight.statusDetailFrom, pending.from)
       if (completed.from) assert.ok(Date.parse(pending.from) >= Date.parse(completed.from), "pending detail never predates the observed completed cache")
       const delayed = readFileSync(resolverEvidence, "utf8").trim().split("\n").map(JSON.parse)
       assert.ok(delayed.length > 0)
