@@ -208,7 +208,8 @@ test("semantic request starts or reuses convergence and executes one proven sema
     topic: "quartz",
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
-  assert.equal(result.results[0].path, "track/work/task.md")
+  // A refusal has no results; print the answer so a failure names its code.
+  assert.equal(result.results?.[0]?.path, "track/work/task.md", JSON.stringify(result))
   assert.deepEqual(f.used, ["semantic"])
 })
 
