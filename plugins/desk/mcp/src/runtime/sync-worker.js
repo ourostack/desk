@@ -46,7 +46,7 @@
 // pass it.
 
 import { randomUUID } from "node:crypto"
-import { execFile, spawn, spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -58,6 +58,7 @@ import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
+import { createGitReader } from "./git-read-worker.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -218,13 +219,11 @@ function parseAheadBehind(stdout) {
   return { ahead: Number.isFinite(ahead) ? ahead : 0, behind: Number.isFinite(behind) ? behind : 0 }
 }
 
-// The same two reads without blocking the caller's thread: desk_status runs on the thread that answers the host, and a synchronous Git spawn there holds every other request for as long as the spawn takes (a few hundred milliseconds on a busy machine, more where a scanner inspects each new process).
+// The same two reads without blocking the caller's thread: desk_status runs on the thread that answers the host, and starting a Git process there holds every other request until the operating system has created it, even through an asynchronous call (see git-read-worker.js). A read that cannot run answers as a failed one.
+const gitReads = createGitReader()
+
 function runAsync(root, args) {
-  return new Promise((resolve) => {
-    execFile("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, env: gitEnv(), windowsHide: true }, (error, stdout) => {
-      resolve({ status: error ? 1 : 0, stdout })
-    })
-  })
+  return gitReads.read({ root, args, env: gitEnv(), timeoutMs: GIT_TIMEOUT_MS })
 }
 
 export async function hasRemoteConfiguredAsync(root) {
