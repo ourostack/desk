@@ -450,7 +450,7 @@ if (threads.isMainThread) {
         } : {}),
       },
     })
-    assert.equal(result.status, 0, result.stdout)
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
     const report = JSON.parse(result.stdout)
     if (delayedResolution) {
       const completed = JSON.parse(readFileSync(completedStatus, "utf8"))
