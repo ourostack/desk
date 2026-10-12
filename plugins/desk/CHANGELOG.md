@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.296 — 2026-10-12
+
+The factory report build and the coverage gate's shard bookkeeping now remove their folders with `removeWithRetry` ([`mcp/src/util/remove-retry.js`](mcp/src/util/remove-retry.js)), which retries EPERM, EACCES, EBUSY and ENOTEMPTY up to ten times over about a second, and counts a folder that is gone after a refused attempt as removed ([`mcp/src/factory/pipeline/build.js`](mcp/src/factory/pipeline/build.js), [`mcp/src/coverage/runner.js`](mcp/src/coverage/runner.js)). Both relied on `rmSync`'s own `maxRetries`, which Node 24.18 does not apply to a Windows access-denied, and whose wait is `i * retryDelay / 1000`, so a delay under a second was no wait on any platform.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.295 — 2026-10-12
 
 The browser broker's lock now reads its own process's start identity once per process and keeps it, shares one read among concurrent first acquisitions, and reads it once more when the first read fails ([`browser-context-broker/src/lock.mjs`](browser-context-broker/src/lock.mjs)). On Windows each read starts PowerShell, capped at 5 s; a loaded machine could hit that cap and fail the lock with `BROKER_LOCK_IDENTITY_UNAVAILABLE`, although the next read would have succeeded. The wait for the lock (`timeoutMs`) now starts after that read, so a slow read no longer uses it up.
