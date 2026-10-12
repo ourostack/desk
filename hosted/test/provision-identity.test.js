@@ -281,7 +281,7 @@ test("--clear-app-secrets writes unset over all four desk-app secrets and nothin
   assert.equal(staging.secrets["desk-signing-key"], SIGNING);
 });
 
-test("the identity-checks identity gets exactly Key Vault Secrets Officer on the vault and Reader on each env's app from that env's run, and its federated subject is the identity environment", async (t) => {
+test("the identity-checks identity gets Key Vault roles only on its env's secrets it uses, never the vault, and Reader on each env's app from that env's run, and its federated subject is the identity environment", async (t) => {
   const context = setup(t, { cloud: withAppleKeyInVault(emptyCloud()) });
   addContainerApp(context.cloud, { name: "ouro-desk-hosted", shown: { ...shownFixture, id: "/apps/ouro-desk-hosted" }, secrets: {} });
   addContainerApp(context.cloud, { name: "ouro-desk-hosted-staging", shown: { ...shownFixture, id: "/apps/ouro-desk-hosted-staging" }, secrets: {} });
@@ -289,7 +289,16 @@ test("the identity-checks identity gets exactly Key Vault Secrets Officer on the
   const checks = context.cloud.identities["id-ouro-identity-checks"];
   const roles = context.cloud.roles.filter(({ principalId }) => principalId === checks.principalId).map(({ role, scope }) => `${role} @ ${scope.split("/").at(-1)}`);
   // A test run touches only the staging app (review m2); a prod run gives Reader on production's app.
-  assert.deepEqual(roles.sort(), ["Key Vault Secrets Officer @ kv-ouro-identity-261e0b", "Reader @ ouro-desk-hosted-staging"]);
+  // Gate finding 4: per secret, never the whole vault. Slot b isn't in this vault yet, so it gets its role on a later run.
+  assert.deepEqual(roles.sort(), [
+    "Key Vault Secrets Officer @ apple-siwa-active-test",
+    "Key Vault Secrets User @ apple-siwa-key-a-test",
+    "Key Vault Secrets User @ entra-client-secret-test",
+    "Reader @ ouro-desk-hosted-staging",
+  ]);
+  const before = context.cloud.roles.length;
+  await context.go();
+  assert.equal(context.cloud.roles.length, before, "a second run grants nothing again");
   assert.deepEqual(checks.federated.map(({ subject, issuer, audiences }) => [subject, issuer, audiences]), [
     ["repo:ourostack@265728804/desk@1386529300:environment:identity", "https://token.actions.githubusercontent.com", "api://AzureADTokenExchange"],
   ]);

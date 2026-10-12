@@ -364,7 +364,7 @@ export async function readState(ctx) {
   state.roles = {
     entraSecret: await rolesAt(ctx, state.vaultSecrets.includes(entraSecretName(env)) ? state.entraSecretScope : null),
     storage: await rolesAt(ctx, state.storage?.id),
-    vault: await rolesAt(ctx, state.vaultId),
+    checksSecrets: Object.fromEntries(await Promise.all(checksAppleSecretRoles(env).map(([name]) => name).filter((name) => state.vaultSecrets.includes(name)).map(async (name) => [name, await rolesAt(ctx, `${state.vaultId}/secrets/${name}`)]))),
     apps: Object.fromEntries(await Promise.all(Object.entries(state.containerApps).map(async ([app, id]) => [app, await rolesAt(ctx, id)]))),
   };
   if (state.checksIdentity) {
@@ -435,6 +435,14 @@ function hasRole(assignments, principalId, role) {
   return assignments.some((assignment) => assignment.principalId === principalId && assignment.roleDefinitionName === role);
 }
 
+// The Apple secrets the identity checks use, with the least role each needs: the renewal reads both key slots and
+// writes the active-slot record and its date tag.
+export const checksAppleSecretRoles = (env) => [
+  [appleKeySecretName("a", env), "Key Vault Secrets User"],
+  [appleKeySecretName("b", env), "Key Vault Secrets User"],
+  [appleActiveSecretName(env), "Key Vault Secrets Officer"],
+];
+
 function roleStep(name, identity, identityLabel, role, scope, assignments) {
   if (identity && scope && !isPlaceholder(scope) && hasRole(assignments ?? [], identity.principalId, role)) return [];
   const principal = identity?.principalId ?? placeholder(`${identityLabel} principal id`);
@@ -497,7 +505,12 @@ export function plan({ env, state, record = {}, now = Date.now() }) {
   if (!(state.checksIdentity?.subjects ?? []).includes(CHECKS_SUBJECT)) {
     steps.push({ name: "checks identity federated credential", calls: [az("identity", "federated-credential", "create", "--name", CHECKS_FEDERATED_NAME, "--identity-name", CHECKS_IDENTITY, "-g", IDENTITY_RESOURCE_GROUP, "--issuer", GITHUB_ISSUER, "--subject", CHECKS_SUBJECT, "--audiences", FEDERATED_AUDIENCE, "--output", "none", SUB)] });
   }
-  steps.push(...roleStep("checks identity: Key Vault Secrets Officer", state.checksIdentity, CHECKS_IDENTITY, "Key Vault Secrets Officer", state.vaultId, state.roles?.vault));
+  // Key Vault access per secret, only on the Apple secrets the checks read or write (gate finding 4): never the whole
+  // vault, so the workflow's identity can't read another env's or another service's secrets. The Entra secret's role
+  // follows its creation, below. A secret that doesn't exist yet gets its role on the run after it is made.
+  for (const [name, role] of checksAppleSecretRoles(env)) {
+    if ((state.vaultSecrets ?? []).includes(name)) steps.push(...roleStep(`checks identity: ${role} on ${name}`, state.checksIdentity, CHECKS_IDENTITY, role, `${state.vaultId}/secrets/${name}`, state.roles?.checksSecrets?.[name]));
+  }
   for (const app of [settings.app]) {
     const id = state.containerApps?.[app];
     if (id) steps.push(...roleStep(`checks identity: Reader on ${app}`, state.checksIdentity, CHECKS_IDENTITY, "Reader", id, state.roles?.apps?.[app]));
@@ -566,6 +579,8 @@ export function plan({ env, state, record = {}, now = Date.now() }) {
       });
     }
     steps.push(...roleStep("gateway identity: Key Vault Secrets User on its Entra secret", state.gatewayIdentity, settings.gatewayIdentity, "Key Vault Secrets User", state.entraSecretScope ?? `${state.vaultId}/secrets/${entraSecretName(env)}`, state.roles?.entraSecret));
+    // The checks read the Entra secret's key-id tag, which az fetches with the value.
+    steps.push(...roleStep("checks identity: Key Vault Secrets User on its env's Entra secret", state.checksIdentity, CHECKS_IDENTITY, "Key Vault Secrets User", state.entraSecretScope ?? `${state.vaultId}/secrets/${entraSecretName(env)}`, state.roles?.entraSecret));
 
     // The automation app the identity-checks workflow signs in to the tenant as.
     const automation = state.automationApp;
