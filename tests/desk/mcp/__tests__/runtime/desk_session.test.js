@@ -375,6 +375,8 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
   assert.doesNotMatch(lines.join(""), /admission ready/u)
   await waitUntil(() => session.admission.snapshot().state === "degraded:state_branch_mismatch")
   assert.equal(fixtureGit(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
+  // The record is written without holding up the session, so it can land just after the state it reports.
+  await session.lastStartWritten()
   assert.equal(JSON.parse(readFileSync(path.join(fixture.stateDir, "last-start.json"), "utf8")).state, "degraded:state_branch_mismatch")
 })
 

@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { installedNodesByMajor, mcpRoot } from "../launch/_mcp_handshake.js"
-import { git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
+import { git, lastStartUntil, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
 import { controllerRecords, waitForProcessesGone } from "./_controller_exit.js"
 
 async function waitFor(predicate, { deadlineMs = 10000, intervalMs = 50 } = {}) {
@@ -37,7 +37,7 @@ test("a missing root recovers in place once the desk appears: ready, same tool l
   const write = await session.call("task_create", { track: "ops", slug: "recovered-write-check", title: "After recovery" })
   assert.equal(write.isError, false, JSON.stringify(write.payload))
   assert.equal(existsSync(path.join(pending, "ops", "recovered-write-check", "task.md")), true)
-  assert.equal(readLastStart(fixture).state, "ready")
+  assert.equal((await lastStartUntil(fixture, (record) => record.state === "ready")).state, "ready")
 })
 
 test("a saved binding to a missing folder never binds a home-folder desk and recovers in place once the folder appears", async (t) => {
