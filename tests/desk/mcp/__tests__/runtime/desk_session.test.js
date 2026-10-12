@@ -1084,6 +1084,68 @@ test("a controller replaced while its last status request is pending is not clos
   assert.deepEqual([connections, closed, session.admission.snapshot().state], [2, [1], "ready"], "only the exited controller was closed; the new one serves")
 })
 
+test("closing the session waits for a lost controller that is still closing, not only the current one", async (t) => {
+  let connections = 0
+  let finishFirstClose
+  const closes = []
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => {
+      const id = (connections += 1)
+      return {
+        accepted: true,
+        async status() { if (id === 1) throw new Error("readiness controller connection closed: status") },
+        close() {
+          closes.push(id)
+          return id === 1 ? new Promise((resolve) => { finishFirstClose = resolve }) : Promise.resolve()
+        },
+      }
+    },
+  })
+  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1, disposeAdmissionWaitMs: 0 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status" })
+  await waitUntil(() => closes.includes(1))
+  let disposed = false
+  const disposing = session.dispose().then(() => { disposed = true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.deepEqual([disposed, connections], [false, 1], "the lost controller's close is still running, so the session has not finished closing")
+  finishFirstClose()
+  await disposing
+  assert.equal(disposed, true)
+})
+
+test("re-election waits until the lost controller has closed, so the new one never races it for the endpoint", async (t) => {
+  let connections = 0
+  let finishFirstClose
+  let firstClosed = false
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => {
+      const id = (connections += 1)
+      if (id === 2) assert.equal(firstClosed, true, "the new controller was elected while the lost one still held its endpoint")
+      return {
+        accepted: true,
+        async status() { if (id === 1) throw new Error("readiness controller connection closed: status") },
+        close() {
+          return id === 1 ? new Promise((resolve) => { finishFirstClose = () => { firstClosed = true; resolve() } }) : Promise.resolve()
+        },
+      }
+    },
+  })
+  const { session } = await makeSession(t, { runtime, controllerRecheckMs: 1 })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_status" })
+  await waitUntil(() => finishFirstClose !== undefined)
+  // The re-election is waiting for that close, so it is started, not awaited.
+  const reelection = session.admission.refresh({ force: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(connections, 1, "no second election while the first controller is closing")
+  finishFirstClose()
+  await reelection
+  await waitUntil(() => connections === 2)
+  await session.admission.refresh()
+  assert.equal(session.admission.snapshot().state, "ready")
+})
+
 test("disposing the session during the repeats ends the check without a verdict", async (t) => {
   const runtime = fakeRuntime({
     connectOrStartController: async () => ({ accepted: true, async status() { throw new Error("readiness controller request timed out: status") } }),

@@ -267,6 +267,8 @@ export function createDeskSession(deps) {
     return line
   }
 
+  // Closes this session started and has not seen finish. A controller forgotten as lost (its status checks all failed) can still be shutting its child down when the session closes, and the session must not report itself closed while a child it owns runs.
+  const controllerCloses = new Set()
   function forgetController() {
     unwatchController?.()
     unwatchController = null
@@ -274,7 +276,10 @@ export function createDeskSession(deps) {
     if (context.admission) context.admission = { ...context.admission, controller: null }
     if (controller) context.controllerLost = true
     context.semanticCurrent = false
-    return Promise.resolve().then(() => controller?.close?.()).catch(() => {})
+    const closing = Promise.resolve().then(() => controller?.close?.()).catch(() => {})
+    controllerCloses.add(closing)
+    void closing.finally(() => controllerCloses.delete(closing))
+    return closing
   }
 
   function watchController(controller) {
@@ -543,6 +548,9 @@ export function createDeskSession(deps) {
   }
 
   async function reconnectController({ deskRoot, policy, onRepair }) {
+    // A lost controller can still be closing, with its child holding the endpoint. Electing now would start a child that fails with EADDRINUSE and then join the one that is exiting; its close is bounded (the child is killed after 1 s).
+    await Promise.all(controllerCloses)
+    if (disposed) return null
     try {
       const connector = context.runtimeServer.connectOrStartController
       const controller = await connector({ deskRoot, policy, stateHome: readinessStateHome, onRepair })
@@ -1089,7 +1097,8 @@ export function createDeskSession(deps) {
       // front door's shutdown limit is never spent waiting for admission first. A late attempt that acquires a
       // controller after disposal closes it itself.
       const retired = Promise.all([operationTail, statusReaderOutcome()]).then(async ([, retirementError]) => {
-        await forgetController()
+        forgetController()
+        await Promise.all(controllerCloses)
         return retirementError
       })
       return Promise.all([retired, attemptStopped]).then(([retirementError]) => {
