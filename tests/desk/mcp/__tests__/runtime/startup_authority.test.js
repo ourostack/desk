@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
+import { callTool, waitForStatusInspection } from "../../../../../plugins/desk/mcp/src/server.js"
 import { admitInProcess, startInProcess } from "./_in_process_desk.js"
 
 // Windows refuses to remove a folder a process still uses; allow the same time _process_hygiene.js allows.
@@ -61,7 +61,9 @@ for (const scenario of [
       },
       authorityProviders: { registry: async () => scenario.provider },
       runtimeImporter: async () => ({
-        callTool,
+        // With waitForStatusInspection the session tracks the desk_status reader process and closing waits for it to
+        // exit; without it, a reader still inspecting the root outlives close, and Windows cannot remove the root.
+        callTool, waitForStatusInspection,
         connectOrStartController: async () => admittedController(controllerEvents),
       }),
     })
