@@ -66,7 +66,7 @@ test("a saved binding to a missing folder never binds a home-folder desk and rec
   assert.equal(existsSync(pending), false, "refusal must not recreate the missing saved desk")
   git(fixture.root, "clone", fixture.origin, pending)
   // A ready status carries no runtime detail when the runtime status misses its short budget (it then says "unavailable"), so wait for the detail the assertions read.
-  const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root)
+  const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending)
   assert.equal(ready.root.path, pending)
   assert.equal(ready.root.source, "activation-config")
   assert.deepEqual((await session.request("tools/list")).result.tools, before)

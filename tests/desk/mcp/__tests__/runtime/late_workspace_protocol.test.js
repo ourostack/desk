@@ -276,7 +276,8 @@ JSON.stringify = function(...args) {
         admission: handle.admission.snapshot(), phase: handle.session.context.phase,
         resolution: resolutionTrace, dispatch: dispatchTrace, statusTrace, convergenceTrace,
       }))
-      if (value.root?.path) return value
+      // A status still waiting for the runtime detail already names the admitted desk; the detail is what this waits for.
+      if (value.root?.path && value.detail_pending !== true) return value
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
     assert.fail("runtime status detail did not arrive")
