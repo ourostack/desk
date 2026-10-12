@@ -302,36 +302,44 @@ test("crash_and_reset_never_refund", async (t) => {
     assert.equal((await readStatus(env)).loop.agent_launch_highwater, undefined, "nothing is written from the pair")
   }))
 
-  await t.test("the documented full reset clears a blocked ledger, keeps today spent and launches the next UTC day", () => scratch(async (env, root) => {
-    // Today: three evaluations (the evaluator's own record says 3) and one triage launch, so the ledger has spent 4.
-    await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { state: "ran", day: dayText(0), jobs: 0 } } }))
-    const legacy = async () => ({ legacyEvaluator: (await readStatus(env)).evaluator })
-    assert.deepEqual(await reserveMany(env, "evaluate", at(0, 9), 3, await legacy()), ["reserved", "reserved", "reserved"])
-    assert.equal((await reserve(env, "triage", at(0, 9), await legacy())).state, "reserved")
-    await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { ...current.evaluator.headless, jobs: 3 } } }))
-    assert.equal((await ledgerOf(root)).spent, 4)
+  await t.test("the documented full reset clears a blocked ledger, keeps the day sealed with nothing refunded, and the next UTC day launches", () => scratch(async (env, root) => {
+    // Reserve as the evaluator step does, passing the stored evaluator record.
+    const r = async (kind, now) => reserveAgentLaunch(env, { kind, generation: null, now, legacyEvaluator: (await readStatus(env)).evaluator })
+    // The evaluator record is from yesterday. Today: one triage launch, one evaluator launch that ran and one the runner reported as not
+    // started (the evaluator's own count takes that one back, the ledger does not).
+    await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { state: "idle", day: dayText(-1), jobs: 7 } } }))
+    assert.equal((await r("triage", at(0, 1))).state, "reserved")
+    const ran = await r("evaluate", at(0, 1))
+    const notStarted = await r("evaluate", at(0, 1))
+    assert.equal((await finishAgentLaunch(env, { token: ran.token, state: "ran", now: at(0, 1) })).state, "recorded")
+    assert.equal((await finishAgentLaunch(env, { token: notStarted.token, state: "not_started", now: at(0, 1) })).state, "recorded")
+    await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { state: "ran", day: dayText(0), jobs: 1 } } }))
+    assert.equal((await r("triage", at(0, 2))).state, "window_used")
+    const spentBefore = (await ledgerOf(root)).spent
+    assert.equal(spentBefore, 3)
     // Blocked: an older guard of the same ledger put back beside the newer ledger and mark.
     await fs.writeFile(path.join(root, GUARD_FILE), (await readBytes(root)).guard.replace(/"revision": ?\d+/u, '"revision": 1'), { mode: 0o600 })
-    const blocked = (await reserve(env, "evaluate", at(0, 10), await legacy())).state
-    assert.ok(["inconsistent", "rollback_detected"].includes(blocked), blocked)
-    // The repair, as "Repairing a blocked launch ledger" says: move both agent-launch-*.json files aside and delete
+    assert.equal((await r("evaluate", at(0, 2))).state, "rollback_detected")
+    // The repair exactly as "Repairing a blocked launch ledger" says: move both agent-launch-*.json files aside, and delete both
     // loop.agent_launch_highwater and evaluator.headless from status.json.
-    await fs.rename(path.join(root, LEDGER_FILE), path.join(root, "aside-ledger.json"))
-    await fs.rename(path.join(root, GUARD_FILE), path.join(root, "aside-guard.json"))
+    await fs.rename(path.join(root, LEDGER_FILE), path.join(root, "agent-launch-ledger.json.aside"))
+    await fs.rename(path.join(root, GUARD_FILE), path.join(root, "agent-launch-guard.json.aside"))
     await updateStatus(env, (current) => {
       const { agent_launch_highwater: _mark, ...loop } = current.loop
       const { headless: _headless, ...evaluator } = current.evaluator
       return { ...current, loop, evaluator }
     })
-    // Same day: a new ledger starts with today spent; nothing launches and nothing is refunded.
-    assert.equal((await reserve(env, "evaluate", at(0, 11), await legacy())).state, "quota_exhausted")
-    assert.equal((await reserve(env, "triage", at(0, 13), await legacy())).state, "quota_exhausted")
-    const fresh = await ledgerOf(root)
-    assert.equal(fresh.spent, 30)
-    assert.equal(fresh.day, dayText(0))
-    // Next UTC day: launches as normal.
-    assert.equal((await reserve(env, "evaluate", at(1, 10), await legacy())).state, "reserved")
-    assert.equal((await reserve(env, "triage", at(1, 10), await legacy())).state, "reserved")
+    // The same day: triage (in the window it already used, and in a later one) and evaluation are refused; nothing is given back.
+    assert.equal((await r("triage", at(0, 3))).state, "quota_exhausted")
+    assert.equal((await r("evaluate", at(0, 3))).state, "quota_exhausted")
+    assert.equal((await r("triage", at(0, 13))).state, "quota_exhausted")
+    const resetDay = await ledgerOf(root)
+    assert.equal(resetDay.day, dayText(0))
+    assert.equal(resetDay.spent, 30)
+    assert.ok(resetDay.spent >= spentBefore, "no refund")
+    // The next UTC day launches both kinds.
+    assert.equal((await r("triage", at(1, 1))).state, "reserved")
+    assert.equal((await r("evaluate", at(1, 1))).state, "reserved")
     assert.equal((await ledgerOf(root)).spent, 2)
   }))
 
@@ -845,24 +853,26 @@ test("a rename that fails for good, or a readback that differs, launches nothing
     assert.deepEqual(await racing.reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 2) }), { state: "write_failed" })
   }))
 
-  await t.test("a lock broken between settling and committing loses no reservation and repeats no revision", () => scratch(async (env, root) => {
-    await reserve(env, "evaluate", at(0, 1))
-    let other = null
+  await t.test("a lock broken between settling and committing never answers more reservations than the ledger spent", () => scratch(async (env, root) => {
+    const answers = [(await reserve(env, "evaluate", at(0, 1))).state]
+    let reads = 0
     const racing = createHeadlessLedger({
-      fault: async (point) => {
-        if (point !== "before_witness_pending" || other !== null) return
-        // A stale-lock break: another process takes the lock after this one settled and reserves to the end.
-        await fs.rm(path.join(root, "locks", "agent-launch-ledger.lock"), { force: true })
-        other = await reserve(env, "evaluate", at(0, 1))
+      readStatus: async (...args) => {
+        reads += 1
+        // The status read right before this transaction's commit (after settling): another process breaks the stale lock and reserves.
+        if (reads === 2) {
+          await fs.rm(path.join(root, "locks", "agent-launch-ledger.lock"), { force: true })
+          answers.push((await reserve(env, "evaluate", at(0, 2))).state)
+        }
+        return readStatus(...args)
       },
     })
-    assert.deepEqual(await racing.reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 2) }), { state: "write_failed" })
-    assert.equal(other.state, "reserved")
-    assert.equal(other.token.revision, (await ledgerOf(root)).revision)
-    const ledger = await ledgerOf(root)
-    assert.equal(ledger.spent, ledger.evaluate.launched, "every launch counted once")
-    assert.equal(ledger.evaluate.launched, 2, "the first and the other process's; the failed one launched nothing")
-    assert.equal((await reserve(env, "evaluate", at(0, 3))).state, "reserved", "the witnesses still agree")
+    const mine = await racing.reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 2), legacyEvaluator: LEGACY })
+    answers.push(mine.state)
+    assert.equal(mine.state, "write_failed", "this transaction's status write sees the other writer and fails")
+    const reserved = answers.filter((state) => state === "reserved").length
+    // The other process found this one's pending mark and sealed the day: more spent than launched, never fewer.
+    assert.ok((await ledgerOf(root)).spent >= reserved, `${reserved} reserved answers, ${(await ledgerOf(root)).spent} spent`)
   }))
 
   await t.test("a final readback that disagrees answers readback_mismatch", () => scratch(async (env, root) => {
