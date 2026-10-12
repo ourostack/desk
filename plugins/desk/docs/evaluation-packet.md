@@ -18,7 +18,7 @@ Read the RFC with an agent rather than alone: start a session and ask it to walk
 
 - **You test the channel as it stands.** Install from the channel this packet names, `main` of `ourostack/desk`, never from a commit. Evaluators use the channel as it is when they run and record the commit they saw as evidence, never as something to hold the evaluation to ([RFC §5](agentic-engineering-v2-rfc.md#5-work-source-and-continuity)). Record it at the start with `git ls-remote https://github.com/ourostack/desk refs/heads/main`.
 - **One host per run.** Run the whole packet on one host, then again on the other if you use both.
-- **Everything under test is throwaway.** A new host profile, a new desk, and Desk's own state and cache, all made for this evaluation inside one folder, so the sessions under test see what a new user sees and never use or change anything you already have. A new profile is not empty once you sign in: the host can load what your account carries, such as connectors and synced plugins, so the preflight also checks which plugins loaded and which Desk tool answers. A preflight check proves the session under test uses the throwaway desk before any scenario runs.
+- **Everything under test is throwaway.** A new host profile, a new desk, and Desk's own state and cache, all made for this evaluation inside one folder, so the sessions under test see what a new user sees and never use or change anything you already have. A new profile is not empty once you sign in: the host can load what your account carries, such as connectors and synced plugins, so setup records which plugins loaded and the preflight checks which Desk tool answers. A preflight check proves the session under test uses the throwaway desk before any scenario runs.
 - **`observer` watches; you and your agent do the work.** `observer` uses its release-evaluation skill, [`desk:evaluate-release`](../skills/evaluate-release/SKILL.md): it records each step's outcome with evidence, classifies each problem as a defect, a confusion or a gap, and reports without fixing anything. It never evaluates work it did and never certifies its own work ([observer's identity](../agents/observer.md)).
 - **Time is measured, not estimated.** Tell `observer` when you start and finish each scenario; it records the elapsed time from the clock or from host log timestamps, and records `unavailable` when it could not measure ([evaluate-release](../skills/evaluate-release/SKILL.md#time-each-scenario)).
 - **Human authority stays human.** Delegating engineering checks does not delegate credentials, consent to publish facts, approval to speak from your account, acceptance of the outcome or promotion. With no human present, the driver records those gates as `blocked`, never bypasses them ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off), [RFC §2](agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent)).
@@ -45,13 +45,13 @@ export EVAL="$(cd "$(mktemp -d "$PWD/.v2-evaluation.XXXXXX")" && pwd -P)/v2-eval
   REAL_CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
   mkdir -p "$EVAL/claude-backup/plugins"
   for part in CLAUDE.md settings.json plugins/installed_plugins.json plugins/known_marketplaces.json agents skills hooks; do
-    if [ -e "$REAL_CLAUDE_DIR/$part" ]; then cp -R "$REAL_CLAUDE_DIR/$part" "$EVAL/claude-backup/$part"; fi
+    if [ -e "$REAL_CLAUDE_DIR/$part" ]; then cp -RL "$REAL_CLAUDE_DIR/$part" "$EVAL/claude-backup/$part" || echo "$part" >> "$EVAL/claude-backup-incomplete.txt"; fi
   done
   if [ -d "$REAL_CLAUDE_DIR/projects" ]; then
-    find "$REAL_CLAUDE_DIR/projects" -mindepth 2 -maxdepth 2 -type d -name memory | while IFS= read -r memory; do
+    find -L "$REAL_CLAUDE_DIR/projects" -mindepth 2 -maxdepth 2 -type d -name memory | while IFS= read -r memory; do
       project="$(basename "$(dirname "$memory")")"
       mkdir -p "$EVAL/claude-backup/projects/$project"
-      cp -R "$memory" "$EVAL/claude-backup/projects/$project/memory"
+      cp -RL "$memory" "$EVAL/claude-backup/projects/$project/memory" || echo "projects/$project/memory" >> "$EVAL/claude-backup-incomplete.txt"
     done
   fi
   ps -axo pid=,lstart=,comm= | awk '$NF ~ /(^|\/)claude$/' > "$EVAL/claude-sessions-before.txt" || true
@@ -88,7 +88,7 @@ Why each piece is there:
 - `DESK_ACTIVATION_CONFIG` binds the throwaway desk on every host that honors it, and its `state_branch` keeps it on `main`. `DESK` names the same desk, so a binding that ever misses falls back to the throwaway desk rather than to a desk in your home folder ([root resolution order](../mcp/src/util/paths.js)).
 - `XDG_STATE_HOME` and `XDG_CACHE_HOME` give these sessions their own Desk state and cache: factory consent, session markers, outbox and readiness state all live under the state folder ([factory outbox](../mcp/src/factory/outbox.js), [start records](../mcp/src/runtime/last-start.js)), so the evaluation never reads or changes yours, and scenario 6 sees the one-time consent question for real.
 - `CLAUDE_CONFIG_DIR` and `COPILOT_HOME` give each host a fresh profile inside `$EVAL`.
-- `$EVAL/claude-backup` is a copy of the parts of your real Claude config directory that setup could change, taken before anything else runs: `CLAUDE.md`, `settings.json`, the two plugin registry files, and what you wrote under `agents/`, `skills/`, `hooks/` and `projects/*/memory/`. It leaves out transcripts, caches and credentials, which can run to gigabytes and change by the minute on a profile in use. `$EVAL/claude-sessions-before.txt` lists the Claude Code processes already running, so a change at the end can be attributed. `env.sh` records the real directory as `REAL_CLAUDE_DIR`: the `CLAUDE_CONFIG_DIR` your shell had before setup, otherwise `~/.claude`.
+- `$EVAL/claude-backup` is a copy of the parts of your real Claude config directory that setup could change, taken before anything else runs: `CLAUDE.md`, `settings.json`, the two plugin registry files, and what you wrote under `agents/`, `skills/`, `hooks/` and `projects/*/memory/`. It leaves out transcripts, caches and credentials, which can run to gigabytes and change by the minute on a profile in use. The copy follows symbolic links, so a part that a dotfile manager links in is backed up by content. A part that could not be copied whole, for example because it holds a broken link, is listed in `$EVAL/claude-backup-incomplete.txt`; differences under it at the end may come from the copy. `$EVAL/claude-sessions-before.txt` lists the Claude Code processes already running, so a change at the end can be attributed. The list finds a process only when its command name is `claude`: an empty list does not prove no session was running. `env.sh` records the real directory as `REAL_CLAUDE_DIR`: the `CLAUDE_CONFIG_DIR` your shell had before setup, otherwise `~/.claude`.
 
 Start every session under test from `$EVAL/scratch`: a host project that is itself a desk would bind that desk instead ([root resolution order](../mcp/src/util/paths.js)). Keep the printed `$EVAL` path; `observer` needs it. If you want pull requests in the engineering scenarios, use a throwaway GitHub repository of your own instead of `$EVAL/scratch`.
 
@@ -149,7 +149,7 @@ Then start the session with a read-only first prompt: "Call the installed Desk p
 
 **If it names any other desk, stop the evaluation.** Run no scenario against that desk. Record a defect with the output as evidence, and file it ([evaluate-release](../skills/evaluate-release/SKILL.md#start-cold-on-the-named-host)).
 
-**What this cannot prevent:** Desk's startup hook runs its boot checks when a session starts, before your first prompt, and can launch detached workspace-tidy work for the desk it resolves ([boot checks](../hooks/lib/boot-checks.cjs)). The current tidy requires fresh ownership and consumer evidence before removal; a listing is not deletion authority ([workspace tidy](workspace-tidy.md)). On Claude Code, the pre-session check rules out a wrong binding before that happens. On a launcher, the in-session `desk_status` detects a wrong binding after startup rather than preventing it. Before starting on a launcher, prove four things point into `$EVAL`: the launcher's configuration, the host home (`COPILOT_HOME`), the desk or workspace binding, and Desk's state and cache (`XDG_STATE_HOME`, `XDG_CACHE_HOME`). If you cannot prove any one of them, record setup as `blocked`; do not try it against your real workspace. The launcher's shared download cache and logs are not on that list.
+**What this cannot prevent:** Desk's startup hook runs its boot checks when a session starts, before your first prompt, and can launch detached workspace-tidy work for the desk it resolves ([boot checks](../hooks/lib/boot-checks.cjs)). The current tidy requires fresh ownership and consumer evidence before removal; a listing is not deletion authority ([workspace tidy](workspace-tidy.md)). On Claude Code, the pre-session check rules out a wrong binding before that happens. On a launcher, the in-session `desk_status` detects a wrong binding after startup rather than preventing it. Before starting on a launcher, prove four things point into `$EVAL`: the launcher's configuration, the host home (`COPILOT_HOME`), the desk or workspace binding, and Desk's state and cache (`XDG_STATE_HOME`, `XDG_CACHE_HOME`). If you cannot prove all four, record setup as `blocked`; do not try it against your real workspace. The launcher's shared download cache and logs are not on that list.
 
 ### Start `observer`
 
@@ -166,7 +166,7 @@ Run `observer` in its own terminal, from its own working folder and its own prof
 
 Run them in order, all against the throwaway desk, from sessions started in `$EVAL/scratch`. For each scenario, tell `observer` when you start and when you finish. A step that says "in another terminal" means a new terminal where you first run `. <the printed EVAL path>/env.sh`.
 
-Run scenarios 1 to 3 in an interactive session. A host's non-interactive prompt mode (`-p`) can tell the agent that no user is present, and an agent told that has nobody to align with, so those scenarios would measure nothing. An agent dry run drives a real terminal for them instead ([evaluate-release](../skills/evaluate-release/SKILL.md#observe-a-dry-run)).
+Run scenarios 1 to 3 in an interactive session, and every later step that reaches a human gate, such as the consent question in scenario 6. A host's non-interactive prompt mode (`-p`) can tell the agent that no user is present, and an agent told that has nobody to align with or to ask, so those steps would measure nothing. An agent dry run drives a real terminal for them instead ([evaluate-release](../skills/evaluate-release/SKILL.md#observe-a-dry-run)).
 
 Scenarios marked **(lands by the evaluation)** exercise features that reach the channel before you run the evaluation. Their outcomes come from V2's design and are confirmed against the channel when each feature lands. If one has not landed when you run it, `observer` records a gap with the channel state as evidence ([evaluate-release](../skills/evaluate-release/SKILL.md#classify-every-problem)).
 
@@ -240,7 +240,7 @@ Then start a new session from `$EVAL/scratch` and say only "hi". Do not mention 
 
 **Good looks like** ([the doctor's organization checks](../mcp/src/desk/organization.js), [interaction-style](../skills/interaction-style/SKILL.md#2-organization-tidy-and-announce)):
 
-- the session's startup tidy check finds the mess and hands the agent its findings before your prompt is answered; you do not ask for it. If you ask the agent afterwards what it found, or to call `desk_doctor` before it tidies, the findings include `loose_file`, `track_missing_scope`, `track_person_name` and `name_prompt_like`;
+- the session's startup tidy check finds the mess, and startup tells the agent a tidy is pending and how to run it; the agent runs it before it answers your prompt, and you do not ask for it. If you ask the agent afterwards what it found, or to call `desk_doctor` before it tidies, the findings include `loose_file`, `track_missing_scope`, `track_person_name` and `name_prompt_like`;
 - in its first reply the agent tidies without asking how you'd like it done, and announces it in one line in the spirit of "I'm going to tidy up my desk a bit: ... Say if you mind.";
 - every move goes through Git, so it can be undone, and nothing is deleted;
 - afterwards `desk_doctor` reports no organization findings, and `_meta/organization.json` records `tidy_version: 1`.
@@ -334,14 +334,14 @@ Compare the backed-up parts of your real Claude config directory with `$EVAL/cla
     if [ -e "$part" ] || [ -e "$REAL_CLAUDE_DIR/$part" ]; then diff -rq "$part" "$REAL_CLAUDE_DIR/$part"; fi
   done
   { [ ! -d projects ] || find projects -mindepth 2 -maxdepth 2 -type d -name memory
-    [ ! -d "$REAL_CLAUDE_DIR/projects" ] || (cd "$REAL_CLAUDE_DIR" && find projects -mindepth 2 -maxdepth 2 -type d -name memory)
+    [ ! -d "$REAL_CLAUDE_DIR/projects" ] || (cd "$REAL_CLAUDE_DIR" && find -L projects -mindepth 2 -maxdepth 2 -type d -name memory)
   } | sort -u | while IFS= read -r part; do diff -rq "$part" "$REAL_CLAUDE_DIR/$part"; done
   echo "Claude Code processes at setup:"; cat "$EVAL/claude-sessions-before.txt"
   echo "Claude Code processes now:"; ps -axo pid=,lstart=,comm= | awk '$NF ~ /(^|\/)claude$/'
 )
 ```
 
-No output above the two process lists means nothing changed. A difference is a finding only when you can attribute it to the evaluation. If another Claude Code session was using your real profile during the run (it is in either process list), that session may have made the change, for example a plugin update or a settings edit: record the difference with both lists and mark its cause `unavailable` rather than blaming the evaluation. If your real directory did not exist at setup, verify it was not created.
+No output above the two process lists means nothing changed. A `No such file or directory` line means that part exists on one side only: it was created or removed. Every difference is a finding. Record its cause with it: the evaluation, when the change matches a `SETUP.md` step or happened with no other session running; another session, when a Claude Code process in either list was using your real profile and the change is the kind a session makes by itself, such as a plugin update; or unknown, with both lists attached. If your real directory did not exist at setup, verify it was not created.
 
 After all owned writers and consumers are confirmed absent, this block removes only the environment file, which the setup block created, not profiles or evidence:
 

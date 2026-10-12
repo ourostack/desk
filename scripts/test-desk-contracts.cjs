@@ -1264,17 +1264,18 @@ contract("the evaluation packet isolates the desk under test and proves it befor
   // The packet names channels, never versions: the release floor is described by the fix it carries.
   assert.doesNotMatch(packet, /\d+\.\d+\.\d+-alpha\.\d+/u, "no hard-coded Desk version");
   assert.match(setup, /requires the Desk release that contains the `SETUP\.md` config-directory fix[\s\S]+claude plugin list[\s\S]+changelog[\s\S]+backs up every part of your real Claude config directory \(`\$REAL_CLAUDE_DIR`\) that those steps can change to `\$EVAL\/claude-backup` whatever version/u);
-  assert.match(setup, /REAL_CLAUDE_DIR="\$\{CLAUDE_CONFIG_DIR:-\$HOME\/\.claude\}"[\s\S]+cp -R "\$REAL_CLAUDE_DIR\/\$part" "\$EVAL\/claude-backup\/\$part"[\s\S]+printf "export REAL_CLAUDE_DIR='%s'\\n"[\s\S]+printf "export CLAUDE_CONFIG_DIR=/u, "the backup follows the evaluator's real Claude config directory, read before env.sh replaces it");
+  assert.match(setup, /REAL_CLAUDE_DIR="\$\{CLAUDE_CONFIG_DIR:-\$HOME\/\.claude\}"[\s\S]+cp -RL "\$REAL_CLAUDE_DIR\/\$part" "\$EVAL\/claude-backup\/\$part"[\s\S]+printf "export REAL_CLAUDE_DIR='%s'\\n"[\s\S]+printf "export CLAUDE_CONFIG_DIR=/u, "the backup follows the evaluator's real Claude config directory, read before env.sh replaces it");
   // Cold dry runs, 2026-10-12: copying a whole live config directory took minutes and gigabytes, and its comparison could not attribute a change.
   assert.doesNotMatch(packet, /cp -R "\$REAL_CLAUDE_DIR" /u, "the backup is bounded to what setup can change, never the whole config directory");
   assert.match(setup, /claude-sessions-before\.txt/u, "setup records the Claude Code processes already running");
-  assert.match(packet.split("\n## Clean up", 2)[1], /diff -rq[\s\S]+claude-sessions-before\.txt[\s\S]+finding only when you can attribute it/u);
+  assert.match(packet.split("\n## Clean up", 2)[1], /diff -rq[\s\S]+claude-sessions-before\.txt[\s\S]+Every difference is a finding\. Record its cause with it/u);
+  assert.match(setup, /The copy follows symbolic links[\s\S]+an empty list does not prove no session was running/u);
   // A signed-in profile carries the account's connectors, so the preflight names which Desk tool must answer.
   assert.match(setup, /connectors and synced plugins[\s\S]+full name of the tool that answered[\s\S]+`mcp__plugin_desk_desk__`[\s\S]+`desk-desk_status`[\s\S]+`mcp__claude_ai_`/u);
   // The overlay's V2 channel, and what a launcher run must isolate.
   assert.match(setup, /from the overlay's `v2-alpha` channel[\s\S]+default branch[\s\S]+still install V1/u);
   assert.match(setup, /`AGENCY_GLOBAL_CONFIG_PATH`[^.]+names a directory, not a file[\s\S]+shared download cache[^.]+acceptable/u);
-  assert.match(setup, /prove four things point into `\$EVAL`[\s\S]+shared download cache and logs are not on that list/u);
+  assert.match(setup, /prove four things point into `\$EVAL`[\s\S]+If you cannot prove all four[\s\S]+shared download cache and logs are not on that list/u);
   assert.match(setup, /If V2 is not installed in your normal profile, give `observer` a throwaway setup of its own[\s\S]+same preflight/u);
   assert.match(setup, /### A managed launcher with a company overlay[\s\S]+COPILOT_HOME[\s\S]+crew install[\s\S]+from its channel branch/u);
 });
@@ -1285,9 +1286,10 @@ contract("the evaluation packet's scenarios run against the throwaway desk with 
   // Cold dry runs, 2026-10-12: the card guard refused the block's hand-made card, and the findings arrive through the startup tidy check.
   assert.match(scenario(4), /DESK_TOOL_COMMIT=1 git -C "\$EVAL\/desk" commit[\s\S]+say only "hi"[\s\S]+startup tidy check finds the mess/u);
   assert.doesNotMatch(scenario(4), /\brm -|git -C "\$EVAL\/desk" rm\b/u, "the tidy scenario's block deletes nothing");
-  assert.match(packet, /Run scenarios 1 to 3 in an interactive session[^.]*\. A host's non-interactive prompt mode \(`-p`\)/u);
+  assert.match(packet, /Run scenarios 1 to 3 in an interactive session, and every later step that reaches a human gate[^.]*\. A host's non-interactive prompt mode \(`-p`\)/u);
   // A block removes only what the packet's own blocks created: the one `rm` is the environment file.
-  assert.deepEqual([...packet.matchAll(/^\s*rm .*$/gmu)].map((match) => match[0].trim()), ['rm -f "$EVAL/env.sh"']);
+  const shellBlocks = [...packet.matchAll(/^\s*```sh\n([\s\S]*?)^\s*```$/gmu)].map((match) => match[1]).join("\n");
+  assert.deepEqual([...shellBlocks.matchAll(/\b(?:rm|rmdir|unlink)\b[^\n;|&)]*|-delete\b|git (?:-C "[^"]+" )?(?:clean|rm)\b[^\n]*/gu)].map((match) => match[0].trim()), ['rm -f "$EVAL/env.sh"']);
   assert.match(scenario(5), /state_branch|state branch/u);
   assert.match(scenario(5), /status --porcelain[\s\S]+push -q origin main[\s\S]+switch -q --detach[\s\S]+another terminal[\s\S]+repaired: detached HEAD → main[\s\S]+`state_branch_detached`[\s\S]+switch_state_branch[\s\S]+`ready` in the same session/u);
   assert.doesNotMatch(scenario(5), /root_unavailable|#L\d/u);
@@ -1443,7 +1445,7 @@ requires(
 requires(
   "plugins/desk/skills/friction-management/SKILL.md",
   "friction-management records no system friction for a state the system did not cause",
-  /before a card says `system`, establish what produced the state[\s\S]+timing is not that evidence[\s\S]+a person or another process produced[\s\S]+pin no card and open no improvement card[\s\S]+say the cause is unknown/u,
+  /when the friction is a state you found[^\n]+establish what produced it before a card says `system`[\s\S]+timing is not that evidence[\s\S]+a person or another process produced[\s\S]+pin no `system` card and open no improvement card[\s\S]+a `setup` card is right[\s\S]+say the cause is unknown/u,
 );
 requires(
   "plugins/desk/skills/desk-problem/SKILL.md",
@@ -1453,7 +1455,7 @@ requires(
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
   "work-orchestration has a child delete only the scratch paths it recorded when it created them",
-  /A brief that lets a child make scratch[^\n]+write down each path when it creates it and to delete only those exact paths[^\n]+a pattern or by taking the newest match[^\n]+a child deletes only paths it created itself, each by the exact path it recorded at creation/u,
+  /Every brief that lets a child make scratch[^\n]+carries this sentence, because the child reads its brief and not this skill: "Write down the exact path of everything you create when you create it\. Delete only those paths, each by that exact path; leave anything else in place and list it in your return\."[^\n]+a pattern or by taking the newest match/u,
 );
 requires(
   "plugins/desk/skills/independent-review/SKILL.md",
