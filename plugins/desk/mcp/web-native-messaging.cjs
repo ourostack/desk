@@ -68,7 +68,8 @@ function createNativeSession(options) {
       if (acquired) return Promise.resolve(acquired);
       if (acquiring) return acquiring;
       owner = name;
-      acquiring = request("acquire", { owner: name }).then(function (result) {
+      // The session's own process id lets the provider release this lease if the session is killed before it can.
+      acquiring = request("acquire", { owner: name, ownerPid: process.pid }).then(function (result) {
         if (!result || typeof result.leaseId !== "string" || typeof result.endpoint !== "string" || result.owner !== owner) {
           throw new Error("NATIVE_ACQUIRE_RESPONSE_INVALID");
         }
@@ -92,7 +93,14 @@ function createNativeSession(options) {
       if (!options.readyFile) return Promise.resolve({ changed: false, endpoint: acquired.endpoint });
       if (resuming) return resuming;
       var fs = require("fs").promises;
-      resuming = fs.lstat(options.readyFile).then(function (info) {
+      // The provider writes this file once it is up and removes it when it stops, so a missing file means no provider is running.
+      resuming = fs.lstat(options.readyFile).then(null, function (failure) {
+        if (!failure || failure.code !== "ENOENT") throw failure;
+        var missing = refusal("browser_native_provider_not_running");
+        missing.message = "The native browser provider is not running: its readiness file " + options.readyFile + " is missing.";
+        missing.readyFile = options.readyFile;
+        throw missing;
+      }).then(function (info) {
         if (!info.isFile() || info.nlink !== 1 || info.size > 16384 ||
             (process.platform !== "win32" && ((info.mode & 63) !== 0 || info.uid !== process.getuid()))) {
           throw refusal("NATIVE_READINESS_NOT_PRIVATE");

@@ -889,6 +889,11 @@ function start(o, io) {
             })();
       });
       return work.then(null, function (error) {
+        if (error.code === "browser_native_provider_not_running") {
+          return { isError: true, content: [{ type: "text", text: JSON.stringify(degraded(error.code,
+            error.message + " No browser operation was forwarded.",
+            "The provider is started by the Desk extension in the signed-in browser. Check that the browser is running with the extension enabled, then call the tool again. If the file stays missing, the provider is failing as it starts: that is a Desk fault, so report it as desk:desk-problem says.")) }] };
+        }
         return { isError: true, content: [{ type: "text", text: JSON.stringify(degraded(
           error.code || "browser_native_operation_unavailable",
           "The exact native browser operation could not be verified. No fallback operation was forwarded.",

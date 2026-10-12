@@ -364,3 +364,27 @@ test("an empty retained lease resumes the current provider before shutdown relea
     { operation: "resume", replacement: true }, { operation: "release", replacement: true },
   ], "targetless shutdown after source update must not send release to the departed transport")
 })
+
+// 2026-10-12: the provider had died at startup, so its readiness file did not exist, and every browser call answered a bare
+// `degraded:ENOENT` with no path and no cause.
+test("a missing readiness file is named as the provider not running, with the file's path", async t => {
+  const root = await mkTempRoot("native-session-not-running-")
+  const readyFile = path.join(root, "native-provider-missing.json")
+  const calls = []
+  const session = native.createNativeSession({
+    endpoint: "http://127.0.0.1:1234/provider/" + "a".repeat(64), readyFile,
+    processIdentity: { pid: 1, startIdentity: "s", owner: "o", executable: "/x", profileRoot: "/p" }, extensionSourceDigest: "c".repeat(64),
+    request: async (operation, payload) => {
+      calls.push({ operation, payload })
+      return { leaseId: "lease-a", owner: payload.owner, endpoint: "http://127.0.0.1:1234/proxy" }
+    },
+  })
+  await session.setOwner("agent")
+  assert.deepEqual(calls[0], { operation: "acquire", payload: { owner: "agent", ownerPid: process.pid } }, "the session names its own process, so the provider can tell when it is gone")
+  await assert.rejects(session.resume(), error => {
+    assert.equal(error.code, "browser_native_provider_not_running")
+    assert.equal(error.readyFile, readyFile)
+    assert.equal(error.message, "The native browser provider is not running: its readiness file " + readyFile + " is missing.")
+    return true
+  })
+})

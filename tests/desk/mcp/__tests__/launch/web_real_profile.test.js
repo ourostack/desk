@@ -1944,6 +1944,27 @@ test("native update without a declaration and malformed update replies fail as o
   }
 })
 
+test("a provider that is not running is named in the answer with its readiness file, not as a bare ENOENT", posixOnly, async () => {
+  const machine = await realMachine()
+  const prepare = machine.launchOptions.nativeMessagingPrepare
+  machine.launchOptions.nativeMessagingPrepare = async options => {
+    const connection = await prepare(options)
+    connection.session.resume = () => Promise.reject(Object.assign(new Error("The native browser provider is not running: its readiness file /state/native-provider-abc.json is missing."),
+      { code: "browser_native_provider_not_running", readyFile: "/state/native-provider-abc.json" }))
+    return connection
+  }
+  const host = session(machine, { cleanupMs: undefined })
+  await host.handshake()
+  const reply = await host.call(2)
+  assert.equal(reply.result.isError, true)
+  const answer = JSON.parse(textOf(reply))
+  assert.equal(answer.state, "degraded:browser_native_provider_not_running")
+  assert.equal(answer.summary, "The native browser provider is not running: its readiness file /state/native-provider-abc.json is missing. No browser operation was forwarded.")
+  assert.match(answer.fix, /^The provider is started by the Desk extension in the signed-in browser\. Check that the browser is running with the extension enabled, then call the tool again\./u)
+  assert.equal(machine.events.includes("child:tools/call browser_navigate"), false)
+  await host.close()
+})
+
 test("native resume refusal is not converted into a replayed call and remains a cleanup diagnostic", posixOnly, async () => {
   const machine = await realMachine()
   const prepare = machine.launchOptions.nativeMessagingPrepare
