@@ -456,8 +456,8 @@ test("disposal while acquiring or reconnecting a controller closes the late cont
     let release
     let closed = 0
     const { session } = await makeSession(t, {
-    // The attempt is held on purpose; the late completion is what this test checks.
-    disposeAdmissionWaitMs: 0,
+      // The attempt is held on purpose; the late completion is what this test checks.
+      disposeAdmissionWaitMs: 0,
       runtime: fakeRuntime({ connectOrStartController: async () => {
         if (block) {
           entered = true
@@ -1735,6 +1735,36 @@ test("closing the session resolves as soon as the running admission attempt fini
   await closing
   assert.ok(Date.now() - started < 1000, "close follows the attempt, not the 2 s bound")
   assert.equal(session.admission.running, false)
+})
+
+test("closing the session closes its controller at once, not after the admission attempt wait", async (t) => {
+  let hold = false
+  let closedAt = null
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => ({
+      accepted: true,
+      async status() { return { state: "READY" } },
+      close() { closedAt ??= Date.now() },
+    }),
+  })
+  const { session, root } = await makeSession(t, {
+    runtime,
+    disposeAdmissionWaitMs: 1000,
+    resolveInputs: () => (hold ? new Promise(() => {}) : Promise.resolve(inputs({ root }))),
+  })
+  await session.admission.refresh()
+  assert.equal(session.admission.snapshot().state, "ready")
+  assert.notEqual(session.context.admission?.controller, null)
+  // An attempt that never finishes is running when the session closes.
+  hold = true
+  void session.admission.refresh({ force: true, waitMs: 0 })
+  assert.equal(session.admission.running, true)
+  const started = Date.now()
+  await session.dispose()
+  const disposedMs = Date.now() - started
+  assert.notEqual(closedAt, null, "the controller was closed")
+  assert.ok(closedAt - started < 300, `the controller closed after ${closedAt - started} ms, not alongside the attempt wait`)
+  assert.ok(disposedMs >= 900, "close still waited for the attempt up to its bound")
 })
 
 test("closing the session stops waiting for an admission attempt that never finishes", async (t) => {
