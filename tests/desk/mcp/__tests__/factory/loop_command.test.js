@@ -94,6 +94,8 @@ test("the steps run in exactly this order, each with the desk, the person and a 
   assert.equal(by.evaluate.maxRuns, 1, "one worker generation starts at most one evaluation")
   assert.deepEqual([by.triage.deskRoot, by.triage.personPrefix, by.triage.pluginVersion], [ctx.desk, "desks/ari", "9.9.9"])
   assert.match(by.triage.generation, /^[0-9a-f]{32}$/u)
+  assert.equal(typeof by.triage.lock, "object", "the worker passes the lock it holds, as the qualifier's proof")
+  assert.ok(by.triage.lock !== null)
   assert.equal(by.triage.deadline.getTime(), by.evaluate.deadline.getTime(), "both agent steps share the one deadline")
   assert.equal(typeof by.triage.onChild, "function")
   assert.equal(typeof by.triage.onChildExit, "function")
@@ -634,8 +636,10 @@ test("requests that cannot be read make nothing due early", () => scratch(async 
 }))
 
 test("one_agent_slot_and_one_continuation", { skip: NEEDS_PREPARED_RUN }, async () => {
-  // The real triage step, shared ledger and continuation; only the runner custody and the other steps are fakes.
-  const w = await triageWorld({ now: new Date(), keys: KEYS.slice(0, 1) })
+  // The real triage step, shared ledger and continuation; only the runner custody and the other steps are fakes. Twenty cards, twenty
+  // accepted results, still one agent.
+  const keys = Array.from({ length: 20 }, (_, index) => `andon:example-org/example-repo#${300 + index}`)
+  const w = await triageWorld({ now: new Date(), keys })
   await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 2, ready_later: 0 } }))
   const lockFile = path.join(await factoryStateRoot(w.env), "locks", "loop-worker.running")
   const generation = async (clock = Date.now) => {
@@ -651,6 +655,7 @@ test("one_agent_slot_and_one_continuation", { skip: NEEDS_PREPARED_RUN }, async 
   // Generation one: triage takes the slot from an evaluation that was due, so the evaluator is neither run nor stamped.
   const first = await generation()
   assert.equal(first.outcome.steps.triage, "ran", JSON.stringify(first.outcome))
+  assert.deepEqual((await readStatus(w.env)).triage.counts, { reviewed: 20, refused: 0, deferred: 0, unreviewed: 0 }, "despite twenty results")
   assert.equal(first.outcome.steps.evaluate, "slot_taken")
   assert.equal(names(first.log).includes("evaluate"), false, "one agent a generation")
   const after = await readStatus(w.env)
@@ -709,6 +714,17 @@ test("prior_evaluation_failure_not_bypassed", { skip: NEEDS_PREPARED_RUN }, asyn
   await worker({ consumeContinuation: async (env) => { await updateStatus(env, (status) => ({ ...status, loop: { ...status.loop, evaluation_continuation: newer } })); return { state: "eligibility_changed" } } })
   assert.deepEqual((await readStatus(w.env)).loop.evaluation_continuation, newer)
 })
+
+test("a triage step that throws leaves the slot unknown: the evaluator does not launch in that generation", () => scratch(async (ctx) => {
+  const log = []
+  const impls = fakes(log)
+  impls.triage = async () => { throw new Error("PRIVATE triage") }
+  const outcome = await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
+  assert.deepEqual([outcome.steps.triage, outcome.steps.evaluate], ["step_error", "slot_unknown"])
+  assert.equal(names(log).includes("evaluate"), false)
+  assert.equal((await readStatus(ctx.env)).loop.steps.evaluate, undefined, "a held evaluator is not stamped")
+  assert.deepEqual(impls.kicks, [])
+}))
 
 test("a triage that failed, or that found a continuation already issued, starts no kick; a launch without a waiting evaluation neither", () => scratch(async (ctx) => {
   for (const answer of [

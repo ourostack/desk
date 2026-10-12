@@ -229,7 +229,10 @@ test("triageKickDue: only after the step ran once, past its hour, with cards wai
   for (const runner of ["unsupported_host", "scope_unqualified", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "headless_session"]) {
     assert.equal(triageKickDue(triaged({ ranAt: long, runner }), now), false, runner)
   }
-  assert.equal(triageKickDue(triaged({ ranAt: long, runner: "timeout" }), now), true, "a failed run is tried again when the ledger next leaves a launch")
+  // A failing triage is retried by the next session-start worker, never kicked: not after a failed pass, and not while the last launch failed.
+  assert.equal(triageKickDue(triaged({ ranAt: long, ok: false }), now), false, "the last pass failed before any launch")
+  assert.equal(triageKickDue({ ...triaged({ ranAt: long, runner: "timeout" }), triage: { ...triaged({ ranAt: long }).triage, run: { failures_in_a_row: 1 } } }, now), false, "the last launch failed")
+  assert.equal(triageKickDue({ ...triaged({ ranAt: long }), triage: { ...triaged({ ranAt: long }).triage, run: { failures_in_a_row: "x" } } }, now), true, "a damaged streak is no failure")
   assert.equal(triageKickDue(triaged({ ranAt: long, witness: witnessAt(now, { windows: [0, 1, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T06:10:00.000Z" }) }), now), false, "this window's launch is used")
   assert.equal(triageKickDue(triaged({ ranAt: long, witness: witnessAt(now, { phase: "damaged" }) }), now), false, "a damaged witness starts nothing")
   assert.equal(triageKickDue({ triage: { eligible: 1 }, loop: { steps: { triage: { last_ran_at: new Date(long).toISOString() } } } }, now), true, "a record without a runner state")
@@ -248,8 +251,17 @@ test("no_requests_due_triage_kicks", () => scratch(async (env) => {
   // The worker that kick starts runs the step, which stamps it: a failed triage is not kicked again at the next turn's end.
   await recordStep(env, "triage", { ok: false, result: "timeout", now })
   await updateStatus(env, (current) => ({ ...current, triage: { ...current.triage, result: "timeout", ok: false, runner: { state: "timeout", reason: null, qualification: "loaded" } } }))
-  for (const later of [now + MINUTE, now + 30 * MINUTE, now + 59 * MINUTE]) assert.deepEqual(await kickLoop(env, { now: later, spawn }), { kicked: false, reason: "no_requests" })
-  assert.equal(spawn.calls.length, 1, "no repeating triage kick")
+  const hours = [MINUTE, 30 * MINUTE, 59 * MINUTE, 61 * MINUTE, 3 * 60 * MINUTE, 7 * 60 * MINUTE, 24 * 60 * MINUTE]
+  for (const later of hours) assert.deepEqual(await kickLoop(env, { now: now + later, spawn }), { kicked: false, reason: "no_requests" })
+  assert.equal(spawn.calls.length, 1, "no repeating triage kick, not even an hour or a day later")
+  // The same for a triage that failed before it launched: nothing is kicked again until a session-start worker has retried it.
+  await updateStatus(env, (current) => ({ ...current, triage: { ...current.triage, result: "no_time_for_a_run", ok: false, runner: { state: null, reason: null, qualification: "loaded" } } }))
+  for (const later of hours) assert.deepEqual(await kickLoop(env, { now: now + later, spawn }), { kicked: false, reason: "no_requests" })
+  // And while the last launch failed, however many quiet passes ran since.
+  await recordStep(env, "triage", { ok: true, result: "not_due", now, carry: true })
+  await updateStatus(env, (current) => ({ ...current, triage: { ...current.triage, result: "not_due", ok: true, run: { last_result: "timeout", failures_in_a_row: 1 } } }))
+  for (const later of hours) assert.deepEqual(await kickLoop(env, { now: now + later, spawn }), { kicked: false, reason: "no_requests" })
+  assert.equal(spawn.calls.length, 1)
   // A worker that is running is left alone whatever is due.
   await updateStatus(env, (current) => ({ ...current, ...triaged({ ranAt: now - 61 * MINUTE }) }))
   const root = await factoryStateRoot(env)

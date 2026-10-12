@@ -1106,22 +1106,30 @@ test("triage_alarm_strict_new_write_and_legacy_read", async () => {
   assert.equal(legacy.revision, LEGACY_REVISION)
   assert.notEqual(legacy.module.readCards, readCards, "the baseline reader is another module, never this checkout's")
   assert.ok(!legacy.module.LOOP_ALARMS.includes("step_stale:triage"), "the baseline predates the code")
-  assert.deepEqual(LOOP_ALARMS.filter((name) => !legacy.module.LOOP_ALARMS.includes(name)), ["step_stale:triage"], "the one addition")
+  assert.deepEqual(LOOP_ALARMS.filter((name) => !legacy.module.LOOP_ALARMS.includes(name)), ["triage_engine_unpinned", "step_stale:triage"], "the two additions")
   assert.deepEqual(legacy.module.LOOP_ALARMS.filter((name) => !LOOP_ALARMS.includes(name)), [])
   for (const name of ["SOURCES", "STATES", "MOVES", "CLAIM_TTL_HOURS", "MAX_CLAIMS_PER_DAY", "MAX_LIVE_CLAIMS", "MAX_CARD_FILES", "CLOSE_REASONS", "CHECK_RESULTS"]) {
     assert.deepEqual({ SOURCES, STATES, MOVES, CLAIM_TTL_HOURS, MAX_CLAIMS_PER_DAY, MAX_LIVE_CLAIMS, MAX_CARD_FILES, CLOSE_REASONS, CHECK_RESULTS }[name], legacy.module[name], `${name} is unchanged`)
   }
   const older = await desk()
   assert.equal((await legacy.module.openImprovement({ ...older, key: KEY, source: "loop_alarm", evidence: [], plugin: "desk", signal: null, now: at(1) })).result, "invalid_source")
+  // The engine-pin card the new writer saves is read the same way.
+  const PIN = "loop_alarm:triage_engine_unpinned"
+  assert.equal((await open(where, { key: PIN, evidence: [] })).result, "opened")
+  assert.equal((await open(where, { key: PIN, evidence: [] })).result, "duplicate")
+  assert.equal((await legacy.module.openImprovement({ ...older, key: PIN, source: "loop_alarm", evidence: [], plugin: "desk", signal: null, now: at(1) })).result, "invalid_source")
+  const pin = (await read(where)).find((card) => card.key === PIN)
+  assert.deepEqual([pin.title, Object.keys(pin)], ["The triage runner engine pin is behind the installed Claude Code", Object.keys(await verify)])
   const seen = await legacy.module.readCards(where)
   assert.deepEqual(seen.skipped, {})
   assert.deepEqual(seen.cards.find((card) => card.key === KEY), await triage, "the prior reader reads every field of the new card")
+  assert.deepEqual(seen.cards.find((card) => card.key === PIN), pin)
   // The prior version claims and updates it under its own unchanged limits, and nothing is moved aside.
   const held = await legacy.module.claimNext({ ...where, now: at(2) })
   assert.equal(held.result, "claimed")
   assert.equal(held.set_aside, undefined)
   assert.equal((await legacy.module.readCards(where)).set_aside_total, 0)
-  assert.equal((await readCards(where)).cards.length, 2)
+  assert.equal((await readCards(where)).cards.length, 3)
 })
 
 test("a legacy reader baseline that is missing fails the compatibility gate instead of skipping it", async () => {

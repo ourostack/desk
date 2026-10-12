@@ -281,6 +281,21 @@ test("the doctor's summary has a Loop block from the stored record: counts, unav
   assert.match(sparse, /stale steps: none/u)
 })
 
+test("the Loop block and the boot findings say what triage last did and why its runner cannot start", async () => {
+  const { factorySummary, factoryFindingLines } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
+  const status = { store: STORE, source: "desk", consent: "yes", stores: [], warnings: [], loop: LOOP }
+  assert.doesNotMatch(factorySummary(status), /triage/u, "no triage record, no line")
+  const stale = { ...LOOP, triage: { last_result: "runner_unavailable", runner_state: "scope_unqualified", runner_reason: "install_changed", qualification: "stale", scan: "complete" } }
+  assert.match(factorySummary({ ...status, loop: stale }), /\n  triage: last result runner_unavailable \(runner scope_unqualified: install_changed\)$/mu)
+  assert.deepEqual(factoryFindingLines({ loop: stale }), ["improvement triage is not starting runs on this machine: its runner qualification no longer matches this install, engine or environment (install_changed). Qualify the triage runner again; until then cards are refreshed but not reviewed."])
+  assert.match(factoryFindingLines({ loop: { ...stale, triage: { ...stale.triage, runner_reason: "Bad/x" } } })[0], /\(reason not recorded\)/u)
+  const partial = { ...LOOP, triage: { last_result: "ran", runner_state: "ran", runner_reason: null, qualification: "loaded", scan: "truncated" } }
+  assert.match(factorySummary({ ...status, loop: partial }), /triage: last result ran \(runner ran\); the card scan was cut off at its limit, so the refresh is partial/u)
+  assert.match(factorySummary({ ...status, loop: { ...LOOP, triage: { last_result: 7, runner_state: null } } }), /triage: last result unavailable$/mu)
+  assert.deepEqual(factoryFindingLines({ loop: partial }), [])
+  assert.deepEqual(factoryFindingLines({ loop: { ...LOOP, triage: "x" } }), [])
+})
+
 test("the doctor's summary says there is no loop record and never prints zeros for it", async () => {
   const { factorySummary } = await import("../../../../../plugins/desk/mcp/src/tools/factory-context.js")
   for (const loop of [null, undefined]) {

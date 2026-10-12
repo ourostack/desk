@@ -6,21 +6,39 @@ import assert from "node:assert/strict"
 import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 
-import { cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { MAX_CARD_FILES, cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { evaluateDue, newestRequestAt, triageKickDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
+import { createEvaluationContinuation, evaluationQuotaOpen, finishAgentLaunch, reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
+import { runMeasureStep } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
+import { staleSteps } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { factoryStateRoot, readStatus, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { prepareTriageCatalog, readTriagePreparedFile } from "../../../../../plugins/desk/mcp/src/factory/triage-catalog.js"
 import { readTriageBasis } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
 import { refreshTriage, triagePaths } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
-import { QUALIFICATION_SEGMENTS, TRIAGE_BATCH_LIMIT, TRIAGE_RUN_MS, runTriageCommand, runTriageStep, writeTriagePreparedInput } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
-import { KEYS, NEEDS_PREPARED_RUN, SENTINELS, STORE, fakeRunner, git, pushDesk, qualifiedSeams, remoteBlobs, remoteJson, row, triageWorld } from "./_triage_world.js"
+import { KEPT_UNACCEPTED_RUNS, QUALIFICATION_SEGMENTS, TRIAGE_ENGINE_CARD, TRIAGE_BATCH_LIMIT, TRIAGE_RUN_MS, runTriageCommand, runTriageStep, writeTriagePreparedInput } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
+import { FAKE_RUNTIME, KEYS, NEEDS_PREPARED_RUN, SENTINELS, STORE, fakeRunner, git, pushDesk, qualifiedSeams, remoteBlobs, remoteJson, row, triageWorld } from "./_triage_world.js"
 
 const T0 = Date.parse("2026-10-12T01:00:00.000Z")
 const HOUR = 3600 * 1000
 const at = (hours) => new Date(T0 + hours * HOUR)
 const later = () => new Date(Date.now() + 20 * 60 * 1000)
 
-const step = (w, { now = at(0), seams = qualifiedSeams(), deadline = later(), generation = "gen-1", personPrefix = "" } = {}) =>
-  runTriageStep(w.env, { deskRoot: w.deskRoot, personPrefix, pluginVersion: "9.9.9", now, deadline, generation, impls: seams })
+// Every step in this file runs under one more check: a continuation is minted only when an evaluation was waiting before the step began
+// (the step's own guard, asked here independently of the ledger, which would refuse the token anyway).
+async function step(w, { now = at(0), seams = qualifiedSeams(), deadline = later(), generation = "gen-1", personPrefix = "", lock = null } = {}) {
+  const before = await readStatus(w.env)
+  const waiting = evaluateDue(before, now, { newWorkAt: await newestRequestAt(w.env) }) && evaluationQuotaOpen(before, now)
+  const mint = seams.createEvaluationContinuation ?? createEvaluationContinuation
+  let minted = 0
+  const counted = async (...args) => {
+    minted += 1
+    return mint(...args)
+  }
+  const result = await runTriageStep(w.env, { deskRoot: w.deskRoot, personPrefix, pluginVersion: "9.9.9", now, deadline, generation, lock, impls: { ...seams, createEvaluationContinuation: counted } })
+  if (!waiting) assert.equal(minted, 0, "no continuation is minted with no evaluation waiting")
+  return result
+}
+const runFolders = async (w) => (await fs.readdir(path.join(await factoryStateRoot(w.env), "triage", "runs")).catch(() => [])).sort()
 
 const annotation = (w, key) => remoteJson(w.origin, triagePaths(w.deskRoot, "", key).annotation)
 
@@ -128,7 +146,7 @@ test("claim_or_ruling_changes_after_submission_not_accepted", { skip: NEEDS_PREP
     return brief.cards.map((card) => row(card))
   })
   const second = await step(w, { now: at(7), seams: qualifiedSeams({ runner: ruled }) })
-  assert.deepEqual([second.result, second.reviewed, second.refused], ["ran", 0, 1], JSON.stringify(second))
+  assert.deepEqual([second.result, second.ok, second.reviewed, second.refused], ["nothing_accepted", false, 0, 1], JSON.stringify(second))
   assert.equal(annotation(w, a), null)
 })
 
@@ -165,7 +183,10 @@ test("mechanical_pass_invalidates_without_agent", { skip: NEEDS_PREPARED_RUN }, 
   const truncated = async (options) => ({ ...(await readCards(options)), truncated: true })
   const before = revision(c)
   const unknown = await step(w, { now: at(10), seams: { ...noAgent, readCards: truncated } })
-  assert.equal(unknown.result, "refresh_incomplete")
+  // Past the card bound the refresh is partial and says so; it is not a failure, and the card it did not reach is unknown, not held.
+  assert.deepEqual([unknown.result, unknown.ok, unknown.unreviewed], ["not_due", true, null])
+  const partial = (await readStatus(w.env)).triage.refresh
+  assert.deepEqual([partial.scan, partial.unknown, partial.held, partial.written], ["truncated", 1, 0, 0])
   assert.equal(revision(c), before, "an incomplete read never withdraws")
   const withdrawn = await step(w, { now: at(10), seams: noAgent })
   assert.equal(withdrawn.ok, true, JSON.stringify(withdrawn))
@@ -203,31 +224,61 @@ test("prepared_writer_round_trips_through_the_runner_reader_and_splits_long_ruli
 test("the agent waits: cooldown, no time, unavailable host, missing or broken qualification, nothing to review", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
   const untouched = qualifiedSeams({ runTriageChild: async () => assert.fail("no run") })
-  // No time for a whole run before the deadline: nothing is reserved.
-  const short = await step(w, { seams: untouched, deadline: new Date(Date.now() + TRIAGE_RUN_MS - 1000) })
-  assert.deepEqual([short.result, short.ok, short.launched], ["no_time_for_a_run", false, false])
+  // No time for a whole run before the deadline: nothing is probed, prepared or reserved, and it is no failure.
+  const short = await step(w, { seams: { ...untouched, probeSignIn: async () => assert.fail("no probe") }, deadline: new Date(Date.now() + TRIAGE_RUN_MS - 1000) })
+  assert.deepEqual([short.result, short.ok, short.launched], ["no_time_for_a_run", true, false])
   assert.equal((await readStatus(w.env)).loop.agent_launch_highwater, undefined)
-  // An unsupported host and a host with no qualification installed are quiet; an installed record that does not restore is not.
+  assert.deepEqual(await runFolders(w), [])
+  // An unsupported host, a host with no qualification installed and one whose record no longer restores are quiet; only a damaged record is not.
   const linux = await step(w, { seams: { ...untouched, hostSupport: async () => ({ provenance: false }) } })
   assert.deepEqual([linux.result, linux.ok], ["runner_unavailable", true])
   assert.equal((await readStatus(w.env)).triage.runner.state, "unsupported_host")
   const thrown = await step(w, { seams: { ...untouched, hostSupport: async () => { throw new Error("no custody") } } })
   assert.equal(thrown.result, "runner_unavailable")
-  const { loadQualification: _drop, ...defaults } = untouched
+  // The real runtime, its record reader, loader and install identity.
+  const { restoreQualification: _drop, loadRunner: _fake, ...defaults } = untouched
   const missing = await step(w, { seams: defaults })
   assert.deepEqual([missing.result, missing.ok], ["runner_unavailable", true])
   assert.equal((await readStatus(w.env)).triage.runner.qualification, "missing")
   const file = path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS)
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  // A whole canonical document that does not restore here is stale: quiet, with a reason, nothing reserved, no failure counted. The
+  // document reader, the loader and the install identity are the runner's own.
   await fs.writeFile(file, "{}\n", { mode: 0o600 })
+  const stale = await step(w, { seams: defaults })
+  assert.deepEqual([stale.result, stale.ok, stale.launched], ["runner_unavailable", true, false], JSON.stringify(stale))
+  const staleRunner = (await readStatus(w.env)).triage.runner
+  assert.deepEqual([staleRunner.state, staleRunner.qualification], ["scope_unqualified", "stale"])
+  assert.ok(["source_changed", "engine_changed"].includes(staleRunner.reason), staleRunner.reason)
+  // Each stale reason the step can tell, then the loader's own.
+  const loader = (reason) => ({ ...defaults, loadTriageQualification: async () => ({ state: "scope_unqualified", ...(reason === undefined ? {} : { reason }) }) })
+  const reasonOf = async (seams) => {
+    const result = await step(w, { seams })
+    assert.deepEqual([result.result, result.ok, result.launched], ["runner_unavailable", true, false])
+    return (await readStatus(w.env)).triage.runner.reason
+  }
+  assert.equal(await reasonOf({ ...loader(), sourceIdentity: async () => ({ files: { "/elsewhere/triage-runner.js": "0" } }) }), "source_changed")
+  assert.equal(await reasonOf({ ...loader(), sourceIdentity: async () => undefined }), "engine_changed")
+  assert.equal(await reasonOf({ ...loader(), sourceIdentity: async () => { throw new Error("no identity") } }), "engine_changed")
+  await fs.rm(file)
+  await fs.writeFile(file, `{"cli":${JSON.stringify(process.execPath)}}\n`, { mode: 0o600 })
+  assert.equal(await reasonOf({ ...loader("effective_policy_unknown"), sourceIdentity: async () => undefined }), "qualification_failed")
+  const passes = (await readStatus(w.env)).loop.steps.triage
+  assert.deepEqual([passes.failures, passes.failures_in_a_row], [0, 0], "a stale or missing record never counts towards the alarm")
+  assert.equal(triageKickDue(await readStatus(w.env), at(48)), false, "and the end of a turn starts no worker for it")
+  // A file that is not the canonical document the qualifier wrote is damaged: the one qualification failure.
+  await fs.rm(file)
+  await fs.writeFile(file, "{ not the canonical document", { mode: 0o600 })
   const broken = await step(w, { seams: defaults })
-  assert.deepEqual([broken.result, broken.ok], ["runner_blocked", false])
-  assert.equal((await readStatus(w.env)).triage.runner.qualification, "invalid")
-  const odd = await step(w, { seams: { ...untouched, loadQualification: async () => ({ state: "invalid" }) } })
-  assert.equal(odd.result, "runner_blocked")
-  assert.equal((await readStatus(w.env)).triage.runner.reason, "diagnostic_inadequate")
+  assert.deepEqual([broken.result, broken.ok, broken.launched], ["runner_blocked", false, false])
+  assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: "unreadable", qualification: "damaged" })
+  const odd = await step(w, { seams: { ...untouched, restoreQualification: async () => ({ state: "invalid" }) } })
+  assert.deepEqual([odd.result, odd.ok], ["runner_unavailable", true])
+  assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: "qualification_failed", qualification: "stale" })
+  const thrownLoader = await step(w, { seams: { ...untouched, restoreQualification: async () => { throw new Error("x") } } })
+  assert.deepEqual([thrownLoader.result, (await readStatus(w.env)).triage.runner.qualification], ["runner_unavailable", "stale"])
   // The default runner refuses a record it did not restore itself.
-  const { runTriageChild: _runner, ...realRunner } = qualifiedSeams()
+  const { runTriageChild: _runner, loadRunner: _runtime, ...realRunner } = qualifiedSeams()
   const unrestored = await step(w, { seams: realRunner })
   assert.deepEqual([unrestored.result, unrestored.launched], ["scope_unqualified", true])
   // That attempt used the window: the next generation is not due.
@@ -266,8 +317,9 @@ test("a run whose writes are not acknowledged, a throwing runner and a deadline 
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2) })
   const unacked = await step(w, { seams: qualifiedSeams({ publishOwnedTriage: async () => ({ state: "unacknowledged", resources: [] }) }) })
   assert.deepEqual([unacked.result, unacked.ok, unacked.reviewed, unacked.refused], ["write_incomplete", false, 0, 2])
+  // A launch that returns and has no review accepted is a failure, whatever the reasons.
   const stale = await step(w, { now: at(7), seams: qualifiedSeams({ publishOwnedTriage: async () => ({ state: "stale_basis", resources: [] }) }) })
-  assert.deepEqual([stale.result, stale.ok, stale.refused], ["ran", true, 2])
+  assert.deepEqual([stale.result, stale.ok, stale.refused], ["nothing_accepted", false, 2])
   const thrown = await step(w, { now: at(14), seams: qualifiedSeams({ runTriageChild: async () => { throw new Error("boom") } }) })
   assert.deepEqual([thrown.result, thrown.launched], ["failed", true])
   // The deadline arrives while rows are being accepted: the rest are deferred, not dropped or refused.
@@ -277,13 +329,13 @@ test("a run whose writes are not acknowledged, a throwing runner and a deadline 
     return brief.cards.map((card) => row(card))
   })
   const late = await step(w, { now: at(21), deadline: new Date(now + 16 * 60 * 1000), seams: qualifiedSeams({ runner, clock: () => now }) })
-  assert.deepEqual([late.result, late.reviewed, late.deferred], ["ran", 0, 2])
+  assert.deepEqual([late.result, late.ok, late.reviewed, late.deferred], ["nothing_accepted", false, 0, 2])
   const attempts = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(w.env), "triage", "attempts.json"), "utf8")).attempts
   assert.deepEqual(Object.values(attempts).map((value) => value.state), ["deferred", "deferred"])
   // A candidate file that cannot be read is no candidate.
   const vanished = fakeRunner(() => ({ state: "ran", resultFile: path.join(w.base, "nowhere.json") }))
   const gone = await step(w, { now: at(28), seams: qualifiedSeams({ runner: vanished }) })
-  assert.deepEqual([gone.result, gone.reviewed, gone.refused], ["ran", 0, 2])
+  assert.deepEqual([gone.result, gone.reviewed, gone.refused], ["nothing_accepted", 0, 2])
 })
 
 test("the step's own guards: headless, no store, a failed or incomplete refresh, an unreadable status, the batch limit and a bad call", { skip: NEEDS_PREPARED_RUN }, async () => {
@@ -303,6 +355,10 @@ test("the step's own guards: headless, no store, a failed or incomplete refresh,
   const alarmed = await step(w, { seams: qualifiedSeams({ refreshTriage: heldRefresh, publishOwnedTriage: async () => ({ state: "busy", alarm: "triage_resource_unrecoverable", resources: [] }), hostSupport: async () => ({ provenance: false }) }) })
   assert.equal(alarmed.result, "refresh_incomplete")
   assert.equal((await readStatus(w.env)).triage.refresh.alarm, "triage_resource_unrecoverable")
+  // A change the refresh could not judge on an unreadable scan is held, and the pass fails.
+  const blindRefresh = async () => ({ state: "unreadable", changes: [{ key: KEYS[0], operation: null, state: "source_unknown", reason: "source_incomplete" }], coverage: { scan: "unreadable", reviewed: null, unreviewed: null } })
+  const blind = await step(w, { seams: qualifiedSeams({ refreshTriage: blindRefresh, hostSupport: async () => ({ provenance: false }) }) })
+  assert.deepEqual([blind.result, blind.ok, (await readStatus(w.env)).triage.refresh.held], ["refresh_incomplete", false, 1])
   // A refresh that runs into the deadline defers what is left.
   const past = await step(w, { deadline: new Date(Date.now() - 1000), seams: qualifiedSeams({ refreshTriage: heldRefresh, hostSupport: async () => ({ provenance: false }) }) })
   assert.equal(past.result, "refresh_incomplete")
@@ -331,6 +387,14 @@ test("an evaluation the slot deferred gets one continuation; none without a wait
   assert.equal(none.continuation, undefined, "an evaluation inside its gap was not deferred by triage")
   const refused = await step(w, { now: at(7), generation: "gen-c", seams: qualifiedSeams({ createEvaluationContinuation: async () => ({ state: "not_runnable" }) }) })
   assert.equal(refused.continuation, undefined)
+  // A ledger that refuses or cannot answer leaves no continuation; the run itself goes on.
+  for (const mint of [async () => ({ state: "not_runnable" }), async () => { throw new Error("ledger") }]) {
+    const fresh = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+    await updateStatus(fresh.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 2, ready_later: 0 } }))
+    const calls = []
+    const result = await step(fresh, { seams: qualifiedSeams({ createEvaluationContinuation: async (...args) => { calls.push(args); return mint() } }) })
+    assert.deepEqual([result.result, result.launched, result.continuation, calls.length], ["ran", true, undefined, 1])
+  }
 })
 
 test("runTriageCommand takes only --desk and --person-prefix, runs under the loop lock and kicks once for a new continuation", { skip: NEEDS_PREPARED_RUN }, async () => {
@@ -347,6 +411,8 @@ test("runTriageCommand takes only --desk and --person-prefix, runs under the loo
   const again = await runTriageCommand({ argv: ["--desk", w.deskRoot], env: w.env, pluginVersion: "9.9.9", impls: qualifiedSeams(), kick })
   assert.equal(again.result, "not_due")
   assert.equal(kicks.length, 1, "no continuation, no kick")
+  // The loop's own switch stops the command as it stops every step.
+  assert.deepEqual(await runTriageCommand({ argv: ["--desk", w.deskRoot], env: { ...w.env, DESK_FACTORY_LOOP: "0" }, pluginVersion: "9.9.9", impls: { refreshTriage: async () => assert.fail("nothing runs") } }), { result: "disabled", ok: true, failed: 0, reviewed: null, refused: null, deferred: null, unreviewed: null })
   const lock = path.join(await factoryStateRoot(w.env), "locks", "loop-worker.running")
   await fs.writeFile(lock, JSON.stringify({ pid: process.pid, token: "t", started_at: new Date().toISOString() }))
   assert.equal((await runTriageCommand({ argv: ["--desk", w.deskRoot], env: w.env, pluginVersion: "9.9.9" })).result, "busy")
@@ -372,26 +438,26 @@ test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review,
   }
   for (const id of ["../outside.md", "missing.md", "_meta"]) {
     const held = await step(w, { seams: qualifiedSeams({ readTriageBasis: rulings(id), runTriageChild: never }) })
-    assert.deepEqual([held.result, held.ok, held.launched], ["preparation_held", false, false], id)
+    // No card could be put in a brief: nothing to send, said and counted, and no failure.
+    assert.deepEqual([held.result, held.ok, held.launched, held.deferred], ["brief_empty", true, false, 2], id)
   }
+  assert.deepEqual(await runFolders(w), [], "no run folder is made for an empty brief")
   const blind = await step(w, { seams: qualifiedSeams({ readStatus: async () => { throw new Error("x") }, runTriageChild: never }) })
   assert.deepEqual([blind.result, blind.ok], ["status_unavailable", false])
   // The installed record is asked of the runner's own loader: only `qualified` loads.
   const file = path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS)
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
   await fs.writeFile(file, "{}\n", { mode: 0o600 })
-  const { loadQualification: _injected, ...viaLoader } = qualifiedSeams({ runTriageChild: never })
+  const { restoreQualification: _injected, loadRunner: _fake, ...viaLoader } = qualifiedSeams({ runTriageChild: never, sourceIdentity: async () => undefined })
   const asked = []
   const held = await step(w, { seams: { ...viaLoader, loadTriageQualification: async (options) => { asked.push(options); return { state: "scope_unqualified" } } } })
-  assert.deepEqual([held.result, (await readStatus(w.env)).triage.runner.reason], ["runner_blocked", "diagnostic_inadequate"])
+  assert.deepEqual([held.result, held.ok, (await readStatus(w.env)).triage.runner.qualification], ["runner_unavailable", true, "stale"])
   assert.deepEqual(asked, [{ recordFile: file, env: w.env }])
-  await step(w, { seams: { ...viaLoader, loadTriageQualification: async () => ({ state: "scope_unqualified", reason: "record_stale" }) } })
-  assert.equal((await readStatus(w.env)).triage.runner.reason, "record_stale")
 
   // A review the safe transform refuses is not written, whatever the candidate said.
   let prepared
   const unsafe = await step(w, { seams: qualifiedSeams({ toSafeTriageReview: () => ({ state: "refused" }), runner: fakeRunner((input) => { prepared = input; return input.brief.cards.map((card) => row(card)) }) }) })
-  assert.deepEqual([unsafe.result, unsafe.reviewed, unsafe.refused], ["ran", 0, 2])
+  assert.deepEqual([unsafe.result, unsafe.reviewed, unsafe.refused], ["nothing_accepted", 0, 2])
   assert.equal(annotation(w, a), null)
   assert.deepEqual(prepared.records.filter((record) => record.kind === "ruling").map((record) => record.text), ["(empty)"], "an empty ruling is still a record")
 
@@ -409,14 +475,14 @@ test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review,
 
   // A candidate that is not a regular file is no candidate.
   const folder = await step(w, { now: at(14), seams: qualifiedSeams({ runner: fakeRunner(() => ({ state: "ran", resultFile: w.base })) }) })
-  assert.deepEqual([folder.result, folder.reviewed, folder.refused], ["ran", 0, 2])
+  assert.deepEqual([folder.result, folder.reviewed, folder.refused], ["nothing_accepted", 0, 2])
 
   // One card's ruling cannot be read: the other is reviewed. The runner names no file, so the one the step asked for is read; a refresh
   // that was incomplete is still said after a run.
   const quiet = fakeRunner()
   const partial = await step(w, { now: at(21), seams: {
     ...viaLoader, loadTriageQualification: async () => ({ state: "qualified" }), readTriageBasis: rulings("missing.md", a),
-    refreshTriage: async (options) => ({ ...(await refreshTriage(options)), state: "truncated" }),
+    refreshTriage: async (options) => ({ ...(await refreshTriage(options)), state: "unreadable" }),
     runTriageChild: async (options) => { await quiet(options); return { state: "ran" } },
   } })
   assert.deepEqual([partial.result, partial.ok, partial.reviewed, partial.deferred], ["refresh_incomplete", false, 1, 1], JSON.stringify(partial))
@@ -424,7 +490,7 @@ test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review,
   assert.equal(annotation(w, a), null)
 
   // The host check is the custody module's own unless a test replaces it: only macOS can run the runner.
-  const { hostSupport: _host, ...ownHost } = qualifiedSeams()
+  const { hostSupport: _host, loadRunner: _runtime, ...ownHost } = qualifiedSeams()
   const native = await step(w, { now: at(28), seams: ownHost })
   assert.deepEqual([native.result, native.reviewed], process.platform === "darwin" ? ["ran", 1] : ["runner_unavailable", null])
   if (process.platform !== "darwin") assert.equal((await readStatus(w.env)).triage.runner.state, "unsupported_host")
@@ -488,7 +554,7 @@ test("off macOS the step degrades cleanly: the refresh still runs, nothing is pr
   const hosts = [async () => ({ provenance: false })]
   if (process.platform !== "darwin") hosts.push(undefined)
   for (const hostSupport of hosts) {
-    const { hostSupport: _injected, ...rest } = qualifiedSeams({ runTriageChild: never, reserveAgentLaunch: never, loadQualification: never })
+    const { hostSupport: _injected, loadRunner: _runtime, ...rest } = qualifiedSeams({ runTriageChild: never, reserveAgentLaunch: never, restoreQualification: never })
     const seams = hostSupport === undefined ? rest : { ...rest, hostSupport }
     for (const hour of [0, 1, 2, 3]) {
       const result = await step(w, { now: at(hour), seams })
@@ -496,13 +562,348 @@ test("off macOS the step degrades cleanly: the refresh still runs, nothing is pr
     }
   }
   const status = await readStatus(w.env)
-  assert.deepEqual(status.triage.runner, { state: "unsupported_host", reason: null, qualification: "not_checked" }, "the reason is visible")
+  // Where the runtime itself cannot be loaded (a host the runner was never built for) that is said instead, just as quietly.
+  const unloadable = process.platform === "win32" && status.triage.runner.state === "runtime_unavailable"
+  assert.deepEqual(status.triage.runner, unloadable ? { state: "runtime_unavailable", reason: "runtime_unloadable", qualification: "not_checked" } : { state: "unsupported_host", reason: null, qualification: "not_checked" }, "the reason is visible")
   assert.deepEqual([status.triage.refresh.changes, status.triage.refresh.held], [0, 0])
   assert.deepEqual([status.loop.steps.triage.failures, status.loop.steps.triage.failures_in_a_row, status.loop.steps.triage.last_result], [0, 0, "runner_unavailable"])
   assert.equal(status.loop.agent_launch_highwater, undefined, "no launch was reserved")
   assert.equal(annotation(w, KEYS[0]), null)
   assert.deepEqual(await fs.readdir(path.join(await factoryStateRoot(w.env), "triage")).catch(() => []), [], "no run folder was made")
   // The end of a turn never starts a worker for a runner this host cannot start.
-  const { triageKickDue } = await import("../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js")
   assert.equal(triageKickDue(status, at(48)), false)
+})
+
+test("six launches that time out reach the stale alarm through the step itself, whatever quiet passes run between them", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  const timeout = () => qualifiedSeams({ runner: fakeRunner(() => ({ state: "timeout" })) })
+  const never = qualifiedSeams({ runTriageChild: async () => assert.fail("no run") })
+  // A damaged streak counts from nothing.
+  await updateStatus(w.env, (status) => ({ ...status, triage: { run: { failures_in_a_row: "many" } } }))
+  const hours = [0, 7, 14, 21, 31, 38]
+  for (const [index, hour] of hours.entries()) {
+    const launched = await step(w, { now: at(hour), seams: timeout() })
+    assert.deepEqual([launched.result, launched.ok, launched.launched], ["timeout", false, true], `launch ${index + 1}`)
+    // The six-hour gap after every launch: a quiet pass, ok for the refresh, that is no success of the run.
+    const cooling = await step(w, { now: at(hour + 1), seams: never })
+    assert.deepEqual([cooling.result, cooling.ok, cooling.launched], ["not_due", true, false])
+    const status = await readStatus(w.env)
+    const record = status.loop.steps.triage
+    assert.deepEqual([record.failures, record.failures_in_a_row, record.last_ok_at, record.last_result, record.runs], [index + 1, index + 1, null, "not_due", 2 * (index + 1)])
+    assert.deepEqual([status.triage.run.failures_in_a_row, status.triage.run.last_result, status.triage.run.last_ok_at ?? null, status.triage.run.last_at], [index + 1, "timeout", null, at(hour).toISOString()])
+    assert.deepEqual(staleSteps(status, at(hour + 1), ["triage"]), index >= 2 ? ["triage"] : [], "three failed launches in a row are stale")
+    assert.equal(triageKickDue(status, at(hour + 6.5)), false, "a failing run is retried by a session-start worker, never by a kick")
+  }
+  // The real measure step opens the real card from what the step recorded.
+  const measured = await runMeasureStep(w.env, { deskRoot: w.deskRoot, personPrefix: "", now: at(39), attempted: ["triage"] })
+  assert.deepEqual([measured.ok, measured.counts.opened], [true, 1], JSON.stringify(measured))
+  assert.ok((await readCards({ deskRoot: w.deskRoot, personPrefix: "" })).cards.some((card) => card.key === "loop_alarm:step_stale:triage" && card.state === "open"))
+  const health = (await readStatus(w.env)).loop.health.triage
+  assert.deepEqual([health.run.last_result, health.run.failures_in_a_row.value, health.run.last_ok_at, health.scan], ["timeout", 6, null, "complete"])
+  // A launch with an accepted review is the run's success: both streaks clear. (The measure step commits the alarm card locally; it is
+  // pushed first, as the desk's own sync would, so it is reviewed too.)
+  git(w.deskRoot, ["push", "-q", "origin", "HEAD:main"])
+  const good = await step(w, { now: at(45) })
+  assert.equal(good.ok, true, JSON.stringify(good))
+  assert.ok(good.reviewed >= 1)
+  const after = await readStatus(w.env)
+  assert.deepEqual([after.loop.steps.triage.failures_in_a_row, after.triage.run.failures_in_a_row, after.triage.run.last_ok_at, after.triage.run.last_result], [0, 0, at(45).toISOString(), "ran"])
+  assert.deepEqual(staleSteps(after, at(45), ["triage"]), [])
+
+  // With no card left for a run to fail on, a failed launch's streak clears without a launch.
+  const other = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  assert.equal((await step(other, { seams: timeout() })).result, "timeout")
+  assert.equal((await step(other, { now: at(1), seams: never })).result, "not_due")
+  assert.equal((await readStatus(other.env)).loop.steps.triage.failures_in_a_row, 1)
+  await fs.rm(cardFile(other.deskRoot, "", KEYS[0]))
+  pushDesk(other)
+  const settled = await step(other, { now: at(7), seams: never })
+  assert.deepEqual([settled.result, settled.ok], ["nothing_to_review", true])
+  const cleared = await readStatus(other.env)
+  assert.deepEqual([cleared.loop.steps.triage.failures_in_a_row, cleared.triage.run.failures_in_a_row, cleared.loop.steps.triage.last_ok_at], [0, 0, at(7).toISOString()])
+})
+
+test("more than 200 card files: the refresh reads up to the card bound and every pass is whole and ok", async () => {
+  const keys = Array.from({ length: 201 }, (_, index) => `andon:example-org/example-repo#${1000 + index}`)
+  const w = await triageWorld({ now: at(0), keys })
+  const limits = []
+  const seams = qualifiedSeams({ hostSupport: async () => ({ provenance: false }), runTriageChild: async () => assert.fail("no run"), readCards: async (options) => { limits.push(options.limit); return readCards(options) } })
+  for (const hour of [0, 1, 2]) {
+    const result = await step(w, { now: at(hour), seams })
+    assert.deepEqual(result, { ok: true, result: "runner_unavailable", launched: false, reviewed: null, refused: null, deferred: null, unreviewed: 201 })
+  }
+  const status = await readStatus(w.env)
+  assert.deepEqual([status.triage.refresh.scan, status.triage.coverage.unreviewed, status.loop.steps.triage.failures, status.loop.steps.triage.last_ok_at], ["complete", 201, 0, at(2).toISOString()])
+  assert.deepEqual([...new Set(limits)], [MAX_CARD_FILES], "every listing asks for the card library's own bound, not the default 200")
+})
+
+test("refusals seen before a launch spend nothing: a billing variable, no sign-in and no time are quiet and reserve no launch", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  const never = (what) => async () => assert.fail(what)
+  const guarded = (extra = {}) => qualifiedSeams({ runTriageChild: never("no run"), reserveAgentLaunch: never("nothing is reserved"), restoreQualification: async () => ({ state: "qualified", qualification: { state: "qualified", cli: "/opt/engine/claude" } }), ...extra })
+  const quietly = async (world, seams, runner, options = {}) => {
+    const result = await step(world, { seams, ...options })
+    assert.deepEqual([result.result, result.ok, result.launched], ["runner_unavailable", true, false], JSON.stringify(result))
+    assert.deepEqual((await readStatus(world.env)).triage.runner, runner)
+  }
+  // A billing variable: the person's decision, seen before the record is even loaded.
+  await quietly({ ...w, env: { ...w.env, ANTHROPIC_API_KEY: "placeholder" } }, guarded({ restoreQualification: never("not loaded"), probeSignIn: never("not probed") }), { state: "disabled_would_bill", reason: null, qualification: "not_checked" })
+  // The engine's own sign-in, asked of the qualified engine before anything is prepared.
+  const asked = []
+  await quietly(w, guarded({ probeSignIn: async (options) => { asked.push([options.cli, options.env === w.env]); return { state: "no_credentials" } } }), { state: "no_credentials", reason: null, qualification: "loaded" })
+  assert.deepEqual(asked, [["/opt/engine/claude", true]])
+  await quietly(w, guarded({ probeSignIn: async () => ({ state: "disabled_would_bill" }) }), { state: "disabled_would_bill", reason: null, qualification: "loaded" })
+  await quietly(w, guarded({ probeSignIn: async () => ({ state: "something_new" }) }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
+  await quietly(w, guarded({ probeSignIn: async () => { throw new Error("no engine") } }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
+  // The probe asks the pinned engine the runtime locates, never a path from the record; no engine located is no sign-in, without a probe.
+  const noProbe = never("not probed")
+  await quietly(w, guarded({ locateEngine: async () => null, probeSignIn: noProbe }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
+  const located = []
+  const runtimeWith = (locatePinnedEngine) => async () => ({ ...FAKE_RUNTIME, qualify: locatePinnedEngine === undefined ? {} : { locatePinnedEngine } })
+  for (const [locatePinnedEngine, found] of [[async () => "/opt/pinned/claude", "/opt/pinned/claude"], [async () => ({ path: "/opt/pinned/other" }), "/opt/pinned/other"], [async () => ({ path: "relative/claude" }), null], [async () => null, null], [undefined, null]]) {
+    const { locateEngine: _seam, ...ownLocator } = guarded({ loadRunner: runtimeWith(locatePinnedEngine), probeSignIn: async (options) => { located.push(options.cli); return { state: "no_credentials" } } })
+    const probes = located.length
+    await step(w, { seams: ownLocator })
+    assert.equal((await readStatus(w.env)).triage.runner.state, found === null ? "sign_in_unknown" : "no_credentials")
+    assert.equal(located.length, probes + (found === null ? 0 : 1))
+  }
+  assert.deepEqual(located, ["/opt/pinned/claude", "/opt/pinned/other"])
+  // The real probe on an engine that does not exist answers without a launch too.
+  const { probeSignIn: _fake, ...realProbe } = guarded()
+  const probed = await step(w, { seams: realProbe })
+  assert.deepEqual([probed.result, probed.ok, probed.launched], ["runner_unavailable", true, false])
+  assert.deepEqual(await runFolders(w), [], "nothing was prepared")
+  // The probe used up the time for a whole run: the prepared folder is removed and nothing is reserved.
+  let now = Date.now()
+  const slow = await step(w, { deadline: new Date(now + TRIAGE_RUN_MS + 60 * 1000), seams: guarded({ clock: () => now, probeSignIn: async () => { now += 5 * 60 * 1000; return { state: "subscription" } } }) })
+  assert.deepEqual([slow.result, slow.ok, slow.launched, slow.deferred], ["no_time_for_a_run", true, false, 1])
+  assert.deepEqual(await runFolders(w), [], "a prepared run that is not launched leaves no folder")
+  // So does a reservation the quota refuses.
+  const refusedQuota = await step(w, { seams: guarded({ reserveAgentLaunch: async () => ({ state: "window_used" }) }) })
+  assert.deepEqual([refusedQuota.result, refusedQuota.ok, await runFolders(w)], ["window_used", true, []])
+  const status = await readStatus(w.env)
+  assert.deepEqual([status.loop.steps.triage.failures, status.loop.agent_launch_highwater], [0, undefined], "no failure counted and no launch spent")
+})
+
+test("a reserved launch is always finished, a throw after the reservation is a stated failure, and one card's failure is that card's alone", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 2) })
+  const finished = []
+  const finish = async (env, options) => { finished.push(options.state); return finishAgentLaunch(env, options) }
+  const timeout = await step(w, { seams: qualifiedSeams({ finishAgentLaunch: finish, runner: fakeRunner(() => ({ state: "timeout" })) }) })
+  assert.deepEqual([timeout.result, finished], ["timeout", ["failed"]])
+  // The clock fails right after the reservation, with no evaluation waiting: the launch is finished in the ledger and the step says so.
+  await updateStatus(w.env, (status) => ({ ...status, loop: { ...status.loop, steps: { ...status.loop.steps, evaluate: { last_ran_at: at(7).toISOString(), last_ok_at: at(7).toISOString(), last_result: "ran", runs: 1, failures: 0, failures_in_a_row: 0 } } } }))
+  let armed = false
+  const clock = () => {
+    if (armed) {
+      armed = false
+      throw new Error("clock")
+    }
+    return Date.now()
+  }
+  const reserve = async (env, options) => {
+    const reserved = await reserveAgentLaunch(env, options)
+    armed = true
+    return reserved
+  }
+  const thrown = await step(w, { now: at(7), seams: qualifiedSeams({ clock, reserveAgentLaunch: reserve, finishAgentLaunch: finish, runTriageChild: async () => assert.fail("no run") }) })
+  assert.deepEqual(thrown, { ok: false, result: "step_error", launched: true, reviewed: null, refused: null, deferred: null, unreviewed: 2 })
+  assert.deepEqual(finished, ["failed", "failed"], "the reservation was finished")
+  const failing = await readStatus(w.env)
+  assert.deepEqual([failing.triage.result, failing.triage.run.failures_in_a_row, failing.loop.steps.triage.failures_in_a_row], ["step_error", 2, 2])
+  // The protected row of one card cannot be stored: that card is refused, the other is accepted, and the pass is not a success.
+  const { writeProtectedTriageFile } = await import("../../../../../plugins/desk/mcp/src/factory/triage-write.js")
+  let rows = 0
+  const store = async (...args) => {
+    rows += 1
+    if (rows === 1) throw new Error("disk full")
+    return writeProtectedTriageFile(...args)
+  }
+  const partial = await step(w, { now: at(14), seams: qualifiedSeams({ finishAgentLaunch: finish, writeProtectedTriageFile: store }) })
+  assert.deepEqual([partial.result, partial.ok, partial.reviewed, partial.refused], ["write_incomplete", false, 1, 1], JSON.stringify(partial))
+  const attempts = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(w.env), "triage", "attempts.json"), "utf8")).attempts
+  assert.deepEqual(Object.values(attempts).map((value) => value.state).sort(), ["refused", "reviewed"])
+  assert.equal((await readStatus(w.env)).triage.run.failures_in_a_row, 0, "a review was accepted: the run itself succeeded")
+  const last = await step(w, { now: at(21), seams: qualifiedSeams({ finishAgentLaunch: finish }) })
+  assert.deepEqual([last.result, last.ok, last.reviewed], ["ran", true, 1])
+  assert.deepEqual(finished, ["failed", "failed", "ran", "ran"], "every reserved launch was finished exactly once")
+})
+
+test("run folders are bounded: launched runs without an accepted review keep only the newest, and a run with one is kept", { skip: NEEDS_PREPARED_RUN }, async () => {
+  assert.equal(KEPT_UNACCEPTED_RUNS, 8)
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  const root = path.join(await factoryStateRoot(w.env), "triage")
+  const name = (index) => index.toString(16).padStart(2, "0").repeat(16)
+  for (const folder of ["runs", "results"]) await fs.mkdir(path.join(root, folder), { recursive: true, mode: 0o700 })
+  // Ten old run folders, the higher the index the older; the oldest had a review accepted. One folder is not a run's.
+  for (let index = 0; index < 10; index += 1) {
+    await fs.mkdir(path.join(root, "runs", name(index)), { mode: 0o700 })
+    await fs.writeFile(path.join(root, "runs", name(index), "candidate.json"), "{}")
+    const when = new Date(Date.now() - (index + 1) * HOUR)
+    await fs.utimes(path.join(root, "runs", name(index)), when, when)
+  }
+  await fs.mkdir(path.join(root, "results", name(9)), { mode: 0o700 })
+  await fs.mkdir(path.join(root, "runs", "notes"), { mode: 0o700 })
+  assert.equal((await step(w)).reviewed, 1)
+  const kept = await runFolders(w)
+  const made = kept.filter((entry) => entry !== "notes" && !Array.from({ length: 10 }, (_, index) => name(index)).includes(entry))
+  assert.equal(made.length, 1, "this run's own folder")
+  assert.deepEqual(kept.filter((entry) => !made.includes(entry)), [...Array.from({ length: 8 }, (_, index) => name(index)), name(9), "notes"].sort(), "the ninth unaccepted run is gone; the accepted one and the stray folder stay")
+})
+
+test("the runner is loaded through one seam: a runtime that does not load is quiet, with its reason, and spends nothing", async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  const never = async () => assert.fail("nothing past the loader")
+  const seams = (loadRunner) => qualifiedSeams({ loadRunner, hostSupport: never, restoreQualification: never, reserveAgentLaunch: never, runTriageChild: never })
+  for (const [loadRunner, reason] of [
+    [async () => { const error = new Error("Cannot find package"); error.code = "ERR_MODULE_NOT_FOUND"; throw error }, "runtime_unloadable"],
+    [async () => ({ state: "unavailable", reason: "runtime_unavailable" }), "runtime_unavailable"],
+    [async () => ({ state: "unavailable", reason: "runtime_unloadable" }), "runtime_unloadable"],
+    [async () => ({ state: "unavailable", reason: "Something Else" }), "runtime_unloadable"],
+    [async () => null, "runtime_unloadable"],
+  ]) {
+    const result = await step(w, { seams: seams(loadRunner) })
+    assert.deepEqual([result.result, result.ok, result.launched], ["runner_unavailable", true, false])
+    assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "runtime_unavailable", reason, qualification: "not_checked" })
+  }
+  const status = await readStatus(w.env)
+  assert.deepEqual([status.loop.steps.triage.failures, status.loop.agent_launch_highwater], [0, undefined])
+  assert.equal(triageKickDue(status, at(48)), false, "a host whose runtime does not load is not kicked")
+  // The host check and the run are asked of the loaded runtime.
+  const runtime = { state: "loaded", custody: { ownedCatalogHostSupport: () => ({ provenance: false }) }, runner: {}, qualify: {} }
+  const { hostSupport: _host, ...own } = qualifiedSeams({ loadRunner: async () => runtime })
+  assert.equal((await step(w, { seams: own })).result, "runner_unavailable")
+  assert.equal((await readStatus(w.env)).triage.runner.state, "unsupported_host")
+})
+
+test("the restore's answer: the runner's own restore is used when it has one, its reasons are kept, and anything unknown is read conservatively", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  const asked = []
+  const runtime = (answer) => ({ ...FAKE_RUNTIME, runner: { restoreTriageQualification: async (options) => { asked.push(options); return answer } } })
+  const { restoreQualification: _drop, ...viaRuntime } = qualifiedSeams({ reserveAgentLaunch: async () => assert.fail("nothing reserved") })
+  const check = async (answer, expected) => {
+    const result = await step(w, { seams: { ...viaRuntime, loadRunner: async () => runtime(answer) } })
+    assert.deepEqual([result.result, result.ok, result.launched], expected.ok ? ["runner_unavailable", true, false] : ["runner_blocked", false, false], JSON.stringify(answer))
+    assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: expected.reason, qualification: expected.qualification })
+  }
+  for (const reason of ["engine_unpinned", "engine_mismatch", "host_unsupported", "measurement_active"]) {
+    await check({ state: "stale", reason, requalify: false }, { ok: true, reason, qualification: "stale" })
+  }
+  // A reason qualifying again can fix goes to the qualifier first; with none loaded, it is the same quiet state.
+  for (const reason of ["record_version", "qualification_failed", "source_changed", "runtime_changed", "engine_changed", "environment_changed", "chain_changed", "policy_changed"]) {
+    await check({ state: "stale", reason, requalify: true }, { ok: true, reason, qualification: "stale" })
+  }
+  await check({ state: "stale", reason: "Not a reason" }, { ok: true, reason: "qualification_failed", qualification: "stale" })
+  await check({ state: "missing" }, { ok: true, reason: null, qualification: "missing" })
+  for (const reason of ["unreadable", "noncanonical", "structure", "receipts", "restore_failed"]) await check({ state: "damaged", reason }, { ok: false, reason, qualification: "damaged" })
+  await check({ state: "damaged", reason: "Not a reason" }, { ok: false, reason: "unreadable", qualification: "damaged" })
+  assert.deepEqual(asked[0], { recordFile: path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS), env: w.env })
+  const record = (await readStatus(w.env)).loop.steps.triage
+  assert.equal(record.failures, 6, "only the six damaged records counted")
+  // A qualified record is handed to the runner as the restore gave it.
+  const qualification = { state: "qualified", cli: "/opt/engine/claude" }
+  const runs = []
+  const ran = await step(w, { now: at(1), seams: { ...viaRuntime, reserveAgentLaunch, loadRunner: async () => runtime({ state: "qualified", qualification }), runTriageChild: async (options, loaded) => { runs.push([options.qualification, loaded.state]); return fakeRunner()(options) } } })
+  assert.deepEqual([ran.result, ran.reviewed, runs], ["ran", 1, [[qualification, "loaded"]]])
+  assert.equal(TRIAGE_ENGINE_CARD, "triage_engine_unpinned")
+})
+
+test("a missing or requalifiable record asks the qualifier first; a launch it made takes the slot, and only its failure counts", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const fresh = async () => {
+    const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+    await updateStatus(w.env, (status) => ({ ...status, evaluator: { ...status.evaluator, ready_now: 1, ready_later: 0 } }))
+    return w
+  }
+  const calls = []
+  const seams = ({ restore = [{ state: "missing" }], qualify, ...extra }) => {
+    const answers = [...restore]
+    return qualifiedSeams({
+      restoreQualification: async () => answers.length > 1 ? answers.shift() : answers[0],
+      autoQualify: async (env, options, runtime) => { calls.push([options, runtime === FAKE_RUNTIME]); return typeof qualify === "function" ? qualify() : qualify },
+      ...extra,
+    })
+  }
+  const noRun = { runTriageChild: async () => assert.fail("no triage run"), reserveAgentLaunch: async () => assert.fail("the step reserves nothing") }
+
+  // Launched and qualified: the slot is spent, the evaluation it deferred gets its continuation, and the run is a success.
+  let w = await fresh()
+  const lock = { proof: "the worker's lock" }
+  const qualified = await step(w, { generation: "gen-q", lock, seams: seams({ qualify: { state: "qualified", reason: null, launched: true }, ...noRun }) })
+  assert.deepEqual([qualified.result, qualified.ok, qualified.launched, qualified.continuation?.state], ["runner_qualified", true, true, "issued"])
+  const [options, sameRuntime] = calls.at(-1)
+  assert.deepEqual(Object.keys(options).sort(), ["deadline", "generation", "legacyEvaluator", "lock", "now"])
+  assert.deepEqual([options.now instanceof Date, options.deadline instanceof Date, options.generation, options.lock, sameRuntime], [true, true, "gen-q", lock, true])
+  assert.deepEqual(options.legacyEvaluator, (await readStatus(w.env)).evaluator)
+  let status = await readStatus(w.env)
+  assert.deepEqual([status.triage.runner, status.triage.run.failures_in_a_row, status.triage.run.last_result], [{ state: "qualifying", reason: null, qualification: "qualified" }, 0, "runner_qualified"])
+
+  // Launched and failed: a failed run for the alarm.
+  w = await fresh()
+  const failed = await step(w, { seams: seams({ qualify: { state: "failed", reason: "chain_changed", launched: true }, ...noRun }) })
+  assert.deepEqual([failed.result, failed.ok, failed.launched], ["qualification_failed", false, true])
+  status = await readStatus(w.env)
+  assert.deepEqual([status.triage.run.failures_in_a_row, status.loop.steps.triage.failures_in_a_row, status.triage.runner.reason], [1, 1, "chain_changed"])
+  assert.equal(triageKickDue(status, at(48)), false)
+
+  // Launched and skipped: quiet, the slot still spent, the run's health unchanged.
+  w = await fresh()
+  const skippedLaunch = await step(w, { seams: seams({ qualify: { state: "skipped", reason: 7, launched: true }, ...noRun }) })
+  assert.deepEqual([skippedLaunch.result, skippedLaunch.ok, skippedLaunch.launched], ["runner_unavailable", true, true])
+  assert.deepEqual([(await readStatus(w.env)).triage.run.failures_in_a_row, (await readStatus(w.env)).triage.runner.reason], [0, null])
+
+  // With no evaluation waiting, a launch the qualifier made mints no continuation.
+  w = await fresh()
+  await updateStatus(w.env, (status) => ({ ...status, loop: { ...(status.loop ?? {}), steps: { evaluate: { last_ran_at: at(0).toISOString(), last_ok_at: at(0).toISOString(), last_result: "ran", runs: 1, failures: 0, failures_in_a_row: 0 } } } }))
+  const idle = await step(w, { seams: seams({ qualify: { state: "qualified", launched: true }, ...noRun }) })
+  assert.deepEqual([idle.result, idle.launched, idle.continuation], ["runner_qualified", true, undefined])
+
+  // A qualifier that throws may have launched: the slot is spent and it is a failed run.
+  w = await fresh()
+  const thrown = await step(w, { seams: seams({ qualify: () => { throw new Error("qualifier") }, ...noRun }) })
+  assert.deepEqual([thrown.result, thrown.ok, thrown.launched], ["qualification_failed", false, true])
+
+  // Not launched: skipped is quiet, failed counts, and qualified restores again and runs in the same generation.
+  w = await fresh()
+  const skipped = await step(w, { seams: seams({ qualify: { state: "skipped", reason: "already_today", launched: false }, ...noRun }) })
+  assert.deepEqual([skipped.result, skipped.ok, skipped.launched], ["runner_unavailable", true, false])
+  assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: "already_today", qualification: "missing" })
+  const refusedEarly = await step(w, { seams: seams({ qualify: { state: "failed", reason: "no_credentials", launched: false }, ...noRun }) })
+  assert.deepEqual([refusedEarly.result, refusedEarly.ok, refusedEarly.launched], ["qualification_failed", false, false])
+  assert.equal((await readStatus(w.env)).triage.run.failures_in_a_row, 1)
+  const ready = await step(w, { seams: seams({ restore: [{ state: "missing" }, { state: "qualified", qualification: { state: "qualified" } }], qualify: { state: "qualified", launched: false } }) })
+  assert.deepEqual([ready.result, ready.ok, ready.launched, ready.reviewed], ["ran", true, true, 1])
+
+  // A qualifier suspended after repeated host-side failures is a counted failure with its reason, whether it says skipped or failed.
+  for (const suspended of ["skipped", "failed"]) {
+    w = await fresh()
+    const result = await step(w, { seams: seams({ qualify: { state: suspended, reason: "auto_suspended", launched: false }, ...noRun }) })
+    assert.deepEqual([result.result, result.ok, result.launched], ["qualification_failed", false, false])
+    const status = await readStatus(w.env)
+    assert.deepEqual([status.triage.runner.reason, status.triage.run.failures_in_a_row, status.loop.steps.triage.failures_in_a_row], ["auto_suspended", 1, 1])
+  }
+
+  // A stale record is offered to the qualifier only when its reason is one qualifying again can fix, by the runtime's own map when it
+  // has one (else the mirror); with no qualifier nothing is attempted.
+  w = await fresh()
+  const before = calls.length
+  for (const reason of ["engine_unpinned", "engine_mismatch", "host_unsupported", "measurement_active"]) {
+    const kept = await step(w, { seams: seams({ restore: [{ state: "stale", reason, requalify: true }], qualify: { state: "qualified", launched: true }, ...noRun }) })
+    assert.deepEqual([kept.result, kept.ok, calls.length, (await readStatus(w.env)).triage.runner.reason], ["runner_unavailable", true, before, reason])
+  }
+  const requalify = await step(w, { seams: seams({ restore: [{ state: "stale", reason: "engine_changed", requalify: false }], qualify: { state: "skipped", reason: "budget", launched: false }, ...noRun }) })
+  assert.deepEqual([requalify.result, calls.length, (await readStatus(w.env)).triage.runner.qualification], ["runner_unavailable", before + 1, "stale"])
+  const theirMap = { ...FAKE_RUNTIME, qualify: { TRIAGE_STALE_REASONS: { engine_changed: false, brand_new: true } } }
+  const mapped = await step(w, { seams: seams({ loadRunner: async () => theirMap, restore: [{ state: "stale", reason: "engine_changed" }], qualify: { state: "qualified", launched: true }, ...noRun }) })
+  assert.deepEqual([mapped.result, calls.length], ["runner_unavailable", before + 1], "the runtime's map says qualifying again cannot fix it")
+  const offered = await step(w, { seams: seams({ loadRunner: async () => ({ ...FAKE_RUNTIME, runner: { TRIAGE_STALE_REASONS: { brand_new: true } } }), restore: [{ state: "stale", reason: "brand_new" }], qualify: { state: "skipped", reason: "budget", launched: false }, ...noRun }) })
+  assert.deepEqual([offered.result, calls.length, (await readStatus(w.env)).triage.runner.reason], ["runner_unavailable", before + 2, "budget"])
+  await step(w, { seams: seams({ loadRunner: async () => theirMap, restore: [{ state: "stale", reason: "record_version" }], ...noRun }) })
+  assert.equal((await readStatus(w.env)).triage.runner.reason, "qualification_failed", "a reason the map does not name is read as the generic one")
+  const { autoQualify: _none, ...noQualifier } = seams({ ...noRun })
+  assert.equal((await step(w, { seams: noQualifier })).result, "runner_unavailable")
+  // The default asks the loaded runtime's own qualifier.
+  const own = []
+  const { autoQualify: _q, ...defaultQualifier } = seams({ ...noRun, loadRunner: async () => ({ ...FAKE_RUNTIME, qualify: { autoQualifyTriage: async (env, options) => { own.push(options.generation); return { state: "skipped", reason: "budget", launched: false } } } }) })
+  assert.equal((await step(w, { generation: "gen-own", seams: defaultQualifier })).result, "runner_unavailable")
+  assert.deepEqual(own, ["gen-own"])
 })

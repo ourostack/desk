@@ -8,7 +8,8 @@
 // The order is route, triage, evaluate, mirror, reconcile, verify, measure. Findings are routed first, so triage reads current cards.
 // The triage step (`triage-step.js`) always runs its mechanical refresh; it may then take the generation's one agent slot. One worker
 // generation starts at most one agent: when triage reserved a launch, the evaluator step is not run and not stamped (its code is
-// `slot_taken`). The evaluator step starts at most one run (`maxRuns: 1`). When triage took the slot from an evaluation that was due,
+// `slot_taken`); when the triage step threw, whether it launched is not known, so the evaluator step is held the same way
+// (`slot_unknown`). The evaluator step starts at most one run (`maxRuns: 1`). When triage took the slot from an evaluation that was due,
 // it mints one evaluation continuation; once this worker has released its lock it kicks the loop once (`kickLoop` with
 // `continuation`), and the next worker's evaluator step consumes the token (`consumeEvaluationContinuation`) under its lock before it
 // is asked whether it is due. A consumed token makes the evaluator due; a refused one (a real run, failure or attempt since) changes
@@ -36,7 +37,7 @@
 // The result holds codes and integers only: `{ result, ran, skipped, failed, steps: { <step>: <code> } }`, where
 // `result` is `completed`, `budget_spent`, `status_unavailable`, `status_reset` (the status file was damaged and moved aside during this run: nothing more runs, and that UTC day is a spent day for the evaluator), `busy`, `headless_session`, `disabled`,
 // `no_factory_state`, `no_consenting_store` or `no_desk`, and a step's code is its own result code, `skipped`
-// (not due), `slot_taken` (the evaluator step, when triage took the agent slot), `not_started` (the budget was spent, or the status unreadable or reset), `step_error` (it threw) or
+// (not due), `slot_taken` (the evaluator step, when triage took the agent slot), `slot_unknown` (the evaluator step, when the triage step threw), `not_started` (the budget was spent, or the status unreadable or reset), `step_error` (it threw) or
 // `invalid_result`. The `route` step is the two route collectors as one: `routed`, `issues_failed`, `local_failed`
 // or `both_failed`. Every other step records itself; the worker records `route`, and records `step_error` for a
 // step that threw. The measure step runs last and is told which steps ran.
@@ -130,23 +131,30 @@ async function consumeContinuation(env, ctx, status, impls) {
 
 // The triage step, which may take the generation's agent slot and leave a continuation for the evaluation it deferred.
 async function triageStep(env, ctx, impls) {
-  const answer = await impls.triage(env, {
-    deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.agentDeadline(),
-    generation: ctx.generation, onChild: ctx.onChild, onChildExit: ctx.onChildExit,
-  })
-  if (answer?.launched === true) ctx.slot = "triage"
+  let answer
+  try {
+    answer = await impls.triage(env, {
+      deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.agentDeadline(),
+      generation: ctx.generation, lock: ctx.lock, onChild: ctx.onChild, onChildExit: ctx.onChildExit,
+    })
+  } catch (error) {
+    // A triage step that threw may have reserved and started a launch: the slot is not known to be free, so no second agent starts.
+    ctx.slot = "slot_unknown"
+    throw error
+  }
+  if (answer?.launched === true) ctx.slot = "slot_taken"
   if (answer?.continuation?.state === "issued") ctx.continuation = true
   return answer
 }
 
 // The ordered steps. Each `run(env, ctx, impls)` answers `{ ok, result }`; a step that records itself needs nothing more. A step with
 // `newWorkAt(env)` is due as soon as work newer than its last run arrives: an evaluation request makes the evaluator step due at once, and so
-// does a queue still draining (`evaluateDue`). A step with `held(ctx)` is not run while it answers a code (the agent slot is taken).
+// does a queue still draining (`evaluateDue`). A step with `held(ctx)` is not run while it answers a code (the agent slot is taken or not known).
 const STEPS = Object.freeze([
   { name: "route", run: routeStep },
   { name: "triage", run: triageStep },
   {
-    name: "evaluate", newWorkAt: newestRequestAt, held: (ctx) => (ctx.slot === "triage" ? "slot_taken" : null),
+    name: "evaluate", newWorkAt: newestRequestAt, held: (ctx) => ctx.slot,
     due: async (status, now, newWorkAt, env, ctx, impls) => {
       const consumed = await consumeContinuation(env, ctx, status, impls)
       return consumed || evaluateDue(status, now, { newWorkAt })
@@ -213,7 +221,7 @@ export async function runLoopWorker(env, {
     return granted
   }
   const ctx = {
-    deskRoot, personPrefix, pluginVersion, attempted: [], slot: null, continuation: false, updateStatus: updateStatusImpl,
+    deskRoot, personPrefix, pluginVersion, attempted: [], slot: null, continuation: false, updateStatus: updateStatusImpl, lock,
     generation: randomBytes(16).toString("hex"),
     // The agent steps' deadline: the budget, moved by any facts-scan time granted so far, less the later steps' reserve.
     agentDeadline: () => new Date(started + budgetMs + extension - LATER_STEPS_RESERVE_MS),

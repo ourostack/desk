@@ -130,7 +130,7 @@ test("the record has exactly the contract's keys, every number is a Count, and a
   const loop = await build(ctx)
   assert.deepEqual(keysOf(loop), ["alarms", "desk_version", "evaluator", "improvement", "reconcile", "schema", "steps", "triage", "unsigned_deliveries", "worker", "written_at"])
   assert.deepEqual(loop.worker, { last_result: "never_ran", last_ran_at: null })
-  assert.deepEqual(loop.triage, { last_result: "never_ran", runner_state: null, runner_reason: null, qualification: null, reviewed: U("not_recorded"), unreviewed: U("not_recorded"), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null })
+  assert.deepEqual(loop.triage, { last_result: "never_ran", runner_state: null, runner_reason: null, qualification: null, reviewed: U("not_recorded"), unreviewed: U("not_recorded"), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null, scan: null, run: { last_result: null, last_at: null, last_ok_at: null, failures_in_a_row: U("not_recorded") } })
   assert.equal(loop.schema, "desk.factory.loop/1")
   assert.equal(loop.written_at, NOW.toISOString())
   assert.equal(loop.desk_version, "3.2.0-alpha.9")
@@ -577,7 +577,7 @@ test("loopAlarms and unreadAlarms work from a record and its signals alone", () 
   assert.deepEqual(loopAlarms(loop), [{ name: "improvement_age", evidence: { age_days: 9 } }])
   assert.deepEqual(loopAlarms(loop, { attempted: ["route"], blocked_days: 3, cards_invalid: 1 }).map((alarm) => alarm.name), ["improvement_age", "cards_invalid"])
   assert.deepEqual(unreadAlarms(loop, { attempted: [...STEPS], blocked_days: 0, cards_invalid: 0, facts_quarantine_not_settling: false }), ["unsigned_age", "headless_blocked", "labels_quarantined", "label_lag"])
-  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", ...STEPS.map((step) => `step_stale:${step}`)])
+  assert.deepEqual(unreadAlarms(loop, {}), ["unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", "triage_engine_unpinned", ...STEPS.map((step) => `step_stale:${step}`)])
   assert.deepEqual(loopAlarms(loop, { facts_quarantine_not_settling: true }).map((alarm) => alarm.name), ["improvement_age", "facts_quarantine_not_settling"])
   const blind = await build(ctx, { readCardsImpl: async () => ({ unreadable: true }) })
   assert.deepEqual(unreadAlarms(blind, { attempted: [...STEPS], blocked_days: 0, cards_invalid: null, facts_quarantine_not_settling: false }), ["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "cards_invalid", "labels_quarantined", "label_lag"])
@@ -769,20 +769,44 @@ test("the triage section shows the step's last result, runner codes and review c
     at: TIME, result: "ran", ok: true, launched: true, runner: { state: "ran", reason: null, qualification: "loaded" },
     counts: { reviewed: 3, refused: 1, deferred: 0, unreviewed: 5 }, eligible: 2, last_success_at: TIME,
     last_review: { key: "andon:ourostack/factory#12", revision: 4, at: TIME, route: "investigate" }, held: 1,
+    refresh: { scan: "truncated", changes: 0 }, run: { last_result: "timeout", last_at: TIME, last_ok_at: null, failures_in_a_row: 2 },
   } })
   const { triage } = await build(ctx)
-  assert.deepEqual(triage, { last_result: "ran", runner_state: "ran", runner_reason: null, qualification: "loaded", reviewed: M(3), unreviewed: M(5), refused: M(1), deferred: M(0), last_success_at: TIME })
+  assert.deepEqual(triage, { last_result: "ran", runner_state: "ran", runner_reason: null, qualification: "loaded", reviewed: M(3), unreviewed: M(5), refused: M(1), deferred: M(0), last_success_at: TIME, scan: "truncated", run: { last_result: "timeout", last_at: TIME, last_ok_at: null, failures_in_a_row: M(2) } })
   assert.equal(JSON.stringify(triage).includes("andon"), false, "no card key reaches the health record")
   // A host that cannot run triage says why; counts the step did not know are unavailable, never 0.
   await setStatus(ctx, { triage: { result: "runner_unavailable", runner: { state: "unsupported_host", reason: null, qualification: "not_checked" }, counts: { reviewed: null, refused: null, deferred: null, unreviewed: 4 }, last_success_at: null } })
-  assert.deepEqual((await build(ctx)).triage, { last_result: "runner_unavailable", runner_state: "unsupported_host", runner_reason: null, qualification: "not_checked", reviewed: U("not_recorded"), unreviewed: M(4), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null })
+  assert.deepEqual((await build(ctx)).triage, { last_result: "runner_unavailable", runner_state: "unsupported_host", runner_reason: null, qualification: "not_checked", reviewed: U("not_recorded"), unreviewed: M(4), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null, scan: null, run: { last_result: null, last_at: null, last_ok_at: null, failures_in_a_row: U("not_recorded") } })
   await setStatus(ctx, { triage: { result: "runner_blocked", runner: { state: "scope_unqualified", reason: "diagnostic_inadequate", qualification: "invalid" } } })
   assert.deepEqual([(await build(ctx)).triage.runner_reason, (await build(ctx)).triage.qualification], ["diagnostic_inadequate", "invalid"])
   // Damaged values read as unknown or absent, never as text from the file.
-  await setStatus(ctx, { triage: { result: "Not A Code /x", runner: "x", counts: "x", last_success_at: "not a time" } })
-  assert.deepEqual((await build(ctx)).triage, { last_result: "unknown", runner_state: null, runner_reason: null, qualification: null, reviewed: U("not_recorded"), unreviewed: U("not_recorded"), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null })
+  await setStatus(ctx, { triage: { result: "Not A Code /x", runner: "x", counts: "x", last_success_at: "not a time", refresh: "x", run: "x" } })
+  assert.deepEqual((await build(ctx)).triage, { last_result: "unknown", runner_state: null, runner_reason: null, qualification: null, reviewed: U("not_recorded"), unreviewed: U("not_recorded"), refused: U("not_recorded"), deferred: U("not_recorded"), last_success_at: null, scan: null, run: { last_result: null, last_at: null, last_ok_at: null, failures_in_a_row: U("not_recorded") } })
   await setStatus(ctx, { triage: "damaged" })
   assert.equal((await build(ctx)).triage.last_result, "never_ran")
+}))
+
+test("a triage runner record stale because its engine pin is behind opens one engine-pin card, and the condition clears with the reason", () => scratch(async (ctx) => {
+  const KEY = "loop_alarm:triage_engine_unpinned"
+  const where = { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix }
+  const measure = (attempted, now = NOW) => runMeasureStep(ctx.env, { ...where, now, attempted })
+  const triage = (reason) => ({ result: "runner_unavailable", ok: true, runner: { state: "scope_unqualified", reason, qualification: "stale" }, counts: { reviewed: null, refused: null, deferred: null, unreviewed: 1 }, eligible: 1, last_success_at: null })
+  await setStatus(ctx, { triage: triage("engine_unpinned") })
+  // A run that did not attempt triage neither raises nor clears it.
+  await measure(["route"])
+  assert.deepEqual(await allCards(ctx), [])
+  const out = await measure(["triage"])
+  assert.deepEqual([out.ok, out.counts.opened], [true, 1], JSON.stringify(out))
+  const cards = await readCards(where)
+  assert.deepEqual(cards.cards.map((card) => [card.key, card.title, card.state, card.evidence]), [[KEY, "The triage runner engine pin is behind the installed Claude Code", "open", []]])
+  assert.equal((await readStatus(ctx.env)).loop.conditions[KEY].present, true)
+  // Open at most once.
+  assert.equal((await measure(["triage"])).counts.opened, undefined)
+  assert.equal((await allCards(ctx)).length, 1)
+  // Another stale reason, and the pin is no longer the problem: the condition clears, so verify closes the card under its lifecycle.
+  await setStatus(ctx, { triage: triage("environment_changed") })
+  await measure(["triage"])
+  assert.equal((await readStatus(ctx.env)).loop.conditions[KEY].present, false)
 }))
 
 test("triage_stale_alarm_opens_real_canonical_card", () => scratch(async (ctx) => {

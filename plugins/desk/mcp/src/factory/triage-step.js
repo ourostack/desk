@@ -9,14 +9,26 @@
 //
 //   - the shared launch ledger's witness leaves a triage launch now (an unused current six-hour window, six hours since the last
 //     triage launch, fewer than 30 launches today); the reservation itself is the authority, this is only an early look;
-//   - the host can run the owned-catalog runner (Darwin only, `ownedCatalogHostSupport`) and a qualification record is installed at
-//     `<factory state>/triage/qualification/qualification.json` and restores (`loadTriageQualification`). Until one is
-//     installed, after the runner's native qualification on this machine, triage never launches; every other host degrades to
-//     `runner_unavailable`, an ok step;
+//   - the runner's runtime loads (`loadRunner`) and the host can run the owned-catalog runner (Darwin only, `ownedCatalogHostSupport`);
 //   - some open card needs a review on its current basis (`selectTriageCards`, at most 20, unreviewed before stale before retries);
+//   - no billing variable is set, a qualification record is installed at `<factory state>/triage/qualification/qualification.json`
+//     and restores (`restoreQualification`), and the pinned engine (`locateEngine`) reports a subscription sign-in (`probeSignIn`);
 //   - the prepared input passes the catalog's own limits (`prepareTriageCatalog`), written once through `writeTriagePreparedInput`;
-//   - right before the reservation, and again right before the spawn, the full 15-minute run still ends by `deadline` (which the
-//     caller sets three minutes before its budget ends, so the later steps keep their reserve).
+//   - before the sign-in probe, right before the reservation, and again right before the spawn, the full 15-minute run still ends by
+//     `deadline` (which the caller sets three minutes before its budget ends, so the later steps keep their reserve).
+//
+// Every refusal that can be seen without a launch is decided before the reservation, spends no launch and leaves the generation's agent
+// slot to the evaluator: a runtime that does not load, an unsupported host, a billing variable, no record, a stale record, no
+// subscription sign-in and no time for a whole run are all quiet (`runner_unavailable` or `no_time_for_a_run`, an ok step, with the
+// reason in `status.triage.runner`). The restored record is `qualified`, `missing`, `stale` (a whole record that does not restore for
+// this install, engine or environment, with the restore's reason) or `damaged` (the file is not the record the qualifier wrote). Only
+// `damaged` is a failure (`runner_blocked`); a Desk update, an engine update or a session with another environment makes a record stale,
+// never a fault. A stale record whose engine pin is behind the installed engine (`engine_unpinned`) raises the measure step's
+// `loop_alarm:triage_engine_unpinned` card. For a missing record, or a stale one whose reason qualifying again can fix (the
+// qualification module's `TRIAGE_STALE_REASONS`), the step asks the qualifier (`autoQualify`) first, with the loop-worker lock it holds
+// as proof: the qualifier makes its own refusals and reservations; when it launched it took the generation's agent slot
+// (`runner_qualified`, or `qualification_failed`, which counts as a failed run), and a skip is quiet, except `auto_suspended` (the
+// qualifier stopped after repeated host-side failures), which counts as a failed run so that it reaches `step_stale:triage`.
 //
 // The runner returns at most a protected UNACCEPTED candidate. Acceptance is this step's alone: it validates the candidate again
 // against the original brief, then re-reads each card's live basis (card bytes, claim at now, rulings, evidence) and accepts a row
@@ -27,20 +39,38 @@
 //
 // When triage took the slot from an evaluation the worker would have run, the step mints the generation's one evaluation
 // continuation (`createEvaluationContinuation`) and keeps it in `status.loop.evaluation_continuation`; the worker kicks the loop
-// once after it unlocks, and the next worker consumes the token. A triage that fails mints nothing and kicks nothing.
+// once after it unlocks, and the next worker consumes the token. The token is minted after the reservation and before the spawn, so a
+// run that then fails still returns it and the evaluation it deferred still starts. With no evaluation waiting nothing is minted.
+//
+// The agent run's health is kept apart from the refresh's, in `status.triage.run` (`last_at`, `last_result`, `last_ok_at`,
+// `failures_in_a_row`). A launch succeeds only when a review was accepted: a runner that failed, a launch lost to the deadline and a
+// run whose every row was refused or deferred (`nothing_accepted`) are failures. A pass that launches nothing (`not_due`, a quota code,
+// an unavailable runner) neither clears that streak nor counts as a success while the last launch failed: the step record's
+// `last_ok_at` and `failures_in_a_row` are carried (`recordStep` with `carry`), so launches that keep failing reach the stale alarm
+// however many quiet passes run between them. `nothing_to_review` clears the streak: no card is left for a run to fail on.
+//
+// A launch that reserved is always finished in the ledger, and nothing after the reservation makes the step throw: a card whose
+// acceptance throws is refused alone (`card_error`), and anything else is `step_error` with the launch counted as failed.
+//
+// Run folders (`triage/runs/<run>`) are bounded: a folder prepared and then not launched is removed at once, and of the launched runs
+// that had no review accepted only the newest `KEPT_UNACCEPTED_RUNS` are kept. A run with an accepted review keeps its folder, because
+// its protected rows (`triage/results/<run>/`) name records by the brief's own references.
 //
 // `status.triage` (local only) says what the step last did: the result, the runner's state and reason, the coverage counts, how many
-// cards wait, the last acknowledged review (its safe codes only) and when it was. Codes and counts only.
+// cards wait, the card scan (`refresh.scan`: `truncated` past `MAX_CARD_FILES` card files, a visible partial state, not a failure), the
+// run's health, the last acknowledged review (its safe codes only) and when it was. Codes and counts only.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
 import { randomBytes } from "node:crypto"
 import { promises as fs, constants as fsConstants } from "node:fs"
+import { createRequire } from "node:module"
 import * as path from "node:path"
+import { isDeepStrictEqual } from "node:util"
 
 import { checkPersonPrefix } from "./binding.js"
 import { evaluateDue, LOOP_LOCK_NAME, newestRequestAt, triageQuotaFor, kickLoop } from "./evaluate-kick.js"
-import { HEADLESS_TIMEOUT_MS } from "./headless.js"
+import { HEADLESS_TIMEOUT_MS, billingVariableBlocks, probeSignIn } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import {
   createEvaluationContinuation, evaluationContinuationBasis, evaluationQuotaOpen, finishAgentLaunch, reserveAgentLaunch,
@@ -56,12 +86,16 @@ import { readAcknowledgedAnnotations, refreshTriage, selectTriageCards, toSafeTr
 import { publishOwnedTriage, writeProtectedTriageFile } from "./triage-write.js"
 import { readCards as readCardsDefault, MAX_CARD_FILES } from "../desk/improvement-cards.js"
 
+const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
+
 /** At most this many cards go into one run. */
 export const TRIAGE_BATCH_LIMIT = 20
 /** A run's own time: the existing headless child timeout. */
 export const TRIAGE_RUN_MS = HEADLESS_TIMEOUT_MS
 /** Where this machine's qualified runner record is installed, under the factory state folder. */
 export const QUALIFICATION_SEGMENTS = Object.freeze(["triage", "qualification", "qualification.json"])
+/** How many launched run folders without an accepted review are kept (two days of launches at four a day). */
+export const KEPT_UNACCEPTED_RUNS = 8
 // The `factory triage` command's own budget: a run plus the three-minute reserve the loop keeps for its later steps.
 const COMMAND_DEADLINE_MS = 17 * 60 * 1000
 const NAMING = { label: "desk_factory", subject: "factory state" }
@@ -86,6 +120,7 @@ const swallow = async (fn, fallback = undefined) => {
   }
 }
 const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
+const whole = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0)
 
 /**
  * `writeTriagePreparedInput({inputDir,brief,records,recordRefs}) -> {path,sha256}`: writes the exact protected
@@ -122,41 +157,81 @@ async function readAttempts(env) {
 const writeAttempts = (env, attempts) => writeProtectedTriageFile(env, ["attempts.json"], `${JSON.stringify({ schema: ATTEMPTS_SCHEMA, attempts })}\n`)
 
 // ---------------------------------------------------------------------------
-// The runner seams. The runner and its custody are imported only when a run may start, so a host that cannot run one never loads them.
+// The runner seams.
+//
+// `loadRunner(env)` is the one place the runner (`triage-runner.js`), its custody (`triage-custody.js`) and the qualifier are loaded. It
+// answers `{state:"loaded",runner,custody,qualify}` or `{state:"unavailable",reason}`, the shape of the dependency-free loader
+// `importTriageRunner(env)` (`triage-home.js`); switching to that loader is the one line in `DEFAULT_IMPLS`. A loader that throws or
+// answers unavailable is a quiet `runner_unavailable` (`runtime_unloadable` unless it named its reason), never a failure: the installed
+// plugin copy may hold no runtime the runner can load. Nothing is loaded until the ledger leaves a launch.
 
-async function defaultHostSupport() {
-  const { ownedCatalogHostSupport } = await import("./triage-custody.js")
-  return ownedCatalogHostSupport()
+/** The engine-pin alarm's id (`loop_alarm:triage_engine_unpinned`), mirrored from the qualification module's `TRIAGE_ENGINE_CARD`. */
+export const TRIAGE_ENGINE_CARD = "triage_engine_unpinned"
+// The qualification states and reasons the restore answers. A reason outside the closed lists reads as the generic one.
+/**
+ * Each stale reason, and whether qualifying again can fix it: a mirror of the qualification module's `TRIAGE_STALE_REASONS`, used only
+ * while the loaded runtime exports none. The step branches on the runtime's own map when it has one.
+ */
+export const TRIAGE_STALE_REASONS_MIRROR = Object.freeze({
+  record_version: true, qualification_failed: true, source_changed: true, runtime_changed: true, engine_changed: true, engine_unpinned: false,
+  engine_mismatch: false, environment_changed: true, chain_changed: true, policy_changed: true, host_unsupported: false, measurement_active: false,
+})
+// The qualifier's code for a qualifier stopped after repeated host-side failures: an alarm, never a quiet skip.
+const AUTO_SUSPENDED = "auto_suspended"
+const staleReasons = (runtime) => {
+  const own = runtime.qualify?.TRIAGE_STALE_REASONS ?? runtime.runner.TRIAGE_STALE_REASONS
+  return isObject(own) ? own : TRIAGE_STALE_REASONS_MIRROR
+}
+// The engine the sign-in probe asks: the runtime's own `locatePinnedEngine` (a path, or `{ path }`), never a path from the record.
+async function defaultLocateEngine(env, runtime) {
+  const locate = runtime.qualify?.locatePinnedEngine ?? runtime.runner.locatePinnedEngine
+  if (typeof locate !== "function") return null
+  const found = await locate(env)
+  const where = typeof found === "string" ? found : found?.path
+  return typeof where === "string" && path.isAbsolute(where) ? where : null
+}
+const DAMAGED_REASONS = new Set(["unreadable", "noncanonical", "structure", "receipts", "restore_failed"])
+
+async function defaultLoadRunner() {
+  const [runner, custody] = await Promise.all([import("./triage-runner.js"), import("./triage-custody.js")])
+  return { state: "loaded", runner, custody, qualify: {} }
 }
 
-/** `{state:"loaded",qualification}`, `{state:"missing"}` (none installed) or `{state:"invalid",reason}` (installed, does not restore). */
-async function defaultLoadQualification(env, functions) {
-  const root = await factoryStateRoot(env)
-  const recordFile = path.join(root, ...QUALIFICATION_SEGMENTS)
+/**
+ * The installed record, restored: `{state:"qualified",qualification}`, `{state:"missing"}`, `{state:"stale",reason,requalify}` or
+ * `{state:"damaged",reason}`. The runner's own `restoreTriageQualification` answers this when it has one. Until then the record is
+ * classified here: a file that is not the canonical document the qualifier wrote is `damaged` (`unreadable`); a whole document that does
+ * not restore is `stale`, `source_changed` when it names other plugin files than this install's, `engine_changed` when the engine it
+ * names is gone, else `qualification_failed`.
+ */
+async function defaultRestore(env, runtime, functions) {
+  const recordFile = path.join(await factoryStateRoot(env), ...QUALIFICATION_SEGMENTS)
+  if (typeof runtime.runner.restoreTriageQualification === "function") return runtime.runner.restoreTriageQualification({ recordFile, env })
   try {
     await fs.lstat(recordFile)
   } catch {
     return { state: "missing" }
   }
-  const record = await functions.loadTriageQualification({ recordFile, env })
-  return record?.state === "qualified" ? { state: "loaded", qualification: record } : { state: "invalid", reason: typeof record?.reason === "string" ? record.reason : "diagnostic_inadequate" }
+  const readDocument = functions.readQualificationDocument ?? runtime.runner.readTriageQualificationDocument
+  const document = await swallow(() => readDocument(recordFile), null)
+  if (!isObject(document?.record)) return { state: "damaged", reason: "unreadable" }
+  const record = await (functions.loadTriageQualification ?? runtime.runner.loadTriageQualification)({ recordFile, env })
+  if (record?.state === "qualified") return { state: "qualified", qualification: record }
+  const installed = await swallow(() => (functions.sourceIdentity ?? runtime.custody.ownedSourceIdentity)(), null)
+  if (installed !== null && !isDeepStrictEqual(installed, document.record.sourceIdentity)) return { state: "stale", reason: "source_changed" }
+  if ((await swallow(() => fs.stat(String(document.record.cli)), null)) === null) return { state: "stale", reason: "engine_changed" }
+  return { state: "stale", reason: "qualification_failed" }
 }
 
-async function defaultLoadRecord(options) {
-  const { loadTriageQualification } = await import("./triage-runner.js")
-  return loadTriageQualification(options)
-}
-
-async function defaultRunTriageChild(options) {
-  const { runTriageChild } = await import("./triage-runner.js")
-  return runTriageChild(options)
-}
+// The qualifier's own `autoQualifyTriage`, when the loaded runtime has one; `null` when it has none (nothing is attempted).
+const defaultAutoQualify = (env, options, runtime) => (typeof runtime.qualify?.autoQualifyTriage === "function" ? runtime.qualify.autoQualifyTriage(env, options) : null)
 
 const DEFAULT_IMPLS = {
   readCards: readCardsDefault, readTriageBasis, refreshTriage, publishOwnedTriage, readAcknowledgedAnnotations,
   reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, newestRequestAt,
-  readStatus, toSafeTriageReview,
-  hostSupport: defaultHostSupport, loadQualification: defaultLoadQualification, loadTriageQualification: defaultLoadRecord, runTriageChild: defaultRunTriageChild,
+  readStatus, toSafeTriageReview, writeProtectedTriageFile,
+  loadRunner: defaultLoadRunner, hostSupport: (runtime) => runtime.custody.ownedCatalogHostSupport(), restoreQualification: defaultRestore,
+  autoQualify: defaultAutoQualify, locateEngine: defaultLocateEngine, billingVariableBlocks, probeSignIn, runTriageChild: (options, runtime) => runtime.runner.runTriageChild(options),
   evidence: { resolve: resolveSelfDescribing },
 }
 
@@ -183,13 +258,17 @@ async function readRulingText(deskRoot, id) {
 function splitText(text) {
   const parts = []
   let current = ""
-  const fits = (value) => Buffer.byteLength(JSON.stringify(value)) <= PART_BYTES
+  // A string's JSON is its two quotes and each code point's own escaped bytes, so the size is kept as a running sum.
+  let size = 2
   for (const char of text) {
-    if (!fits(current + char)) {
+    const bytes = Buffer.byteLength(JSON.stringify(char)) - 2
+    if (size + bytes > PART_BYTES) {
       parts.push(current)
       current = ""
+      size = 2
     }
     current += char
+    size += bytes
   }
   // Only an empty text leaves nothing here; a record may not be empty, so it says so.
   parts.push(current === "" ? "(empty)" : current)
@@ -320,20 +399,21 @@ async function acceptCandidate(env, ctx, { prepared, resultFile, runToken, store
   const checked = bytes === null ? { valid: [], refused: [] } : validateTriageResultBytes(bytes, { brief: prepared.brief })
   const valid = new Map(checked.valid.map((row) => [row.key, row]))
   const briefKeys = prepared.brief.cards.map((card) => card.key)
-  for (const card of prepared.cards) {
+  // One card's acceptance; answers nothing. Whatever it throws is that card's alone (see the loop below).
+  const acceptOne = async (card) => {
     const row = valid.get(card.key)
     if (row === undefined) {
       out.refused.push({ key: card.key, reason: bytes === null ? "no_candidate" : checked.refused.some((item) => item.result?.key === card.key) ? "row_refused" : "row_missing" })
-      continue
+      return
     }
     if (ctx.clock() >= ctx.deadlineMs) {
       out.deferred.push(card.key)
-      continue
+      return
     }
     const fresh = await swallow(() => ctx.impls.readTriageBasis({ deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, key: card.key, now: ctx.nowAt(), evidence: ctx.impls.evidence, env }), null)
     if (fresh === null || fresh.state !== "ready" || fresh.basis.fingerprint !== card.basis.fingerprint) {
       out.refused.push({ key: card.key, reason: "basis_changed" })
-      continue
+      return
     }
     const protectedToken = hex(16)
     const translated = translate(row, card)
@@ -341,10 +421,10 @@ async function acceptCandidate(env, ctx, { prepared, resultFile, runToken, store
     const safe = ctx.impls.toSafeTriageReview({ result: translated, basis: fresh.basis, authorizedEvidence, protectedToken, briefKeys })
     if (safe.state !== "safe") {
       out.refused.push({ key: card.key, reason: "review_unsafe" })
-      continue
+      return
     }
     // The full row stays in owner-protected state under the review's opaque token; Git gets only the safe codes.
-    await writeProtectedTriageFile(env, ["results", runToken, `${protectedToken}.json`], `${JSON.stringify({ schema: PROTECTED_RESULT_SCHEMA, key: card.key, result: row })}\n`)
+    await ctx.impls.writeProtectedTriageFile(env, ["results", runToken, `${protectedToken}.json`], `${JSON.stringify({ schema: PROTECTED_RESULT_SCHEMA, key: card.key, result: row })}\n`)
     const written = await swallow(() => ctx.impls.publishOwnedTriage({
       env, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, key: card.key, store, expectedBasis: fresh.basis, review: safe.review,
       operation: "review", now: ctx.nowAt(), evidence: ctx.impls.evidence,
@@ -356,6 +436,15 @@ async function acceptCandidate(env, ctx, { prepared, resultFile, runToken, store
       out.refused.push({ key: card.key, reason: written.state === "stale_basis" ? "basis_changed" : "not_acknowledged" })
     }
   }
+  for (const card of prepared.cards) {
+    try {
+      await acceptOne(card)
+    } catch {
+      // A card whose acceptance threw (the protected row could not be stored, say) is refused alone; the others are still accepted.
+      out.writeFailed = true
+      out.refused.push({ key: card.key, reason: "card_error" })
+    }
+  }
   return out
 }
 
@@ -363,13 +452,17 @@ async function acceptCandidate(env, ctx, { prepared, resultFile, runToken, store
 // The mechanical refresh.
 
 async function mechanicalRefresh(env, ctx, store) {
-  const refresh = await ctx.impls.refreshTriage({ env, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now, readCards: ctx.impls.readCards, evidence: ctx.impls.evidence })
-  const tally = { changes: refresh.changes.length, written: 0, held: 0, foreign: 0, deferred: 0, alarm: null }
+  // The refresh reads as many card files as the card library reads anywhere (`MAX_CARD_FILES`), not the listing's default of 200.
+  const readCards = (options) => ctx.impls.readCards({ ...options, limit: MAX_CARD_FILES })
+  const refresh = await ctx.impls.refreshTriage({ env, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now, readCards, evidence: ctx.impls.evidence })
+  const tally = { scan: refresh.state, changes: refresh.changes.length, written: 0, held: 0, foreign: 0, unknown: 0, deferred: 0, alarm: null }
   for (const change of refresh.changes) {
     if (change.operation === null) {
       // A review another machine wrote, whose protected basis this one does not hold, cannot be rechecked here. That is how a shared desk
       // looks from its second machine, not a fault: the card is simply not known to be current, so a run on this machine reviews it again.
+      // A card the truncated scan did not reach is unknown, not held: past the bound the refresh is partial by design.
       if (change.reason === "protected_basis_unavailable") tally.foreign += 1
+      else if (refresh.state === "truncated") tally.unknown += 1
       else tally.held += 1
       continue
     }
@@ -430,11 +523,28 @@ async function selectCards(env, ctx, { attempts, freshKeys }) {
   return { selection, reads, held, history }
 }
 
-async function writeStatus(env, record) {
-  await updateStatus(env, (current) => {
-    const before = isObject(current.triage) ? current.triage : {}
-    return { ...current, triage: { ...record, last_success_at: record.last_success_at ?? before.last_success_at ?? null, last_review: record.last_review ?? before.last_review ?? null, eligible: record.eligible === undefined ? (before.eligible ?? null) : record.eligible } }
-  })
+// Results that launch nothing and leave no card for a run to fail on: they clear the run's failure streak.
+const SETTLED = new Set(["nothing_to_review"])
+const RUN_NONE = Object.freeze({ last_at: null, last_result: null, last_ok_at: null, failures_in_a_row: 0 })
+
+// Mints the generation's one evaluation continuation for the evaluation a launch deferred, and keeps a new one in the status. Answers
+// `{ continuation }` when the ledger issued one or one exists, `{}` otherwise.
+async function mintContinuation(env, functions, { generation, status, at }) {
+  const continuation = await swallow(() => functions.createEvaluationContinuation(env, { generation: generation ?? `triage-${hex(8)}`, expectedEvaluation: evaluationContinuationBasis(status), now: at }), undefined)
+  if (continuation?.state === "issued") await swallow(() => updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: continuation.token } })))
+  return ["issued", "exists"].includes(continuation?.state) ? { continuation } : {}
+}
+
+// Removes launched run folders that had no review accepted, beyond the newest `KEPT_UNACCEPTED_RUNS` (see the header).
+async function pruneRuns(env) {
+  const root = path.join(await factoryStateRoot(env), "triage")
+  const accepted = new Set(await swallow(() => fs.readdir(path.join(root, "results")), []))
+  const idle = []
+  for (const name of await fs.readdir(path.join(root, "runs"))) {
+    if (/^[0-9a-f]{32}$/u.test(name) && !accepted.has(name)) idle.push({ name, at: (await fs.lstat(path.join(root, "runs", name))).mtimeMs })
+  }
+  idle.sort((a, b) => b.at - a.at)
+  for (const { name } of idle.slice(KEPT_UNACCEPTED_RUNS)) await fs.rm(path.join(root, "runs", name), { recursive: true, force: true })
 }
 
 /**
@@ -442,14 +552,16 @@ async function writeStatus(env, record) {
  *   -> { ok, result, launched, reviewed, refused, deferred, unreviewed, continuation? }`.
  *
  * `deadline` is when the step must be done (the loop gives its budget less the later steps' reserve). `generation` is the worker
- * generation's code; the continuation is minted for it. `launched` is true once a launch was reserved in the shared ledger: the
+ * generation's code; the continuation is minted for it. `lock` is the loop-worker lock the caller holds, passed to the qualifier as proof. `launched` is true once a launch was reserved in the shared ledger: the
  * generation's agent slot is then spent, run or not. Counts are whole numbers or null (not known). `continuation`, when present, is
  * `{ state, token }` from `createEvaluationContinuation`; only `issued` is new. `impls` are seams for tests (see `DEFAULT_IMPLS`).
  * Results: `headless_session`; `no_consenting_store`; `refresh_failed`, `refresh_incomplete`, `status_unavailable`; the quiet results `not_due`, a ledger
- * quota code, `nothing_to_review`, `runner_unavailable`; the problems `runner_blocked`, `preparation_held`, `no_time_for_a_run`,
- * `ledger_blocked`; after a launch, `ran`, `write_incomplete` or the runner's own failure state. The step records itself.
+ * quota code, `nothing_to_review`, `runner_unavailable`, `no_time_for_a_run` (before the reservation), `brief_empty` (no selected card
+ * could be put in a brief) and `runner_qualified` (the qualifier launched and qualified the runner); the problems `runner_blocked`,
+ * `preparation_held`, `ledger_blocked` and `qualification_failed`; after a launch, `ran`,
+ * `nothing_accepted`, `write_incomplete`, `step_error`, `no_time_for_a_run` or the runner's own failure state. The step records itself.
  */
-export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVersion, now = new Date(), deadline, generation = null, onChild, onChildExit, impls = {} } = {}) {
+export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVersion, now = new Date(), deadline, generation = null, lock = null, onChild, onChildExit, impls = {} } = {}) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("deskRoot: must be an absolute path")
   checkPersonPrefix(personPrefix, "runTriageStep")
   const nowDate = new Date(now)
@@ -464,11 +576,31 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     deskRoot, personPrefix, now: nowDate, deadlineMs, impls: functions, clock,
     nowAt: () => new Date(nowDate.getTime() + Math.max(0, clock() - clockStart)),
   }
-  const record = { at: nowDate.toISOString(), result: null, launched: false, runner: { state: null, reason: null, qualification: "not_checked" }, coverage: null, held: null, refresh: null, ledger: null }
+  const at = nowDate.toISOString()
+  // `runOutcome` is the agent launch's own outcome for its health: `ok`, `failed`, or null (no launch, or one that counts neither way).
+  const record = { at, result: null, launched: false, runOutcome: null, runner: { state: null, reason: null, qualification: "not_checked" }, coverage: null, held: null, refresh: null, ledger: null }
   const finish = async (ok, result, extra = {}) => {
     const answer = { ok, result, launched: record.launched, ...none, ...extra }
-    await swallow(() => writeStatus(env, { ...record, result, ok, counts: { reviewed: answer.reviewed, refused: answer.refused, deferred: answer.deferred, unreviewed: answer.unreviewed } }))
-    await swallow(() => recordStep(env, "triage", { ok, result, now: nowDate }))
+    const { runOutcome, ...stored } = record
+    let carry = false
+    await swallow(() => updateStatus(env, (current) => {
+      const before = isObject(current.triage) ? current.triage : {}
+      const prior = isObject(before.run) ? before.run : RUN_NONE
+      const run = runOutcome === "ok" ? { last_at: at, last_result: result, last_ok_at: at, failures_in_a_row: 0 }
+        : runOutcome === "failed" ? { last_at: at, last_result: result, last_ok_at: prior.last_ok_at, failures_in_a_row: whole(prior.failures_in_a_row) + 1 }
+        : SETTLED.has(result) ? { ...prior, failures_in_a_row: 0 } : prior
+      // A pass whose run counts neither way says nothing about a run that keeps failing: its success is not the run's.
+      carry = ok && runOutcome === null && whole(run.failures_in_a_row) > 0
+      return {
+        ...current,
+        triage: {
+          ...stored, result, ok, run, counts: { reviewed: answer.reviewed, refused: answer.refused, deferred: answer.deferred, unreviewed: answer.unreviewed },
+          last_success_at: stored.last_success_at ?? before.last_success_at ?? null, last_review: stored.last_review ?? before.last_review ?? null,
+          eligible: stored.eligible === undefined ? (before.eligible ?? null) : stored.eligible,
+        },
+      }
+    }))
+    await swallow(() => recordStep(env, "triage", { ok, result, now: nowDate, carry }))
     return answer
   }
 
@@ -480,7 +612,8 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   if (mechanical === null) return finish(false, "refresh_failed")
   record.refresh = mechanical.tally
   record.coverage = mechanical.refresh.coverage
-  const refreshOk = mechanical.refresh.state === "complete" && mechanical.tally.held === 0 && mechanical.tally.deferred === 0
+  // A scan cut off at the card bound is partial, and said (`refresh.scan`); only a scan that could not be read is a failure.
+  const refreshOk = mechanical.refresh.state !== "unreadable" && mechanical.tally.held === 0 && mechanical.tally.deferred === 0
   const quiet = async (result, extra = {}) => finish(refreshOk, refreshOk ? result : "refresh_incomplete", { unreviewed: count(mechanical.refresh.coverage.unreviewed), ...extra })
   const freshKeys = new Set()
   {
@@ -499,8 +632,13 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     return QUOTA_STATES.has(quota) ? quiet("not_due") : finish(false, "ledger_blocked", { unreviewed: count(mechanical.refresh.coverage.unreviewed) })
   }
 
-  // 3. Can this host run the runner at all?
-  const host = await swallow(() => functions.hostSupport(), { provenance: false })
+  // 3. Can this host load and run the runner at all?
+  const runtime = await swallow(() => functions.loadRunner(env), null)
+  if (runtime?.state !== "loaded") {
+    record.runner = { state: "runtime_unavailable", reason: runtime?.reason === "runtime_unavailable" ? "runtime_unavailable" : "runtime_unloadable", qualification: "not_checked" }
+    return quiet("runner_unavailable")
+  }
+  const host = await swallow(() => functions.hostSupport(runtime), { provenance: false })
   if (host?.provenance !== true) {
     record.runner = { state: "unsupported_host", reason: null, qualification: "not_checked" }
     return quiet("runner_unavailable")
@@ -514,18 +652,61 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   record.eligible = chosen.selection.selected.length + chosen.selection.deferred.length
   const unreviewedNow = chosen.selection.coverage.unreviewed + chosen.held
   if (chosen.selection.selected.length === 0) return quiet("nothing_to_review", { unreviewed: unreviewedNow, deferred: 0, reviewed: 0, refused: 0 })
+  // Every refusal from here to the reservation is seen without a launch: quiet, nothing reserved, the slot left to the evaluator.
+  const unavailable = (state, reason, qualification) => {
+    record.runner = { state, reason, qualification }
+    return quiet("runner_unavailable", { unreviewed: unreviewedNow })
+  }
+  const noTime = () => deadlineMs - clock() < TRIAGE_RUN_MS
 
-  // 5. A qualified runner, loaded only now that there is work for it.
-  const loaded = await swallow(() => functions.loadQualification(env, functions), { state: "invalid", reason: "diagnostic_inadequate" })
-  if (loaded.state !== "loaded") {
-    record.runner = { state: "scope_unqualified", reason: loaded.state === "missing" ? null : loaded.reason ?? "diagnostic_inadequate", qualification: loaded.state === "missing" ? "missing" : "invalid" }
-    // No record installed is a host not yet enabled (quiet); one that is installed and does not restore is a problem to see.
-    if (loaded.state === "missing") return quiet("runner_unavailable", { unreviewed: unreviewedNow })
+  // 5. A run would bill per token: the person's decision, never a launch.
+  if (functions.billingVariableBlocks(env)) return unavailable("disabled_would_bill", null, "not_checked")
+
+  // 6. A qualified runner, restored only now that there is work for it. Missing or stale is quiet; only a damaged record is a failure.
+  const evaluationWaiting = async () => evaluateDue(status, nowDate, { newWorkAt: await swallow(() => functions.newestRequestAt(env), null) }) && evaluationQuotaOpen(status, nowDate)
+  const restore = () => swallow(() => functions.restoreQualification(env, runtime, functions), { state: "stale", reason: "qualification_failed" })
+  let loaded = await restore()
+  const reasons = staleReasons(runtime)
+  if (loaded.state === "missing" || (loaded.state === "stale" && reasons[loaded.reason] === true)) {
+    // The qualifier makes its own cheap refusals, reserves its own launches and runs at most once a UTC day; `null` is no qualifier.
+    const wasWaiting = await evaluationWaiting()
+    const qualified = await swallow(() => functions.autoQualify(env, { lock, deadline: new Date(deadlineMs), generation, legacyEvaluator: status.evaluator, now: ctx.nowAt() }, runtime), { state: "failed", reason: "diagnostic_inadequate", launched: true })
+    if (qualified !== null) {
+      const reason = typeof qualified.reason === "string" ? qualified.reason : null
+      // A qualifier suspended after repeated host-side failures is a failure to see, skipped or not.
+      const state = reason === AUTO_SUSPENDED ? "failed" : ["qualified", "skipped"].includes(qualified.state) ? qualified.state : "failed"
+      // A qualifier that launched took this generation's agent slot, and owes a waiting evaluation its continuation like any launch.
+      if (qualified.launched !== false) {
+        record.launched = true
+        record.runner = { state: "qualifying", reason, qualification: state }
+        record.runOutcome = state === "qualified" ? "ok" : state === "failed" ? "failed" : null
+        const extra = wasWaiting ? await mintContinuation(env, functions, { generation, status, at: ctx.nowAt() }) : {}
+        return state === "failed" ? finish(false, "qualification_failed", { unreviewed: unreviewedNow, ...extra }) : quiet(state === "qualified" ? "runner_qualified" : "runner_unavailable", { unreviewed: unreviewedNow, ...extra })
+      }
+      if (state === "failed") {
+        record.runOutcome = "failed"
+        record.runner = { state: "qualifying", reason, qualification: "failed" }
+        return finish(false, "qualification_failed", { unreviewed: unreviewedNow })
+      }
+      if (state === "skipped") return unavailable("scope_unqualified", reason, loaded.state)
+      loaded = await restore()
+    }
+  }
+  if (loaded.state === "damaged") {
+    record.runner = { state: "scope_unqualified", reason: DAMAGED_REASONS.has(loaded.reason) ? loaded.reason : "unreadable", qualification: "damaged" }
     return finish(false, "runner_blocked", { unreviewed: unreviewedNow })
   }
+  if (loaded.state === "missing") return unavailable("scope_unqualified", null, "missing")
+  if (loaded.state !== "qualified") return unavailable("scope_unqualified", Object.hasOwn(reasons, loaded.reason ?? "") ? loaded.reason : "qualification_failed", "stale")
   record.runner = { state: null, reason: null, qualification: "loaded" }
 
-  // 6. Prepare the run's protected input.
+  // 7. Time for a whole run, asked before anything is started or prepared; then the engine's own sign-in.
+  if (noTime()) return quiet("no_time_for_a_run", { unreviewed: unreviewedNow })
+  const engine = await swallow(() => functions.locateEngine(env, runtime), null)
+  const signIn = engine === null ? null : (await swallow(() => functions.probeSignIn({ cli: engine, env, onChild, onChildExit }), null))?.state
+  if (signIn !== "subscription") return unavailable(["no_credentials", "disabled_would_bill"].includes(signIn) ? signIn : "sign_in_unknown", null, "loaded")
+
+  // 8. Prepare the run's protected input.
   const selected = chosen.selection.selected.map((card) => ({ key: card.key, read: chosen.reads.get(card.key) }))
   const first = selected[0].read.basis
   let prepared
@@ -533,8 +714,10 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   let inputDir
   try {
     prepared = await prepareBatch({ deskRoot, selected, producerVersion: first.producer_version, rubricVersion: first.rubric_version })
-    if (prepared.cards.length === 0) throw new Error("nothing_prepared")
+    // No selected card could be put in a brief (a ruling that cannot be read, or one too large): nothing to send, said and counted.
+    if (prepared.cards.length === 0) return quiet("brief_empty", { unreviewed: unreviewedNow, deferred: chosen.selection.deferred.length + prepared.deferred.length })
     prepareTriageCatalog({ brief: prepared.brief, records: prepared.records, recordRefs: prepared.recordRefs, generation: hex(32) })
+    await swallow(() => pruneRuns(env))
     const runToken = hex(16)
     runDir = await fs.realpath(await protectedDir(env, ["triage", "runs", runToken]))
     inputDir = path.join(runDir, "input")
@@ -545,81 +728,86 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     return finish(false, "preparation_held", { unreviewed: unreviewedNow })
   }
   const deferredKeys = [...chosen.selection.deferred.map((card) => card.key), ...prepared.deferred]
+  // A run folder that is prepared and then not launched is removed, not left behind.
+  const abandon = () => swallow(() => fs.rm(runDir, { recursive: true, force: true }))
 
-  // 7. Right before the reservation: the whole run must still end by the deadline.
-  if (deadlineMs - clock() < TRIAGE_RUN_MS) {
-    record.runner = { ...record.runner, state: "no_time_for_a_run" }
-    return finish(false, "no_time_for_a_run", { unreviewed: unreviewedNow, deferred: deferredKeys.length + prepared.cards.length })
+  // 9. Right before the reservation: the whole run must still end by the deadline.
+  if (noTime()) {
+    await abandon()
+    return quiet("no_time_for_a_run", { unreviewed: unreviewedNow, deferred: deferredKeys.length + prepared.cards.length })
   }
-  const newWorkAt = await swallow(() => functions.newestRequestAt(env), null)
-  const evaluationWaiting = evaluateDue(status, nowDate, { newWorkAt }) && evaluationQuotaOpen(status, nowDate)
+  const waiting = await evaluationWaiting()
   const reservation = await swallow(() => functions.reserveAgentLaunch(env, { kind: "triage", generation, now: ctx.nowAt(), legacyEvaluator: status.evaluator }), { state: "write_failed" })
   if (reservation.state !== "reserved") {
     record.ledger = reservation.state
+    await abandon()
     if (QUOTA_STATES.has(reservation.state)) return quiet(reservation.state, { unreviewed: unreviewedNow })
     return finish(false, "ledger_blocked", { unreviewed: unreviewedNow })
   }
   record.launched = true
+  record.runOutcome = "failed"
   record.ledger = "reserved"
 
-  // 8. The continuation for the evaluation this slot deferred, minted before the spawn so a crash cannot lose it twice.
-  let continuation
-  if (evaluationWaiting) {
-    continuation = await swallow(() => functions.createEvaluationContinuation(env, { generation: generation ?? `triage-${hex(8)}`, expectedEvaluation: evaluationContinuationBasis(status), now: ctx.nowAt() }), undefined)
-    if (continuation?.state === "issued") await swallow(() => updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, evaluation_continuation: continuation.token } })))
-    if (continuation !== undefined && !["issued", "exists"].includes(continuation.state)) continuation = undefined
-  }
-  const extra = continuation === undefined ? {} : { continuation }
+  // From here the launch is spent. Nothing below makes the step throw, and the reservation is always finished.
+  let extra = {}
+  try {
+    let run = { state: "failed", reason: "diagnostic_inadequate" }
+    try {
+      // 10. The continuation for the evaluation this slot deferred, minted before the spawn so a crash cannot lose it twice.
+      if (waiting) extra = await mintContinuation(env, functions, { generation, status, at: ctx.nowAt() })
+      // 11. Right before the spawn, once more.
+      run = noTime() ? { state: "no_time_for_a_run" } : await swallow(() => functions.runTriageChild({
+        env, inputDir, resultFile: path.join(runDir, "candidate.json"), workDir: runDir, qualification: loaded.qualification, deadline: clock() + TRIAGE_RUN_MS, onChild, onChildExit,
+      }, runtime), { state: "failed", reason: "diagnostic_inadequate" })
+    } finally {
+      const outcomeState = run.state === "ran" ? "ran" : ["timeout", "budget_exceeded", "failed"].includes(run.state) ? "failed" : "not_started"
+      await swallow(() => functions.finishAgentLaunch(env, { token: reservation.token, state: outcomeState, now: ctx.nowAt() }))
+    }
+    record.runner = { state: run.state, reason: typeof run.reason === "string" ? run.reason : null, qualification: "loaded" }
 
-  // 9. Right before the spawn, once more.
-  const resultFile = path.join(runDir, "candidate.json")
-  let run
-  if (deadlineMs - clock() < TRIAGE_RUN_MS) run = { state: "no_time_for_a_run" }
-  else {
-    run = await swallow(() => functions.runTriageChild({
-      env, inputDir, resultFile, workDir: runDir, qualification: loaded.qualification, deadline: clock() + TRIAGE_RUN_MS, onChild, onChildExit,
-    }), { state: "failed", reason: "diagnostic_inadequate" })
-  }
-  const outcomeState = run.state === "ran" ? "ran" : ["timeout", "budget_exceeded", "failed"].includes(run.state) ? "failed" : "not_started"
-  await swallow(() => functions.finishAgentLaunch(env, { token: reservation.token, state: outcomeState, now: ctx.nowAt() }))
-  record.runner = { state: run.state, reason: typeof run.reason === "string" ? run.reason : null, qualification: "loaded" }
+    // 12. Acceptance, card by card, against the live basis.
+    const accepted = run.state === "ran"
+      ? await acceptCandidate(env, ctx, { prepared, resultFile: run.resultFile ?? path.join(runDir, "candidate.json"), runToken: prepared.runToken, store })
+      : { reviewed: [], refused: prepared.cards.map((card) => ({ key: card.key, reason: "run_failed" })), deferred: [], writeFailed: false }
 
-  // 10. Acceptance, card by card, against the live basis.
-  const accepted = run.state === "ran"
-    ? await acceptCandidate(env, ctx, { prepared, resultFile: run.resultFile ?? resultFile, runToken: prepared.runToken, store })
-    : { reviewed: [], refused: prepared.cards.map((card) => ({ key: card.key, reason: "run_failed" })), deferred: [], writeFailed: false }
+    // 13. What every selected card's attempt was, so the next run rotates past cards that keep failing.
+    const doneAt = ctx.nowAt().toISOString()
+    const nextAttempts = {}
+    const known = new Set([...chosen.reads.keys()])
+    for (const [key, value] of Object.entries(attempts)) if (known.has(key)) nextAttempts[key] = value
+    for (const item of accepted.reviewed) nextAttempts[item.key] = { at: doneAt, state: "reviewed", fingerprint: item.fingerprint, review_fingerprint: item.fingerprint }
+    for (const item of accepted.refused) {
+      const card = prepared.cards.find((candidate) => candidate.key === item.key)
+      nextAttempts[item.key] = { at: doneAt, state: "refused", fingerprint: card.basis.fingerprint, review_fingerprint: chosen.history[item.key]?.review_fingerprint ?? null }
+    }
+    for (const key of accepted.deferred) {
+      const card = prepared.cards.find((candidate) => candidate.key === key)
+      nextAttempts[key] = { at: doneAt, state: "deferred", fingerprint: card.basis.fingerprint, review_fingerprint: chosen.history[key]?.review_fingerprint ?? null }
+    }
+    await swallow(() => writeAttempts(env, nextAttempts))
 
-  // 11. What every selected card's attempt was, so the next run rotates past cards that keep failing.
-  const at = ctx.nowAt().toISOString()
-  const nextAttempts = {}
-  const known = new Set([...chosen.reads.keys()])
-  for (const [key, value] of Object.entries(attempts)) if (known.has(key)) nextAttempts[key] = value
-  for (const item of accepted.reviewed) nextAttempts[item.key] = { at, state: "reviewed", fingerprint: item.fingerprint, review_fingerprint: item.fingerprint }
-  for (const item of accepted.refused) {
-    const card = prepared.cards.find((candidate) => candidate.key === item.key)
-    nextAttempts[item.key] = { at, state: "refused", fingerprint: card.basis.fingerprint, review_fingerprint: chosen.history[item.key]?.review_fingerprint ?? null }
+    const reviewed = accepted.reviewed.length
+    const counts = {
+      reviewed, refused: accepted.refused.length, deferred: accepted.deferred.length + deferredKeys.length,
+      unreviewed: Math.max(0, unreviewedNow - reviewed),
+    }
+    record.eligible = Math.max(0, record.eligible - reviewed)
+    if (reviewed > 0) {
+      const last = accepted.reviewed.at(-1)
+      record.runOutcome = "ok"
+      record.last_success_at = doneAt
+      const { protected_result: _token, related_keys: _related, duplicate_keys: _duplicates, evidence: _evidence, ...codes } = last.review
+      record.last_review = { key: last.key, revision: last.revision, at: doneAt, ...codes }
+    }
+    if (run.state !== "ran") return await finish(false, run.state, { ...counts, ...extra })
+    if (accepted.writeFailed) return await finish(false, "write_incomplete", { ...counts, ...extra })
+    // A launch that returned and had no review accepted spent the launch for nothing: a failure, whatever the reasons.
+    if (reviewed === 0) return await finish(false, "nothing_accepted", { ...counts, ...extra })
+    return await finish(refreshOk, refreshOk ? "ran" : "refresh_incomplete", { ...counts, ...extra })
+  } catch {
+    record.runOutcome = "failed"
+    return finish(false, "step_error", { unreviewed: unreviewedNow, ...extra })
   }
-  for (const key of accepted.deferred) {
-    const card = prepared.cards.find((candidate) => candidate.key === key)
-    nextAttempts[key] = { at, state: "deferred", fingerprint: card.basis.fingerprint, review_fingerprint: chosen.history[key]?.review_fingerprint ?? null }
-  }
-  await swallow(() => writeAttempts(env, nextAttempts))
-
-  const reviewed = accepted.reviewed.length
-  const counts = {
-    reviewed, refused: accepted.refused.length, deferred: accepted.deferred.length + deferredKeys.length,
-    unreviewed: Math.max(0, unreviewedNow - reviewed),
-  }
-  record.eligible = Math.max(0, record.eligible - reviewed)
-  if (reviewed > 0) {
-    const last = accepted.reviewed.at(-1)
-    record.last_success_at = at
-    const { protected_result: _token, related_keys: _related, duplicate_keys: _duplicates, evidence: _evidence, ...codes } = last.review
-    record.last_review = { key: last.key, revision: last.revision, at, ...codes }
-  }
-  if (run.state !== "ran") return finish(false, run.state, { ...counts, ...extra })
-  const ok = !accepted.writeFailed && refreshOk
-  return finish(ok, accepted.writeFailed ? "write_incomplete" : refreshOk ? "ran" : "refresh_incomplete", { ...counts, ...extra })
 }
 
 const TRIAGE_USAGE = "Usage: factory.js triage --desk <absolute desk root> [--person-prefix desks/<alias>]"
@@ -627,7 +815,7 @@ const TRIAGE_USAGE = "Usage: factory.js triage --desk <absolute desk root> [--pe
 /**
  * `runTriageCommand({ argv, env, pluginVersion, ...seams }) -> { result, ok, failed, reviewed, refused, deferred, unreviewed }`: one triage
  * step outside the loop, under the loop worker's own lock (a worker that is running answers `busy`). It accepts only `--desk <absolute>`
- * and `--person-prefix <owned prefix>`. After it unlocks it kicks the loop once when it minted a new evaluation continuation. Seams:
+ * and `--person-prefix <owned prefix>`. With the loop switched off (`DESK_FACTORY_LOOP`) it answers `disabled` and runs nothing. After it unlocks it kicks the loop once when it minted a new evaluation continuation. Seams:
  * `impls` (as `runTriageStep`), `clock`, `kick`.
  */
 export async function runTriageCommand({ argv, env, pluginVersion, impls = {}, clock = Date.now, kick = kickLoop } = {}) {
@@ -644,6 +832,8 @@ export async function runTriageCommand({ argv, env, pluginVersion, impls = {}, c
   if (deskRoot === undefined || !path.isAbsolute(deskRoot) || !/^(?:|desks\/[A-Za-z0-9][A-Za-z0-9._-]*)$/u.test(personPrefix)) throw new Error(TRIAGE_USAGE)
   const reply = (result, ok, extra = {}) => ({ result, ok, failed: ok ? 0 : 1, reviewed: null, refused: null, deferred: null, unreviewed: null, ...extra })
   if (isHeadlessFactorySession(env)) return reply("headless_session", false)
+  // The loop's own switch stops this step too, as it stops every other.
+  if (!isLoopEnabled(env)) return reply("disabled", true)
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return reply("no_factory_state", true)
   const lock = await takeLock(root, { name: LOOP_LOCK_NAME, record: { children: [] } })
@@ -651,7 +841,7 @@ export async function runTriageCommand({ argv, env, pluginVersion, impls = {}, c
   let step
   try {
     const started = clock()
-    step = await runTriageStep(env, { deskRoot, personPrefix, pluginVersion, now: new Date(started), deadline: new Date(started + COMMAND_DEADLINE_MS), generation: `command-${hex(8)}`, impls: { clock, ...impls } })
+    step = await runTriageStep(env, { deskRoot, personPrefix, pluginVersion, now: new Date(started), deadline: new Date(started + COMMAND_DEADLINE_MS), generation: `command-${hex(8)}`, lock, impls: { clock, ...impls } })
   } finally {
     await releaseLock(lock)
   }

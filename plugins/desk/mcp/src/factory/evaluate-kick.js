@@ -22,7 +22,8 @@
 //
 // The kick also starts the worker when improvement triage is due with no evaluation request waiting (`triageKickDue`): the
 // shared ledger's witness leaves a triage launch now, the last triage step found cards waiting for a review,
-// its runner was not unavailable on this host, and the step last ran at least `TRIAGE_KICK_GAP_MS` ago. No request no longer
+// its runner was not unavailable on this host, the step's last pass did not fail and its last agent run did not fail (a failing triage
+// is retried by the next session-start worker, never by a kick), and the step last ran at least `TRIAGE_KICK_GAP_MS` ago. No request no longer
 // means no worker when triage is due. A triage-only worker generation kicks once more when it ends with a fresh evaluation
 // continuation (`kickLoop` with `continuation`), so the evaluation it deferred starts without another turn; that kick skips
 // only the due check, never the switches, the state folder or a running worker.
@@ -90,7 +91,7 @@ const HOUR_MS = 60 * 60 * 1000
 /** The shortest time between two kicks for triage: a triage step that could not launch is not asked again at every turn's end. */
 export const TRIAGE_KICK_GAP_MS = HOUR_MS
 // The triage step's runner states in which no run can start until the host or the person changes something (`triage-step.js`).
-const TRIAGE_RUNNER_UNAVAILABLE = new Set(["unsupported_host", "scope_unqualified", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "headless_session"])
+const TRIAGE_RUNNER_UNAVAILABLE = new Set(["runtime_unavailable", "unsupported_host", "scope_unqualified", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "headless_session"])
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10)
 // How far the clock may read behind the witnessed clock, as the ledger allows.
 const CLOCK_SKEW_MS = 5 * 60 * 1000
@@ -115,13 +116,15 @@ export function triageQuotaFor(status, nowMs) {
 /**
  * `triageKickDue(status, now) -> boolean`: whether improvement triage alone makes the end of a turn start the loop worker (see the header).
  * Never before the triage step has run once on this machine (the session-start worker runs it first), so a machine whose worker cannot
- * reach the step is not kicked at every turn's end.
+ * reach the step is not kicked at every turn's end. Never while the step's last pass failed or its last agent run failed
+ * (`status.triage.ok`, `status.triage.run.failures_in_a_row`): the next session-start worker retries, so a failure is not kicked every hour.
  */
 export function triageKickDue(status, now) {
   const nowMs = new Date(now).getTime()
   const triage = isObject(status?.triage) ? status.triage : null
   const ranAt = Date.parse(status?.loop?.steps?.triage?.last_ran_at)
   if (triage === null || Number.isNaN(ranAt) || nowMs - ranAt < TRIAGE_KICK_GAP_MS) return false
+  if (triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
   if (TRIAGE_RUNNER_UNAVAILABLE.has(triage.runner?.state) || !(Number.isSafeInteger(triage.eligible) && triage.eligible > 0)) return false
   return ["ok", "unwitnessed"].includes(triageQuotaFor(status, nowMs))
 }

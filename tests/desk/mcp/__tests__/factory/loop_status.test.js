@@ -67,6 +67,14 @@ test("recordStep on failure raises the counters, keeps last_ok_at, and a success
   assert.equal(three.last_ok_at, "2026-10-08T10:00:00.000Z")
 }))
 
+test("recordStep with carry moves the time, result and run count and leaves the step's health as it was", () => scratch(async (env) => {
+  await recordStep(env, "triage", { ok: false, result: "timeout", now: at("2026-10-05T10:00:00Z") })
+  const carried = await recordStep(env, "triage", { ok: true, result: "not_due", now: at("2026-10-05T11:00:00Z"), carry: true })
+  assert.deepEqual(carried, { last_ran_at: "2026-10-05T11:00:00.000Z", last_ok_at: null, last_result: "not_due", runs: 2, failures: 1, failures_in_a_row: 1 })
+  const ok = await recordStep(env, "triage", { ok: true, result: "ran", now: at("2026-10-05T12:00:00Z") })
+  assert.deepEqual([ok.last_ok_at, ok.failures_in_a_row], ["2026-10-05T12:00:00.000Z", 0])
+}))
+
 test("a first failure leaves last_ok_at null, never looking like a success", () => scratch(async (env) => {
   const record = await recordStep(env, "mirror", { ok: false, result: "held_cap", now: at("2026-10-05T10:00:00Z") })
   assert.equal(record.last_ok_at, null)

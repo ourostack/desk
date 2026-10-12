@@ -10,6 +10,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { openImprovement } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { readTriagePreparedFile } from "../../../../../plugins/desk/mcp/src/factory/triage-catalog.js"
+import { publishOwnedTriage } from "../../../../../plugins/desk/mcp/src/factory/triage-write.js"
 
 export const STORE = "example-org/example-store"
 // The runner's prepared input lives in a folder checked by POSIX owner and mode, so no triage run can be prepared on Windows (where the
@@ -44,6 +45,9 @@ export function pushDesk(desk, message = "desk change") {
   git(desk.deskRoot, ["push", "-q", "origin", "HEAD:main"])
 }
 
+/** The environment without the provider switches and credentials that would make a run bill per token (`billingVariableBlocks`), whatever the machine running the tests has set. */
+export const subscriptionEnv = (env) => Object.fromEntries(Object.entries(env).filter(([name]) => !/^(?:ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_TOKEN$|AWS_BEARER_TOKEN_BEDROCK$)/u.test(name)))
+
 /**
  * `triageWorld({ keys, now }) -> { base, origin, deskRoot, env, keys }`: a seeded remote and a clone, an AGENTS.md ruling, one andon
  * card per key with an issue pointer, consent for the store and a valid legacy evaluator day, so the shared ledger migrates.
@@ -67,7 +71,7 @@ export async function triageWorld({ keys = KEYS, now, agents = "Agents may fix f
   const deskRoot = path.join(base, "desk")
   git(base, ["clone", "-q", origin, deskRoot])
   configure(deskRoot)
-  const env = { ...process.env, HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+  const env = { ...subscriptionEnv(process.env), HOME: base, XDG_STATE_HOME: path.join(base, "state") }
   await setConsent(env, { store: STORE, contribute: true, account: "someone" })
   await updateStatus(env, (status) => ({ ...status, evaluator: { headless: { day: new Date(now).toISOString().slice(0, 10), jobs: 0 } } }))
   return { base, origin, deskRoot, env, keys }
@@ -116,11 +120,19 @@ export function fakeRunner(produce = ({ brief }) => brief.cards.map((card) => ro
   return run
 }
 
-/** The seams of a qualified Darwin host with the fake runner, a test clock and the issue resolver. */
+/** A loaded runner runtime that holds nothing: the seams that use it are replaced. */
+export const FAKE_RUNTIME = Object.freeze({ state: "loaded", runner: {}, custody: {}, qualify: {} })
+
+/** The seams of a qualified, signed-in Darwin host with the fake runner, a test clock and the issue resolver. */
 export function qualifiedSeams({ runner = fakeRunner(), clock, ...extra } = {}) {
   return {
+    loadRunner: async () => FAKE_RUNTIME,
     hostSupport: async () => ({ provenance: true }),
-    loadQualification: async () => ({ state: "loaded", qualification: { state: "qualified" } }),
+    restoreQualification: async () => ({ state: "qualified", qualification: { state: "qualified" } }),
+    locateEngine: async () => "/opt/engine/claude",
+    // The real writer, with room for a slow machine: a test run under load must not turn a slow push into a refused review.
+    publishOwnedTriage: (options) => publishOwnedTriage({ ...options, git: { ...options.git, timeoutMs: 60_000 } }),
+    probeSignIn: async () => ({ state: "subscription" }),
     runTriageChild: runner,
     evidence: { resolve: resolveIssue },
     ...(clock === undefined ? {} : { clock }),
