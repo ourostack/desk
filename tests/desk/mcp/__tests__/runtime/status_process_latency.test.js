@@ -10,7 +10,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 
-for (const phase of ["rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot"]) {
+for (const phase of Array.from({ length: 10 }, () => ["rootStatus", "inspectLocalDb", "openSnapshot"]).flat()) {
 test(`actual MCP and controller processes retain 200 ms status/list/ping caps through blocked ${phase} and late destination`, async (t) => {
   const base = await mkTempRoot("status-process-")
   const home = path.join(base, "home")
@@ -78,7 +78,7 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
   for (const name of ["DESK", "DESK_ACTIVATION_CONFIG", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CODEX_HOME"]) delete env[name]
   assert.equal(recordCopilotSession({ sessionId: env.COPILOT_AGENT_SESSION_ID, folder: cwd, activationConfig: config, env }), true)
   const child = fork(fileURLToPath(new URL("./_status_process.js", import.meta.url)), [seam, marker, phase], {
-    cwd, env, execArgv: ["--cpu-prof", `--cpu-prof-dir=${path.join(base, "prof")}`], stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true,
+    cwd, env, execArgv: [], stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true,
   })
   let stderr = ""
   child.stderr.on("data", (chunk) => { stderr += chunk })
@@ -93,7 +93,6 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     await client.close()
     child.stdin.end()
     assert.equal(await exited, 0, stderr)
-    { const { readdirSync } = await import("node:fs"); const dir = path.join(base, "prof"); const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes(`.${child.pid}.0.`)).map((f) => path.join(dir, f)) : []; const r = spawnSync(process.execPath, [fileURLToPath(new URL("./_diag_prof_runs.mjs", import.meta.url)), ...files], { encoding: "utf8" }); console.log("PROF " + phase + " " + r.stdout.replace(/\n\s*/g, " | ") + r.stderr) }
     assert.deepEqual(closedReport?.children, 0, "all exact-owned status readers and controllers must close")
     assert.equal(closedReport.maxReaders, 1, "status calls must never pile up concurrent reader processes")
     t.diagnostic(JSON.stringify({ owningMcpPid: child.pid, ownedChildrenAfterClose: closedReport.children,
