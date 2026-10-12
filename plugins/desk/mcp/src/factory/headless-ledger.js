@@ -352,7 +352,7 @@ async function readAll(io, env, root) {
   const raw = loop.agent_launch_highwater
   return {
     status,
-    witness: raw === undefined ? { state: "missing" } : validWitness(raw) ? { state: "ok", value: raw } : { state: "invalid" },
+    witness: raw === undefined ? { state: "missing" } : validWitness(raw) ? { state: "ok", value: raw } : { state: "invalid", raw },
     ledger: await readRecord(io, root, LEDGER_FILE, validLedger),
     guard: await readRecord(io, root, GUARD_FILE, validGuard),
   }
@@ -365,7 +365,8 @@ const block = (state) => ({ kind: "block", state })
  * ledger and only the mark's acknowledgement is missing), `recover` (a transaction stopped before its ledger) or `block` with a state code.
  */
 function assess({ witness, ledger, guard }, nowMs) {
-  if (witness.state === "missing") return ledger.state === "missing" && guard.state === "missing" ? { kind: "migrate" } : block("witness_missing")
+  // A missing or damaged mark beside a ledger or guard was handled by `resealFromPair` before this.
+  if (witness.state === "missing") return { kind: "migrate" }
   if (witness.state === "invalid") return block("witness_invalid")
   const mark = witness.value
   if (ledger.state === "invalid" || guard.state === "invalid") return block("ledger_unreadable")
@@ -419,6 +420,44 @@ function legacySpent(legacyEvaluator, today) {
   return isCount(headless.jobs) ? { state: "valid", spent: Math.min(headless.jobs, DAILY_LAUNCHES) } : { state: "damaged" }
 }
 
+// A status file reset or edited after the ledger exists loses the high-water mark. The surviving pair is the greatest evidence left: all
+// three witnesses are written again from it, with the day of the reset sealed as spent (30) and every older token burned. When the reset
+// happened on an earlier UTC day than today (the set-aside file's day), that day is already over and today starts normally; a mark that is
+// simply gone, with no set-aside file of its own, seals today. Nothing is refunded: the reset costs the rest of its day. Answers null
+// when this is not that case, `{ state }` when the day is sealed or the pair cannot be trusted, or `{ ledger }` to go on.
+async function resealFromPair(io, env, root, { witness, ledger, guard }, nowMs) {
+  if (witness.state === "ok" || (ledger.state === "missing" && guard.state === "missing")) return null
+  if (ledger.state !== "ok" || guard.state !== "ok") return { state: ledger.state === "missing" || guard.state === "missing" ? witness.state === "missing" ? "witness_missing" : "witness_invalid" : "ledger_unreadable" }
+  const L = ledger.value
+  const G = guard.value
+  if (L.epoch !== G.epoch) return { state: "epoch_mismatch" }
+  const clock = Math.max(L.last_clock_ms, G.last_clock_ms)
+  if (nowMs + CLOCK_SKEW_MS < clock) return { state: "clock_regressed" }
+  const effective = Math.max(nowMs, clock)
+  const today = dayOf(effective)
+  const pairDay = [L.day, G.day].sort().at(-1)
+  const resetDay = statusResetDay(root)
+  const sealedDay = resetDay !== null && resetDay >= pairDay && resetDay < today ? resetDay : today
+  const triageTimes = [L.last_triage_at, G.last_triage_at].filter((value) => value !== null).sort()
+  const issued = Math.max(L.issued_serial, G.issued_serial)
+  const target = ledgerRecord({
+    epoch: L.epoch,
+    revision: Math.max(L.revision, G.revision) + 1,
+    day: today,
+    last_clock_ms: effective,
+    spent: sealedDay === today ? DAILY_LAUNCHES : 0,
+    evaluate: emptyKind(L.evaluate.finished_revision),
+    triage: emptyKind(L.triage.finished_revision),
+    windows: [0, 0, 0, 0],
+    last_triage_at: triageTimes.at(-1) ?? null,
+    issued_serial: issued,
+    consumed_through: issued,
+    continuations: [],
+  })
+  await commit(io, env, root, target, witness.state === "missing" ? null : witness.raw, target.revision - 1)
+  return sealedDay === today ? { state: "witness_reset_sealed" } : { ledger: target }
+}
+
 // ---------------------------------------------------------------------------
 // The transaction.
 // ---------------------------------------------------------------------------
@@ -435,10 +474,10 @@ async function writeWitness(io, env, expected, next) {
 
 // Writes `target` through all three witnesses. `previous` is the mark as read (null before the first). Throws on any failure: the caller
 // launches nothing, and the next call reads whatever the disk holds.
-async function commit(io, env, root, target, previous) {
+async function commit(io, env, root, target, previous, acknowledged = previous?.max_acknowledged_revision ?? 0) {
   const bytes = encode(target)
   const ledgerSha = sha256(bytes)
-  const pending = witnessFor(target, ledgerSha, previous?.max_acknowledged_revision ?? 0, "pending")
+  const pending = witnessFor(target, ledgerSha, acknowledged, "pending")
   await io.fault("before_witness_pending")
   await writeWitness(io, env, previous, pending)
   await io.fault("after_witness_pending")
@@ -454,6 +493,8 @@ async function commit(io, env, root, target, previous) {
 async function settle(io, env, root, { nowMs, legacyEvaluator }) {
   // Read first: the status reader itself sets a damaged file aside, and that is the reset this checks for.
   const read = await readAll(io, env, root)
+  const resealed = await resealFromPair(io, env, root, read, nowMs)
+  if (resealed !== null) return resealed
   if ((statusResetDay(root) ?? "") >= dayOf(nowMs)) return { state: "status_reset" }
   const verdict = assess(read, nowMs)
   if (verdict.kind === "block") return { state: verdict.state }

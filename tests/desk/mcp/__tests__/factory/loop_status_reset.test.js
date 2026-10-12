@@ -1,7 +1,8 @@
 // A damaged status file is moved aside by the reader and read as empty. That must never restart the evaluator's daily cap:
 // a UTC day on which the status was reset is a spent day for the evaluator. The reader here is the real one, on a really damaged file.
 // The shared launch ledger keeps its high-water mark in the status file, so a reset also takes that witness away: before the ledger
-// exists there is then no evidence for a first allowance, and after it exists the ledger blocks rather than rebuild the mark.
+// exists there is then no evidence for a first allowance, and after it exists the ledger writes the mark again from the surviving
+// ledger with the reset's day sealed as spent.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -94,17 +95,22 @@ test("a status reset before the shared ledger exists leaves no evidence: the led
   assert.equal(calls.length, 1)
 }))
 
-test("a status reset after the shared ledger exists blocks later days too: the high-water mark is never rebuilt from the ledger", () => scratch(async (env, base) => {
+test("a status reset after the shared ledger exists seals that day from the surviving ledger, and the next day runs", () => scratch(async (env, base) => {
   await seedJob(env, base)
   const calls = []
-  assert.equal((await runEvaluatorStep(env, seams(calls))).result, "ran")
+  // Real time throughout: the set-aside file carries the real day.
+  assert.equal((await runEvaluatorStep(env, seams(calls, { now: Date.now() }))).result, "ran")
   await damageStatus(env)
   await seedJob(env, base, 11)
-  for (const days of [3, 20]) {
-    assert.equal((await runEvaluatorStep(env, seams(calls, { now: NOW + days * DAY }))).result, "budget_exhausted")
-    assert.equal((await readStatus(env)).evaluator.headless.ledger, "witness_missing")
-  }
-  assert.equal(calls.length, 1, "nothing ran after the reset")
+  const sameDay = { now: Date.now() }
+  assert.equal((await runEvaluatorStep(env, seams(calls, sameDay))).result, "budget_exhausted")
+  assert.equal((await readStatus(env)).evaluator.headless.ledger, "witness_reset_sealed", "the reason is visible")
+  // Deleted again the same day: still nothing runs.
+  await damageStatus(env)
+  await seedJob(env, base, 12)
+  assert.equal((await runEvaluatorStep(env, seams(calls, sameDay))).result, "budget_exhausted")
+  assert.equal(calls.length, 1, "nothing ran on the day of the resets")
+  assert.equal((await runEvaluatorStep(env, seams(calls, { now: Date.now() + DAY }))).result, "ran", "the next UTC day is a normal one")
 }))
 
 test("a machine with no set-aside status runs as before", () => scratch(async (env, base) => {

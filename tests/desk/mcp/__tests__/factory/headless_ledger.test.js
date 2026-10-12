@@ -245,25 +245,99 @@ test("crash_and_reset_never_refund", async (t) => {
     await assert.rejects(fs.stat(path.join(root, LEDGER_FILE)), { code: "ENOENT" })
   }))
 
-  await t.test("a missing or damaged status mark blocks and is not regenerated from the pair", () => scratch(async (env) => {
+  await t.test("a missing or damaged status mark is written again from the pair, with today sealed as spent", () => scratch(async (env, root) => {
     await spentTen(env)
+    assert.equal((await reserve(env, "triage", at(0, 9, 30))).state, "reserved")
+    const before = await ledgerOf(root)
     await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: { schema: "desk.factory.agent-launch-highwater/1" } } }))
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "witness_reset_sealed" })
+    const sealed = await ledgerOf(root)
+    assert.equal(sealed.spent, 30, "nothing refunded: the rest of the day is spent")
+    assert.equal(sealed.revision, before.revision + 1)
+    assert.equal(sealed.epoch, before.epoch)
+    assert.equal((await mark(env)).phase, "acknowledged", "all three witnesses agree again")
+    assert.equal((await reserve(env, "evaluate", at(0, 11))).state, "quota_exhausted")
+    // Removed outright, again and again the same day: each time the day is sealed, never a launch.
+    for (const hour of [12, 13]) {
+      await updateStatus(env, (current) => {
+        const { agent_launch_highwater: _gone, ...loop } = current.loop
+        return { ...current, loop }
+      })
+      assert.deepEqual(await reserve(env, "evaluate", at(0, hour)), { state: "witness_reset_sealed" })
+    }
+    assert.equal((await reserve(env, "triage", at(0, 14))).state, "quota_exhausted")
+    assert.equal((await ledgerOf(root)).last_triage_at, new Date(at(0, 9, 30)).toISOString(), "the triage clock survives the reset")
+    assert.equal((await reserve(env, "evaluate", at(1, 0, 5))).state, "reserved", "the next UTC day is a normal one")
+  }))
+
+  await t.test("a damaged mark beside a damaged or missing pair file still blocks", () => scratch(async (env, root) => {
+    await spentTen(env)
+    await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: "damaged" } }))
+    await fs.writeFile(path.join(root, GUARD_FILE), "{ damaged")
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "ledger_unreadable" })
+    await fs.rename(path.join(root, GUARD_FILE), path.join(root, "moved-guard.json"))
     assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "witness_invalid" })
     await updateStatus(env, (current) => {
       const { agent_launch_highwater: _gone, ...loop } = current.loop
       return { ...current, loop }
     })
     assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "witness_missing" })
-    assert.deepEqual(await reserve(env, "evaluate", at(3, 10)), { state: "witness_missing" })
+    await assert.rejects(fs.stat(path.join(root, GUARD_FILE)), { code: "ENOENT" }, "nothing rebuilt from half a pair")
+    await fs.rename(path.join(root, LEDGER_FILE), path.join(root, "moved-ledger.json"))
+    await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: "damaged" } }))
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "witness_invalid" }, "a damaged mark with no pair at all is not a fresh install")
+  }))
+
+  await t.test("a set-aside file older than the ledger does not move the seal off today", () => scratch(async (env, root) => {
+    const aside = path.join(root, "status.json.corrupt-json-1")
+    await fs.writeFile(aside, "{}")
+    await fs.utimes(aside, new Date(at(-3, 1)), new Date(at(-3, 1)))
+    await spentTen(env)
+    await updateStatus(env, (current) => {
+      const { agent_launch_highwater: _gone, ...loop } = current.loop
+      return { ...current, loop }
+    })
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "witness_reset_sealed" })
+  }))
+
+  await t.test("a pair from two ledgers, or dated after the clock, is not used to write the mark again", () => scratch(async (env, root) => {
+    await spentTen(env)
+    const guard = JSON.parse(await fs.readFile(path.join(root, GUARD_FILE), "utf8"))
+    const clear = (current) => {
+      const { agent_launch_highwater: _gone, ...loop } = current.loop
+      return { ...current, loop }
+    }
+    await updateStatus(env, clear)
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 8)), { state: "clock_regressed" })
+    await fs.writeFile(path.join(root, GUARD_FILE), `${JSON.stringify({ ...guard, epoch: "cd".repeat(16) })}\n`)
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "epoch_mismatch" })
     assert.equal(await mark(env), undefined)
   }))
 
-  await t.test("a status file the reader sets aside blocks that day, and later days, since its mark went with it", () => scratch(async (env, root) => {
+  await t.test("a status file the reader sets aside seals that day; the next UTC day launches", () => scratch(async (env, root) => {
     const today = Date.now()
-    assert.equal((await reserve(env, "evaluate", today, { legacyEvaluator: { headless: { day: new Date(today).toISOString().slice(0, 10), jobs: 0 } } })).state, "reserved")
+    const todayText = new Date(today).toISOString().slice(0, 10)
+    assert.equal((await reserve(env, "evaluate", today, { legacyEvaluator: { headless: { day: todayText, jobs: 0 } } })).state, "reserved")
     await fs.writeFile(path.join(root, "status.json"), "{ damaged")
-    assert.deepEqual(await reserve(env, "evaluate", today), { state: "status_reset" })
-    assert.deepEqual(await reserve(env, "evaluate", today + 2 * DAY), { state: "witness_missing" })
+    assert.deepEqual(await reserve(env, "evaluate", today), { state: "witness_reset_sealed" })
+    assert.deepEqual(await reserve(env, "evaluate", today), { state: "status_reset" }, "the rest of that day stays refused")
+    await fs.writeFile(path.join(root, "status.json"), "{ damaged again")
+    assert.deepEqual(await reserve(env, "evaluate", today), { state: "witness_reset_sealed" })
+    const next = Date.parse(`${todayText}T00:00:00.000Z`) + DAY + 60 * 1000
+    assert.equal((await reserve(env, "evaluate", next)).state, "reserved")
+  }))
+
+  await t.test("a reset noticed only on a later day seals the reset's own day, not the later one", () => scratch(async (env, root) => {
+    const today = Date.now()
+    const todayText = new Date(today).toISOString().slice(0, 10)
+    assert.equal((await reserve(env, "evaluate", today, { legacyEvaluator: { headless: { day: todayText, jobs: 0 } } })).state, "reserved")
+    // The status reader sets the damaged file aside today, but nothing reserves until the next day.
+    await fs.writeFile(path.join(root, "status.json"), "{ damaged")
+    await readStatus(env)
+    const next = Date.parse(`${todayText}T00:00:00.000Z`) + DAY + 60 * 1000
+    const answer = await reserve(env, "evaluate", next)
+    assert.equal(answer.state, "reserved")
+    assert.equal((await ledgerOf(root)).consumed_through, (await ledgerOf(root)).issued_serial, "older tokens are burned")
   }))
 
   await t.test("a mark or ledger dated after the clock blocks as a clock regression", () => scratch(async (env) => {

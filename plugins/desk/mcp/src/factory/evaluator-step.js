@@ -100,7 +100,6 @@ import { isHeadlessFactorySession } from "./headless-flag.js"
 import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
 import { recordStep } from "./loop-status.js"
 import { factoryStateRoot, readStatus, updateStatus } from "./outbox.js"
-import { statusResetDay } from "./loop-worker-state.js"
 import { processAlive, releaseLock, takeLock } from "./process-lock.js"
 
 const MAX_ATTEMPTS = 3
@@ -325,8 +324,8 @@ async function execute(env, { impl, root, nowMs, limitMs, maxRuns, pluginVersion
   // Anything set that is not a clear "on" (1, true, on, yes; padded or in capitals) turns the evaluator off.
   const switchValue = env.DESK_FACTORY_HEADLESS_EVALUATOR
   let stop = switchValue === undefined || SWITCH_ON.has(switchValue.trim().toLowerCase()) ? null : "disabled"
-  // A UTC day on which the status file was damaged and set aside is a spent day: its day count was lost, and failing open costs money.
-  if (stop === null && statusResetDay(root) === dayOf(nowMs)) stop = "budget_exhausted"
+  // A UTC day on which the status file was damaged and set aside is a spent day: the shared ledger refuses it (`status_reset`, or
+  // `witness_reset_sealed` when it writes its high-water mark again), so its day count, lost with the file, never fails open.
   let ranJobs = 0
   // Launches reserved in the shared ledger by this step, started or not: what `maxRuns` bounds.
   let reserved = 0
