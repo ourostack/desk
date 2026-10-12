@@ -22,7 +22,7 @@ test("local imports are found in source order, once each, including multi-line a
   assert.deepEqual(localImports("file:///m/src/server.js", () => source), ["file:///m/src/a.js", "file:///m/lib/b.js", "file:///m/src/c.js"])
 })
 
-test("each piece loads on its own turn after its own local imports, then the module itself; a failing piece is left to the final import", async () => {
+test("each piece loads on its own turn after the pieces below it, then the module itself; a failing piece is left to the final import", async () => {
   const events = []
   const sources = {
     "server.js": 'import "x"\nimport { a } from "./a.js"\nimport { b } from "./b.js"\n',
@@ -39,8 +39,8 @@ test("each piece loads on its own turn after its own local imports, then the mod
     },
     yieldTurn: async () => { events.push("turn") },
   })
-  // A cycle (leaf.js imports a.js back) and a shared import (b.js) are each loaded once.
-  assert.deepEqual(events, ["load leaf.js", "turn", "load b.js", "turn", "load a.js", "turn", "load server.js"])
+  // a.js and leaf.js import each other, so only a.js, where the walk enters that cycle, loads on its own; b.js is shared and loads once.
+  assert.deepEqual(events, ["load b.js", "turn", "load a.js", "turn", "load server.js"])
   assert.equal(loaded.href, "file:///m/src/server.js")
 })
 
@@ -66,18 +66,16 @@ test("package imports are found in source order, once each, without Node's built
   assert.deepEqual(packageImports("file:///m/src/server.js", () => source), ["@modelcontextprotocol/sdk/server/index.js", "gray-matter", "pkg"])
 })
 
-test("with a package resolver, each package is its own piece before the module's local imports, and the walk continues inside it", async () => {
+test("with a package resolver, each package is its own piece in source order, and the walk does not read inside packages", async () => {
   const events = []
+  const reads = []
   const sources = {
     "server.js": 'import { Server } from "sdk"\nimport { a } from "./a.js"\nimport x from "missing"\n',
-    "a.js": 'import { Server } from "sdk"\n',
-    "index.js": 'import { p } from "./protocol.js"\nimport Ajv from "ajv"\n',
-    "protocol.js": "export const p = 1\n",
-    "ajv.js": "module.exports = {}\n",
+    "a.js": 'import { Server } from "sdk"\nimport Ajv from "ajv"\n',
   }
   const resolved = { sdk: "file:///m/node_modules/sdk/index.js", ajv: "file:///m/node_modules/ajv/ajv.js" }
   await importInChunks("file:///m/src/server.js", {
-    read: (href) => sources[href.split("/").pop()],
+    read: (href) => { reads.push(href.replace("file:///m/", "")); return sources[href.split("/").pop()] },
     resolvePackage: (specifier) => {
       if (!resolved[specifier]) throw new Error(`cannot resolve ${specifier}`)
       return resolved[specifier]
@@ -85,7 +83,8 @@ test("with a package resolver, each package is its own piece before the module's
     load: async (href) => { events.push(href.replace("file:///m/", "")) },
     yieldTurn: async () => {},
   })
-  assert.deepEqual(events, ["node_modules/ajv/ajv.js", "node_modules/sdk/protocol.js", "node_modules/sdk/index.js", "src/a.js", "src/server.js"])
+  assert.deepEqual(events, ["node_modules/sdk/index.js", "node_modules/ajv/ajv.js", "src/a.js", "src/server.js"])
+  assert.deepEqual(reads, ["src/server.js", "src/a.js"])
 })
 
 test("the mirror's resolver loads a package early as the same instance the module later imports", async () => {
@@ -104,4 +103,38 @@ test("the mirror's resolver loads a package early as the same instance the modul
   assert.equal(loaded[0], resolvePackage("counted"))
   assert.equal(result.value, 1)
   assert.equal(globalThis.deskCountedLoads, 1)
+})
+
+test("a module in an import cycle is never imported on its own: the cycle is entered where the whole graph enters it", async () => {
+  // A valid cycle: main imports a, a imports b, b imports c, c imports a back. Importing main evaluates c, then b, then a. Importing
+  // c on its own would instead evaluate b before c and fail with "Cannot access 'c' before initialization", and Node would keep that
+  // failure for every later import of the graph.
+  const root = await mkTempRoot("desk-chunked-import-cycle-")
+  writeFileSync(path.join(root, "main.mjs"), 'import { A } from "./a.mjs"\nexport const value = A\n')
+  writeFileSync(path.join(root, "a.mjs"), 'import { b } from "./b.mjs"\nexport const A = b + 1\n')
+  writeFileSync(path.join(root, "b.mjs"), 'import { c } from "./c.mjs"\nexport const b = c + 1\n')
+  writeFileSync(path.join(root, "c.mjs"), 'import { A } from "./a.mjs"\nexport const c = 1\nexport function readA() { return A }\n')
+  const loaded = []
+  const result = await importInChunks(pathToFileURL(path.join(root, "main.mjs")).href, {
+    load: (href) => { loaded.push(path.basename(new URL(href).pathname)); return import(href) },
+  })
+  assert.equal(result.value, 3)
+  assert.deepEqual(loaded, ["a.mjs", "main.mjs"], "only the cycle's entry is imported on its own")
+})
+
+test("imports are taken in source order, including side-effect imports, and packages are leaves", async () => {
+  const events = []
+  const sources = {
+    "server.js": 'import "./setup.js"\nimport { Server } from "sdk"\nimport { a } from "./a.js"\n',
+    "setup.js": "globalThis.ready = true\n",
+    "a.js": 'import { b } from "./b.js"\n',
+    "b.js": 'import { a } from "./a.js"\n',
+  }
+  await importInChunks("file:///m/src/server.js", {
+    read: (href) => sources[href.split("/").pop()] ?? (() => { throw new Error(`read ${href}`) })(),
+    resolvePackage: (specifier) => `file:///m/node_modules/${specifier}/index.js`,
+    load: async (href) => { events.push(href.replace("file:///m/", "")) },
+    yieldTurn: async () => {},
+  })
+  assert.deepEqual(events, ["src/setup.js", "node_modules/sdk/index.js", "src/a.js", "src/server.js"])
 })
