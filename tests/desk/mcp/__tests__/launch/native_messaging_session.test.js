@@ -472,6 +472,25 @@ test("a provider that stopped after writing its readiness file is tried once mor
       " is present, but the provider does not answer (ECONNREFUSED).")
 })
 
+test("a connection failure reported only by its message is still named as the provider not running", async t => {
+  const { readyFile, write } = await readyFixture("native-session-message-only-")
+  const provider = await providerFixture(t)
+  await write(provider.endpoint("a"))
+  const session = sessionFor(readyFile, provider.endpoint("a"), { request: async () => { throw new Error("ECONNRESET") } })
+  await assert.rejects(session.setOwner("agent"), error => error.code === "browser_native_provider_not_running" &&
+    error.message.endsWith(" is present, but the provider does not answer (ECONNRESET)."))
+})
+
+test("a failure with no error object is passed on, not retried", async t => {
+  const { readyFile, write } = await readyFixture("native-session-no-error-")
+  const provider = await providerFixture(t)
+  await write(provider.endpoint("a"))
+  let requests = 0
+  const session = sessionFor(readyFile, provider.endpoint("a"), { request: () => { requests++; return Promise.reject(undefined) } })
+  await session.setOwner("agent").then(() => assert.fail("acquired"), error => assert.equal(error, undefined))
+  assert.equal(requests, 1)
+})
+
 test("a session whose lease the provider no longer holds takes a new one instead of failing", async t => {
   const { readyFile, write } = await readyFixture("native-session-reacquire-")
   const provider = await providerFixture(t)
