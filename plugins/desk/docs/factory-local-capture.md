@@ -323,7 +323,7 @@ The plugin starts the evaluator itself only on a subscription sign-in. Under per
 
 ### Bounds
 
-- At most 30 headless launches a UTC day per machine, waste evaluation and triage together, a safety ceiling rather than a pace (see [Shared launch ledger](#shared-launch-ledger)); one job at most once a day, and at most three times in a row without an accepted answer (an accepted run starts the count again).
+- At most 30 evaluator runs a day per machine, and that ceiling is shared with triage launches (see [Shared launch ledger](#shared-launch-ledger)), a safety ceiling rather than a pace; one job at most once a day, and at most three times in a row without an accepted answer (an accepted run starts the count again).
 - 1 live claim per machine and 2 new claims per machine per day; a claim lasts 4 hours, then the card is open again.
 - The 72-hour freshness rule: a reading older than 72 hours decides nothing, and a step that last succeeded more than 72 hours ago, or failed three times in a row, is stale.
 - Two age alarms: the oldest open card is older than 7 days (`loop_alarm:improvement_age`), or a card has been in verification for more than 21 days (`loop_alarm:improvement_stuck`). Loop alarm cards are not counted in either age.
