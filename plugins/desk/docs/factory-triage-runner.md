@@ -208,6 +208,11 @@ These limits were reviewed and accepted. They are not open defects.
 - **Model provenance is not proved.** An allowlisted `HTTPS_PROXY` with `NODE_EXTRA_CA_CERTS` in the operator's environment could put a scripted model behind a genuine engine. Qualification proves the engine's tool surface, not where the model's answers came from.
 - **`notifications/cancelled` is advisory.** It never interrupts a request in flight. It never unseals or partially seals a submission. It only drops a read that is still queued.
 - **A SIGINT is a graceful close.** Claude Code's first SIGINT after ready closes the session with a `client_sigint` terminal receipt. A SIGINT from any process running as the same user looks the same, so it can end a run early. It can never make a run pass, because acceptance still needs a sealed submission, the matching native tool result and native success.
+- **Two module roots trust the same uid.** The owned server and the parent load modules from the source tree and from the `node_modules` folder Node resolves the MCP SDK from (inside a checkout, or the runtime pack beside an installed source mirror). Both must be owned by this uid or root and closed to group and world writes. The runtime pack is checked against its archive hash only when it is extracted, so a same-uid writer can change a module there. A change after qualification is caught, because every loaded server module and every file of the parent's dependency packages is hashed in the record. A change before qualification is qualified with it.
+- **HOME is inherited, validated and bound, not taken from passwd.** The design reviewer preferred the passwd home, so an ambient HOME could not select another home. We kept the inherited value: it must be an absolute, normalised directory owned by this uid with no group or world write, and it is part of the environment fingerprint, so a different HOME makes the record stale (`environment_changed`). Task 6 inherited HOME without these checks, and tests and operators that isolate HOME keep working.
+- **An operating-system update makes the record stale.** The chain fingerprint binds the macOS build and the dyld shared cache, so the record goes `stale/chain_changed` after an update, and the loop qualifies again within its once-a-day limit.
+- **The engine pin follows a retained build.** Triage keeps working after Claude Code updates only while the pinned 2.1.296 build stays in `~/.local/share/claude/versions/`. Whether that build updates itself when run with `-p` is not verified; each run re-checks its hash.
+- **The measurement guard reads this process's own `NODE_OPTIONS`.** cmux's `--require` preload removes itself from `process.env` before the guard reads it, so a cmux shell does not trip the guard. Nothing relies on that.
 - **The `server/discover` fallback is pinned to Claude Code 2.1.296.** The probe shape, the `-32601` answer and the probe timeout come from that engine's source. A native run is accepted only for the pinned 2.1.296 engine hash, and any other engine is refused before launch. A probe in any other shape, a probe that arrives late, or a client that does not fall back to `initialize` on the same process all close the session rather than pass.
 
 Fixed authenticated `observation` frames on the same private receipt FIFO retain
@@ -229,15 +234,16 @@ See [observer validation](../mcp/src/factory/triage-custody.js),
 ## Qualification and protected unaccepted output
 
 The explicit qualifier's direct lane runs actual non-model server subprocesses;
-it never issues a qualified record without two native positive receipts. Root
-alone invokes native qualification after both independent reviews:
+it never issues a qualified record without two native positive receipts. The
+supported way to run it is `factory.js triage-qualify` (next section); the
+script itself takes an engine and an evidence folder:
 
 ```sh
 node plugins/desk/mcp/scripts/qualify-triage-runner.js --cli /absolute/existing/engine --out /protected/evidence
 ```
 
 Evidence remains owner-only outside Git. The version-3 `owned_catalog_mcp`
-record v6 binds protocol envelope 2 and its schema/negotiation identity, recipe
+record v7 binds protocol envelope 2 and its schema/negotiation identity, recipe
 version 3, table E296/3, controls /3, both control
 collections and their closed builtin-basis hashes, exact optional false-map
 and eleven-ID registry hashes, and current effective source-fold identities.
@@ -288,3 +294,58 @@ The current candidate still requires complete lifecycle/fatal-case proof,
 persisted qualification conformance and strict final coverage. Neither this
 document nor the local suite asserts installed-host qualification, release,
 scheduling activation or live rollout.
+
+## How the record comes to exist and when it must be redone
+
+The loop's triage step launches only with a record that restores. The record lives at `<factory state>/triage/qualification/qualification.json` (the factory state folder is `~/.local/state/ouroboros-skills/desk/factory` unless `XDG_STATE_HOME` moves it).
+
+### For the operator
+
+```sh
+node ~/.claude/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js triage-qualify --check
+node ~/.claude/plugins/cache/ourostack/desk/<version>/mcp/scripts/factory.js triage-qualify
+```
+
+- `--check` launches nothing. It prints what restore says now: `qualified`, `missing`, `stale` with a reason and whether qualifying again can clear it (`requalify`), or `damaged` with a reason. It waits for no one: while the loop worker or a qualification holds `loop-worker.running`, it answers `busy`.
+- Without `--check`, the command qualifies when the record does not restore. It starts two real model sessions on the subscription (about a minute in all), reserved together as one triage opportunity in the shared launch ledger, so it refuses when the day's launches or the current window are used up. It refuses quietly on any host but macOS arm64, in a headless session, with a billing variable set, under coverage or loader measurement, without the pinned engine, or when signed out.
+- An earlier record is moved aside as `qualification.aside-<UTC stamp>-<hex>` and never deleted. Each is about 8 MB; you may move old asides to the Trash.
+- The command also clears an automatic suspension (below).
+
+### What the loop does by itself
+
+When restore says `missing`, or `stale` with `requalify: true`, the loop worker qualifies once per UTC day at most (`autoQualifyTriage` in [triage-qualify.js](../mcp/src/factory/triage-qualify.js)), under its own lock and with at least 20 minutes left in its run. The marker `triage/auto-qualify.json` is written before the attempt starts, so a crash never retries the same day, and a marker that cannot be read counts as today's attempt. After three attempts in a row for the same host-side reason, automatic qualification stops for that reason and reports `auto_suspended` until `triage-qualify` runs. Reasons a release causes (`record_version`, `source_changed`, `engine_changed`) never count toward that limit. The two launches are reserved only after the qualifier's own chain, admission, control and sign-in checks pass, just before the first launch; a refusal there launches nothing and puts the earlier record back.
+
+### What makes a record stale
+
+The record is keyed on content, not on where Desk is installed, so a release with byte-identical files, a copy at another path, or a different ambient `PATH` or `TERM` keeps it. Restore answers ([restoreTriageQualification](../mcp/src/factory/triage-runner.js)), checking the cheap things first and launching nothing:
+
+| Reason | What changed | Qualifying again helps |
+| --- | --- | --- |
+| `record_version` | An earlier record version (v6 was keyed on absolute paths and the ambient environment) | yes |
+| `qualification_failed` | The last qualification failed; its `failure-capture.json` is beside it | yes |
+| `source_changed` | A runner, custody, catalog, qualifier or helper file, the fixture, `package-lock.json`, a file of the parent's dependency packages, or a loaded server module | yes |
+| `runtime_changed` | The Node runtime's path or bytes | yes |
+| `engine_changed` | The engine pin moved, or the record's engine file changed while the pinned build is still installed elsewhere | yes |
+| `engine_unpinned` | No installed file is the pinned 2.1.296 build; the loop opens the improvement card "The triage runner's engine pin is behind the installed Claude Code" | no: a Desk release must re-derive the engine table |
+| `engine_mismatch` | The caller named a different engine than the record's | no |
+| `environment_changed` | The constructed child environment: HOME, the account, the temporary folder, `CLAUDE_CONFIG_DIR`, proxy or CA variables | yes |
+| `environment_unsafe` | HOME, `CLAUDE_CONFIG_DIR` or the temporary folder is not a private folder of this account | no |
+| `chain_changed` | The launch chain: engine signature, macOS build, sealed system volume, dyld shared cache | yes |
+| `chain_unavailable` | The launch chain could not be inspected | no |
+| `policy_changed` | Managed or user policy sources | yes |
+| `policy_blocked` | Policy no longer admits the fixed invocation | no |
+| `host_unsupported`, `measurement_active` | Not macOS, or coverage or loader measurement is active | no |
+
+A `damaged` record (unreadable, non-canonical, an unknown shape, receipts that fail restoration) is never treated as stale and never replaced automatically; `triage-qualify` moves it aside. `loadTriageQualification` keeps its earlier contract on top of restore.
+
+### The child environment
+
+The engine, its sign-in probe, `doctor` and the OS readers get one constructed environment ([triageChildEnvironment](../mcp/src/factory/triage-runner.js)): `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `TERM=dumb`, `LANG=en_US.UTF-8`, `SHELL=/bin/sh`, the account's name, the validated inherited HOME, the system's per-user temporary folder from `getconf DARWIN_USER_TEMP_DIR` (owner-only), and, when set, `CLAUDE_CONFIG_DIR` (an absolute private folder) and the proxy and CA variables. Nothing else is inherited. Intent selectors and billing variables are still read from the ambient environment first, so filtering never hides them.
+
+### The engine
+
+The pin stays: the reviewed byte ranges of Claude Code 2.1.296 back every control. The runner finds that build by content: the record's engine, then the default `claude`, then Claude Code's own versions folder. A candidate counts only as a regular file whose folders, up to `/`, only this account or root can change.
+
+### Where the runner loads from
+
+The installed plugin copy has no `node_modules`. [triage-home.js](../mcp/src/factory/triage-home.js) (`importTriageRunner`) loads the runner from the plugin's own folder when its packages resolve there, and otherwise from the source mirror that the MCP server's own runtime preparation admits for exactly this source, chosen from the account's home alone. A failure is a quiet `runtime_unavailable` or `runtime_unloadable`.
