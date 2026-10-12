@@ -61,6 +61,40 @@ async function readProcessStartIdentity(pid) {
   throw new Error(`Process start identity is unsupported on ${process.platform}`);
 }
 
+/**
+ * Read this process's own start identity, keeping it once read: a process's start never changes. A failed or empty
+ * read is tried once more before it is reported. On a loaded Windows machine the PowerShell read can hit its 5 s cap
+ * while the next one returns in well under a second, and without an identity the lock cannot be taken at all.
+ */
+export function ownIdentityReader(read, { pid = process.pid } = {}) {
+  // Concurrent first acquisitions share one read; a read that fails is forgotten so the next acquisition reads again.
+  let pending;
+  async function attempt() {
+    try {
+      const identity = await read(pid);
+      if (identity) return identity;
+    } catch {
+      // Read once more below.
+    }
+    return read(pid);
+  }
+  return () => {
+    pending ??= attempt().then(
+      (identity) => {
+        if (!identity) pending = undefined;
+        return identity;
+      },
+      (error) => {
+        pending = undefined;
+        throw error;
+      },
+    );
+    return pending;
+  };
+}
+
+const readOwnStartIdentity = ownIdentityReader(readProcessStartIdentity);
+
 async function inspectOwner(owner, processIdentityReader) {
   if (
     !owner ||
@@ -150,6 +184,9 @@ export async function withBrokerLock(stateDir, fn, options = {}) {
     pollMs = 10,
     staleMs = 30_000,
     processIdentityReader = readProcessStartIdentity,
+    readOwnIdentity = processIdentityReader === readProcessStartIdentity
+      ? readOwnStartIdentity
+      : () => processIdentityReader(process.pid),
     ownerPublisher = publishOwnerAtomically,
   } = options;
   if (!/^[A-Za-z0-9._-]+$/u.test(name)) {
@@ -160,10 +197,9 @@ export async function withBrokerLock(stateDir, fn, options = {}) {
   await ensureStateDirectory(stateDir);
   const lockPath = path.join(stateDir, `${name}.lock`);
   const token = randomUUID();
-  const started = Date.now();
   let startIdentity;
   try {
-    startIdentity = await processIdentityReader(process.pid);
+    startIdentity = await readOwnIdentity();
   } catch (cause) {
     throw new BrokerError(
       'BROKER_LOCK_IDENTITY_UNAVAILABLE',
@@ -179,6 +215,8 @@ export async function withBrokerLock(stateDir, fn, options = {}) {
     );
   }
 
+  // The wait for the lock starts after this process's identity is known, so a slow identity read does not use it up.
+  const started = Date.now();
   for (;;) {
     try {
       await mkdir(lockPath, { mode: 0o700 });
