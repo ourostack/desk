@@ -6,16 +6,17 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { checks, runBootChecks } from "../../../../../plugins/desk/hooks/lib/boot-checks.cjs"
+import { removeTree } from "../_remove_tree.js"
 const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
 
 function fixture(t) {
   const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-boot-drift-")))
-  t.after(() => rmSync(repo, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(repo))
   const env = {
     // XDG_STATE_HOME is set explicitly, not just inherited from `...process.env`: the
     // filing-storm throttle (fix round, spec.md §1 Part 5) keys its stamp file off this
@@ -103,7 +104,7 @@ test("with no bound desk, index tracing never runs and never touches Git", async
 
 test("a bound desk that resolves but is not itself a Git repository is never watched for drift", async (t) => {
   const notGit = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-boot-drift-not-git-")))
-  t.after(() => rmSync(notGit, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(notGit))
   const line = await runBootChecks({
     ...quiet,
     env: { HOME: notGit, DESK: notGit },

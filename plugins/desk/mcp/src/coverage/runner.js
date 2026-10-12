@@ -21,6 +21,7 @@ import {
   evaluateCoverageReport,
   isOfflineEvaluationScope,
 } from "./gate.js"
+import { removeWithRetry } from "../util/remove-retry.js"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const defaultMcpRoot = path.resolve(moduleDir, "..", "..")
@@ -317,7 +318,7 @@ function runCoverageShard({ repoRoot, request, requiredFiles, coverageIncludeFil
   // writing -- and continue. The shard's own status (the instrumented run's own pass/fail) is unaffected either way.
   const processInfoDirectory = path.join(rawDirectory, "processinfo")
   try {
-    fsOps.removeDirRetrying(processInfoDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    fsOps.removeDirRetrying(processInfoDirectory)
   } catch (error) {
     const leftover = listLeftoverFiles(fsOps, processInfoDirectory)
     io.stderr.write(`[coverage-gate] could not remove ${processInfoDirectory} after the retry (${error.code ?? error.message}); it is process bookkeeping, not coverage, so the shard continues; leftover file(s): ${leftover.length ? leftover.join(", ") : "(none listed; the directory itself could not be read)"}\n`)
@@ -534,7 +535,8 @@ function defaultFsOps() {
     writeText: (file, text) => writeFileSync(file, text, "utf8"),
     // A separate hook from `removeDir` (no retry/force options there) so a test can make exactly this removal --
     // and only this one -- fail, the way a real ENOTEMPTY from a still-writing process does.
-    removeDirRetrying: (dir, options) => rmSync(dir, options),
+    // Not rmSync's own retry options: Node 24.18 waits `i * retryDelay / 1000` whole seconds on POSIX (0 for 200 ms) and does not retry a Windows access-denied.
+    removeDirRetrying: (dir) => removeWithRetry(dir, { recursive: true, force: true }),
     listDir: (dir) => readdirSync(dir),
   }
 }

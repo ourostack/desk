@@ -1,15 +1,15 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { callTool, waitForStatusInspection } from "../../../../../plugins/desk/mcp/src/server.js"
 import { admitInProcess, startInProcess } from "./_in_process_desk.js"
+import { removeTree } from "../_remove_tree.js"
 
-// Windows refuses to remove a folder a process still uses; allow the same time _process_hygiene.js allows.
+// Windows refuses to remove a folder a process still uses for a moment; the shared removal waits that out.
 function removeRoot(root) {
-  const windows = process.platform === "win32"
-  rmSync(root, { recursive: true, force: true, maxRetries: windows ? 40 : 5, retryDelay: windows ? 250 : 100 })
+  return removeTree(root)
 }
 
 function tempRoot(prefix) {

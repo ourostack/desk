@@ -16,6 +16,7 @@ import * as path from "node:path"
 import { after } from "node:test"
 import { controllerRecords, processAlive, waitForProcessesGone } from "./runtime/_controller_exit.js"
 import { readProcessStart } from "../../../../plugins/desk/mcp/src/readiness/process-start.js"
+import { removeTree } from "./_remove_tree.js"
 
 const ownedRoots = new Set()
 // Readiness controller children seen under an owned root, by PID. A controller deletes its owner.json as it shuts down, before its process is gone, so they are noted while the session is alive and teardown waits for them.
@@ -36,7 +37,7 @@ async function stillTheController(record, startOf) {
 /**
  * Remove `roots` once every readiness controller under them, and every one in `known`, has exited. Controllers outlive their sessions and hold the derived index open, and Windows refuses to delete a file a process holds. The wait has a bounded deadline and a failure that names the PIDs. The delete retries are unchanged; the roots are still removed when the wait fails, and every failure is thrown, the wait's first.
  */
-export async function removeRootsAfterControllers(roots, known = knownControllers, { waitForGone = waitForProcessesGone, remove = (root) => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }), startOf = readProcessStart } = {}) {
+export async function removeRootsAfterControllers(roots, known = knownControllers, { waitForGone = waitForProcessesGone, remove = removeTree, startOf = readProcessStart } = {}) {
   const records = new Map([...(known instanceof Map ? known : [...known].map((pid) => [pid, { pid, processStart: null, parentPid: null }])), ...controllerRecords(roots).map((record) => [record.pid, record])])
   const running = []
   for (const record of records.values()) if (await stillTheController(record, startOf)) running.push(record)

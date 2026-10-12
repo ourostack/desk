@@ -12,12 +12,13 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { promises as fs, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import * as os from "node:os"
 import { execFileSync, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
+import { removeTree } from "../_remove_tree.js"
 import {
   queueDeskProblemFiling,
   runSessionSyncCli,
@@ -503,7 +504,7 @@ test("syncWorkspace reports sync_deadline_exceeded right after the first pull's 
 // `filer_throttle.test.js`'s own `fixtureEnv` exactly.
 function fixtureFilerEnv(t) {
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-session-sync-filer-"))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => removeTree(root))
   return { HOME: root }
 }
 

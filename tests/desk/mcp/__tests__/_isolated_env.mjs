@@ -13,6 +13,7 @@ import { syncBuiltinESMExports } from "node:module"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { removeWithRetry } from "../../../../plugins/desk/mcp/src/util/remove-retry.js"
 // The tests live outside the shipped plugin; this links their bare-name imports to the installed dependencies.
 import "../../link-dependencies.mjs"
 
@@ -31,7 +32,8 @@ if (typeof runDir !== "string" || runDir.length === 0 || !fs.existsSync(runDir))
   // The process that made the folder removes it when it exits.
   process.once("exit", () => {
     try {
-      originalRm(runDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      // Synchronous because it runs at exit; removeWithRetry waits for real between attempts, which rmSync's own retry options do not on Windows.
+      removeWithRetry(runDir, { recursive: true, force: true, remove: originalRm })
     } catch {
       // A child still holding a file on Windows: the OS temp folder cleans it up later.
     }

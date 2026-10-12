@@ -9,7 +9,7 @@ import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
-import { rm } from "node:fs/promises"
+import { removeTree } from "../_remove_tree.js"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
@@ -39,9 +39,9 @@ function recordHandshake(t, result, label) {
   t.diagnostic(`${label}: handshake in ${result.handshakeMs} ms (target ${HANDSHAKE_TARGET_MS} ms, asserted budget ${HANDSHAKE_BUDGET_MS} ms)`)
 }
 
-// Windows can keep a just-exited child's files busy for a moment (EBUSY): remove a spawned test's fixture with retries. The asynchronous rm retries EBUSY on the fixture folder itself; rmSync retries only after a first ENOTEMPTY, so an EBUSY on the folder a child ran in failed at once on Windows CI.
+// Windows can keep a just-exited child's files busy for a moment (EBUSY): remove a spawned test's fixture with the shared retrying removal.
 function removeFixture(t, root) {
-  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
+  t.after(() => removeTree(root))
 }
 
 // ---- fixtures ----

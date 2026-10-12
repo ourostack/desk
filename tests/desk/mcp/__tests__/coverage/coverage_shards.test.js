@@ -99,7 +99,7 @@ function run(fixture, argv, { producer = () => ({ status: 0, stdout: "", stderr:
       removeDir: (directory) => rmSync(directory, { recursive: true, force: true }),
       readText: (file) => readFileSync(file, "utf8"),
       writeText: (file, text) => writeFileSync(file, text),
-      removeDirRetrying: (directory, options) => rmSync(directory, options),
+      removeDirRetrying: (directory) => rmSync(directory, { recursive: true, force: true }),
       listDir: (directory) => readdirSync(directory),
       ...fsOpsOverrides,
     },

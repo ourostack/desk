@@ -14,7 +14,8 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -212,7 +213,8 @@ async function stop({ gateway, scratch, log }) {
   }
   if (!scratch) return;
   if (process.env.DESK_E2E_KEEP === "1") writeFileSync(join(scratch, "gateway.log"), log());
-  else rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  // The async removal: Node 24.18's synchronous one does not honour its retry options for a Windows access-denied.
+  else await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
 describe("hosted Desk end to end", { skip: !ENABLED && "set DESK_E2E=1 to run (needs npm ci in plugins/desk/mcp)" }, () => {
