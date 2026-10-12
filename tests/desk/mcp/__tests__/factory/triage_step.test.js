@@ -786,7 +786,7 @@ test("the restore's answer: the runner's own restore is used when it has one, it
     assert.deepEqual([result.result, result.ok, result.launched], expected.ok ? ["runner_unavailable", true, false] : ["runner_blocked", false, false], JSON.stringify(answer))
     assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: expected.reason, qualification: expected.qualification })
   }
-  for (const reason of ["engine_unpinned", "engine_mismatch", "host_unsupported", "measurement_active"]) {
+  for (const reason of ["engine_unpinned", "engine_mismatch", "host_unsupported", "measurement_active", "root_unsafe"]) {
     await check({ state: "stale", reason, requalify: false }, { ok: true, reason, qualification: "stale" })
   }
   // A reason qualifying again can fix goes to the qualifier first; with none loaded, it is the same quiet state.
@@ -796,10 +796,12 @@ test("the restore's answer: the runner's own restore is used when it has one, it
   await check({ state: "stale", reason: "Not a reason" }, { ok: true, reason: "qualification_failed", qualification: "stale" })
   await check({ state: "missing" }, { ok: true, reason: null, qualification: "missing" })
   for (const reason of ["unreadable", "noncanonical", "structure", "receipts", "restore_failed"]) await check({ state: "damaged", reason }, { ok: false, reason, qualification: "damaged" })
+  // A record copied from another machine is damaged, with whatever code the restore names.
+  await check({ state: "damaged", reason: "copied_record" }, { ok: false, reason: "copied_record", qualification: "damaged" })
   await check({ state: "damaged", reason: "Not a reason" }, { ok: false, reason: "unreadable", qualification: "damaged" })
   assert.deepEqual(asked[0], { recordFile: path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS), env: w.env })
   const record = (await readStatus(w.env)).loop.steps.triage
-  assert.equal(record.failures, 6, "only the six damaged records counted")
+  assert.equal(record.failures, 7, "only the seven damaged records counted")
   // A qualified record is handed to the runner as the restore gave it.
   const qualification = { state: "qualified", cli: "/opt/engine/claude" }
   const runs = []
@@ -886,7 +888,7 @@ test("a missing or requalifiable record asks the qualifier first; a launch it ma
   // has one (else the mirror); with no qualifier nothing is attempted.
   w = await fresh()
   const before = calls.length
-  for (const reason of ["engine_unpinned", "engine_mismatch", "host_unsupported", "measurement_active"]) {
+  for (const reason of ["engine_unpinned", "engine_mismatch", "host_unsupported", "measurement_active", "root_unsafe"]) {
     const kept = await step(w, { seams: seams({ restore: [{ state: "stale", reason, requalify: true }], qualify: { state: "qualified", launched: true }, ...noRun }) })
     assert.deepEqual([kept.result, kept.ok, calls.length, (await readStatus(w.env)).triage.runner.reason], ["runner_unavailable", true, before, reason])
   }

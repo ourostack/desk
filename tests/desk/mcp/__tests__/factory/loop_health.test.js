@@ -804,6 +804,11 @@ test("a triage runner record stale because its engine pin is behind opens one en
   assert.equal((await measure(["triage"])).counts.opened, undefined)
   assert.equal((await allCards(ctx)).length, 1)
   // Another stale reason, and the pin is no longer the problem: the condition clears, so verify closes the card under its lifecycle.
+  // An unsafe root is quiet and visible on the health record, with no card of its own.
+  await setStatus(ctx, { triage: triage("root_unsafe") })
+  await measure(["triage"])
+  assert.equal((await readStatus(ctx.env)).loop.health.triage.runner_reason, "root_unsafe")
+  assert.deepEqual((await allCards(ctx)).length, 1)
   await setStatus(ctx, { triage: triage("environment_changed") })
   await measure(["triage"])
   assert.equal((await readStatus(ctx.env)).loop.conditions[KEY].present, false)

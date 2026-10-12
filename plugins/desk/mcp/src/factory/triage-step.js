@@ -175,6 +175,7 @@ export const TRIAGE_ENGINE_CARD = "triage_engine_unpinned"
 const TRIAGE_STALE_REASONS_MIRROR = Object.freeze({
   record_version: true, qualification_failed: true, source_changed: true, runtime_changed: true, engine_changed: true, engine_unpinned: false,
   engine_mismatch: false, environment_changed: true, chain_changed: true, policy_changed: true, host_unsupported: false, measurement_active: false,
+  root_unsafe: false,
 })
 // The qualifier's code for a qualifier stopped after repeated host-side failures: an alarm, never a quiet skip.
 const AUTO_SUSPENDED = "auto_suspended"
@@ -190,7 +191,8 @@ async function defaultLocateEngine(env, runtime) {
   const where = typeof found === "string" ? found : found?.path
   return typeof where === "string" && path.isAbsolute(where) ? where : null
 }
-const DAMAGED_REASONS = new Set(["unreadable", "noncanonical", "structure", "receipts", "restore_failed"])
+// A damaged record's reason is kept when it is a code (the restore may name new ones, such as a record copied from another machine).
+const REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/u
 
 async function defaultLoadRunner() {
   const [runner, custody] = await Promise.all([import("./triage-runner.js"), import("./triage-custody.js")])
@@ -693,7 +695,7 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     }
   }
   if (loaded.state === "damaged") {
-    record.runner = { state: "scope_unqualified", reason: DAMAGED_REASONS.has(loaded.reason) ? loaded.reason : "unreadable", qualification: "damaged" }
+    record.runner = { state: "scope_unqualified", reason: REASON_CODE.test(loaded.reason ?? "") ? loaded.reason : "unreadable", qualification: "damaged" }
     return finish(false, "runner_blocked", { unreviewed: unreviewedNow })
   }
   if (loaded.state === "missing") return unavailable("scope_unqualified", null, "missing")
