@@ -25,7 +25,7 @@ export const electionWaitMsFor = (platform = process.platform) => controllerStar
 const controllerStarts = new Map()
 const stateDirCreates = new Map()
 // Asynchronous: on Windows a directory create can wait on an antivirus scan for over a second, and this runs on the session's event loop while it answers tool calls.
-// Callers in this process that ask for one folder at the same time share one create, so they continue in the order they called: the first caller becomes the owner, as it did when the create was synchronous. Separate creates would finish in any order.
+// Callers in this process that ask for one folder at the same time share one create, so they continue past it in the order they called, as they did when the create was synchronous. Separate creates would finish in any order, and the caller that continued first would become the owner. A caller that joins a create uses the first caller's `makeDir` and options, which are the same for every caller outside tests.
 function createStateDir(stateDir, makeDir) {
   let creating = stateDirCreates.get(stateDir)
   if (creating === undefined) {
