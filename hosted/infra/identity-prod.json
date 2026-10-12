@@ -6,12 +6,25 @@
     "id": "de8841c3-7799-4523-bbad-44f8a2426eaa",
     "domain": "ourobot.onmicrosoft.com"
   },
-  "gatewayApp": null,
-  "automationApp": null,
-  "adminApp": {
-    "appId": "59d08d8f-5134-4a1b-9655-4fe74a469f08"
+  "gatewayApp": {
+    "appId": "dc7bd82a-dcc6-438a-9d17-b29dcaacd6a5",
+    "objectId": "0fc9e340-af0f-417a-ba93-33b7cc4908f2",
+    "servicePrincipalId": "6cad03eb-883e-4be3-a7c3-6aa871020795"
   },
-  "userFlow": null,
+  "automationApp": {
+    "appId": "2a07bfa6-43a5-42c3-af98-3fe9e3f3ac40",
+    "objectId": "62beb095-89d3-4b24-94c4-9e2f8ee96daf",
+    "servicePrincipalId": "f3317a3a-9dea-4dc9-b96d-2b87b06edf12"
+  },
+  "adminApp": {
+    "appId": "59d08d8f-5134-4a1b-9655-4fe74a469f08",
+    "objectId": "5ddaab7a-3630-4abd-867f-3e9a837416eb",
+    "servicePrincipalId": "4e3c2274-0756-47e3-8f49-0f1f2046f6b1"
+  },
+  "userFlow": {
+    "id": "70374fb2-87b5-4d1c-97bc-fba5e1e7967e",
+    "displayName": "Ouro sign-in"
+  },
   "apple": {
     "outcome": null,
     "developerId": "743GT2AJ24",
@@ -23,11 +36,35 @@
     },
     "providerId": "724b880d-ca3b-45f8-aa03-1a3a1ecf32c5"
   },
-  "gatewayIdentity": null,
-  "checksIdentity": null,
-  "storage": null,
-  "keyVault": null,
-  "ari": null,
+  "gatewayIdentity": {
+    "name": "id-ouro-desk-hosted",
+    "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourcegroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted",
+    "clientId": "e9c97801-2067-41f8-83a2-1241652c9a40",
+    "principalId": "1c2b5350-5e21-4ccc-bba3-8cd719147ebb",
+    "tenantId": "a32d5dac-917a-4009-ba4b-9e6129bbeb43"
+  },
+  "checksIdentity": {
+    "name": "id-ouro-identity-checks",
+    "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourcegroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-identity-checks",
+    "clientId": "e250640c-2704-4c96-82d9-d0ec23a65ff7",
+    "principalId": "ee0cad0d-994f-47e8-a877-c68fe405b0e7",
+    "tenantId": "a32d5dac-917a-4009-ba4b-9e6129bbeb43"
+  },
+  "storage": {
+    "account": "stouroaccounts261e0b",
+    "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.Storage/storageAccounts/stouroaccounts261e0b",
+    "endpoint": "https://stouroaccounts261e0b.table.core.windows.net"
+  },
+  "ari": {
+    "accountId": "d3a1a4f4-2e74-4f52-837a-54fbca0d9f36",
+    "githubUserId": 16390116,
+    "githubLogin": "arimendelow"
+  },
   "legacyCutoff": null,
-  "releasedAt": null
+  "releasedAt": null,
+  "keyVault": {
+    "name": "kv-ouro-identity-261e0b",
+    "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.KeyVault/vaults/kv-ouro-identity-261e0b",
+    "entraClientSecret": "entra-client-secret-prod"
+  }
 }
