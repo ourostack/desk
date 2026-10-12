@@ -627,7 +627,7 @@ test("a pushed branch with no upstream waits for desk_doctor's switch_state_bran
     const doctor = await session.call("desk_doctor", { repair: "switch_state_branch" })
     assert.equal(doctor.isError, false, JSON.stringify(doctor.payload))
     assert.match(doctor.payload.repair, /^repaired: branch review-copy → main/u)
-    assert.equal(doctor.payload.state, "ready")
+    assert.equal(doctor.payload.state, "ready", JSON.stringify(doctor.payload))
     assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "main")
   })
 })

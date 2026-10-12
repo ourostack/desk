@@ -1367,6 +1367,59 @@ test("state branch at startup: automatic repair, a failed switch, a local-only c
   assert.equal(again.summary, "Already on the state branch main.")
 })
 
+test("a switch repair whose admission fails names the error without a machine path, a credential or a stack", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const scripted = scriptedGit(state)
+  const planted = new Error("fatal: cannot lock C:\\Users\\ari\\private-repo\\.git\\index.lock for https://x:ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5@github.com")
+  planted.code = "ELOCKED"
+  const git = (options) => {
+    if (state.switches && options.args[0] === "rev-parse") throw planted
+    return scripted(options)
+  }
+  const { session } = await makeSession(t, { git, inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "degraded:state_branch_mismatch")
+  const doctored = payload(await session.callTool({ name: "desk_doctor", input: { repair: "switch_state_branch" } }))
+  assert.equal(doctored.state, "degraded:admission_exception")
+  const answer = JSON.stringify(doctored)
+  for (const leak of ["Users", "private-repo", "ghp_aB3dE5", "    at ", ".js:"]) assert.ok(!answer.includes(leak), `the doctor answer leaks ${leak}: ${answer}`)
+  assert.deepEqual(Object.keys(doctored.diagnostic.observed).sort(), ["failure_code", "message", "name"])
+  assert.equal(doctored.diagnostic.observed.failure_code, "ELOCKED")
+  assert.match(doctored.summary, /cannot lock <redacted path>/u)
+})
+
+test("a switch repair whose admission is not ready without an error gives the summary and no diagnostic", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const scripted = scriptedGit(state)
+  // The switch reports success, but HEAD stays on the review branch, so admission is still not ready, with no exception behind it.
+  const git = (options) => {
+    const answer = scripted(options)
+    if (options.args[0] === "switch") state.branch = "review"
+    return answer
+  }
+  const { session } = await makeSession(t, { git, inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "degraded:state_branch_mismatch")
+  const doctored = payload(await session.callTool({ name: "desk_doctor", input: { repair: "switch_state_branch" } }))
+  assert.notEqual(doctored.state, "ready")
+  assert.equal(typeof doctored.summary, "string")
+  assert.equal(doctored.diagnostic, undefined)
+})
+
+test("a switch repair whose admission then fails says why, not only the degraded state", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const scripted = scriptedGit(state)
+  // Once the branch has been switched, the next admission attempt hits an unexpected error.
+  const git = (options) => {
+    if (state.switches && options.args[0] === "rev-parse") throw new Error("fatal: Unable to create '.git/index.lock': File exists.")
+    return scripted(options)
+  }
+  const { session } = await makeSession(t, { git, inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "degraded:state_branch_mismatch")
+  const doctored = payload(await session.callTool({ name: "desk_doctor", input: { repair: "switch_state_branch" } }))
+  assert.equal(doctored.state, "degraded:admission_exception")
+  assert.match(doctored.summary, /index\.lock/u)
+  assert.equal(doctored.diagnostic.observed.message, "fatal: Unable to create '.git/index.lock': File exists.")
+})
+
 test("mid-session, HEAD leaving the state branch is never switched back automatically: writes go read-only with the doctor fix", async (t) => {
   const state = { branch: "main", onRemote: true, upstream: true }
   const { session } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch: quietWatch })

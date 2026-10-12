@@ -9,7 +9,7 @@
 // have broken that path even though nothing on it ever calls argvSafeReason.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { argvSafeReason } from "../../../../../plugins/desk/mcp/src/runtime/argv-safe-reason.js"
+import { argvSafeReason, redactMachineText } from "../../../../../plugins/desk/mcp/src/runtime/argv-safe-reason.js"
 
 test("argvSafeReason strips a real-shaped desk task path", () => {
   const safe = argvSafeReason("engineering/fix-thing/2026-09-28-cover-reset/planning.md unexpectedly staged")
@@ -48,4 +48,10 @@ test("argvSafeReason never throws on a non-string, nullish or empty input", () =
   assert.equal(argvSafeReason(null), "")
   assert.equal(argvSafeReason(42), "42")
   assert.equal(argvSafeReason(""), "")
+})
+
+test("redactMachineText keeps line breaks and desk-relative paths, and renders a missing or non-string value as text", () => {
+  assert.equal(redactMachineText("cannot lock .git/index.lock\nunder /Users/ari/desk"), "cannot lock .git/index.lock\nunder <redacted path>")
+  assert.equal(redactMachineText(undefined), "")
+  assert.equal(redactMachineText(42), "42")
 })
