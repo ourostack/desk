@@ -116,7 +116,8 @@ test("the tidy commit and its revert both go through desk_save tidy, which adds 
     assert.ok(part.length > 100, label)
     assert.match(part, /desk_save \(tidy: true/u, label)
   }
-  assert.match(step7, /desk_save ends it with the trailer `Desk-Tidy: true`/u)
+  // The steps sit in a heredoc the shell expands, so the source escapes each backtick; the agent reads `Desk-Tidy: true`.
+  assert.match(step7, /desk_save ends it with the trailer \\`Desk-Tidy: true\\`/u)
   assert.equal(text.split("Desk-Tidy: true").length - 1, 1, "the tool adds the trailer, so the text names it once")
 })
 

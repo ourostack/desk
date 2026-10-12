@@ -1350,6 +1350,7 @@ test("pending destination resolution without completed status proof never invent
   assert.equal(pending.detail_pending, true)
   assert.equal(pending.status_detail_from, undefined)
   assert.match(pending.status_detail, /^unavailable: no completed same-context/u)
+  assert.equal(pending.root, undefined, "no root is named while the destination is being verified")
   assert.equal(pending.admission.writes, "refused")
   release()
   complete()
@@ -2282,6 +2283,8 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.match(slow.status_detail, /^unavailable: .*did not answer within this call's budget/u)
   assert.equal(slow.detail_pending, true)
   assert.equal(slow.state, "ready")
+  // The session already knows which desk it admitted, so an answer without the runtime detail still names it.
+  assert.deepEqual(slow.root, { path: session.context.root.root, source: "explicit-root" })
   // While that computation runs, another call waits only its own budget for it and does not start a second one.
   const joinedStarted = Date.now()
   assert.match(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_detail, /^unavailable: a runtime status computation .* that started at \d{4}-.* is still running/u)

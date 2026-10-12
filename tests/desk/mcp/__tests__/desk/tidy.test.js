@@ -8,7 +8,7 @@
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -293,6 +293,17 @@ test("stale tasks alone never make the tidy needed, but the report still lists t
   const report = cli(["--report"], { env: { DESK: root } })
   assert.equal(report.code, 0)
   assert.match(report.stdout, /^ {2}stale_task: billing-disputes\/old-refund-audit\/task\.md — .*\(reported only; the tidy leaves it alone\)$/m)
+})
+
+test("a stale quarantine entry alone never makes the tidy needed: the tidy deletes nothing and leaves ignored files where they are", () => {
+  const root = soloDesk({ messy: false })
+  const stale = path.join(root, "_cache", "stray-2026-07-01")
+  mkdirSync(stale, { recursive: true })
+  utimesSync(stale, new Date(NOW - 40 * 24 * 60 * 60 * 1000), new Date(NOW - 40 * 24 * 60 * 60 * 1000))
+  const result = status(root)
+  assert.deepEqual(result.findings.map((f) => f.code), ["stale_quarantine"])
+  assert.equal(result.needed, false)
+  assert.equal(result.reason, "nothing to tidy")
 })
 
 test("once the organization record says tidy_version 1 or later, the desk is not even walked", () => {

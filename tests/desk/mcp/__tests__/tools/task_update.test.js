@@ -578,15 +578,16 @@ test("task_update reports a commit failure without losing the write", async () =
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
-test("task_update skips staging and committing when the file held unstaged changes before the write", async () => {
+// A card can only be committed through Desk's tools (the desk's pre-commit hook refuses a hand commit of one), so a card that
+// already holds uncommitted changes has no other way in: task_update commits it and says what the commit took along.
+test("task_update commits a card that held unstaged changes before the write, and says the commit includes them", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
   const filePath = path.join(root, "t", "book-flights", "task.md")
 
-  // Another session's unstaged edit to this same file, in place before
-  // task_update writes.
-  await fs.appendFile(filePath, "\nanother session's note\n")
+  // An edit nobody committed: an earlier commit that failed, or a change made outside Desk's tools.
+  await fs.appendFile(filePath, "\nan uncommitted note\n")
 
   const calls = []
   const result = await task_update({
@@ -595,12 +596,83 @@ test("task_update skips staging and committing when the file held unstaged chang
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.equal(result.status, "updated", "the write always happens")
-  assert.equal(result.commit, undefined, "no commit attempted when the file was already dirty")
-  const { data } = await readFront(filePath)
-  assert.equal(data.status, "processing")
-  assert.match(gitStatus(root), /t\/book-flights\/task\.md/, "the file is left as an uncommitted change")
-  assert.equal(calls.length, 0, "schedulePush is never called when staging was skipped for a pre-existing dirty file")
+  assert.equal(result.status, "updated")
+  assert.equal(result.commit, undefined, "the commit succeeded")
+  assert.match(result.desk_commit, /^[0-9a-f]{7,}$/u)
+  assert.match(result.included_uncommitted_changes, /^This card already held uncommitted changes before this call.*this commit includes them\.$/u)
+  assert.equal(gitStatus(root), "", "nothing is left uncommitted")
+  assert.match(await fs.readFile(filePath, "utf8"), /an uncommitted note/u)
+  assert.deepEqual(calls, [{ root }], "the push is scheduled")
+})
+
+// The Agency dry run of 2026-10-12: the pre-commit hook told the agent to unstage a new card and call task_update for it; the card was
+// then untracked, and task_update wrote the note without committing it or saying so.
+test("task_update commits a card that is still untracked, as the pre-commit hook's own advice needs", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const filePath = path.join(root, "t", "fix-the-login", "task.md")
+  await fs.mkdir(path.dirname(filePath), { recursive: true })
+  await fs.writeFile(filePath, "---\ntitle: Fix the login\nstatus: drafting\n---\n")
+
+  const result = await task_update({
+    deskRoot: root,
+    input: { track: "t", slug: "fix-the-login", note: "Operator asked for the desk changes to be committed." },
+    schedulePush: () => {},
+  })
+
+  assert.equal(result.commit, undefined)
+  assert.match(result.desk_commit, /^[0-9a-f]{7,}$/u)
+  assert.equal(typeof result.included_uncommitted_changes, "string")
+  assert.deepEqual(lastCommitFiles(root), [path.posix.join("t", "fix-the-login", "task.md")])
+  assert.equal(gitStatus(root), "")
+})
+
+// A card Git holds as a conflict (a sync whose stash would not go back, `autostash_pop_conflict`) still has the conflict markers in it:
+// committing it would publish them and mark the conflict resolved.
+test("task_update does not commit a card that Git holds as a conflict, and says why", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
+  const filePath = path.join(root, "t", "book-flights", "task.md")
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8" })
+  await fs.appendFile(filePath, "\nfrom this machine\n")
+  assert.equal(git("stash").status, 0)
+  await fs.appendFile(filePath, "\nfrom another machine\n")
+  assert.equal(git("commit", "-q", "--no-verify", "-am", "theirs").status, 0)
+  assert.notEqual(git("stash", "pop").status, 0, "the stash does not go back cleanly")
+  assert.match(gitStatus(root), /^UU t\/book-flights\/task\.md/u)
+  const head = git("rev-parse", "HEAD").stdout
+
+  const calls = []
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "carried on" }, schedulePush: (opts) => calls.push(opts) })
+
+  assert.equal(result.status, "updated")
+  assert.deepEqual(result.commit, { status: "failed", reason: "Git holds this card as a conflict (unmerged): the write is on disk and nothing was committed. Resolve the conflict markers in the card, run `git add` on it, then call task_update again." })
+  assert.equal("desk_commit" in result, false)
+  assert.equal("included_uncommitted_changes" in result, false)
+  assert.equal(git("rev-parse", "HEAD").stdout, head, "no commit was made")
+  assert.match(gitStatus(root), /^UU t\/book-flights\/task\.md/u, "the conflict is not marked resolved")
+  assert.match(await fs.readFile(filePath, "utf8"), /carried on/u, "the write itself is kept")
+  assert.deepEqual(calls, [], "no push is scheduled")
+
+  // When Git cannot say whether the card is unmerged, the commit is tried and Git's own answer is reported.
+  const blind = (cmd, args, opts) => (args.includes("ls-files") && args.includes("-u") ? { status: 1, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts))
+  const tried = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "again" }, spawnGit: blind, schedulePush: () => {} })
+  assert.notEqual(tried.commit?.reason, result.commit.reason)
+})
+
+test("task_update says nothing about uncommitted changes for a clean card, or when the commit fails", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
+  const clean = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "one" }, schedulePush: () => {} })
+  assert.equal("included_uncommitted_changes" in clean, false)
+
+  await fs.appendFile(path.join(root, "t", "book-flights", "task.md"), "\nan uncommitted note\n")
+  const spawnGit = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit boom" } : spawnSync(cmd, args, opts))
+  const failed = await task_update({ deskRoot: root, input: { track: "t", slug: "book-flights", note: "two" }, spawnGit, schedulePush: () => {} })
+  assert.deepEqual(failed.commit, { status: "failed", reason: "commit boom" })
+  assert.equal("included_uncommitted_changes" in failed, false, "a failed commit included nothing")
 })
 
 // A real `.git/index.lock`, held the way a concurrent Git command (or a

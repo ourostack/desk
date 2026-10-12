@@ -274,8 +274,10 @@ function commitTidy({ deskRoot, paths, message, spawnGit, schedulePush }) {
   if (cards.length > 0 && hasUnstagedWork(deskRoot, cards, spawnGit)) {
     throw new Error("desk_save: a task card in `paths` has an unstaged change, is untracked, or git could not check it; run task_update for a card edit, or git restore --staged and git restore the card, and pass only cards that task_move, track_rename or git mv staged as moves")
   }
-  if (others.length > 0 && hasUnstagedWork(deskRoot, others, spawnGit)) {
-    const staged = stagePaths(deskRoot, others, spawnGit)
+  // Only the paths that hold unstaged work are staged. The old side of a move `git mv` already staged is neither on disk nor in the index, and `git add` refuses the whole call for one such path.
+  const unstaged = others.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
+  if (unstaged.length > 0) {
+    const staged = stagePaths(deskRoot, unstaged, spawnGit)
     if (!staged.ok) return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
   }
   const listed = new Set(rels)

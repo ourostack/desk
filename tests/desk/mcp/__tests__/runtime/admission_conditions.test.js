@@ -533,6 +533,8 @@ test("a clean detached HEAD on a remote branch is switched back to the state bra
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "ready")
     assert.equal(status.repair, `repaired: detached HEAD → main (was ${detachedSha.slice(0, 12)})`)
+    // The compact answer, the one an agent reads, tells it too.
+    assert.deepEqual((await session.call("desk_status", {})).payload.notes.filter((note) => note.startsWith("repaired:")), [status.repair])
     assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "main")
     assert.equal(readFileSync(path.join(fixture.desk, "notes-untracked.md"), "utf8"), "keep me\n")
     const lastStart = await lastStartUntil(fixture, (record) => record.state === "ready")
