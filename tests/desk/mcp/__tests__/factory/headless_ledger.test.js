@@ -302,6 +302,39 @@ test("crash_and_reset_never_refund", async (t) => {
     assert.equal((await readStatus(env)).loop.agent_launch_highwater, undefined, "nothing is written from the pair")
   }))
 
+  await t.test("the documented full reset clears a blocked ledger, keeps today spent and launches the next UTC day", () => scratch(async (env, root) => {
+    // Today: three evaluations (the evaluator's own record says 3) and one triage launch, so the ledger has spent 4.
+    await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { state: "ran", day: dayText(0), jobs: 0 } } }))
+    const legacy = async () => ({ legacyEvaluator: (await readStatus(env)).evaluator })
+    assert.deepEqual(await reserveMany(env, "evaluate", at(0, 9), 3, await legacy()), ["reserved", "reserved", "reserved"])
+    assert.equal((await reserve(env, "triage", at(0, 9), await legacy())).state, "reserved")
+    await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { ...current.evaluator.headless, jobs: 3 } } }))
+    assert.equal((await ledgerOf(root)).spent, 4)
+    // Blocked: an older guard of the same ledger put back beside the newer ledger and mark.
+    await fs.writeFile(path.join(root, GUARD_FILE), (await readBytes(root)).guard.replace(/"revision": ?\d+/u, '"revision": 1'), { mode: 0o600 })
+    const blocked = (await reserve(env, "evaluate", at(0, 10), await legacy())).state
+    assert.ok(["inconsistent", "rollback_detected"].includes(blocked), blocked)
+    // The repair, as "Repairing a blocked launch ledger" says: move both agent-launch-*.json files aside and delete
+    // loop.agent_launch_highwater and evaluator.headless from status.json.
+    await fs.rename(path.join(root, LEDGER_FILE), path.join(root, "aside-ledger.json"))
+    await fs.rename(path.join(root, GUARD_FILE), path.join(root, "aside-guard.json"))
+    await updateStatus(env, (current) => {
+      const { agent_launch_highwater: _mark, ...loop } = current.loop
+      const { headless: _headless, ...evaluator } = current.evaluator
+      return { ...current, loop, evaluator }
+    })
+    // Same day: a new ledger starts with today spent; nothing launches and nothing is refunded.
+    assert.equal((await reserve(env, "evaluate", at(0, 11), await legacy())).state, "quota_exhausted")
+    assert.equal((await reserve(env, "triage", at(0, 13), await legacy())).state, "quota_exhausted")
+    const fresh = await ledgerOf(root)
+    assert.equal(fresh.spent, 30)
+    assert.equal(fresh.day, dayText(0))
+    // Next UTC day: launches as normal.
+    assert.equal((await reserve(env, "evaluate", at(1, 10), await legacy())).state, "reserved")
+    assert.equal((await reserve(env, "triage", at(1, 10), await legacy())).state, "reserved")
+    assert.equal((await ledgerOf(root)).spent, 2)
+  }))
+
   await t.test("a set-aside file older than the ledger does not move the seal off today", () => scratch(async (env, root) => {
     const aside = path.join(root, "status.json.corrupt-json-1")
     await fs.writeFile(aside, "{}")
