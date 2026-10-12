@@ -389,8 +389,20 @@ async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runti
   return { runtimeServer, runtimeStatus }
 }
 
+// Packages are resolved from inside the mirror, next to its own node_modules, so each one loaded early is the file the server's own import finds. A mirror without the resolver is imported without splitting out its packages.
+async function importMirrorInChunks(url) {
+  let resolvePackage = null
+  try {
+    resolvePackage = (await import(new URL("./runtime/resolve-here.js", url).href)).resolvePackage
+  } catch {
+    // The server's own import reports a missing or broken mirror.
+  }
+  // The mirror's root, holding its package.json, is our own package: a `#` import resolving inside it is our source, not a package.
+  return importInChunks(url, { resolvePackage, ownPackage: new URL("../", url).href })
+}
+
 // The last step of the shipped importer, after the worker restored the runtime: load the server from the source mirror, next to its native dependencies.
-export async function importPreparedRuntime({ mcpRoot, prepared, load = (url) => importInChunks(url) }) {
+export async function importPreparedRuntime({ mcpRoot, prepared, load = importMirrorInChunks }) {
   const pluginRoot = path.resolve(mcpRoot, "..")
   const runtimeServer = await load(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href)
   runtimeServer.configureRuntimeArtifacts?.({ pluginRoot })
