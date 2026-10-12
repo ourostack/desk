@@ -87,6 +87,21 @@ test("with a package resolver, each package is its own piece in source order, an
   assert.deepEqual(reads, ["src/server.js", "src/a.js"])
 })
 
+test("a package is a leaf because the resolver returned it, not because of its path", async () => {
+  // The source mirror sits under a node_modules folder, and a package resolves outside one.
+  const events = []
+  const reads = []
+  const sources = { "server.js": 'import { a } from "./a.js"\n', "a.js": 'import { Server } from "sdk"\n' }
+  await importInChunks("file:///cache/node_modules/desk/src/server.js", {
+    read: (href) => { reads.push(href); return sources[href.split("/").pop()] },
+    resolvePackage: () => "file:///pkgs/sdk/index.js",
+    load: async (href) => { events.push(href) },
+    yieldTurn: async () => {},
+  })
+  assert.deepEqual(events, ["file:///pkgs/sdk/index.js", "file:///cache/node_modules/desk/src/a.js", "file:///cache/node_modules/desk/src/server.js"])
+  assert.deepEqual(reads, ["file:///cache/node_modules/desk/src/server.js", "file:///cache/node_modules/desk/src/a.js"])
+})
+
 test("the mirror's resolver loads a package early as the same instance the module later imports", async () => {
   const root = await mkTempRoot("desk-chunked-import-packages-")
   mkdirSync(path.join(root, "node_modules", "counted"), { recursive: true })
