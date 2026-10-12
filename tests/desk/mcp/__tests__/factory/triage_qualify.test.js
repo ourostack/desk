@@ -326,6 +326,8 @@ test("the default seams answer from the real host", async () => {
   } finally {
     fs.lstat = lstat
   }
+  const autoDefaults = await qualify.autoQualifyTriage({ ...ENV, DESK_FACTORY_HEADLESS: "1" }, {})
+  assert.equal(autoDefaults.state, "refused")
   const defaults = await qualify.qualifyTriage({ ...ENV, DESK_FACTORY_HEADLESS: "1" })
   assert.deepEqual(defaults, { state: "refused", reason: process.platform === "darwin" && process.arch === "arm64" ? "headless_session" : "host_unsupported", launched: false })
 })
@@ -334,13 +336,13 @@ test("the loader finds the runner here, in a prepared mirror, or answers a quiet
   const own = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))) + path.sep
   assert.equal(home.packagesResolve(own), true)
   assert.equal(home.packagesResolve("/nonexistent-desk-root/"), false)
-  assert.deepEqual(await home.triageRuntimeRoot(ENV), { state: "found", root: own })
+  assert.deepEqual(await home.triageRuntimeRoot(), { state: "found", root: own })
   const never = () => { throw new Error("unresolved") }
   const mirror = "/unit/mirror"
   const resolve = (root) => { if (root !== `${mirror}/`) throw new Error("unresolved") }
-  assert.deepEqual(await home.triageRuntimeRoot(ENV, { ownRoot: "/plugin/", resolve, prepare: async () => mirror }), { state: "found", root: `${mirror}/` })
+  assert.deepEqual(await home.triageRuntimeRoot({ ownRoot: "/plugin/", resolve, prepare: async () => mirror }), { state: "found", root: `${mirror}/` })
   for (const prepare of [async () => "relative", async () => null, async () => { throw new Error("pack") }, async () => "/other"]) {
-    assert.deepEqual(await home.triageRuntimeRoot(ENV, { ownRoot: "/plugin/", resolve, prepare }), { state: "unavailable", reason: "runtime_unavailable" })
+    assert.deepEqual(await home.triageRuntimeRoot({ ownRoot: "/plugin/", resolve, prepare }), { state: "unavailable", reason: "runtime_unavailable" })
   }
   assert.deepEqual(await home.importTriageRunner(ENV, { ownRoot: "/plugin/", resolve: never, prepare: async () => null }), { state: "unavailable", reason: "runtime_unavailable" })
   assert.deepEqual(await home.importTriageRunner(ENV, { ownRoot: "/plugin/", resolve, prepare: async () => mirror, load: async () => { throw new Error("unit") } }), { state: "unavailable", reason: "runtime_unloadable" })

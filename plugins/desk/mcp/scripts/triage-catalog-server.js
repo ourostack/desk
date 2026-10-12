@@ -42,7 +42,8 @@ export function catalogModuleRoots(resolve=specifier=>fileURLToPath(import.meta.
   if(!source.startsWith(path.dirname(deps)+path.sep))throw Error("module_roots")
   return [source,deps]
 }
-export async function startCatalogServer(runtime=process){
+// `moduleRoots` is a test seam; the entry point passes nothing.
+export async function startCatalogServer(runtime=process,{moduleRoots=catalogModuleRoots}={}){
   if(!serverFirstEnvironment(runtime)){
     runtime.stderr.write("catalog_bootstrap_failed_environment\n");runtime.exitCode=1;return null
   }
@@ -50,7 +51,7 @@ export async function startCatalogServer(runtime=process){
     runtime.stderr.write("catalog_bootstrap_failed_runtime_provenance\n");runtime.exitCode=1;return null
   }
   let roots
-  try{roots=catalogModuleRoots()}
+  try{roots=moduleRoots()}
   catch{runtime.stderr.write("catalog_bootstrap_failed_module_roots\n");runtime.exitCode=1;return null}
   const loadedModules=new Map()
   const loadHooks=nodeModule.registerHooks({load:(url,context,next)=>catalogModuleLoad(loadedModules,roots,url,context,next)})
