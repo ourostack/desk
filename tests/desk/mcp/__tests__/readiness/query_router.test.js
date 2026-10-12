@@ -1225,7 +1225,19 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   }
   const first = await launch()
   await t.test("immediate startup query returns canonical fixture during convergence", async () => {
-    const result = await first.call("desk_search", { query: "startupquartz" })
+    // A read waits up to 10 s for admission, then refuses with code "admitting" and asks the caller to retry. A cold start on a slow
+    // Windows runner can take longer than that, so the test follows the documented contract and retries; the embedding barrier
+    // still holds convergence open, so the answer still comes during convergence.
+    const deadline = Date.now() + 60_000
+    let result
+    for (;;) {
+      const response = await first.request("tools/call", { name: "desk_search", arguments: { query: "startupquartz" } })
+      const body = JSON.parse(response.content[0].text)
+      if (response.isError !== true) { result = body; break }
+      assert.equal(body.code, "admitting", response.content[0].text)
+      assert.ok(Date.now() < deadline, `desk_search was still refused after 60 s: ${response.content[0].text}`)
+      await first.call("desk_status", {})
+    }
     assert.equal(result.results[0].snippet, "startupquartz")
     assert.equal(result.search_mode, "lexical")
   })
