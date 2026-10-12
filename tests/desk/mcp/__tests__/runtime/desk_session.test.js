@@ -1146,6 +1146,34 @@ test("re-election waits until the lost controller has closed, so the new one nev
   assert.equal(session.admission.snapshot().state, "ready")
 })
 
+test("closing the session waits for a controller whose election finished after the close began", async (t) => {
+  let finishElection
+  let finishClose
+  let closeStarted = false
+  const runtime = fakeRuntime({
+    connectOrStartController: () => new Promise((resolve) => {
+      finishElection = () => resolve({
+        accepted: true,
+        async status() {},
+        close() { closeStarted = true; return new Promise((done) => { finishClose = done }) },
+      })
+    }),
+  })
+  // The attempt wait (50 ms) runs out while the late controller is still closing.
+  const { session } = await makeSession(t, { runtime, disposeAdmissionWaitMs: 50 })
+  void session.admission.refresh()
+  await waitUntil(() => finishElection !== undefined)
+  let disposed = false
+  const disposing = session.dispose().then(() => { disposed = true })
+  finishElection()
+  await waitUntil(() => closeStarted)
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  assert.equal(disposed, false, "the late controller is still closing, so the session has not finished closing")
+  finishClose()
+  await disposing
+  assert.equal(disposed, true)
+})
+
 test("disposing the session during the repeats ends the check without a verdict", async (t) => {
   const runtime = fakeRuntime({
     connectOrStartController: async () => ({ accepted: true, async status() { throw new Error("readiness controller request timed out: status") } }),

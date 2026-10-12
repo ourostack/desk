@@ -276,10 +276,19 @@ export function createDeskSession(deps) {
     if (context.admission) context.admission = { ...context.admission, controller: null }
     if (controller) context.controllerLost = true
     context.semanticCurrent = false
+    return closeTracked(controller)
+  }
+
+  function closeTracked(controller) {
     const closing = Promise.resolve().then(() => controller?.close?.()).catch(() => {})
     controllerCloses.add(closing)
     void closing.finally(() => controllerCloses.delete(closing))
     return closing
+  }
+
+  // Closes can start while the session waits, such as an election that finished after disposal began, so wait until none remain.
+  async function controllerClosesSettled() {
+    while (controllerCloses.size > 0) await Promise.all([...controllerCloses])
   }
 
   function watchController(controller) {
@@ -524,7 +533,7 @@ export function createDeskSession(deps) {
       controllerFailure = { error }
     }
     if (disposed) {
-      await admitted?.controller?.close?.()
+      await closeTracked(admitted?.controller)
       return { outcome: null }
     }
     try {
@@ -549,13 +558,13 @@ export function createDeskSession(deps) {
 
   async function reconnectController({ deskRoot, policy, onRepair }) {
     // A lost controller can still be closing, with its child holding the endpoint. Electing now would start a child that fails with EADDRINUSE and then join the one that is exiting; its close is bounded (the child is killed after 1 s).
-    await Promise.all(controllerCloses)
+    await controllerClosesSettled()
     if (disposed) return null
     try {
       const connector = context.runtimeServer.connectOrStartController
       const controller = await connector({ deskRoot, policy, stateHome: readinessStateHome, onRepair })
       if (disposed) {
-        await controller?.close?.()
+        await closeTracked(controller)
         return null
       }
       if (!controller?.accepted) throw Object.assign(new Error("The readiness controller could not accept ownership."), { code: "controller_start_failed" })
@@ -1098,10 +1107,12 @@ export function createDeskSession(deps) {
       // controller after disposal closes it itself.
       const retired = Promise.all([operationTail, statusReaderOutcome()]).then(async ([, retirementError]) => {
         forgetController()
-        await Promise.all(controllerCloses)
+        await controllerClosesSettled()
         return retirementError
       })
-      return Promise.all([retired, attemptStopped]).then(([retirementError]) => {
+      // An attempt that finished during the attempt wait may have closed a late controller; each close ends within the child's kill bound.
+      return Promise.all([retired, attemptStopped]).then(async ([retirementError]) => {
+        await controllerClosesSettled()
         if (retirementError) throw retirementError
       })
     },
