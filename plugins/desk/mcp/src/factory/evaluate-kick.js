@@ -16,7 +16,9 @@
 //
 // A loop worker whose evaluator step labeled a job kicks once more when it ends (`loop-worker.js`), so the queue
 // drains back to back, one worker after another, until nothing the runner can run today is left. Every run stays
-// inside the daily ceiling (`MAX_HEADLESS_JOBS_PER_DAY`), the 3-attempt limit and one attempt per job per UTC day.
+// inside the daily ceiling (`MAX_HEADLESS_JOBS_PER_DAY`), the 3-attempt limit and one attempt per job per UTC day. The ceiling is the
+// shared launch ledger's (`headless-ledger.js`): the day is spent for the kick when the evaluator's own count reached it, or when the
+// witnessed shared quota leaves no evaluation launch now (spent, or held back for triage's unused windows).
 //
 // It starts nothing in a headless factory session, with the loop switched off (`DESK_FACTORY_LOOP`), without factory
 // state, with no request waiting, or while a loop worker holds its lock and is younger than the worker's own hard
@@ -34,6 +36,7 @@ import { fileURLToPath } from "node:url"
 
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
+import { evaluationQuotaOpen } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus } from "./outbox.js"
 
@@ -67,7 +70,8 @@ export function evaluateDue(status, now, { newWorkAt = null, kick = false } = {}
   if (Number.isNaN(ranAt) || (Number.isFinite(newWorkAt) && newWorkAt > ranAt)) return dueStep(status, "evaluate", now, { newWorkAt })
   const today = new Date(now).toISOString().slice(0, 10)
   const headless = isObject(evaluator.headless) ? evaluator.headless : {}
-  const spent = headless.day === today && tally(headless.jobs) >= MAX_HEADLESS_JOBS_PER_DAY
+  // Spent by the evaluator's own count, or by the shared launch ledger's witnessed quota (triage's protected windows included).
+  const spent = (headless.day === today && tally(headless.jobs) >= MAX_HEADLESS_JOBS_PER_DAY) || !evaluationQuotaOpen(status, now)
   // Only a step that accepted a job's labels drains on: a run that timed out, spent its budget, failed or was rejected waits out the gap.
   if (record.last_result === "ran" && tally(evaluator.accepted_last_step) > 0 && tally(evaluator.ready_now) > 0 && !spent) return true
   if (!kick) return dueStep(status, "evaluate", now)

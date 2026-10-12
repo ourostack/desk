@@ -16,6 +16,7 @@ import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-
 import { evaluateDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { STOP_FACTS_BINDING_VERSION } from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import { HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
+import { LEDGER_FILE, reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
 import { labelsBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus, requestEvaluation, setConsent, updateStatus, writeLocalFacts, writeLocalLabels, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { indexJob } from "./_index_helper.js"
@@ -43,9 +44,17 @@ async function scratch(run) {
 const hex = (index) => `${String(index).padStart(2, "0")}${"ab".repeat(15)}`
 const sessionId = (index) => `3b0c1f5e-8a1d-4c2e-9f3a-${String(index).padStart(12, "0")}`
 
+// The evaluator record a machine that ran the evaluator step before the shared launch ledger leaves behind: from an earlier UTC day, so
+// the ledger's first migration starts today at zero. Without it the migration has no evidence and counts today as spent.
+const LEGACY_EVALUATOR = { headless: { state: "idle", day: "2000-01-01", jobs: 0 } }
+async function seedLegacy(env) {
+  await updateStatus(env, (current) => (current.evaluator === undefined ? { ...current, evaluator: structuredClone(LEGACY_EVALUATOR) } : current))
+}
+
 // A finished job with one session on `host`; its evaluation request is recorded.
 async function seedJob(env, base, index, { host = "claude-code", hosts = [host] } = {}) {
   await setConsent(env, { store: STORE, contribute: true })
+  await seedLegacy(env)
   const job = hex(index)
   for (const [offset, sessionHost] of hosts.entries()) {
     const facts = structuredClone(LOCAL)
@@ -149,6 +158,7 @@ test("a ready job runs the headless runner once, its answer is accepted and the 
       deferred_jobs: 0,
       deferred_reason: null,
       blocked_days: 0,
+      ledger: null,
     },
     lag: { at: new Date(DAY0).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] },
   })
@@ -171,19 +181,21 @@ test("a step with no jobs waiting says so, runs and probes nothing, and records 
   assert.equal((await readStatus(env)).loop.steps.evaluate.last_result, "no_jobs_waiting")
 }))
 
-test("the seventh job in a day is not run and the state is budget_exhausted; the next day it runs", () => scratch(async (env, base) => {
-  // Six jobs already ran today (a step records its counts after every job), and two more are waiting.
+test("the job past the shared ceiling is not run and the state is budget_exhausted; the next day it runs", () => scratch(async (env, base) => {
+  // 27 jobs already ran today (a step records its counts after every job), and two more are waiting. At noon the two windows still ahead
+  // hold one triage opportunity each, so evaluation may reach 28 of the day's 30 shared launches.
   await seedJob(env, base, 1)
   await seedJob(env, base, 2)
   const today = new Date(DAY0).toISOString().slice(0, 10)
-  await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { day: today, jobs: MAX_HEADLESS_JOBS_PER_DAY - 1, accepted: MAX_HEADLESS_JOBS_PER_DAY - 1 } } }))
+  await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { day: today, jobs: MAX_HEADLESS_JOBS_PER_DAY - 3, accepted: MAX_HEADLESS_JOBS_PER_DAY - 3 } } }))
   const options = seams()
   assert.deepEqual(await step(env, options), { ok: true, result: "budget_exhausted" })
   assert.equal(options.runHeadless.calls.length, 1, "one more job fits under the cap")
   let evaluator = await evaluatorOf(env)
   assert.equal(evaluator.headless.state, "budget_exhausted")
-  assert.equal(evaluator.headless.jobs, MAX_HEADLESS_JOBS_PER_DAY)
-  assert.equal(evaluator.headless.accepted, MAX_HEADLESS_JOBS_PER_DAY)
+  assert.equal(evaluator.headless.ledger, "window_protected")
+  assert.equal(evaluator.headless.jobs, MAX_HEADLESS_JOBS_PER_DAY - 2)
+  assert.equal(evaluator.headless.accepted, MAX_HEADLESS_JOBS_PER_DAY - 2)
   assert.equal(evaluator.waiting, 1)
   assert.equal(evaluator.headless.deferred_jobs, 1)
   assert.equal(evaluator.headless.deferred_reason, null, "a spent cap is its own state, not a lack of time")
@@ -410,6 +422,8 @@ test("DESK_FACTORY_HEADLESS_EVALUATOR=0 records disabled and runs nothing, but s
   assert.equal(evaluator.expired_total, 1)
 
   await seedJob(env, base, 2)
+  // The disabled step dated its record 31 days ahead; the shared ledger would refuse to migrate from a record dated after its clock.
+  await setEvaluator(env, structuredClone(LEGACY_EVALUATOR))
   const live = seams({ now: DAY0 + DAY })
   await step({ ...env, DESK_FACTORY_HEADLESS_EVALUATOR: "1" }, live)
   assert.equal(live.runHeadless.calls.length, 1, "any other value leaves the evaluator on")
@@ -625,6 +639,9 @@ test("the caller's contract is checked", () => scratch(async (env) => {
   await assert.rejects(step(env), TypeError)
   await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), deskRoot: "relative" }), TypeError)
   await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), deskRoot: 7 }), TypeError)
+  for (const maxRuns of [0, -1, 1.5, "1", Number.NaN]) {
+    await assert.rejects(step(env, { pluginVersion: VERSION, deadline: Date.now(), maxRuns }), TypeError, String(maxRuns))
+  }
 }))
 
 test("the runner is told the folder of each session log the briefs name", () => scratch(async (env, base) => {
@@ -663,7 +680,8 @@ test("a lock folder that cannot be written to is an error, not a busy answer", {
 
 const TODAY = new Date(DAY0).toISOString().slice(0, 10)
 const dayOf = (offsetDays) => new Date(DAY0 + offsetDays * DAY).toISOString().slice(0, 10)
-const setEvaluator = (env, evaluator, loop) => updateStatus(env, (current) => ({ ...current, evaluator, ...(loop === undefined ? {} : { loop: { ...(current.loop ?? {}), ...loop } }) }))
+// With no evaluator given, the legacy record from an earlier day stands in, so the shared ledger's migration has its evidence.
+const setEvaluator = (env, evaluator, loop) => updateStatus(env, (current) => ({ ...current, evaluator: evaluator ?? structuredClone(LEGACY_EVALUATOR), ...(loop === undefined ? {} : { loop: { ...(current.loop ?? {}), ...loop } }) }))
 
 test("a run is counted as started before it starts: the day's count and the attempt are saved first", () => scratch(async (env, base) => {
   const job = await seedJob(env, base, 1)
@@ -699,7 +717,7 @@ test("a run that never started (a blocked answer) is taken back out of the count
   assert.deepEqual(Object.values((await readStatus(env)).loop.evaluate.attempts).map((entry) => entry.attempts), [1], "only the job that ran keeps an attempt")
 }))
 
-test("a damaged day count means the day is spent; only an absent record means zero", () => scratch(async (env, base) => {
+test("a damaged day count means the day is spent; with no record at all the shared ledger has no evidence and spends the day too", () => scratch(async (env, base) => {
   await seedJob(env, base, 1)
   for (const headless of [{ day: TODAY, jobs: "many" }, { day: TODAY, jobs: -1 }, { day: TODAY }, { day: "someday", jobs: 0 }, {}, "garbage", 7]) {
     await setEvaluator(env, { headless })
@@ -712,7 +730,10 @@ test("a damaged day count means the day is spent; only an absent record means ze
   }
   await updateStatus(env, ({ evaluator, ...rest }) => rest)
   const fresh = seams()
-  assert.equal((await step(env, fresh)).result, "ran", "no record at all is a new day")
+  assert.equal((await step(env, fresh)).result, "budget_exhausted", "no record at all is no evidence: the ledger's first day starts spent")
+  assert.equal(fresh.runHeadless.calls.length, 0)
+  assert.equal((await evaluatorOf(env)).headless.ledger, "quota_exhausted")
+  assert.equal((await step(env, seams({ now: DAY0 + DAY }))).result, "ran", "the next UTC day is a normal one")
 }))
 
 test("a stored day that is earlier is a new day even when its counts are damaged", () => scratch(async (env, base) => {
@@ -731,12 +752,14 @@ test("a clock that moves backwards never gives the day a fresh budget", () => sc
   assert.equal(spent.runHeadless.calls.length, 0)
   assert.equal((await evaluatorOf(env)).headless.day, dayOf(1), "the stored later day stands")
 
+  // Room in the evaluator's own later-day count is not room in the shared ledger: a record dated after the clock blocks its migration.
   await setEvaluator(env, { headless: { day: dayOf(1), jobs: 2, accepted: 2, rejected: 0 } })
   const room = seams()
-  assert.equal((await step(env, room)).result, "ran")
-  assert.equal(room.runHeadless.calls.length, 2)
+  assert.deepEqual(await step(env, room), { ok: true, result: "budget_exhausted" })
+  assert.equal(room.runHeadless.calls.length, 0)
   const evaluator = await evaluatorOf(env)
-  assert.equal(evaluator.headless.jobs, 4)
+  assert.equal(evaluator.headless.ledger, "legacy_future_dated")
+  assert.equal(evaluator.headless.jobs, 2)
   assert.equal(evaluator.headless.day, dayOf(1))
 }))
 
@@ -776,7 +799,8 @@ test("a step that crosses UTC midnight starts the new day's count; no day starts
   await seedJob(env, base, 2)
   const nextMidnight = Math.floor(DAY0 / DAY) * DAY + DAY
   let clock = 0
-  await setEvaluator(env, { headless: { day: TODAY, jobs: MAX_HEADLESS_JOBS_PER_DAY - 1, accepted: 0, rejected: 0 } })
+  // 28 ran today: at 23:59 the last window is still triage's, so one evaluation fits before midnight.
+  await setEvaluator(env, { headless: { day: TODAY, jobs: MAX_HEADLESS_JOBS_PER_DAY - 2, accepted: 0, rejected: 0 } })
   const options = seams({
     now: nextMidnight - 60 * 1000,
     clock: () => clock,
@@ -1181,4 +1205,122 @@ test("a job labeled in the step leaves the lag; a step with nothing waiting reco
   await seedJob(env, base, 1)
   await step(env, seams({ now: DAY0 + DAY }))
   assert.deepEqual((await evaluatorOf(env)).lag, { at: new Date(DAY0 + DAY).toISOString(), unlabeled_jobs: 0, oldest_finished_at: null, unsupported_jobs: [], gave_up_jobs: [] })
+}))
+
+// ---------------------------------------------------------------------------
+// The shared launch ledger (`headless-ledger.js`).
+
+const sharedLedger = async (env) => JSON.parse(await fs.readFile(path.join(await factoryStateRoot(env), LEDGER_FILE), "utf8"))
+// The evaluator's own record without the per-step fields that change with every step.
+const evaluatorCounters = (evaluator) => ({ gave_up: evaluator.gave_up, waiting: evaluator.waiting, ready_now: evaluator.ready_now, ready_later: evaluator.ready_later, headless: { state: evaluator.headless.state, day: evaluator.headless.day, jobs: evaluator.headless.jobs, accepted: evaluator.headless.accepted, rejected: evaluator.headless.rejected, cost_usd: evaluator.headless.cost_usd } })
+
+test("maxRuns bounds the launches one step reserves; the automatic worker's 1 leaves the rest for the next step", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  await seedJob(env, base, 2)
+  const one = seams({ maxRuns: 1 })
+  assert.deepEqual(await step(env, one), { ok: true, result: "ran" })
+  assert.equal(one.runHeadless.calls.length, 1)
+  const evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.headless.deferred_jobs, 1)
+  assert.equal(evaluator.headless.deferred_reason, null, "a run limit is not a lack of time")
+  assert.equal(evaluator.ready_now, 1, "the next step can run it")
+  assert.equal((await sharedLedger(env)).evaluate.launched, 1)
+  // Without maxRuns the standalone step keeps its old behavior.
+  await seedJob(env, base, 3)
+  const all = seams({ now: DAY0 + 1000 })
+  await step(env, all)
+  assert.equal(all.runHeadless.calls.length, 2)
+}))
+
+test("every run is reserved in the shared ledger and its outcome recorded; a run that never started stays spent there", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  await seedJob(env, base, 2)
+  const options = seams({ runHeadless: fakeRunner((_call, count) => ({ state: count === 1 ? "timeout" : "ran", cost_usd: null })) })
+  await step(env, options)
+  let ledger = await sharedLedger(env)
+  assert.equal(ledger.spent, 2)
+  assert.deepEqual([ledger.evaluate.launched, ledger.evaluate.ran, ledger.evaluate.failed, ledger.evaluate.not_started], [2, 1, 1, 0])
+  await seedJob(env, base, 3)
+  await step(env, seams({ now: DAY0 + 1000, runHeadless: fakeRunner(() => ({ state: "no_credentials", cost_usd: null })) }))
+  ledger = await sharedLedger(env)
+  assert.equal(ledger.spent, 3, "the shared launch is never given back")
+  assert.equal(ledger.evaluate.not_started, 1)
+  assert.equal((await evaluatorOf(env)).headless.jobs, 2, "the evaluator's own count takes the run back, as before")
+}))
+
+test("a failure to record an outcome changes nothing in the step", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  const options = seams({ finishAgentLaunch: async () => { throw new Error("lost") } })
+  assert.deepEqual(await step(env, options), { ok: true, result: "ran" })
+  assert.equal((await evaluatorOf(env)).headless.accepted, 1)
+  assert.equal((await sharedLedger(env)).evaluate.ran, 0, "outcome evidence unknown, never assumed")
+}))
+
+test("a ledger that refuses or blocks stops the step as budget_exhausted with the ledger's code, before any run", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  const refusing = seams({ reserveAgentLaunch: async () => ({ state: "rollback_detected" }) })
+  assert.deepEqual(await step(env, refusing), { ok: true, result: "budget_exhausted" })
+  assert.equal(refusing.runHeadless.calls.length, 0)
+  const evaluator = await evaluatorOf(env)
+  assert.equal(evaluator.headless.ledger, "rollback_detected")
+  assert.equal(evaluator.headless.jobs, 0)
+  assert.deepEqual((await readStatus(env)).loop.evaluate.attempts, {}, "no attempt is stamped")
+  // A witnessed spent day is refused before the sign-in probe.
+  const spentMark = { schema: "desk.factory.agent-launch-highwater/1", epoch: "ab".repeat(16), max_revision: 9, max_acknowledged_revision: 9, max_day: new Date(DAY0).toISOString().slice(0, 10), spent_at_max_day: 30, max_clock_ms: DAY0 - 1000, windows: [0, 0, 0, 0], last_triage_at: null, max_issued_serial: 0, consumed_through: 0, target_sha256: "0".repeat(64), phase: "acknowledged" }
+  await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: spentMark } }))
+  const witnessed = seams()
+  assert.deepEqual(await step(env, witnessed), { ok: true, result: "budget_exhausted" })
+  assert.equal(witnessed.probes.length, 0)
+  assert.equal((await evaluatorOf(env)).headless.ledger, "quota_exhausted")
+}))
+
+test("a damaged status mark beside a surviving ledger seals that day through the real step, and the next day runs", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  await seedJob(env, base, 2)
+  assert.deepEqual(await step(env, seams({ maxRuns: 1 })), { ok: true, result: "ran" })
+  await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: { ...current.loop.agent_launch_highwater, phase: "bogus" } } }))
+  assert.equal(evaluateDue(await readStatus(env), DAY0 + HOURS, { kick: true }), true, "the kick leaves a damaged mark to the step")
+  const sealed = seams({ maxRuns: 1, now: DAY0 + HOURS })
+  assert.deepEqual(await step(env, sealed), { ok: true, result: "budget_exhausted" })
+  assert.equal(sealed.runHeadless.calls.length, 0)
+  assert.equal((await evaluatorOf(env)).headless.ledger, "witness_reset_sealed")
+  assert.equal((await readStatus(env)).loop.agent_launch_highwater.phase, "acknowledged", "the mark is written again from the ledger")
+  assert.equal(evaluateDue(await readStatus(env), DAY0 + 2 * HOURS, { kick: true }), false, "the sealed day kicks nothing")
+  const again = seams({ maxRuns: 1, now: DAY0 + 2 * HOURS })
+  assert.deepEqual(await step(env, again), { ok: true, result: "budget_exhausted" })
+  assert.equal(again.probes.length, 0, "the sealed day stops before the probe")
+  const next = seams({ maxRuns: 1, now: DAY0 + DAY })
+  assert.deepEqual(await step(env, next), { ok: true, result: "ran" })
+  assert.equal(next.runHeadless.calls.length, 1)
+}))
+
+test("triage-only reservations leave the evaluator's counters and failure cooldown as they were", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  // A genuine failure today: the job was attempted and must wait for tomorrow whatever triage does.
+  await step(env, seams({ runHeadless: fakeRunner(() => ({ state: "failed", cost_usd: null }), { write: false }) }))
+  const before = await readStatus(env)
+  assert.equal(before.loop.evaluate.attempts[job].attempts, 1)
+  assert.equal((await reserveAgentLaunch(env, { kind: "triage", now: DAY0 + 1000 })).state, "reserved")
+  assert.equal((await reserveAgentLaunch(env, { kind: "triage", now: DAY0 + 7 * 60 * 60 * 1000 })).state, "reserved")
+  const after = await readStatus(env)
+  assert.deepEqual(evaluatorCounters(after.evaluator), evaluatorCounters(before.evaluator), "triage launches are not evaluation launches")
+  assert.deepEqual(after.loop.evaluate, before.loop.evaluate)
+  assert.deepEqual(after.loop.steps.evaluate, before.loop.steps.evaluate, "no evaluation step stamped")
+  assert.equal(evaluateDue(after, DAY0 + 1000), false, "the failure's own gap still holds")
+  const again = seams({ now: DAY0 + 2 * 60 * 60 * 1000 })
+  assert.deepEqual(await step(env, again), { ok: true, result: "none_could_run" }, "attempted today: it waits for tomorrow")
+  assert.equal(again.runHeadless.calls.length, 0)
+  assert.equal((await sharedLedger(env)).spent, 3)
+  assert.equal((await sharedLedger(env)).triage.launched, 2)
+}))
+
+test("a crash between the reservation and the run's record keeps the launch spent and the attempt counted", () => scratch(async (env, base) => {
+  const job = await seedJob(env, base, 1)
+  assert.deepEqual(await step(env, seams({ runHeadless: async () => { throw new Error("killed") } })), { ok: false, result: "step_error" })
+  assert.equal((await sharedLedger(env)).spent, 1)
+  assert.equal((await sharedLedger(env)).evaluate.ran + (await sharedLedger(env)).evaluate.failed, 0, "the outcome is unknown, not a success and not zero spend")
+  assert.equal((await readStatus(env)).loop.evaluate.attempts[job].attempts, 1)
+  const again = seams({ now: DAY0 + 1000 })
+  await step(env, again)
+  assert.equal(again.runHeadless.calls.length, 0, "no replay the same day")
 }))

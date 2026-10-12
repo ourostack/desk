@@ -43,14 +43,21 @@ test("labelsBootCheck adds the age of the oldest waiting request and the stored 
   // No status yet: the evaluator is not recorded, which is not the same as zero.
   assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 2, quarantined: 0, oldest_days: 9, evaluator: null })
   await evaluatorStatus(env, running({ expired_total: 4, gave_up: 1, headless: { state: "ran" } }))
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "ran", expired_total: 4, gave_up: 1, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "ran", expired_total: 4, gave_up: 1, ledger_block: null, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   // An absent number stays absent; an unknown state is not a state.
   await evaluatorStatus(env, { headless: { state: "tomorrow" }, gave_up: -1, expired_total: "many" })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "unrecognized", expired_total: null, gave_up: null, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: "unrecognized", expired_total: null, gave_up: null, ledger_block: null, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   await evaluatorStatus(env, { gave_up: 1 })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, ledger_block: null, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
   await evaluatorStatus(env, { headless: {}, gave_up: 1 })
-  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }).evaluator, { state: null, expired_total: null, gave_up: 1, ledger_block: null, lag_minutes: null, unsupported_jobs: [], gave_up_jobs: [] })
+  // A shared launch ledger block that does not clear with the day is named; a spent day, or a code beside another state, is not.
+  await evaluatorStatus(env, { headless: { state: "budget_exhausted", ledger: "inconsistent" } })
+  assert.equal(labelsBootCheck({ env, now: NOW }).evaluator.ledger_block, "inconsistent")
+  await evaluatorStatus(env, { headless: { state: "budget_exhausted", ledger: "quota_exhausted" } })
+  assert.equal(labelsBootCheck({ env, now: NOW }).evaluator.ledger_block, null)
+  await evaluatorStatus(env, { headless: { state: "ran", ledger: "inconsistent" } })
+  assert.equal(labelsBootCheck({ env, now: NOW }).evaluator.ledger_block, null)
   // A request file that does not parse does not give an age, and the rest still do.
   await fs.writeFile(file(JOB_B), "not json")
   assert.equal(labelsBootCheck({ env, now: NOW }).oldest_days, 3)
@@ -63,6 +70,10 @@ test("the evaluator line says the plugin does the work, and gives the last resul
   assert.equal(labelsLine(base), "Factory evaluator: 3 finished jobs wait for labels (oldest 5 days); the plugin labels them in the background, last result ran")
   assert.equal(labelsLine({ ...base, count: 1, oldest_days: 1 }), "Factory evaluator: 1 finished job waits for labels (oldest 1 day); the plugin labels them in the background, last result ran")
   assert.equal(labelsLine({ ...base, oldest_days: null, evaluator: null }), "Factory evaluator: 3 finished jobs wait for labels; the plugin labels them in the background, no result recorded yet")
+  assert.equal(
+    labelsLine({ ...base, evaluator: { state: "budget_exhausted", expired_total: null, gave_up: null, ledger_block: "rollback_detected" } }),
+    'Factory evaluator: 3 finished jobs wait for labels (oldest 5 days); the plugin labels them in the background, last result budget_exhausted; the shared launch ledger blocks every launch (rollback_detected); see "Repairing a blocked launch ledger" in the factory docs',
+  )
   assert.equal(labelsLine({ ...base, evaluator: { state: null, expired_total: 0, gave_up: 0 } }), "Factory evaluator: 3 finished jobs wait for labels (oldest 5 days); the plugin labels them in the background, no result recorded yet")
   assert.equal(
     labelsLine({ ...base, evaluator: { state: "idle", expired_total: 2, gave_up: 2 } }),

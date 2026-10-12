@@ -252,6 +252,8 @@ const MAX_REQUEST_READS = 200
 const EVALUATOR_STATES = new Set(["idle", "ran", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "budget_exhausted", "disabled", "unsupported_host", "no_time_for_a_run"])
 // The states in which a card opens after two blocked days (the evaluator step's blocked states that a person can change).
 const CARD_STATES = new Set(["no_agent_cli", "no_credentials", "unsupported_host", "sign_in_unknown"])
+// The shared launch ledger's refusals that do not clear with the next UTC day (`headless-ledger.js`), named in the evaluator line.
+const LEDGER_BLOCKS = new Set(["rollback_detected", "ledger_missing", "inconsistent", "epoch_mismatch", "clock_regressed", "status_rollback", "ledger_unreadable", "witness_missing", "witness_invalid", "legacy_future_dated"])
 
 const days = (n) => `${n} ${n === 1 ? "day" : "days"}`
 // The label lag target the `label_lag` alarm uses (`loop-health.js` `LABEL_LAG_ALARM_MINUTES`), said in the evaluator line.
@@ -277,7 +279,8 @@ export function labelsLine({ count, oldest_days: oldest = null, evaluator = null
   const waiting = `${count} finished ${count === 1 ? "job waits" : "jobs wait"} for labels${age}`
   if (state === "disabled") return ["Factory evaluator: switched off on this machine", waiting, ...gaveUp, ...unsupported, ...expired].join("; ")
   const last = state === null ? "no result recorded yet" : state === "unrecognized" ? "last result not recognised by this version" : state === "no_time_for_a_run" ? "last result no_time_for_a_run (no run could finish before the loop's time limit)" : `last result ${state}`
-  return [`Factory evaluator: ${waiting}`, `the plugin labels them in the background, ${last}`, ...gaveUp, ...unsupported, ...expired].join("; ")
+  const ledger = evaluator?.ledger_block ? [`the shared launch ledger blocks every launch (${evaluator.ledger_block}); see "Repairing a blocked launch ledger" in the factory docs`] : []
+  return [`Factory evaluator: ${waiting}`, `the plugin labels them in the background, ${last}`, ...ledger, ...gaveUp, ...unsupported, ...expired].join("; ")
 }
 
 /** The agent line for `count` finished jobs whose waste labels are quarantined; `cardOpen` is true, false, or null when the cards could not be read. */
@@ -424,7 +427,7 @@ export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
   return { count: waiting.length, quarantined: quarantined.size, oldest_days: oldest === null ? null : wholeDays(oldest, now), evaluator: evaluatorRecord(dir, now) }
 }
 
-/** `status.json`'s `evaluator` record as `{ state, expired_total, gave_up }`, each null when it is not recorded as a plausible value; null with no record. */
+/** `status.json`'s `evaluator` record as `{ state, expired_total, gave_up, ledger_block }`, each null when it is not recorded as a plausible value; null with no record. */
 function evaluatorRecord(dir, now) {
   const record = readState(path.join(dir, "status.json"), {})?.evaluator
   if (!isPlainObject(record)) return null
@@ -434,7 +437,8 @@ function evaluatorRecord(dir, now) {
   const state = EVALUATOR_STATES.has(recorded) ? recorded : typeof recorded === "string" ? "unrecognized" : null
   const lag = lagMinutes(record.lag, now)
   const names = (list) => (lag !== null && Array.isArray(list) ? list.filter((job) => typeof job === "string" && /^[0-9a-f]{32}$/u.test(job)).map((job) => job.slice(0, 8)) : [])
-  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up), lag_minutes: lag, unsupported_jobs: names(record.lag?.unsupported_jobs), gave_up_jobs: names(record.lag?.gave_up_jobs) }
+  const ledgerBlock = state === "budget_exhausted" && LEDGER_BLOCKS.has(record.headless.ledger) ? record.headless.ledger : null
+  return { state, expired_total: count(record.expired_total), gave_up: count(record.gave_up), ledger_block: ledgerBlock, lag_minutes: lag, unsupported_jobs: names(record.lag?.unsupported_jobs), gave_up_jobs: names(record.lag?.gave_up_jobs) }
 }
 
 // The lag record's age of the oldest unlabeled finished job, in whole minutes; 0 with none recorded; null when it says nothing about now.
