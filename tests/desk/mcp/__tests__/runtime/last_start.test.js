@@ -2,11 +2,11 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { readFileSync, statSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import {
-  appendRepairLog, LAST_START_FILE, LAST_START_ROOTS_DIR, lastStartPath, lastStartRootKey, REPAIR_LOG_FILE, resolveDeskStateDir, resolveReadinessStateHome, writeLastStart,
+  appendRepairLog, createLastStartWriter, LAST_START_FILE, LAST_START_ROOTS_DIR, lastStartPath, lastStartRootKey, REPAIR_LOG_FILE, resolveDeskStateDir, resolveReadinessStateHome, writeLastStart,
 } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { existsSync } from "node:fs"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -27,7 +27,7 @@ test("last-start.json is replaced atomically with state, code and repair, owner-
   const base = await mkTempRoot("desk-last-start-")
   const stateDir = path.join(base, "state")
   const snapshot = { state: "degraded:state_branch_detached", code: "state_branch_detached", repair: null, fix: "push it" }
-  const file = writeLastStart({ stateDir, snapshot, root: "/desk", pid: 42, now: () => new Date("2026-09-25T00:00:00Z") })
+  const file = await writeLastStart({ stateDir, snapshot, root: "/desk", pid: 42, now: () => new Date("2026-09-25T00:00:00Z") })
   assert.equal(path.basename(file), LAST_START_FILE)
   assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
     schema_version: 1, state: "degraded:state_branch_detached", code: "state_branch_detached", repair: null,
@@ -39,7 +39,7 @@ test("last-start.json is replaced atomically with state, code and repair, owner-
   assert.equal(lastStartPath({ stateDir }), path.join(stateDir, LAST_START_FILE), "no root: the shared record")
   assert.equal(lastStartPath({ stateDir, root: "/desk" }), perRoot)
   assert.notEqual(lastStartRootKey("/desk"), lastStartRootKey("/other-desk"))
-  writeLastStart({ stateDir, snapshot: { state: "ready", code: null, repair: "repaired: x", fix: null } })
+  await writeLastStart({ stateDir, snapshot: { state: "ready", code: null, repair: "repaired: x", fix: null } })
   assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).state, "degraded:state_branch_detached", "a record without a root leaves the per-root records alone")
   assert.equal(existsSync(path.join(stateDir, LAST_START_ROOTS_DIR)), true)
   const record = JSON.parse(readFileSync(file, "utf8"))
@@ -58,4 +58,48 @@ test("the repair log gets one line per repair", async () => {
   const lines = readFileSync(file, "utf8").trim().split("\n")
   assert.equal(lines.length, 2)
   assert.equal(lines[0], "2026-09-25T01:00:00.000Z /desk repaired: detached HEAD → main (was abc)")
+})
+
+test("the session's writer writes records in call order, stamps each with its call time, and keeps going after a failure", async () => {
+  const written = []
+  const errors = []
+  let release
+  const held = new Promise((resolve) => { release = resolve })
+  const writer = createLastStartWriter({
+    onError: (error) => errors.push(error.message),
+    write: async ({ snapshot, now }) => {
+      if (snapshot.state === "first") await held
+      if (snapshot.state === "broken") throw new Error("disk full")
+      written.push([snapshot.state, now().toISOString()])
+    },
+  })
+  writer.record({ snapshot: { state: "first" } })
+  writer.record({ snapshot: { state: "broken" } })
+  writer.record({ snapshot: { state: "last" } })
+  const recordedBy = Date.now()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(written, [], "a held write holds the ones after it")
+  release()
+  await writer.written()
+  assert.deepEqual(written.map(([state]) => state), ["first", "last"])
+  assert.ok(Date.parse(written[1][1]) <= recordedBy, "stamped when recorded, not 20 ms later when written")
+  assert.deepEqual(errors, ["disk full"])
+})
+
+test("the real writer leaves the record in place, and a failed write leaves no temporary file behind", async () => {
+  const base = await mkTempRoot("desk-last-start-writer-")
+  const stateDir = path.join(base, "state")
+  const writer = createLastStartWriter({ onError: assert.fail })
+  writer.record({ stateDir, snapshot: { state: "ready", code: null, repair: null, fix: null }, root: "/desk" })
+  await writer.written()
+  assert.equal(JSON.parse(readFileSync(path.join(stateDir, LAST_START_FILE), "utf8")).state, "ready")
+  // A directory where the record goes: the rename fails, and the temporary file it wrote is removed.
+  mkdirSync(path.join(stateDir, LAST_START_ROOTS_DIR, `${lastStartRootKey("/blocked")}.json`), { recursive: true })
+  const errors = []
+  const failing = createLastStartWriter({ onError: (error) => errors.push(error.code) })
+  failing.record({ stateDir, snapshot: { state: "ready", code: null, repair: null, fix: null }, root: "/blocked" })
+  await failing.written()
+  assert.equal(errors.length, 1)
+  assert.deepEqual(readdirSync(path.join(stateDir, LAST_START_ROOTS_DIR)).filter((name) => name.endsWith(".tmp")), [])
+  assert.deepEqual(readdirSync(stateDir).filter((name) => name.endsWith(".tmp")), [])
 })

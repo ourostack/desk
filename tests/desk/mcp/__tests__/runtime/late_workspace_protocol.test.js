@@ -368,8 +368,13 @@ test("actual protocol reconciles ready fallback A to late saved B before mutatio
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
   assert.equal(git(f.b, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
   assertAThenOnlyB(f, "the session connects A, then only B")
-  const record = JSON.parse(readFileSync(path.join(f.base, "session-state", "last-start", `${lastStartRootKey(f.b)}.json`), "utf8"))
-  assert.equal(record.state, "ready")
+  // The session writes its start records without holding up the tool call, so B's record can land a moment after the update answers.
+  const recordFile = path.join(f.base, "session-state", "last-start", `${lastStartRootKey(f.b)}.json`)
+  const recordDeadline = Date.now() + 10000
+  while (!(existsSync(recordFile) && JSON.parse(readFileSync(recordFile, "utf8")).state === "ready") && Date.now() < recordDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  assert.equal(JSON.parse(readFileSync(recordFile, "utf8")).state, "ready")
   const status = await f.status()
   assert.equal(status.root.path, f.b)
   assert.equal(f.focuses.at(-1).get(), null)

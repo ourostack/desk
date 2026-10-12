@@ -100,4 +100,16 @@ export function readLastStart(fixture) {
   return JSON.parse(readFileSync(path.join(fixture.stateDir, "last-start.json"), "utf8"))
 }
 
+// The session writes last-start.json without holding up its tool calls, so a record can land just after the status that reports it.
+export async function lastStartUntil(fixture, predicate, deadlineMs = 10000) {
+  const deadline = Date.now() + deadlineMs
+  for (;;) {
+    let record = null
+    try { record = readLastStart(fixture) } catch (error) { if (error.code !== "ENOENT") throw error }
+    if (record !== null && predicate(record)) return record
+    if (Date.now() > deadline) throw new Error(`last-start.json never matched; last: ${JSON.stringify(record)}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
 export const settled = (payload) => payload.state !== "admitting"

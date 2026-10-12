@@ -1,4 +1,6 @@
 import { renameSync } from "node:fs"
+import { rename as renameAsync } from "node:fs/promises"
+import { setTimeout as delay } from "node:timers/promises"
 
 // What Windows answers when Defender, the search indexer or a backup agent briefly holds a fresh file open. The same lock
 // clears within milliseconds, so a short retry succeeds where a single attempt fails (graceful-fs and write-file-atomic do the same).
@@ -24,8 +26,25 @@ export function renameWithRetry(source, destination, { rename = renameSync, slee
       rename(source, destination)
       return
     } catch (error) {
-      if (platform !== "win32" || !TRANSIENT.has(error.code) || attempt >= ATTEMPTS) throw error
-      sleep(Math.min(STEP_MS * attempt, CAP_MS))
+      sleep(retryWait(error, attempt, platform))
     }
   }
+}
+
+/** The same retries as renameWithRetry, waiting without blocking the event loop. */
+export async function renameWithRetryAsync(source, destination, { rename = renameAsync, sleep = delay, platform = process.platform } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(source, destination)
+      return
+    } catch (error) {
+      await sleep(retryWait(error, attempt, platform))
+    }
+  }
+}
+
+// How long to wait before the next attempt; throws `error` when it is not one to retry.
+function retryWait(error, attempt, platform) {
+  if (platform !== "win32" || !TRANSIENT.has(error.code) || attempt >= ATTEMPTS) throw error
+  return Math.min(STEP_MS * attempt, CAP_MS)
 }
