@@ -951,8 +951,10 @@ test("a facts scan of 131 seconds with 18 ready jobs still starts a run when the
 
 test("inside the real loop worker, a 131-second scan with 18 ready jobs starts a run: the worker's grant reaches the step's limit", () => scratch(async (env, base) => {
   for (let index = 1; index <= 18; index += 1) await seedJob(env, base, index)
-  // One fake clock on the real time for both, so the worker's lock file and the clock agree.
-  let clock = Date.now()
+  // One fake clock for both, at midday. The step starts a new daily count when its clock crosses UTC midnight, so a clock on the real
+  // time cleared the day's count after the first run, and failed this test, whenever it started in the ten minutes that end 2 minutes
+  // before midnight. Each lock file here is new, so no lock age is read against this clock.
+  let clock = DAY0
   const runner = fakeRunner(() => { clock += 10 * 60 * 1000; return { state: "ran", cost_usd: null } })
   const done = async () => ({ ok: true, result: "done" })
   const outcome = await runLoopWorker(env, {
