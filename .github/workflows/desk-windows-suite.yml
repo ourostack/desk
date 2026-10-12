@@ -104,11 +104,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.mode }}-shard-${{ matrix.shard }}
+          # One name per run attempt, so a rerun of only the failed shards keeps the earlier attempt's results; the verdict judges each shard by its latest attempt.
+          name: windows-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: results.json
           if-no-files-found: warn
-          # A rerun of only the failed shards uploads under a name an earlier attempt already holds.
-          overwrite: true
 
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
   # standard-user shards uploaded (not the shards' job conclusions), so a shard that never ran, was cancelled or reported a failed test
