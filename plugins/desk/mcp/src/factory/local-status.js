@@ -41,6 +41,13 @@
 // present only when a store's own capture check could not read the record `CHECK_UNAVAILABLE_ALARM` (3) or more times in a row:
 // `[{ store, times }]`. `capture_dropped` is present when a record dropped from a rebuilt intake branch was still not sent six hours later: `[{ store, since }]`. `coverage_kept` is present when the coverage pass was kept back for a quarantine that did not settle within an hour and was recorded anyway: `{ since }`. Like `orphans`, all are pushed to the doctor and the boot status, not only shown by `factory.js status`.
 //
+// `triage_publication` is present when a contributing store has a triage publication record (`triage-outbox.js` writes
+// `status.triage_publication[store]`): `[{ store, health, pending, waiting, held? }]`. `health` is `triagePublicationHealth`'s reading:
+// `held` (emission is held; `held` names the code), `not_published` (no batch of this machine has reached the store), `source_incomplete`
+// (the last card scan was not complete), `stale` (the last batch reached the store more than 72 hours ago) or `current`. Only `current`
+// supports a claim that the store shows this machine's triage as it is now. `pending` counts staged batches not yet on the store's default
+// branch and `waiting` acknowledged annotations not yet staged.
+//
 // The result carries store names, codes and counts only: never the machine
 // secret, an account, an intake ID, a token or any content, and no local
 // path or time except where a held route needs one to be fixed. Manifest
@@ -278,6 +285,29 @@ function keptAgeDays(file, now) {
   }
 }
 
+/** A triage publication older than this cannot support a claim about now; the store reads it as stale too. */
+export const TRIAGE_PUBLICATION_FRESH_MS = 72 * 60 * 60 * 1000
+
+/** See the header: what one store's `status.triage_publication` entry supports at `now` (milliseconds). */
+export function triagePublicationHealth(entry, now = Date.now()) {
+  if (typeof entry.held === "string") return "held"
+  if (typeof entry.delivered_at !== "string") return "not_published"
+  if (entry.scan !== "complete") return "source_incomplete"
+  const age = now - Date.parse(entry.delivered_at)
+  return age >= 0 && age <= TRIAGE_PUBLICATION_FRESH_MS ? "current" : "stale"
+}
+
+function triagePublications(status, contributes, now) {
+  const all = isPlainObject(status.triage_publication) ? status.triage_publication : {}
+  return Object.keys(all).filter((store) => PATTERNS.prRepo.test(store) && isPlainObject(all[store]) && contributes(store)).sort().map((store) => ({
+    store,
+    health: triagePublicationHealth(all[store], now),
+    pending: Number.isSafeInteger(all[store].pending) ? all[store].pending : 0,
+    waiting: Number.isSafeInteger(all[store].waiting) ? all[store].waiting : 0,
+    ...(typeof all[store].held === "string" && RESULT_CODE.test(all[store].held) ? { held: all[store].held } : {}),
+  }))
+}
+
 /** See the header. Never writes and never throws for missing or unreadable state. */
 export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanIncomplete = false, pluginScanReason = null }) {
   const routing = route({ deskRoot, pluginDirs, pluginScanIncomplete })
@@ -299,6 +329,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
   const captureCheck = status === UNREADABLE ? [] : captureCheckFindings(status).filter(({ store }) => PATTERNS.prRepo.test(store) && decision(records, store) === "yes")
   const captureDropped = status === UNREADABLE ? [] : captureDroppedFindings(status, Date.now()).filter(({ store }) => PATTERNS.prRepo.test(store) && decision(records, store) === "yes")
   const coverageKept = status === UNREADABLE ? null : coverageKeptFinding(status)
+  const triage = status === UNREADABLE ? [] : triagePublications(status, (store) => decision(records, store) === "yes", Date.now())
   return {
     store: routing.store,
     source: routing.source,
@@ -312,6 +343,7 @@ export function factoryLocalStatus({ env, deskRoot, pluginDirs = [], pluginScanI
     ...(captureCheck.length > 0 ? { capture_check_unavailable: captureCheck } : {}),
     ...(captureDropped.length > 0 ? { capture_dropped: captureDropped } : {}),
     ...(coverageKept === null ? {} : { coverage_kept: coverageKept }),
+    ...(triage.length > 0 ? { triage_publication: triage } : {}),
     ...heldFields(routing, pluginScanReason, status === UNREADABLE ? {} : status),
   }
 }

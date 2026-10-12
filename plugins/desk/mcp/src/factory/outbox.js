@@ -57,6 +57,10 @@
 //   evaluate-requests/quarantine/<job>.json   { reason, at }
 //   evaluate-requests/expired/<job>.json      { reason: "expired", at }
 //   locks/<name>.lock                  a named critical-section lock with no JSON file of its own
+//   triage-outbox/<store-slug>/state.json   which acknowledged triage annotations wait to be published, what was
+//                                      published, the coverage to say and the store's readiness (`triage-outbox.js`)
+//   triage-outbox/<store-slug>/<batch>.json   one staged public triage batch, immutable once written; outside
+//                                      outbox/ so an older Desk never reads it as facts
 //
 // Local labels (`desk.factory.labels/3`, or `/2` or `/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
@@ -1055,6 +1059,34 @@ export async function quarantine(env, store, name, reason, { facts = undefined, 
   const record = { reason, ...(facts === undefined ? {} : { facts }), ...(blob === undefined ? {} : { blob }), ...(version === null ? {} : { desk_version: version }), ...(source === undefined ? {} : { source }), at: now() }
   await writeJsonAtomic(root, path.join(root, "quarantine", slug, name), record, { platform, env, runner })
   return record
+}
+
+// ---------------------------------------------------------------------------
+// The triage outbox.
+// ---------------------------------------------------------------------------
+
+const TRIAGE_OUTBOX_NAME = /^(?:[0-9a-f]{16}|state)\.json$/u
+const isRecordOrNone = (value) => value === null || isPlainObject(value)
+
+function triageOutboxFile(root, store, name) {
+  requirePattern(name, TRIAGE_OUTBOX_NAME, "name")
+  return path.join(root, "triage-outbox", storeSlug(store), name)
+}
+
+/** `readTriageOutbox(env, store, name) -> record | null`: one protected file of the store's triage outbox, `state.json` or `<batch>.json`. */
+export async function readTriageOutbox(env, store, name, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return readJsonFileSafe(triageOutboxFile(root, store, name), null, platform, isRecordOrNone)
+}
+
+/** `updateTriageOutbox(env, store, name, mutate) -> record`: a lock-guarded read, `mutate(current | null) -> record` and atomic write of one triage outbox file. */
+export async function updateTriageOutbox(env, store, name, mutate, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return updateJsonLocked(root, triageOutboxFile(root, store, name), null, (current) => {
+    const next = mutate(current)
+    requirePlainObject(next, "record")
+    return next
+  }, { platform, env, runner }, isRecordOrNone)
 }
 
 // ---------------------------------------------------------------------------

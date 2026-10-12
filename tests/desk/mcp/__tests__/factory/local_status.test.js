@@ -460,3 +460,39 @@ test("the orphan pass readers take the clock and the Desk version as defaults", 
   assert.equal(orphanPassLine(record), `orphan pass: running, started ${record.started_at}, last full walk never`)
   assert.equal(orphanPassLine({ ...record, ran_at: record.started_at, examined: 1, unexamined: 0, pending: 0, frozen: {}, sweeps_in_walk: 0 }).startsWith("orphan pass: ran "), true)
 })
+
+test("triage publication health is current only for a complete scan delivered within 72 hours", () => scratch(async ({ desk, env }) => {
+  const { factoryLocalStatus, triagePublicationHealth, TRIAGE_PUBLICATION_FRESH_MS } = await load()
+  const now = Date.parse("2020-01-01T12:00:00.000Z")
+  const delivered = (ms) => new Date(now - ms).toISOString()
+  assert.equal(TRIAGE_PUBLICATION_FRESH_MS, 72 * 60 * 60 * 1000)
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(0), scan: "complete" }, now), "current")
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(TRIAGE_PUBLICATION_FRESH_MS), scan: "complete" }, now), "current")
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(TRIAGE_PUBLICATION_FRESH_MS + 1), scan: "complete" }, now), "stale")
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(-1), scan: "complete" }, now), "stale", "a delivery in the future is not a current one")
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(0), scan: "truncated" }, now), "source_incomplete")
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(0) }, now), "source_incomplete")
+  assert.equal(triagePublicationHealth({ scan: "complete" }, now), "not_published")
+  assert.equal(triagePublicationHealth({ held: "triage_store_not_ready", delivered_at: delivered(0), scan: "complete" }, now), "held")
+  assert.equal(triagePublicationHealth({ delivered_at: delivered(0), scan: "complete" }), "stale", "the default clock is now")
+
+  await setConsent(env, { store: STORE, contribute: true, account: "someone" })
+  await setConsent(env, { store: OTHER, contribute: false, account: "someone" })
+  assert.equal(factoryLocalStatus({ env, deskRoot: desk }).triage_publication, undefined, "nothing recorded, nothing said")
+  await writeStatus(env, {
+    triage_publication: {
+      [STORE]: { at: new Date().toISOString(), pending: 1, waiting: 2, held: "triage_store_not_ready", scan: "complete" },
+      // A store this machine no longer contributes to, a damaged entry and a name that is not a store say nothing.
+      [OTHER]: { at: delivered(0), pending: 3 },
+      "example-org/damaged": "not an entry",
+      "not a store": { pending: 1 },
+    },
+  })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).triage_publication, [{ store: STORE, health: "held", pending: 1, waiting: 2, held: "triage_store_not_ready" }])
+  await writeStatus(env, { triage_publication: { [STORE]: { delivered_at: new Date().toISOString(), scan: "complete", held: "Not A Code", pending: "1" } } })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).triage_publication, [{ store: STORE, health: "held", pending: 0, waiting: 0 }], "a code that is not a code is not shown")
+  await writeStatus(env, { triage_publication: { [STORE]: { delivered_at: new Date().toISOString(), scan: "complete" } } })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: desk }).triage_publication, [{ store: STORE, health: "current", pending: 0, waiting: 0 }])
+  await writeStatus(env, { triage_publication: "damaged" })
+  assert.equal(factoryLocalStatus({ env, deskRoot: desk }).triage_publication, undefined)
+}))
