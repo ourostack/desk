@@ -261,6 +261,29 @@ function stepsSection(status, nowMs) {
   }))
 }
 
+/**
+ * The triage step's last record (`status.triage`, written by `triage-step.js`), field by field: its result and runner codes, the review
+ * counts as Counts (a count the step did not know is `unavailable`, never 0) and when a review was last accepted. Local only: the capture
+ * record's loop slot (`loop-slot.js`) reads none of it.
+ */
+function triageSection(stored) {
+  const triage = isObject(stored) ? stored : null
+  const code = (value) => (typeof value === "string" && RESULT_CODE.test(value) ? value : null)
+  const counts = triage !== null && isObject(triage.counts) ? triage.counts : {}
+  const runner = triage !== null && isObject(triage.runner) ? triage.runner : {}
+  return {
+    last_result: triage === null ? "never_ran" : code(triage.result) ?? "unknown",
+    runner_state: code(runner.state),
+    runner_reason: code(runner.reason),
+    qualification: code(runner.qualification),
+    reviewed: count(counts.reviewed),
+    unreviewed: count(counts.unreviewed),
+    refused: count(counts.refused),
+    deferred: count(counts.deferred),
+    last_success_at: triage === null ? null : isoOrNull(triage.last_success_at),
+  }
+}
+
 // The loop worker's last outcome: a code and a time, nothing else (`loop-worker-state.js`).
 function workerSection(stored) {
   const worker = validWorker(stored)
@@ -321,6 +344,7 @@ export function assembleLoop({ status, read, nowMs, version }) {
     },
     reconcile: reconcileSection(stored.reconcile),
     steps: stepsSection(stored, nowMs),
+    triage: triageSection(stored.triage),
     worker: workerSection(loopStatus.worker),
   }
   const blocked = evaluator !== null && isObject(evaluator.headless) && isInteger(evaluator.headless.blocked_days) ? evaluator.headless.blocked_days : null

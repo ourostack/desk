@@ -7,6 +7,7 @@ import * as path from "node:path"
 import { osEnv } from "../_os_env.js"
 import { createHash } from "node:crypto"
 import { mkTempRoot } from "../_temp_roots.js"
+import { LEGACY_REVISION, legacyCards } from "../_legacy_reader.js"
 import {
   SOURCES,
   STATES,
@@ -1079,4 +1080,54 @@ test("verifying_since is null on a new or reopened card, a card file without it 
 
 test("checks_not_green is a check result a system patch may write", () => {
   assert.ok(CHECK_RESULTS.includes("checks_not_green"))
+})
+
+test("triage_alarm_strict_new_write_and_legacy_read", async () => {
+  const KEY = "loop_alarm:step_stale:triage"
+  const where = await desk()
+  // The strict writer accepts exactly the one new code; anything shaped like it but not in the table is still refused.
+  assert.ok(LOOP_ALARMS.includes("step_stale:triage"))
+  assert.equal(cardKey("loop_alarm", "step_stale:triage"), KEY)
+  for (const bad of ["loop_alarm:step_stale:Triage", "loop_alarm:step_stale:triage ", "loop_alarm:step_stale:triage:x", "loop_alarm:step_stale:", "loop_alarm:step_stale:triages", "loop_alarm:triage", "loop_alarm:step_stale:triage\n"]) {
+    assert.equal((await open(where, { key: bad, evidence: [] })).result, "invalid_source", bad)
+  }
+  assert.equal((await open(where, { key: KEY, evidence: [], title: "A supplied title" })).result, "title_not_allowed")
+  assert.equal((await open(where, { key: KEY, evidence: [] })).result, "opened")
+  assert.equal((await open(where, { key: KEY, evidence: [] })).result, "duplicate")
+  // Fields, states and claim limits are what they were: the new card has the same fields as an existing alarm's card.
+  assert.equal((await open(where, { key: "loop_alarm:step_stale:verify", evidence: [] })).result, "opened")
+  const [verify, triage] = ["loop_alarm:step_stale:verify", KEY].map((key) => read(where).then((cards) => cards.find((card) => card.key === key)))
+  assert.deepEqual(Object.keys(await triage), Object.keys(await verify))
+  assert.equal((await triage).title, "Loop step triage is stale")
+  assert.deepEqual([(await triage).state, (await triage).claim, (await triage).claim_log, (await triage).recurrences, (await triage).reopened], ["open", null, [], 0, 0])
+
+  // The reader an older installed plugin runs, from the baseline source tree: it refuses to write the code and still reads the saved card.
+  const legacy = await legacyCards()
+  assert.equal(legacy.revision, LEGACY_REVISION)
+  assert.notEqual(legacy.module.readCards, readCards, "the baseline reader is another module, never this checkout's")
+  assert.ok(!legacy.module.LOOP_ALARMS.includes("step_stale:triage"), "the baseline predates the code")
+  assert.deepEqual(LOOP_ALARMS.filter((name) => !legacy.module.LOOP_ALARMS.includes(name)), ["step_stale:triage"], "the one addition")
+  assert.deepEqual(legacy.module.LOOP_ALARMS.filter((name) => !LOOP_ALARMS.includes(name)), [])
+  for (const name of ["SOURCES", "STATES", "MOVES", "CLAIM_TTL_HOURS", "MAX_CLAIMS_PER_DAY", "MAX_LIVE_CLAIMS", "MAX_CARD_FILES", "CLOSE_REASONS", "CHECK_RESULTS"]) {
+    assert.deepEqual({ SOURCES, STATES, MOVES, CLAIM_TTL_HOURS, MAX_CLAIMS_PER_DAY, MAX_LIVE_CLAIMS, MAX_CARD_FILES, CLOSE_REASONS, CHECK_RESULTS }[name], legacy.module[name], `${name} is unchanged`)
+  }
+  const older = await desk()
+  assert.equal((await legacy.module.openImprovement({ ...older, key: KEY, source: "loop_alarm", evidence: [], plugin: "desk", signal: null, now: at(1) })).result, "invalid_source")
+  const seen = await legacy.module.readCards(where)
+  assert.deepEqual(seen.skipped, {})
+  assert.deepEqual(seen.cards.find((card) => card.key === KEY), await triage, "the prior reader reads every field of the new card")
+  // The prior version claims and updates it under its own unchanged limits, and nothing is moved aside.
+  const held = await legacy.module.claimNext({ ...where, now: at(2) })
+  assert.equal(held.result, "claimed")
+  assert.equal(held.set_aside, undefined)
+  assert.equal((await legacy.module.readCards(where)).set_aside_total, 0)
+  assert.equal((await readCards(where)).cards.length, 2)
+})
+
+test("a legacy reader baseline that is missing fails the compatibility gate instead of skipping it", async () => {
+  const base = await mkTempRoot("desk-cards-legacy-")
+  await assert.rejects(() => legacyCards({ DESK_TRIAGE_LEGACY_SOURCE: path.join(base, "absent") }), /baseline is missing/u)
+  await assert.rejects(() => legacyCards({ DESK_TRIAGE_LEGACY_SOURCE: base }), /holds no plugins\/desk\/mcp\/src\/desk\/improvement-cards\.js/u)
+  await assert.rejects(() => legacyCards({ DESK_TRIAGE_LEGACY_SOURCE: "relative/checkout" }), /absolute path/u)
+  await assert.rejects(() => legacyCards({ DESK_TRIAGE_LEGACY_SOURCE: path.resolve(import.meta.dirname, "..", "..", "..", "..", "..") }), /names this checkout/u)
 })

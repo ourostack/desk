@@ -25,11 +25,11 @@ async function scratch(run) {
 const at = (iso) => new Date(iso)
 const HOUR = 3600 * 1000
 
-test("STEPS and MIN_GAP_HOURS are frozen and name the seven steps", () => {
-  assert.deepEqual([...STEPS], ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver"])
+test("STEPS and MIN_GAP_HOURS are frozen and name the eight steps", () => {
+  assert.deepEqual([...STEPS], ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver", "triage"])
   assert.ok(Object.isFrozen(STEPS))
   assert.ok(Object.isFrozen(MIN_GAP_HOURS))
-  assert.deepEqual(MIN_GAP_HOURS, { evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24, measure: 0, deliver: 0 })
+  assert.deepEqual(MIN_GAP_HOURS, { evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24, measure: 0, deliver: 0, triage: 0 }, "triage has no gap: its mechanical refresh runs in every worker generation, and the shared ledger alone spaces its agent runs")
 })
 
 test("recordStep creates loop.steps.<name> on success and keeps other status keys", () => scratch(async (env) => {

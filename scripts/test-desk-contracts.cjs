@@ -1436,7 +1436,7 @@ requires(
 requires(
   "plugins/desk/docs/factory-local-capture.md",
   "the factory doc has one improvement-loop section with the cards, the tools, the steps, the money rule, the bounds and the health record",
-  /^## The improvement loop$[\s\S]+improvement card[\s\S]+_meta\/improvement[\s\S]+improvement_open[\s\S]+improvement_next[\s\S]+improvement_update[\s\S]+evaluate, route, mirror, reconcile, verify, measure[\s\S]+DESK_FACTORY_LOOP[\s\S]+DESK_FACTORY_HEADLESS_EVALUATOR[\s\S]+disabled_would_bill[\s\S]+sign_in_unknown[\s\S]+headless_blocked[\s\S]+closed_confirmed[\s\S]+closed_unverified[\s\S]+cards_invalid[\s\S]+status\.json[\s\S]+not recorded[\s\S]+^## /mu,
+  /^## The improvement loop$[\s\S]+improvement card[\s\S]+_meta\/improvement[\s\S]+improvement_open[\s\S]+improvement_next[\s\S]+improvement_update[\s\S]+route, triage, evaluate, mirror, reconcile, verify, measure[\s\S]+DESK_FACTORY_LOOP[\s\S]+DESK_FACTORY_HEADLESS_EVALUATOR[\s\S]+disabled_would_bill[\s\S]+sign_in_unknown[\s\S]+headless_blocked[\s\S]+closed_confirmed[\s\S]+closed_unverified[\s\S]+cards_invalid[\s\S]+status\.json[\s\S]+not recorded[\s\S]+^## /mu,
 );
 contract("the improvement-loop bounds in the doc are the constants in the code", () => {
   const source = (file) => text(`plugins/desk/mcp/src/${file}`);

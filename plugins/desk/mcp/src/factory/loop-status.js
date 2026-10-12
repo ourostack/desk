@@ -5,10 +5,13 @@
 
 import { updateStatus } from "./outbox.js"
 
-export const STEPS = Object.freeze(["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver"])
+export const STEPS = Object.freeze(["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver", "triage"])
 
-/** The shortest time between two runs of a step, in hours; 0 means the step runs every time it is asked. */
-export const MIN_GAP_HOURS = Object.freeze({ evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24, measure: 0, deliver: 0 })
+/**
+ * The shortest time between two runs of a step, in hours; 0 means the step runs every time it is asked. Triage's mechanical refresh runs
+ * every time; its agent run keeps its own six-hour gap in the shared launch ledger (`headless-ledger.js`), not here.
+ */
+export const MIN_GAP_HOURS = Object.freeze({ evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24, measure: 0, deliver: 0, triage: 0 })
 
 const STALE_AFTER_HOURS = 72
 const STALE_FAILURES_IN_A_ROW = 3

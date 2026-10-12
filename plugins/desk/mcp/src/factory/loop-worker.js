@@ -2,8 +2,17 @@
 // through `factory.js loop`. It runs the steps in order (the list `STEPS` below is data, so a step added later is
 // one more entry), one at a time and each inside its own try, so one failing step never stops the next. A step that
 // is not due (`dueStep`, inside its minimum gap with no newer work for it) is skipped and leaves no record. Besides the
-// session-start hook, the end of a turn and a finalize run start the worker when the evaluator step is due (`evaluate-kick.js`),
+// session-start hook, the end of a turn and a finalize run start the worker when the evaluator step or triage is due (`evaluate-kick.js`),
 // and a worker whose evaluator step labeled a job starts the next one as it ends, so the queue drains back to back.
+//
+// The order is route, triage, evaluate, mirror, reconcile, verify, measure. Findings are routed first, so triage reads current cards.
+// The triage step (`triage-step.js`) always runs its mechanical refresh; it may then take the generation's one agent slot. One worker
+// generation starts at most one agent: when triage reserved a launch, the evaluator step is not run and not stamped (its code is
+// `slot_taken`). The evaluator step starts at most one run (`maxRuns: 1`). When triage took the slot from an evaluation that was due,
+// it mints one evaluation continuation; once this worker has released its lock it kicks the loop once (`kickLoop` with
+// `continuation`), and the next worker's evaluator step consumes the token (`consumeEvaluationContinuation`) under its lock before it
+// is asked whether it is due. A consumed token makes the evaluator due; a refused one (a real run, failure or attempt since) changes
+// nothing, so a genuine failure's cooldown still holds. A token is consumed at most once and a worker kicks at most once.
 //
 // Safe and detached:
 //   - One worker at a time per machine, under one lock file in the factory state folder (`process-lock.js`: the
@@ -27,11 +36,12 @@
 // The result holds codes and integers only: `{ result, ran, skipped, failed, steps: { <step>: <code> } }`, where
 // `result` is `completed`, `budget_spent`, `status_unavailable`, `status_reset` (the status file was damaged and moved aside during this run: nothing more runs, and that UTC day is a spent day for the evaluator), `busy`, `headless_session`, `disabled`,
 // `no_factory_state`, `no_consenting_store` or `no_desk`, and a step's code is its own result code, `skipped`
-// (not due), `not_started` (the budget was spent, or the status unreadable or reset), `step_error` (it threw) or
+// (not due), `slot_taken` (the evaluator step, when triage took the agent slot), `not_started` (the budget was spent, or the status unreadable or reset), `step_error` (it threw) or
 // `invalid_result`. The `route` step is the two route collectors as one: `routed`, `issues_failed`, `local_failed`
 // or `both_failed`. Every other step records itself; the worker records `route`, and records `step_error` for a
 // step that threw. The measure step runs last and is told which steps ran.
 
+import { randomBytes } from "node:crypto"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 
@@ -49,6 +59,8 @@ import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
 import { runEvaluatorStep } from "./evaluator-step.js"
 import { LOOP_LOCK_NAME, evaluateDue, kickLoop, newestRequestAt } from "./evaluate-kick.js"
+import { consumeEvaluationContinuation } from "./headless-ledger.js"
+import { runTriageStep } from "./triage-step.js"
 import { runVerifyStep } from "./improvement-verify.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
@@ -98,12 +110,49 @@ async function routeStep(env, ctx, impls) {
   return outcome
 }
 
+// The pending evaluation continuation a triage-only generation left (`status.loop.evaluation_continuation`), or null.
+const pendingContinuation = (status) => (isObject(status?.loop) && isObject(status.loop.evaluation_continuation) ? status.loop.evaluation_continuation : null)
+
+// Consumes a pending continuation under this worker's lock and removes it from the status, whatever the ledger answers: a token is
+// offered once. Answers whether it was consumed.
+async function consumeContinuation(env, ctx, status, impls) {
+  const token = pendingContinuation(status)
+  if (token === null) return false
+  const consumed = await swallow(() => impls.consumeContinuation(env, { token, now: ctx.now, status }))
+  await swallow(() => ctx.updateStatus(env, (current) => {
+    // Another token, or none: it is not this worker's to remove.
+    if (JSON.stringify(pendingContinuation(current)) !== JSON.stringify(token)) return current
+    const { evaluation_continuation: _gone, ...rest } = current.loop
+    return { ...current, loop: rest }
+  }))
+  return consumed?.state === "consumed"
+}
+
+// The triage step, which may take the generation's agent slot and leave a continuation for the evaluation it deferred.
+async function triageStep(env, ctx, impls) {
+  const answer = await impls.triage(env, {
+    deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.agentDeadline(),
+    generation: ctx.generation, onChild: ctx.onChild, onChildExit: ctx.onChildExit,
+  })
+  if (answer?.launched === true) ctx.slot = "triage"
+  if (answer?.continuation?.state === "issued") ctx.continuation = true
+  return answer
+}
+
 // The ordered steps. Each `run(env, ctx, impls)` answers `{ ok, result }`; a step that records itself needs nothing more. A step with
 // `newWorkAt(env)` is due as soon as work newer than its last run arrives: an evaluation request makes the evaluator step due at once, and so
-// does a queue still draining (`evaluateDue`).
+// does a queue still draining (`evaluateDue`). A step with `held(ctx)` is not run while it answers a code (the agent slot is taken).
 const STEPS = Object.freeze([
-  { name: "evaluate", newWorkAt: newestRequestAt, due: (status, now, newWorkAt) => evaluateDue(status, now, { newWorkAt }), run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.evaluatorDeadline, deskRoot: ctx.deskRoot, onChild: ctx.onChild, onChildExit: ctx.onChildExit, extendDeadline: ctx.extendDeadline }) },
   { name: "route", run: routeStep },
+  { name: "triage", run: triageStep },
+  {
+    name: "evaluate", newWorkAt: newestRequestAt, held: (ctx) => (ctx.slot === "triage" ? "slot_taken" : null),
+    due: async (status, now, newWorkAt, env, ctx, impls) => {
+      const consumed = await consumeContinuation(env, ctx, status, impls)
+      return consumed || evaluateDue(status, now, { newWorkAt })
+    },
+    run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.agentDeadline(), deskRoot: ctx.deskRoot, maxRuns: 1, onChild: ctx.onChild, onChildExit: ctx.onChildExit, extendDeadline: ctx.extendDeadline }),
+  },
   { name: "mirror", run: (env, ctx, impls) => impls.mirror(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
   { name: "reconcile", run: (env, ctx, impls) => impls.reconcile(env, { now: ctx.now, desks: [ctx.deskRoot], personPrefix: ctx.personPrefix }) },
   { name: "verify", run: (env, ctx, impls) => impls.verify(env, { deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, now: ctx.now }) },
@@ -112,7 +161,7 @@ const STEPS = Object.freeze([
 
 export const LOOP_STEP_NAMES = Object.freeze(STEPS.map(({ name }) => name))
 
-const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, routeIssues: runRouteIssuesStep, routeLocal: runRouteLocalStep, mirror: runMirrorStep, reconcile: runReconcileStep, verify: runVerifyStep, measure: runMeasureStep, kick: kickLoop }
+const DEFAULT_IMPLS = { evaluate: runEvaluatorStep, triage: runTriageStep, consumeContinuation: consumeEvaluationContinuation, routeIssues: runRouteIssuesStep, routeLocal: runRouteLocalStep, mirror: runMirrorStep, reconcile: runReconcileStep, verify: runVerifyStep, measure: runMeasureStep, kick: kickLoop }
 
 /**
  * `runLoopWorker(env, { deskRoot, personPrefix, pluginVersion, clock, alive, budgetMs, ceilingMs, exit, notify, readStatusImpl, impls }) -> result`
@@ -164,8 +213,10 @@ export async function runLoopWorker(env, {
     return granted
   }
   const ctx = {
-    deskRoot, personPrefix, pluginVersion, attempted: [],
-    evaluatorDeadline: new Date(started + budgetMs - LATER_STEPS_RESERVE_MS),
+    deskRoot, personPrefix, pluginVersion, attempted: [], slot: null, continuation: false, updateStatus: updateStatusImpl,
+    generation: randomBytes(16).toString("hex"),
+    // The agent steps' deadline: the budget, moved by any facts-scan time granted so far, less the later steps' reserve.
+    agentDeadline: () => new Date(started + budgetMs + extension - LATER_STEPS_RESERVE_MS),
     onChild: (pid) => track(pid, true),
     onChildExit: (pid) => track(pid, false),
     extendDeadline,
@@ -186,10 +237,16 @@ export async function runLoopWorker(env, {
           stopped = "status_unavailable"
         }
       }
+      const held = stopped === null ? (step.held?.(ctx) ?? null) : null
+      if (held !== null) {
+        outcome.steps[step.name] = held
+        outcome.skipped += 1
+        continue
+      }
       // New work that cannot be read makes nothing due early; the gap still applies.
       const newWorkAt = stopped === null && step.newWorkAt !== undefined ? ((await swallow(() => step.newWorkAt(env))) ?? null) : null
       const due = step.due ?? ((stored, now, work) => dueStep(stored, step.name, now, { newWorkAt: work }))
-      if (stopped === null && !due(status, new Date(clock()), newWorkAt)) {
+      if (stopped === null && !(await due(status, new Date(clock()), newWorkAt, env, { ...ctx, now: new Date(clock()) }, functions))) {
         outcome.steps[step.name] = "skipped"
         outcome.skipped += 1
         continue
@@ -221,6 +278,8 @@ export async function runLoopWorker(env, {
   }
   // A worker whose evaluator step accepted a job's labels (`evaluator.accepted_last_step`) starts the next one once its lock is free, so the queue drains back to back. The kick starts
   // one only while a job the runner can run today is left within the day's ceiling (`evaluateDue`); a kick that fails changes nothing here.
+  // A triage-only generation that minted a new evaluation continuation kicks once instead; never both, and never for a triage that failed.
   if (outcome.steps.evaluate === "ran" && (await swallow(async () => (await readStatusImpl(env))?.evaluator?.accepted_last_step > 0)) === true) await swallow(() => functions.kick(env))
+  else if (ctx.continuation) await swallow(() => functions.kick(env, { continuation: true }))
   return outcome
 }

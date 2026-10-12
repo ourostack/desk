@@ -988,14 +988,16 @@ test("inside the real loop worker, a 131-second scan with 18 ready jobs starts a
         ...options, clock: () => clock, runHeadless: runner, findAgentCli: () => "claude", probeSignIn: async () => ({ state: "subscription" }),
         requestFinishedJobs: async () => { clock += SCAN_MS; return { requested: [] } },
       }),
-      routeIssues: done, routeLocal: done, mirror: done, reconcile: done, verify: done, measure: done, kick: async () => ({ kicked: false, reason: "test" }),
+      routeIssues: done, routeLocal: done, triage: async () => ({ ok: true, result: "done", launched: false }), mirror: done, reconcile: done, verify: done, measure: done, kick: async () => ({ kicked: false, reason: "test" }),
     },
   })
   assert.equal(outcome.steps.evaluate, "ran")
   assert.equal(runner.calls.length, 1)
   const evaluator = await evaluatorOf(env)
   assert.equal(evaluator.headless.jobs, 1)
-  assert.equal(evaluator.headless.deferred_reason, "no_time_for_a_run")
+  // The worker starts one run a generation, so the other 17 wait for the next worker, not for time.
+  assert.equal(evaluator.headless.deferred_jobs, 17)
+  assert.equal(evaluator.headless.deferred_reason, null)
 }))
 
 test("without a caller that leaves the scan out, the same slow scan defers every job and says it had no time", () => scratch(async (env, base) => {

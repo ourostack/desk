@@ -47,7 +47,8 @@ export const MOVES = Object.freeze({
 export const CLAIM_TTL_HOURS = 4
 export const MAX_CLAIMS_PER_DAY = 2
 export const MAX_LIVE_CLAIMS = 1
-const STEP_NAMES = ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver"]
+// The loop steps whose `step_stale:<step>` alarm this version may write; `triage` came with the loop's triage step (no field, lifecycle or claim change), so an earlier Desk reads its card and never writes it.
+const STEP_NAMES = ["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver", "triage"]
 export const LOOP_ALARMS = Object.freeze(["improvement_age", "improvement_stuck", "unsigned_age", "headless_blocked", "labels_quarantined", "label_lag", "facts_quarantine_not_settling", "cards_invalid", "capture_loop_slot", ...STEP_NAMES.map((step) => `step_stale:${step}`)])
 export const EVALUATOR_NAMES = Object.freeze(["expired_requests", "gave_up"])
 export const FLUSH_HEALTH_CODES = Object.freeze(["no_account", "auth_failed", "gh_missing", "account_cannot_deliver", "route_unknown", "held_markers", "frozen"])
