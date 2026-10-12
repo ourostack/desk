@@ -10,13 +10,13 @@
 // A failure is a quiet code, never a throw: `runtime_unavailable` (no pack or mirror could be prepared) or
 // `runtime_unloadable` (the modules were found but did not load).
 
-import { createRequire } from "node:module"
+import { existsSync } from "node:fs"
 import { userInfo } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const OWN_ROOT = fileURLToPath(new URL("../../", import.meta.url))
-const PACKAGES = Object.freeze(["gray-matter", "@modelcontextprotocol/sdk/server/index.js"])
+const PACKAGES = Object.freeze(["gray-matter", "@modelcontextprotocol/sdk"])
 const MODULES = Object.freeze({ runner: "src/factory/triage-runner.js", custody: "src/factory/triage-custody.js", qualify: "src/factory/triage-qualify.js" })
 
 /** The improvement card the loop opens or reuses while restore reports `stale` / `engine_unpinned`. */
@@ -26,8 +26,16 @@ export const TRIAGE_ENGINE_CARD = Object.freeze({
   title: "The triage runner's engine pin is behind the installed Claude Code",
 })
 
-/** `packagesResolve(root, resolve)`: whether every package the runner needs resolves from `root`. */
-export function packagesResolve(root, resolve = (from, name) => createRequire(path.join(from, "package.json")).resolve(name)) {
+// The node_modules folders ESM resolution walks from `from` (never NODE_PATH, which ESM imports ignore).
+function nodeModulesPackage(from, name) {
+  for (let dir = path.resolve(from); ; dir = path.dirname(dir)) {
+    if (existsSync(path.join(dir, "node_modules", name, "package.json"))) return
+    if (dir === path.dirname(dir)) throw new Error(`${name} does not resolve`)
+  }
+}
+
+/** `packagesResolve(root, resolve)`: whether every package the runner needs resolves from `root` as an ES module import would. */
+export function packagesResolve(root, resolve = nodeModulesPackage) {
   try {
     for (const name of PACKAGES) resolve(root, name)
     return true
@@ -45,10 +53,10 @@ export async function prepareSourceMirror({ mcpRoot }, { load = (url) => import(
 }
 
 /**
- * `triageRuntimeRoot(env, seams) -> { state: "found", root } | { state: "unavailable", reason: "runtime_unavailable" }`: the source
+ * `triageRuntimeRoot(seams) -> { state: "found", root } | { state: "unavailable", reason: "runtime_unavailable" }`: the source
  * root the runner loads from. `seams` (`ownRoot`, `resolve`, `prepare`) are test seams.
  */
-export async function triageRuntimeRoot(env = process.env, { ownRoot = OWN_ROOT, resolve, prepare = prepareSourceMirror } = {}) {
+export async function triageRuntimeRoot({ ownRoot = OWN_ROOT, resolve, prepare = prepareSourceMirror } = {}) {
   if (packagesResolve(ownRoot, resolve)) return { state: "found", root: ownRoot }
   try {
     const prepared = await prepare({ mcpRoot: ownRoot })
@@ -64,8 +72,9 @@ export async function triageRuntimeRoot(env = process.env, { ownRoot = OWN_ROOT,
  * `importTriageRunner(env, seams) -> { state: "loaded", root, runner, custody, qualify } | { state: "unavailable", reason }`: the runner,
  * custody and qualification modules from the root `triageRuntimeRoot` finds. Never throws.
  */
-export async function importTriageRunner(env = process.env, { load = (url) => import(url), ...seams } = {}) {
-  const found = await triageRuntimeRoot(env, seams)
+// `env` is part of the contract for callers; the runtime is chosen from the account's home alone.
+export async function importTriageRunner(env, { load = (url) => import(url), ...seams } = {}) {
+  const found = await triageRuntimeRoot(seams)
   if (found.state !== "found") return found
   try {
     const [runner, custody, qualify] = await Promise.all(Object.values(MODULES).map((file) => load(pathToFileURL(path.join(found.root, file)).href)))

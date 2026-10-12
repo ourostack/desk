@@ -1806,6 +1806,7 @@ test("the identity lists every own file and dependency package the parent actual
   const packages=[...new Set(loaded.filter(file=>file.startsWith(deps)).map(file=>{const parts=file.slice(deps.length).split(path.sep);return parts[0].startsWith("@")?`${parts[0]}/${parts[1]}`:parts[0]}))].sort()
   assert.deepEqual(own.filter(file=>!custody.OWNED_SOURCE_FILES.includes(file)),[],"an own module the parent loads is missing from OWNED_SOURCE_FILES")
   assert.deepEqual(packages.filter(name=>!custody.OWNED_DEPENDENCY_PACKAGES.includes(name)),[],"a package the parent loads is missing from OWNED_DEPENDENCY_PACKAGES")
-  assert.ok(own.includes("src/factory/headless-flag.cjs"),"createRequire loads are seen")
+  // Under nyc, its own require hook compiles CommonJS sources, so the load hook sees them only in a plain run.
+  if(process.env.DESK_COVERAGE_RUNNER_CHILD!=="1")assert.ok(own.includes("src/factory/headless-flag.cjs"),"createRequire loads are seen")
 })
 function fileURLToPathSafe(url){return new URL(url).pathname}
