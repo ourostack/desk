@@ -212,7 +212,7 @@ test("startControllerProcess arms its startup timer with the platform window unl
   const options = { identity, endpoint, stateDir, policy, embed: null, ephemeral: true }
   const realSetTimeout = globalThis.setTimeout
   const armed = []
-  // Fire any startup-sized timer at once so the test does not wait out the window; every other timer is real.
+  // Fire any startup-sized timer at once so the test does not wait out the window; every other timer is real. The startup timer is the first one armed; the wait for a killed child's exit comes after it.
   t.mock.method(globalThis, "setTimeout", (fn, delay, ...rest) => {
     if (delay >= 1000) armed.push(delay)
     return delay >= 10000 ? realSetTimeout(fn, 0) : realSetTimeout(fn, delay, ...rest)
@@ -228,14 +228,14 @@ test("startControllerProcess arms its startup timer with the platform window unl
   for (const platform of ["win32", "linux", "darwin"]) {
     armed.length = 0
     await assert.rejects(startControllerProcess(options, { spawn: neverReady, platform }), /startup timed out/u)
-    assert.equal(armed.at(-1), platform === "win32" ? 30000 : 10000, `the default window on ${platform}`)
+    assert.equal(armed[0], platform === "win32" ? 30000 : 10000, `the default window on ${platform}`)
   }
   armed.length = 0
   await assert.rejects(startControllerProcess(options, { spawn: neverReady }), /startup timed out/u)
-  assert.equal(armed.at(-1), controllerStartTimeoutMs(), "the real platform is the default")
+  assert.equal(armed[0], controllerStartTimeoutMs(), "the real platform is the default")
   armed.length = 0
   await assert.rejects(startControllerProcess(options, { spawn: neverReady, timeoutMs: 12345 }), /startup timed out/u)
-  assert.equal(armed.at(-1), 12345, "an explicit timeoutMs still wins")
+  assert.equal(armed[0], 12345, "an explicit timeoutMs still wins")
 })
 
 for (const [name, script, expected] of [
@@ -499,4 +499,45 @@ test("a corrupted owner record during child startup rejects admission instead of
   const result = JSON.parse(stdout)
   assert.equal(result.handled, true)
   assert.match(result.message, /unexpected owner/u)
+})
+
+test("a controller child that ignores SIGKILL never holds close or a failed start forever", { skip: posixOnly }, async () => {
+  const root = await mkTempRoot("desk-kill-bound-")
+  const identity = controllerIdentity({ root, ...readinessContracts(policy) })
+  const endpoint = deriveControllerEndpoint({ identity })
+  const stateDir = path.join(root, "readiness", identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const options = { identity, endpoint, stateDir, policy, embed: null, ephemeral: true }
+  const kills = []
+  // A child whose exit event never comes, as when the operating system has not yet reported a killed process.
+  const stubborn = (reply) => () => {
+    const child = new EventEmitter()
+    child.pid = 424244
+    child.connected = true
+    child.channel = { unref() {} }
+    child.unref = () => {}
+    child.ref = () => {}
+    child.kill = (signal) => { kills.push(signal); return true }
+    child.send = (message) => {
+      if (message.type === "start") queueMicrotask(() => reply(child))
+      return true
+    }
+    return child
+  }
+  const ready = (child) => {
+    const owner = { pid: child.pid, token: "owner-token", started_at: new Date().toISOString() }
+    writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ identity, owner }))
+    child.emit("message", { type: "ready", owner })
+  }
+  const failed = (child) => child.emit("message", { type: "error", message: "listen EADDRINUSE", code: "EADDRINUSE" })
+
+  let started = Date.now()
+  await assert.rejects(startControllerProcess(options, { spawn: stubborn(failed), killWaitMs: 50 }), /EADDRINUSE/u)
+  assert.ok(Date.now() - started < 2000, "a failed start gives up waiting for the killed child")
+  // close allows 1 s for a clean exit, then one kill wait: 2.5 s here. Waiting for the kill twice would take 4 s.
+  const controller = await startControllerProcess(options, { spawn: stubborn(ready), killWaitMs: 1500 })
+  started = Date.now()
+  await controller.close()
+  assert.ok(Date.now() - started < 3200, "close waits for the killed child once")
+  assert.deepEqual(kills, ["SIGKILL", "SIGKILL"])
 })

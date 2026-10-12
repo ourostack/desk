@@ -22,7 +22,10 @@ export function supervisorEndpoint(endpoint, platform = process.platform) {
 }
 
 /** The only process that can terminate a controller is the parent holding its actual child handle. */
-export async function startControllerProcess(options, { spawn = fork, platform = process.platform, timeoutMs = controllerStartTimeoutMs(platform), createServer = net.createServer, socketTimeoutMs = 10000 } = {}) {
+// How long to wait for a killed child's exit event before giving up on it. SIGKILL cannot be ignored, so this only bounds a report the operating system has not delivered yet.
+const KILL_WAIT_MS = 5000
+
+export async function startControllerProcess(options, { spawn = fork, platform = process.platform, timeoutMs = controllerStartTimeoutMs(platform), createServer = net.createServer, socketTimeoutMs = 10000, killWaitMs = KILL_WAIT_MS } = {}) {
   const { identity, endpoint, stateDir } = options
   const supervisor = { endpoint: supervisorEndpoint(endpoint), token: randomUUID() }
   validateControllerEndpoint(supervisor.endpoint)
@@ -32,6 +35,15 @@ export async function startControllerProcess(options, { spawn = fork, platform =
   let ended = false
   let resolveExit
   const exited = new Promise((resolve) => { resolveExit = resolve })
+  async function killedExit() {
+    let timer
+    const gaveUp = await Promise.race([
+      exited.then(() => false),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(true), killWaitMs) }),
+    ])
+    clearTimeout(timer)
+    if (gaveUp) process.stderr.write(`[desk-mcp] controller child ${child.pid} did not report its exit within ${killWaitMs} ms of SIGKILL\n`)
+  }
   const server = createServer((socket) => {
     let pending = ""
     socket.setEncoding("utf8")
@@ -112,7 +124,7 @@ export async function startControllerProcess(options, { spawn = fork, platform =
     child.unref()
     child.channel.unref()
   } catch (error) {
-    if (child?.pid && !ended) { child.kill("SIGKILL"); await exited }
+    if (child?.pid && !ended) { child.kill("SIGKILL"); await killedExit() }
     else server.close()
     throw error
   }
@@ -126,10 +138,11 @@ export async function startControllerProcess(options, { spawn = fork, platform =
     async close() {
       if (ended) return
       child.ref()
-      const timeout = setTimeout(() => child.kill("SIGKILL"), 1000)
       if (child.connected) child.send({ type: "close" })
-      await exited
-      clearTimeout(timeout)
+      let timer
+      const closed = await Promise.race([exited.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), 1000) })])
+      clearTimeout(timer)
+      if (!closed && !ended) { child.kill("SIGKILL"); await killedExit() }
     },
   }
 }
