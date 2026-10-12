@@ -138,14 +138,11 @@ export async function startControllerProcess(options, { spawn = fork, platform =
     async close() {
       if (ended) return
       child.ref()
-      let killed = false
-      const timeout = setTimeout(() => { killed = true; child.kill("SIGKILL") }, 1000)
       if (child.connected) child.send({ type: "close" })
-      let bound
-      await Promise.race([exited, new Promise((resolve) => { bound = setTimeout(resolve, 1000 + killWaitMs) })])
-      clearTimeout(bound)
-      clearTimeout(timeout)
-      if (!ended && killed) await killedExit()
+      let timer
+      const closed = await Promise.race([exited.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), 1000) })])
+      clearTimeout(timer)
+      if (!closed && !ended) { child.kill("SIGKILL"); await killedExit() }
     },
   }
 }

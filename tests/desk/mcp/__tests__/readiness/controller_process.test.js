@@ -534,9 +534,10 @@ test("a controller child that ignores SIGKILL never holds close or a failed star
   let started = Date.now()
   await assert.rejects(startControllerProcess(options, { spawn: stubborn(failed), killWaitMs: 50 }), /EADDRINUSE/u)
   assert.ok(Date.now() - started < 2000, "a failed start gives up waiting for the killed child")
-  const controller = await startControllerProcess(options, { spawn: stubborn(ready), killWaitMs: 50 })
+  // close allows 1 s for a clean exit, then one kill wait: 2.5 s here. Waiting for the kill twice would take 4 s.
+  const controller = await startControllerProcess(options, { spawn: stubborn(ready), killWaitMs: 1500 })
   started = Date.now()
   await controller.close()
-  assert.ok(Date.now() - started < 3000, "close gives up waiting for the killed child")
+  assert.ok(Date.now() - started < 3200, "close waits for the killed child once")
   assert.deepEqual(kills, ["SIGKILL", "SIGKILL"])
 })
