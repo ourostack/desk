@@ -26,7 +26,7 @@
     "displayName": "Ouro sign-in (test)"
   },
   "apple": {
-    "outcome": null,
+    "outcome": "A",
     "developerId": "743GT2AJ24",
     "appId": "bot.ouro.identity.testapp",
     "serviceId": "bot.ouro.identity.test",
@@ -60,8 +60,8 @@
     "githubUserId": 16390116,
     "githubLogin": "arimendelow"
   },
-  "legacyCutoff": null,
-  "releasedAt": null,
+  "legacyCutoff": "2026-10-12T02:42:44Z",
+  "releasedAt": "2026-10-12T00:42:44Z",
   "keyVault": {
     "name": "kv-ouro-identity-261e0b",
     "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.KeyVault/vaults/kv-ouro-identity-261e0b",
