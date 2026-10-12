@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activation/failures.js"
 import { createDeskSession, requirementMet, toolRequirement, watchGitHead } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
@@ -1222,7 +1222,7 @@ test("desk_doctor refuses switch_state_branch without a state branch, when unsaf
   assert.match(gitRefused.fix, /untracked file would be overwritten/u)
 })
 
-test("the .git/HEAD watch re-runs admission on HEAD changes only, never switches, and a failed watcher is re-created", async (t) => {
+test("the .git/HEAD watch re-runs admission once for a burst of changes, never switches, and a watch that cannot start is logged", async (t) => {
   const state = { branch: "main", onRemote: true }
   const watchers = []
   const watch = (dir, options, listener) => {
@@ -1230,7 +1230,7 @@ test("the .git/HEAD watch re-runs admission on HEAD changes only, never switches
     watchers.push(watcher)
     return watcher
   }
-  const { session, log } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch })
+  const { session } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch })
   await session.admission.refresh()
   assert.equal(watchers.length, 1)
   assert.equal(watchers[0].dir, "/repo/.git")
@@ -1246,20 +1246,12 @@ test("the .git/HEAD watch re-runs admission on HEAD changes only, never switches
   assert.equal(session.admission.snapshot().state, "degraded:state_branch_detached")
   assert.equal(state.switches, undefined, "a watched HEAD change never switches")
 
-  watchers[0].emit("error", new Error("watch died"))
-  assert.equal(watchers[0].closed, true)
-  assert.match(log(), /HEAD watch on \/repo\/\.git failed \(watch died\)/u)
-  await session.admission.refresh({ force: true })
-  assert.equal(watchers.length, 2, "the next attempt re-created the watcher")
-  watchers[0].emit("error", "late error from the old watcher")
-  assert.equal(watchers[1].closed, false)
-
   const failing = await makeSession(t, { git: scriptedGit({ branch: "main" }), inputs: { stateBranch: "main" }, watch: () => { throw new Error("EMFILE") } })
   await failing.session.admission.refresh()
   assert.match(failing.log(), /could not watch \/repo\/\.git for HEAD changes: EMFILE/u)
-  watchers[1].listener("rename", "HEAD")
+  watchers[0].listener("change", "HEAD")
   session.dispose()
-  assert.equal(watchers[1].closed, true)
+  assert.equal(watchers[0].closed, true)
 })
 
 test("the default HEAD watch reports a HEAD that Git replaced by rename, and stops when closed", async (t) => {
@@ -1280,8 +1272,26 @@ test("the default HEAD watch reports a HEAD that Git replaced by rename, and sto
   watcher.close()
   const seen = events.length
   replace("ref: refs/heads/other\n")
-  await new Promise((resolve) => setTimeout(resolve, 700))
+  await new Promise((resolve) => setTimeout(resolve, 1200))
   assert.equal(events.length, seen, "a closed watch reports nothing")
+})
+
+test("the default HEAD watch reports a HEAD that appears or disappears before its first poll", async (t) => {
+  for (const [name, before, change] of [
+    ["appears", false, (head) => writeFileSync(head, "ref: refs/heads/main\n")],
+    ["disappears", true, (head) => rmSync(head)],
+  ]) {
+    const gitDir = path.join(await mkTempRoot("head-watch-"), ".git")
+    mkdirSync(gitDir, { recursive: true })
+    const head = path.join(gitDir, "HEAD")
+    if (before) writeFileSync(head, "ref: refs/heads/main\n")
+    const events = []
+    const watcher = watchGitHead(gitDir, { persistent: false }, (event, filename) => events.push([event, filename]))
+    t.after(() => watcher.close())
+    change(head)
+    await waitUntil(() => events.length > 0)
+    assert.deepEqual(events[0], ["change", "HEAD"], name)
+  }
 })
 
 test("a root outside Git drops the HEAD watch", async (t) => {
