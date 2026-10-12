@@ -32,7 +32,7 @@ childProcess.fork = (file, args, options) => {
 }
 for (const n of ["spawnSync","execFileSync","execSync"]) { const o = childProcess[n]; childProcess[n] = function(...a) { const s = Date.now(); try { return o.apply(this, a) } finally { const d = Date.now() - s; if (d > 30) process.stderr.write(`SYNC ${n} ${d}ms ${String(a[0])} ${JSON.stringify(a[1]??"").slice(0,120)}\n${new Error().stack.split("\n").slice(2,8).join(" | ")}\n`) } } }
 const ow = Atomics.wait; Atomics.wait = function(...a) { process.stderr.write(`ATOMICS ${a[3]} ${new Error().stack.split("\n").slice(2,12).join(" | ")}\n`); return ow.apply(this, a) }
-let lastTick = Date.now(); setInterval(() => { const d = Date.now() - lastTick; if (d > 60) process.stderr.write(`LAG ${d}ms\n`); lastTick = Date.now() }, 10).unref()
+let lastTick = Date.now(); setInterval(() => { const d = Date.now() - lastTick; if (d > 30) process.stderr.write(`LAG ${d}ms at ${new Date(lastTick).toISOString().slice(17)}\n`); lastTick = Date.now() }, 10).unref()
 syncBuiltinESMExports()
 const originalPrepare = Database.prototype.prepare
 Database.prototype.prepare = function(...args) {

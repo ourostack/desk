@@ -10,7 +10,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 
-for (const phase of ["rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot"]) {
+for (const phase of ["rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot", "rootStatus", "inspectLocalDb", "openSnapshot"]) {
 test(`actual MCP and controller processes retain 200 ms status/list/ping caps through blocked ${phase} and late destination`, async (t) => {
   const base = await mkTempRoot("status-process-")
   const home = path.join(base, "home")
@@ -101,10 +101,12 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
   })
   await client.connect(new StreamTransport({ toServer: child.stdin, fromServer: child.stdout }))
   const statusTimes = []
+  const clientLags = []
+  { let last = Date.now(); const timer = setInterval(() => { const d = Date.now() - last; if (d > 40) clientLags.push([new Date(last).toISOString().slice(17), d]); last = Date.now() }, 10); timer.unref(); t.after(() => clearInterval(timer)) }
   const status = async () => {
     const start = Date.now()
     const response = await client.callTool({ name: "desk_status", arguments: { detail: true } })
-    assert.ok(Date.now() - start < 200, `actual process status exceeded cap: ${Date.now() - start} ms; ${stderr}`)
+    assert.ok(Date.now() - start < 200, `actual process status exceeded cap: ${Date.now() - start} ms from ${new Date(start).toISOString()}; client lag ${JSON.stringify(clientLags)}; ${stderr}`)
     statusTimes.push(Date.now() - start)
     return JSON.parse(response.content[0].text)
   }

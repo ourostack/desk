@@ -791,8 +791,10 @@ export function createDeskSession(deps) {
   async function deskStatus(input, signal) {
     // desk_status must answer at once whatever admission is doing: it starts or joins an attempt but waits only briefly for it, and the whole answer shares one time budget. A ready session also checks its controller in the background, so a lost one is re-elected without waiting for the 60 s check.
     const deadline = Date.now() + STATUS_BUDGET_MS
+    const diagT0 = Date.now()
     // An attempt that was already running (a slow restore, the import of the runtime, the controller election) is joined, not waited on.
     await admission.refresh({ waitMs: STATUS_WAIT_MS, joinMs: 0 })
+    const diagT1 = Date.now()
     const snapshot = statusSnapshot()
     if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
@@ -835,9 +837,13 @@ export function createDeskSession(deps) {
         : { ...payload, status_detail_from: detailFrom,
           status_detail: `${payload.status_detail ?? "cached: this detail belongs to the currently admitted context."} Destination verification is pending; this detail is not permission to dispatch an operation.` }
     }
+    const diagT2 = Date.now()
     const full = withAdmission(payload, stamped ?? statusSnapshot())
     // Compact unless asked: the full payload is tens of KB, and an agent only wants "ready or not, and what do I do".
-    return jsonResult(input?.detail === true ? full : compactStatus(full))
+    const diagResult = jsonResult(input?.detail === true ? full : compactStatus(full))
+    const diagT3 = Date.now()
+    if (diagT3 - diagT0 > 110) process.stderr.write(`SRV status ${diagT3 - diagT0}ms refresh=${diagT1 - diagT0} detail=${diagT2 - diagT1} finish=${diagT3 - diagT2} at=${new Date(diagT0).toISOString()}\n`)
+    return diagResult
   }
 
   function statusSnapshot() {
