@@ -1,0 +1,1 @@
+`desk_doctor`'s `switch_state_branch` repair now includes the admission `summary` and `diagnostic` when admission after the switch does not reach ready ([`mcp/src/runtime/desk-session.js`](mcp/src/runtime/desk-session.js)). It used to report only the degraded state, so a `degraded:admission_exception` after a successful switch did not name the error.

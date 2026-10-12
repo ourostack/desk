@@ -1277,6 +1277,22 @@ test("state branch at startup: automatic repair, a failed switch, a local-only c
   assert.equal(again.summary, "Already on the state branch main.")
 })
 
+test("a switch repair whose admission then fails says why, not only the degraded state", async (t) => {
+  const state = { branch: "review", onRemote: true }
+  const scripted = scriptedGit(state)
+  // Once the branch has been switched, the next admission attempt hits an unexpected error.
+  const git = (options) => {
+    if (state.switches && options.args[0] === "rev-parse") throw new Error("fatal: Unable to create '.git/index.lock': File exists.")
+    return scripted(options)
+  }
+  const { session } = await makeSession(t, { git, inputs: { stateBranch: "main" }, watch: quietWatch })
+  assert.equal((await session.admission.refresh()).state, "degraded:state_branch_mismatch")
+  const doctored = payload(await session.callTool({ name: "desk_doctor", input: { repair: "switch_state_branch" } }))
+  assert.equal(doctored.state, "degraded:admission_exception")
+  assert.match(doctored.summary, /index\.lock/u)
+  assert.equal(doctored.diagnostic.observed.message, "fatal: Unable to create '.git/index.lock': File exists.")
+})
+
 test("mid-session, HEAD leaving the state branch is never switched back automatically: writes go read-only with the doctor fix", async (t) => {
   const state = { branch: "main", onRemote: true, upstream: true }
   const { session } = await makeSession(t, { git: scriptedGit(state), inputs: { stateBranch: "main" }, watch: quietWatch })

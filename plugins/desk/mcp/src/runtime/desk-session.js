@@ -989,7 +989,9 @@ export function createDeskSession(deps) {
     context.pendingRepairs.push(recordRepair(repaired.line))
     release()
     const snapshot = await admission.refresh({ force: true, waitMs: GATE_WAIT_MS })
-    return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix })
+    // When admission after the switch is not ready, say why: the summary and diagnostic name an exception's message.
+    const why = snapshot.state === "ready" ? {} : { summary: snapshot.summary, diagnostic: snapshot.diagnostic }
+    return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix, ...why })
   }
 
   // Legacy/unverified owners remain report-only. A supervisor may stop only its retained controller child.
