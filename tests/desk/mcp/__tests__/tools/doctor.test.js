@@ -1,13 +1,13 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
 
 import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
-import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
+import { doctorRuntime, organizationSection, ORGANIZATION_CODES } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
 const deskPluginVersion = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/plugin.json", import.meta.url), "utf8")).version
 
 function makeRoot() {
@@ -263,6 +263,35 @@ test("desk_doctor's organization section truncates a code past the first five pa
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+// ~/ms-desk, 2026-10-12: nine stale `_cache/` entries made desk_doctor fail with "Cannot read properties of undefined (reading 'push')",
+// because the section's list of codes did not hold `stale_quarantine`.
+test("desk_doctor reports a stale quarantine entry instead of failing on it", async () => {
+  const root = makeRoot()
+  try {
+    const stale = path.join(root, "_cache", "stray-2026-07-01")
+    mkdirSync(stale, { recursive: true })
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000)
+    utimesSync(stale, old, old)
+    const body = parseToolResult(await callTool({ deskRoot: root, name: "desk_doctor", input: {} }))
+    assert.deepEqual(body.organization.map((f) => f.code), ["stale_quarantine"])
+    assert.match(body.summary, /^ {2}stale_quarantine: 1\n {4}_cache\/stray-2026-07-01 — stale quarantine: review and delete$/mu)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("the organization section lists every code the organization checks can return, and still prints one it does not know", () => {
+  const source = readFileSync(new URL("../../../../../plugins/desk/mcp/src/desk/organization.js", import.meta.url), "utf8")
+  const returned = [...new Set([...source.matchAll(/\bcode: "([a-z_]+)"|\breturn "((?:name|track)_[a-z_]+)"/gu)].map((match) => match[1] ?? match[2]))].sort()
+  assert.ok(["stale_quarantine", "loose_file", "name_shape", "track_person_name"].every((code) => returned.includes(code)), "the scan reads the finding codes")
+  assert.deepEqual(returned.filter((code) => !ORGANIZATION_CODES.includes(code)), [], "a code the checks return is missing from desk_doctor's list")
+  const section = organizationSection([
+    { code: "a_code_added_later", path: "somewhere", hint: "look" },
+    { code: "loose_file", path: "notes.md", hint: "file it" },
+  ])
+  assert.equal(section, "Organization\n  loose_file: 1\n    notes.md — file it\n  a_code_added_later: 1\n    somewhere — look")
 })
 
 function findByCode(findings, code) {

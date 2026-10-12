@@ -891,6 +891,53 @@ test("Desk ships the tidy-desk migration: in-session agent work, no restart", ()
   assert.equal(frontmatter.agent_work, "true");
 });
 
+// A heredoc whose delimiter is not quoted is expanded by the shell: a backtick or `$(` in its text runs as a command, in
+// the folder the migration was started from. The tidy's steps once quoted `git add -A` in backticks there, and running the
+// migration from a project repository staged every untracked file in that repository (Agency dry run, 2026-10-12).
+function unquotedHeredocBodies(block) {
+  const bodies = [];
+  const lines = block.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const opener = /<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/u.exec(lines[i].replace(/#.*$/u, ""));
+    if (opener === null) continue;
+    const end = lines.indexOf(opener[2], i + 1);
+    assert.notEqual(end, -1, `heredoc ${opener[2]} is never closed`);
+    if (opener[1] === "") bodies.push(lines.slice(i + 1, end).join("\n"));
+    i = end;
+  }
+  return bodies;
+}
+
+test("no migration block runs prose as a command: an expanding heredoc holds no command substitution", () => {
+  assert.deepEqual(unquotedHeredocBodies("cat <<'A'\n`x`\nA\ncat <<B\nplain $v\nB\n"), ["plain $v"], "the check reads only heredocs the shell expands");
+  for (const name of migrationFiles) {
+    const { blocks } = parseMigration(path.join(migrationsDir, name));
+    for (const section of BASH_SECTIONS) {
+      for (const body of unquotedHeredocBodies(blocks[section])) {
+        assert.doesNotMatch(body, /(^|[^\\])(\\\\)*`/u, `${name} ${section}: a backtick in an expanding heredoc runs its text as a command; escape it as \\\``);
+        assert.doesNotMatch(body, /(^|[^\\])(\\\\)*\$\(/u, `${name} ${section}: $( in an expanding heredoc runs a command; escape the dollar sign`);
+      }
+    }
+  }
+});
+
+test("the tidy migration started from a project repository stages nothing there and prints its quoted commands", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({}, (tidy) => {
+    const project = path.join(tidy.root, "project");
+    fs.mkdirSync(project);
+    gitIn(project, "init", "-q");
+    put(project, "untracked-work.py", "print('mine')\n");
+    const migrate = spawnSync(BASH, ["-c", blocks.Migrate], { cwd: project, env: { ...tidy.env, DESK_TOOLS_ROOT: tidy.desk }, encoding: "utf8" });
+    assert.equal(migrate.status, 0, migrate.stderr);
+    assert.equal(migrate.stderr, "", "no line of the steps ran as a command");
+    assert.equal(gitIn(project, "status", "--porcelain"), "?? untracked-work.py\n", "the project's untracked file is still untracked");
+    assert.match(migrate.stdout, /a bare `git add -A` or a folder\/pattern add, or by deleting `\.git\/index\.lock`/u);
+    assert.match(migrate.stdout, /ends it with the trailer `Desk-Tidy: true`/u);
+    assert.match(migrate.stdout, /run: node '[^']+tidy-status\.js' --defer '<one-line reason>' --root '[^']+' --claim '[0-9a-f-]+'/u, "the commands the steps name are still filled in");
+  });
+});
+
 test("the tidy migration tidies and announces: announce-and-proceed wording and no question anywhere", () => {
   const text = read(TIDY_FILE);
   const { blocks } = tidyMigration();
@@ -1091,6 +1138,8 @@ function hookContexts() {
     const env = {
       ...process.env,
       HOME: path.join(scratch, "home"),
+      // The Copilot hook edits the settings file under this folder; a developer's own must never be the one.
+      COPILOT_HOME: path.join(scratch, "home", ".copilot"),
       DESK: scratch,
       CLAUDE_PLUGIN_ROOT: deskRoot,
       PLUGIN_ROOT: deskRoot,
@@ -1127,7 +1176,7 @@ test(`startup hooks ${marketplace.name === "ouroboros-skills" ? "open with the m
 // M4-7-F2: the startup hooks run the Detect blocks themselves, so a pending tidy never depends on the agent choosing to
 // run the session-start migration step.
 function startupContexts(desk, home, extraEnv = {}) {
-  const env = { ...process.env, HOME: home, DESK: desk, DESK_IDENTITY: "nobody-in-the-registry", CLAUDE_PLUGIN_ROOT: deskRoot, PLUGIN_ROOT: deskRoot, ...extraEnv };
+  const env = { ...process.env, HOME: home, COPILOT_HOME: path.join(home, ".copilot"), DESK: desk, DESK_IDENTITY: "nobody-in-the-registry", CLAUDE_PLUGIN_ROOT: deskRoot, PLUGIN_ROOT: deskRoot, ...extraEnv };
   for (const key of [...HOST_BINDING_VARS, "CLAUDE_CONFIG_DIR", "AGENCY_TOML"]) if (!["DESK", "DESK_IDENTITY", "CLAUDE_PLUGIN_ROOT"].includes(key) && !(key in extraEnv)) delete env[key];
   const claude = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "claude-session-start.cjs")], { cwd: home, env, encoding: "utf8" });
   assert.equal(claude.status, 0, claude.stderr);

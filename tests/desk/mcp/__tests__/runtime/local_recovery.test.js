@@ -256,15 +256,18 @@ test("the whole run ends within its total budget, which caps the dispatched call
   assert.ok(Date.now() - started < 1500, "the run ended near its 500 ms total, not after the write's 2 s")
 })
 
-test("an already edited card is not falsely reported as committed", async () => {
+// task_update used to write such a card and skip the commit, and the recovery reported `commit_not_observed`; it now commits the card
+// with the edit it already held, and its answer says so.
+test("an already edited card is committed with its earlier edit, and the answer says the commit includes it", async () => {
   const root = fixture()
   const head = git(root, "rev-parse", "HEAD")
   writeFileSync(path.join(root, "work/one/task.md"), readFileSync(path.join(root, "work/one/task.md"), "utf8") + "\nLocal edit\n")
   const result = await recover(root)
-  assert.equal(result.exitCode, 2)
-  assert.equal(result.report.effects.commit, "not_observed")
-  assert.equal(git(root, "rev-parse", "HEAD"), head)
-  assert.match(readFileSync(path.join(root, "work/one/task.md"), "utf8"), /Local edit/u)
+  assert.equal(result.report.effects.commit, "observed", JSON.stringify(result.report))
+  assert.notEqual(git(root, "rev-parse", "HEAD"), head)
+  assert.match(result.report.result.included_uncommitted_changes, /this commit includes them/u)
+  assert.match(git(root, "show", "HEAD:work/one/task.md"), /Local edit/u)
+  assert.equal(git(root, "status", "--porcelain", "--", "work/one/task.md"), "")
 })
 
 for (const [operation, value, expected] of [

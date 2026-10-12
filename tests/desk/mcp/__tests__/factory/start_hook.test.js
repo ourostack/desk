@@ -279,9 +279,9 @@ test("the desk-health check reports a degraded last start and otherwise asks for
   execFileSync("git", ["init", "-q", "-b", "main", desk])
   const stateDir = resolveDeskStateDir({ env })
   const real = await fs.realpath(desk)
-  writeLastStart({ stateDir, root: real, snapshot: { state: "degraded:state_branch_detached", code: "state_branch_detached", repair: null, fix: null } })
+  await writeLastStart({ stateDir, root: real, snapshot: { state: "degraded:state_branch_detached", code: "state_branch_detached", repair: null, fix: null } })
   assert.equal(await run({ host: "claude", env }), "Desk boot pre-checks: Desk: degraded (desk checkout detached; writes paused); run desk_doctor")
-  writeLastStart({ stateDir, root: real, snapshot: { state: "ready", code: null, repair: null, fix: null } })
+  await writeLastStart({ stateDir, root: real, snapshot: { state: "ready", code: null, repair: null, fix: null } })
   const repairs = []
   assert.equal(await run({ host: "claude", env, launchRepair: async (command) => repairs.push(command) }), "")
   assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", BOOT, "--fast-forward", desk]], "the fast-forward starts through the compatible-Node launcher")
@@ -289,7 +289,7 @@ test("the desk-health check reports a degraded last start and otherwise asks for
   await fs.mkdir(path.join(crew, "_meta"), { recursive: true })
   await fs.mkdir(path.join(crew, "desks"), { recursive: true })
   execFileSync("git", ["init", "-q", "-b", "main", crew])
-  writeLastStart({ stateDir, root: crew, snapshot: { state: "degraded:crew_state_not_main", code: "crew_state_not_main", repair: null, fix: null } })
+  await writeLastStart({ stateDir, root: crew, snapshot: { state: "degraded:crew_state_not_main", code: "crew_state_not_main", repair: null, fix: null } })
   assert.equal(await run({ host: "copilot", env, sessionFolder: crew }), "Desk boot pre-checks: Desk: degraded (crew_state_not_main; writes paused); run desk_status for the fix", "the session's own desk comes first on Copilot")
 }))
 

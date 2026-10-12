@@ -84,6 +84,15 @@ export function hasUnstagedWork(root, relPaths, spawnGit) {
 }
 
 /**
+ * Whether Git holds any of `relPaths` as a conflict (unmerged index entries): staging such a path marks the conflict resolved with its
+ * markers still in the file. `false` when Git cannot say, so the caller's own stage or commit reports Git's failure.
+ */
+export function hasUnmergedPath(root, relPaths, spawnGit) {
+  const result = run(spawnGit, root, ["ls-files", "-u", "--", ...relPaths])
+  return result.status === 0 && result.stdout.trim() !== ""
+}
+
+/**
  * What is staged at `relPaths`, with renames detected: `[{ status, paths }]`, where `status` is git's letter plus a rename's similarity (`R100`, `D`, `A`, `M`)
  * and `paths` is the old and new path of a rename or the one path otherwise. Returns `null` when Git fails, so a caller refusing on it fails safe.
  */

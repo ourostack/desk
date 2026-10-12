@@ -4,11 +4,12 @@
 //
 // `writeLastStart` and `appendRepairLog` are the two places this module actually writes; each calls `assertNotRealStateUnderTest` (`./test-state-guard.js`) first, refusing a non-temp state directory from what looks like a node:test run. `resolveDeskStateDir` itself stays a plain, side-effect-free function — many tests call it only to compute an expected path — so the guard sits at the write points, not there.
 
-import { createHash } from "node:crypto"
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { createHash, randomBytes } from "node:crypto"
+import { appendFileSync, mkdirSync } from "node:fs"
+import { mkdir, rm, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
-import { renameWithRetry } from "../util/rename-retry.js"
+import { renameWithRetryAsync } from "../util/rename-retry.js"
 import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 export const LAST_START_FILE = "last-start.json"
@@ -38,10 +39,13 @@ export function lastStartPath({ stateDir, root = null }) {
   return root === null ? path.join(stateDir, LAST_START_FILE) : path.join(stateDir, LAST_START_ROOTS_DIR, `${lastStartRootKey(root)}.json`)
 }
 
-/** Replace last-start.json, and the root's own record when the root is known, atomically. Returns the path of last-start.json. */
-export function writeLastStart({ stateDir, snapshot, root = null, pid = process.pid, now = () => new Date() }) {
+/**
+ * Replace last-start.json, and the root's own record when the root is known, atomically. Resolves to the path of last-start.json.
+ * The I/O is asynchronous: on Windows, creating a file can wait on an antivirus scan for over 100 ms, and a Desk session must not stall its event loop (and every tool call it is answering) for that.
+ */
+export async function writeLastStart({ stateDir, snapshot, root = null, pid = process.pid, now = () => new Date() }) {
   assertNotRealStateUnderTest(stateDir)
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  await mkdir(stateDir, { recursive: true, mode: 0o700 })
   const file = path.join(stateDir, LAST_START_FILE)
   const record = {
     schema_version: 1,
@@ -53,19 +57,66 @@ export function writeLastStart({ stateDir, snapshot, root = null, pid = process.
     pid,
     updated_at: now().toISOString(),
   }
-  replaceFile(file, record, pid)
+  await replaceFile(file, record, pid)
   if (root !== null) {
     const rootsDir = path.join(stateDir, LAST_START_ROOTS_DIR)
-    mkdirSync(rootsDir, { recursive: true, mode: 0o700 })
-    replaceFile(lastStartPath({ stateDir, root }), record, pid)
+    await mkdir(rootsDir, { recursive: true, mode: 0o700 })
+    await replaceFile(lastStartPath({ stateDir, root }), record, pid)
   }
   return file
 }
 
-function replaceFile(file, record, pid) {
-  const temporary = `${file}.${pid}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
-  renameWithRetry(temporary, file)
+/**
+ * A session's writer of its start records: `record` returns at once, the writes run one at a time in the order recorded, and `written()` resolves once every record so far is on disk.
+ * Records waiting behind a running write are coalesced to the latest one per root: each file holds only the latest state, so a skipped intermediate record loses nothing, and closing a session waits for at most one record per root.
+ * A failed write goes to `onError` and does not stop later ones. `updated_at` is when `record` was called, not when the write ran.
+ */
+export function createLastStartWriter({ onError, write = writeLastStart }) {
+  // Keyed by root and re-inserted on every record, so iteration order is recency order and the newest record is written last, leaving it in the shared last-start.json.
+  const pending = new Map()
+  let tail = Promise.resolve()
+  const report = (error) => {
+    try {
+      onError(error)
+    } catch {
+      // A failing error report must not stop the records after it.
+    }
+  }
+  const drain = async () => {
+    for (const [root, args] of pending) {
+      pending.delete(root)
+      try {
+        await write(args)
+      } catch (error) {
+        report(error)
+      }
+    }
+  }
+  return {
+    record(args) {
+      const at = new Date()
+      const root = args.root ?? null
+      const queued = pending.size > 0
+      pending.delete(root)
+      pending.set(root, { ...args, now: () => at })
+      // A drain already queued picks this record up; otherwise start one after the running write.
+      if (!queued) tail = tail.then(drain)
+    },
+    written: () => tail,
+  }
+}
+
+async function replaceFile(file, record, pid) {
+  // Unique per write: two sessions in one process may write the same record at once.
+  const temporary = `${file}.${pid}.${randomBytes(4).toString("hex")}.tmp`
+  try {
+    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
+    await renameWithRetryAsync(temporary, file)
+  } catch (error) {
+    // A unique name is never reused, so a failed write removes its own; a failed removal never hides the error.
+    await Promise.allSettled([rm(temporary, { force: true })])
+    throw error
+  }
 }
 
 /** Append one repair line: `<time> <root> <line>`. */

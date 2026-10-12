@@ -62,6 +62,8 @@ function notesFor(payload, search) {
   }
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
   if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}.`)
+  // The latest thing Desk repaired by itself in this session (at its start, the checkout switched back to the state branch, for example), in the repair log's own words: the agent was not there to see it.
+  if (typeof payload.repair === "string") notes.push(payload.repair)
   return notes
 }
 
@@ -70,6 +72,8 @@ function notesFor(payload, search) {
 const DIAGNOSTIC_KEYS = ["mode", "reason", "reason_detail", "binding_path", "paths_tried", "remediation"]
 
 const DETAIL_PENDING_SUMMARY = "Desk is ready, but its details (root, search, sync) are still loading, so the empty fields below are not a missing desk. Call desk_status again shortly."
+// The usual first answer of a session: the desk the session admitted is already named, and only the runtime's own detail is still to come.
+const DETAIL_PENDING_ROOTED_SUMMARY = "Desk is ready, but its details (search, sync) are still loading, so the empty fields below are not a fault. Call desk_status again shortly."
 
 // The first line of a runtime status error, at most 200 characters, so a stack or a long message never fills the answer.
 function errorLine(error) {
@@ -93,7 +97,7 @@ export function compactStatus(payload) {
   // The other ways a ready desk answers without its root, each with its own cause, so the empty fields are never read as "no desk".
   const statusError = state === "ready" && typeof payload.status_error === "string" ? errorLine(payload.status_error) : null
   const noDetail = state === "ready" && !detailPending && statusError === null && !payload.root?.path
-  const readySummary = detailPending ? DETAIL_PENDING_SUMMARY : statusError !== null ? statusErrorSummary(statusError) : noDetail ? NO_DETAIL_SUMMARY : "Desk is ready."
+  const readySummary = detailPending ? (payload.root?.path ? DETAIL_PENDING_ROOTED_SUMMARY : DETAIL_PENDING_SUMMARY) : statusError !== null ? statusErrorSummary(statusError) : noDetail ? NO_DETAIL_SUMMARY : "Desk is ready."
   const compact = {
     state,
     summary: state === "ready" ? readySummary : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),

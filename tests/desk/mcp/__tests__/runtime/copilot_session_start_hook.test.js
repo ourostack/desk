@@ -37,6 +37,18 @@ test("a hook payload with no session id records nothing but still starts the ses
   assert.match(context, /Desk startup:/u)
 })
 
+test("a session start turns Copilot's AI co-author commit trailer off once when the operator never set it, and says so in one line", () => {
+  const home = path.join(ROOT, "trailer")
+  mkdirSync(path.join(home, ".copilot"), { recursive: true })
+  const settings = path.join(home, ".copilot", "settings.json")
+  const first = start({ sessionId: "sess-trailer", cwd: ROOT, source: "new" }, "trailer")
+  assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { includeCoAuthoredBy: false })
+  assert.equal(first.context.split("\n").filter((line) => line.includes("includeCoAuthoredBy")).length, 1)
+  assert.match(first.context, /\n\nDesk startup: set `includeCoAuthoredBy: false` in \S+settings\.json, so Copilot stops asking for an AI co-author trailer on commits from the next session; add none in this session either\.\n\n/u)
+  assert.doesNotMatch(start({ sessionId: "sess-trailer-2", cwd: ROOT, source: "new" }, "trailer").context, /includeCoAuthoredBy/u, "the next session says nothing")
+  assert.doesNotMatch(start({ sessionId: "sess-no-copilot", cwd: ROOT, source: "new" }, "no-copilot-folder").context, /includeCoAuthoredBy/u, "a home with no Copilot folder is left alone")
+})
+
 test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   const hooks = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
   const commands = (event) => hooks[event].map((entry) => entry.bash)

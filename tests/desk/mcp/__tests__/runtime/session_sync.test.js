@@ -150,6 +150,49 @@ test("a dirty-index pull failure is resolved by quarantining the stray paths and
   assert.ok(!git(cloneA, ["status", "--porcelain"]).includes("stray.txt"))
 })
 
+// ~/ms-desk, 2026-10-12: that desk's `.gitignore` had no `_cache/` line, so an earlier quarantine was itself listed as stray and moved
+// into the new one, `_cache/stray-<today>/_cache/stray-<earlier>/...`.
+test("on a desk that does not ignore _cache/, an earlier quarantine is left where it is and only the stray path moves", async () => {
+  const origin = await mkBareOrigin()
+  const cloneA = await mkClone(origin, "a")
+  await writeAndCommit(cloneA, "seed.md", "seed\n", "seed")
+  git(cloneA, ["push", "-q", "-u", "origin", "main"])
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "stray.txt", "from origin\n", "add stray from origin")
+  git(cloneB, ["push", "-q"])
+  await fs.writeFile(path.join(cloneA, "stray.txt"), "local uncommitted\n")
+  const earlier = path.join(cloneA, "_cache", "stray-2026-09-01")
+  mkdirSync(earlier, { recursive: true })
+  writeFileSync(path.join(earlier, "kept.txt"), "from an earlier quarantine\n")
+  const today = new Date().toISOString().slice(0, 10)
+
+  const result = await syncWorkspace({ root: cloneA, env })
+  assert.equal(result.state, "quarantined")
+  assert.deepEqual(result.quarantinedPaths, [path.join("_cache", `stray-${today}`, "stray.txt")])
+  assert.equal(await fs.readFile(path.join(earlier, "kept.txt"), "utf8"), "from an earlier quarantine\n")
+  assert.ok(!existsSync(path.join(cloneA, "_cache", `stray-${today}`, "_cache")), "the quarantine folder is never moved into itself")
+})
+
+test("on a desk that does not ignore _cache/, a pull failure with nothing stray outside _cache/ quarantines nothing", async () => {
+  const origin = await mkBareOrigin()
+  const cloneA = await mkClone(origin, "a")
+  await writeAndCommit(cloneA, "seed.md", "seed\n", "seed")
+  git(cloneA, ["push", "-q", "-u", "origin", "main"])
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "seed.md", "seed\nfrom origin\n", "origin edits seed")
+  git(cloneB, ["push", "-q"])
+  await writeAndCommit(cloneA, "seed.md", "seed\nfrom local\n", "local edits seed")
+  const earlier = path.join(cloneA, "_cache", "stray-2026-09-01")
+  mkdirSync(earlier, { recursive: true })
+  writeFileSync(path.join(earlier, "kept.txt"), "from an earlier quarantine\n")
+
+  const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
+  assert.equal(result.state, "unresolved")
+  assert.equal(result.reason, "pull_rebase_failed")
+  assert.equal(result.quarantinedPaths, undefined)
+  assert.deepEqual((await fs.readdir(path.join(cloneA, "_cache"))).sort(), ["stray-2026-09-01"])
+})
+
 test("a second (and third) same-day quarantine does not clobber the ones before it", async () => {
   const { cloneA } = await mkDirtyIndexFixture()
   const today = new Date().toISOString().slice(0, 10)

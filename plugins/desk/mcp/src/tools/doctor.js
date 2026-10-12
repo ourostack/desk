@@ -10,7 +10,7 @@ import { factoryStatus, factorySummary } from "./factory-context.js"
 // order regardless of which codes actually fired, so the section's shape is
 // stable across desks and its absence lines read as "checked, found none"
 // rather than "not checked".
-const ORGANIZATION_CODES = [
+export const ORGANIZATION_CODES = [
   "track_missing_scope",
   "track_person_name",
   "track_catch_all",
@@ -21,6 +21,7 @@ const ORGANIZATION_CODES = [
   "loose_file",
   "duplicate_job",
   "stale_task",
+  "stale_quarantine",
 ]
 
 const ORGANIZATION_PATHS_SHOWN = 5
@@ -28,11 +29,13 @@ const ORGANIZATION_PATHS_SHOWN = 5
 // Human-readable "Organization" section: count per code, first five paths
 // per code (M4-3 brief). Printed even when clean, so a resuming agent can
 // tell "checked, nothing to tidy" apart from "never checked".
-function organizationSection(findings) {
-  // Every code `organizationFindings` can return is pre-registered above, so
-  // `byCode.get(finding.code)` below always finds its array.
+// Exported for its tests.
+export function organizationSection(findings) {
+  // Every code `organizationFindings` returns is meant to be listed above (a test checks the list against the checks' source). A code
+  // that is not gets its own group after the listed ones, so a new finding type can never make desk_doctor fail (`stale_quarantine` did).
   const byCode = new Map(ORGANIZATION_CODES.map((code) => [code, []]))
   for (const finding of findings) {
+    if (!byCode.has(finding.code)) byCode.set(finding.code, [])
     byCode.get(finding.code).push(finding)
   }
 

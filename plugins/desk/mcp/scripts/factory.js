@@ -3,6 +3,8 @@
 //
 //   node scripts/factory.js account --store <owner/repo>
 //   node scripts/factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>]
+//   node scripts/factory.js consent --store <owner/repo> --mentioned yes
+//     Records that the operator was told Desk can contribute to the store, so no later session start raises it again. It decides nothing.
 //   node scripts/factory.js flush --store <owner/repo>
 //   node scripts/factory.js finalize --job <job> [--job <job> ...]
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
@@ -64,6 +66,8 @@ import { captureCheckLines, retentionLine } from "../src/factory/retention.js"
 import { listFinalizeRequests, listMarkers, readMachineSecret, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { normalizeTimestamp } from "../src/factory/time.js"
+import { noteConsentMentioned } from "../src/runtime/consent-mentioned.js"
+import { resolveDeskStateDir } from "../src/runtime/last-start.js"
 import { reconcile } from "../src/factory/reconcile.js"
 import { keyedJobId } from "../src/factory/publish.js"
 import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
@@ -598,13 +602,22 @@ export async function runTriageCliCommand({ argv, env, pluginVersion = deskVersi
   return runTriageCommand({ argv, env, pluginVersion, impls, clock, kick })
 }
 
-/** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
+const CONSENT_USAGE = "Usage: factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>], or factory.js consent --store <owner/repo> --mentioned yes"
+
+/**
+ * Runs the `consent` subcommand and returns the JSON-ready result: with `--contribute`, validates `argv` and calls `setConsent`; with
+ * `--mentioned yes`, records only that the operator was told about the store (`consent-mentioned.js`).
+ */
 export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
   const store = options?.get("store")
+  if (options?.has("mentioned")) {
+    if (store === undefined || options.get("mentioned") !== "yes" || options.size !== 2) throw new Error(CONSENT_USAGE)
+    return noteConsentMentioned(resolveDeskStateDir({ env }), store)
+  }
   const contribute = options?.get("contribute")
   if (options === null || store === undefined || !CONTRIBUTE_VALUES.has(contribute)) {
-    throw new Error("Usage: factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>]")
+    throw new Error(CONSENT_USAGE)
   }
   for (const key of options.keys()) {
     if (!CONSENT_OPTIONS.has(key)) throw new Error(`factory.js consent: unknown option --${key}`)

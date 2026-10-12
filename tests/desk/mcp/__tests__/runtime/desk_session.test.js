@@ -375,6 +375,8 @@ test("head_first_real_git_switch_withheld_callback_never_publishes_old_ready", a
   assert.doesNotMatch(lines.join(""), /admission ready/u)
   await waitUntil(() => session.admission.snapshot().state === "degraded:state_branch_mismatch")
   assert.equal(fixtureGit(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
+  // The record is written without holding up the session, so it can land just after the state it reports.
+  await session.lastStartWritten()
   assert.equal(JSON.parse(readFileSync(path.join(fixture.stateDir, "last-start.json"), "utf8")).state, "degraded:state_branch_mismatch")
 })
 
@@ -1218,6 +1220,7 @@ test("a resolver rejection after disposal cannot publish a new last-start record
   })
   const pending = session.start()
   await flush()
+  await session.lastStartWritten()
   const file = path.join(base, "state", "last-start.json")
   const before = readFileSync(file, "utf8")
   await session.dispose()
@@ -1231,6 +1234,7 @@ test("a bare runtime failure records null remediation without inventing an overr
     loadRuntime: async () => ({ outcome: { state: "degraded", code: "fixture_failure" } }),
   })
   assert.equal((await session.start()).fix, null)
+  await session.lastStartWritten()
   const record = JSON.parse(readFileSync(path.join(base, "state", "last-start.json"), "utf8"))
   assert.equal(record.state, "degraded:fixture_failure")
   assert.equal(record.fix, null)
@@ -1346,6 +1350,7 @@ test("pending destination resolution without completed status proof never invent
   assert.equal(pending.detail_pending, true)
   assert.equal(pending.status_detail_from, undefined)
   assert.match(pending.status_detail, /^unavailable: no completed same-context/u)
+  assert.equal(pending.root, undefined, "no root is named while the destination is being verified")
   assert.equal(pending.admission.writes, "refused")
   release()
   complete()
@@ -2278,6 +2283,8 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.match(slow.status_detail, /^unavailable: .*did not answer within this call's budget/u)
   assert.equal(slow.detail_pending, true)
   assert.equal(slow.state, "ready")
+  // The session already knows which desk it admitted, so an answer without the runtime detail still names it.
+  assert.deepEqual(slow.root, { path: session.context.root.root, source: "explicit-root" })
   // While that computation runs, another call waits only its own budget for it and does not start a second one.
   const joinedStarted = Date.now()
   assert.match(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_detail, /^unavailable: a runtime status computation .* that started at \d{4}-.* is still running/u)
@@ -2570,6 +2577,7 @@ test("state-directory repairs and last-start records, and an unwritable state di
   assert.equal(snapshot.repair, "repaired: readiness state directory mode 755 → 700 (/state/abc)")
   assert.match(readFileSync(path.join(base, "state", "repairs.log"), "utf8"), /mode 755 → 700/u)
   assert.match(log(), /state: ready \(repaired: readiness state directory/u)
+  await session.lastStartWritten()
   assert.equal(JSON.parse(readFileSync(path.join(base, "state", "last-start.json"), "utf8")).repair, snapshot.repair)
 
   const blockedBase = await mkTempRoot("desk-session-unwritable-")
@@ -2577,6 +2585,7 @@ test("state-directory repairs and last-start records, and an unwritable state di
   writeFileSync(blocked, "not a directory")
   const unwritable = await makeSession(t, { runtime: repairing, deskStateDir: path.join(blocked, "state") })
   assert.equal((await unwritable.session.admission.refresh()).state, "ready")
+  await unwritable.session.lastStartWritten()
   assert.match(unwritable.log(), /could not append to the repair log/u)
   assert.match(unwritable.log(), /could not record last-start\.json/u)
 })
@@ -2597,6 +2606,7 @@ test("the root's own start record begins with admitting, and desk_status points 
   assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).root, root)
   release()
   assert.equal((await attempt).state, "ready")
+  await session.lastStartWritten()
   assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).state, "ready")
   assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).admission.last_start, perRoot)
 })

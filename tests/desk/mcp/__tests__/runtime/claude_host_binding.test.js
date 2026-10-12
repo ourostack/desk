@@ -213,7 +213,7 @@ test("main serves setup mode instead of exiting when no desk exists yet, and loa
     mkdirSync(path.join(created, "_meta"), { recursive: true })
     mkdirSync(path.join(created, "_archive"), { recursive: true })
     // A ready status carries no runtime detail when the runtime status misses its short budget (it then says "unavailable"), so wait for the detail the assertions read.
-    const ready = await desk.statusUntil((payload) => payload.state === "ready" && payload.root)
+    const ready = await desk.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending)
     assert.equal(ready.root.path, created)
     assert.equal(ready.root.source, "home_fallback", "desk_status reports where the root came from")
     assert.equal(runtimeLoads, 1)
@@ -223,7 +223,7 @@ test("main serves setup mode instead of exiting when no desk exists yet, and loa
   }
 })
 
-test("a ready status whose runtime detail misses its budget says so and carries the root once the detail lands", async () => {
+test("a ready status whose runtime detail misses its budget says so, names the admitted desk, and carries the rest once the detail lands", async () => {
   const fixture = makeFixture()
   const { startInProcess } = await import("./_in_process_desk.js")
   const { callTool } = await import("../../../../../plugins/desk/mcp/src/server.js")
@@ -247,10 +247,13 @@ test("a ready status whose runtime detail misses its budget says so and carries 
   })
   try {
     const first = await desk.statusUntil((payload) => payload.state === "ready")
-    assert.equal(first.root, undefined, "the detail missed its budget, so the status has no root yet")
+    assert.deepEqual(first.root, { path: created, source: "home_fallback" }, "the detail missed its budget, and the status still names the desk the session admitted")
+    assert.equal(first.detail_pending, true)
+    assert.equal(first.write_scope, undefined, "the rest of the detail is not there yet")
     assert.match(first.status_detail, /^unavailable: /u)
-    const detailed = await desk.statusUntil((payload) => payload.state === "ready" && payload.root)
+    const detailed = await desk.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending)
     assert.equal(detailed.root.path, created)
+    assert.equal(detailed.root.valid, true)
   } finally {
     await desk.close()
     rmSync(fixture.root, { recursive: true, force: true })
@@ -323,7 +326,7 @@ test("a saved binding to a missing folder degrades to root_unavailable, binds no
     mkdirSync(path.join(moved, "_meta"), { recursive: true })
     mkdirSync(path.join(moved, "_archive"), { recursive: true })
     // A ready status carries no runtime detail when the runtime status misses its short budget (it then says "unavailable"), so wait for the detail the assertions read.
-    const ready = await desk.statusUntil((payload) => payload.state === "ready" && payload.root)
+    const ready = await desk.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending)
     assert.equal(ready.root.path, moved)
     assert.equal(ready.root.source, "activation-config")
     assert.equal(runtimeLoads, 1)

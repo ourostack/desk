@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { installedNodesByMajor, mcpRoot } from "../launch/_mcp_handshake.js"
-import { git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
+import { git, lastStartUntil, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
 import { controllerRecords, waitForProcessesGone } from "./_controller_exit.js"
 
 async function waitFor(predicate, { deadlineMs = 10000, intervalMs = 50 } = {}) {
@@ -37,7 +37,7 @@ test("a missing root recovers in place once the desk appears: ready, same tool l
   const write = await session.call("task_create", { track: "ops", slug: "recovered-write-check", title: "After recovery" })
   assert.equal(write.isError, false, JSON.stringify(write.payload))
   assert.equal(existsSync(path.join(pending, "ops", "recovered-write-check", "task.md")), true)
-  assert.equal(readLastStart(fixture).state, "ready")
+  assert.equal((await lastStartUntil(fixture, (record) => record.state === "ready")).state, "ready")
 })
 
 test("a saved binding to a missing folder never binds a home-folder desk and recovers in place once the folder appears", async (t) => {
@@ -66,7 +66,7 @@ test("a saved binding to a missing folder never binds a home-folder desk and rec
   assert.equal(existsSync(pending), false, "refusal must not recreate the missing saved desk")
   git(fixture.root, "clone", fixture.origin, pending)
   // A ready status carries no runtime detail when the runtime status misses its short budget (it then says "unavailable"), so wait for the detail the assertions read.
-  const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root)
+  const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.root && !payload.detail_pending)
   assert.equal(ready.root.path, pending)
   assert.equal(ready.root.source, "activation-config")
   assert.deepEqual((await session.request("tools/list")).result.tools, before)

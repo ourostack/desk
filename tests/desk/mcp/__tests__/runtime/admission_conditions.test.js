@@ -15,7 +15,7 @@ import { connectOrStartController, probeEndpoint } from "../../../../../plugins/
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/server.js"
 import { killAndWait } from "../_kill_and_wait.js"
 import {
-  HANDSHAKE_BUDGET_MS, git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile,
+  HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, settled, startDesk, writeActivation, writeFile,
 } from "./_admission_fixtures.js"
 
 const posixOnly = process.platform === "win32" ? "unix sockets and file modes are POSIX-only" : false
@@ -90,7 +90,7 @@ test("a --root that does not exist: handshake, then degraded:root_unavailable wi
     const read = await session.call("desk_search", { query: "lighthouse" })
     assert.equal(read.isError, true)
     assert.equal(read.payload.code, "root_unavailable")
-    assert.equal(readLastStart(fixture).state, "degraded:root_unavailable")
+    await lastStartUntil(fixture, (record) => record.state === "degraded:root_unavailable")
   })
 })
 
@@ -533,10 +533,11 @@ test("a clean detached HEAD on a remote branch is switched back to the state bra
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "ready")
     assert.equal(status.repair, `repaired: detached HEAD → main (was ${detachedSha.slice(0, 12)})`)
+    // The compact answer, the one an agent reads, tells it too.
+    assert.deepEqual((await session.call("desk_status", {})).payload.notes.filter((note) => note.startsWith("repaired:")), [status.repair])
     assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "main")
     assert.equal(readFileSync(path.join(fixture.desk, "notes-untracked.md"), "utf8"), "keep me\n")
-    const lastStart = readLastStart(fixture)
-    assert.equal(lastStart.state, "ready")
+    const lastStart = await lastStartUntil(fixture, (record) => record.state === "ready")
     assert.equal(lastStart.repair, status.repair)
     assert.match(readFileSync(path.join(fixture.stateDir, "repairs.log"), "utf8"), /repaired: detached HEAD → main/u)
   })

@@ -37,6 +37,8 @@ import { shouldLaunchFiler } from "./filer-throttle.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_QUARANTINE_SUFFIX = 1000
+// Where stray paths are moved, relative to the desk root, and so never itself a stray path.
+const QUARANTINE_FOLDER = "_cache"
 // The whole retry-quarantine-diagnose sequence's own wall-clock budget
 // (controller ruling, fix round): session start cannot afford an unbounded
 // sync step, so each git call below gets whatever of this remains, capped at
@@ -99,12 +101,14 @@ function conflictedPaths(root, spawnGit, timeoutMs) {
 }
 
 // Untracked, non-ignored paths at `root` -- what a dirty-index pull failure
-// most often blames (`--exclude-standard` already respects `.gitignore`, so
-// scratch directories such as `_cache/` never appear here).
+// most often blames. `--exclude-standard` respects `.gitignore`, which on most
+// desks lists `_cache/`; a desk whose `.gitignore` does not would list its
+// earlier quarantines here, and moving those would nest the quarantine folder
+// inside itself, so anything under `_cache/` is left out whatever Git says.
 function untrackedPaths(root, spawnGit, timeoutMs) {
   const result = run(spawnGit, root, ["ls-files", "--others", "--exclude-standard"], timeoutMs)
   if (result.status !== 0 || typeof result.stdout !== "string") return []
-  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
+  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith(`${QUARANTINE_FOLDER}/`))
 }
 
 // The number of stash entries `root` currently has -- used only to notice a
@@ -132,7 +136,7 @@ function popConflicted(root, spawnGit, timeoutMs, stashBefore) {
 // The first `_cache/stray-<date>[-n]/` directory that does not already exist
 // today -- never clobbers an earlier quarantine from the same day.
 async function freshQuarantineDir(root) {
-  const base = path.join(root, "_cache", `stray-${today()}`)
+  const base = path.join(root, QUARANTINE_FOLDER, `stray-${today()}`)
   if (!(await pathExists(base))) return base
   for (let suffix = 2; suffix <= MAX_QUARANTINE_SUFFIX; suffix += 1) {
     const candidate = `${base}-${suffix}`

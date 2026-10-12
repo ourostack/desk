@@ -21,7 +21,7 @@ import { redactMachineText } from "./argv-safe-reason.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
 import { hostedRefusal } from "./hosted.js"
 import { deskSkill } from "./skills.js"
-import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
+import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
@@ -254,13 +254,14 @@ export function createDeskSession(deps) {
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
 
+  // Written in order without the event loop waiting on the disk, so a slow file create on Windows never delays a tool call; dispose waits for them.
+  const lastStart = createLastStartWriter({
+    onError: (error) => log(`could not record last-start.json in ${deskStateDir}: ${error.message}`),
+  })
+
   function recordLastStart(snapshot) {
     if (disposed) return
-    try {
-      writeLastStart({ stateDir: deskStateDir, snapshot, root: context.root?.root ?? null })
-    } catch (error) {
-      log(`could not record last-start.json in ${deskStateDir}: ${error.message}`)
-    }
+    lastStart.record({ stateDir: deskStateDir, snapshot, root: context.root?.root ?? null })
   }
 
   const admission = createAdmission({
@@ -1082,16 +1083,18 @@ export function createDeskSession(deps) {
         const why = joined
           ? `a runtime status computation (index, readiness controller) that started at ${run.at} is still running`
           : "the runtime status (index, readiness controller) did not answer within this call's budget"
+        // The session admitted this root before the runtime's status was asked for it, so the answer names the desk even though the rest of the detail is not loaded yet.
         payload = lastStatusDetail === null
-          ? { ...payload, detail_pending: true, status_detail: `unavailable: ${why}; call desk_status again shortly` }
+          ? { ...payload, detail_pending: true, root: { path: context.root.root, source: context.root.source }, status_detail: `unavailable: ${why}; call desk_status again shortly` }
           : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
         detailFrom = lastStatusDetail?.at ?? null
       }
     }
     if (admission.running && snapshot.state === "ready" && context.phase?.name === "resolving_inputs" &&
         !context.resolutionFailed) {
+      // No root is named either: the destination is the very thing being verified.
       payload = detailFrom === null
-        ? { ...payload, detail_pending: true,
+        ? { ...payload, detail_pending: true, root: undefined,
           status_detail: "unavailable: no completed same-context runtime detail; destination verification is pending. Call desk_status again shortly." }
         : { ...payload, status_detail_from: detailFrom,
           status_detail: `${payload.status_detail ?? "cached: this detail belongs to the currently admitted context."} Destination verification is pending; this detail is not permission to dispatch an operation.` }
@@ -1325,6 +1328,8 @@ export function createDeskSession(deps) {
     callTool,
     recordException,
     start: () => admission.start(),
+    /** Resolves once every start record so far is written. For tests that read a record right after a state change; dispose waits on the writer itself. */
+    lastStartWritten: () => lastStart.written(),
     dispose() {
       disposed = true
       invalidateStatus()
@@ -1347,7 +1352,7 @@ export function createDeskSession(deps) {
         return retirementError
       })
       // An attempt that finished during the attempt wait may have closed a late controller; each close ends within the child's kill bound.
-      return Promise.all([retired, attemptStopped]).then(async ([retirementError]) => {
+      return Promise.all([retired, attemptStopped, lastStart.written()]).then(async ([retirementError]) => {
         await controllerClosesSettled()
         if (retirementError) throw retirementError
       })
