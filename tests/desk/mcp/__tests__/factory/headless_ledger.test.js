@@ -288,6 +288,20 @@ test("crash_and_reset_never_refund", async (t) => {
     assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "witness_invalid" }, "a damaged mark with no pair at all is not a fresh install")
   }))
 
+  await t.test("a lost mark beside an older guard of the same ledger is not resealed: the pair must agree", () => scratch(async (env, root) => {
+    await reserveMany(env, "evaluate", at(0, 9), 2)
+    const olderGuard = await fs.readFile(path.join(root, GUARD_FILE), "utf8")
+    await reserveMany(env, "evaluate", at(0, 9), 2)
+    await fs.writeFile(path.join(root, GUARD_FILE), olderGuard, { mode: 0o600 })
+    await updateStatus(env, (current) => {
+      const { agent_launch_highwater: _gone, ...loop } = current.loop
+      return { ...current, loop }
+    })
+    assert.deepEqual(await reserve(env, "evaluate", at(0, 10)), { state: "inconsistent" })
+    assert.deepEqual(await reserve(env, "evaluate", at(1, 10)), { state: "inconsistent" }, "a later day does not clear it")
+    assert.equal((await readStatus(env)).loop.agent_launch_highwater, undefined, "nothing is written from the pair")
+  }))
+
   await t.test("a set-aside file older than the ledger does not move the seal off today", () => scratch(async (env, root) => {
     const aside = path.join(root, "status.json.corrupt-json-1")
     await fs.writeFile(aside, "{}")
@@ -686,8 +700,8 @@ test("the basis and quota readers", () => {
   assert.equal(evaluationQuotaOpen(status({ ...witness, spent_at_max_day: 30 }), at(1, 0)), true, "a new day")
   assert.equal(evaluationQuotaOpen(status({ ...witness, max_day: dayText(1) }), at(0, 2)), false, "a mark dated later")
   assert.equal(evaluationQuotaOpen(status({ ...witness, max_clock_ms: at(0, 3) }), at(0, 2)), false)
-  assert.equal(evaluationQuotaOpen(status({ ...witness, phase: "unknown" }), at(0, 2)), false)
-  assert.equal(evaluationQuotaOpen(status({ ...witness, phase: "pending" }), at(0, 2)), false, "pending must lag its acknowledged revision")
+  assert.equal(evaluationQuotaOpen(status({ ...witness, phase: "unknown" }), at(0, 2)), true, "a damaged mark is left to the reservation, which may reseal it")
+  assert.equal(evaluationQuotaOpen(status({ ...witness, phase: "pending" }), at(0, 2)), true, "pending must lag its acknowledged revision, or the mark is damaged")
   assert.equal(evaluationQuotaOpen(status({ ...witness, phase: "pending", max_acknowledged_revision: 2 }), at(0, 2)), true)
   assert.equal(evaluationQuotaOpen({ loop: "damaged" }, at(0, 2)), true)
   assert.equal(validWitness({ ...witness, epoch: "x" }), false)
@@ -777,8 +791,8 @@ test("a rename that fails for good, or a readback that differs, launches nothing
   }))
 
   await t.test("a status mark that reads back otherwise fails", async () => {
-    // Reads in order: the witnesses, the mark before the transaction, the pending readback, the acknowledged readback.
-    for (const [failing, loop] of [[3, {}], [4, "damaged"]]) {
+    // Reads in order: the witnesses, the pending readback, the acknowledged readback.
+    for (const [failing, loop] of [[2, {}], [3, "damaged"]]) {
       await scratch(async (env) => {
         await reserve(env, "evaluate", at(0, 1))
         let reads = 0
@@ -796,6 +810,26 @@ test("a rename that fails for good, or a readback that differs, launches nothing
       },
     })
     assert.deepEqual(await racing.reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 2) }), { state: "write_failed" })
+  }))
+
+  await t.test("a lock broken between settling and committing loses no reservation and repeats no revision", () => scratch(async (env, root) => {
+    await reserve(env, "evaluate", at(0, 1))
+    let other = null
+    const racing = createHeadlessLedger({
+      fault: async (point) => {
+        if (point !== "before_witness_pending" || other !== null) return
+        // A stale-lock break: another process takes the lock after this one settled and reserves to the end.
+        await fs.rm(path.join(root, "locks", "agent-launch-ledger.lock"), { force: true })
+        other = await reserve(env, "evaluate", at(0, 1))
+      },
+    })
+    assert.deepEqual(await racing.reserveAgentLaunch(env, { kind: "evaluate", now: at(0, 2) }), { state: "write_failed" })
+    assert.equal(other.state, "reserved")
+    assert.equal(other.token.revision, (await ledgerOf(root)).revision)
+    const ledger = await ledgerOf(root)
+    assert.equal(ledger.spent, ledger.evaluate.launched, "every launch counted once")
+    assert.equal(ledger.evaluate.launched, 2, "the first and the other process's; the failed one launched nothing")
+    assert.equal((await reserve(env, "evaluate", at(0, 3))).state, "reserved", "the witnesses still agree")
   }))
 
   await t.test("a final readback that disagrees answers readback_mismatch", () => scratch(async (env, root) => {

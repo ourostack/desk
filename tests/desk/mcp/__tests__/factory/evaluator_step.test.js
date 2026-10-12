@@ -1264,11 +1264,32 @@ test("a ledger that refuses or blocks stops the step as budget_exhausted with th
   assert.equal(evaluator.headless.jobs, 0)
   assert.deepEqual((await readStatus(env)).loop.evaluate.attempts, {}, "no attempt is stamped")
   // A witnessed spent day is refused before the sign-in probe.
-  await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: { schema: "desk.factory.agent-launch-highwater/1" } } }))
+  const spentMark = { schema: "desk.factory.agent-launch-highwater/1", epoch: "ab".repeat(16), max_revision: 9, max_acknowledged_revision: 9, max_day: new Date(DAY0).toISOString().slice(0, 10), spent_at_max_day: 30, max_clock_ms: DAY0 - 1000, windows: [0, 0, 0, 0], last_triage_at: null, max_issued_serial: 0, consumed_through: 0, target_sha256: "0".repeat(64), phase: "acknowledged" }
+  await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: spentMark } }))
   const witnessed = seams()
   assert.deepEqual(await step(env, witnessed), { ok: true, result: "budget_exhausted" })
   assert.equal(witnessed.probes.length, 0)
-  assert.equal((await evaluatorOf(env)).headless.ledger, "witness_invalid")
+  assert.equal((await evaluatorOf(env)).headless.ledger, "quota_exhausted")
+}))
+
+test("a damaged status mark beside a surviving ledger seals that day through the real step, and the next day runs", () => scratch(async (env, base) => {
+  await seedJob(env, base, 1)
+  await seedJob(env, base, 2)
+  assert.deepEqual(await step(env, seams({ maxRuns: 1 })), { ok: true, result: "ran" })
+  await updateStatus(env, (current) => ({ ...current, loop: { ...current.loop, agent_launch_highwater: { ...current.loop.agent_launch_highwater, phase: "bogus" } } }))
+  assert.equal(evaluateDue(await readStatus(env), DAY0 + HOURS, { kick: true }), true, "the kick leaves a damaged mark to the step")
+  const sealed = seams({ maxRuns: 1, now: DAY0 + HOURS })
+  assert.deepEqual(await step(env, sealed), { ok: true, result: "budget_exhausted" })
+  assert.equal(sealed.runHeadless.calls.length, 0)
+  assert.equal((await evaluatorOf(env)).headless.ledger, "witness_reset_sealed")
+  assert.equal((await readStatus(env)).loop.agent_launch_highwater.phase, "acknowledged", "the mark is written again from the ledger")
+  assert.equal(evaluateDue(await readStatus(env), DAY0 + 2 * HOURS, { kick: true }), false, "the sealed day kicks nothing")
+  const again = seams({ maxRuns: 1, now: DAY0 + 2 * HOURS })
+  assert.deepEqual(await step(env, again), { ok: true, result: "budget_exhausted" })
+  assert.equal(again.probes.length, 0, "the sealed day stops before the probe")
+  const next = seams({ maxRuns: 1, now: DAY0 + DAY })
+  assert.deepEqual(await step(env, next), { ok: true, result: "ran" })
+  assert.equal(next.runHeadless.calls.length, 1)
 }))
 
 test("triage-only reservations leave the evaluator's counters and failure cooldown as they were", () => scratch(async (env, base) => {

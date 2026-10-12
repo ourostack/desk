@@ -359,9 +359,10 @@ async function execute(env, { impl, root, nowMs, limitMs, maxRuns, pluginVersion
       continue
     }
     if (!probed) {
-      // The witnessed shared quota is read once before the sign-in probe, so a spent or protected day probes nothing.
+      // The witnessed shared quota is read once before the sign-in probe, so a spent, protected or regressed day probes nothing.
       const witnessed = witnessedEvaluationQuota(status, nowMs + (impl.clock() - clockStart))
-      if (!["ok", "unwitnessed"].includes(witnessed)) {
+      // Only a spent, protected or regressed day stops here; a missing or damaged mark goes on to the reservation, which may reseal it.
+      if (["quota_exhausted", "window_protected", "clock_regressed"].includes(witnessed)) {
         stop = "budget_exhausted"
         ledger.refusal = witnessed
         ledger.deferred += 1

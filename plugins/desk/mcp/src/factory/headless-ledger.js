@@ -25,9 +25,12 @@
 //                                                                                that day with old tokens cancelled
 //   pending mark, guard and ledger both at the target                           mark acknowledged, then go on
 //   acknowledged mark that matches the pair                                     normal
-//   pair older than the mark, pair newer than the mark, another epoch,
-//   a clock earlier than the mark, a missing or damaged witness,
-//   a status file set aside today                                               launch nothing (no regeneration)
+//   missing or damaged mark beside a ledger and guard that agree                write all three again from the pair, the
+//                                                                                reset's UTC day sealed as spent (30)
+//   pair older than the mark, pair newer than the mark, another epoch, a
+//   ledger and guard that disagree, a clock earlier than the mark, a missing
+//   or damaged mark beside a missing or damaged pair file, a status file set
+//   aside today                                                                 launch nothing (no regeneration)
 //
 // Limit: the checks detect a restored ledger and guard while the status mark survives, and a restored status while a
 // newer pair survives. Restoring all three witnesses together (with the evaluator's attempt state) is outside what
@@ -247,9 +250,13 @@ export function witnessedEvaluationQuota(status, now) {
   return quotaFor(ledger, "evaluate", effective).state
 }
 
-/** `evaluationQuotaOpen(status, now) -> boolean`: whether `witnessedEvaluationQuota` leaves room for one more evaluation (`ok` or `unwitnessed`). */
+/**
+ * `evaluationQuotaOpen(status, now) -> boolean`: whether `witnessedEvaluationQuota` leaves room for one more evaluation: false only for
+ * `quota_exhausted`, `window_protected` and `clock_regressed`. A missing or damaged mark is left to the reservation, which writes it again
+ * from a surviving ledger and guard (sealing that day) or blocks.
+ */
 export function evaluationQuotaOpen(status, now) {
-  return ["ok", "unwitnessed"].includes(witnessedEvaluationQuota(status, now))
+  return !["quota_exhausted", "window_protected", "clock_regressed"].includes(witnessedEvaluationQuota(status, now))
 }
 
 /**
@@ -420,7 +427,7 @@ function legacySpent(legacyEvaluator, today) {
   return isCount(headless.jobs) ? { state: "valid", spent: Math.min(headless.jobs, DAILY_LAUNCHES) } : { state: "damaged" }
 }
 
-// A status file reset or edited after the ledger exists loses the high-water mark. The surviving pair is the greatest evidence left: all
+// A status file reset or edited after the ledger exists loses the high-water mark. The surviving pair, when it agrees, is the greatest evidence left: all
 // three witnesses are written again from it, with the day of the reset sealed as spent (30) and every older token burned. When the reset
 // happened on an earlier UTC day than today (the set-aside file's day), that day is already over and today starts normally; a mark that is
 // simply gone, with no set-aside file of its own, seals today. Nothing is refunded: the reset costs the rest of its day. Answers null
@@ -431,31 +438,30 @@ async function resealFromPair(io, env, root, { witness, ledger, guard }, nowMs) 
   const L = ledger.value
   const G = guard.value
   if (L.epoch !== G.epoch) return { state: "epoch_mismatch" }
-  const clock = Math.max(L.last_clock_ms, G.last_clock_ms)
-  if (nowMs + CLOCK_SKEW_MS < clock) return { state: "clock_regressed" }
-  const effective = Math.max(nowMs, clock)
+  // Only a pair that agrees (as `assess` requires) is trusted as the high-water: one file restored or left mid-transaction blocks.
+  if (G.revision !== L.revision || G.ledger_sha256 !== ledger.sha || !guardAgrees(G, L)) return { state: "inconsistent" }
+  if (nowMs + CLOCK_SKEW_MS < L.last_clock_ms) return { state: "clock_regressed" }
+  const effective = Math.max(nowMs, L.last_clock_ms)
   const today = dayOf(effective)
-  const pairDay = [L.day, G.day].sort().at(-1)
   const resetDay = statusResetDay(root)
-  const sealedDay = resetDay !== null && resetDay >= pairDay && resetDay < today ? resetDay : today
-  const triageTimes = [L.last_triage_at, G.last_triage_at].filter((value) => value !== null).sort()
-  const issued = Math.max(L.issued_serial, G.issued_serial)
+  const sealedDay = resetDay !== null && resetDay >= L.day && resetDay < today ? resetDay : today
+  const issued = L.issued_serial
   const target = ledgerRecord({
     epoch: L.epoch,
-    revision: Math.max(L.revision, G.revision) + 1,
+    revision: L.revision + 1,
     day: today,
     last_clock_ms: effective,
     spent: sealedDay === today ? DAILY_LAUNCHES : 0,
     evaluate: emptyKind(L.evaluate.finished_revision),
     triage: emptyKind(L.triage.finished_revision),
     windows: [0, 0, 0, 0],
-    last_triage_at: triageTimes.at(-1) ?? null,
+    last_triage_at: L.last_triage_at,
     issued_serial: issued,
     consumed_through: issued,
     continuations: [],
   })
-  await commit(io, env, root, target, witness.state === "missing" ? null : witness.raw, target.revision - 1)
-  return sealedDay === today ? { state: "witness_reset_sealed" } : { ledger: target }
+  const mark = await commit(io, env, root, target, witness.state === "missing" ? null : witness.raw, target.revision - 1)
+  return sealedDay === today ? { state: "witness_reset_sealed" } : { ledger: target, mark }
 }
 
 // ---------------------------------------------------------------------------
@@ -472,8 +478,9 @@ async function writeWitness(io, env, expected, next) {
   if (!same(isObject(readBack.loop) ? readBack.loop.agent_launch_highwater ?? null : null, next)) throw new Error("witness_readback_mismatch")
 }
 
-// Writes `target` through all three witnesses. `previous` is the mark as read (null before the first). Throws on any failure: the caller
-// launches nothing, and the next call reads whatever the disk holds.
+// Writes `target` through all three witnesses and answers the acknowledged mark it wrote. `previous` is the mark the caller settled on
+// (null before the first): the status write compares against it, so a writer that got in after a broken lock fails this one rather than
+// being overwritten. Throws on any failure: the caller launches nothing, and the next call reads whatever the disk holds.
 async function commit(io, env, root, target, previous, acknowledged = previous?.max_acknowledged_revision ?? 0) {
   const bytes = encode(target)
   const ledgerSha = sha256(bytes)
@@ -484,12 +491,14 @@ async function commit(io, env, root, target, previous, acknowledged = previous?.
   await writeAtomic(io, root, GUARD_FILE, encode(guardFor(target, ledgerSha)), "guard")
   await writeAtomic(io, root, LEDGER_FILE, bytes, "ledger")
   await io.fault("before_witness_acknowledged")
-  await writeWitness(io, env, pending, { ...pending, max_acknowledged_revision: target.revision, phase: "acknowledged" })
+  const acknowledgedMark = { ...pending, max_acknowledged_revision: target.revision, phase: "acknowledged" }
+  await writeWitness(io, env, pending, acknowledgedMark)
   await io.fault("after_witness_acknowledged")
+  return acknowledgedMark
 }
 
 // Brings the three witnesses to an agreed state under the lock: migrates, acknowledges or recovers as `assess` says. Answers
-// `{ ledger }` (the agreed ledger) or `{ state }` when nothing may launch.
+// `{ ledger, mark }` (the agreed ledger and the mark settled on) or `{ state }` when nothing may launch.
 async function settle(io, env, root, { nowMs, legacyEvaluator }) {
   // Read first: the status reader itself sets a damaged file aside, and that is the reset this checks for.
   const read = await readAll(io, env, root)
@@ -499,15 +508,15 @@ async function settle(io, env, root, { nowMs, legacyEvaluator }) {
   const verdict = assess(read, nowMs)
   if (verdict.kind === "block") return { state: verdict.state }
   const mark = read.witness.value
-  if (verdict.kind === "ok") return { ledger: verdict.ledger }
+  if (verdict.kind === "ok") return { ledger: verdict.ledger, mark }
   if (verdict.kind === "acknowledge") {
-    await writeWitness(io, env, mark, { ...mark, max_acknowledged_revision: mark.max_revision, phase: "acknowledged" })
-    return { ledger: verdict.ledger }
+    const acknowledged = { ...mark, max_acknowledged_revision: mark.max_revision, phase: "acknowledged" }
+    await writeWitness(io, env, mark, acknowledged)
+    return { ledger: verdict.ledger, mark: acknowledged }
   }
   if (verdict.kind === "recover") {
     const target = recoveredLedger(mark, verdict.ledger, nowMs)
-    await commit(io, env, root, target, mark)
-    return { ledger: target }
+    return { ledger: target, mark: await commit(io, env, root, target, mark) }
   }
   const today = dayOf(nowMs)
   const legacy = legacySpent(legacyEvaluator, today)
@@ -529,8 +538,7 @@ async function settle(io, env, root, { nowMs, legacyEvaluator }) {
     consumed_through: 0,
     continuations: [],
   })
-  await commit(io, env, root, target, null)
-  return { ledger: target }
+  return { ledger: target, mark: await commit(io, env, root, target, null) }
 }
 
 // Runs `body(ledger, nowMs)` with the witnesses settled, under the ledger lock. `body` answers `{ result, target? }`: a `target` is
@@ -550,7 +558,7 @@ async function transact(io, env, { nowMs, legacyEvaluator }, body) {
     if (decided.target === undefined) return decided.result
     const target = ledgerRecord({ ...decided.target, revision: settled.ledger.revision + 1 })
     try {
-      await commit(io, env, root, target, (await io.readStatus(env)).loop.agent_launch_highwater)
+      await commit(io, env, root, target, settled.mark)
       // Read all three again right before the caller acts: they must agree on exactly this revision.
       const again = assess(await readAll(io, env, root), nowMs)
       if (again.kind !== "ok" || !same(again.ledger, target) || (statusResetDay(root) ?? "") >= dayOf(nowMs)) return { state: "readback_mismatch" }
