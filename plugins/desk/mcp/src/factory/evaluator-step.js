@@ -12,6 +12,11 @@
 //     `DESK_FACTORY_HEADLESS_EVALUATOR` set to anything but 1, true, on or yes each stop the loop over jobs, keep every request waiting and are
 //     recorded as `evaluator.headless.state`. The sign-in is probed once per step and the result is handed to
 //     every run.
+//   - Every run is reserved in the shared launch ledger (`headless-ledger.js`) right before it starts, after every other check: evaluation
+//     and triage share the day's 30 launches, and an unused triage window that has not ended is held back from evaluation. A refused or
+//     blocked reservation stops the step as `budget_exhausted`, with the ledger's code in `headless.ledger`. A reservation is never given
+//     back: a run the runner reports as not started stays spent in the ledger, though the evaluator's own day count (`jobs`) takes it back.
+//   - `maxRuns` (a positive whole number; default: no limit) caps the runs one step starts; the jobs left wait for the next step.
 //   - A headless session never starts another: with `DESK_FACTORY_HEADLESS` set (not empty, not `0`) the step
 //     returns `headless_session` before it starts anything, not even the probe, and writes no state.
 //   - A job the runner cannot evaluate (a host it does not support) is skipped and counted as an
@@ -39,7 +44,7 @@
 //
 //   { expired_total, gave_up, waiting, ready_now, ready_later, accepted_last_step, scan_ms,
 //     headless: { state, day, jobs, accepted, rejected, cost_usd, cost_unreported_runs,
-//                 unsupported_jobs, deferred_jobs, deferred_reason, blocked_days },
+//                 unsupported_jobs, deferred_jobs, deferred_reason, blocked_days, ledger },
 //     lag: { at, unlabeled_jobs, oldest_finished_at, unsupported_jobs, gave_up_jobs } }
 //
 //   expired_total  requests moved to `evaluate-requests/expired/`, ever (each counted once)
@@ -61,6 +66,8 @@
 //                  (already attempted today, past the deadline, or after a stop)
 //   deferred_reason   `no_time_for_a_run` when at least one job was left only because no run would have finished
 //                  before the step's limit, else `null`
+//   ledger         the shared ledger's code when it refused this step's last reservation (`window_protected`, `quota_exhausted`, or a
+//                  state that blocks every launch, such as `rollback_detected`), else `null`
 //   blocked_days   consecutive days the step has seen a machine-level blocked state (`no_agent_cli`,
 //                  `no_credentials`, `disabled_would_bill`, `sign_in_unknown`, `disabled`, `budget_exhausted`)
 //   lag            the label lag as this step left it: `at` (when it was read), `unlabeled_jobs` (finished
@@ -90,6 +97,7 @@ import {
   runHeadless,
 } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
+import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
 import { recordStep } from "./loop-status.js"
 import { factoryStateRoot, readStatus, updateStatus } from "./outbox.js"
 import { statusResetDay } from "./loop-worker-state.js"
@@ -109,7 +117,7 @@ const MACHINE_BLOCKED = new Set(["no_agent_cli", "no_credentials", "disabled_wou
 // Every state that counts toward `blocked_days`.
 const BLOCKED_DAY_STATES = new Set([...MACHINE_BLOCKED, "disabled", "budget_exhausted"])
 
-const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, requestFinishedJobs, clock: Date.now }
+const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, requestFinishedJobs, reserveAgentLaunch, finishAgentLaunch, clock: Date.now }
 const BRIEF_NAME = /^(claude-code|copilot-cli|codex-cli)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.brief\.json$/u
 const DAY_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/u
 
@@ -173,11 +181,13 @@ function readDay(evaluator, clockDay) {
 }
 
 /**
- * `runEvaluatorStep(env, { pluginVersion, now, deadline, deskRoot, onChild, onChildExit, ...seams }) -> { ok, result }`.
+ * `runEvaluatorStep(env, { pluginVersion, now, deadline, deskRoot, maxRuns, onChild, onChildExit, ...seams }) -> { ok, result }`.
  * `deskRoot` (absolute, or null) is the desk the backstop names on a request whose session marker names none.
  * `now` is a time (default: the real clock) and `deadline` a time and required (the step also stops starting
  * runs 25 minutes after it took its lock, whatever the deadline says); a violated contract throws a `TypeError`.
- * `extendDeadline(scanMs) -> grantedMs` (optional, may be async) leaves the facts scan out of both limits, up to what it grants. Seams for tests: `runHeadless`, `probeSignIn`, `findAgentCli`, `requestFinishedJobs`, `clock` (milliseconds).
+ * `extendDeadline(scanMs) -> grantedMs` (optional, may be async) leaves the facts scan out of both limits, up to what it grants. `maxRuns`
+ * (optional) is the most runs this step starts; the automatic loop passes 1. Seams for tests: `runHeadless`, `probeSignIn`, `findAgentCli`,
+ * `requestFinishedJobs`, `reserveAgentLaunch`, `finishAgentLaunch`, `clock` (milliseconds).
  * `result` is one of `ran`, `no_jobs_waiting`, `none_could_run`, `no_time_for_a_run`, `unsupported_host`, `busy`, `no_factory_state`,
  * `headless_session`, `step_error` or a blocked state (see the header); only `busy`, `no_factory_state` and
  * `headless_session` record nothing.
@@ -189,6 +199,8 @@ export async function runEvaluatorStep(env, options = {}) {
   const nowMs = toMs(impl.now === undefined ? new Date() : impl.now, "now")
   const deadlineMs = toMs(impl.deadline ?? null, "deadline")
   if (impl.deskRoot !== undefined && impl.deskRoot !== null && (typeof impl.deskRoot !== "string" || !path.isAbsolute(impl.deskRoot))) throw new TypeError("deskRoot: must be an absolute path or null")
+  const maxRuns = impl.maxRuns ?? Number.POSITIVE_INFINITY
+  if (maxRuns !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxRuns) || maxRuns < 1)) throw new TypeError("maxRuns: must be a positive whole number")
   if (isHeadlessFactorySession(env)) return { ok: false, result: "headless_session" }
   const root = await factoryStateRoot(env, { create: false })
   if (root === null) return { ok: true, result: "no_factory_state" }
@@ -197,7 +209,7 @@ export async function runEvaluatorStep(env, options = {}) {
   const limitMs = Math.min(deadlineMs, impl.clock() + STEP_LIMIT_MS)
   let outcome
   try {
-    outcome = await execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild, onChildExit })
+    outcome = await execute(env, { impl, root, nowMs, limitMs, maxRuns, pluginVersion, onChild, onChildExit })
   } catch {
     outcome = { ok: false, result: "step_error" }
   }
@@ -214,7 +226,7 @@ const byPriority = (left, right) => Number(right.unlabeled > 0) - Number(left.un
 // A caller's grant as whole milliseconds from 0 to `scanMs`; anything that is not a number grants nothing.
 const grantOf = (value, scanMs) => (typeof value === "number" && !Number.isNaN(value) ? Math.min(scanMs, Math.max(0, Math.floor(value))) : 0)
 
-async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild, onChildExit }) {
+async function execute(env, { impl, root, nowMs, limitMs, maxRuns, pluginVersion, onChild, onChildExit }) {
   const clockStart = impl.clock()
   // The backstop never stops the step: a job it cannot ask for now is asked for at the next step.
   try {
@@ -259,6 +271,7 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
     acceptedHere: 0,
     deferred: 0,
     deferredForTime: 0,
+    refusal: null,
   }
   let stillWaiting = ready.length
 
@@ -295,6 +308,7 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
           deferred_jobs: ledger.deferred,
           deferred_reason: ledger.deferredForTime > 0 ? "no_time_for_a_run" : null,
           blocked_days: ledger.blocked_days,
+          ledger: ledger.refusal,
         },
         lag: {
           at: new Date(nowMs).toISOString(),
@@ -314,6 +328,8 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
   // A UTC day on which the status file was damaged and set aside is a spent day: its day count was lost, and failing open costs money.
   if (stop === null && statusResetDay(root) === dayOf(nowMs)) stop = "budget_exhausted"
   let ranJobs = 0
+  // Launches reserved in the shared ledger by this step, started or not: what `maxRuns` bounds.
+  let reserved = 0
   let probed = false
   let cli = null
   let signIn
@@ -334,7 +350,7 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
       continue
     }
     if (stop === null && ledger.jobs >= MAX_HEADLESS_JOBS_PER_DAY) stop = "budget_exhausted"
-    if (stop !== null) {
+    if (stop !== null || reserved >= maxRuns) {
       ledger.deferred += 1
       continue
     }
@@ -344,6 +360,14 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
       continue
     }
     if (!probed) {
+      // The witnessed shared quota is read once before the sign-in probe, so a spent or protected day probes nothing.
+      const witnessed = witnessedEvaluationQuota(status, nowMs + (impl.clock() - clockStart))
+      if (!["ok", "unwitnessed"].includes(witnessed)) {
+        stop = "budget_exhausted"
+        ledger.refusal = witnessed
+        ledger.deferred += 1
+        continue
+      }
       probed = true
       cli = impl.findAgentCli({ env })
       signIn = cli !== null && !billingVariableBlocks(env) ? await impl.probeSignIn({ cli, env, onChild, onChildExit }) : undefined
@@ -356,6 +380,15 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
       ledger.deferredForTime += 1
       continue
     }
+    // The shared ledger reserves the launch last, right before it starts: evaluation and triage share the day's launches.
+    const reservation = await impl.reserveAgentLaunch(env, { kind: "evaluate", generation: null, now: nowMs + (impl.clock() - clockStart), legacyEvaluator: status.evaluator })
+    if (reservation.state !== "reserved") {
+      stop = "budget_exhausted"
+      ledger.refusal = reservation.state
+      ledger.deferred += 1
+      continue
+    }
+    reserved += 1
     // The run is counted as started before it starts, so a throw or a killed worker never leaves an uncounted run.
     const priorAttempt = ledger.attempts[entry.job]
     ledger.jobs += 1
@@ -373,8 +406,11 @@ async function execute(env, { impl, root, nowMs, limitMs, pluginVersion, onChild
       onChild,
       onChildExit,
     })
-    if (run.state === "headless_session" || run.state === "unsupported_host" || MACHINE_BLOCKED.has(run.state)) {
-      // No run started: take the count back.
+    const started = !(run.state === "headless_session" || run.state === "unsupported_host" || MACHINE_BLOCKED.has(run.state))
+    // The outcome is evidence only: the shared launch stays spent whatever it says, and a failure to record it changes nothing here.
+    await impl.finishAgentLaunch(env, { token: reservation.token, state: !started ? "not_started" : run.state === "ran" ? "ran" : "failed", now: nowMs + (impl.clock() - clockStart) }).catch(() => {})
+    if (!started) {
+      // No run started: take the evaluator's own count back (the shared launch stays spent).
       ledger.jobs -= 1
       if (priorAttempt === undefined) delete ledger.attempts[entry.job]
       else ledger.attempts[entry.job] = priorAttempt

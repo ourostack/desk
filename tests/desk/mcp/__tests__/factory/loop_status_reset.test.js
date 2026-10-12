@@ -1,5 +1,7 @@
 // A damaged status file is moved aside by the reader and read as empty. That must never restart the evaluator's daily cap:
 // a UTC day on which the status was reset is a spent day for the evaluator. The reader here is the real one, on a really damaged file.
+// The shared launch ledger keeps its high-water mark in the status file, so a reset also takes that witness away: before the ledger
+// exists there is then no evidence for a first allowance, and after it exists the ledger blocks rather than rebuild the mark.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -31,11 +33,13 @@ async function scratch(run) {
   }
 }
 
-async function seedJob(env, base) {
+async function seedJob(env, base, index = 10) {
   await setConsent(env, { store: STORE, contribute: true })
-  const job = `01${"ab".repeat(15)}`
+  // What the evaluator step left before the shared ledger: a record from an earlier day, the evidence the ledger's migration needs.
+  await updateStatus(env, (current) => ({ ...current, evaluator: { headless: { state: "idle", day: "2000-01-01", jobs: 0 } } }))
+  const job = `${String(index).padStart(2, "0")}${"ab".repeat(15)}`
   const facts = structuredClone(LOCAL)
-  facts.session.id = "3b0c1f5e-8a1d-4c2e-9f3a-000000000010"
+  facts.session.id = `3b0c1f5e-8a1d-4c2e-9f3a-${String(index).padStart(12, "0")}`
   facts.jobs = [{ ...facts.jobs[0], job }]
   await writeLocalFacts(env, STORE, facts)
   await indexJob(env, job, `claude-code-${facts.session.id}.json`)
@@ -79,12 +83,28 @@ test("after the real reader sets a damaged status aside, the evaluator runs noth
   assert.deepEqual(calls, [])
 }))
 
-test("the next UTC day starts clean, and a machine whose status was never damaged is not held", () => scratch(async (env, base) => {
+test("a status reset before the shared ledger exists leaves no evidence: the ledger's first day is spent, and the next one runs", () => scratch(async (env, base) => {
   await seedJob(env, base)
   await damageStatus(env)
   const calls = []
-  assert.equal((await runEvaluatorStep(env, seams(calls, { now: NOW + 3 * DAY }))).result, "ran")
+  assert.equal((await runEvaluatorStep(env, seams(calls, { now: NOW + 3 * DAY }))).result, "budget_exhausted")
+  assert.equal((await readStatus(env)).evaluator.headless.ledger, "quota_exhausted")
+  assert.deepEqual(calls, [])
+  assert.equal((await runEvaluatorStep(env, seams(calls, { now: NOW + 4 * DAY }))).result, "ran")
   assert.equal(calls.length, 1)
+}))
+
+test("a status reset after the shared ledger exists blocks later days too: the high-water mark is never rebuilt from the ledger", () => scratch(async (env, base) => {
+  await seedJob(env, base)
+  const calls = []
+  assert.equal((await runEvaluatorStep(env, seams(calls))).result, "ran")
+  await damageStatus(env)
+  await seedJob(env, base, 11)
+  for (const days of [3, 20]) {
+    assert.equal((await runEvaluatorStep(env, seams(calls, { now: NOW + days * DAY }))).result, "budget_exhausted")
+    assert.equal((await readStatus(env)).evaluator.headless.ledger, "witness_missing")
+  }
+  assert.equal(calls.length, 1, "nothing ran after the reset")
 }))
 
 test("a machine with no set-aside status runs as before", () => scratch(async (env, base) => {

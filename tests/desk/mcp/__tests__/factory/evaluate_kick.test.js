@@ -166,3 +166,19 @@ test("kickLoop starts the launcher detached with this environment only when due,
 test("with its defaults and nothing due, kickLoop starts nothing", () => scratch(async (env) => {
   assert.deepEqual(await kickLoop(env), { kicked: false, reason: "no_factory_state" })
 }))
+
+test("evaluateDue reads the shared launch ledger's witnessed quota: triage's unused windows and a spent shared day end the drain", () => {
+  const now = Date.parse("2026-10-08T02:00:00.000Z")
+  const mark = { schema: "desk.factory.agent-launch-highwater/1", epoch: "ab".repeat(16), max_revision: 9, max_acknowledged_revision: 9, max_day: "2026-10-08", spent_at_max_day: 25, max_clock_ms: now - MINUTE, windows: [0, 0, 0, 0], last_triage_at: null, max_issued_serial: 0, consumed_through: 0, target_sha256: "0".repeat(64), phase: "acknowledged" }
+  const draining = (witness) => {
+    const status = stored({ result: "ran", ranAt: now - 5 * MINUTE, readyNow: 2, day: "2026-10-08", jobs: 3 })
+    return { ...status, loop: { ...status.loop, agent_launch_highwater: witness } }
+  }
+  assert.equal(evaluateDue(draining(mark), new Date(now), { kick: true }), true, "25 spent, four windows held back: one more fits")
+  assert.equal(evaluateDue(draining({ ...mark, spent_at_max_day: 26 }), new Date(now), { kick: true }), false, "26 spent: the rest is held for triage")
+  assert.equal(evaluateDue(draining({ ...mark, spent_at_max_day: 26 }), new Date(now + 4 * 60 * MINUTE), { kick: true }), true, "at 06:00 the first unused window has ended")
+  assert.equal(evaluateDue(draining({ ...mark, spent_at_max_day: 30 }), new Date(now), { kick: true }), false)
+  assert.equal(evaluateDue(draining({ ...mark, phase: "damaged" }), new Date(now), { kick: true }), false, "a damaged mark launches nothing")
+  assert.equal(evaluateDue(draining({ ...mark, max_clock_ms: now + 60 * MINUTE }), new Date(now), { kick: true }), false, "a mark dated after the clock")
+  assert.equal(evaluateDue(draining({ ...mark, max_day: "2026-10-09" }), new Date(now), { kick: true }), false, "a mark dated a later day")
+})
