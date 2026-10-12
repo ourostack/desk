@@ -19,6 +19,14 @@ let sequence = 0
 const update = { track: "work", slug: "one", status: "processing" }
 const text = "---\nname: One\nstatus: drafting\n---\n\n# One\n"
 const payload = (result) => JSON.parse(result.content[0].text)
+const assertWritten = (result) => assert.notEqual(result.isError, true, JSON.stringify(result))
+// A loaded runner may legitimately re-elect B's controller (a write's 1 s controller ping can miss), so the
+// connections are A once, then only B: never A again after the session moved to B.
+const assertAThenOnlyB = (f, message) => {
+  assert.equal(f.connectedRoots[0], f.a, message)
+  assert.ok(f.connectedRoots.length > 1, message)
+  assert.ok(f.connectedRoots.slice(1).every((root) => root === f.b), `${message}: ${JSON.stringify(f.connectedRoots)}`)
+}
 function git(root, ...args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 5000 })
   assert.equal(result.status, 0, result.stderr)
@@ -137,6 +145,15 @@ JSON.stringify = function(...args) {
       semanticContract: { mode: policy.semantic, embedding_spec: null },
     })
     const endpoint = deriveControllerEndpoint({ identity })
+    // Production joins a live owner at this rendezvous or waits for it to go
+    // before electing a new one. The session closes a superseded controller
+    // without awaiting it (forgetController), so finish that release here:
+    // binding the same endpoint while the old child still holds it fails with
+    // EADDRINUSE, most often on slower Windows runners.
+    for (const earlier of controllers.filter((entry) => entry.endpoint === endpoint)) {
+      await earlier.controller.close()
+      await earlier.exited
+    }
     let child
     const controller = await startControllerProcess({
       identity, endpoint, stateDir: path.join(stateHome, identity.id),
@@ -157,17 +174,22 @@ JSON.stringify = function(...args) {
     controllers.push({ controller, child, exited, identity, endpoint })
     endpoints.push(endpoint)
     connectedRoots.push(deskRoot)
-    const call = (method, params = {}, timeoutMs = 2000) => request({
-      endpoint, identity, method, params: { ...params, token: controller.owner.token }, timeoutMs,
+    const call = (method, params = {}, timeoutMs = 2000, signal) => request({
+      endpoint, identity, method, params: { ...params, token: controller.owner.token }, timeoutMs, signal,
     })
     assert.equal((await call("handshake")).accepted, true)
+    // The same request budgets as the production client (controller-client.js
+    // createClient): a durable journal write, convergence and the event fence
+    // wait without a deadline, and markUncertain exists for the recording
+    // failure path.
     return {
       accepted: true, identity,
-      status: (timeoutMs) => call("status", {}, timeoutMs),
-      beginConvergence: () => call("beginConvergence"),
+      status: (timeoutMs = 2000) => call("status", {}, timeoutMs),
+      beginConvergence: () => call("beginConvergence", {}, null),
       barrier: (params) => call("barrier", params, params?.wait ? null : 2000),
-      recordChange: (change) => call("recordChange", typeof change === "string" ? { path: change } : change),
-      fenceEvents: () => call("fenceEvents"),
+      recordChange: (change) => call("recordChange", typeof change === "string" ? { path: change } : change, null),
+      markUncertain: (reason) => call("markUncertain", { reason }),
+      fenceEvents: ({ signal } = {}) => call("fenceEvents", {}, null, signal),
       close: () => controller.close(),
     }
   }
@@ -274,7 +296,7 @@ JSON.stringify = function(...args) {
 test("a slow completed controller response cannot monopolize the MCP status event loop", async (t) => {
   const f = await fixture(t, { controlledController: true })
   f.associate(f.b)
-  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assertWritten(await f.call("task_update", update))
   const convergenceDeadline = Date.now() + 15000
   let completed
   do {
@@ -284,7 +306,7 @@ test("a slow completed controller response cannot monopolize the MCP status even
     await new Promise((resolve) => setTimeout(resolve, 20))
   } while (Date.now() < convergenceDeadline)
   assert.equal(completed.readiness.detail.convergence.status, "succeeded",
-    "the controlled stall must occur after actual convergence has completed")
+    `the controlled stall must occur after actual convergence has completed: ${JSON.stringify(completed.readiness.detail.convergence)}`)
   const stringify = JSON.stringify
   let blocked = false
   let blockedMs = null
@@ -345,7 +367,7 @@ test("actual protocol reconciles ready fallback A to late saved B before mutatio
   assert.equal(git(f.a, "rev-parse", "HEAD"), aHead)
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
   assert.equal(git(f.b, "show", "--format=", "--name-only", "HEAD"), "work/one/task.md")
-  assert.deepEqual(f.connectedRoots, [f.a, f.b])
+  assertAThenOnlyB(f, "the session connects A, then only B")
   const record = JSON.parse(readFileSync(path.join(f.base, "session-state", "last-start", `${lastStartRootKey(f.b)}.json`), "utf8"))
   assert.equal(record.state, "ready")
   const status = await f.status()
@@ -358,7 +380,7 @@ test("actual protocol reconciles ready fallback A to late saved B before mutatio
 test("an explicit A remains A when the same host record later associates B", async (t) => {
   const f = await fixture(t, { explicit: true })
   f.associate(f.b)
-  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assertWritten(await f.call("task_update", update))
   assert.match(readFileSync(f.card(f.a), "utf8"), /status: processing/u)
   assert.equal(readFileSync(f.card(f.b), "utf8"), text)
   assert.ok(f.connectedRoots.length > 0)
@@ -386,7 +408,7 @@ test("invalid late associations and missing binding files refuse without changin
 test("removed context does not redirect a bound session back to a fallback", async (t) => {
   const f = await fixture(t)
   f.associate(f.b)
-  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assertWritten(await f.call("task_update", update))
   const record = copilotSessionFile(path.join(f.env.XDG_STATE_HOME, "ouroboros-skills", "desk"), f.env.COPILOT_AGENT_SESSION_ID)
   renameSync(record, `${record}.removed`)
   for (let i = 0; i < 2; i += 1) {
@@ -401,7 +423,7 @@ test("removed context does not redirect a bound session back to a fallback", asy
 test("a mutation cannot join destination proof sampled before its request", async (t) => {
   const f = await fixture(t, { capturedFolder: true })
   f.associate(f.b)
-  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assertWritten(await f.call("task_update", update))
   f.holdNextResolution()
   await f.call("desk_status", { detail: true })
   await f.waitHeld()
@@ -428,7 +450,7 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     assert.equal(f.handle.session.context.root.root, f.a)
     assert.equal(f.handle.session.context.root.source, "host-project")
     f.associate(f.b)
-    assert.notEqual((await f.call("task_update", update)).isError, true)
+    assertWritten(await f.call("task_update", update))
     assert.equal(f.handle.session.context.root.root, f.b)
     assert.equal(f.handle.session.context.root.source, "activation-config")
     await f.status()
@@ -442,6 +464,7 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
       mkdirSync(record)
       assert.throws(() => readFileSync(record, "utf8"), "the actual record read must fail")
     }
+    const connectionsWhileLost = f.connectedRoots.length
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const result = await f.call("task_update", update)
       assert.equal(result.isError, true, JSON.stringify({
@@ -454,22 +477,24 @@ for (const failure of ["removed", "untrusted", "unreadable"]) {
     }
     assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
     assert.deepEqual([f.a, f.b].map((root) => readFileSync(f.card(root), "utf8")), cards)
-    assert.deepEqual(f.connectedRoots, [f.a, f.b], "no A authority/controller is acquired after losing B")
+    assertAThenOnlyB(f, "no A authority/controller is acquired after losing B")
+    assert.equal(f.connectedRoots.length, connectionsWhileLost, "no controller is acquired while B's association is lost")
     const status = payload(await f.call("desk_status", { detail: true }))
     assert.equal(status.code, "root_unavailable")
     assert.equal(status.write_scope, undefined, "no cached B ownership survives failed resolution")
     if (failure === "unreadable") renameSync(record, `${record}.unreadable-directory`)
     f.associate(f.b)
-    assert.notEqual((await f.call("task_update", update)).isError, true)
+    assertWritten(await f.call("task_update", update))
     assert.equal(f.handle.session.context.root.root, f.b)
-    assert.deepEqual(f.connectedRoots, [f.a, f.b, f.b])
+    assertAThenOnlyB(f, "re-association reconnects only B")
+    assert.ok(f.connectedRoots.length > connectionsWhileLost, "the lost B controller is acquired again after re-association")
   })
 }
 
 test("a host/session root retains precedence over a late saved association", async (t) => {
   const f = await fixture(t, { capturedFolder: true, sessionRoot: true })
   f.associate(f.b)
-  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assertWritten(await f.call("task_update", update))
   assert.equal(f.handle.session.context.root.root, f.a)
   assert.equal(f.handle.session.context.root.source, "host-session-root")
   assert.equal(readFileSync(f.card(f.b), "utf8"), text)
@@ -481,12 +506,12 @@ test("late recorded folder evidence can upgrade an initial home-folder guess", a
   assert.equal(recordCopilotSession({
     sessionId: f.env.COPILOT_AGENT_SESSION_ID, folder: f.b, env: f.env,
   }), true)
-  assert.notEqual((await f.call("task_update", update)).isError, true)
+  assertWritten(await f.call("task_update", update))
   assert.equal(f.handle.session.context.root.root, f.b)
   assert.equal(f.handle.session.context.root.source, "host-project")
   assert.equal(readFileSync(f.card(f.a), "utf8"), text)
   assert.match(readFileSync(f.card(f.b), "utf8"), /status: processing/u)
-  assert.deepEqual(f.connectedRoots, [f.a, f.b])
+  assertAThenOnlyB(f, "the upgraded session connects A, then only B")
 })
 
 test("late person policy cannot reuse fallback workspace authority", async (t) => {
