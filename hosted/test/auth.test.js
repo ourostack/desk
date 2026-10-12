@@ -270,8 +270,8 @@ test("authorize shows a consent page naming the client and where it will be sent
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
   assert.match(response.headers.get("cache-control"), /no-store/);
-  assert.match(html, /Connect Claude to Hosted Desk\?/);
-  assert.match(html, /After you sign in with GitHub, it will be sent to claude\.ai\./);
+  assert.match(html, /Connect Claude to your desk/);
+  assert.match(html, /When you approve, you sign in with GitHub, and then Hosted Desk sends you back to <strong>claude\.ai<\/strong>\./);
   assert.match(html, /<form method="post" action="\/oauth\/consent">/);
   assert.match(html, /<button type="submit">Approve<\/button>/);
   const sealed = unseal("consent", consent, { key: KEY });
@@ -288,8 +288,8 @@ test("the consent page names an unnamed client 'an app' and a loopback redirect 
   const client = (await register(base, { client_name: undefined, redirect_uris: ["http://127.0.0.1:33418/callback"] })).body;
   const { response, html } = await consentPage(base, client);
   assert.equal(response.status, 200);
-  assert.match(html, /Connect an app to Hosted Desk\?/);
-  assert.match(html, /it will be sent to 127\.0\.0\.1:33418\./);
+  assert.match(html, /Connect an app to your desk/);
+  assert.match(html, /sends you back to <strong>127\.0\.0\.1:33418<\/strong>\./);
 });
 
 test("the consent page escapes a hostile client name", async (t) => {
@@ -298,8 +298,8 @@ test("the consent page escapes a hostile client name", async (t) => {
   const client = (await register(base, { client_name: hostile })).body;
   const { html } = await consentPage(base, client);
   assert.ok(!html.includes("<script>"), "no raw script tag");
-  assert.ok(!html.includes("<img"), "no raw img tag");
-  assert.match(html, /Connect &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;&lt;img src=x onerror=&#39;y&#39;&gt;&amp; to Hosted Desk\?/);
+  assert.ok(!/<img(?! src="\/assets\/desk-icon\.svg")/.test(html), "no raw img tag other than the Hosted Desk icon");
+  assert.match(html, /Connect &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;&lt;img src=x onerror=&#39;y&#39;&gt;&amp; to your desk/);
 });
 
 test("a consent POST that is tampered, expired, of another kind or missing gets 400 and no redirect", async (t) => {
@@ -780,7 +780,7 @@ test("a client metadata document signs in end to end as a public client", async 
   assert.equal(response.status, 200);
   // The host the client id names comes first, above the name the document
   // gives itself, which anyone could choose.
-  assert.match(html, /<p>From <strong>client\.example<\/strong><\/p><p>Connect Example App to Hosted Desk\?/);
+  assert.match(html, /<p class="from">From <strong>client\.example<\/strong><\/p><h1>Connect Example App to your desk<\/h1>/);
   const toGitHub = await approve(base, consent);
   const state = new URL(toGitHub.headers.get("location")).searchParams.get("state");
   const callback = await fetch(`${base}/oauth/github/callback?${new URLSearchParams({ code: "gh-code", state })}`, { redirect: "manual" });
@@ -812,7 +812,7 @@ test("the consent page escapes a hostile document's name and shows the host of i
   const { base, provider } = await start(t, fakeGitHub(), { clientDocuments: documents });
   const { html } = await consentPage(base, await provider.clientsStore.getClient(DOCUMENT_ID));
   assert.ok(!html.includes("<script>"));
-  assert.match(html, /Connect &lt;script&gt;x&lt;\/script&gt; to Hosted Desk\?/);
+  assert.match(html, /<h1>Connect &lt;script&gt;x&lt;\/script&gt; to your desk<\/h1>/);
   const { consentPage: render } = await import("../src/auth/pages.js");
   const page = render({ clientName: "A", clientHost: "client.example:8443", redirectUri: CLAUDE_CALLBACK, consent: "c" });
   assert.match(page.html, /From <strong>client\.example:8443<\/strong>/);

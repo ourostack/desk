@@ -203,6 +203,7 @@ export async function main(env = process.env) {
     allowedLogins: config.allowedLogins,
     resource: config.resource,
     redirects: config.redirects,
+    deskRepo: config.repo,
   });
   const app = createApp({
     provider,

@@ -30,12 +30,14 @@ const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message
 // is sealed for. `redirects` is the redirect policy (see redirects.js); by
 // default Claude's callbacks, ChatGPT's and loopback. `clientDocuments`
 // reads clients whose id is an https URL (see client-document.js).
+// `deskRepo` names the desk repository on the consent page.
 export function createProvider({
   key,
   issuer,
   github,
   allowedLogins,
   resource,
+  deskRepo,
   redirects = createRedirectPolicy(),
   log = stderrLog,
   clientDocuments = createClientDocuments({ redirects, log, ownHost: new URL(issuer).hostname }),
@@ -166,7 +168,7 @@ export function createProvider({
       // A document's client_name is whatever its author chose; the host of
       // its id is the part they had to control, so the page shows it too.
       const clientHost = client.client_id.startsWith("https://") ? new URL(client.client_id).host : undefined;
-      sendPage(res, consentPage({ clientName: client.client_name, clientHost, redirectUri, consent }));
+      sendPage(res, consentPage({ clientName: client.client_name, clientHost, redirectUri, consent, deskRepo }));
     },
 
     // The Approve form's POST. Returns `{ redirectTo }` (GitHub sign-in,

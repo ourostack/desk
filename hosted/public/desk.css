@@ -1,0 +1,97 @@
+/* The look of the gateway's few pages (front door, consent, sign-in errors), following the public site's
+   reading-paper system: light and dark tokens, a serif display face and a plain sans for text. System fonts
+   only, so the pages load nothing from another origin. */
+:root {
+  --paper: #f4f5f0;
+  --sheet: #fcfcf9;
+  --ink: #15201a;
+  --ink-soft: #3d4a42;
+  --muted: #5d6a62;
+  --line: #dde2d9;
+  --accent: #23753f;
+  --accent-wash: rgba(35, 117, 63, .09);
+  --gate: #b8402f;
+  --gate-wash: rgba(184, 64, 47, .09);
+  --amber: #7a5a0e;
+  --amber-wash: rgba(176, 128, 20, .12);
+  --shadow: 0 18px 50px -28px rgba(21, 32, 26, .35);
+  --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #08110c;
+    --sheet: #0f1c14;
+    --ink: #e9efe9;
+    --ink-soft: #c3cec6;
+    --muted: #93a79a;
+    --line: #22362a;
+    --accent: #5fd982;
+    --accent-wash: rgba(95, 217, 130, .10);
+    --gate: #ef7a68;
+    --gate-wash: rgba(239, 122, 104, .12);
+    --amber: #e2b44d;
+    --amber-wash: rgba(226, 180, 77, .12);
+    --shadow: 0 18px 50px -28px rgba(0, 0, 0, .8);
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.6 var(--sans);
+}
+main {
+  width: 100%;
+  max-width: 460px;
+  display: grid;
+  gap: 20px;
+  justify-items: center;
+  text-align: center;
+  padding: clamp(24px, 6vw, 40px);
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.icon { display: block; width: 72px; height: 72px; border-radius: 16px; }
+h1 { margin: 0; font: 600 clamp(1.6rem, 6vw, 2rem)/1.15 var(--display); text-wrap: balance; }
+p { margin: 0; }
+.lede { color: var(--ink-soft); }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+code { font-family: var(--mono); font-size: .9em; overflow-wrap: anywhere; }
+.tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 .72rem/1 var(--sans); letter-spacing: .04em;
+  padding: 6px 9px; border-radius: 999px; white-space: nowrap;
+  color: var(--amber); background: var(--amber-wash);
+}
+.tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.scopes { width: 100%; text-align: left; display: grid; gap: 10px; font-size: .93rem; }
+.scopes h2 { margin: 6px 0 0; font: 600 .74rem/1.2 var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.scopes ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.scopes li { position: relative; padding-left: 1.7em; color: var(--ink-soft); }
+.scopes li::before { position: absolute; left: 0; top: 0; font-weight: 700; }
+.scopes .can li::before { content: "\2713"; color: var(--accent); }
+.scopes .cannot li::before { content: "\2715"; color: var(--gate); }
+form { width: 100%; margin: 0; }
+button, .btn {
+  display: inline-flex; justify-content: center; align-items: center;
+  width: 100%; padding: 12px 16px; border-radius: 10px;
+  font: 600 .95rem/1 var(--sans); cursor: pointer; text-decoration: none;
+  background: var(--ink); color: var(--paper); border: 1px solid var(--ink);
+}
+.note { font-size: .86rem; color: var(--muted); }
+.from { margin-bottom: -8px; font-size: 1.05rem; color: var(--ink); }
+footer { font-size: .86rem; color: var(--muted); display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+footer a { color: var(--muted); }

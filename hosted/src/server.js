@@ -1,4 +1,5 @@
-// The gateway's HTTP surface: the MCP SDK's OAuth endpoints for Claude, the
+// The gateway's HTTP surface: a front door at / with its stylesheet and icon,
+// the MCP SDK's OAuth endpoints for Claude, the
 // consent form's target and the GitHub sign-in callback, a health check, and /mcp, which relays each
 // authenticated MCP request to a Desk child unchanged.
 import express from "express";
@@ -7,7 +8,7 @@ import { metadataHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { githubCallbackHandler } from "./auth/github.js";
 import { consentHandler } from "./auth/provider.js";
-import { page, sendPage } from "./auth/pages.js";
+import { assetRoute, frontDoor, page, sendPage } from "./auth/pages.js";
 
 // `unavailable`, when set, is the reason the gateway cannot sign anyone in
 // or start Desk yet: /authorize and /mcp answer 503 with it while the rest
@@ -19,6 +20,10 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.set("trust proxy", 1);
 
   app.get("/healthz", (_req, res) => res.type("text").send("ok"));
+  // The front door and the two files the gateway's pages load. They answer
+  // the same whether or not the gateway is set up.
+  app.get("/", (_req, res) => sendPage(res, frontDoor()));
+  app.get("/assets/:name", assetRoute);
 
   if (unavailable) {
     app.all(["/authorize", "/oauth/consent"], (_req, res) => sendPage(res, page(503, unavailable)));
