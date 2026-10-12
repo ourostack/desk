@@ -6,6 +6,12 @@ import * as path from "node:path"
 import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 import { admitInProcess, startInProcess } from "./_in_process_desk.js"
 
+// Windows refuses to remove a folder a process still uses; allow the same time _process_hygiene.js allows.
+function removeRoot(root) {
+  const windows = process.platform === "win32"
+  rmSync(root, { recursive: true, force: true, maxRetries: windows ? 40 : 5, retryDelay: windows ? 250 : 100 })
+}
+
 function tempRoot(prefix) {
   return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
 }
@@ -44,7 +50,7 @@ for (const scenario of [
 ]) {
   test(`common startup dispatches only admitted authority: ${scenario.name}`, async (t) => {
     const root = tempRoot("desk-startup-authority-")
-    t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
+    t.after(() => removeRoot(root))
     const controllerEvents = []
     const desk = await startInProcess({
       argv: ["--root", root, ...(scenario.raw === undefined ? [] : ["--person", scenario.raw])],
@@ -84,6 +90,9 @@ for (const scenario of [
       assert.equal(existsSync(path.join(root, ...wrongPrefix, "ops", "authority-route", "task.md")), false)
       assert.equal(existsSync(path.join(root, "desks", "bob")), false)
     } finally {
+      // A refused session re-admits at once on desk_status, running Git in the root. Closing does not wait for that
+      // attempt (follow-up #340), and Windows cannot remove a folder a running process still uses.
+      await desk.handle.admission.idle({ waitMs: 10000 })
       await desk.close()
     }
   })
@@ -91,7 +100,7 @@ for (const scenario of [
 
 test("common startup rejects contradictory authority even from a runtime-provided admission implementation", async (t) => {
   const root = tempRoot("desk-custom-admission-")
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
+  t.after(() => removeRoot(root))
   const started = await admitInProcess({
     argv: ["--root", root, "--person", "ari"], env: {},
     runtimeImporter: async () => ({
@@ -111,7 +120,7 @@ for (const scenario of [
 ]) {
   test(`prebuilt runtime admission ${scenario.authority.mode} under ${scenario.policy} policy`, async (t) => {
     const root = tempRoot("desk-runtime-authority-")
-    t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
+    t.after(() => removeRoot(root))
     const events = []
     const started = await admitInProcess({
       argv: ["--root", root], env: {},
