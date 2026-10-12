@@ -737,3 +737,128 @@ test("native debugger events preserve Chrome ordering across asynchronous owned-
     ["Runtime.executionContextsCleared", "Runtime.executionContextCreated"])
   extension.stop()
 })
+
+// The browser stops an idle extension service worker after 30 seconds, and its timers die with it. A reconnect delay that reached 30
+// seconds could let the worker stop with no native host and nothing to reconnect it, so every browser call failed.
+function manualTimers(t) {
+  const delays = []
+  const timers = []
+  t.mock.method(globalThis, "setTimeout", (callback, ms) => {
+    delays.push(ms)
+    timers.push(callback)
+    return { unref() {} }
+  })
+  t.mock.method(globalThis, "clearTimeout", () => {})
+  return { delays, async fire() { timers.shift()(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) } }
+}
+
+test("a host that fails as it starts backs off, never as long as the worker's idle limit, and an answering host resets it", async t => {
+  const { createBrowserExtension } = await import(extensionUrl)
+  const fake = fixture()
+  const timers = manualTimers(t)
+  // Chromium returns a port for a missing or failing host and then disconnects it with lastError.
+  let ports = 0
+  fake.chrome.runtime.connectNative = () => {
+    ports++
+    const port = { onMessage: event(), onDisconnect: event(), postMessage() {}, disconnect() {} }
+    Promise.resolve().then(() => {
+      fake.chrome.runtime.lastError = { message: "Native host has exited." }
+      port.onDisconnect.emit()
+      fake.chrome.runtime.lastError = undefined
+    })
+    return port
+  }
+  const extension = createBrowserExtension(fake.chrome, { onStatus: () => {} })
+  await extension.start()
+  for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve))
+  for (let attempt = 0; attempt < 10; attempt++) await timers.fire()
+  assert.equal(ports, 11)
+  assert.deepEqual(timers.delays.slice(0, 6), [1000, 2000, 4000, 8000, 10000, 10000])
+  assert.equal(Math.max(...timers.delays), 10000, "every delay is well under 30 seconds")
+  // A host that answers resets the backoff.
+  let answering
+  fake.chrome.runtime.connectNative = () => {
+    answering = { onMessage: event(), onDisconnect: event(), postMessage() {}, disconnect() {} }
+    return answering
+  }
+  await timers.fire()
+  answering.onMessage.emit({ id: "x", method: "unknown.method" })
+  answering.onDisconnect.emit()
+  assert.equal(timers.delays.at(-1), 1000)
+  extension.stop()
+})
+
+test("a start that fails before the host is reached is retried within the worker's idle limit", async t => {
+  const { createBrowserExtension } = await import(extensionUrl)
+  const fake = fixture()
+  const timers = manualTimers(t)
+  const extension = createBrowserExtension(fake.chrome, { onStatus: () => {} })
+  await extension.start()
+  fake.chrome.runtime.sendMessage = async () => ({})
+  fake.port.onDisconnect.emit()
+  for (let attempt = 0; attempt < 8; attempt++) await timers.fire()
+  assert.equal(Math.max(...timers.delays), 10000, "delays: " + timers.delays.join(","))
+  extension.stop()
+})
+
+function withAlarms(fake) {
+  const alarms = new Map()
+  const onAlarm = event()
+  fake.chrome.alarms = {
+    onAlarm,
+    get: async name => alarms.get(name),
+    create: async (name, info) => { alarms.set(name, { name, ...info }) },
+  }
+  let connects = 0
+  const connect = fake.chrome.runtime.connectNative
+  fake.chrome.runtime.connectNative = name => { connects++; return connect(name) }
+  return { alarms, onAlarm, connects: () => connects }
+}
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 10))
+
+test("a worker woken by its reconnect alarm reconnects a lost native host without any browser event", async () => {
+  const { runBackground, RECONNECT_ALARM } = await import(extensionUrl)
+  const fake = fixture()
+  const { alarms, onAlarm, connects } = withAlarms(fake)
+  // A fresh worker: the previous one stopped with its native port and its timers.
+  const extension = runBackground(fake.chrome)
+  // An alarm while the first start is still running opens no second port.
+  onAlarm.emit({ name: RECONNECT_ALARM })
+  await settle()
+  assert.deepEqual(alarms.get(RECONNECT_ALARM), { name: RECONNECT_ALARM, periodInMinutes: 0.5 })
+  assert.equal(connects(), 1)
+  onAlarm.emit({ name: RECONNECT_ALARM })
+  await settle()
+  assert.equal(connects(), 1, "a connected worker does not open a second port")
+  extension.stop()
+  onAlarm.emit({ name: "another-alarm" })
+  await settle()
+  assert.equal(connects(), 1)
+  onAlarm.emit({ name: RECONNECT_ALARM })
+  await settle()
+  assert.equal(connects(), 2, "the alarm reconnects")
+  extension.stop()
+})
+
+test("a worker that wakes keeps a current alarm, replaces one with another period, and retries a failed wake", async t => {
+  const { runBackground, createBrowserExtension, RECONNECT_ALARM } = await import(extensionUrl)
+  const fake = fixture()
+  const { alarms, connects } = withAlarms(fake)
+  alarms.set(RECONNECT_ALARM, { name: RECONNECT_ALARM, periodInMinutes: 0.5, marker: true })
+  const first = runBackground(fake.chrome)
+  await settle()
+  assert.equal(alarms.get(RECONNECT_ALARM).marker, true, "a current alarm is not rescheduled")
+  first.stop()
+  alarms.set(RECONNECT_ALARM, { name: RECONNECT_ALARM, periodInMinutes: 5 })
+  const timers = manualTimers(t)
+  fake.chrome.runtime.sendMessage = async () => ({})
+  const second = runBackground(fake.chrome, createBrowserExtension(fake.chrome, { onStatus: () => {} }))
+  for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve))
+  assert.equal(alarms.get(RECONNECT_ALARM).periodInMinutes, 0.5, "an alarm from another release is replaced")
+  assert.deepEqual(timers.delays, [1000], "a wake whose start fails is retried, not left to the next alarm")
+  fake.chrome.runtime.sendMessage = async () => ({ token })
+  await timers.fire()
+  assert.equal(connects(), 2)
+  second.stop()
+})

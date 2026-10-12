@@ -43,6 +43,13 @@ function integer(value) {
   return Number.isSafeInteger(value) && value > 0
 }
 
+// The browser stops an extension service worker after 30 seconds without events, and its timers die with it. A reconnect delay
+// past that limit can leave the worker stopped with no native host, so every Desk browser call fails until a browser event wakes it.
+const RETRY_MAX_MS = 10000
+// An alarm wakes a stopped worker; each wake reconnects if the native port is gone. 30 seconds is the shortest period allowed.
+export const RECONNECT_ALARM = "desk-native-reconnect"
+const RECONNECT_PERIOD_MINUTES = 0.5
+
 export function createBrowserExtension(api, { onStatus = code => console.error(code) } = {}) {
   const leases = new Map()
   const requests = new Set()
@@ -480,13 +487,18 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
     if (stopped || retryTimer) return
     retryTimer = setTimeout(() => {
       retryTimer = undefined
-      start().catch(() => {
-        onStatus("NATIVE_HOST_UNAVAILABLE")
-        retry()
-      })
+      reconnect()
     }, retryMs)
     retryTimer.unref?.()
-    retryMs = Math.min(30000, retryMs * 2)
+    retryMs = Math.min(RETRY_MAX_MS, retryMs * 2)
+  }
+
+  // Starts the native host if it is not connected; a failed start is retried.
+  function reconnect() {
+    return start().catch(() => {
+      onStatus("NATIVE_HOST_UNAVAILABLE")
+      retry()
+    })
   }
 
   async function start() {
@@ -498,6 +510,9 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       const connected = api.runtime.connectNative(HOST)
       port = connected
       connected.onMessage.addListener(request => {
+        // The backoff resets only once the host has answered, so a host that fails as it starts backs off instead of being
+        // relaunched every second.
+        if (port === connected && request?.event !== "diagnostic") retryMs = 1000
         if (request?.event === "diagnostic") {
           const context = [DIAGNOSTIC_STAGES.has(request.stage) ? request.stage : null,
             DIAGNOSTIC_SYSCALLS.has(request.syscall) ? request.syscall : null].filter(Boolean)
@@ -524,7 +539,6 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
       publish({ event: "ready", protocolVersion: 1, extensionId: api.runtime.id, sourceDigest: SOURCE_DIGEST, profileToken: token,
         browserVersion: typeof navigator === "undefined" ? undefined : navigator.userAgent.match(/(?:Edg|Chrome)\/[\d.]+/u)?.[0],
         userAgent: typeof navigator === "undefined" ? undefined : navigator.userAgent })
-      retryMs = 1000
     })()
     try {
       await starting
@@ -542,13 +556,23 @@ export function createBrowserExtension(api, { onStatus = code => console.error(c
     connected?.disconnect()
   }
 
-  return Object.freeze({ dispatch, start, stop, ensureTokenDocument })
+  return Object.freeze({ dispatch, start, reconnect, stop, ensureTokenDocument })
 }
 
-if (typeof chrome !== "undefined") {
-  const extension = createBrowserExtension(chrome)
-  const start = () => extension.start().catch(() => console.error("NATIVE_HOST_UNAVAILABLE"))
-  chrome.runtime.onInstalled.addListener(start)
-  chrome.runtime.onStartup.addListener(start)
+// Listeners are registered synchronously at the worker's top level, so the event that wakes a stopped worker reaches them.
+export function runBackground(api, extension = createBrowserExtension(api)) {
+  const start = () => extension.reconnect()
+  api.runtime.onInstalled.addListener(start)
+  api.runtime.onStartup.addListener(start)
+  api.alarms.onAlarm.addListener(alarm => {
+    if (alarm.name === RECONNECT_ALARM) start()
+  })
+  api.alarms.get(RECONNECT_ALARM)
+    .then(existing => existing?.periodInMinutes === RECONNECT_PERIOD_MINUTES ? existing
+      : api.alarms.create(RECONNECT_ALARM, { periodInMinutes: RECONNECT_PERIOD_MINUTES }))
+    .catch(() => console.error("NATIVE_RECONNECT_ALARM_UNAVAILABLE"))
   start()
+  return extension
 }
+
+if (typeof chrome !== "undefined") runBackground(chrome)

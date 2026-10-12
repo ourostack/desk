@@ -5,7 +5,7 @@
   "minimum_chrome_version": "125",
   "description": "Recognizable agent-owned background browser windows for Desk.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkauo7/L963/S9oNHNxfoU5oqywGqLUJpM6PaOAs/7xS25aBADBGcLr1T9p5xQyVT4YkMFqqW95nSNXmhJFIt1y7CwsJrjJF/gn93YLRlBM574Hi78BsSGkW+/MOaTOG8jyCMyj8ohqC7VMVh++9qlttQsVeJ4beNZRiIgTp1u2RUQpCI0yGGPM57D7fh2bDmtRvMp09FOUluDZwh2mlW50k0DgSN3G93ZaE7BmjZsN4Qh65LId3QmqlA6E0efngk3kVrr8vQMELsLwqfmOv+f66HHME4lQR61NMcm/L58CfiumpAznd3cnsv1demPoB6TvcKl259v1aGyRhZcMwxEwIDAQAB",
-  "permissions": ["nativeMessaging", "debugger", "tabs", "offscreen"],
+  "permissions": ["nativeMessaging", "debugger", "tabs", "offscreen", "alarms"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
