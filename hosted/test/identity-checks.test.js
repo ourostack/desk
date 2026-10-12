@@ -148,6 +148,10 @@ function fakeAz(cloud) {
       return tsv("https://kv/secrets/x/v2");
     }
     if (joined.startsWith("resource show")) {
+      // With az's current account in an Ouro tenant (both the local run and the workflow's second azure/login), az
+      // resolves --ids against that account, which has no subscription, unless --subscription names it (rehearsal,
+      // 2026-10-12: SubscriptionNotFound).
+      if (opt(args, "--subscription") !== "261e0bf1-934d-41ab-9295-229b0d254418") throw new CallFailed("az resource show failed", "ERROR: (SubscriptionNotFound) The subscription 'c12edfb6-c5ab-4bf8-b1d5-1f053311d396' could not be found.");
       const [, app, revision] = /\/containerApps\/([^/]+)(?:\/revisions\/([^/]+))?$/.exec(opt(args, "--ids")) ?? [];
       if (!cloud.appEnv[app]) notFound(opt(args, "--ids"));
       // The app itself: its latest and latest ready revisions. By default one revision, ready, running the template.
