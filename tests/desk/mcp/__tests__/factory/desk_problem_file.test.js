@@ -3,8 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
-import * as os from "node:os"
+import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -14,6 +13,7 @@ import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblem
 import { DROPPED_KEY, KNOWN_KEY, PENDING_KEY, knownHitsSince } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-known.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { osEnv } from "../_os_env.js"
+import { mkTempRoot } from "../_temp_roots.js"
 import { LAUNCH_STAMP_DIR, MAX_LAUNCH_STAMPS, endLaunch, launchStampKey, pendingLaunchTimes } from "../../../../../plugins/desk/mcp/src/factory/filer-launch.js"
 import { shouldLaunchFiler } from "../../../../../plugins/desk/mcp/src/runtime/filer-throttle.js"
 
@@ -21,14 +21,12 @@ const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/fi
 
 const VERSION = "gh version 2.54.0 (2024-07-31)\n"
 
+// The shared temp roots are removed when the file ends, with retries: on Windows a CLI child that ran with its cwd here can keep the
+// folder busy for a moment after it exits, and removing it at once failed with EPERM.
 async function scratch(run) {
-  const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-problem-file-")))
+  const base = await mkTempRoot("desk-problem-file-")
   const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })
-  try {
-    return await run({ env, base })
-  } finally {
-    rmSync(base, { recursive: true, force: true })
-  }
+  return run({ env, base })
 }
 
 /** gh's `auth status` text for `accounts` ({ login, active }). */
@@ -116,7 +114,7 @@ test("a 'known' result records the hit with the running Desk version; a second h
 }))
 
 test("the Desk version a problem is recorded under follows DESK_PLUGIN_ROOT, like every other Desk version", () => scratch(async ({ env }) => {
-  const other = mkdtempSync(path.join(os.tmpdir(), "desk-problem-version-"))
+  const other = await mkTempRoot("desk-problem-version-")
   await fs.writeFile(path.join(other, "plugin.json"), JSON.stringify({ version: "9.8.7-alpha.6" }))
   const saved = process.env.DESK_PLUGIN_ROOT
   process.env.DESK_PLUGIN_ROOT = other
