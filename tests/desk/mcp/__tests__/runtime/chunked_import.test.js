@@ -6,6 +6,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 import { importInChunks, localImports, packageImports } from "../../../../../plugins/desk/mcp/src/runtime/chunked-import.js"
+import { resolvePackage as resolveFromPlugin } from "../../../../../plugins/desk/mcp/src/runtime/resolve-here.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 test("local imports are found in source order, once each, including multi-line and re-export forms", () => {
@@ -52,6 +53,15 @@ test("an unreadable module is imported in one step, and the real default loader 
   writeFileSync(path.join(root, "middle.mjs"), 'import { leaf } from "./leaf.mjs"\nexport const middle = leaf + 1\n')
   writeFileSync(path.join(root, "main.mjs"), 'import { middle } from "./middle.mjs"\nexport const value = middle + 1\n')
   assert.equal((await importInChunks(pathToFileURL(path.join(root, "main.mjs")).href)).value, 3)
+})
+
+test("local and package imports read the module's own file by default, and the plugin's resolver finds its packages", async () => {
+  const root = await mkTempRoot("desk-chunked-import-read-")
+  writeFileSync(path.join(root, "m.mjs"), 'import { a } from "./a.mjs"\nimport { z } from "zod"\nimport { readFileSync } from "node:fs"\n')
+  const url = pathToFileURL(path.join(root, "m.mjs")).href
+  assert.deepEqual(localImports(url), [pathToFileURL(path.join(root, "a.mjs")).href])
+  assert.deepEqual(packageImports(url), ["zod"])
+  assert.match(resolveFromPlugin("zod"), /\/node_modules\/zod\//u)
 })
 
 test("package imports are found in source order, once each, without Node's built-in modules", () => {

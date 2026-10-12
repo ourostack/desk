@@ -25,7 +25,7 @@ export function packageImports(url, read = readSource) {
 }
 
 /** Every static module request (imports with or without bindings, re-exports), once each, in source order. */
-function moduleRequests(url, read = readSource) {
+function moduleRequests(url, read) {
   return [...new Set([...read(url).matchAll(MODULE_REQUEST)].map((match) => match[1]))]
 }
 
