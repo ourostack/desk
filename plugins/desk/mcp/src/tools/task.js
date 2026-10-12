@@ -448,10 +448,15 @@ function relPath(deskRoot, absPath) {
   return deskRelativePath(deskRoot, absPath)
 }
 
-// On a Git desk, a task tool stages the task.md it writes (M4-5 fix round 4)
-// only when the file held no unstaged changes before this write, so a
-// dirty/untracked card left by another session is never adopted as this
-// tool's own work. `spawnGit` is a test-only seam over `spawnSync`.
+// Said by task_update when the card it committed was already changed or untracked before the call.
+const INCLUDED_CHANGES_NOTE = "This card already held uncommitted changes before this call (an earlier commit that failed, a card taken out of a hand commit, or an edit made outside Desk's tools); this commit includes them."
+
+// On a Git desk, task_signoff and the archived-card resource write stage the
+// task.md they write (M4-5 fix round 4) only when the file held no unstaged
+// changes before this write, so a dirty/untracked card left by another session
+// is never adopted as this tool's own work. task_update is the exception: it
+// is the way a card with uncommitted changes gets committed at all (see
+// INCLUDED_CHANGES_NOTE). `spawnGit` is a test-only seam over `spawnSync`.
 function stagingAllowed(filePath, spawnGit) {
   const dir = path.dirname(filePath)
   return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
@@ -836,7 +841,7 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success, when the file was already dirty, or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, factory_report?, factory_report_unavailable? } (`factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
+ * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note?, included_uncommitted_changes?, factory_report?, factory_report_unavailable? } (`included_uncommitted_changes` says the card was already changed or untracked before this call and the commit took that along; `factory_report_unavailable` is the reason code a card that reached done has no report link, and `factory_report` the link when this call filled it in on such a card; when Desk committed the card, `desk_note` is the second field, right after `status`: it says no git is needed and not to add, commit or push the card; `desk_commit` is the short sha of that commit, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
  * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
  * step, or null, and a reminder; `report_as` and `report_note` whenever the status is not terminal: the sentence to
  * report the task with, and a line against calling it done)
@@ -1053,7 +1058,9 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     newBody = `${newBody}${sep}${body_append}`
   }
 
-  const stage = stagingAllowed(filePath, spawnGit)
+  // task_update commits the card even when it already held uncommitted changes: the desk's pre-commit hook lets a card in only through Desk's tools and sends the agent here, so skipping the commit would leave the card with no way in. The answer says when the commit took such changes along.
+  const stage = isGitRepository(path.dirname(filePath), spawnGit)
+  const heldChanges = stage && hasUnstagedWork(path.dirname(filePath), [path.basename(filePath)], spawnGit)
   // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
   await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
   // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
@@ -1099,6 +1106,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     result.desk_pushed = false
     result.desk_note = DESK_COMMIT_NOTE
     result.desk_commit_note = DESK_COMMIT_HASH_NOTE
+    if (heldChanges) result.included_uncommitted_changes = INCLUDED_CHANGES_NOTE
   }
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
   // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show

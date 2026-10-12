@@ -57,6 +57,31 @@ test("desk_save tidy commits a moved card with the record and the trailer", asyn
   assert.equal(git(root, ["status", "--short"]).stdout, "")
 })
 
+// The Agency dry run of 2026-10-12: a tidy moved a track card and a loose file with git mv and wrote the record. The old side of each
+// move is neither on disk nor in the index, and `git add` refuses such a path, so the tidy's own commit failed with "pathspec did not match".
+test("a tidy that moved files other than task cards commits them with the untracked record", async () => {
+  const root = await makeDesk()
+  await fs.writeFile(path.join(root, "old-track", "track.md"), "# old-track\n")
+  await fs.writeFile(path.join(root, "status-notes.md"), "notes\n")
+  git(root, ["add", "--", "old-track/track.md", "status-notes.md"])
+  git(root, ["commit", "-q", "-m", "a track card and a loose file"])
+  await fs.mkdir(path.join(root, "_archive", "old-track"), { recursive: true })
+  git(root, ["mv", "old-track/track.md", "_archive/old-track/track.md"])
+  git(root, ["mv", "status-notes.md", "_meta/status-notes.md"])
+  await fs.writeFile(path.join(root, "_meta", "organization.json"), "{}\n")
+  // A file the tidy fixed by hand and did not stage is still staged here.
+  await fs.writeFile(path.join(root, "other.md"), "fixed by the tidy\n")
+  const paths = ["old-track/track.md", "_archive/old-track/track.md", "status-notes.md", "_meta/status-notes.md", "_meta/organization.json", "other.md"]
+  const result = await save(root, { paths, message: "File the notes and archive the old track", tidy: true })
+  assert.deepEqual(result, { status: "committed" })
+  const files = git(root, ["show", "--name-status", "--format=", "-M", "HEAD"]).stdout
+  assert.match(files, /R100\told-track\/track\.md\t_archive\/old-track\/track\.md/u)
+  assert.match(files, /R100\tstatus-notes\.md\t_meta\/status-notes\.md/u)
+  assert.match(files, /A\t_meta\/organization\.json/u)
+  assert.match(files, /M\tother\.md/u)
+  assert.equal(git(root, ["status", "--short"]).stdout, "")
+})
+
 test("the trailer is not added twice", async () => {
   const root = await makeDesk()
   await stageTidy(root)

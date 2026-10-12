@@ -34,6 +34,18 @@ test("a ready desk whose detail is still loading says so in the summary and flag
   assert.equal(compactStatus({ ...ready, detail_pending: true, status: "admitting", state: "admitting" }).detail_pending, undefined, "only a ready desk is called ready")
 })
 
+test("a repair Desk made at this session's start is one of the notes, in the words the repair log uses", () => {
+  const line = "repaired: detached HEAD → main (was 0123456789ab)"
+  assert.deepEqual(compactStatus({ ...ready, repair: line }).notes, [line])
+  assert.deepEqual(compactStatus({ ...ready, repair: null }).notes, [])
+  // The first answer of a session, before the runtime detail is loaded, already says it.
+  assert.deepEqual(compactStatus({ status: "ok", state: "ready", detail_pending: true, repair: line, admission: { summary: "ok", blockers: [] } }).notes, [line])
+  // A desk that is not ready says it too: the repair happened whatever the attempt ended in.
+  const degraded = compactStatus({ ...ready, status: "degraded", state: "degraded", code: "controller_unavailable", repair: line })
+  assert.equal(degraded.state, "degraded")
+  assert.deepEqual(degraded.notes, [line])
+})
+
 test("a ready desk whose runtime status failed, or that carries no runtime detail, says why its root is empty", () => {
   const failed = compactStatus({ status: "ok", state: "ready", status_error: "status exploded", admission: { summary: "ok", blockers: [] } })
   assert.equal(failed.state, "ready")

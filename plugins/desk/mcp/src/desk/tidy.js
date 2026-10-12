@@ -80,8 +80,8 @@ const parseFrontmatter = loadFrontmatterParser()
 export const TIDY_VERSION = 1
 export const ORGANIZATION_RECORD = path.join("_meta", "organization.json")
 
-// Findings the tidy acts on. `stale_task` is reported, never acted on.
-const REPORT_ONLY_CODES = new Set(["stale_task"])
+// Findings the tidy acts on. `stale_task` is reported, never acted on, and so is `stale_quarantine`: the tidy deletes nothing and leaves ignored files where they are.
+const REPORT_ONLY_CODES = new Set(["stale_task", "stale_quarantine"])
 
 const IN_PROGRESS_MARKERS = [
   ["MERGE_HEAD", "a merge"],
