@@ -54,6 +54,9 @@ for (const [name, dir] of Object.entries(locations)) {
   originalMkdir(dir, { recursive: true, mode: 0o700 })
   process.env[name] = dir
 }
+// Desk's Copilot session start edits `settings.json` under COPILOT_HOME, which wins over HOME: a developer who exports it must not have
+// their own Copilot settings written by a hook a test spawns. The folder is not created, so a test that wants one makes it.
+process.env.COPILOT_HOME = path.join(home, ".copilot")
 // Desk commits only on the branch it expects (`main` unless the remote or the host says otherwise), so a fixture repository must start on `main`, whatever the machine's own default is.
 fs.writeFileSync(path.join(home, ".gitconfig"), "[init]\n\tdefaultBranch = main\n")
 // os.homedir() reads USERPROFILE on Windows.

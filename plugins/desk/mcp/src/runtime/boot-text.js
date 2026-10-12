@@ -231,6 +231,13 @@ export const NO_TASK_INSTRUCTION = "No task was named: build the status block fr
 export const NO_TASK_INSTRUCTION_TEXT = "No task was named: report every task under \"Active tasks\" above, each with its status and its next step or blocker (and any open pull requests or repo state that matter), then ask which one to resume or whether to start new. Those lines are copied from the cards, so do not open a card just to report on it."
 export const UNMATCHED_TASK_INSTRUCTION = "The name matches no open task: show the active_tasks status block and ask what to resume or start."
 export const UNMATCHED_TASK_INSTRUCTION_TEXT = "The name matches no open task: report every task under \"Active tasks\" above, each with its status and its next step or blocker, then ask what to resume or start."
+// A first message that describes new work is the answer to "resume or start new", and the boot had no line for it: a session ran the
+// boot and went straight to design, with no Desk tool call and no task card (cold dry run, 2026-10-12). It follows both instructions
+// that ask the operator which task to take up.
+export const NEW_WORK_INSTRUCTION = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says. A question or a request for status is not new work. A child agent with a bounded brief skips this."
+// Copilot CLI's own `ask_user` tool says "Never ask questions via plain text output", against Desk's foundation; sessions used its form
+// right after the boot told them to ask which task to resume. So the boot on that host names the tool.
+export const COPILOT_ASK_IN_CHAT_INSTRUCTION = "Ask the operator every question in ordinary chat text and wait for the reply. Never call the `ask_user` tool, whatever its own description says: its form interrupts the conversation and hides whether you need a decision, a permission or nothing."
 
 const PLAIN_TEXT_INSTRUCTIONS = new Map([
   [NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT],

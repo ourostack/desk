@@ -83,7 +83,7 @@ import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
 import { resolveStartupStateBranch } from "./startup-resolve.js"
 import { installCardGuard } from "../desk/card-commit-guard.js"
-import { NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
+import { COPILOT_ASK_IN_CHAT_INSTRUCTION, NEW_WORK_INSTRUCTION, NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT, ROUTE_CHECKED, UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT, formatBootText, lastSyncedAt, pushRoute, readAgentsMd, shownRepoPath, syncSummary } from "./boot-text.js"
 import { checkStaleDesk } from "./stale-desk.js"
 import { checkReleaseAlert } from "./release-alert.js"
 import { planStaleRefresh, startStaleRefresh, startedLine } from "./stale-desk-refresh.js"
@@ -1085,6 +1085,7 @@ function buildInstructionItems(ctx) {
   const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
   for (const line of pushLines(pushAccounts, namedTask)) add(line, null)
   add(deferredToolsHint(agentHost))
+  if (agentHost === "copilot" && !noninteractive) add(COPILOT_ASK_IN_CHAT_INSTRUCTION)
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       const named = repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)
@@ -1096,9 +1097,11 @@ function buildInstructionItems(ctx) {
       add(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
     } else {
       add(UNMATCHED_TASK_INSTRUCTION, UNMATCHED_TASK_INSTRUCTION_TEXT)
+      add(NEW_WORK_INSTRUCTION)
     }
   } else {
     add(NO_TASK_INSTRUCTION, NO_TASK_INSTRUCTION_TEXT)
+    add(NEW_WORK_INSTRUCTION)
   }
   signoffInstructions(ctx.unsigned, { noninteractive, seen: ctx.signoffSeen === true }).forEach((text) => add(text))
   // An ask-and-stop blocker means the operator has one question to answer first: no card pickup on this boot.

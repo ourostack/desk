@@ -1138,6 +1138,8 @@ function hookContexts() {
     const env = {
       ...process.env,
       HOME: path.join(scratch, "home"),
+      // The Copilot hook edits the settings file under this folder; a developer's own must never be the one.
+      COPILOT_HOME: path.join(scratch, "home", ".copilot"),
       DESK: scratch,
       CLAUDE_PLUGIN_ROOT: deskRoot,
       PLUGIN_ROOT: deskRoot,
@@ -1174,7 +1176,7 @@ test(`startup hooks ${marketplace.name === "ouroboros-skills" ? "open with the m
 // M4-7-F2: the startup hooks run the Detect blocks themselves, so a pending tidy never depends on the agent choosing to
 // run the session-start migration step.
 function startupContexts(desk, home, extraEnv = {}) {
-  const env = { ...process.env, HOME: home, DESK: desk, DESK_IDENTITY: "nobody-in-the-registry", CLAUDE_PLUGIN_ROOT: deskRoot, PLUGIN_ROOT: deskRoot, ...extraEnv };
+  const env = { ...process.env, HOME: home, COPILOT_HOME: path.join(home, ".copilot"), DESK: desk, DESK_IDENTITY: "nobody-in-the-registry", CLAUDE_PLUGIN_ROOT: deskRoot, PLUGIN_ROOT: deskRoot, ...extraEnv };
   for (const key of [...HOST_BINDING_VARS, "CLAUDE_CONFIG_DIR", "AGENCY_TOML"]) if (!["DESK", "DESK_IDENTITY", "CLAUDE_PLUGIN_ROOT"].includes(key) && !(key in extraEnv)) delete env[key];
   const claude = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "claude-session-start.cjs")], { cwd: home, env, encoding: "utf8" });
   assert.equal(claude.status, 0, claude.stderr);

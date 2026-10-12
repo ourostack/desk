@@ -49,6 +49,17 @@ async function recordSession({ folder, sessionId, source }) {
   recordCopilotSession({ sessionId, folder: path.resolve(folder), source, activationConfig: resolveActivationConfigPath({ env: process.env }), env: process.env });
 }
 
+// Copilot asks its agent for an AI co-author trailer on commits unless the operator's Copilot settings turn it off; Desk forbids AI
+// attribution, so the setting is turned off once, only when unset (mcp/src/runtime/copilot-commit-trailer.js). One line when it did.
+async function commitTrailerLine() {
+  try {
+    const { disableCoAuthorTrailer } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-commit-trailer.js")).href);
+    return disableCoAuthorTrailer({ env: process.env }).line;
+  } catch {
+    return "";
+  }
+}
+
 // Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the
 // project folder, so the line never names a root the server will not use.
 async function startupDirection() {
@@ -66,7 +77,7 @@ async function startupDirection() {
     const pending = migrationLine({ host: "copilot", env: process.env, sessionFolder });
     const boot = await runBootChecks({ host: "copilot", env: process.env, sessionFolder });
     const migrations = await pending;
-    return [direction, boot, migrations].filter(Boolean).join("\n\n");
+    return [direction, boot, migrations, await commitTrailerLine()].filter(Boolean).join("\n\n");
   } catch {
     return `Desk startup: Desk could not resolve its root in this hook. The boot has not run: run node ${bootScript} now, before other work, for the authoritative workspace scan; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.`;
   }
