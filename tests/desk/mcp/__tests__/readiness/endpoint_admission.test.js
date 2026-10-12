@@ -8,9 +8,18 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { connectOrStartController, startControllerRuntime } from "../../../../../plugins/desk/mcp/src/server.js"
 
+// The client processes of each test, closed before its folder is removed.
+const clients = new WeakMap()
+
 function fixture(t) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-endpoints-"))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  clients.set(t, [])
+  // One hook, in this order: a client still running writes its session state under `root` (last-start.json, without holding up the session), and removing the folder under it fails. A failed removal used to skip the hooks that closed the clients, which then kept this file's process alive until the suite's watchdog.
+  t.after(async () => {
+    const closed = await Promise.allSettled(clients.get(t).map((close) => close()))
+    rmSync(root, { recursive: true, force: true })
+    for (const result of closed) if (result.status === "rejected") throw result.reason
+  })
   writeFileSync(path.join(root, "task.md"), "# Endpoint capture\n\nDocument vector.\n")
   return root
 }
@@ -42,7 +51,7 @@ async function client(t, root, endpoint, variable = "DESK_EMBED_ENDPOINT") {
   let stderr = ""
   child.stderr.on("data", (chunk) => { stderr += chunk })
   const exited = once(child, "exit")
-  t.after(async () => {
+  clients.get(t).push(async () => {
     if (child.connected) child.send("close")
     const [code] = await exited
     assert.equal(code, 0, stderr)

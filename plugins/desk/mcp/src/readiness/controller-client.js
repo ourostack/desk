@@ -23,6 +23,18 @@ const LIVE_OWNER_HANDSHAKE_MS = 1000
 const ELECTION_MARGIN_MS = 2_000
 export const electionWaitMsFor = (platform = process.platform) => controllerStartTimeoutMs(platform) + ELECTION_MARGIN_MS
 const controllerStarts = new Map()
+const stateDirCreates = new Map()
+// Asynchronous: on Windows a directory create can wait on an antivirus scan for over a second, and this runs on the session's event loop while it answers tool calls.
+// Callers in this process that ask for one folder at the same time share one create, so they continue past it in the order they called, as they did when the create was synchronous. Separate creates would finish in any order, and the caller that continued first would become the owner. A caller that joins a create uses the first caller's `makeDir` and options, which are the same for every caller outside tests.
+function createStateDir(stateDir, makeDir) {
+  let creating = stateDirCreates.get(stateDir)
+  if (creating === undefined) {
+    creating = makeDir(stateDir, { recursive: true, mode: 0o700 }).finally(() => stateDirCreates.delete(stateDir))
+    stateDirCreates.set(stateDir, creating)
+  }
+  return creating
+}
+
 const privateDirectoryValidators = {
   win32: Object,
   darwin: validatePrivateDirectory,
@@ -55,6 +67,7 @@ export async function connectOrStartController({
   startController = startReadinessController,
   env = process.env,
   electionWaitMs = electionWaitMsFor(process.platform),
+  makeDir = mkdir,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
@@ -68,8 +81,7 @@ export async function connectOrStartController({
   // `exceptionOutcome` for a code this specific). Matching that existing contract means throwing normally, not
   // inventing a new local return shape.
   assertNotRealStateUnderTest(stateDir, { env })
-  // Asynchronous: on Windows a directory create can wait on an antivirus scan for over a second, and this runs on the session's event loop while it answers tool calls.
-  await mkdir(stateDir, { recursive: true, mode: 0o700 })
+  await createStateDir(stateDir, makeDir)
   privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)
   const endpoint = await rendezvousEndpoint({ derived: deriveControllerEndpoint({ identity }), identity, stateDir })

@@ -1,6 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdir } from "node:fs/promises"
+import { setTimeout as delay } from "node:timers/promises"
 import { fork } from "node:child_process"
 import { createConnection, createServer } from "node:net"
 import Database from "better-sqlite3"
@@ -239,6 +241,40 @@ test("a second compatible client refreshes convergence from lexical ready", asyn
     rmSync(root, { recursive: true, force: true })
     rmSync(stateHome, { recursive: true, force: true })
   }
+})
+
+test("concurrent in-process starts for one desk share one state folder create, so the first caller becomes the owner", async (t) => {
+  const root = tempFixture("desk-owner-order-")
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const common = { root, stateHome: path.join(root, "state"), ephemeral: true }
+  const firstContract = { mode: "background", endpoints: ["http://first.invalid"] }
+  const secondContract = { mode: "required", endpoints: ["http://second.invalid"] }
+  const created = []
+  // The first caller's create is slow and the second's would be instant: with a create each, the second caller would continue first.
+  const slow = async (dir, options) => { created.push("first"); await delay(100); await mkdir(dir, options) }
+  const instant = async (dir, options) => { created.push("second"); await mkdir(dir, options) }
+  const results = await Promise.allSettled([
+    connectOrStartController({ ...common, semanticContract: firstContract, makeDir: slow }),
+    connectOrStartController({ ...common, semanticContract: secondContract, makeDir: instant }),
+  ])
+  const clients = results.filter((r) => r.status === "fulfilled").map((r) => r.value)
+  t.after(async () => { for (const client of clients) await client.close() })
+  assert.deepEqual(created, ["first"], "the second caller joins the first caller's create")
+  assert.deepEqual(results.map((r) => r.status), ["fulfilled", "rejected"])
+  assert.equal(results[1].reason.code, "controller_semantic_mismatch")
+  assert.deepEqual((await clients[0].status()).identity.semantic_contract, firstContract)
+  await clients[0].close()
+
+  // A create that fails is not kept: both callers see the failure, and the next start creates the folder again.
+  const failing = async () => { throw Object.assign(new Error("no space"), { code: "ENOSPC" }) }
+  const failed = await Promise.allSettled([
+    connectOrStartController({ ...common, semanticContract: firstContract, makeDir: failing }),
+    connectOrStartController({ ...common, semanticContract: firstContract, makeDir: instant }),
+  ])
+  assert.deepEqual(failed.map((r) => r.reason?.code), ["ENOSPC", "ENOSPC"])
+  const later = await connectOrStartController({ ...common, semanticContract: firstContract, makeDir: instant })
+  await later.close()
+  assert.deepEqual(created, ["first", "second"])
 })
 
 test("F2 in-process semantic mismatch refuses without retaining a phantom client", async (t) => {
