@@ -240,6 +240,22 @@ test("a slow startup does not shorten the dispatched call's budget", async () =>
   assert.equal(result.report.effects.mutation, "reported_complete", JSON.stringify(result.report))
 })
 
+test("the whole run ends within its total budget, which caps the dispatched call's own budget", async (t) => {
+  const root = fixture()
+  let dispatches = 0
+  const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
+  // Startup spends 300 ms; the write would answer 300 ms after dispatch, inside its own 2 s budget, but the run's 500 ms total ends first.
+  const started = Date.now()
+  const result = await runRecovery({
+    argv: args(root), env: env(), cwd: root, input: input(update), timeoutMs: 400, dispatchTimeoutMs: 2000, totalTimeoutMs: 500,
+    launch: fakeServer(root, { statusDelayMs: 300, updateDelayMs: 300, onDispatch: () => dispatches++ }),
+  })
+  assert.equal(dispatches, 1)
+  assert.equal(result.report.code, "timeout", JSON.stringify(result.report))
+  assert.equal(result.report.effects.mutation, "unknown")
+  assert.ok(Date.now() - started < 1500, "the run ended near its 500 ms total, not after the write's 2 s")
+})
+
 test("an already edited card is not falsely reported as committed", async () => {
   const root = fixture()
   const head = git(root, "rev-parse", "HEAD")

@@ -180,7 +180,7 @@ function gitHead(root, env) {
 /** One mutation at most, through the ordinary MCP bootstrap and admission. */
 export async function runRecovery({
   argv = process.argv.slice(2), env = process.env, cwd = process.cwd(),
-  input = process.stdin, launch = launchBootstrap, timeoutMs = 60000, dispatchTimeoutMs = 60000,
+  input = process.stdin, launch = launchBootstrap, timeoutMs = 60000, dispatchTimeoutMs = 60000, totalTimeoutMs = 100000,
 } = {}) {
   const report = {
     operation: null, requestedRoot: null, actualRoot: null,
@@ -194,7 +194,10 @@ export async function runRecovery({
   let transport
   let payload
   let exitCode = 1
-  const deadline = Date.now() + timeoutMs
+  const startedAt = Date.now()
+  const deadline = startedAt + timeoutMs
+  // The whole run ends within totalTimeoutMs, so it prints its report before a 120 s command limit (Claude Code's default) kills it.
+  const totalDeadline = startedAt + totalTimeoutMs
   try {
     const options = argumentsFor(argv)
     report.operation = options["--operation"]
@@ -287,9 +290,9 @@ export async function runRecovery({
 
     report.git.headBefore = gitHead(root, env)
     report.effects = { mutation: "unknown", commit: "unknown", push: "unknown" }
-    // The dispatched call gets its own budget from the moment it is sent, so a slow startup never leaves the mutation too little
-    // time and turns an applied write into an unknown one.
-    const response = await client.request("tools/call", { name: report.operation, arguments: payload }, Date.now() + dispatchTimeoutMs)
+    // The dispatched call gets its own budget from the moment it is sent, so a slow startup cannot spend it, capped by the whole run's
+    // deadline. With the defaults the preflight ends within 60 s, so the write always has at least 40 s.
+    const response = await client.request("tools/call", { name: report.operation, arguments: payload }, Math.min(Date.now() + dispatchTimeoutMs, totalDeadline))
     const result = toolPayload(response)
     report.result = redact(result, payload)
     report.git.headAfter = gitHead(root, env)
