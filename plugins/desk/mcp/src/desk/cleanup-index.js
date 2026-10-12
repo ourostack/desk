@@ -6,6 +6,7 @@
 // each time (active-tasks.js), so a card finished by any path is picked up. Because the index is per machine, only the machine that recorded a row reminds about it.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import * as path from "node:path"
 import { lastStartRootKey, resolveDeskStateDir } from "../runtime/last-start.js"
 import { renameWithRetry } from "../util/rename-retry.js"
@@ -19,10 +20,10 @@ export const cardFiles = (deskRoot, rel) => [path.join(deskRoot, rel, "task.md")
 
 const safe = (rel) => typeof rel === "string" && rel !== "" && !path.isAbsolute(rel) && !rel.split(/[\\/]/u).includes("..")
 
-/** The indexed card folders, newest first; an unreadable or odd file reads as empty. */
-export function readCleanupIndex(deskRoot, env = process.env) {
+/** The indexed card folders, newest first; an unreadable or odd file reads as empty. Asynchronous, because desk_status reads it on the session's event loop. */
+export async function readCleanupIndex(deskRoot, env = process.env) {
   try {
-    const { cards } = JSON.parse(readFileSync(cleanupIndexPath(deskRoot, env), "utf8"))
+    const { cards } = JSON.parse(await readFile(cleanupIndexPath(deskRoot, env), "utf8"))
     return cards.filter(safe)
   } catch {
     return []
