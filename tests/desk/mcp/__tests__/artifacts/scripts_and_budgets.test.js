@@ -387,6 +387,18 @@ function captureIo() {
   }
 }
 
+// Setup that builds artifacts for another test's subject runs under generous budgets: the budgets are tested on their own, and the 1 s
+// production rebuild budget failed this setup on busy Windows runners with `performance_budget_exceeded`.
+function writeSetupBudgetConfig() {
+  const file = path.join(makeTempDir("desk-artifact-setup-budgets-"), "setup-budgets.json")
+  writeBudgetConfig(file, { startup: { ensure_index_ms: 60000, snapshot_restore_ms: 60000, vector_pack_import_ms: 60000 }, rebuild: { vector_pack_rebuild_ms: 60000, snapshot_build_ms: 60000 }, artifacts: { snapshot_verify_ms: 60000, validate_ms: 60000 } })
+  return file
+}
+
+function capturedOutput(captured) {
+  return `${captured.stdout.join("")}\n${captured.stderr.join("")}`
+}
+
 function workflowPathFilters(workflow, eventName) {
   const lines = workflow.split(/\r?\n/u)
   const eventStart = lines.findIndex((line) => line === `  ${eventName}:`)
@@ -540,20 +552,21 @@ function runtimeServerWithStartupAdmission(controller = { accepted: true, id: "c
 async function withSeededArtifactFixture(fn) {
   const deskRoot = makeTempDir("desk-artifact-scripts-budget-desk-")
   const pluginRoot = makeTempDir("desk-artifact-scripts-budget-plugin-")
+  const budgetConfig = writeSetupBudgetConfig()
   try {
     writeApprovedPolicy(pluginRoot)
     await seedIndexedDesk({ deskRoot })
     const vectorTarget = ARTIFACT_SCRIPT_TARGETS[0]
     const vectorRun = runNpmScript(
       vectorTarget.scriptName,
-      artifactArgs({ target: vectorTarget, deskRoot, pluginRoot }),
+      artifactArgs({ target: vectorTarget, deskRoot, pluginRoot, budgetConfig }),
     )
     assertScriptSucceeded(vectorRun)
     const snapshotTarget = ARTIFACT_SCRIPT_TARGETS[1]
     const snapshotRun = runNpmScript(
       snapshotTarget.scriptName,
       [
-        ...artifactArgs({ target: snapshotTarget, deskRoot, pluginRoot }),
+        ...artifactArgs({ target: snapshotTarget, deskRoot, pluginRoot, budgetConfig }),
         "--included-pack-id",
         vectorTarget.id,
       ],
@@ -563,6 +576,7 @@ async function withSeededArtifactFixture(fn) {
   } finally {
     rmSync(deskRoot, { recursive: true, force: true })
     rmSync(pluginRoot, { recursive: true, force: true })
+    rmSync(path.dirname(budgetConfig), { recursive: true, force: true })
   }
 }
 
@@ -652,11 +666,13 @@ test("artifact build scripts can stamp a source provenance commit", async () => 
   const deskRoot = makeTempDir("desk-artifact-scripts-provenance-desk-")
   const pluginRoot = makeTempDir("desk-artifact-scripts-provenance-plugin-")
   const provenanceCommit = "1".repeat(40)
+  const budgetConfig = writeSetupBudgetConfig()
   try {
     writeApprovedPolicy(pluginRoot)
     await seedIndexedDesk({ deskRoot })
 
     const packId = "source-provenance-pack"
+    const buildPack = captureIo()
     assert.equal(
       await runVectorPackBuildCli({
         argv: [
@@ -669,13 +685,17 @@ test("artifact build scripts can stamp a source provenance commit", async () => 
           "--from-local-db",
           "--provenance-commit",
           provenanceCommit,
+          "--budget-config",
+          budgetConfig,
         ],
-        io: captureIo().io,
+        io: buildPack.io,
       }),
       0,
+      capturedOutput(buildPack),
     )
 
     const snapshotId = "source-provenance-snapshot"
+    const buildSnapshot = captureIo()
     assert.equal(
       await runSnapshotBuildCli({
         argv: [
@@ -690,10 +710,13 @@ test("artifact build scripts can stamp a source provenance commit", async () => 
           "--from-local-db",
           "--provenance-commit",
           provenanceCommit,
+          "--budget-config",
+          budgetConfig,
         ],
-        io: captureIo().io,
+        io: buildSnapshot.io,
       }),
       0,
+      capturedOutput(buildSnapshot),
     )
 
     const packManifest = loadJson(path.join(
@@ -716,6 +739,7 @@ test("artifact build scripts can stamp a source provenance commit", async () => 
   } finally {
     rmSync(deskRoot, { recursive: true, force: true })
     rmSync(pluginRoot, { recursive: true, force: true })
+    rmSync(path.dirname(budgetConfig), { recursive: true, force: true })
   }
 })
 
