@@ -10,6 +10,8 @@ on:
       - "hosted/**"
       - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
+      - ".github/workflows/hosted-deploy.yml"
+      - ".github/workflows/identity-checks.yml"
   push:
     branches:
       - main
@@ -17,6 +19,8 @@ on:
       - "hosted/**"
       - "plugins/desk/mcp/**"
       - ".github/workflows/hosted-tests.yml"
+      - ".github/workflows/hosted-deploy.yml"
+      - ".github/workflows/identity-checks.yml"
   workflow_dispatch:
 
 concurrency:
@@ -48,6 +52,26 @@ jobs:
             hosted/package-lock.json
             plugins/desk/mcp/package-lock.json
 
+      # Lockfiles must fetch from npm itself, never a mirror a developer's machine happened to use, so that `npm ci`
+      # here and in the image build checks every sha512 against npmjs. infra/normalize-lockfile.mjs fixes a lockfile.
+      - name: Check that the lockfiles resolve from registry.npmjs.org with sha512 integrity
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { nonNpmResolved } from "./hosted/infra/normalize-lockfile.mjs";
+            let failed = false;
+            for (const path of ["hosted/package-lock.json", "plugins/desk/mcp/package-lock.json"]) {
+              const lock = JSON.parse(readFileSync(path, "utf8"));
+              const bad = nonNpmResolved(lock);
+              if (bad.length) { failed = true; console.error(`${path}: ${bad.length} packages resolve outside registry.npmjs.org: ${bad.slice(0, 5).join(", ")}`); }
+            }
+            const hosted = JSON.parse(readFileSync("hosted/package-lock.json", "utf8"));
+            const weak = Object.entries(hosted.packages).filter(([key, entry]) => key && entry.resolved && !entry.link && !entry.integrity?.startsWith("sha512-")).map(([key]) => key);
+            if (weak.length) { failed = true; console.error(`hosted/package-lock.json: ${weak.length} packages lack sha512 integrity: ${weak.slice(0, 5).join(", ")}`); }
+            if (failed) process.exit(1);
+            console.log("lockfiles resolve from registry.npmjs.org");
+          '
+
       - name: Install dependencies
         working-directory: hosted
         run: npm ci
@@ -57,8 +81,41 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
-      - name: Run the gateway tests, end to end included
+      # The accounts store's tests also run against Azurite's Table service, whose ETag conditional updates are the
+      # real ones the invite race relies on. With DESK_AZURITE=1 the suite fails, rather than skips, if Azurite is down.
+      - name: Start Azurite's Table service
+        working-directory: hosted
+        run: |
+          nohup npx azurite-table --inMemoryPersistence --tableHost 127.0.0.1 --tablePort 10002 > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:10002/; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/azurite.log"
+          echo "Azurite didn't start within 60 seconds" >&2
+          exit 1
+
+      - name: Run the gateway tests, end to end and Azurite included
         working-directory: hosted
         env:
           DESK_E2E: "1"
+          DESK_AZURITE: "1"
         run: npm test
+
+      # The store suite runs once per store, with tests named `[memory] ...` and `[azurite] ...`. Every one of them must
+      # pass against Azurite too: a skipped, todo or missing Azurite test fails the step instead of passing quietly.
+      - name: Count the Azurite tests that ran
+        working-directory: hosted
+        env:
+          DESK_AZURITE: "1"
+        run: |
+          node --disable-warning=ExperimentalWarning --test --test-reporter=tap test/accounts.test.js > "$RUNNER_TEMP/accounts.tap"
+          passed() {
+            # Passing tests only: not the suite's own line, not a skipped or todo one.
+            grep -E "^\s*ok [0-9]+ - \[$1\] " "$RUNNER_TEMP/accounts.tap" | grep -vE '# (SKIP|TODO)' | grep -cv " - \[$1\] accounts store" || true
+          }
+          memory=$(passed memory)
+          count=$(passed azurite)
+          echo "Azurite tests run: $count of $memory"
+          echo "Azurite tests run: $count of $memory" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -lt 1 ] || [ "$count" -ne "$memory" ]; then echo "Every store test must pass against Azurite as well as in memory" >&2; exit 1; fi

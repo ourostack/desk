@@ -1,0 +1,72 @@
+{
+  "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.App/containerApps/ouro-desk-hosted-staging",
+  "identity": {
+    "type": "UserAssigned",
+    "userAssignedIdentities": {
+      "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging": { "clientId": "33333333-3333-3333-3333-333333333333", "principalId": "44444444-4444-4444-4444-444444444444" }
+    }
+  },
+  "location": "East US 2",
+  "name": "ouro-desk-hosted-staging",
+  "properties": {
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": {
+        "allowInsecure": false,
+        "customDomains": [{ "bindingType": "SniEnabled", "certificateId": "/subscriptions/x/certificates/desk", "name": "desk.ouro.bot" }],
+        "external": true,
+        "fqdn": "ouro-desk-hosted-staging.blueflower-44af4710.eastus2.azurecontainerapps.io",
+        "targetPort": 8080,
+        "transport": "Auto"
+      },
+      "registries": [{ "identity": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging", "server": "ouroworkprodk2aumligevt3e.azurecr.io" }],
+      "secrets": [
+        { "name": "desk-signing-key" },
+        { "name": "desk-client-key" },
+        { "name": "desk-signing-key-previous" },
+        { "name": "desk-app-id" },
+        { "name": "desk-app-client-id" },
+        { "name": "desk-app-client-secret" },
+        { "name": "desk-app-key" },
+        { "name": "entra-client-secret", "keyVaultUrl": "https://kv-ouro-identity-261e0b.vault.azure.net/secrets/entra-client-secret-test", "identity": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-ouro-desk-hosted-staging" }
+      ]
+    },
+    "latestReadyRevisionName": "ouro-desk-hosted-staging--0000003",
+    "managedEnvironmentId": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-work-substrate/providers/Microsoft.App/managedEnvironments/ouro-prod-cae",
+    "provisioningState": "Succeeded",
+    "template": {
+      "containers": [
+        {
+          "env": [
+            { "name": "DESK_PUBLIC_URL", "value": "https://ouro-desk-hosted-staging.blueflower-44af4710.eastus2.azurecontainerapps.io" },
+            { "name": "DESK_REPO", "value": "arimendelow/desk-rehearsal" },
+            { "name": "DESK_ALLOWED_LOGINS", "value": "arimendelow" },
+            { "name": "DESK_SIGNING_KEY", "secretRef": "desk-signing-key" },
+            { "name": "DESK_CLIENT_KEY", "secretRef": "desk-client-key" },
+            { "name": "DESK_SIGNING_KEY_PREVIOUS", "secretRef": "desk-signing-key-previous" },
+            { "name": "DESK_SIGNING_KEY_PREVIOUS_UNTIL", "value": "2026-11-10T01:00:00.000Z" },
+            { "name": "DESK_ENTRA_CLIENT_SECRET", "secretRef": "entra-client-secret" },
+            { "name": "DESK_APP_ID", "secretRef": "desk-app-id" },
+            { "name": "DESK_APP_CLIENT_ID", "secretRef": "desk-app-client-id" },
+            { "name": "DESK_APP_CLIENT_SECRET", "secretRef": "desk-app-client-secret" },
+            { "name": "DESK_APP_KEY_FILE", "value": "/secrets/app-key.pem" }
+          ],
+          "image": "ouroworkprodk2aumligevt3e.azurecr.io/ouro-desk-hosted:0123456789abcdef",
+          "name": "gateway",
+          "probes": [
+            { "type": "Startup", "httpGet": { "path": "/healthz", "port": 8080 }, "initialDelaySeconds": 5, "periodSeconds": 30, "failureThreshold": 10 },
+            { "type": "Liveness", "httpGet": { "path": "/healthz", "port": 8080 }, "periodSeconds": 30, "failureThreshold": 3 }
+          ],
+          "resources": { "cpu": 1.0, "memory": "2Gi" },
+          "volumeMounts": [{ "mountPath": "/secrets", "volumeName": "app-key" }]
+        }
+      ],
+      "scale": { "maxReplicas": 1, "minReplicas": 0 },
+      "terminationGracePeriodSeconds": 90,
+      "volumes": [{ "name": "app-key", "secrets": [{ "path": "app-key.pem", "secretRef": "desk-app-key" }], "storageType": "Secret" }]
+    }
+  },
+  "resourceGroup": "rg-ouro-work-substrate",
+  "systemData": { "createdAt": "2026-10-10T00:00:00Z" },
+  "type": "Microsoft.App/containerApps"
+}
