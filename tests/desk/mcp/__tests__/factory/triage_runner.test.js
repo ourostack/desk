@@ -16,6 +16,16 @@ import {runInNewContext} from "node:vm"
 import {different} from "../_file_identity.js"
 import * as runner from "../../../../../plugins/desk/mcp/src/factory/triage-runner.js"
 const realRunner=runner
+// Off Darwin (Linux CI), stand in for Darwin's per-user temporary folder. The product reads it through getconf on Darwin and
+// os.tmpdir() elsewhere and requires an owner-only folder either way; /tmp is shared, and getconf has no Darwin variable,
+// including in the tests that present a Darwin platform.
+if(process.platform!=="darwin"){
+  const userTemp=realpathSync(mkdtempSync(path.join(tmpdir(),"triage-user-temp-")))
+  process.env.TMPDIR=userTemp
+  const spawnSync=childProcess.spawnSync
+  childProcess.spawnSync=(command,args,...rest)=>command==="/usr/bin/getconf"&&args?.[0]==="DARWIN_USER_TEMP_DIR"?{status:0,stdout:`${userTemp}\n`}:spawnSync(command,args,...rest)
+  syncBuiltinESMExports()
+}
 // A caller doctor, policy reader or chain resolver reaches only this
 // nonaccepted control host over the real pins, never the production exports.
 const adapterRunner=Object.freeze({...runner,...runner.createNonacceptedControlHost()})
@@ -1776,7 +1786,7 @@ test("the host seal binds a record to this Mac's hardware UUID and account",()=>
   for(const failing of [run(ioreg(uuid),1),run("no uuid here"),run(ioreg("not-a-uuid"))]){
     assert.throws(()=>runner.hostRecordSeal(record,{run:failing,uid:501}),{message:"host_identity"})
   }
-  if(process.platform==="darwin")assert.equal(runner.hostRecordSeal(record),runner.hostRecordSeal(record),"the real host answers the same seal")
+  if(fsNative.existsSync("/usr/sbin/ioreg"))assert.equal(runner.hostRecordSeal(record),runner.hostRecordSeal(record),"the real host answers the same seal")
   else assert.throws(()=>runner.hostRecordSeal(record),{message:"host_identity"},"no ioreg elsewhere")
 })
 
