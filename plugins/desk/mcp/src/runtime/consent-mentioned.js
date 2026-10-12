@@ -18,13 +18,13 @@ import { renameWithRetry } from "../util/rename-retry.js"
 export const CONSENT_MENTIONED_DIR = "factory-consent-mentioned"
 
 const hasText = (value) => typeof value === "string" && value.trim() !== ""
-// GitHub names, and the file names made from them on most desks' file systems, ignore case.
+// GitHub names ignore case, so two spellings of a store share one record: the file name is lower case.
 const sameStore = (recorded, store) => typeof recorded === "string" && recorded.toLowerCase() === store.toLowerCase()
 const isStore = (store) => typeof store === "string" && PATTERNS.prRepo.test(store)
 
 /** The record for one store. `store` must already be a valid `<owner/repo>`. */
 export function mentionedFile(stateDir, store) {
-  return path.join(stateDir, CONSENT_MENTIONED_DIR, `${store.replace("/", "__")}.json`)
+  return path.join(stateDir, CONSENT_MENTIONED_DIR, `${store.toLowerCase().replace("/", "__")}.json`)
 }
 
 function readRecord(stateDir, store) {
