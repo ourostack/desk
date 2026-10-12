@@ -126,3 +126,7 @@ test("a settings file kept as a symlink is edited where it lives, and the link s
   assert.equal(lstatSync(file(dir)).isSymbolicLink(), true)
   assert.deepEqual(JSON.parse(readFileSync(real, "utf8")), { model: "x", includeCoAuthoredBy: false })
 })
+
+test("with no options it reads the process environment, which the test preload points at a Copilot folder that does not exist", () => {
+  assert.deepEqual(disableCoAuthorTrailer(), { state: "no_copilot_home", line: "" })
+})
