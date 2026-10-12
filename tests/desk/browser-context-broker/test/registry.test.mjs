@@ -13,7 +13,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-import { withBrokerLock } from '../../../../plugins/desk/browser-context-broker/src/lock.mjs';
+import { ownIdentityReader, withBrokerLock } from '../../../../plugins/desk/browser-context-broker/src/lock.mjs';
 import {
   readRegistry,
   reconcileContext,
@@ -365,6 +365,34 @@ for (const [ownerState, createProcessIdentityReader] of [
     );
   });
 }
+
+test('the own start identity is read again once after a failed read, then kept', async () => {
+  const reads = [];
+  const answers = [new Error('powershell timed out'), 'win32:2026-10-12T04:07:45.000Z'];
+  const readOwn = ownIdentityReader(async (pid) => {
+    reads.push(pid);
+    const answer = answers.shift();
+    if (answer instanceof Error) throw answer;
+    return answer;
+  }, { pid: 4242 });
+
+  assert.equal(await readOwn(), 'win32:2026-10-12T04:07:45.000Z');
+  assert.equal(await readOwn(), 'win32:2026-10-12T04:07:45.000Z');
+  assert.deepEqual(reads, [4242, 4242]);
+});
+
+test('an own start identity that cannot be read twice is reported, and not kept', async () => {
+  let reads = 0;
+  const readOwn = ownIdentityReader(async () => {
+    reads += 1;
+    if (reads <= 2) return undefined;
+    return 'darwin:2026-10-12T04:07:45.000Z';
+  });
+
+  assert.equal(await readOwn(), undefined);
+  assert.equal(await readOwn(), 'darwin:2026-10-12T04:07:45.000Z');
+  assert.equal(reads, 3);
+});
 
 test('readRegistry rejects a state directory accessible by other users', async () => {
   const directory = await stateDir();
