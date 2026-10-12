@@ -197,7 +197,9 @@ test("support smoke: process restart replays durable mutations and discovers ext
       statusContext: { admission: { controller } },
     });
     if (result.isError) throw new Error(JSON.stringify(result));
-    const owner = (await controller.status()).owner;
+    // Only the owner's pid is needed here. The 2 s default is a liveness budget, and a controller that has just started and indexed
+    // the new card can take longer to answer on a slow Windows runner.
+    const owner = (await controller.status(30000)).owner;
     if (owner.pid === process.pid) throw new Error("controller must be a child");
     console.log(JSON.stringify({ id: controller.id, pid: owner.pid }));
     process.kill(owner.pid, "SIGKILL");
@@ -222,7 +224,7 @@ test("support smoke: process restart replays durable mutations and discovers ext
   fs.writeFileSync(path.join(root, "track", "durable-task", "doing.md"), "# external downtime write\n")
   const restarted = await connectOrStartController(options)
   try {
-    assert.equal((await restarted.status()).state, "CONTROL_READY")
+    assert.equal((await restarted.status(30000)).state, "CONTROL_READY")
     await restarted.beginConvergence()
     assert.equal((await restarted.barrier({ capability: "lexical" })).current, true)
     const db = openDb(root)
