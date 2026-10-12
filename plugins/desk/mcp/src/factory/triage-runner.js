@@ -1258,7 +1258,7 @@ export function createNonacceptedTriageUnit(config){
     "run","postAdmission","postIdentity","throwRun","runTimeout","runBudget","runUnqualified","badSignIn","close",
     "signInChainDrift","signInChainUnknown","runChainDrift","runChainUnknown","nativeMode",
     "postExitAdmission","postExitIdentity","signInArgvDrift","runArgvDrift",
-    "host","engineMoved","engineGone","dependencies","closureChanged","closureInvalid","runClosure","noCapture","reserve"])
+    "host","engineMoved","engineGone","dependencies","closureChanged","closureInvalid","runClosure","noCapture","reserve","chainThrows"])
   const records=new WeakMap(),controlRecords=new WeakMap(),documents=new Map(),stats={runs:0,closed:0},out=path.dirname(path.dirname(data.record.nativeReceipts[0].snapshotFile))
   for(const e of data.admission.control_history??[])controlRecords.set(e,fingerprint(e))
   let admissionReads=0,signedIn=false,hasRun=false
@@ -1303,6 +1303,7 @@ export function createNonacceptedTriageUnit(config){
     },
     policy:request=>failures.policy?held("unsafe_permission_grant"):triagePolicy(request),
     chain:()=>{
+      if(failures.chainThrows)throw Error("unit_chain_threw")
       if(failures.chain||(signedIn&&failures.signInChainUnknown)||(hasRun&&failures.runChainUnknown))return held("launch_chain_unknown")
       const value={...structuredClone(data.chain),fingerprint:failures.chainIdentity||(signedIn&&failures.signInChainDrift)||(hasRun&&failures.runChainDrift)?"f".repeat(64):data.chain.fingerprint}
       if((signedIn&&failures.signInArgvDrift)||(hasRun&&failures.runArgvDrift))value.effective_argv.push("--unit-drift")

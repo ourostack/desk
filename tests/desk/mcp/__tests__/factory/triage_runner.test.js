@@ -1195,6 +1195,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   for(const [failure,reason]of [["closureInvalid","structure"],["restoreDirect","receipts"],["restoreNative","receipts"],["restoreAuthNative","receipts"]]){
     assert.deepEqual(await classify({[failure]:true}),{state:"damaged",reason},failure)
   }
+  assert.deepEqual(await classify({chainThrows:true}),{state:"damaged",reason:"restore_failed"})
   assert.deepEqual(await classify({},{edit:r=>{r.sourceIdentity.runtime.sha256="f".repeat(64)}}),{state:"stale",reason:"runtime_changed",requalify:true})
   assert.deepEqual(await classify({},{edit:r=>{r.control_evidence[0].engine_sha256="f".repeat(64)}}),{state:"stale",reason:"engine_changed",requalify:true})
   assert.deepEqual(await classify({},{edit:r=>{r.environment_sha256="f".repeat(64)}}),{state:"stale",reason:"environment_changed",requalify:true})
@@ -1703,6 +1704,11 @@ test("the pinned engine counts only by content, at a location no other account c
     {"/home/u/.local/bin":dir({mode:0o40777})},{"/home":dir({uid:7})},{"/home/u":reg()},
   ])assert.equal(ok("/home/u/.local/bin/claude",over),false,JSON.stringify(Object.keys(over)))
   assert.equal(runner.pinnedEngineFile("/x/claude",{hash:()=>pin,uid,stat:()=>{throw Error("ENOENT")}}),false)
+  const bytes=fsNative.mkdtempSync(path.join(tmpdir(),"desk-engine-bytes-"))
+  try{
+    const file=path.join(realpathSync(bytes),"2.1.296");writeFileSync(file,Buffer.alloc(3*1048576+5,1))
+    assert.equal(runner.pinnedEngineFile(file,{uid,stat:tree()}),false,"the real hash reads the whole file and finds other bytes")
+  }finally{rmSync(bytes,{recursive:true,force:true})}
   const hashes={"/home/u/.local/share/claude/versions/2.1.296":pin}
   const checks={hash:file=>hashes[file]??"0".repeat(64),uid,stat:tree()}
   const user={homedir:"/home/u"},versions=()=>["2.1.294","2.1.296","2.1.297"]

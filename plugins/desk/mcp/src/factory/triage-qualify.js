@@ -102,7 +102,7 @@ async function readMarker(file, impl) {
   }
 }
 
-const answer = (state, reason = null, extra = {}) => ({ state, reason, launched: false, ...extra })
+const answer = (state, reason, extra = {}) => ({ state, reason, launched: false, ...extra })
 
 // The shared gates: nothing below them launches or writes when one fails.
 function gate(env, impl) {
@@ -169,7 +169,7 @@ export async function qualifyTriage(env, { now = Date.now, impls = {} } = {}) {
  * `refused` (a gate, the ledger, or the lock) or `skipped` (nothing to do, or not today). `launched` is true whenever a native
  * run started, so the caller treats the agent slot as used.
  */
-export async function autoQualifyTriage(env, { lock = null, now = Date.now, deadline, generation = null, legacyEvaluator, impls = {} } = {}) {
+export async function autoQualifyTriage(env, { lock, now = Date.now, deadline, generation = null, legacyEvaluator, impls = {} }) {
   const impl = { ...DEFAULT_IMPLS, ...impls }
   const refused = gate(env, impl)
   if (refused) return answer("refused", refused)
