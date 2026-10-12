@@ -40,7 +40,7 @@ If the desk already exists and still shows V1 evidence (durable desk state such 
 
 ## Judgment rules
 
-**First reply.** Say only what the operator needs: the open work and the one question (resume which, or start new), plus any `degraded`, `pending` or blocked item that changes what they would do. Do not print the host, user or path line, a list of checks that passed, or the boot output itself. A healthy boot with nothing to flag needs no health report; a named task skips the status block and goes straight to its resume reply.
+**First reply.** Say only what the operator needs: the open work and the one question (resume which, or start new), written as a sentence in the reply and never put through the host's question form (`interaction-style`, "No question forms"), plus any `degraded`, `pending` or blocked item that changes what they would do. Do not print the host, user or path line, a list of checks that passed, or the boot output itself. A healthy boot with nothing to flag needs no health report; a named task skips the status block and goes straight to its resume reply.
 
 **Factory consent.** Only when the boot's last instruction says it is undecided: after the operator's work, end the reply with the one line it gives, once. The script behind a yes is in `details.md`, "Factory consent".
 
