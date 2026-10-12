@@ -137,6 +137,24 @@ test("a module in an import cycle is never imported on its own: the cycle is ent
   assert.deepEqual(loaded, ["a.mjs", "main.mjs"], "only the cycle's entry is imported on its own")
 })
 
+test("a # import that resolves into our own package is walked as source, so a cycle through it still loads", async () => {
+  // main imports a; a uses B from "#b", which package.json maps to ./b.mjs; b imports c, and c imports a back. A plain import evaluates
+  // c, then b, then a. Treated as a package, b would be imported on its own and evaluate a before b: "Cannot access 'B' before initialization".
+  const root = await mkTempRoot("desk-chunked-import-hash-")
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "own", type: "module", imports: { "#b": "./b.mjs" } }))
+  writeFileSync(path.join(root, "resolve.mjs"), "export const resolvePackage = (specifier) => import.meta.resolve(specifier)\n")
+  writeFileSync(path.join(root, "main.mjs"), 'import { A } from "./a.mjs"\nexport const value = A\n')
+  writeFileSync(path.join(root, "a.mjs"), 'import { B } from "#b"\nexport const A = B + 1\n')
+  writeFileSync(path.join(root, "b.mjs"), 'import { c } from "./c.mjs"\nexport const B = c + 1\n')
+  writeFileSync(path.join(root, "c.mjs"), 'import { A } from "./a.mjs"\nexport const c = 1\nexport function readA() { return A }\n')
+  const { resolvePackage } = await import(pathToFileURL(path.join(root, "resolve.mjs")).href)
+  const result = await importInChunks(pathToFileURL(path.join(root, "main.mjs")).href, {
+    resolvePackage,
+    ownPackage: pathToFileURL(root + path.sep).href,
+  })
+  assert.equal(result.value, 3)
+})
+
 test("imports are taken in source order, including side-effect imports, and packages are leaves", async () => {
   const events = []
   const sources = {

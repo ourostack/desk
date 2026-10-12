@@ -397,7 +397,8 @@ async function importMirrorInChunks(url) {
   } catch {
     // The server's own import reports a missing or broken mirror.
   }
-  return importInChunks(url, { resolvePackage })
+  // The mirror's root, holding its package.json, is our own package: a `#` import resolving inside it is our source, not a package.
+  return importInChunks(url, { resolvePackage, ownPackage: new URL("../", url).href })
 }
 
 // The last step of the shipped importer, after the worker restored the runtime: load the server from the source mirror, next to its native dependencies.

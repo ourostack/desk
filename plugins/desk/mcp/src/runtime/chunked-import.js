@@ -5,7 +5,7 @@
 // Two rules keep each piece's evaluation exactly what the whole import would have done at that point:
 // - The walk follows every module request of a module in source order (local, package and side-effect imports and re-exports), as Node does.
 // - A module in an import cycle is never imported on its own, except the cycle's first module in that order, where the whole graph enters the cycle. Entered anywhere else, a cycle evaluates in a different order and can fail with "Cannot access ... before initialization", which Node then keeps for every later import of the graph. Cycles are found with Tarjan's algorithm.
-// Packages, the URLs the package resolver returned, are leaves: their internals cannot import our modules back, and importing a package entry on its own evaluates it as the whole graph would when it first reaches that entry.
+// Packages, the URLs the package resolver returned outside our own package folder (`ownPackage`), are leaves: their internals cannot import our modules back, and importing a package entry on its own evaluates it as the whole graph would when it first reaches that entry.
 
 // Dependency-free, so the session can use it before the runtime pack loads.
 
@@ -34,6 +34,7 @@ export async function importInChunks(url, {
   load = (href) => import(href),
   read = readSource,
   resolvePackage = null,
+  ownPackage = null,
   yieldTurn = () => new Promise((resolve) => setImmediate(resolve)),
 } = {}) {
   const order = new Map()
@@ -41,6 +42,10 @@ export async function importInChunks(url, {
   const walking = []
   const onWalk = new Set()
   const packages = new Set()
+  // A `#` import or a self-reference by package name resolves into our own source, which is walked like any local module.
+  function isOwnSource(resolved) {
+    return Boolean(ownPackage) && resolved.startsWith(ownPackage) && !resolved.slice(ownPackage.length).split("/").includes("node_modules")
+  }
   function requestsOf(href) {
     if (packages.has(href)) return []
     let specifiers = []
@@ -55,7 +60,7 @@ export async function importInChunks(url, {
       else if (resolvePackage && !specifier.startsWith("node:") && !specifier.startsWith("/")) {
         try {
           const resolved = resolvePackage(specifier)
-          packages.add(resolved)
+          if (!isOwnSource(resolved)) packages.add(resolved)
           pieces.push(resolved)
         } catch {
           // An unresolvable package is left for the module's own import to report.
