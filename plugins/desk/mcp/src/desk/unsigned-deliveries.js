@@ -65,12 +65,16 @@ function readHead(file) {
   } catch (error) {
     return unopened(error)
   }
+  let head
   try {
     const buffer = Buffer.alloc(HEAD_BYTES)
-    return headOf(buffer, readSync(fd, buffer, 0, HEAD_BYTES, 0))
-  } finally {
-    closeSync(fd)
+    head = headOf(buffer, readSync(fd, buffer, 0, HEAD_BYTES, 0))
+  } catch {
+    // A card that opens but cannot be read (a folder named task.md, where opening a folder succeeds) is unreadable, never a scan failure.
+    head = { failed: true }
   }
+  closeSync(fd)
+  return head
 }
 async function readHeadAsync(file) {
   let handle
@@ -79,12 +83,15 @@ async function readHeadAsync(file) {
   } catch (error) {
     return unopened(error)
   }
+  let head
   try {
     const buffer = Buffer.alloc(HEAD_BYTES)
-    return headOf(buffer, (await handle.read(buffer, 0, HEAD_BYTES, 0)).bytesRead)
-  } finally {
-    await handle.close()
+    head = headOf(buffer, (await handle.read(buffer, 0, HEAD_BYTES, 0)).bytesRead)
+  } catch {
+    head = { failed: true }
   }
+  await handle.close()
+  return head
 }
 
 // The frontmatter lines, or null when there is none. A head that was cut before the closing `---` is read as far as it goes only when it already holds both the `signoff:` and `status:` keys; otherwise the card may carry either further down and is unreadable.
@@ -184,6 +191,7 @@ async function readEach(items, read, signal) {
   const results = []
   for (let start = 0; start < items.length; start += CARD_READS) {
     signal?.throwIfAborted()
+    // A card read rejects only if its close fails, so a batch does not end while another of its files is still open.
     results.push(...await Promise.all(items.slice(start, start + CARD_READS).map(read)))
   }
   return results

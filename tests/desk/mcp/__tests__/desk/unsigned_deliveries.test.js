@@ -201,6 +201,8 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
   await put(desk, ["alpha", "_hidden", "x"], card())
   await put(desk, [".dot", "x"], card())
   await fs.mkdir(path.join(desk, "alpha", "empty-folder"), { recursive: true })
+  // A folder named task.md opens on POSIX but cannot be read: one more unreadable card, never a failed scan.
+  await fs.mkdir(path.join(desk, "alpha", "folder-card", "task.md"), { recursive: true })
   await fs.writeFile(path.join(desk, "alpha", "a-file.md"), "x")
   await fs.mkdir(path.join(desk, "_archive", "t", "no-card"), { recursive: true })
   await put(desk, ["alpha", "no-status"], "---\ntitle: x\n---\n")
@@ -208,7 +210,7 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
   // A later scan in the same process counts the same cards: a broken card stays unreadable.
   assert.deepEqual(await scan(desk, { now: NOW }), found)
   await fs.chmod(locked, 0o644)
-  const unreadable = lockHolds ? 3 : 2
+  const unreadable = lockHolds ? 4 : 3
   assert.equal(found.count, lockHolds ? 1 : 2)
   assert.equal(found.unreadable, unreadable)
   assert.equal(unsignedLines(found).at(-1), `${unreadable} task cards could not be read, so this list may be short.`)

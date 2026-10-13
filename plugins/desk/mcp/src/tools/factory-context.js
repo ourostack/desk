@@ -61,12 +61,12 @@ function storedLoop(env) {
   }
 }
 
-/** `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set, the sign-off counts, and `loop`: the stored loop record or `null`. */
 function statusWithoutSignoff({ env, deskRoot }) {
   const { dirs, incomplete, reason } = factoryPluginScan(env)
   return { ...factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete, pluginScanReason: reason }), loop: withLoopSwitch(storedLoop(env), env) }
 }
 
+/** `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set, the sign-off counts, and `loop`: the stored loop record or `null`. */
 export function factoryStatus({ env, deskRoot }) {
   const status = statusWithoutSignoff({ env, deskRoot })
   return deskRoot === null || deskRoot === undefined ? status : { ...status, signoff: signoffCounts(deskRoot) }
