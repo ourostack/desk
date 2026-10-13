@@ -218,9 +218,12 @@ function protectedWindows(ledger, nowMs) {
   return ledger.windows.filter((used, index) => used === 0 && dayStart(ledger.day) + (index + 1) * WINDOW_MS > nowMs).length
 }
 
+const laterUnusedWindows = (ledger, nowMs) => ledger.windows.filter((used, index) => used === 0 && index > windowOf(nowMs)).length
+
 /**
- * `quotaFor(ledger, kind, nowMs) -> { state, remaining }`: whether one more launch of `kind` fits in `ledger` (already rolled to `nowMs`'s day).
- * `state` is `ok`, `quota_exhausted`, `window_protected` (evaluation only), `window_used` or `triage_cooldown` (triage only).
+ * `quotaFor(ledger, kind, nowMs, launches) -> { state, remaining }`: whether one more launch of `kind` (or a triage qualification's two) fits in
+ * `ledger` (already rolled to `nowMs`'s day). `state` is `ok`, `quota_exhausted`, `window_protected` (evaluation, or a two-launch
+ * qualification that would take a later unused window's launch), `window_used` or `triage_cooldown` (triage only).
  */
 export function quotaFor(ledger, kind, nowMs, launches = 1) {
   if (kind === "evaluate") {
@@ -230,6 +233,8 @@ export function quotaFor(ledger, kind, nowMs, launches = 1) {
     return { state: "ok", remaining: ceiling - ledger.spent - 1 }
   }
   if (ledger.spent + launches > DAILY_LAUNCHES) return { state: "quota_exhausted", remaining: 0 }
+  // A qualification's second launch is outside its window's one protected launch, so it must leave each later unused window its own.
+  if (launches === 2 && ledger.spent + 2 > DAILY_LAUNCHES - laterUnusedWindows(ledger, nowMs)) return { state: "window_protected", remaining: 0 }
   if (ledger.windows[windowOf(nowMs)] !== 0) return { state: "window_used", remaining: 0 }
   if (ledger.last_triage_at !== null && nowMs - instantMs(ledger.last_triage_at) < TRIAGE_GAP_MS) return { state: "triage_cooldown", remaining: 0 }
   return { state: "ok", remaining: DAILY_LAUNCHES - ledger.spent - launches }

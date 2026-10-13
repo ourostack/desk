@@ -44,6 +44,8 @@ import { locatePinnedEngine, qualificationMeasurementActive, restoreTriageQualif
 export const AUTO_MIN_REMAINING_MS = 6 * 60 * 1000
 /** Failed automatic attempts in a row for the same reason before automatic qualification stops for that reason. */
 export const AUTO_STREAK_LIMIT = 3
+/** The furthest ahead a marker's `retry_after` is believed: the ledger's own answers are never later than the next UTC day. */
+const RETRY_HORIZON_MS = 24 * 60 * 60 * 1000
 // Reasons a new release or engine pin causes, not the host: these never count toward the streak.
 const STREAK_EXEMPT = new Set(["record_version", "source_changed", "engine_changed"])
 const NAMING = { label: "triage qualification", subject: "folder" }
@@ -222,8 +224,10 @@ export async function autoQualifyTriage(env, { lock, now = Date.now, deadline, g
     return answer("skipped", "attempted_today")
   }
   if (marker?.day === today) return answer("skipped", "attempted_today")
-  // The ledger refused a reservation after the read below had passed: no new attempt before the time it gave.
-  if (marker?.retry_after && nowMs < Date.parse(marker.retry_after)) return answer("skipped", marker.retry_reason, { retry_at: marker.retry_after })
+  // The ledger refused a reservation after the read below had passed: no new attempt before the time it gave. The ledger never
+  // names a time more than a day ahead, so a later one is not the ledger's and is ignored; the next refusal overwrites it.
+  const wait = marker?.retry_after ? Date.parse(marker.retry_after) - nowMs : 0
+  if (wait > 0 && wait <= RETRY_HORIZON_MS) return answer("skipped", marker.retry_reason, { retry_at: marker.retry_after })
   // `streak` counts this trigger's failed attempts in a row; an attempt that never finished counts as failed.
   const counted = !STREAK_EXEMPT.has(trigger)
   const failures = counted && marker?.trigger === trigger && ["failed", "started"].includes(marker.result) ? marker.streak : 0

@@ -421,6 +421,32 @@ test("a first automatic attempt records the ledger's time after a refused reserv
   }
 })
 
+test("a marker retry time more than a day ahead is ignored and overwritten by the next refusal", async () => {
+  const root = scratch()
+  const lock = await workerLock(root)
+  const paths = qualify.triagePaths(root)
+  try {
+    await fs.mkdir(paths.dir, { recursive: true })
+    const far = { ...BLANK, retry_after: new Date(T0 + 24 * HOUR + 1).toISOString(), retry_reason: "window_used" }
+    await fs.writeFile(paths.marker, JSON.stringify(far))
+    const retry = new Date(T0 + HOUR).toISOString()
+    const race = world(root, { reserve: async () => ({ state: "triage_cooldown", retry_at: retry }), qualify: async (options) => {
+      await options.reserve().catch(() => {})
+      return { state: "blocked", resources: { launches: 0 } }
+    } })
+    assert.equal((await qualify.autoQualifyTriage(ENV, { lock, now: () => T0, deadline: T0 + HOUR, impls: race.impls })).state, "refused", "the far time did not hold the attempt back")
+    assert.equal(race.calls.peek.length, 1)
+    assert.deepEqual(await marker(root), { ...BLANK, retry_after: retry, retry_reason: "triage_cooldown" })
+    // Exactly a day ahead is still the ledger's furthest answer and is honoured.
+    await fs.writeFile(paths.marker, JSON.stringify({ ...far, retry_after: new Date(T0 + 24 * HOUR).toISOString() }))
+    const held = world(root)
+    assert.equal((await qualify.autoQualifyTriage(ENV, { lock, now: () => T0, deadline: T0 + HOUR, impls: held.impls })).state, "skipped")
+    assert.equal(held.calls.peek.length, 0)
+  } finally {
+    await releaseLock(lock)
+  }
+})
+
 test("restore learns whether a sealed record has qualified on this host", async () => {
   const root = scratch()
   const lock = await workerLock(root)

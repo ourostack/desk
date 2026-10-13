@@ -921,6 +921,20 @@ test("a qualification needs room for both launches", () => scratch(async (env, r
   assert.equal(one.token.launches, undefined)
 }))
 
+test("a qualification leaves each later unused window its protected launch", () => scratch(async (env, root) => {
+  // 09:00 is the second window: it and the two after it are unused. Two launches at 27 spent would leave one for two windows.
+  await forge(env, root, { spent: 27 })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 9) }), { state: "window_protected", retry_at: new Date(at(0, 12)).toISOString() })
+  assert.deepEqual(await reserve(env, "triage", at(0, 9), { launches: 2 }),
+    { state: "window_protected", day: dayText(0), remaining: 0, retry_at: new Date(at(0, 12)).toISOString() })
+  // In the last window nothing later is protected, so the same two launches fit.
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 19) }), { state: "ok" })
+  await forge(env, root, { spent: 26 })
+  assert.equal((await reserve(env, "triage", at(0, 9), { launches: 2 })).state, "reserved", "28 spent leaves the two later windows one each")
+  await forge(env, root, { spent: 27 })
+  assert.equal((await reserve(env, "triage", at(0, 9))).state, "reserved", "a single triage launch is judged as before")
+}))
+
 test("a two-launch refusal says when it could pass, and a peek answers the same without writing", () => scratch(async (env, root) => {
   assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 9) }), { state: "unknown" }, "no ledger yet: the reservation decides")
   assert.equal((await reserve(env, "triage", at(0, 9), { launches: 2 })).state, "reserved")
