@@ -239,7 +239,8 @@ test("a first scoped scan blocked before selection resumes when its witnessed qu
   }
   for (const change of [
     { eligible: 0 }, { eligible: -1 }, { eligible: "unknown" }, { eligible: undefined },
-    { result: "runner_unavailable" }, { ledger: "witness_invalid" }, { ok: false },
+    { result: "runner_unavailable" }, { ledger: "witness_invalid" },
+    ...[undefined, null, false, 0, "false", {}, []].map((ok) => ({ ok })),
     { runner: { state: "disabled_would_bill" } }, { run: { failures_in_a_row: 1 } },
     { coverage: undefined }, { coverage: { scan: "truncated", unreviewed: 50 } },
     ...[0, -1, null, "50"].map((unreviewed) => ({ coverage: { scan: "complete", unreviewed } })),

@@ -155,7 +155,7 @@ export function triageKickDue(status, now, scope = null) {
   if (triage.result === "no_consenting_store" || triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
   const eligible = Number.isSafeInteger(triage.eligible) && triage.eligible > 0
   // Quota can stop a first scoped pass before selection. Its complete scan is only a hint to classify work once quota opens.
-  const unclassified = triage.eligible === null && triage.result === "not_due" &&
+  const unclassified = triage.ok === true && triage.eligible === null && triage.result === "not_due" &&
     ["quota_exhausted", "window_used", "triage_cooldown", "window_protected"].includes(triage.ledger) &&
     triage.coverage?.scan === "complete" && Number.isSafeInteger(triage.coverage.unreviewed) && triage.coverage.unreviewed > 0
   if (TRIAGE_RUNNER_UNAVAILABLE.has(triage.runner?.state) || !(eligible || unclassified)) return false
