@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.314 — 2026-10-13
+
+`track_rename` and `task_move` now check the cards they will update before they move anything ([`mcp/src/tools/move.js`](mcp/src/tools/move.js)). `track_rename` patched each task card after the folder had moved, and `task_move` edited the tasks tables in `track.md` after the task folder had moved, so a task card whose `track:` or `updated:` could not be patched in place (for example a duplicated key), or a track card with invalid YAML, stopped the tool half way. Both now refuse with nothing changed, and the error names the card and the YAML problem.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.313 — 2026-10-13
 
 A task card whose frontmatter is not valid YAML is now treated as broken every time Desk reads it, instead of only the first time in a process: the tools that edit a card refuse it, and the scans skip it or count it as unreadable ([`mcp/src/desk/organization.js`](mcp/src/desk/organization.js), [`mcp/src/util/fm.js`](mcp/src/util/fm.js), [`mcp/src/indexer/discover.js`](mcp/src/indexer/discover.js)). The YAML library remembered each text before parsing it, so the second read of a broken card came back as a card with no frontmatter: `desk_status` stopped counting the card as unreadable after its first run, and a second attempt to patch a card with a duplicated key wrote a new frontmatter block above the old one and dropped the other fields. Desk now parses without that cache, so each read also gets its own data. A tool that refuses a broken card now names the card's path and the YAML problem in its error, so the card can be repaired.
