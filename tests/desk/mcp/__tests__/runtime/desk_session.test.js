@@ -1903,6 +1903,26 @@ test("a call joins at most three late background attempts before it refuses as a
   assert.deepEqual(runtime.calls, [])
 })
 
+test("gated calls that arrive together are all dispatched, none refused as admitting", async (t) => {
+  // A host sends one turn's tool calls in a batch. Each call's gate used to start a revalidation that the other calls
+  // read as a background attempt, so they rejoined in turn until one ran out of rejoins (Agency dry run, 2026-10-12).
+  for (const count of [2, 3, 5]) {
+    const runtime = fakeRuntime()
+    const { session, root } = await makeSession(t, {
+      runtime,
+      resolveInputs: async () => {
+        await new Promise((resolve) => setImmediate(resolve))
+        return inputs({ root })
+      },
+    })
+    await session.admission.refresh()
+    assert.equal(session.admission.snapshot().state, "ready")
+    const results = await Promise.all(Array.from({ length: count }, () => session.callTool({ name: "task_create" })))
+    assert.deepEqual(results.map((result) => result.isError === true ? payload(result).code : "dispatched"), Array(count).fill("dispatched"), `${count} calls together`)
+    assert.equal(runtime.calls.length, count)
+  }
+})
+
 test("a call whose wait budget is spent refuses as admitting instead of rejoining", async (t) => {
   const runtime = fakeRuntime()
   const { session } = await makeSession(t, { runtime, focusWaitMs: 0 })
