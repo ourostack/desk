@@ -1428,7 +1428,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const result = { status: "archived", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
-  Object.assign(result, reportResult(report, delivered === null))
+  Object.assign(result, reportResult(report, archiveBump === null))
   // Archiving finishes the card, so every due resource row is listed, as for a task_update that finishes it.
   Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
   return withArchiveFocus(statusContext, { track, slug }, result)
