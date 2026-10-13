@@ -1,1 +1,0 @@
-- **Browser pages no longer fail when they are busy.** If a page is still loading or redirecting when Desk sets up its owner helper, the browser call now goes ahead, and Desk retries the setup on the next call. Before, a 10-second timeout failed that call and every later call on the page.

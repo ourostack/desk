@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.302 — 2026-10-13
+
+- **Browser pages no longer fail when they are busy.** If a page is still loading or redirecting when Desk sets up its owner helper, the browser call now goes ahead, and Desk retries the setup on the next call. Before, a 10-second timeout failed that call and every later call on the page.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.301 — 2026-10-12
 
 `desk_status`'s active-task listing now reads the desk's folders, task cards and this machine's cleanup index asynchronously, up to 16 cards of a track at a time ([`mcp/src/desk/active-tasks.js`](mcp/src/desk/active-tasks.js), [`mcp/src/desk/cleanup-index.js`](mcp/src/desk/cleanup-index.js)). The scan runs on the Desk session's event loop. On a Windows runner, one synchronous read of the cleanup index waited 138 ms, and a `desk_status` call took 241 ms against its 200 ms limit while it waited. The listing's content and order are unchanged.
