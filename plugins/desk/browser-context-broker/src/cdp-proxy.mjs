@@ -3,7 +3,6 @@ import WebSocket, { WebSocketServer } from 'ws';
 
 import { resolveBrowserWebSocket } from './cdp-client.mjs';
 import { BrokerError } from './claims.mjs';
-import { readRegistry } from './registry.mjs';
 import {
   addOwnedTarget,
   attestLeaseContext,
@@ -99,19 +98,7 @@ export async function startLeaseProxy({
     declaration,
     providerInvoker,
   });
-  const ownedTargets = new Set(lease.targetIds.filter(targetId => targetId !== lease.nativeRouting?.controlTargetId));
-  async function refreshNativeTargets() {
-    if (!lease.nativeRouting) return;
-    const current = (await readRegistry(stateDir)).leases[leaseId];
-    if (!current || ['pid', 'startIdentity', 'owner', 'executable', 'profileRoot'].some(
-      key => current.processIdentity?.[key] !== lease.processIdentity?.[key])) {
-      throw new BrokerError('CONTEXT_DISCONNECTED', 'Native proxy ownership no longer matches its lease generation');
-    }
-    ownedTargets.clear();
-    for (const targetId of current.targetIds) {
-      if (targetId !== current.nativeRouting?.controlTargetId) ownedTargets.add(targetId);
-    }
-  }
+  const ownedTargets = new Set(lease.targetIds);
   const upstreamMetadata = await resolveBrowserWebSocket(lease.rawEndpoint);
   const credentialPath = `/${lease.proxyToken}`;
   const server = http.createServer((request, response) => {
@@ -197,7 +184,6 @@ export async function startLeaseProxy({
       rejectPendingRequests(error);
     });
     const processDownstreamMessage = async (data) => {
-      await refreshNativeTargets();
       const message = JSON.parse(data.toString());
       if (ACTIVATION_METHODS.has(message.method)) {
         downstream.send(errorResponse(message.id, -32001, 'Target activation is denied by the lease proxy'));
@@ -415,7 +401,6 @@ export async function startLeaseProxy({
         });
     });
     const processUpstreamMessage = async (data) => {
-      await refreshNativeTargets();
       const message = JSON.parse(data.toString());
       if (message.id) {
         const request = requests.get(message.id);

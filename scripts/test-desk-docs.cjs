@@ -720,7 +720,7 @@ function validateBrowserFocusPolicy(errors, {
     errors.push("cdp-headed-browser must describe the real browser profile: the desk.browser declaration, each session's own tab group, and closing it with browser_close");
   }
   if (!lower.includes("no first-window focus-stealing exception") || lower.includes("does not apply to the one new window")) {
-    errors.push("cdp-headed-browser must prohibit focus stealing, including the initial native-owned window");
+    errors.push("cdp-headed-browser must prohibit focus stealing, including the first window a context opens");
   }
   if (/\b(?:pkill|killall|pgrep)\b/u.test(body)) {
     errors.push("cdp-headed-browser must not recommend process-pattern cleanup");
