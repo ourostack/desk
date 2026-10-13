@@ -28,6 +28,21 @@ import { factoryStateRoot, requestEvaluation, updateStatus } from "../../../../.
 const MINUTE = 60 * 1000
 const JOB = "ab".repeat(16)
 
+test("scoped kicks fail closed on missing observations and keep each desk/person's retry gap", () => {
+  const now = Date.parse("2026-10-13T18:00:00.000Z")
+  const ready = { at: "2026-10-13T16:00:00.000Z", ok: true, eligible: 2, runner: { state: "qualified" } }
+  const status = { triage: ready, loop: { steps: { triage: { last_ran_at: ready.at } } } }
+  for (const table of [null, [], "unreadable", {}, { missing: null }, { missing: {} }]) {
+    assert.equal(triageKickDue({ ...status, triage_by_desk: table }, now), false)
+  }
+  assert.equal(triageKickDue({ ...status, triage_by_desk: {
+    a: { ...ready, at: "2026-10-13T17:59:00.000Z" },
+    b: { ...ready, ok: false },
+  } }, now), false)
+  assert.equal(triageKickDue({ ...status, triage_by_desk: { a: ready, b: { ...ready, ok: false } } }, now), true)
+  assert.equal(triageKickDue({ ...status, triage_by_desk: { a: { ...ready, result: "no_consenting_store" } } }, now), false)
+})
+
 async function scratch(run) {
   const base = await fs.realpath(mkdtempSync(path.join(os.tmpdir(), "desk-evaluate-kick-")))
   const env = osEnv({ HOME: base, XDG_STATE_HOME: path.join(base, "state") })

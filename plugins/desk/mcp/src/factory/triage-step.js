@@ -562,6 +562,7 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     nowAt: () => new Date(nowDate.getTime() + Math.max(0, clock() - clockStart)),
   }
   const at = nowDate.toISOString()
+  const scope = JSON.stringify([path.resolve(deskRoot), personPrefix])
   // `runOutcome` is the agent launch's own outcome for its health: `ok`, `failed`, or null (no launch, or one that counts neither way).
   const record = { at, result: null, launched: false, runOutcome: null, runner: { state: null, reason: null, qualification: "not_checked" }, coverage: null, held: null, refresh: null, ledger: null }
   const finish = async (ok, result, extra = {}) => {
@@ -569,21 +570,20 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     const { runOutcome, ...stored } = record
     let carry = false
     await swallow(() => updateStatus(env, (current) => {
-      const before = isObject(current.triage) ? current.triage : {}
+      const scopes = isObject(current.triage_by_desk) ? current.triage_by_desk : {}
+      const before = isObject(scopes[scope]) ? scopes[scope] : {}
       const prior = isObject(before.run) ? before.run : RUN_NONE
       const run = runOutcome === "ok" ? { last_at: at, last_result: result, last_ok_at: at, failures_in_a_row: 0 }
         : runOutcome === "failed" ? { last_at: at, last_result: result, last_ok_at: prior.last_ok_at, failures_in_a_row: whole(prior.failures_in_a_row) + 1 }
         : SETTLED.has(result) ? { ...prior, failures_in_a_row: 0 } : prior
       // A pass whose run counts neither way says nothing about a run that keeps failing: its success is not the run's.
       carry = ok && runOutcome === null && whole(run.failures_in_a_row) > 0
-      return {
-        ...current,
-        triage: {
+      const triage = {
           ...stored, result, ok, run, counts: { reviewed: answer.reviewed, refused: answer.refused, deferred: answer.deferred, unreviewed: answer.unreviewed },
           last_success_at: stored.last_success_at ?? before.last_success_at ?? null, last_review: stored.last_review ?? before.last_review ?? null,
           eligible: stored.eligible === undefined ? (before.eligible ?? null) : stored.eligible,
-        },
       }
+      return { ...current, triage, triage_by_desk: { ...scopes, [scope]: triage } }
     }))
     await swallow(() => recordStep(env, "triage", { ok, result, now: nowDate, carry }))
     // What a published batch says about this scan and the runner (`triage-outbox.js`); only a step that read the cards has anything to say.
@@ -850,4 +850,3 @@ export async function runTriageCommand({ argv, env, pluginVersion, impls = {}, c
   const { ok, result, reviewed, refused, deferred, unreviewed } = step
   return reply(result, ok, { reviewed, refused, deferred, unreviewed })
 }
-

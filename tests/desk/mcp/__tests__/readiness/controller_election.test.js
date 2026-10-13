@@ -13,6 +13,7 @@ import * as path from "node:path"
 import {
   connectOrStartController,
   createControllerResponseAccumulator,
+  electionWaitMsFor,
 } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
 import * as endpoints from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
@@ -28,6 +29,16 @@ function deferred() {
   const promise = new Promise((done) => { resolve = done })
   return { promise, resolve }
 }
+
+test("an election collision with a vanished winner returns a bounded retry instead of waiting the whole election window", async (t) => {
+  const root = tempFixture("desk-vanished-winner-")
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  assert.equal(electionWaitMsFor(), electionWaitMsFor(process.platform))
+  await assert.rejects(connectOrStartController({
+    root, stateHome: path.join(root, "state"), electionWaitMs: 1_000,
+    startController: async () => { throw Object.assign(new Error("lost election"), { code: "EADDRINUSE" }) },
+  }), /election winner is gone/)
+})
 
 test("controller response buffering waits for a newline across chunks", () => {
   const lines = []

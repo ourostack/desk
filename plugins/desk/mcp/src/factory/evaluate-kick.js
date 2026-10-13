@@ -120,11 +120,20 @@ export function triageQuotaFor(status, nowMs) {
  * (`status.triage.ok`, `status.triage.run.failures_in_a_row`): the next session-start worker retries, so a failure is not kicked every hour.
  */
 export function triageKickDue(status, now) {
+  // The shared quota is machine-wide, but a scan and its retry gap belong to one desk/person.
+  // Legacy status is read only until a scoped worker has run; a missing scoped observation is not healthy.
+  if (status?.triage_by_desk !== undefined) {
+    if (!isObject(status.triage_by_desk)) return false
+    return Object.values(status.triage_by_desk).some((triage) => triageKickDue({
+      ...status, triage_by_desk: undefined, triage,
+      loop: { ...status.loop, steps: { triage: { last_ran_at: triage?.at } } },
+    }, now))
+  }
   const nowMs = new Date(now).getTime()
   const triage = isObject(status?.triage) ? status.triage : null
   const ranAt = Date.parse(status?.loop?.steps?.triage?.last_ran_at)
   if (triage === null || Number.isNaN(ranAt) || nowMs - ranAt < TRIAGE_KICK_GAP_MS) return false
-  if (triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
+  if (triage.result === "no_consenting_store" || triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
   if (TRIAGE_RUNNER_UNAVAILABLE.has(triage.runner?.state) || !(Number.isSafeInteger(triage.eligible) && triage.eligible > 0)) return false
   return ["ok", "unwitnessed"].includes(triageQuotaFor(status, nowMs))
 }
