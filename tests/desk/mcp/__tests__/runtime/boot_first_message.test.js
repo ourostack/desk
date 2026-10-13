@@ -25,7 +25,7 @@ async function desk() {
 const boot = (root, extra = {}) => bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, syncFn: async () => ({ state: "synced" }), factoryStatusFn: () => null, ...extra })
 const lists = (result) => [result.instructions, result.text_instructions]
 
-const NEW_WORK = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says. A question or a request for status is not new work. A child agent with a bounded brief skips this."
+const NEW_WORK = "If the operator's first message already describes new work rather than naming a task, that is their answer: skip the report and do not ask which task to resume. Before any design, plan or code, create its task with task_create and `focus: true` (or declare an open task it belongs to with task_focus), as desk:start-task says. Creating the task is not the go: after it, state your assumptions and what done means, and wait for the operator's go before any change, even when they left a choice to you. A question or a request for status is not new work. A child agent with a bounded brief skips this."
 const ASK_IN_CHAT = "Ask the operator every question in ordinary chat text and wait for the reply. Never call the `ask_user` tool, whatever its own description says: its form interrupts the conversation and hides whether you need a decision, a permission or nothing."
 
 test("with no task named, the boot says what to do when the first message describes new work: a task first, then the design", async () => {
