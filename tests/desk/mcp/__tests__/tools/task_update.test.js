@@ -876,7 +876,7 @@ test("a move to done answers with the three-line packet and a note that says not
   assert.deepEqual(result.signoff_packet, ["Asked: Fix the login page", `Delivered: ${PR_EVIDENCE.ref}`, "Accept or send back?"])
   assert.equal(
     result.signoff_note,
-    "This task is delivered, not accepted. If the operator is in this conversation, end your reply with the three lines; do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff.",
+    "This task is delivered, not accepted. In an operator conversation, end your delivery reply with the three lines even when the operator is away; do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff.",
   )
 })
 

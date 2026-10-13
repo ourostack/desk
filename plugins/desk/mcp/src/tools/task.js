@@ -361,7 +361,7 @@ function packetTitle(data, slug) {
 
 // What the answer says after a delivery: the state, three lines for the agent to adapt, and one note.
 const SIGNOFF_NOTE =
-  "This task is delivered, not accepted. If the operator is in this conversation, end your reply with the three lines; do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
+  "This task is delivered, not accepted. In an operator conversation, end your delivery reply with the three lines even when the operator is away; do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
 function deliveryAnswer({ data, slug, ref }) {
   return {
     signoff: "delivered_unsigned",
@@ -1428,7 +1428,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const result = { status: "archived", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
-  Object.assign(result, reportResult(report, archiveBump === null))
+  Object.assign(result, reportResult(report, archiveBump?.status !== "done"))
   // Archiving finishes the card, so every due resource row is listed, as for a task_update that finishes it.
   Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
   return withArchiveFocus(statusContext, { track, slug }, result)
