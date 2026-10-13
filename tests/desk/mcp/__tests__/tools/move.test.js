@@ -1559,6 +1559,34 @@ test("track_rename works on a track with no tasks", async () => {
   assert.ok(await exists(path.join(root, "new-track", "track.md")))
 })
 
+test("track_rename renames nothing when a task card's frontmatter cannot be patched, and names the card", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+  await task_create({ deskRoot: root, input: { track: "old-track", slug: "good-task", title: "T" } })
+  const goodCard = path.join(root, "old-track", "good-task", "task.md")
+  const good = await fs.readFile(goodCard, "utf8")
+  const brokenCard = path.join(root, "old-track", "z-broken-task", "task.md")
+  const broken = "---\ntitle: T\ntrack: old-track\ntrack: duplicate\nstatus: drafting\n---\nbody\n"
+  await fs.mkdir(path.dirname(brokenCard), { recursive: true })
+  await fs.writeFile(brokenCard, broken, "utf8")
+  commitAll(root)
+  const head = () => spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout
+  const before = head()
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(
+      track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => assert.fail("nothing to push") }),
+      (error) => error.message.startsWith("track_rename: nothing was renamed") && error.message.includes(brokenCard) && /duplicated mapping key/u.test(error.message),
+    )
+  }
+  assert.equal(await exists(path.join(root, "new-track")), false)
+  assert.equal(await fs.readFile(goodCard, "utf8"), good)
+  assert.equal(await fs.readFile(brokenCard, "utf8"), broken)
+  assert.equal(head(), before)
+  assert.equal(spawnSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).stdout, "")
+})
+
 test("track_rename refuses when the target already exists", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

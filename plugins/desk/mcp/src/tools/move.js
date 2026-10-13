@@ -20,6 +20,7 @@ import {
   nowIso,
   readMarkdown,
   writeMarkdown,
+  assertFrontmatterPatchable,
   patchMarkdownFrontmatter,
   pathExists,
 } from "../util/fm.js"
@@ -684,6 +685,16 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   }
   if (await pathExists(destDir)) {
     throw new Error(`track_rename: target already exists at ${shownRelPath(deskRoot, destDir)}`)
+  }
+
+  // Every card is patched after the folder moves, so a card the patch would
+  // refuse is found here, while nothing has changed yet.
+  for (const file of await findTaskCards(srcDir)) {
+    try {
+      await assertFrontmatterPatchable(file, { track: to, updated: nowIso() })
+    } catch (error) {
+      throw new Error(`track_rename: nothing was renamed, because a task card cannot be updated: ${error.message}`, { cause: error })
+    }
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))

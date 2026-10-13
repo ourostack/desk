@@ -322,6 +322,16 @@ export async function patchMarkdownFrontmatter(filePath, fields) {
   await writeMarkdown(filePath, data, parsed.content)
 }
 
+/**
+ * Throws, naming the card, when `patchMarkdownFrontmatter(filePath, fields)`
+ * would refuse the card; writes nothing. A tool that moves cards before it
+ * patches them calls this first, so a broken card stops it before the move.
+ */
+export async function assertFrontmatterPatchable(filePath, fields) {
+  const raw = await fs.readFile(filePath, "utf8")
+  if (patchFrontmatterFields(raw, fields) === null) parseCard(raw, filePath)
+}
+
 /** Check whether a path exists (file OR directory). */
 export async function pathExists(p) {
   try {
