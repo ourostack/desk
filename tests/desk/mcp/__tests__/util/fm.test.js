@@ -14,6 +14,7 @@ import {
   today,
   patchFrontmatterFields,
   patchMarkdownFrontmatter,
+  assertFrontmatterPatchable,
 } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
@@ -367,6 +368,26 @@ test("a card whose YAML cannot be parsed is refused on every read and never rewr
     await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: `done-${attempt}` }), names)
   }
   assert.equal(await fs.readFile(filePath, "utf8"), broken)
+})
+
+test("assertFrontmatterPatchable refuses exactly the cards patchMarkdownFrontmatter refuses, and writes nothing", async () => {
+  const root = await mkTempDeskRoot()
+  const fields = { track: "t2", updated: "2026-10-13T00:00:00Z" }
+  const cards = {
+    "no fences": "Just a body.\n",
+    "invalid YAML in another field": "---\ntitle: a\ntitle: b\ntrack: t\n---\nbody\n",
+    "duplicated field being patched": "---\ntrack: a\ntrack: b\n---\nbody\n",
+    "unclosed fence": "---\ntrack: [unclosed\nbody\n",
+  }
+  for (const [name, text] of Object.entries(cards)) {
+    const filePath = path.join(root, `${name.replaceAll(" ", "-")}.md`)
+    await fs.writeFile(filePath, text, "utf8")
+    const checked = await assertFrontmatterPatchable(filePath, fields).then(() => "ok", (error) => error.message)
+    assert.equal(await fs.readFile(filePath, "utf8"), text, `${name}: the check wrote nothing`)
+    const patched = await patchMarkdownFrontmatter(filePath, fields).then(() => "ok", (error) => error.message)
+    assert.equal(checked, patched, name)
+    assert.equal(checked === "ok", name === "no fences" || name === "invalid YAML in another field", name)
+  }
 })
 
 test("reading, writing and patching cards leaves nothing in the YAML library's cache", async () => {

@@ -1612,6 +1612,20 @@ test("track_rename renames nothing when a task card's frontmatter cannot be patc
   assert.equal(spawnSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).stdout, "")
 })
 
+test("track_rename still renames a track whose card has invalid YAML in a field it does not patch", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+  const card = path.join(root, "old-track", "odd-task", "task.md")
+  await fs.mkdir(path.dirname(card), { recursive: true })
+  await fs.writeFile(card, "---\ntitle: a\ntitle: b\ntrack: old-track\nstatus: drafting\n---\nbody\n", "utf8")
+  commitAll(root)
+
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
+  assert.deepEqual(result.updated_files, [path.posix.join("new-track", "odd-task", "task.md")])
+  assert.match(await fs.readFile(path.join(root, "new-track", "odd-task", "task.md"), "utf8"), /^---\ntitle: a\ntitle: b\ntrack: new-track\n/u)
+})
+
 test("track_rename refuses when the target already exists", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
