@@ -149,3 +149,35 @@ test("native peer inspection is explicit and read-only with bounded formats", as
   } })
   await assert.rejects(page.deskBrowserOwner.peek({ leaseId: "lease-b", targetId: "lease-b:102", format: "evaluate" }), /browser_owner_peek_invalid/u)
 })
+
+test("a page that is too busy to prove ownership never fails the browser call and retries later", async t => {
+  const module = require(path.join(mcpRoot, "scripts/native-owned-page.cjs"))
+  const saved = [process.env.DESK_NATIVE_LEASE_ID, process.env.DESK_BROWSER_OWNER]
+  process.env.DESK_NATIVE_LEASE_ID = "busy-lease"
+  process.env.DESK_BROWSER_OWNER = "busy owner"
+  t.after(() => {
+    for (const [key, value] of [["DESK_NATIVE_LEASE_ID", saved[0]], ["DESK_BROWSER_OWNER", saved[1]]]) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  const context = { newPage: async () => { throw new Error("not requested") } }
+  let busy = true
+  const page = { context: () => context, evaluate: async () => { if (busy) throw new Error("Execution context was destroyed"); return "busy-lease:7" } }
+  await module.default({ page })
+  assert.equal(page.deskBrowserOwner, undefined)
+  busy = false
+  await module.default({ page })
+  assert.equal(Object.isFrozen(page.deskBrowserOwner), true)
+})
+
+test("a failed ownership proof is retried on the next call instead of cached", async () => {
+  const { createPageInitializer } = require(file)
+  let fail = true
+  const page = { evaluate: async () => { if (fail) throw new Error("navigating"); return "lease-a:101" } }
+  const initialize = createPageInitializer({ leaseId: "lease-a", owner: "owner", request: async () => ({}) })
+  await assert.rejects(initialize({ page }), /navigating/u)
+  fail = false
+  await initialize({ page })
+  assert.equal(Object.isFrozen(page.deskBrowserOwner), true)
+})
