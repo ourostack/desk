@@ -1459,7 +1459,17 @@ requires(
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
   "work-orchestration has a child delete only the scratch paths it recorded when it created them",
-  /Every brief that lets a child make scratch[^\n]+carries this sentence, because the child reads its brief and not this skill: "Write down the exact path of everything you create when you create it\. Delete only those paths, each by that exact path; leave anything else in place and list it in your return\."[^\n]+a pattern or by taking the newest match/u,
+  /Every brief that lets a child make scratch[^\n]+carries this sentence, because the child reads its brief and not this skill: "Write down the exact path of everything you create when you create it\. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return\."[^\n]+a pattern or by taking the newest match[^\n]+stops for approval on a deletion whose path is a variable/u,
+);
+requires(
+  "plugins/desk/docs/evaluation-packet.md",
+  "the factory scenario expects no report field on a card without consent",
+  /Without consent to contribute, a move to `done` writes neither `factory_report` nor `factory_report_unavailable`[^\n]+`job-link` does not read consent/u,
+);
+requires(
+  "plugins/desk/migrations/02-tidy-desk.md",
+  "the tidy writes no scope line for a track it will archive",
+  /1\. Scope lines\.[^\n]+Skip a track that step 5 or step 6 will move into _archive\//u,
 );
 requires(
   "plugins/desk/skills/independent-review/SKILL.md",
