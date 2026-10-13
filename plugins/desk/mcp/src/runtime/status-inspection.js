@@ -52,20 +52,25 @@ export function createStatusInspection(deskRoot, {
   }
   const terminate = (name, next, ms) => {
     resource.signals.push(name)
+    // `kill` returns false when the process no longer exists. On Windows that includes a child that has just exited by itself and whose exit event has not arrived yet (POSIX still signals such a child and returns true). That is the stop this close wanted, so a false return is a failure only if the child has still not exited when this step's grace ends.
+    let unsent = false
     try {
-      if (!child.kill(name)) {
-        resource.failures.push(`${name}: child.kill returned false`)
-        failure ??= Object.assign(new Error(`status inspection child termination failed (pid ${resource.pid}, ${name})`), {
-          code: "status_reader_termination_failed", pid: resource.pid, signal: name,
-        })
-      }
+      unsent = !child.kill(name)
     } catch (error) {
       resource.failures.push(`${name}: ${error.message}`)
       failure ??= Object.assign(new Error(`status inspection child termination failed (pid ${resource.pid}, ${name}): ${error.message}`), {
         code: "status_reader_termination_failed", pid: resource.pid, signal: name,
       })
     }
-    if (!ended) terminationTimer = setTimeout(next, ms)
+    if (!ended) terminationTimer = setTimeout(() => {
+      if (unsent) {
+        resource.failures.push(`${name}: child.kill returned false`)
+        failure ??= Object.assign(new Error(`status inspection child termination failed (pid ${resource.pid}, ${name})`), {
+          code: "status_reader_termination_failed", pid: resource.pid, signal: name,
+        })
+      }
+      next()
+    }, ms)
   }
   const force = () => {
     terminationTimer = null

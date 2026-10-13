@@ -1139,6 +1139,8 @@ export function createDeskSession(deps) {
       })
       .then((value) => {
         const payload = JSON.parse(value.content[0].text)
+        // A runtime status that failed is an error, not a detail: served as a detail it reads as a ready answer with no root.
+        if (value.isError) throw new Error(payload.message ?? value.content[0].text)
         if (!disposed && run.generation === contextGeneration &&
             (lastStatusDetail === null || lastStatusDetail.seq < run.seq)) lastStatusDetail = { payload, at: run.at, seq: run.seq }
         return { payload }

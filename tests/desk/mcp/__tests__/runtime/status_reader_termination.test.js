@@ -163,6 +163,34 @@ test("a failed soft kill remains explicit even when escalation verifies exit", a
   assert.deepEqual(reader.resource.failures, ["SIGTERM: child.kill returned false"])
 })
 
+test("a soft kill that finds the child already gone is not a failure once the child's exit arrives", async () => {
+  const child = new EventEmitter()
+  child.pid = 44
+  child.send = (_, callback) => callback(null)
+  child.disconnect = () => {}
+  // The child exited by itself just before the kill: the kill finds no process, and the exit event arrives after it.
+  child.kill = () => { setImmediate(() => child.emit("exit", 0, null)); return false }
+  const reader = createStatusInspection("root", { spawn: () => child, closeGraceMs: 1, terminateGraceMs: 5000 })
+  await reader.close()
+  assert.deepEqual(reader.resource.signals, ["SIGTERM"])
+  assert.deepEqual(reader.resource.failures, [])
+  assert.equal(reader.resource.exited, true)
+})
+
+test("a soft kill that was sent but ignored escalates without being recorded as a failed kill", async () => {
+  const child = new EventEmitter()
+  child.send = (_, callback) => callback(null)
+  child.disconnect = () => {}
+  child.kill = (signal) => {
+    if (signal === "SIGKILL") child.emit("exit", null, signal)
+    return true
+  }
+  const reader = createStatusInspection("root", { spawn: () => child, closeGraceMs: 1, terminateGraceMs: 1 })
+  await reader.close()
+  assert.deepEqual(reader.resource.signals, ["SIGTERM", "SIGKILL"])
+  assert.deepEqual(reader.resource.failures, [])
+})
+
 test("closing during an unanswered request rejects the request explicitly even when child exit is clean", async () => {
   const child = new EventEmitter()
   child.send = (_, callback) => callback(null)
