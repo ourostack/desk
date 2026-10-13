@@ -1446,7 +1446,42 @@ test("a_due_row_is_checked_against_the_desk_remote_fetched_once_and_waits_when_t
   assert.deepEqual([[...plan.attest].sort(), plan.held, Object.keys(plan.state.rows).sort()], [[ids[1], ids[2]].sort(), {}, [ids[1], ids[2]].sort()])
 })
 
-test("a_dropped_row_is_not_current_until_its_newer_revision_is_delivered_or_it_ages_out", async () => {
+test("a_waiting_reattestation_fetches_remote_main_before_accepting_its_pending_standing", async () => {
+  const { w, ids, scan } = await deliveredWorld([KEY])
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  const staged = await prepare(w, now)
+  assert.equal(staged.items.length, 1)
+  const [batch] = (await state(w)).pending
+  const cached = git(w.deskRoot, ["rev-parse", "refs/remotes/origin/main"])
+  assert.deepEqual((await record(w, batch)).rows.map((row) => [row.id, row.attest]), [[ids[0], true]])
+  await invalidateElsewhere(w, KEY, now)
+  git(w.deskRoot, ["update-ref", "refs/remotes/origin/main", cached])
+  let outgoing
+  assert.equal(await fetches(async () => { outgoing = await prepare(w, now + HOUR) }), 1)
+  assert.deepEqual(outgoing.items, [], "a cached reviewed row invalidated on the actual remote cannot be retried")
+  assert.equal((await record(w, batch)).reason, "superseded")
+  assert.deepEqual(Object.keys((await state(w)).dropped), ids)
+})
+
+test("a_waiting_reattestation_is_withheld_when_its_fresh_remote_read_fails", async () => {
+  const { w, ids, scan } = await deliveredWorld([KEY])
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  assert.equal((await prepare(w, now)).items.length, 1)
+  const origin = git(w.deskRoot, ["remote", "get-url", "origin"])
+  git(w.deskRoot, ["remote", "set-url", "origin", path.join(w.deskRoot, "absent-remote")])
+  let outgoing
+  assert.equal(await fetches(async () => { outgoing = await prepare(w, now + HOUR) }), 1)
+  assert.deepEqual(outgoing.items, [])
+  assert.deepEqual(Object.keys((await state(w)).rows), ids, "a failed read does not prove supersession")
+  assert.equal((await state(w)).held_requests.triage_desk_not_fetched, 1)
+  git(w.deskRoot, ["remote", "set-url", "origin", origin])
+  assert.equal(await fetches(async () => { outgoing = await prepare(w, now + 2 * HOUR) }), 1)
+  assert.equal(outgoing.items.length, 1, "a subsequent successful fresh read permits rebuilding the retained row")
+})
+
+test("a_dropped_row_is_not_current_until_its_verified_higher_revision_is_delivered", async () => {
   const { w, ids, hub, scan } = await deliveredWorld(KEYS.slice(0, 2))
   const told = async (now) => {
     const entry = (await readStatus(w.env)).triage_publication[STORE]
@@ -1473,11 +1508,11 @@ test("a_dropped_row_is_not_current_until_its_newer_revision_is_delivered_or_it_a
   const kept = await state(w)
   assert.deepEqual([again.id, kept.rows[ids[1]].revision > 1, kept.dropped], [ids[1], true, { [ids[0]]: sent }])
   assert.deepEqual(await told(T0 + 2 * DAY + 8 * HOUR), [1, "stale"])
-  // Seventy-two hours after the first row was last sent the store reads it as stale whoever looks: it is no longer counted either.
+  // Aging changes the retained store row to stale; it does not remove the row or prove a higher replacement was delivered.
   await run(w, hub, T0 + 2 * HOUR + 3 * DAY)
   assert.deepEqual(await told(T0 + 2 * HOUR + 3 * DAY), [1, "stale"])
   await run(w, hub, T0 + 2 * HOUR + 3 * DAY + 1)
-  assert.deepEqual([(await state(w)).dropped, await told(T0 + 2 * HOUR + 3 * DAY + 1)], [{}, [undefined, "current"]])
+  assert.deepEqual([(await state(w)).dropped, await told(T0 + 2 * HOUR + 3 * DAY + 1)], [{ [ids[0]]: sent }, [1, "stale"]])
 })
 
 test("a_waiting_record_without_each_rows_card_and_desk_is_not_waiting", async () => {
