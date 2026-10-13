@@ -1311,7 +1311,7 @@ export async function bootOnce({
 
   let tasks = null
   try {
-    tasks = activeTasksFn(root.path)
+    tasks = await activeTasksFn(root.path)
   } catch (error) {
     degraded.push(`active_tasks: ${error.message}`)
   }

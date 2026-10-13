@@ -41,7 +41,7 @@ test("a blocked task with no blocker falls back to its next step, and with neith
   assert.match(textFor(task({ status: "blocked", blocker: "", next_step: "" })), /blocker: no blocker or next step recorded/u)
 })
 
-test("the task list is capped by count, and says how many it left out", () => {
+test("the task list is capped by count, and says how many it left out", async () => {
   const many = Array.from({ length: TASKS_SHOWN_CAP + 3 }, (_, index) => task({ slug: `t${index}`, title: `t${index}`, next_step: `step ${index} ${"x".repeat(300)}` }))
   const text = textFor(...many)
   assert.equal((text.match(/^- ops\/t\d+ /gmu) ?? []).length, TASKS_SHOWN_CAP)
@@ -58,7 +58,7 @@ async function cards(bodies) {
     await fs.mkdir(path.join(root, "ops", slug), { recursive: true })
     await fs.writeFile(path.join(root, "ops", slug, "task.md"), `---\ntitle: ${slug}\nstatus: blocked\nupdated: "2026-09-22T00:00:00Z"\n---\n\n${body}`)
   }
-  return Object.fromEntries(activeTasks(root).tracks[0].tasks.map((entry) => [entry.slug, entry.blocker]))
+  return Object.fromEntries((await activeTasks(root)).tracks[0].tasks.map((entry) => [entry.slug, entry.blocker]))
 }
 
 test("active_tasks reads the blocker from a section, a labelled line or a label with the reason below it", async () => {

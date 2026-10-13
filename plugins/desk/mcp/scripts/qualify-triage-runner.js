@@ -6,8 +6,8 @@ import {promises as fs} from "node:fs"
 import * as path from "node:path"
 import {fileURLToPath} from "node:url"
 import {createHash} from "node:crypto"
-import {childEnvironment,runChild,probeSignIn,billingVariableBlocks,HEADLESS_TIMEOUT_MS} from "../src/factory/headless.js"
-import {inspectLaunchChain,collectTriageAdmission,hasCollectedTriageControls,validateTriageControls,triagePolicy,sealOwnedQualification,loadTriageQualification,createNonacceptedTriageUnit,qualificationMeasurementActive} from "../src/factory/triage-runner.js"
+import {runChild,probeSignIn,billingVariableBlocks,HEADLESS_TIMEOUT_MS} from "../src/factory/headless.js"
+import {QUALIFICATION_VERSION,triageChildEnvironment,inspectLaunchChain,collectTriageAdmission,hasCollectedTriageControls,validateTriageControls,triagePolicy,sealOwnedQualification,loadTriageQualification,createNonacceptedTriageUnit,qualificationMeasurementActive,hostRecordSeal} from "../src/factory/triage-runner.js"
 import {assertOutsideGitWorkspace,ensureOwnerOnlyDirectory,protectLeafFile} from "../src/factory/os-protect.js"
 import {runDirectCatalog,runCatalogWireCase,prepareOwnedCatalogRun,runOwnedCatalogNative,runNonacceptedNativeTransaction,retainDirectReceipt,completeDirectBundle,catalogFatalCases,QUALIFICATION_FIXTURE} from "../src/factory/triage-custody.js"
 import {writeTriagePreparedFile,catalogCanonical,closedObject} from "../src/factory/triage-catalog.js"
@@ -19,28 +19,33 @@ async function protectedWrite(file,value){
 // The real qualifier takes the engine path and environment only. It starts the
 // engine, sign-in probe and doctor through node:child_process itself; no caller
 // can substitute a launcher, sign-in, doctor, chain resolver or policy reader.
-export async function qualifyTriageRunner({out,cli,env=process.env}){
-  return qualifyOwnedCatalog({launch:{cli,env},
+// `reserve` (optional) is called once, after every check and just before the
+// first native launch, to account for both launches; a throw stops the
+// qualification with nothing launched. `deadline` can only shorten the run.
+export async function qualifyTriageRunner({out,cli,env=process.env,deadline,reserve}){
+  const limit=Date.now()+HEADLESS_TIMEOUT_MS
+  return qualifyOwnedCatalog({launch:{cli,env,...(reserve?{reserve}:{})},
     fixture:JSON.parse(await fs.readFile(QUALIFICATION_FIXTURE,"utf8")),
-    deadline:Date.now()+HEADLESS_TIMEOUT_MS,evidenceDir:out})
+    deadline:Number.isSafeInteger(deadline)?Math.min(deadline,limit):limit,evidenceDir:out})
 }
 export async function writeSyntheticTriagePreparedInput({inputDir,fixture}){
   return writeTriagePreparedFile({inputDir,brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs})
 }
 export async function qualifyOwnedCatalog({launch,fixture,deadline,evidenceDir}){
   // A direct-only run passes no launch; any launch carries cli and env only.
-  try{closedObject({cli:undefined,env:undefined,...launch},["cli","env"])}
+  try{closedObject({cli:undefined,env:undefined,...launch},["cli","env"],["reserve"]);if(launch?.reserve!==undefined&&typeof launch.reserve!=="function")throw Error("reserve")}
   catch{return {state:"blocked",reason:"policy_control_unsupported",record:null,directReceipts:[],nativeReceipts:[],
     resources:{out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]}}}
-  return qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},realCatalogTransaction)
+  const {reserve,...fixed}=launch??{}
+  return qualifyCatalogTransaction({launch:launch&&fixed,reserve,fixture,deadline,evidenceDir},realCatalogTransaction)
 }
-async function qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},context){
+async function qualifyCatalogTransaction({launch,reserve,fixture,deadline,evidenceDir},context){
   if(context===realCatalogTransaction&&launch&&qualificationMeasurementActive())return {state:"blocked",reason:"diagnostic_inadequate",record:null,
     directReceipts:[],nativeReceipts:[],resources:{out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]}}
   const resources={out:evidenceDir,launches:0,pids:[],exited_pids:[],files:[]},directReceipts=[],nativeReceipts=[]
   const stages=[],stage=name=>stages.push({name,observation:"present",at_ms:Date.now()})
   let outReady=false
-  let record={version:6,protocol_envelope_version:2,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
+  let record={version:QUALIFICATION_VERSION,protocol_envelope_version:2,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
   const save=async(name,value)=>{
     const file=path.join(evidenceDir,name)
     await context.write(file,catalogCanonical(value)+"\n");resources.files.push(file)
@@ -80,12 +85,17 @@ async function qualifyCatalogTransaction({launch,fixture,deadline,evidenceDir},c
       stage(`direct_${i}_complete`)
     }
     if(!launch)return {state:"direct_validated",directReceipts,nativeReceipts,record:null,resources}
-    record=await context.native({launch,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context.nativeContext)
+    record=await context.native({launch,reserve,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context.nativeContext)
   }catch(e){
     resources.protected_failure_detail=e.message
     const allowed=["effective_policy_unknown","applicable_delivery_pending","active_hook_or_helper","unsafe_permission_grant","billing_unresolved","policy_control_unsupported","diagnostic_inadequate","launch_chain_unknown"]
     record.reason=allowed.includes(e.message)?e.message:"diagnostic_inadequate"
   }
+  // A blocked record carries this host's seal too, so that once a sealed
+  // record has qualified here, an unsealed blocked record reads as damaged.
+  // A host that cannot seal leaves it unsealed; restore there is
+  // host_unsupported before any seal matters.
+  if(record.state==="blocked"&&context.hostSeal){try{record.host_seal=context.hostSeal(record)}catch{}}
   let final
   try{
     if(!outReady)throw Error("protected_output_unavailable")
@@ -118,15 +128,15 @@ const realNativeTransaction=Object.freeze({chain:inspectLaunchChain,help:runChil
   policy:triagePolicy,admission:collectTriageAdmission,controls:hasCollectedTriageControls,signIn:probeSignIn,run:runOwnedCatalogNative,seal:sealOwnedQualification})
 const realCatalogTransaction=Object.freeze({outside:assertOutsideGitWorkspace,mkdir:ensureOwnerOnlyDirectory,
   write:protectedWrite,direct:runDirectCatalog,retain:retainDirectReceipt,wire:runCatalogWireCase,complete:completeDirectBundle,
-  native:qualifyNativeRuns,nativeContext:realNativeTransaction,reload:loadTriageQualification})
-async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context){
+  native:qualifyNativeRuns,nativeContext:realNativeTransaction,reload:loadTriageQualification,hostSeal:hostRecordSeal})
+async function qualifyNativeRuns({launch,reserve,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context){
     if(billingVariableBlocks(launch.env))throw Error("billing_unresolved")
     let metadata=launch.cliMetadata
     const chain=context.chain(launch)
     if(chain.state!=="inspected")throw Error("launch_chain_unknown")
     if(!metadata){
       const help=await context.help({spawn:nodeSpawn,cmd:chain.effective_argv[0],args:["--help"],
-        opts:{env:childEnvironment(launch.env),stdio:["ignore","pipe","pipe"]},timeoutMs:15000,maxBytes:65536})
+        opts:{env:triageChildEnvironment(launch.env),stdio:["ignore","pipe","pipe"]},timeoutMs:15000,maxBytes:65536})
       await save("help.json",help)
       if(help.kind!=="closed"||help.code!==0||help.truncated)throw Error("diagnostic_inadequate")
       metadata={host:"claude-code",flags:help.stdout.match(/--[a-zA-Z-]+/gu)??[]}
@@ -157,10 +167,10 @@ async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,
       step("control_admission")
       const control_basis=Object.fromEntries(Object.entries(admitted.controls).filter(([key])=>key!=="recipe_sha256"))
       const invariant=catalogCanonical({sources:admitted.sources,remote_delivery:admitted.remote_delivery,control_basis,
-        env:childEnvironment(launch.env)})
+        env:triageChildEnvironment(launch.env)})
       if(firstAdmissionIdentity!==undefined&&firstAdmissionIdentity!==invariant){await owned.close();throw Error("effective_policy_unknown")}
       firstAdmissionIdentity=invariant
-      const signIn=await context.signIn({cli:chain.effective_argv[0],env:launch.env,spawn:nodeSpawn,
+      const signIn=await context.signIn({cli:chain.effective_argv[0],env:triageChildEnvironment(launch.env),spawn:nodeSpawn,
         onChild:pid=>resources.pids.push(pid),onChildExit:pid=>resources.exited_pids.push(pid)})
       if(signIn.state!=="subscription"){await owned.close();throw Error(signIn.state)}
       step("subscription")
@@ -170,8 +180,9 @@ async function qualifyNativeRuns({launch,fixture,deadline,evidenceDir,resources,
         catalogCanonical(currentChain)!==catalogCanonical(chain)){await owned.close();throw Error("effective_policy_unknown")}
       admitted=current;control_history.push(current.controls)
       step("fresh_prelaunch_admission")
+      if(i===1&&reserve)await reserve()
       const run=await context.run({owned,command:chain.effective_argv[0],args:[...chain.effective_argv.slice(1),...policy.argv],
-        env:childEnvironment(launch.env),deadline,resultFile:path.join(evidenceDir,`unaccepted-${i}.json`),
+        env:triageChildEnvironment(launch.env),deadline,resultFile:path.join(evidenceDir,`unaccepted-${i}.json`),
         onChild:pid=>{resources.launches++;resources.pids.push(pid)},onChildExit:pid=>resources.exited_pids.push(pid)})
       await save(`native-${i}-bundle.json`,run);nativeReceipts.push(run)
       capture.channels.native={observation:run.evidence?.spawned?"present":"unobserved",truncated:false}
@@ -228,7 +239,9 @@ export async function runNonacceptedNativeQualification(config){
   closedObject(config,["record","env","admission","chain"],["failures"])
   const data=JSON.parse(catalogCanonical(config)),unit=createNonacceptedTriageUnit(data),failures=data.failures??{}
   const evidenceDir=path.dirname(path.dirname(data.record.nativeReceipts[0].snapshotFile))
-  let prepared=0,admissionReads=0,chainReads=0,closed=0
+  let prepared=0,admissionReads=0,chainReads=0,closed=0,reserved=0
+  // A synthetic ledger callback: "accept" counts the reservation, "refuse" throws as a refused ledger does.
+  const reserve=failures.reserve?async()=>{reserved++;if(failures.reserve==="refuse")throw Error("quota_refused")}:undefined
   const resources={launches:0,pids:[],exited_pids:[],files:[]},documents=new Map()
   const context={
     chain(){
@@ -283,16 +296,16 @@ export async function runNonacceptedNativeQualification(config){
     seal:()=>unit.seal().record,
   }
   try{
-    const record=await qualifyNativeRuns({launch:{cli:data.record.cli,env:data.env,cliMetadata:data.record.cliMetadata},
+    const record=await qualifyNativeRuns({launch:{cli:data.record.cli,env:data.env,cliMetadata:data.record.cliMetadata},reserve,
       fixture:null,deadline:Date.now()+HEADLESS_TIMEOUT_MS,evidenceDir,resources,
       directReceipts:structuredClone(data.record.directReceipts),nativeReceipts:[],
       save:async(name,value)=>{if(failures.write&&name.endsWith("-stages.json"))throw Error("unit_stage_write_failed");documents.set(name,catalogCanonical(value))}},context)
     const outcome=await persistQualification(record,{save:value=>unit.save(value),load:async()=>((await unit.load()).outcome)})
     return {authority:false,outcome,evidence:[...documents].map(([name,text])=>({name,value:JSON.parse(text)})),statistics:{...unit.statistics(),syntheticLaunches:resources.launches,
-      syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,memoryEvidenceDocuments:documents.size}}
+      syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,syntheticReservations:reserved,memoryEvidenceDocuments:documents.size}}
   }catch{
     return {authority:false,outcome:{state:"blocked",reason:"diagnostic_inadequate"},evidence:[...documents].map(([name,text])=>({name,value:JSON.parse(text)})),
-      statistics:{...unit.statistics(),syntheticLaunches:resources.launches,syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,memoryEvidenceDocuments:documents.size}}
+      statistics:{...unit.statistics(),syntheticLaunches:resources.launches,syntheticAuthGenerations:resources.pids.filter(pid=>pid<0).length,syntheticClosed:closed,syntheticReservations:reserved,memoryEvidenceDocuments:documents.size}}
   }
 }
 /** NONACCEPTED direct-only qualification over a createNonacceptedOwnedCatalog()
@@ -339,6 +352,7 @@ export async function runNonacceptedCatalogTransaction(config){
       if(result.outcome.state!=="qualified")throw Error("diagnostic_inadequate")
       return unit.seal().record
     },
+    hostSeal:record=>unit.sealDocument(record).host_seal,
     async reload(){
       if(phaseFailure==="reloadThrows")throw Error("unit_reload_failed")
       if(phaseFailure==="reload")return {state:"blocked"}
