@@ -8,6 +8,7 @@
 // The answer carries the slug, codes and the desk-relative card path only: no title, no body text, no absolute path.
 
 import * as path from "node:path"
+import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { readMarkdown, patchMarkdownFrontmatter } from "../util/fm.js"
 import { validateWriteSegment } from "../util/paths.js"
@@ -97,7 +98,14 @@ export async function taskSignoff({
   let file = found.file
   // A refusal reopens the task, and a task cannot be worked in an archived track. No tool brings a track back yet, so say the one command.
   if (refused && found.trackArchived) {
-    throw new Error(`task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded. Bring the track back with \`git mv _archive/${track} ${track}\`, commit that, then call task_signoff again.`)
+    const taskDir = path.dirname(found.file)
+    const archivedTrack = path.basename(path.dirname(taskDir)) === "_archive" ? path.dirname(path.dirname(taskDir)) : path.dirname(taskDir)
+    const liveTrack = path.join(path.dirname(path.dirname(archivedTrack)), track)
+    // With a live track of the same name, moving the archived track would nest it inside: only the task moves.
+    const how = existsSync(liveTrack)
+      ? `A live track ${track} exists too: from the desk root, move the task into it with \`git mv ${relPath(deskRoot, taskDir)} ${relPath(deskRoot, path.join(liveTrack, slug))}\``
+      : `From the desk root, bring the track back with \`git mv ${relPath(deskRoot, archivedTrack)} ${relPath(deskRoot, liveTrack)}\``
+    throw new Error(`task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded. ${how}, commit that, then call task_signoff again.`)
   }
   if (refused && found.archived) {
     try {

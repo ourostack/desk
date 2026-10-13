@@ -281,7 +281,8 @@ test("an acceptance of an archived task leaves it archived", async () => {
 
 // A track whose tasks are all terminal is archived whole into the desk's `_archive/` (archive-workflow), often before the operator answers.
 function archiveTrack(root, track = "t") {
-  spawnSync("git", ["-C", root, "mv", track, path.join("_archive", track)], { encoding: "utf8" })
+  const moved = spawnSync("git", ["-C", root, "mv", track, path.join("_archive", track)], { encoding: "utf8" })
+  assert.equal(moved.status, 0, moved.stderr)
   git(root, "commit", "-q", "-m", `archive: track ${track}`)
 }
 
@@ -315,10 +316,48 @@ test("a refusal of a task whose whole track was archived records nothing and say
   const before = await body(file)
   const head = headOf(root)
   const finalize = spy()
-  await assert.rejects(sign(root, "track-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), /task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded\. Bring the track back with `git mv _archive\/t t`, commit that, then call task_signoff again\./u)
+  await assert.rejects(sign(root, "track-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), /task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded\. From the desk root, bring the track back with `git mv _archive\/t t`, commit that, then call task_signoff again\./u)
   assert.equal(await body(file), before)
   assert.equal(headOf(root), head)
   assert.equal(finalize.calls.length, 0)
+})
+
+test("when a live track of the same name exists, a refusal says to move the task's folder into it, and that move makes the refusal work", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.mkdir(path.join(root, "_archive"), { recursive: true })
+  await delivered(root, "track-on-shelf", { archive: true })
+  archiveTrack(root)
+  await delivered(root, "newer-work")
+  const head = headOf(root)
+  await assert.rejects(sign(root, "track-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" }), /task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded\. A live track t exists too: from the desk root, move the task into it with `git mv _archive\/t\/_archive\/track-on-shelf t\/track-on-shelf`, commit that, then call task_signoff again\./u)
+  assert.equal(headOf(root), head)
+  const moved = spawnSync("git", ["-C", root, "mv", "_archive/t/_archive/track-on-shelf", "t/track-on-shelf"], { encoding: "utf8" })
+  assert.equal(moved.status, 0, moved.stderr)
+  git(root, "commit", "-q", "-m", "bring the task back")
+  const result = await sign(root, "track-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" })
+  assert.equal(result.path, "t/track-on-shelf/task.md")
+  assert.equal((await readFront(path.join(root, "t", "track-on-shelf", "task.md"))).data.status, "processing")
+})
+
+test("on a crew desk the refusal names the track's paths from the desk root", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const mine = path.join(root, "desks", "ari")
+  await fs.mkdir(path.join(mine, "_archive"), { recursive: true })
+  await fs.mkdir(path.join(mine, "_meta"), { recursive: true })
+  await fs.mkdir(path.join(mine, "t"), { recursive: true })
+  await fs.writeFile(path.join(mine, "t", "track.md"), TRACK_CARD(["crew-task"]))
+  settle(root)
+  await task_create({ deskRoot: root, person: "ari", input: { track: "t", slug: "crew-task", title: "Crew task", status: "processing", body: "b\n" } })
+  await task_update({ deskRoot: root, person: "ari", input: { track: "t", slug: "crew-task", frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, finalize: async () => {} })
+  settle(root)
+  const moved = spawnSync("git", ["-C", root, "mv", "desks/ari/t", "desks/ari/_archive/t"], { encoding: "utf8" })
+  assert.equal(moved.status, 0, moved.stderr)
+  git(root, "commit", "-q", "-m", "archive: track t")
+  await assert.rejects(sign(root, "crew-task", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { person: "ari" }), /From the desk root, bring the track back with `git mv desks\/ari\/_archive\/t desks\/ari\/t`, commit that/u)
+  const accepted = await sign(root, "crew-task", { outcome: "accepted" }, { person: "ari" })
+  assert.equal(accepted.path, "desks/ari/_archive/t/crew-task/task.md")
 })
 
 test("a live card wins over one left in an archived track of the same name", async () => {
