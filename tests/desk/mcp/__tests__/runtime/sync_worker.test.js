@@ -29,6 +29,8 @@ import {
   finalUnpushedCheck,
   hasRemoteConfigured,
   hasRemoteConfiguredAsync,
+  reportGitReadFailure,
+  waitForStatusGitReads,
   hostFromEnv,
   queueDeskProblemFiling,
   readSyncStatus,
@@ -274,6 +276,30 @@ test("the asynchronous remote and upstream reads give the same answers as the sy
   assert.deepEqual(await aheadBehindCountsAsync({ root: cloneA }), { ahead: 1, behind: 0 })
 
   assert.equal(await hasRemoteConfiguredAsync(path.join(plain, "no-such-folder")), false)
+})
+
+test("a Git read worker that cannot run is reported on stderr with what desk_status will then show", (t) => {
+  const written = t.mock.method(process.stderr, "write", () => true)
+  reportGitReadFailure("the Git read worker exited (code 1)")
+  assert.deepEqual(written.mock.calls.map((call) => call.arguments[0]), ['[desk-mcp] sync status: the Git read worker exited (code 1). desk_status treats a Git read that cannot run as failed, so it may report "no remote configured" for a desk that has a remote.\n'])
+})
+
+test("a status run that aborts gets its abort reason from a Git read, never a false \"no remote\", and its wait ends with its reads", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  const live = new AbortController()
+  assert.equal(await hasRemoteConfiguredAsync(cloneA, { signal: live.signal }), true)
+  assert.deepEqual(await aheadBehindCountsAsync({ root: cloneA, signal: live.signal }), { ahead: 0, behind: 0 })
+  await waitForStatusGitReads(live.signal)
+
+  // Aborted while the read runs: the read is cancelled, and the caller hears the reason.
+  const reason = new Error("runtime status context ended")
+  const during = hasRemoteConfiguredAsync(cloneA, { signal: live.signal })
+  live.abort(reason)
+  await assert.rejects(during, reason)
+  await waitForStatusGitReads(live.signal)
+  // Aborted before the read: nothing starts.
+  await assert.rejects(hasRemoteConfiguredAsync(cloneA, { signal: live.signal }), reason)
+  await assert.rejects(aheadBehindCountsAsync({ root: cloneA, signal: live.signal }), reason)
 })
 
 test("aheadBehindCounts falls back to 0 for any count it cannot parse as a number", () => {

@@ -8,8 +8,8 @@ import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
-import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus } from "../runtime/sync-worker.js"
-import { createStatusInspection } from "../runtime/status-inspection.js"
+import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
+import { createStatusInspection, waitForStatusInspection as waitForInspectionChild } from "../runtime/status-inspection.js"
 
 
 // desk_status's inputs are read elsewhere: `detail` where the answer is shaped for the caller (runtime/desk-session.js, which
@@ -31,8 +31,8 @@ export const DESK_STATUS_FIELDS = ["detail", "has_instructions"]
  * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
  * (`finalUnpushedCheck`) ever decide what "blocked" means.
  */
-async function syncStatus({ deskRoot, env }) {
-  if (!await hasRemoteConfiguredAsync(deskRoot)) return "no remote configured"
+async function syncStatus({ deskRoot, env, signal }) {
+  if (!await hasRemoteConfiguredAsync(deskRoot, { signal })) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
   // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
   const lastPull = pullStillFailing({ lastPull: recorded?.last_pull, lastPushAt: recorded?.last_push_at ?? null, fetchedAt: readFetchOkAt({ root: deskRoot, env }) })
@@ -41,7 +41,7 @@ async function syncStatus({ deskRoot, env }) {
   if (recorded?.blocked) {
     return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], ...lastPull }
   }
-  const counts = await aheadBehindCountsAsync({ root: deskRoot })
+  const counts = await aheadBehindCountsAsync({ root: deskRoot, signal })
   return {
     blocked: false,
     ahead: counts?.ahead ?? 0,
@@ -62,6 +62,15 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
+/**
+ * Resolves when the status run that owns `signal` has no process left: neither its inspection child nor a Git read.
+ * A session aborts the run and awaits this before it reports itself closed, so nothing of the run still holds the desk folder.
+ * Rejects as the inspection child's wait does.
+ */
+export async function waitForStatusInspection(signal) {
+  await Promise.all([waitForInspectionChild(signal), waitForStatusGitReads(signal)])
+}
+
 export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
@@ -74,6 +83,8 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
   const reader = createStatusInspection(deskRoot, { signal })
   try {
     const root = await reader.inspect("root", statusContext.root)
+    // The sync section comes last; its worker thread starts while the inspections run.
+    if (root.valid) warmStatusGitReads()
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const localDb = root.valid
       ? await reader.inspect("local")
@@ -133,7 +144,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
       active_tasks: root.valid ? await activeTasks(root.path) : null,
       factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
-      sync: root.valid ? await syncStatus({ deskRoot: root.path, env }) : null,
+      sync: root.valid ? await syncStatus({ deskRoot: root.path, env, signal }) : null,
       summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
     }
   } finally {

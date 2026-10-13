@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
-  beginBackgroundConvergence, callTool, connectOrStartController, ensureIndex, startControllerRuntime,
+  beginBackgroundConvergence, callTool, connectOrStartController, ensureIndex, startControllerRuntime, waitForStatusInspection,
 } from "../../../../../plugins/desk/mcp/src/server.js"
 import { startInProcess, statusContextOf } from "./_in_process_desk.js"
 import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
@@ -63,6 +63,8 @@ async function session(t, { semantic = "background", handler, statusDelayMs = 0 
       state.desk = await startInProcess({
         argv: ["--root", root], env: {}, readinessPolicy: { semantic },
         runtimeImporter: async () => ({
+          // As the real runtime does: closing the session waits for a status run's processes, so none is left inside the root when the test removes it.
+          waitForStatusInspection,
           async callTool(request) {
             const result = await callTool(request)
             if (request.name === "desk_status") firstStatus.resolve()
