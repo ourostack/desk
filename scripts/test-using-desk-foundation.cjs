@@ -436,7 +436,7 @@ function main() {
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.
   assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
     "same durable task",
-    "name the prior check the new requirement invalidates, or say none has run",
+    "name checks the change invalidates, or say none has run",
     "implementation and review gates",
     "`work-orchestration`",
   ]);

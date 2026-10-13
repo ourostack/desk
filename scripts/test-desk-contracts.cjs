@@ -52,7 +52,7 @@ contract("delivery has a literal three-line response contract", () => {
 });
 contract("a changed requirement names the previous check and its missing coverage", () => {
   const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
-  assert.match(foundation, /name the prior check[\s\S]+new requirement invalidates, or say none has run[\s\S]+same durable task[\s\S]+rerun/iu);
+  assert.match(foundation, /name checks the change invalidates, or say none has run[\s\S]+same durable task[\s\S]+rerun/iu);
 });
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",

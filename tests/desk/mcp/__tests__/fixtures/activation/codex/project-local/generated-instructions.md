@@ -60,7 +60,7 @@ Instructions, preferences, task state and reusable artifacts live in the desk, a
 
 ## Requirements that arrive during execution
 
-On a material change, name the prior check the new requirement invalidates, or say none has run; keep the same durable task and rerun affected implementation and review gates (`work-orchestration`).
+On a material change, name checks the change invalidates, or say none has run; keep the same durable task and rerun affected implementation and review gates (`work-orchestration`).
 
 ## Visual proof when it helps
 
