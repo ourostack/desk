@@ -6,6 +6,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import * as os from "node:os"
 import { promises as fs } from "node:fs"
+import matter from "gray-matter"
 
 import { discover, classify, isIndexable, normalizeDate } from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -158,6 +159,8 @@ test("discover indexes malformed frontmatter with empty metadata", async () => {
   assert.equal(docs[0].status, null)
   assert.equal(docs[0].schema_version, 0)
   assert.equal(docs[0].body, "---\n[\n---\nbody after malformed frontmatter")
+  assert.deepEqual(await discover(root), docs)
+  assert.deepEqual(Object.keys(matter.cache), [], "the indexer parses without the cache")
 })
 
 test("discover flags _archive docs with is_archived=true", async () => {

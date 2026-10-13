@@ -56,11 +56,11 @@ test("runtime-resolver: requireFromRuntime throws like a failed require until a 
 })
 
 test("loadFrontmatterParser reaches gray-matter through the restored runtime dependencies when it is not beside the plugin", () => {
-  const sentinel = () => ({ data: {} })
+  const sentinel = (text) => ({ data: { parsed: text } })
   setRuntimeResolver((name) => (name === "gray-matter" ? sentinel : null))
   // The default loader tries beside-the-plugin first (present in this repo), so
   // prove the fallback by making the first lookup fail through the seam.
-  assert.equal(loadFrontmatterParser(() => requireFromRuntime("gray-matter")), sentinel)
+  assert.deepEqual(loadFrontmatterParser(() => requireFromRuntime("gray-matter"))("card"), { data: { parsed: "card" } })
   setRuntimeResolver(null)
   assert.equal(loadFrontmatterParser(() => requireFromRuntime("gray-matter")), parseFrontmatterLite)
 })

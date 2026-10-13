@@ -5,6 +5,7 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
+import matter from "gray-matter"
 import {
   findFilenameEquivalent,
   readMarkdown,
@@ -351,6 +352,31 @@ test("readMarkdown returns concrete data and content without frontmatter", async
     data: {},
     content: "Plain body.\n",
   })
+})
+
+test("a card whose YAML cannot be parsed is refused on every read and never rewritten by a patch", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "broken.md")
+  const broken = "---\nstatus: drafting\ntrack: t\nstatus: duplicate\n---\nbody\n"
+  await fs.writeFile(filePath, broken, "utf8")
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // The error names the card and the YAML problem, so an agent can repair it.
+    const names = (error) => error.message.startsWith(`${filePath}: the frontmatter is not valid YAML`) && /duplicated mapping key/u.test(error.message) && error.cause.name === "YAMLException"
+    await assert.rejects(() => readMarkdown(filePath), names)
+    await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: `done-${attempt}` }), names)
+  }
+  assert.equal(await fs.readFile(filePath, "utf8"), broken)
+})
+
+test("reading, writing and patching cards leaves nothing in the YAML library's cache", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "cached.md")
+  await fs.writeFile(filePath, serializeMarkdown({ status: "doing" }, "Body.\n"), "utf8")
+  await readMarkdown(filePath)
+  await patchMarkdownFrontmatter(filePath, { nested: { field: 1 } })
+  serializeMarkdown({ a: 1 }, "---\nx: [\n---\n")
+  assert.deepEqual(Object.keys(matter.cache), [])
 })
 
 test("serializeMarkdown handles empty and already-prefixed content", () => {

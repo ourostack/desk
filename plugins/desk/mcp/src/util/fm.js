@@ -14,6 +14,18 @@ import letterRegex from "./unicode-16/letter.cjs"
 import markRegex from "./unicode-16/mark.cjs"
 import numberRegex from "./unicode-16/number.cjs"
 
+// gray-matter with its cache off (see `loadFrontmatterParser` in
+// `desk/organization.js`): a cached parse would answer a card whose YAML
+// throws as a card with no frontmatter, and a patch would then write that.
+function parseCard(raw, filePath) {
+  try {
+    return matter(raw, {})
+  } catch (error) {
+    // Name the file and keep the parser's own reason, so the card can be repaired.
+    throw new Error(`${filePath}: the frontmatter is not valid YAML, so the card was left unchanged: ${error.message}`, { cause: error })
+  }
+}
+
 const windowsReservedBasename = /^(?:aux|con|nul|prn|com[1-9¹²³]|lpt[1-9¹²³])$/u
 
 function normalizeNfc(value) {
@@ -54,7 +66,7 @@ export async function readMarkdown(filePath) {
     }
     throw err
   }
-  const parsed = matter(raw)
+  const parsed = parseCard(raw, filePath)
   return { data: parsed.data, content: parsed.content }
 }
 
@@ -67,7 +79,8 @@ export function serializeMarkdown(data, content) {
   // body so there's always a blank line between frontmatter and body when
   // body is non-empty.
   const body = content == null ? "" : String(content)
-  return matter.stringify(body.startsWith("\n") ? body : `\n${body}`, data)
+  // The options argument keeps the body out of gray-matter's cache (see `parseCard`).
+  return matter.stringify(body.startsWith("\n") ? body : `\n${body}`, data, {})
 }
 
 /** Write a markdown file with frontmatter, creating parent dirs as needed. */
@@ -301,7 +314,7 @@ export async function patchMarkdownFrontmatter(filePath, fields) {
     await fs.writeFile(filePath, patched, "utf8")
     return
   }
-  const parsed = matter(raw)
+  const parsed = parseCard(raw, filePath)
   const data = { ...parsed.data, ...fields }
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) delete data[key]

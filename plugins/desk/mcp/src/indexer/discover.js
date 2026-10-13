@@ -287,7 +287,7 @@ async function describeDoc(deskRoot, abs, rel, signal) {
   throwIfAborted(signal)
   let parsed
   try {
-    parsed = matter(raw)
+    parsed = matter(raw, {})
   } catch {
     // Malformed frontmatter — index anyway, just with empty metadata.
     parsed = { data: {}, content: raw }

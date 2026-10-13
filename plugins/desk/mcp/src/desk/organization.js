@@ -94,13 +94,20 @@ export function loadGrayMatter(besidePlugin = () => requireFromHere("gray-matter
 /**
  * gray-matter when it can be loaded, the dependency-free reader otherwise.
  * `load` is a test seam; real callers never pass it.
+ *
+ * gray-matter is always called with options, which is what turns its cache
+ * off. Called without them it remembers each text before parsing it, so a
+ * card whose YAML throws is answered as a card with no frontmatter from the
+ * second parse on, and every caller is handed the same `data` object.
  */
 export function loadFrontmatterParser(load = loadGrayMatter) {
+  let matter
   try {
-    return load()
+    matter = load()
   } catch {
     return parseFrontmatterLite
   }
+  return (text) => matter(text, {})
 }
 
 const parseFrontmatter = loadFrontmatterParser()
