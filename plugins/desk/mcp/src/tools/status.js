@@ -6,7 +6,7 @@ import { personPrefix } from "../util/paths.js"
 import { deskVersion } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
-import { factoryStatus } from "./factory-context.js"
+import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
 import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
 import { createStatusInspection, waitForStatusInspection as waitForInspectionChild } from "../runtime/status-inspection.js"
@@ -62,16 +62,53 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
-/**
- * Resolves when the status run that owns `signal` has no process left: neither its inspection child nor a Git read.
- * A session aborts the run and awaits this before it reports itself closed, so nothing of the run still holds the desk folder.
- * Rejects as the inspection child's wait does.
- */
-export async function waitForStatusInspection(signal) {
-  await Promise.all([waitForInspectionChild(signal), waitForStatusGitReads(signal)])
+// The desk_status calls still running, by the signal that owns them: their card reads hold files in the desk folder open.
+const statusCalls = new WeakMap()
+
+// How long a session waits for an aborted desk_status call to settle. Once aborted, the call's own waits end at once
+// (its scan, its Git reads, the controller check); what remains is at most one batch of card reads and the
+// active-task listing, which takes no signal. A read that never returns must not hold every later status run and
+// the session's close forever, so the wait ends in an error instead and the run stays retained. It is shorter than
+// the server's 3 s shutdown limit (`SHUTDOWN_TIMEOUT_MS` in index.js), so a close reports this error, not a timeout.
+const STATUS_CALL_SETTLE_MS = 1500
+
+function callsSettled(calls, ms) {
+  if (calls === undefined || calls.size === 0) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Object.assign(
+      new Error(`desk_status call did not settle within ${ms} ms of its status run ending`),
+      { code: "status_call_not_settled" },
+    )), ms)
+    Promise.allSettled(calls).then(() => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
 }
 
-export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
+/**
+ * Resolves when the status run that owns `signal` has nothing left: neither its inspection child, nor a Git read, nor the
+ * call itself with its file reads. A session aborts the run and awaits this before it reports itself closed, so nothing
+ * of the run still holds the desk folder. Rejects as the inspection child's wait does, and with `status_call_not_settled`
+ * when the call has not settled within `callSettleMs`; a later wait for the same signal tries again.
+ */
+export async function waitForStatusInspection(signal, { callSettleMs = STATUS_CALL_SETTLE_MS } = {}) {
+  await Promise.all([waitForInspectionChild(signal), waitForStatusGitReads(signal), callsSettled(statusCalls.get(signal), callSettleMs)])
+}
+
+export function desk_status(request) {
+  const call = statusCall(request)
+  const { signal } = request
+  if (signal !== undefined) {
+    const calls = statusCalls.get(signal) ?? new Set()
+    statusCalls.set(signal, calls)
+    calls.add(call)
+    call.then(() => calls.delete(call), () => calls.delete(call))
+  }
+  return call
+}
+
+async function statusCall({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -90,7 +127,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       ? await reader.inspect("local")
       : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
     const startup = normalizeStartup(statusContext.startup)
-    const readiness = await controllerReadiness(statusContext.admission)
+    const readiness = await controllerReadiness(statusContext.admission, signal)
     const observed = await (queryRouter ?? createDeskQueryRouter({
       controller: statusContext.admission?.controller,
     })).snapshot({ deskRoot: root.valid ? root.path : null, signal }, {
@@ -143,7 +180,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       write_scope: writeScope,
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
       active_tasks: root.valid ? await activeTasks(root.path) : null,
-      factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
+      factory: await factoryStatusAsync({ env, deskRoot: root.valid ? root.path : null, signal }),
       sync: root.valid ? await syncStatus({ deskRoot: root.path, env, signal }) : null,
       summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
     }
@@ -181,13 +218,24 @@ function presentReadiness(readiness) {
   return { state: word, meaning, detail: { controller_state: readiness.state, convergence: readiness.convergence } }
 }
 
-async function controllerReadiness(admission) {
+// Settles as `promise` does, or rejects with the signal's reason once it aborts.
+function untilAborted(promise, signal) {
+  if (signal === undefined) return promise
+  const aborted = new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+  })
+  return Promise.race([promise, aborted])
+}
+
+async function controllerReadiness(admission, signal) {
   const empty = { status: "not_checked", semantic: null, diagnostic: null }
   if (typeof admission?.controller?.status !== "function") {
     return { state: "not_checked", convergence: empty }
   }
   try {
-    const snapshot = await admission.controller.status()
+    // An aborted run stops waiting for the controller, so the session's close does not wait for it either.
+    const snapshot = await untilAborted(Promise.resolve().then(() => admission.controller.status()), signal)
     return { state: snapshot.state, convergence: snapshot.convergence ?? empty }
   } catch (error) {
     return {

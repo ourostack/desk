@@ -10,6 +10,7 @@ import { scratch } from "../factory/_session_helpers.js"
 import { readStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import {
   unsignedDeliveries,
+  unsignedDeliveriesAsync,
   signoffStatus,
   refreshSignoffStatus,
   recordUnsigned,
@@ -46,9 +47,16 @@ async function put(desk, where, text) {
 
 const withDesk = async (run) => run(await mkTempRoot("desk-unsigned-"))
 
+// Both scans, which must agree: the synchronous one `desk_doctor` and boot use, and the asynchronous one `desk_status` uses. Returns the answer.
+async function scan(desk, options) {
+  const found = unsignedDeliveries(desk, options)
+  assert.deepEqual(await unsignedDeliveriesAsync(desk, options), found, "the asynchronous scan gives the same answer as the synchronous one")
+  return found
+}
+
 test("a delivered unsigned live task is listed with its age and proof", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "ship-it"], card({ title: "Ship it", deliveredAt: ago(3, 1000) }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 1)
   assert.equal(found.at_least, false)
   assert.equal(found.oldest_age_days, 3)
@@ -62,7 +70,7 @@ test("a delivered unsigned archived task is listed", () => withDesk(async (desk)
   // The usual order: the task is archived in its track, then the whole track is archived.
   await put(desk, ["_archive", "gone-track", "_archive", "shelved-first"], card({ deliveredAt: ago(15) }))
   await put(desk, ["desks", "crew", "beta", "_archive", "crewed"], card({ deliveredAt: ago(2) }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 4)
   assert.deepEqual(found.tasks.map((task) => `${task.track}/${task.slug}`), ["gone-track/older", "gone-track/shelved-first", "alpha/old-one", "crew/beta/crewed"])
   assert.equal(found.oldest_age_days, 20)
@@ -71,7 +79,7 @@ test("a delivered unsigned archived task is listed", () => withDesk(async (desk)
 test("a legacy done task is counted as not recorded and never listed", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "legacy"], card({ signoff: null, evidence: null }))
   await put(desk, ["alpha", "_archive", "legacy-old"], card({ signoff: null, evidence: null }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 0)
   assert.equal(found.not_recorded, 2)
   assert.deepEqual(found.tasks, [])
@@ -83,14 +91,14 @@ test("an accepted or refused task is not listed, and neither is a task that is n
   await put(desk, ["alpha", "refused"], card({ signoff: "refused" }))
   await put(desk, ["alpha", "working"], card({ status: "processing" }))
   await put(desk, ["alpha", "cancelled"], card({ status: "cancelled" }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 0)
   assert.equal(found.not_recorded, 0)
 }))
 
 test("tasks are listed oldest first and only the first fifteen are shown, with the full count", () => withDesk(async (desk) => {
   for (let n = 1; n <= 17; n += 1) await put(desk, ["alpha", `task-${String(n).padStart(2, "0")}`], card({ deliveredAt: ago(n) }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 17)
   assert.equal(found.tasks.length, 15)
   assert.equal(found.tasks[0].slug, "task-17")
@@ -98,13 +106,13 @@ test("tasks are listed oldest first and only the first fifteen are shown, with t
   assert.equal(found.tasks[14].slug, "task-03")
   const lines = unsignedLines(found)
   assert.equal(lines.at(-1), "- ...and 2 more")
-  assert.equal(unsignedDeliveries(desk, { now: NOW, shown: 2 }).tasks.length, 2)
+  assert.equal((await scan(desk, { now: NOW, shown: 2 })).tasks.length, 2)
 }))
 
 test("a task seven days old is marked overdue", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "late"], card({ deliveredAt: ago(7) }))
   await put(desk, ["alpha", "fine"], card({ deliveredAt: ago(6, DAY - 1000) }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.overdue, 1)
   assert.equal(found.tasks[0].overdue, true)
   assert.equal(found.tasks[1].overdue, false)
@@ -118,11 +126,11 @@ test("a scan cut by the archive cap says at least", () => withDesk(async (desk) 
     const file = await put(desk, ["alpha", "_archive", `a-${n}`], card({ deliveredAt: ago(n) }))
     await fs.utimes(file, new Date(NOW - (10 - n) * 1000), new Date(NOW - (10 - n) * 1000))
   }
-  const cut = unsignedDeliveries(desk, { now: NOW, archiveCap: 2 })
+  const cut = (await scan(desk, { now: NOW, archiveCap: 2 }))
   assert.equal(cut.at_least, true)
   assert.equal(cut.count, 2)
   assert.deepEqual(cut.tasks.map((task) => task.slug).sort(), ["a-3", "a-4"], "the newest files by modification time are the ones read")
-  const whole = unsignedDeliveries(desk, { now: NOW, archiveCap: 4 })
+  const whole = (await scan(desk, { now: NOW, archiveCap: 4 }))
   assert.equal(whole.at_least, false)
   assert.equal(whole.count, 4)
 }))
@@ -131,7 +139,7 @@ test("a card whose delivery time cannot be read is listed with age unknown, sort
   await put(desk, ["alpha", "no-flow-time"], card({ deliveredAt: null, evidence: null }))
   await put(desk, ["alpha", "bad-time"], card({ deliveredAt: "not a time", evidence: { kind: "pr", ref: "r1", recordedAt: "also bad" } }))
   await put(desk, ["alpha", "known"], card({ deliveredAt: ago(1) }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 3)
   assert.deepEqual(found.tasks.map((task) => task.slug), ["known", "bad-time", "no-flow-time"])
   assert.equal(found.tasks[1].age_days, null)
@@ -139,13 +147,13 @@ test("a card whose delivery time cannot be read is listed with age unknown, sort
   assert.match(unsignedLines(found)[3], /^- alpha\/bad-time, age unknown, pr r1$/u)
   const onlyUnknown = await mkTempRoot("desk-unsigned-")
   await put(onlyUnknown, ["alpha", "x"], card({ deliveredAt: null, evidence: null }))
-  assert.equal(unsignedDeliveries(onlyUnknown, { now: NOW }).oldest_age_days, null)
+  assert.equal((await scan(onlyUnknown, { now: NOW })).oldest_age_days, null)
 }))
 
 test("the age falls back to the evidence time, and a delivery in the future is not negative", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "from-evidence"], card({ deliveredAt: null, evidence: { kind: "pr", ref: "r", recordedAt: ago(5) } }))
   await put(desk, ["alpha", "future"], card({ deliveredAt: new Date(NOW + DAY).toISOString() }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   const byslug = Object.fromEntries(found.tasks.map((task) => [task.slug, task]))
   assert.equal(byslug["from-evidence"].age_days, 5)
   assert.equal(byslug.future.age_days, 0)
@@ -154,7 +162,7 @@ test("the age falls back to the evidence time, and a delivery in the future is n
 test("a card created already done has the record and no proof, and is listed as no proof recorded", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "bare"], card({ evidence: null }))
   await put(desk, ["alpha", "kindless"], card({ evidence: { kind: "note", ref: null, recordedAt: ago(1) } }))
-  const lines = unsignedLines(unsignedDeliveries(desk, { now: NOW }))
+  const lines = unsignedLines((await scan(desk, { now: NOW })))
   assert.match(lines[2], /^- alpha\/bare, 3 days, no proof recorded$/u)
   assert.match(lines[3], /^- alpha\/kindless, 3 days, no proof recorded$/u)
 }))
@@ -163,7 +171,7 @@ test("a title is printed as the card holds it, on one line and at most 80 charac
   await put(desk, ["alpha", "long"], card({ title: `"${"w".repeat(120)}"` }))
   await put(desk, ["alpha", "lines"], card({ title: `"first\\nsecond\\u0007 bell"` }))
   await put(desk, ["alpha", "untitled"], card({ title: "''" }))
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   const byslug = Object.fromEntries(found.tasks.map((task) => [task.slug, task]))
   assert.equal(byslug.long.title.length, 80)
   assert.equal(byslug.lines.title, "first second bell")
@@ -172,13 +180,13 @@ test("a title is printed as the card holds it, on one line and at most 80 charac
 
 test("a very long proof is cut to one line of 80 characters", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "proof"], card({ evidence: { kind: "pr", ref: `"${"p".repeat(200)}"`, recordedAt: ago(1) } }))
-  const [task] = unsignedDeliveries(desk, { now: NOW }).tasks
+  const [task] = (await scan(desk, { now: NOW })).tasks
   assert.equal(task.proof.length, 80)
 }))
 
 test("a track or task name that carries a secret is redacted in the list", () => withDesk(async (desk) => {
   await put(desk, ["ghp_abcdefghijklmnopqrstuvwxyz0123456789", "fine"], card())
-  const [task] = unsignedDeliveries(desk, { now: NOW }).tasks
+  const [task] = (await scan(desk, { now: NOW })).tasks
   assert.doesNotMatch(JSON.stringify(task), /ghp_/u)
 }))
 
@@ -193,14 +201,16 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
   await put(desk, ["alpha", "_hidden", "x"], card())
   await put(desk, [".dot", "x"], card())
   await fs.mkdir(path.join(desk, "alpha", "empty-folder"), { recursive: true })
+  // A folder named task.md opens on POSIX but cannot be read: one more unreadable card, never a failed scan.
+  await fs.mkdir(path.join(desk, "alpha", "folder-card", "task.md"), { recursive: true })
   await fs.writeFile(path.join(desk, "alpha", "a-file.md"), "x")
   await fs.mkdir(path.join(desk, "_archive", "t", "no-card"), { recursive: true })
   await put(desk, ["alpha", "no-status"], "---\ntitle: x\n---\n")
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = await scan(desk, { now: NOW })
   // A later scan in the same process counts the same cards: a broken card stays unreadable.
-  assert.deepEqual(unsignedDeliveries(desk, { now: NOW }), found)
+  assert.deepEqual(await scan(desk, { now: NOW }), found)
   await fs.chmod(locked, 0o644)
-  const unreadable = lockHolds ? 3 : 2
+  const unreadable = lockHolds ? 4 : 3
   assert.equal(found.count, lockHolds ? 1 : 2)
   assert.equal(found.unreadable, unreadable)
   assert.equal(unsignedLines(found).at(-1), `${unreadable} task cards could not be read, so this list may be short.`)
@@ -208,7 +218,7 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
 
 test("a byte-order mark before the frontmatter is accepted and the card is read", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "bom"], `\uFEFF${card()}`)
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 1)
   assert.equal(found.unreadable, 0)
 }))
@@ -216,7 +226,7 @@ test("a byte-order mark before the frontmatter is accepted and the card is read"
 test("a card whose frontmatter runs past the head of the file is unreadable, not not recorded", () => withDesk(async (desk) => {
   const padded = card({ signoff: null, evidence: null, extra: Array.from({ length: 1500 }, (_, n) => `note_${n}: ${"x".repeat(20)}`) })
   await put(desk, ["alpha", "long-frontmatter"], padded)
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.unreadable, 1)
   assert.equal(found.not_recorded, 0)
 }))
@@ -225,7 +235,7 @@ test("a cut head that holds signoff but whose status sits further down is unread
   const head = ["---", "title: Late status", "signoff:", "  state: delivered_unsigned", "  at: null", "  verified: null", "  reason: null"]
   const late = [...head, ...Array.from({ length: 1500 }, (_, n) => `note_${n}: ${"x".repeat(20)}`), "status: done", "---", ""].join("\n")
   await put(desk, ["alpha", "late-status"], late)
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.unreadable, 1)
   assert.equal(found.count, 0)
 }))
@@ -248,13 +258,21 @@ test("unreadable cards make every status figure a lower bound, and the cap reaso
 
 test("a proof reference that carries a secret is redacted", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "p"], card({ evidence: { kind: "pr", ref: "https://example.test/x?token=ghp_abcdefghijklmnopqrstuvwxyz0123456789", recordedAt: ago(1) } }))
-  assert.doesNotMatch(unsignedDeliveries(desk, { now: NOW }).tasks[0].proof, /ghp_/u)
+  assert.doesNotMatch((await scan(desk, { now: NOW })).tasks[0].proof, /ghp_/u)
 }))
 
 test("a missing desk folder reads as nothing, and a bad time input throws", () => withDesk(async (desk) => {
-  assert.equal(unsignedDeliveries(path.join(desk, "missing"), { now: NOW }).count, 0)
+  assert.equal((await scan(path.join(desk, "missing"), { now: NOW })).count, 0)
   assert.throws(() => unsignedDeliveries(desk, { now: "nonsense" }), /now/u)
-  assert.equal(unsignedDeliveries(desk, { now: new Date(NOW) }).count, 0)
+  await assert.rejects(unsignedDeliveriesAsync(desk, { now: "nonsense" }), /now/u)
+  assert.equal((await scan(desk, { now: new Date(NOW) })).count, 0)
+  // A status run that has been abandoned reads nothing more: an aborted signal rejects with its reason, and a live one changes nothing.
+  await put(desk, ["alpha", "live"], card())
+  await put(desk, ["_archive", "alpha", "old"], card())
+  const stop = new AbortController()
+  stop.abort(new Error("status run ended"))
+  await assert.rejects(unsignedDeliveriesAsync(desk, { now: NOW, signal: stop.signal }), /status run ended/u)
+  assert.deepEqual(await unsignedDeliveriesAsync(desk, { now: NOW, signal: new AbortController().signal }), unsignedDeliveries(desk, { now: NOW }))
 }))
 
 test("a card in flow form and a long frontmatter are read from the head of the file", () => withDesk(async (desk) => {
@@ -262,7 +280,7 @@ test("a card in flow form and a long frontmatter are read from the head of the f
   await put(desk, ["alpha", "flow"], flowCard)
   const padded = card({ deliveredAt: ago(5), extra: Array.from({ length: 3000 }, (_, n) => `note_${n}: ${"x".repeat(20)}`) })
   await put(desk, ["alpha", "_archive", "padded"], padded)
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 2)
   assert.equal(found.tasks.find((task) => task.slug === "flow").proof, "pr r2")
 }))
@@ -371,7 +389,7 @@ test("the scan stays inside the boot budget on a desk with 500 archived cards", 
   for (let n = 0; n < 500; n += 1) await put(desk, [`track-${n % 10}`, "_archive", `task-${n}`], body)
   for (let n = 0; n < 20; n += 1) await put(desk, [`live-${n % 4}`, `live-${n}`], card({ deliveredAt: ago(1) }))
   const started = performance.now()
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   const took = performance.now() - started
   assert.equal(found.count, 520)
   assert.equal(found.at_least, false)
@@ -382,7 +400,7 @@ test("the scan stays inside the boot budget on a desk with 500 archived cards", 
 test("a proof with no kind shows its reference, an unquoted evidence time is read, and a card with no status is skipped", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "no-kind"], card({ deliveredAt: null, evidence: { kind: null, ref: "abc123", recordedAt: ago(4), bare: true } }))
   await put(desk, ["alpha", "no-status"], "---\ntitle: x\n---\n")
-  const found = unsignedDeliveries(desk, { now: NOW })
+  const found = (await scan(desk, { now: NOW }))
   assert.equal(found.count, 1)
   assert.equal(found.tasks[0].proof, "abc123")
   assert.equal(found.tasks[0].age_days, 4)
@@ -394,5 +412,5 @@ test("archived cards with the same modification time are read in a fixed order",
     const file = await put(desk, ["alpha", "_archive", name], card({ deliveredAt: ago(2) }))
     await fs.utimes(file, when, when)
   }
-  assert.deepEqual(unsignedDeliveries(desk, { now: NOW, archiveCap: 2 }).tasks.map((task) => task.slug), ["a", "b"])
+  assert.deepEqual((await scan(desk, { now: NOW, archiveCap: 2 })).tasks.map((task) => task.slug), ["a", "b"])
 }))

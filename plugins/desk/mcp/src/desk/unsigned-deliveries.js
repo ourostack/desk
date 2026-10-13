@@ -15,6 +15,7 @@
 // what `status.json.signoff` holds.
 
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs"
+import { open, readdir, stat } from "node:fs/promises"
 import * as path from "node:path"
 
 import { loadFrontmatterParser } from "./organization.js"
@@ -29,12 +30,22 @@ const HEAD_BYTES = 16 * 1024
 const TEXT_LIMIT = 80
 const NO_PROOF = "no proof recorded"
 
+// The scan exists twice over one set of rules: `unsignedDeliveries` reads the disk synchronously, for the callers that must answer without awaiting (`desk_doctor`, boot), and `unsignedDeliveriesAsync` reads it without blocking the thread, for `desk_status`, which answers the host on a time budget (a single directory listing took 192 ms on a Windows runner). Only the reads differ; which folders are walked, how a card is read and how the figures are counted are shared.
+
+const folderNames = (entries) => entries
+  .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+  .map((entry) => entry.name)
+  .sort()
 const subfolders = (dir) => {
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => entry.name)
-      .sort()
+    return folderNames(readdirSync(dir, { withFileTypes: true }))
+  } catch {
+    return []
+  }
+}
+const subfoldersAsync = async (dir) => {
+  try {
+    return folderNames(await readdir(dir, { withFileTypes: true }))
   } catch {
     return []
   }
@@ -42,21 +53,45 @@ const subfolders = (dir) => {
 const visible = (names) => names.filter((name) => !name.startsWith("_"))
 
 // The first bytes of a card, cut at its last line break so no line is half read, and whether the file went on past them. A card that cannot be opened is `{ missing: true }` when there is no file and `{ failed: true }` for any other reason.
+const unopened = (error) => (error?.code === "ENOENT" || error?.code === "ENOTDIR" ? { missing: true } : { failed: true })
+function headOf(buffer, read) {
+  const text = buffer.toString("utf8", 0, read).replace(/^\uFEFF/u, "")
+  return read < HEAD_BYTES ? { text, cut: false } : { text: text.slice(0, Math.max(text.lastIndexOf("\n"), 0)), cut: true }
+}
 function readHead(file) {
   let fd
   try {
     fd = openSync(file, "r")
   } catch (error) {
-    return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? { missing: true } : { failed: true }
+    return unopened(error)
   }
+  let head
   try {
     const buffer = Buffer.alloc(HEAD_BYTES)
-    const read = readSync(fd, buffer, 0, HEAD_BYTES, 0)
-    const text = buffer.toString("utf8", 0, read).replace(/^\uFEFF/u, "")
-    return read < HEAD_BYTES ? { text, cut: false } : { text: text.slice(0, Math.max(text.lastIndexOf("\n"), 0)), cut: true }
-  } finally {
-    closeSync(fd)
+    head = headOf(buffer, readSync(fd, buffer, 0, HEAD_BYTES, 0))
+  } catch {
+    // A card that opens but cannot be read (a folder named task.md, where opening a folder succeeds) is unreadable, never a scan failure.
+    head = { failed: true }
   }
+  closeSync(fd)
+  return head
+}
+async function readHeadAsync(file) {
+  let handle
+  try {
+    handle = await open(file, "r")
+  } catch (error) {
+    return unopened(error)
+  }
+  let head
+  try {
+    const buffer = Buffer.alloc(HEAD_BYTES)
+    head = headOf(buffer, (await handle.read(buffer, 0, HEAD_BYTES, 0)).bytesRead)
+  } catch {
+    head = { failed: true }
+  }
+  await handle.close()
+  return head
 }
 
 // The frontmatter lines, or null when there is none. A head that was cut before the closing `---` is read as far as it goes only when it already holds both the `signoff:` and `status:` keys; otherwise the card may carry either further down and is unreadable.
@@ -85,9 +120,8 @@ function proofOf(evidence) {
   return oneLine(redactCredentialLikeText(kind === "" ? ref : `${kind} ${ref}`))
 }
 
-// What one card says about its sign-off: `{ missing }` for a folder with no card, `{ unreadable }` for a card that cannot be read in full.
-function readCard(file, { now }) {
-  const head = readHead(file)
+// What one card says about its sign-off, from its head: `{ missing }` for a folder with no card, `{ unreadable }` for a card that cannot be read in full.
+function cardOf(head, { now }) {
   if (head.missing) return { missing: true }
   const lines = head.failed ? null : frontmatterLines(head.text, head.cut)
   if (lines === null) return { unreadable: true }
@@ -112,24 +146,25 @@ function readCard(file, { now }) {
 }
 
 // Every card folder of the desk and of each `desks/<alias>/` subtree: `{ file, desk, track, slug, archived }`.
-function cardFiles(deskRoot) {
+// A generator so both scans walk the same folders: it yields each folder it needs listed and is handed that folder's subfolder names.
+function* cardFiles(deskRoot) {
   const found = []
-  const scanRoot = (base, desk) => {
+  function* scanRoot(base, desk) {
     const add = (track, slug, folder, archived) => found.push({ file: path.join(folder, slug, "task.md"), desk, track, slug, archived })
-    for (const track of visible(subfolders(base))) {
+    for (const track of visible(yield base)) {
       if (desk === null && track === "desks") continue
       const trackDir = path.join(base, track)
-      for (const slug of visible(subfolders(trackDir))) add(track, slug, trackDir, false)
-      for (const slug of visible(subfolders(path.join(trackDir, "_archive")))) add(track, slug, path.join(trackDir, "_archive"), true)
+      for (const slug of visible(yield trackDir)) add(track, slug, trackDir, false)
+      for (const slug of visible(yield path.join(trackDir, "_archive"))) add(track, slug, path.join(trackDir, "_archive"), true)
     }
-    for (const track of visible(subfolders(path.join(base, "_archive")))) {
-      for (const slug of visible(subfolders(path.join(base, "_archive", track)))) add(track, slug, path.join(base, "_archive", track), true)
+    for (const track of visible(yield path.join(base, "_archive"))) {
+      for (const slug of visible(yield path.join(base, "_archive", track))) add(track, slug, path.join(base, "_archive", track), true)
       // A task archived in its track before the whole track was archived.
-      for (const slug of visible(subfolders(path.join(base, "_archive", track, "_archive")))) add(track, slug, path.join(base, "_archive", track, "_archive"), true)
+      for (const slug of visible(yield path.join(base, "_archive", track, "_archive"))) add(track, slug, path.join(base, "_archive", track, "_archive"), true)
     }
   }
-  scanRoot(deskRoot, null)
-  for (const alias of visible(subfolders(path.join(deskRoot, "desks")))) scanRoot(path.join(deskRoot, "desks", alias), alias)
+  yield* scanRoot(deskRoot, null)
+  for (const alias of visible(yield path.join(deskRoot, "desks"))) yield* scanRoot(path.join(deskRoot, "desks", alias), alias)
   return found
 }
 
@@ -139,6 +174,40 @@ function modifiedAt(file) {
   } catch {
     return 0
   }
+}
+async function modifiedAtAsync(file) {
+  try {
+    return (await stat(file)).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+// How many cards the asynchronous scan has open at once: each needs a file descriptor, and a card that fails to open reads as unreadable.
+const CARD_READS = 16
+
+// `read(item)` for every item, at most CARD_READS at a time, in the order given.
+async function readEach(items, read, signal) {
+  const results = []
+  for (let start = 0; start < items.length; start += CARD_READS) {
+    signal?.throwIfAborted()
+    // A card read rejects only if its close fails, so a batch does not end while another of its files is still open.
+    results.push(...await Promise.all(items.slice(start, start + CARD_READS).map(read)))
+  }
+  return results
+}
+
+const timeOf = (now) => {
+  const at = now instanceof Date ? now.getTime() : now
+  if (typeof at !== "number" || !Number.isFinite(at)) throw new TypeError("now must be a time in milliseconds")
+  return at
+}
+
+// The cards to read: every live card, then the newest `archiveCap` archived ones. `modified` holds the archived cards' times, in the order of `archivedOf(all)`.
+const archivedOf = (all) => all.filter((entry) => entry.archived)
+function cardsToRead(all, modified, archiveCap) {
+  const archived = archivedOf(all).map((entry, index) => ({ ...entry, modified: modified[index] })).sort((a, b) => b.modified - a.modified || a.file.localeCompare(b.file))
+  return { scanned: [...all.filter((entry) => !entry.archived), ...archived.slice(0, archiveCap)], atLeast: archived.length > archiveCap }
 }
 
 const trackOf = ({ desk, track }) => [desk, track].filter((part) => part !== null).map((part) => redactName(part)).join("/")
@@ -151,16 +220,36 @@ const trackOf = ({ desk, track }) => [desk, track].filter((part) => part !== nul
  * card of unknown age and is null when none has a known age.
  */
 export function unsignedDeliveries(deskRoot, { now, archiveCap = 500, shown = 15 }) {
-  const at = now instanceof Date ? now.getTime() : now
-  if (typeof at !== "number" || !Number.isFinite(at)) throw new TypeError("now must be a time in milliseconds")
-  const all = cardFiles(deskRoot)
-  const archived = all.filter((entry) => entry.archived).map((entry) => ({ ...entry, modified: modifiedAt(entry.file) })).sort((a, b) => b.modified - a.modified || a.file.localeCompare(b.file))
-  const scanned = [...all.filter((entry) => !entry.archived), ...archived.slice(0, archiveCap)]
+  const at = timeOf(now)
+  const walk = cardFiles(deskRoot)
+  let step = walk.next()
+  while (!step.done) step = walk.next(subfolders(step.value))
+  const all = step.value
+  const { scanned, atLeast } = cardsToRead(all, archivedOf(all).map((entry) => modifiedAt(entry.file)), archiveCap)
+  return tally(scanned, scanned.map((entry) => cardOf(readHead(entry.file), { now: at })), { atLeast, shown })
+}
+
+/** The same scan and the same answer as `unsignedDeliveries`, read without blocking the thread. Rejects where that one throws. */
+export async function unsignedDeliveriesAsync(deskRoot, { now, archiveCap = 500, shown = 15, signal }) {
+  const at = timeOf(now)
+  const walk = cardFiles(deskRoot)
+  let step = walk.next()
+  while (!step.done) {
+    signal?.throwIfAborted()
+    step = walk.next(await subfoldersAsync(step.value))
+  }
+  const all = step.value
+  const { scanned, atLeast } = cardsToRead(all, await readEach(archivedOf(all), (entry) => modifiedAtAsync(entry.file), signal), archiveCap)
+  return tally(scanned, (await readEach(scanned, (entry) => readHeadAsync(entry.file), signal)).map((head) => cardOf(head, { now: at })), { atLeast, shown })
+}
+
+// The figures for the cards read: `cards[i]` is what `scanned[i]`'s card says.
+function tally(scanned, cards, { atLeast, shown }) {
   const unsigned = []
   let notRecorded = 0
   let unreadable = 0
-  for (const entry of scanned) {
-    const card = readCard(entry.file, { now: at })
+  for (const [index, entry] of scanned.entries()) {
+    const card = cards[index]
     if (card.unreadable) unreadable += 1
     if (card.missing || card.unreadable || card.status !== "done") continue
     if (card.state === "not_recorded") notRecorded += 1
@@ -170,7 +259,7 @@ export function unsignedDeliveries(deskRoot, { now, archiveCap = 500, shown = 15
   const ages = ordered.filter((task) => task.age_days !== null).map((task) => task.age_days)
   return {
     count: ordered.length,
-    at_least: archived.length > archiveCap,
+    at_least: atLeast,
     overdue: ordered.filter((task) => task.overdue).length,
     oldest_age_days: ages.length === 0 ? null : Math.max(...ages),
     not_recorded: notRecorded,
