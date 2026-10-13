@@ -38,6 +38,19 @@ test("with no task named, the boot says what to do when the first message descri
   assert.ok(formatBootText(result).includes(NEW_WORK))
 })
 
+test("a session with no operator is not told to wait for a go: it gets the instruction without that sentence", async () => {
+  const root = await desk()
+  const GO = " Creating the task is not the go: after it, state your assumptions and what done means, and wait for the operator's go before any change, even when they left a choice to you."
+  assert.ok(NEW_WORK.includes(GO))
+  for (const extra of [{}, { taskQuery: "add a moisture threshold to the rain delay policy" }]) {
+    const unattended = await boot(root, { ...extra, env: { DESK: root, CLAUDECODE: "1", DESK_FACTORY_HEADLESS: "1" } })
+    for (const list of lists(unattended)) {
+      assert.ok(list.includes(NEW_WORK.replace(GO, "")), "the task-first instruction is still there")
+      assert.ok(!list.some((line) => line.includes("wait for the operator's go")), "nobody is there to give a go")
+    }
+  }
+})
+
 test("a description that matches no open task gets the same instruction; a named task that resolves does not", async () => {
   const root = await desk()
   const unmatched = await boot(root, { taskQuery: "add a moisture threshold to the rain delay policy" })
