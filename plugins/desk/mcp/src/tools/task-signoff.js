@@ -95,6 +95,10 @@ export async function taskSignoff({
   const refused = outcome === "refused"
   const next = refused ? refuse(signed.record, { at, reason, returnReason }) : signed.record
   let file = found.file
+  // A refusal reopens the task, and a task cannot be worked in an archived track. No tool brings a track back yet, so say the one command.
+  if (refused && found.trackArchived) {
+    throw new Error(`task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded. Bring the track back with \`git mv _archive/${track} ${track}\`, commit that, then call task_signoff again.`)
+  }
   if (refused && found.archived) {
     try {
       await task_move({ deskRoot, input: { track, slug, unarchive: true }, person, readiness, statusContext, spawnGit, schedulePush })

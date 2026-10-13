@@ -279,6 +279,60 @@ test("an acceptance of an archived task leaves it archived", async () => {
 })
 
 
+// A track whose tasks are all terminal is archived whole into the desk's `_archive/` (archive-workflow), often before the operator answers.
+function archiveTrack(root, track = "t") {
+  spawnSync("git", ["-C", root, "mv", track, path.join("_archive", track)], { encoding: "utf8" })
+  git(root, "commit", "-q", "-m", `archive: track ${track}`)
+}
+
+test("an acceptance of a task whose whole track was archived is recorded where the card is", async () => {
+  for (const archive of [true, false]) {
+    const root = await mkTempDeskRoot()
+    initGit(root)
+    await fs.mkdir(path.join(root, "_archive"), { recursive: true })
+    await delivered(root, "track-on-shelf", { archive })
+    archiveTrack(root)
+    const rel = archive ? "_archive/t/_archive/track-on-shelf/task.md" : "_archive/t/track-on-shelf/task.md"
+    const result = await sign(root, "track-on-shelf", { outcome: "accepted" })
+    assert.equal(result.status, "signed")
+    assert.equal(result.path, rel)
+    const { data } = await readFront(path.join(root, rel))
+    assert.equal(data.signoff.state, "accepted")
+    assert.equal(data.status, "done")
+    await assert.rejects(fs.access(path.join(root, "t")), "the track stays archived")
+    assert.equal(git(root, "status", "--short").trim(), "", "everything is committed")
+    assert.deepEqual(lastFiles(root), [rel])
+  }
+})
+
+test("a refusal of a task whose whole track was archived records nothing and says how to bring the track back", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.mkdir(path.join(root, "_archive"), { recursive: true })
+  await delivered(root, "track-on-shelf", { archive: true })
+  archiveTrack(root)
+  const file = path.join(root, "_archive", "t", "_archive", "track-on-shelf", "task.md")
+  const before = await body(file)
+  const head = headOf(root)
+  const finalize = spy()
+  await assert.rejects(sign(root, "track-on-shelf", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { finalize: finalize.fn }), /task_signoff: the task's track is archived, so the task cannot go back to processing there; nothing was recorded\. Bring the track back with `git mv _archive\/t t`, commit that, then call task_signoff again\./u)
+  assert.equal(await body(file), before)
+  assert.equal(headOf(root), head)
+  assert.equal(finalize.calls.length, 0)
+})
+
+test("a live card wins over one left in an archived track of the same name", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.mkdir(path.join(root, "_archive"), { recursive: true })
+  await delivered(root, "same-name")
+  archiveTrack(root)
+  const live = await delivered(root, "same-name")
+  const result = await sign(root, "same-name", { outcome: "accepted" })
+  assert.equal(result.path, "t/same-name/task.md")
+  assert.equal((await readFront(live)).data.signoff.state, "accepted")
+})
+
 test("repeating an acceptance changes nothing and says so", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

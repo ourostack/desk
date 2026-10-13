@@ -39,9 +39,12 @@ function folderName(field, value) {
   return value
 }
 
-// The card at its live path, else under `_archive`. A missing person folder reads as a missing card.
+// The card at its live path, else under the track's `_archive`, else in a track that was archived whole into the desk's `_archive/`
+// (`trackArchived`; the track is archived once its tasks are terminal, often before the operator answers a delivery). A missing
+// person folder reads as a missing card.
 export async function findCard({ deskRoot, person, track, slug }) {
-  for (const segments of [[track, slug, "task.md"], [track, "_archive", slug, "task.md"]]) {
+  const layouts = [[track, slug, "task.md"], [track, "_archive", slug, "task.md"], ["_archive", track, slug, "task.md"], ["_archive", track, "_archive", slug, "task.md"]]
+  for (const segments of layouts) {
     let file
     try {
       file = await resolveWriteTarget({ deskRoot, person, segments, createPersonRoot: false })
@@ -49,7 +52,7 @@ export async function findCard({ deskRoot, person, track, slug }) {
       if (!String(error?.message).startsWith(EFFECTIVE_ROOT_MISSING)) throw error
       return null
     }
-    if (await pathExists(file)) return { file, archived: segments[1] === "_archive" }
+    if (await pathExists(file)) return { file, archived: segments.includes("_archive"), trackArchived: segments[0] === "_archive" }
   }
   return null
 }
