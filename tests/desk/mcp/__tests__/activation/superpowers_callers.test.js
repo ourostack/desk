@@ -117,6 +117,20 @@ test("the Desk adapter ships with valid named frontmatter", () => {
   assert.match(frontmatter[1], /^description: .+$/mu)
 })
 
+test("the adapter trigger covers new work before raw provider skill selection", () => {
+  const frontmatter = read(adapter).match(/^---\r?\n([\s\S]*?)\r?\n---/u)[1]
+  assert.match(frontmatter, /new or resumed engineering work/u)
+  assert.match(frontmatter, /before invoking brainstorming or another Superpowers skill/u)
+  assert.doesNotMatch(frontmatter, /^description: Map an existing Desk task/mu)
+})
+
+test("the adapter maps outcome approval onto later provider artifacts without another human gate", () => {
+  const text = read(adapter)
+  assert.match(text, /explicit go authorizes drafting and reviewing the provider's design and plan within that outcome/u)
+  assert.match(text, /Written design and plan review remain required, but the agent owns them/u)
+  assert.match(text, /human-only artifact approval.*explicitly requested|explicitly requested.*human-only artifact approval/u)
+})
+
 test("the Desk adapter admits exactly the three recorded entries", () => {
   const text = read(adapter)
   assert.match(text, /Entry: start \| reconciled-resume \| material-redesign\./u)

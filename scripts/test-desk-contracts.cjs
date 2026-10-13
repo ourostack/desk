@@ -40,6 +40,20 @@ function subsection(file, heading) {
 }
 
 // Work orchestration, the Superpowers seam and the task lifecycle.
+contract("alignment presents the completion checks before asking for go", () => {
+  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
+  assert.match(foundation, /Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go/iu);
+});
+contract("delivery has a literal three-line response contract", () => {
+  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
+  assert.match(foundation, /Asked: <[\s\S]+Delivered: <[\s\S]+Accept or send back\?/u);
+  assert.match(foundation, /Required format, not an optional follow-up/iu);
+  assert.match(foundation, /Put evidence in Delivered/iu);
+});
+contract("a changed requirement names the previous check and its missing coverage", () => {
+  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
+  assert.match(foundation, /name the previous check[\s\S]+new requirement it does not cover[\s\S]+same durable task[\s\S]+rerun/iu);
+});
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
   "Desk alpha delegates engineering without repeating approval",

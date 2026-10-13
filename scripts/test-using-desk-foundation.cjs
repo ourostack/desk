@@ -57,7 +57,10 @@ function section(markdown, title) {
 }
 
 function assertSinglePhysicalLine(body, label) {
-  assert.equal(body.split("\n").length, 1, `${label} prose must stay on one physical line`);
+  const prose = body.replace(/```[^\n]*\n[\s\S]*?\n```/gu, "").trim();
+  for (const paragraph of prose.split(/\n\s*\n/u)) {
+    assert.equal(paragraph.split("\n").length, 1, `${label} prose paragraphs must stay on one physical line`);
+  }
 }
 
 function assertSectionPhrases(body, label, phrases) {
@@ -290,11 +293,13 @@ function main() {
 
   // The foundation says done is a delivery, tells the agent what to do at delivery, and tells a child never to record the answer.
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation says done is a delivery and names task_signoff", [
-    "Done is a delivery, not an acceptance. When you deliver, end your reply with three lines (what was asked, what you delivered with its proof, accept or send back?) and carry on. Record the operator's answer with task_signoff in a later turn, never in the turn that delivered.",
+    "Done is a delivery, not an acceptance.",
+    "Record the answer later with task_signoff, never in this turn.",
   ]);
   assertSectionPhrases(section(skill, "Delivery and sign-off"), "using-desk the foundation tells a child agent never to call task_signoff", [
-    "A child agent never calls task_signoff.",
+    "A child agent never asks for acceptance or calls task_signoff.",
   ]);
+  assert.match(section(skill, "Delivery and sign-off"), /```text\nAsked: <outcome>\nDelivered: <result and proof>\nAccept or send back\?\n```/u);
 
   const owned = (name) => fs.readFileSync(path.join(pluginRoot, "skills", name, "SKILL.md"), "utf8");
   // Raising older unsigned deliveries moved to interaction-style, which owns it, to make room for the RFC reading trigger (SessionStart size budget).
@@ -310,14 +315,13 @@ function main() {
   ]);
 
   assertSectionConcepts(section(skill, "Alignment, then ownership"), [
-    /state assumptions/iu,
-    /define done/iu,
+    /state the outcome, assumptions/iu,
+    /completion checks/iu,
     /explicit go/iu,
-    /proportionate/iu,
     /own routine choices and safe scoped work to done/iu,
     /safe scoped work to done.*while questions wait/iu,
     /gates: voice \(sent as them\), their decisions, money, user-only credentials or accounts, irreversible acts or unclear intent or authority/u,
-    /gather human input for the whole task with recommendations/iu,
+    /recommended decisions and completion checks together/iu,
     /bounded requests need one confirming sentence/iu,
     // Cold dry runs, 2026-10-12: "Frontload before they leave" did not make the agent say what it needed, or that it needed nothing, when the human left.
     /When they say they're leaving, open with your needs, even if none/u,
@@ -432,9 +436,9 @@ function main() {
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.
   assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
     "same durable task",
-    "name the evidence it invalidates",
+    "name the previous check and the new requirement it does not cover",
     "implementation and review gates",
-    "`work-orchestration` holds the procedure",
+    "`work-orchestration`",
   ]);
   assertSectionPhrases(section(owned("work-orchestration"), "Requirements that arrive during execution"), "work-orchestration Requirements that arrive during execution", [
     "governing spec",

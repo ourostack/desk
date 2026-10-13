@@ -1,0 +1,1 @@
+Route new engineering work through the Desk adapter before raw provider skills and map whole-outcome go onto agent-owned design and plan review without another human approval. Make the delivery format literal, require completion checks in alignment, and identify missing coverage when requirements change. Add matching collaboration evals within the existing startup-size limit.
