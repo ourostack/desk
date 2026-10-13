@@ -15,11 +15,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_update|task_archive|task_signoff)$/u;
 const text = value => typeof value === "string";
 const plain = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const clean = value => value.replace(/[*`]/gu, "").trim();
+const clean = value => value.replace(/(\*\*|__)(.+?)\1/gu, "$2").replace(/`([^`]+)`/gu, "$1").trim();
 function proofIn(line, ref) {
-  const proof = clean(ref);
+  const proof = ref.trim();
   if (/^[0-9a-f]{7,40}$/iu.test(proof)) {
-    return (line.match(/\b[0-9a-f]{7,40}\b/giu) ?? []).some(x => x.length <= proof.length && proof.toLowerCase().startsWith(x.toLowerCase()));
+    return (clean(line).match(/\b[0-9a-f]{7,40}\b/giu) ?? []).some(x => x.length <= proof.length && proof.toLowerCase().startsWith(x.toLowerCase()));
   }
   return line.includes(proof);
 }
@@ -31,11 +31,11 @@ function packetOf(value) {
 }
 function hasEnding(reply, packets) {
   if (!text(reply)) return false;
-  const lines = reply.split(/\r?\n/u).map(clean).filter(Boolean);
+  const lines = reply.split(/\r?\n/u).map(x => x.trim()).filter(Boolean);
   const tail = lines.slice(-packets.length * 3);
   return tail.length === packets.length * 3 && packets.every((p, i) =>
-    /^Asked:\s*\S/u.test(tail[i * 3]) && /^Delivered:\s*\S/u.test(tail[i * 3 + 1])
-    && proofIn(tail[i * 3 + 1], p[1].slice("Delivered: ".length)) && tail[i * 3 + 2] === "Accept or send back?");
+    /^Asked:\s*\S/u.test(clean(tail[i * 3])) && /^Delivered:\s*\S/u.test(clean(tail[i * 3 + 1]))
+    && proofIn(tail[i * 3 + 1], p[1].slice("Delivered: ".length)) && clean(tail[i * 3 + 2]) === "Accept or send back?");
 }
 function resultOf(content) {
   if (plain(content)) return content;

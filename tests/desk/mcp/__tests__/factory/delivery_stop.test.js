@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import hook from "../../../../../plugins/desk/hooks/lib/factory-end.cjs"
+import { checkDelivery } from "../../../../../plugins/desk/hooks/lib/delivery-stop.cjs"
 import { scratch, ID, START, END } from "./_session_helpers.js"
 
 const REF = "1234567890abcdef1234567890abcdef12345678"
@@ -41,8 +41,8 @@ async function fixture(ctx, host, options = {}) {
   return { host, payload, env: ctx.env, log, lines }
 }
 async function check(f) {
-  assert.equal(typeof hook.checkDelivery, "function", "the existing stop wrapper must expose the bounded delivery decision")
-  return hook.checkDelivery(f)
+  assert.equal(typeof checkDelivery, "function", "the existing stop wrapper's bounded delivery helper must exist")
+  return checkDelivery(f)
 }
 for (const host of ["copilot", "claude"]) {
   test(`${host}: missing evidenced delivery, including away, requests only final-reply correction`, () => scratch(async ctx => {
@@ -52,8 +52,8 @@ for (const host of ["copilot", "claude"]) {
     for (const line of PACKET) assert.ok(result.output.reason.includes(line))
     assert.match(result.output.reason, /Do not rerun[\s\S]+task[\s\S]+commit[\s\S]+approval/u)
   }))
-  for (const reply of [PACKET.join("\n"), `Proof verified.\n\n**Asked:** Portable manifests\n\n**Delivered:** \`${REF.slice(0, 8)}\` — 79 tests\n\n**Accept or send back?**`]) {
-    test(`${host}: already complete formatting is not blocked (${reply.startsWith("Proof") ? "bold/blank" : "plain"})`, () => scratch(async ctx => {
+  for (const reply of [PACKET.join("\n"), `Proof verified.\n\n**Asked:** Portable manifests\n\n**Delivered:** \`${REF.slice(0, 8)}\` — 79 tests\n\n**Accept or send back?**`, `__Asked:__ Portable manifests\n\n__Delivered:__ ${REF}\n\n__Accept or send back?__`]) {
+    test(`${host}: already complete formatting is not blocked (${reply.startsWith("__") ? "underscore" : reply.startsWith("Proof") ? "bold/blank" : "plain"})`, () => scratch(async ctx => {
       assert.equal((await check(await fixture(ctx, host, { reply }))).status, "complete")
     }))
   }

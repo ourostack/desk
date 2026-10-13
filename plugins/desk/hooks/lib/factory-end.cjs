@@ -189,4 +189,4 @@ function main(entry, argv = process.argv, stdin = process.stdin) {
 }
 
 const checkDelivery = options => require("./delivery-stop.cjs").checkDelivery(options);
-module.exports = { readInput, runHook, launch, main, checkDelivery };
+module.exports = { readInput, runHook, launch, main };
