@@ -16,6 +16,27 @@ import {runInNewContext} from "node:vm"
 import {different} from "../_file_identity.js"
 import * as runner from "../../../../../plugins/desk/mcp/src/factory/triage-runner.js"
 const realRunner=runner
+// Every test that presents another platform restores this one, taken before any test runs: a body inside a wrapper that
+// already presents Darwin would otherwise capture Darwin and put it back last.
+const REAL_PLATFORM=Object.getOwnPropertyDescriptor(process,"platform")
+// Off Darwin (Linux CI), stand in for Darwin's per-user temporary folder. It is needed there, not a cover for a leak: the
+// constructed child environment requires an owner-only temporary folder, which the product reads through os.tmpdir() off
+// Darwin (CI's /tmp is shared, so TMPDIR points at a private folder), and the tests that present a Darwin platform on Linux
+// read it through getconf, which has no DARWIN_USER_TEMP_DIR there.
+if(process.platform!=="darwin"){
+  const userTemp=realpathSync(mkdtempSync(path.join(tmpdir(),"triage-user-temp-")))
+  process.env.TMPDIR=userTemp
+  const spawnSync=childProcess.spawnSync
+  childProcess.spawnSync=(command,args,...rest)=>command==="/usr/bin/getconf"&&args?.[0]==="DARWIN_USER_TEMP_DIR"?{status:0,stdout:`${userTemp}\n`}:spawnSync(command,args,...rest)
+  syncBuiltinESMExports()
+}
+// A test whose run builds the child environment needs POSIX owners and modes. Windows has neither, so the product refuses to
+// build it there, and the test asserts that refusal instead of running.
+const posixEnvTest=(name,fn)=>test(name,async(t)=>{
+  if(process.platform!=="win32")return fn(t)
+  t.diagnostic("Windows has no POSIX owners or modes; asserting the child environment's refusal instead")
+  assert.throws(()=>runner.triageChildEnvironment({HOME:tmpdir()}),{message:"environment_unsafe"})
+})
 // A caller doctor, policy reader or chain resolver reaches only this
 // nonaccepted control host over the real pins, never the production exports.
 const adapterRunner=Object.freeze({...runner,...runner.createNonacceptedControlHost()})
@@ -200,12 +221,12 @@ function controlHostTest(name,fn){
     const system=path.join(library,"Application Support","ClaudeCode"),preferences=path.join(library,"Managed Preferences")
     const host=runner.createNonacceptedControlHost({engine:{sha256:hash(bytes),spans},system,preferences})
     assert.equal(host.authority,false)
-    const platform=Object.getOwnPropertyDescriptor(process,"platform"),exec=childProcess.execFileSync
+    const platform=REAL_PLATFORM,exec=childProcess.execFileSync
     Object.defineProperty(process,"platform",{...platform,value:"darwin"})
     t.mock.method(childProcess,"execFileSync",(command,args,options)=>command==="/usr/bin/codesign"?"":exec(command,args,options))
     syncBuiltinESMExports()
     t.after(()=>{Object.defineProperty(process,"platform",platform);childProcess.execFileSync=exec;syncBuiltinESMExports()})
-    await fn(t,{runner:Object.freeze({...runner,...host}),cli,system,preferences,fragment:spans[0][0],synthetic:true})
+    await fn(t,{runner:Object.freeze({...runner,...host}),cli,system,preferences,fragment:spans[0][0],synthetic:true,engine:{sha256:hash(bytes),spans}})
     // Synthetic collections never reach the production registry.
   })
 }
@@ -586,7 +607,7 @@ test("finite_control_rejections_preserve_named_boundary_and_no_authority",async(
 test("old_safe_mode_record_rejected",()=>{
   assert.throws(()=>runner.validateOwnedQualificationStructure({record:{version:2}}),{message:"qualification_structure"})
 })
-controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory",async(t,{runner,cli:actual,synthetic})=>{
+controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_without_inventing_inventory",async(t,{runner,cli:actual,synthetic,engine,preferences})=>{
   const f=await fixture(t),catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const custody=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js")
   const data=JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/src/factory/v12-owned-catalog.json",import.meta.url)))
@@ -609,6 +630,11 @@ controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_witho
   assert.equal(observed.evidence.sources[0].path_identity.path,actual)
   const unknown=await runner.collectTriageControls({cli:f.cli,env,argv:p.argv,runDiagnostic:()=>{throw Error("no diagnostic")}})
   assert.equal(unknown.detail,"engine_revision")
+  if(synthetic){
+    // A managed root that is not one absolute, normalised path is refused before any file is read.
+    const relative=realRunner.createNonacceptedControlHost({engine,system:"relative/ClaudeCode",preferences})
+    assert.equal((await relative.collectTriageControls({cli:actual,env,argv:p.argv,runDiagnostic:diagnostic})).detail,"control_path_ambiguous")
+  }
   const {EventEmitter}=await import("node:events"),{PassThrough}=await import("node:stream")
   t.mock.method(childProcess,"spawn",(_command,args)=>{
     assert.deepEqual(args,["doctor"])
@@ -623,6 +649,7 @@ controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_witho
     complete:true,controller_invariant:true,sources:[source],validation_errors:[],
   })}})
   assert.equal(legacyDiagnostic.authority,false);assert.equal(legacyDiagnostic.state,"admitted")
+  // Restored at once, inside this body, to what the wrapper presents.
   const platform=Object.getOwnPropertyDescriptor(process,"platform")
   try{
     Object.defineProperty(process,"platform",{...platform,value:"linux"})
@@ -630,7 +657,7 @@ controlHostTest("real_control_collector_pins_source_and_collects_fixed_off_witho
     const linuxPolicy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:linuxLaunch})
     assert.equal((await runner.collectTriageControls({cli:actual,env,argv:linuxPolicy.argv,runDiagnostic:diagnostic})).detail,"control_host")
   }finally{Object.defineProperty(process,"platform",platform)}
-  assert.equal((await runner.collectTriageControls({cli:actual,env:{HOME:"relative"},argv:p.argv,runDiagnostic:diagnostic})).detail,"control_path_ambiguous")
+  assert.equal((await runner.collectTriageControls({cli:actual,env:{HOME:"relative"},argv:p.argv,runDiagnostic:diagnostic})).detail,"environment_unsafe")
   const brokenDiagnostic=await runner.collectTriageControls({cli:actual,env,argv:p.argv,
     runDiagnostic:async()=>({stdout:BigInt(1),stderr:null})})
   assert.equal(brokenDiagnostic.capture.channels.diagnostic.observation,"unobserved")
@@ -876,7 +903,7 @@ async function fixture(t){
   const resolveExec=()=>({cmd:cli,prefix:[],files:[cli,path.join(dir,"runtime")],supported:true})
   return {dir,inputDir,resultFile,cli,resolveExec,env:{HOME:dir,PATH:"/fixture",PRIVATE_SECRET:"not-for-child",HTTPS_PROXY:"https://proxy"}}
 }
-test("real_exports_refuse_caller_doctor_policy_reader_and_chain_resolver",async(t)=>{
+posixEnvTest("real_exports_refuse_caller_doctor_policy_reader_and_chain_resolver",async(t)=>{
   const f=await fixture(t);let called=0
   const count=async()=>{called++;return diagnostic()}
   for(const extra of [{runDiagnostic:count},{policyReaders:{read:()=>{called++;return readers.read()}}},{resolveExec:f.resolveExec}]){
@@ -1003,7 +1030,7 @@ ownedHostTest("qualified_format_full_per_run_identity","posix",async(t)=>{
     const run=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(f.dir,`identity-${i}`),deadline:Date.now()+15000})
     t.after(()=>run.close())
     const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:run.launch})
-    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical({HOME:f.dir,DESK_FACTORY_HEADLESS:"1"})),owned_launch:run.launch,
+    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment({HOME:f.dir}))),owned_launch:run.launch,
       prepared_sha256:run.prepared.sha256,catalog_sha256:run.catalog.catalogSha256,brief_sha256:run.catalog.briefSha256,record_refs_sha256:run.catalog.recordRefsSha256}
     const config={invocation,chain:{effective_argv:[f.cli]},cliMetadata:metadata,env:{HOME:f.dir}}
     const identity=runner.ownedInvocationIdentity(config);identities.push(identity)
@@ -1043,18 +1070,19 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
     const run=await custody.prepareOwnedCatalogRun({inputDir:f.inputDir,runDir:path.join(out,`native-${i}`),deadline:Date.now()+15000})
     t.after(()=>run.close())
     const policy=runner.triagePolicy({inputDir:f.inputDir,resultFile:f.resultFile,cliMetadata:metadata,ownedServer:run.launch})
-    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical({HOME:f.dir,DESK_FACTORY_HEADLESS:"1"})),owned_launch:run.launch,
+    const invocation={command:f.cli,args:policy.argv,cwd:run.runDir,parent_env_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment({HOME:f.dir}))),owned_launch:run.launch,
       prepared_sha256:run.prepared.sha256,catalog_sha256:run.catalog.catalogSha256,brief_sha256:run.catalog.briefSha256,record_refs_sha256:run.catalog.recordRefsSha256}
-    nativeReceipts.push({snapshotFile:path.join(out,`native-${i}`,"catalog.json"),invocation,custody:{sourceIdentity}})
-    directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools})
+    nativeReceipts.push({snapshotFile:path.join(out,`native-${i}`,"catalog.json"),invocation,custody:{sourceIdentity,roots:custody.ownedSourceRoots(),moduleClosure:[]}})
+    directReceipts.push({snapshotArchive:path.join(out,`direct-${i}`,"catalog.json"),tools:catalog.catalogToolSchemas().tools,custody:{sourceIdentity,roots:custody.ownedSourceRoots()}})
     invocationIdentities.push(runner.ownedInvocationIdentity({invocation,chain:{effective_argv:[f.cli]},cliMetadata:metadata,env}))
   }
   const collected=await runner.runNonacceptedControlCollection(controlInput()),controls=collected.outcome.evidence
   const control_history=nativeReceipts.map(run=>({...structuredClone(controls),recipe_sha256:hash(catalog.catalogCanonical({version:3,argv:run.invocation.args}))}))
   const registered=[...Object.keys(fixedOff()),"cc-plugin-tips@builtin","cc-plugin-sec-default@builtin"]
   const {catalogProtocolIdentity}=await import("../../../../../plugins/desk/mcp/src/factory/triage-protocol.js")
-  const synthetic={version:6,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
-    enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:2,sourceIdentity,
+  const synthetic={version:7,protocol_envelope_version:2,protocol_identity:catalogProtocolIdentity(),
+    enforcement_scheme:"owned_catalog_mcp",state:"qualified",env_recipe_version:3,sourceIdentity,source_roots:custody.ownedSourceRoots(),
+    dependency_identity:custody.ownedDependencyIdentity(),environment_sha256:hash(catalog.catalogCanonical(runner.triageChildEnvironment(env))),
     recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",
     optional_off_sha256:hash(catalog.catalogCanonical(fixedOff())),registered_set_sha256:hash(catalog.catalogCanonical(registered)),
     effective_off_sha256:hash(catalog.catalogCanonical(control_history.map(e=>({recipe:e.recipe_sha256,sources:e.effective_sources_sha256,
@@ -1080,7 +1108,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   const document=runner.prepareOwnedQualificationDocument({directReceipts,nativeReceipts,admission:{sources:[],remote_delivery:"not_applicable",controls:control_history[1],control_history},
     chain:{effective_argv:[f.cli],fingerprint:"b".repeat(64)},cliMetadata:metadata,cli:path.join(f.dir,"indirect-selector"),env})
   assert.equal(document.state,"unaccepted_document");assert.equal(document.authority,false)
-  assert.equal(document.record.version,6,"published protocol amendment invalidates record5")
+  assert.equal(document.record.version,7,"content-addressed identity invalidates record6")
   assert.equal(document.record.protocol_envelope_version,2,"record binds the finite reviewed protocol envelope")
   assert.equal(document.record.cli,f.cli,"record binds actual execution target, not original selector")
   const lateArgs=structuredClone(nativeReceipts),secondArgs=lateArgs[1].invocation.args
@@ -1092,6 +1120,8 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
     chain:{state:"inspected",effective_argv:[f.cli],fingerprint:"b".repeat(64)}}
   const unit=runner.createNonacceptedTriageUnit(unitConfig)
   const sealed=unit.seal()
+  assert.match(sealed.record.host_seal,/^[a-f0-9]{64}$/u,"a registered record carries this host's seal")
+  const stored=unit.sealDocument(document.record)
   assert.equal(sealed.authority,false);assert.equal(sealed.state,"unit_registered")
   assert.equal(unit.lookup(sealed.record).registered,true)
   const successful=await unit.run(sealed.record)
@@ -1161,7 +1191,7 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   }
   for(const failure of ["read","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect","admission","admissionIdentity"]){
     const isolated=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
-    await isolated.save(document.record)
+    await isolated.save(stored)
     const refused=await isolated.load()
     assert.equal(refused.outcome.state,"scope_unqualified",failure)
     assert.equal(isolated.lookup(refused.outcome).registered,false)
@@ -1170,8 +1200,113 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   await assert.rejects(writeFailure.save(document.record))
   assert.equal((await writeFailure.load()).outcome.state,"scope_unqualified")
   const cliMismatch=runner.createNonacceptedTriageUnit(unitConfig)
-  await cliMismatch.save(document.record)
-  assert.equal((await cliMismatch.load({cli:"/synthetic/other"})).outcome.reason,"launch_chain_unknown")
+  await cliMismatch.save(stored)
+  assert.equal((await cliMismatch.load({cli:"/synthetic/other"})).outcome.reason,"diagnostic_inadequate")
+  assert.deepEqual((await cliMismatch.restore({cli:"/synthetic/other"})).outcome,{state:"stale",reason:"engine_mismatch",requalify:false})
+  // The classified restore: stale reasons with their requalify flag, damage kept apart.
+  // `edit` changes the stored record after sealing (damage); `reseal` seals the edited record as this host would.
+  const classify=async(failures,{record=stored,edit,reseal,cli,extra,sealedBefore}={})=>{
+    const isolated=runner.createNonacceptedTriageUnit({...unitConfig,...(extra??{}),failures})
+    let saved=structuredClone(record);edit?.(saved)
+    if(reseal)saved=isolated.sealDocument(saved)
+    await isolated.save(saved)
+    if(saved.state==="blocked"&&!failures.noCapture)await isolated.saveDocument("failure-capture.json",{version:1})
+    return (await isolated.restore({...(cli?{cli}:{}),...(sealedBefore===undefined?{}:{sealedBefore})})).outcome
+  }
+  assert.equal((await classify({})).state,"qualified")
+  assert.deepEqual(await classify({host:true}),{state:"stale",reason:"host_unsupported",requalify:false})
+  const fresh=runner.createNonacceptedTriageUnit(unitConfig)
+  assert.deepEqual((await fresh.restore()).outcome,{state:"missing"})
+  assert.deepEqual(await classify({read:true}),{state:"damaged",reason:"unreadable"})
+  for(const [failure,reason,requalify]of [["source","source_changed",true],["sourceGone","source_changed",true],
+    ["dependencies","source_changed",true],["dependenciesGone","source_changed",true],["runtime","runtime_changed",true],
+    ["engineMoved","engine_changed",true],["engineGone","engine_unpinned",false],["closureChanged","source_changed",true],
+    ["chain","chain_unavailable",false],["chainIdentity","chain_changed",true],["admission","policy_blocked",false],
+    ["admissionIdentity","policy_changed",true],["hostUnknown","host_unsupported",false],["rootUnsafe","root_unsafe",false],
+    ["sourceUnreadable","check_failed",false],["closureUnreadable","check_failed",false],["chainThrows","check_failed",false]]){
+    assert.deepEqual(await classify({[failure]:true}),{state:"stale",reason,requalify},failure)
+  }
+  assert.equal((await classify({sourceFlicker:true})).state,"qualified","a file that vanishes once mid-read is read again")
+  // Relocated roots: restore admits the qualified invocation rebuilt under the current roots, not the recorded argv.
+  assert.equal((await classify({otherRoots:true})).state,"qualified","a byte-identical install at another path keeps the record")
+  const elsewhere=runner.createNonacceptedTriageUnit({...unitConfig,failures:{otherRoots:true}})
+  const misplaced=await elsewhere.run(elsewhere.seal().record)
+  assert.equal(misplaced.outcome.state,"scope_unqualified","the unit's admission refuses a launch that names another root")
+  assert.equal(elsewhere.statistics().runs,0)
+  for(const [failure,reason]of [["closureInvalid","structure"],["restoreDirect","receipts"],["restoreNative","receipts"],
+    ["restoreAuthNative","receipts"],["receiptFrames","receipts"],["foreignHost","seal"]]){
+    assert.deepEqual(await classify({[failure]:true}),{state:"damaged",reason},failure)
+  }
+  assert.deepEqual(await classify({},{record:document.record}),{state:"damaged",reason:"seal"},"an unsealed record is not this host's")
+  // Any edit to a sealed record is damage, never staleness: identity fields included.
+  for(const edit of [r=>{r.sourceIdentity.runtime.sha256="f".repeat(64)},r=>{r.control_evidence[0].engine_sha256="f".repeat(64)},
+    r=>{r.environment_sha256="f".repeat(64)},r=>{r.dependency_identity.sha256="f".repeat(64)},r=>{r.sourceIdentity.version=1},
+    r=>{r.predicate_table_sha256="f".repeat(64)}]){
+    assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"seal"},String(edit))
+  }
+  // A resealed record whose identity disagrees with its receipts is damage too.
+  for(const edit of [r=>{r.environment_sha256="f".repeat(64)},r=>{r.directReceipts[0].custody.sourceIdentity={...r.sourceIdentity,extra:1}},
+    r=>{r.nativeReceipts[1].custody.roots={...r.source_roots,source:"/elsewhere/"}},r=>{r.nativeReceipts[0].invocation.command="/synthetic/other"},
+    r=>{r.control_evidence[0].recipe_sha256="f".repeat(64)},r=>{r.control_evidence[1].engine_sha256="f".repeat(64)},
+    r=>{r.control_evidence=[r.control_evidence[0]]},r=>{r.directReceipts=[r.directReceipts[0]]}]){
+    assert.deepEqual(await classify({},{edit,reseal:true}),{state:"damaged",reason:"receipts"},String(edit))
+  }
+  // A coherent sealed record from an earlier engine pin is stale.
+  assert.deepEqual(await classify({},{edit:r=>{for(const e of r.control_evidence)e.engine_sha256="f".repeat(64)},reseal:true}),
+    {state:"stale",reason:"engine_changed",requalify:true})
+  assert.deepEqual(await classify({},{extra:{env:{...env,HTTPS_PROXY:"http://proxy.invalid:8080"}}}),{state:"stale",reason:"environment_changed",requalify:true})
+  assert.deepEqual(await classify({},{extra:{env:{HOME:"relative"}}}),{state:"stale",reason:"environment_unsafe",requalify:false})
+  const everywhere=change=>r=>{change(r);for(const run of [...r.directReceipts,...r.nativeReceipts])run.custody.sourceIdentity=r.sourceIdentity}
+  for(const change of [r=>{r.sourceIdentity.version=1},r=>{r.sourceIdentity=null},r=>{r.sourceIdentity.files=[]},r=>{r.sourceIdentity.runtime=null}]){
+    assert.deepEqual(await classify({},{edit:everywhere(change),reseal:true}),{state:"damaged",reason:"structure"})
+  }
+  for(const edit of [r=>{r.extra=1},r=>{r.cli="relative"},r=>{r.control_evidence=null},r=>{r.nativeReceipts=null},r=>{r.version=8}]){
+    assert.deepEqual(await classify({},{edit}),{state:"damaged",reason:"structure"})
+  }
+  assert.deepEqual(await classify({},{edit:r=>{r.predicate_table_sha256="f".repeat(64)},reseal:true}),{state:"damaged",reason:"structure"})
+  // A malformed dependency identity is structure damage even when the install reports the same malformed value.
+  for(const change of [{version:2},{files:1.5},{sha256:"F".repeat(64)}]){
+    const identity={...unitConfig.record.dependency_identity,...change}
+    assert.deepEqual(await classify({},{extra:{record:{...unitConfig.record,dependency_identity:identity}},edit:r=>{r.dependency_identity=identity},reseal:true}),
+      {state:"damaged",reason:"structure"},JSON.stringify(change))
+  }
+  assert.deepEqual(await classify({noncanonical:true}),{state:"damaged",reason:"noncanonical"})
+  const blocked={version:7,protocol_envelope_version:2,enforcement_scheme:"owned_catalog_mcp",recipe_version:3,controls_schema:"desk.factory.triage-controls/3",predicate_table:"E296/3",state:"blocked",reason:"diagnostic_inadequate"}
+  assert.deepEqual(await classify({},{record:blocked}),{state:"stale",reason:"qualification_failed",requalify:true})
+  assert.deepEqual(await classify({noCapture:true},{record:blocked}),{state:"damaged",reason:"structure"},"a failure without its capture is not ours")
+  for(const edit of [r=>{r.reason=1},r=>{r.extra=1},r=>{r.recipe_version=2},r=>{r.state="other"}]){
+    assert.deepEqual(await classify({},{record:blocked,edit}),{state:"damaged",reason:"structure"})
+  }
+  assert.deepEqual(await classify({},{record:{...blocked,version:6}}),{state:"stale",reason:"record_version",requalify:true})
+  const v6=structuredClone(document.record);v6.version=6
+  for(const key of ["source_roots","dependency_identity","environment_sha256"])delete v6[key]
+  assert.deepEqual(await classify({},{record:v6}),{state:"stale",reason:"record_version",requalify:true})
+  assert.deepEqual(await classify({},{record:{...v6,state:"other"}}),{state:"damaged",reason:"structure"})
+  assert.deepEqual(await classify({},{record:{...v6,extra:1}}),{state:"damaged",reason:"structure"},"an edited earlier record is damage, not staleness")
+  assert.deepEqual(await classify({},{record:{version:5}}),{state:"damaged",reason:"structure"})
+  // Once a sealed record has qualified on this host, an unsealed shape is no longer believed. This version seals its blocked
+  // records, so a failed requalification still reads as stale and can recover.
+  assert.equal((await classify({},{sealedBefore:true})).state,"qualified")
+  for(const record of [v6,{...blocked,version:6},blocked]){
+    assert.deepEqual(await classify({},{record,sealedBefore:true}),{state:"damaged",reason:"seal"},`${record.version} ${record.state}`)
+    assert.equal((await classify({},{record,sealedBefore:false})).state,"stale")
+  }
+  const sealedBlocked=runner.createNonacceptedTriageUnit(unitConfig).sealDocument(blocked)
+  for(const sealedBefore of [true,false]){
+    assert.deepEqual(await classify({},{record:sealedBlocked,sealedBefore}),{state:"stale",reason:"qualification_failed",requalify:true})
+  }
+  assert.deepEqual(await classify({foreignHost:true},{record:sealedBlocked}),{state:"damaged",reason:"seal"},"another host's blocked record")
+  assert.deepEqual(await classify({},{record:sealedBlocked,edit:r=>{r.reason="billing_unresolved"}}),{state:"damaged",reason:"seal"})
+  assert.deepEqual(await classify({hostUnknown:true},{record:sealedBlocked}),{state:"stale",reason:"host_unsupported",requalify:false})
+  assert.throws(()=>runner.createNonacceptedTriageUnit({...unitConfig,failures:{hostUnknown:true}}).sealDocument(blocked),/host_identity/u)
+  assert.deepEqual(await classify({},{record:[]}),{state:"damaged",reason:"structure"})
+  assert.deepEqual(Object.entries(runner.TRIAGE_STALE_REASONS).filter(([,value])=>!value).map(([key])=>key).sort(),
+    ["chain_unavailable","check_failed","engine_mismatch","engine_unpinned","environment_unsafe","host_unsupported","measurement_active","policy_blocked","root_unsafe"])
+  // A production run must load the server modules that were qualified, and the same dependencies.
+  for(const failure of ["runClosure","dependencies"]){
+    const isolated=runner.createNonacceptedTriageUnit({...unitConfig,failures:{[failure]:true}})
+    assert.equal((await isolated.run(isolated.seal().record)).outcome.state,"scope_changed",failure)
+  }
   const qualifier=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
   const memoryFlow=await qualifier.runNonacceptedQualifierTransaction(unitConfig)
   assert.equal(memoryFlow.authority,false)
@@ -1184,6 +1319,15 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
   assert.equal(nativeUnit.statistics.syntheticLaunches,2)
   assert.equal(nativeUnit.statistics.syntheticAuthGenerations,2)
   assert.equal(nativeUnit.statistics.memoryDocuments,1)
+  assert.equal(nativeUnit.statistics.syntheticReservations,0)
+  const reservedUnit=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{reserve:"accept"}})
+  assert.equal(reservedUnit.outcome.state,"qualified")
+  assert.equal(reservedUnit.statistics.syntheticReservations,1,"both launches are reserved once, before the first")
+  assert.equal(reservedUnit.statistics.syntheticLaunches,2)
+  const refusedUnit=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{reserve:"refuse"}})
+  assert.equal(refusedUnit.outcome.state,"blocked")
+  assert.equal(refusedUnit.statistics.syntheticLaunches,0,"a refused ledger launches nothing")
+  assert.equal(refusedUnit.statistics.syntheticAuthGenerations,1,"the reservation follows the sign-in check")
   for(const failure of ["policy","chain","chainIdentity","admission","admissionIdentity","signIn","prepared","postAdmission","postIdentity","postExitAdmission","postExitIdentity","runChainUnknown","runChainDrift","native","direct","write","read"]){
     const refused=await qualifier.runNonacceptedNativeQualification({...unitConfig,failures:{[failure]:true}})
     assert.equal(refused.authority,false)
@@ -1226,6 +1370,12 @@ ownedHostTest("synthetic_record_structure_validation_never_issues_authority","po
     assert.equal(transaction.statistics.diskWrites,0)
     assert.equal(transaction.statistics.actualLaunches,0)
   }
+  // A blocked record carries this host's seal, unless the host cannot seal.
+  const sealedFailure=await qualifier.runNonacceptedCatalogTransaction({...unitConfig,fixture:data,phaseFailure:"direct"})
+  assert.equal(typeof sealedFailure.outcome.record.host_seal,"string")
+  const unsealedFailure=await qualifier.runNonacceptedCatalogTransaction({...unitConfig,fixture:data,phaseFailure:"direct",failures:{hostUnknown:true}})
+  assert.equal(unsealedFailure.outcome.state,"blocked")
+  assert.equal(unsealedFailure.outcome.record.host_seal,undefined)
   const nativeFailure=await qualifier.runNonacceptedCatalogTransaction({...unitConfig,fixture:data,phaseFailure:null,failures:{admission:true}})
   assert.equal(nativeFailure.outcome.state,"blocked")
   assert.equal(nativeFailure.outcome.reason,"diagnostic_inadequate")
@@ -1338,11 +1488,11 @@ test("owned_runner_guards_precede_record_or_discovery",async(t)=>{
   assert.equal((await runner.runTriageChild({...f,env:{...f.env,ANTHROPIC_API_KEY:"synthetic"},spawn})).state,"disabled_would_bill")
   assert.equal((await runner.runTriageChild({...f,deadline:0,spawn})).state,"no_time_for_a_run")
 })
-test("compatible_trusted_policy_is_admissible_without_admin_tamper_proof",async(t)=>{
+posixEnvTest("compatible_trusted_policy_is_admissible_without_admin_tamper_proof",async(t)=>{
   const f=await fixture(t),r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:readers})
   assert.equal(r.state,"admitted");assert.equal(r.remote_delivery,"not_applicable");assert.match(r.fingerprint,/^[a-f0-9]{64}$/)
 })
-test("pending_applicable_policy_blocks",async(t)=>{
+posixEnvTest("pending_applicable_policy_blocks",async(t)=>{
   const f=await fixture(t)
   for(const [stdout,reason]of [["Managed settings (remote): checking… (fetch in progress; re-run in a moment)","applicable_delivery_pending"],["Managed settings (remote): unfamiliar future message","diagnostic_inadequate"],["Managed settings (remote): fetch failed (cached policy applies)","effective_policy_unknown"]]){
     const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>({kind:"closed",code:0,stdout}),policyReaders:readers})
@@ -1354,14 +1504,17 @@ test("pending_applicable_policy_blocks",async(t)=>{
     assert.equal(r.remote_delivery,stdout.includes("loaded")?"delivered":"no_configuration")
   }
 })
-test("effective_hook_helper_or_widening_grant_blocks",async(t)=>{
+posixEnvTest("effective_hook_helper_or_widening_grant_blocks",async(t)=>{
   const f=await fixture(t)
+  const allowOnly=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({complete:true,controller_invariant:true,
+    sources:[{...source,settings:{permissions:{allow:[]}}}],validation_errors:[]})}})
+  assert.equal(allowOnly.state,"admitted","permissions with no deny list grant nothing")
   for(const [settings,reason]of [[{hooks:{SessionStart:[{hooks:[{type:"command",command:"never execute this"}]}]}},"active_hook_or_helper"],[{policyHelper:"never execute this"},"active_hook_or_helper"],[{permissions:{allow:["Edit"]}},"unsafe_permission_grant"],[{permissions:{additionalDirectories:["/outside"]}},"unsafe_permission_grant"],[{env:{ANTHROPIC_API_KEY:"secret"}},"billing_unresolved"],[{mcpServers:{unsafe:{}}},"unsafe_permission_grant"]]){
     const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({complete:true,controller_invariant:true,sources:[{...source,settings}],validation_errors:[]})}})
     assert.equal(r.reason,reason);assert.equal(JSON.stringify(r).includes("secret"),false);assert.equal(JSON.stringify(r).includes("never execute"),false)
   }
 })
-test("launcher_or_engine_change_invalidates_qualification",async(t)=>{
+posixEnvTest("launcher_or_engine_change_invalidates_qualification",async(t)=>{
   const f=await fixture(t),before=adapterRunner.inspectLaunchChain(f)
   writeFileSync(path.join(f.dir,"runtime"),"runtime revision two");assert.notEqual(adapterRunner.inspectLaunchChain(f).fingerprint,before.fingerprint)
   writeFileSync(f.cli,"engine revision two");assert.notEqual(adapterRunner.inspectLaunchChain(f).fingerprint,before.fingerprint)
@@ -1369,7 +1522,7 @@ test("launcher_or_engine_change_invalidates_qualification",async(t)=>{
 })
 controlHostTest("default_local_policy_matrix_reads_synthetic_documents_without_command_execution",async(t,{runner,cli})=>{
   const f=await fixture(t),realRead=fsNative.readFileSync,realList=fsNative.readdirSync
-  const platform=Object.getOwnPropertyDescriptor(process,"platform")
+  const platform=REAL_PLATFORM
   let mode="valid",diagnostics=0,verifications=0
   assert.equal(fsNative.existsSync(cli),true,"this concrete host's already-selected installed source remains available")
   t.mock.method(fsNative,"readFileSync",(file,...args)=>{
@@ -1414,7 +1567,7 @@ controlHostTest("default_local_policy_matrix_reads_synthetic_documents_without_c
     assert.equal((await runner.collectTriageAdmission({cli,env:{HOME:f.dir},argv:flags,runDiagnostic:diagnostic})).state,"scope_unqualified",value)
   }
 })
-test("chain_relative_files_and_selected_permissions_fail_closed",async(t)=>{
+posixEnvTest("chain_relative_files_and_selected_permissions_fail_closed",async(t)=>{
   const f=await fixture(t)
   assert.equal(adapterRunner.inspectLaunchChain({...f,cli:"relative"}).reason,"launch_chain_unknown")
   assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:()=>({supported:true,cmd:f.cli,files:[f.cli,"relative"],prefix:[]})}).reason,"launch_chain_unknown")
@@ -1424,7 +1577,7 @@ test("chain_relative_files_and_selected_permissions_fail_closed",async(t)=>{
   assert.equal(result.state,"admitted")
   assert.equal(result.capabilities,null)
 })
-test("fixed_optional_map_legacy_hazard_checks_accept_only_exact_off_controls",async(t)=>{
+posixEnvTest("fixed_optional_map_legacy_hazard_checks_accept_only_exact_off_controls",async(t)=>{
   const f=await fixture(t),settings={...controlInput().settings,permissions:{allow:[],deny:[]}}
   const read=value=>({complete:true,controller_invariant:true,validation_errors:[],sources:[{...source,settings:value}]})
   const accepted=await adapterRunner.collectTriageAdmission({...f,argv:["--settings",JSON.stringify(settings)],
@@ -1438,7 +1591,7 @@ test("fixed_optional_map_legacy_hazard_checks_accept_only_exact_off_controls",as
     assert.equal(result.state,"scope_unqualified")
   }
 })
-test("admission_missing_invalid_and_incompatible_evidence_never_becomes_none",async(t)=>{
+posixEnvTest("admission_missing_invalid_and_incompatible_evidence_never_becomes_none",async(t)=>{
   const f=await fixture(t)
   for(const [observed,evidence,reason]of [
     [{kind:"timeout"},readers.read(),"diagnostic_inadequate"],[{kind:"closed",code:1,stdout:doctor},readers.read(),"diagnostic_inadequate"],
@@ -1457,7 +1610,7 @@ test("admission_missing_invalid_and_incompatible_evidence_never_becomes_none",as
   assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,"diagnostic_inadequate")
   assert.equal((await adapterRunner.collectTriageAdmission({...f,cli:process.execPath,argv:[]})).reason,"policy_control_unsupported")
 })
-test("native_loader_inspection_refuses_unknown_or_unreadable_images",async(t)=>{
+posixEnvTest("native_loader_inspection_refuses_unknown_or_unreadable_images",async(t)=>{
   const f={...await fixture(t),resolveExec:undefined},realRead=fsNative.readFileSync,realPath=fsNative.realpathSync
   let files=new Map()
   t.mock.method(fsNative,"readFileSync",(file,...args)=>files.has(String(file))?files.get(String(file)):realRead(file,...args))
@@ -1482,8 +1635,8 @@ test("native_loader_inspection_refuses_unknown_or_unreadable_images",async(t)=>{
   for(let i=0;i<65;i++)files.set(`/fixture/${i}`,image([`/fixture/${i+1}`]))
   assert.equal(adapterRunner.inspectLaunchChain(f).state,"scope_unqualified")
 })
-test("local_policy_reader_never_executes_command_bearing_settings",async(t)=>{
-  const f=await fixture(t),platform=Object.getOwnPropertyDescriptor(process,"platform"),realRead=fsNative.readFileSync,realList=fsNative.readdirSync
+posixEnvTest("local_policy_reader_never_executes_command_bearing_settings",async(t)=>{
+  const f=await fixture(t),platform=REAL_PLATFORM,realRead=fsNative.readFileSync,realList=fsNative.readdirSync
   let mode="safe"
   t.mock.method(fsNative,"readdirSync",(file,...args)=>{
     if(!String(file).endsWith("managed-settings.d"))return realList(file,...args)
@@ -1506,7 +1659,7 @@ test("local_policy_reader_never_executes_command_bearing_settings",async(t)=>{
     mode=next;assert.equal((await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic})).reason,reason)
   }
 })
-test("configured_helper_is_rejected_before_native_diagnostic_start",async(t)=>{
+posixEnvTest("configured_helper_is_rejected_before_native_diagnostic_start",async(t)=>{
   const f=await fixture(t);let called=0
   const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{called++;return diagnostic()},policyReaders:{read:()=>({...readers.read(),sources:[{...source,settings:{policyHelper:"forbidden"}}]})}})
   assert.equal(r.reason,"active_hook_or_helper");assert.equal(called,0)
@@ -1531,7 +1684,7 @@ test("R6_1_default_platform_provenance_connects_signed_installed_runtime_without
     assert.match(r.platform.cache_uuid,/^[a-f0-9]{32}$/);assert.equal(r.platform.dependencies.includes("/usr/lib/libSystem.B.dylib"),true)
   }else assert.equal(r.state,"scope_unqualified")
 })
-test("R6_1_default_reader_rejects_user_helpers_before_any_diagnostic",async(t)=>{
+posixEnvTest("R6_1_default_reader_rejects_user_helpers_before_any_diagnostic",async(t)=>{
   const f=await fixture(t),dir=path.join(f.env.HOME,".claude");fsNative.mkdirSync(dir)
   writeFileSync(path.join(dir,"settings.json"),JSON.stringify({apiKeyHelper:"must never execute",permissions:{allow:["Edit"]}}))
   let calls=0
@@ -1540,7 +1693,7 @@ test("R6_1_default_reader_rejects_user_helpers_before_any_diagnostic",async(t)=>
 })
 ownedHostTest("R6_1_native_platform_adapter_rejects_each_unverified_platform_dimension","posix",async(t)=>{
   const f=await fixture(t),realRead=fsNative.readFileSync,realPath=fsNative.realpathSync,realList=fsNative.readdirSync,realStat=fsNative.lstatSync,realOpen=fsNative.openSync
-  const platform=Object.getOwnPropertyDescriptor(process,"platform"),arch=Object.getOwnPropertyDescriptor(process,"arch");let mode="valid"
+  const platform=REAL_PLATFORM,arch=Object.getOwnPropertyDescriptor(process,"arch");let mode="valid"
   const binary=Buffer.alloc(192);binary.writeUInt32LE(0xfeedfacf);binary.writeUInt32LE(1,16);binary.writeUInt32LE(0xc,32);binary.writeUInt32LE(160,36);binary.writeUInt32LE(24,40);binary.write("/usr/lib/probe.dylib",56)
   const cache=Buffer.alloc(160);cache.write("dyld_v1  arm64e");cache.fill(1,88,104);cache.writeBigUInt64LE(1n,128)
   const cacheFixture=path.join(f.dir,"cache");writeFileSync(cacheFixture,cache)
@@ -1576,7 +1729,23 @@ ownedHostTest("R6_1_native_platform_adapter_rejects_each_unverified_platform_dim
   mode="valid";Object.defineProperty(process,"platform",{value:"linux",configurable:true});assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified")
   Object.defineProperty(process,"platform",{value:"darwin",configurable:true});Object.defineProperty(process,"arch",{value:"x64",configurable:true});assert.equal(adapterRunner.inspectLaunchChain({...f,resolveExec:undefined}).state,"scope_unqualified")
 })
-test("R6_6_policy_documents_and_supported_value_types_require_validation_before_admission",async(t)=>{
+posixEnvTest("R6_6_default_reader_refuses_an_invalid_user_or_managed_document_before_any_diagnostic",async(t)=>{
+  const f=await fixture(t),dir=path.join(f.env.HOME,".claude");fsNative.mkdirSync(dir)
+  let calls=0
+  const admit=()=>adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()}})
+  writeFileSync(path.join(dir,"settings.json"),JSON.stringify({permissions:"private malformed prose"}))
+  const user=await admit()
+  assert.equal(user.reason,"effective_policy_unknown");assert.deepEqual(user.validation_errors,["invalid_policy_document"])
+  assert.equal(JSON.stringify(user).includes("private malformed prose"),false)
+  writeFileSync(path.join(dir,"settings.json"),"{}")
+  const managed=path.join(process.platform==="darwin"?"ClaudeCode":"claude-code","managed-settings.json"),realRead=fsNative.readFileSync
+  t.mock.method(fsNative,"readFileSync",(file,...args)=>String(file).endsWith(managed)?Buffer.from(JSON.stringify({permissions:true})):realRead(file,...args))
+  syncBuiltinESMExports();t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports()})
+  const managedResult=await admit()
+  assert.equal(managedResult.reason,"effective_policy_unknown");assert.deepEqual(managedResult.validation_errors,["invalid_policy_document"])
+  assert.equal(calls,0)
+})
+posixEnvTest("R6_6_policy_documents_and_supported_value_types_require_validation_before_admission",async(t)=>{
   const f=await fixture(t)
   for(const settings of [true,1,"private malformed prose",[],null,{permissions:true},{permissions:{allow:"Read"}},{permissions:{deny:[true]}},{disableAllHooks:"true"},{hooks:true},{hooks:{SessionStart:"not an array"}},{hooks:{SessionStart:[{hooks:"not an array"}]}},{hooks:{SessionStart:[{matcher:7,hooks:[]}]}},{env:true},{env:{SECRET:7}},{mcpServers:true},{mcpServers:{server:false}}]){
     let calls=0;const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:async()=>{calls++;return diagnostic()},policyReaders:{read:()=>({...readers.read(),sources:[{...source,settings}]})}})
@@ -1584,15 +1753,129 @@ test("R6_6_policy_documents_and_supported_value_types_require_validation_before_
     assert.equal(JSON.stringify(r).includes("private malformed prose"),false);assert.equal(r.capabilities,null)
   }
 })
-test("R6_6_post_diagnostic_validation_errors_are_fixed_code_and_invalidate_admission",async(t)=>{
+posixEnvTest("R6_6_post_diagnostic_validation_errors_are_fixed_code_and_invalidate_admission",async(t)=>{
   const f=await fixture(t);let calls=0
   const r=await adapterRunner.collectTriageAdmission({...f,argv:[],runDiagnostic:diagnostic,policyReaders:{read:()=>({...readers.read(),validation_errors:++calls===1?[]:["private error detail"]})}})
   assert.equal(calls,2);assert.equal(r.state,"scope_unqualified");assert.deepEqual(r.validation_errors,["invalid_effective_settings"]);assert.equal(r.capabilities,null);assert.equal(JSON.stringify(r).includes("private error detail"),false)
 })
-test("R6_6_native_invalid_settings_diagnostic_never_admits_or_echoes_private_errors",async(t)=>{
+posixEnvTest("R6_6_native_invalid_settings_diagnostic_never_admits_or_echoes_private_errors",async(t)=>{
   const f=await fixture(t)
   for(const label of ["Invalid settings","\u001b[33mInvalid settings\u001b[39m"]){
     const r=await adapterRunner.collectTriageAdmission({...f,argv:[],policyReaders:readers,runDiagnostic:async()=>({kind:"closed",code:0,stdout:doctor+`\n${label}\n- private raw policy value\n`})})
     assert.equal(r.state,"scope_unqualified");assert.deepEqual(r.validation_errors,["invalid_native_settings"]);assert.equal(JSON.stringify(r).includes("private raw policy"),false);assert.equal(r.capabilities,null)
   }
+})
+
+posixEnvTest("the child environment is built from fixed values and validated folders, never inherited",()=>{
+  const base=realpathSync(fsNative.mkdtempSync(path.join(tmpdir(),"desk-child-env-")))
+  const user={username:"unit-user",homedir:base},temp=()=>base,uid=process.getuid()
+  const built=runner.triageChildEnvironment({HOME:base,PATH:"/hostile",TERM:"xterm-256color",LC_ALL:"x",XDG_CONFIG_HOME:"/x",TMPDIR:"/hostile",
+    SHELL:"/bin/zsh",HTTPS_PROXY:"http://proxy.invalid",PRIVATE_SECRET:"not-for-child"},{user,temp,uid})
+  assert.deepEqual(built,{HOME:base,USER:"unit-user",LOGNAME:"unit-user",SHELL:"/bin/sh",PATH:"/usr/bin:/bin:/usr/sbin:/sbin",TERM:"dumb",
+    LANG:"en_US.UTF-8",TMPDIR:`${base}${path.sep}`,HTTPS_PROXY:"http://proxy.invalid",DESK_FACTORY_HEADLESS:"1"})
+  assert.deepEqual(runner.triageChildEnvironment({PATH:"/a"},{user,temp,uid}),runner.triageChildEnvironment({PATH:"/b",TERM:"vt100",HOME:""},{user,temp,uid}),
+    "HOME falls back to the account's own, and ambient PATH/TERM never change the result")
+  const config=path.join(base,"config");fsNative.mkdirSync(config,{mode:0o700})
+  assert.equal(runner.triageChildEnvironment({HOME:base,CLAUDE_CONFIG_DIR:config},{user,temp,uid}).CLAUDE_CONFIG_DIR,config)
+  const file=path.join(base,"file");writeFileSync(file,"x")
+  const open=path.join(base,"open");fsNative.mkdirSync(open,{mode:0o700});fsNative.chmodSync(open,0o775)
+  const shared=path.join(base,"shared");fsNative.mkdirSync(shared,{mode:0o700});fsNative.chmodSync(shared,0o750)
+  for(const [env,options]of [
+    [{HOME:"relative"},{}],[{HOME:`${base}/./x/..`},{}],[{HOME:path.join(base,"missing")},{}],[{HOME:file},{}],[{HOME:open},{}],
+    [{HOME:base},{uid:uid+1}],[{HOME:base},{temp:()=>undefined}],[{HOME:base},{temp:()=>"relative"}],[{HOME:base},{temp:()=>shared}],
+    [{HOME:base,CLAUDE_CONFIG_DIR:"relative"},{}],[{HOME:base,CLAUDE_CONFIG_DIR:`${config}/`},{}],[{HOME:base,CLAUDE_CONFIG_DIR:path.join(base,"missing")},{}],
+    [{HOME:base,CLAUDE_CONFIG_DIR:open},{}],
+  ])assert.throws(()=>runner.triageChildEnvironment(env,{user,temp,uid,...options}),{message:"environment_unsafe"},JSON.stringify(env))
+  assert.equal(runner.systemTempDirectory({platform:"linux"}),tmpdir())
+  const calls=[]
+  assert.equal(runner.systemTempDirectory({platform:"darwin",run:(...args)=>{calls.push(args);return {status:0,stdout:"/var/folders/unit/T/\n"}}}),"/var/folders/unit/T/")
+  assert.deepEqual(calls,[["/usr/bin/getconf",["DARWIN_USER_TEMP_DIR"],{env:{},encoding:"utf8",timeout:5000}]])
+  assert.throws(()=>runner.systemTempDirectory({platform:"darwin",run:()=>({status:1,stdout:""})}),{message:"environment_unsafe"})
+  rmSync(base,{recursive:true,force:true})
+})
+
+posixEnvTest("the pinned engine counts only by content, at a location no other account can change",async()=>{
+  const {NATIVE_ENGINE_SHA256:pin,NATIVE_ENGINE_BYTES:size}=await import("../../../../../plugins/desk/mcp/src/factory/triage-custody.js"),uid=4242
+  const dir=(over={})=>({isDirectory:()=>true,isFile:()=>false,uid,mode:0o40755,...over})
+  const reg=(over={})=>({isDirectory:()=>false,isFile:()=>true,uid,mode:0o100755,size,...over})
+  const tree=(over={})=>file=>over[file]??(["/home/u/.local/bin/claude","/home/u/pinned/claude"].includes(file)||/\/\d+\.\d+\.\d+$/u.test(file)?reg():dir())
+  const ok=(file,over,hash=()=>pin)=>runner.pinnedEngineFile(file,{hash,uid,stat:tree(over)})
+  assert.equal(ok("/home/u/.local/bin/claude"),true)
+  assert.equal(ok("/home/u/.local/bin/claude",{"/":dir({uid:0})}),true,"root-owned folders are closed")
+  assert.equal(ok("/home/u/.local/bin/claude",{},()=>"0".repeat(64)),false,"other bytes")
+  assert.equal(ok("/home/u/.local/bin/claude",{"/home/u/.local/bin/claude":reg({size:size-1})},()=>{throw Error("must not hash")}),false,"another size is never hashed")
+  for(const file of [null,"relative/claude","/home/u/../u/claude"])assert.equal(ok(file),false,String(file))
+  for(const over of [
+    {"/home/u/.local/bin/claude":reg({uid:7})},{"/home/u/.local/bin/claude":reg({mode:0o100775})},{"/home/u/.local/bin/claude":dir()},
+    {"/home/u/.local/bin":dir({mode:0o40777})},{"/home":dir({uid:7})},{"/home/u":reg()},
+  ])assert.equal(ok("/home/u/.local/bin/claude",over),false,JSON.stringify(Object.keys(over)))
+  assert.equal(runner.pinnedEngineFile("/x/claude",{hash:()=>pin,uid,stat:()=>{throw Error("ENOENT")}}),false)
+  const bytes=fsNative.mkdtempSync(path.join(tmpdir(),"desk-engine-bytes-"))
+  try{
+    const file=path.join(realpathSync(bytes),"2.1.296");writeFileSync(file,Buffer.alloc(3*1048576+5,1))
+    assert.equal(runner.pinnedEngineFile(file,{uid,stat:tree()}),false,"the real hash reads the whole file and finds other bytes")
+    assert.equal(runner.pinnedEngineFile(file,{uid}),false,"the real size check")
+    assert.equal(runner.pinnedEngineFile(file),false,"the real account, folders, size and hash")
+  }finally{rmSync(bytes,{recursive:true,force:true})}
+  const hashes={"/home/u/.local/share/claude/versions/2.1.296":pin}
+  const checks={hash:file=>hashes[file]??"0".repeat(64),uid,stat:tree()}
+  const user={homedir:"/home/u"},versions=()=>["2.1.294","2.1.296","2.1.297"]
+  assert.equal(runner.locatePinnedEngine({env:{},find:()=>"/nonexistent/claude",list:versions,user,...checks}),"/home/u/.local/share/claude/versions/2.1.296",
+    "an updated default falls back to the retained pinned build")
+  assert.equal(runner.locatePinnedEngine({env:{},preferred:["/home/u/pinned/claude"],find:()=>null,list:versions,user,...checks,hash:()=>pin}),"/home/u/pinned/claude")
+  assert.equal(runner.locatePinnedEngine({env:{},find:()=>{throw Error("unit")},list:()=>{throw Error("unit")},user,...checks}),null)
+  const linked=fsNative.mkdtempSync(path.join(tmpdir(),"desk-engine-"))
+  try{
+    writeFileSync(path.join(linked,"real"),"x");fsNative.symlinkSync(path.join(linked,"real"),path.join(linked,"claude"))
+    const target=realpathSync(path.join(linked,"real"))
+    assert.equal(runner.locatePinnedEngine({env:{},find:()=>path.join(linked,"claude"),list:()=>[],user,uid,
+      hash:file=>file===target?pin:"0",stat:file=>file===target?reg():dir()}),target,"the default selector is followed to its real file")
+  }finally{rmSync(linked,{recursive:true,force:true})}
+  assert.equal(runner.locatePinnedEngine({env:{},find:()=>null,list:()=>[]}),runner.locatePinnedEngine({env:{},find:()=>null,list:()=>[]}),"defaults are deterministic")
+})
+
+test("the host seal binds a record to this Mac's hardware UUID and account",()=>{
+  const uuid="01234567-89AB-CDEF-0123-456789ABCDEF",calls=[]
+  const run=(stdout,status=0)=>(...args)=>{calls.push(args);return {status,stdout}}
+  const ioreg=id=>`+-o J316sAP  <class IOPlatformExpertDevice>\n    "IOPlatformUUID" = "${id}"\n`
+  const record={version:7,state:"qualified",nested:{b:2,a:1}}
+  const seal=runner.hostRecordSeal(record,{run:run(ioreg(uuid)),uid:501})
+  assert.match(seal,/^[a-f0-9]{64}$/u)
+  assert.deepEqual(calls[0],["/usr/sbin/ioreg",["-rd1","-c","IOPlatformExpertDevice"],{env:{},encoding:"utf8",timeout:5000}])
+  assert.equal(runner.hostRecordSeal({...record,host_seal:seal},{run:run(ioreg(uuid)),uid:501}),seal,"the seal covers every field but itself")
+  assert.equal(runner.hostRecordSeal({nested:{a:1,b:2},state:"qualified",version:7},{run:run(ioreg(uuid)),uid:501}),seal,"over the canonical form")
+  assert.notEqual(runner.hostRecordSeal({...record,state:"edited"},{run:run(ioreg(uuid)),uid:501}),seal,"an edit")
+  assert.notEqual(runner.hostRecordSeal(record,{run:run(ioreg(uuid.replace("0","F"))),uid:501}),seal,"another Mac")
+  assert.notEqual(runner.hostRecordSeal(record,{run:run(ioreg(uuid)),uid:502}),seal,"another account")
+  for(const failing of [run(ioreg(uuid),1),run("no uuid here"),run(ioreg("not-a-uuid"))]){
+    assert.throws(()=>runner.hostRecordSeal(record,{run:failing,uid:501}),{message:"host_identity"})
+  }
+  if(fsNative.existsSync("/usr/sbin/ioreg"))assert.equal(runner.hostRecordSeal(record),runner.hostRecordSeal(record),"the real host answers the same seal")
+  else assert.throws(()=>runner.hostRecordSeal(record),{message:"host_identity"},"no ioreg elsewhere")
+})
+
+test("the qualifier takes an optional deadline and ledger callback, and reserves just before the first launch",async t=>{
+  const qualifier=await import("../../../../../plugins/desk/mcp/scripts/qualify-triage-runner.js")
+  const out=fsNative.mkdtempSync(path.join(tmpdir(),"desk-qualifier-options-"));t.after(()=>rmSync(out,{recursive:true,force:true}))
+  let reserved=0
+  for(const options of [{deadline:Date.now()+1000,reserve:async()=>{reserved++}},{}]){
+    const result=await qualifier.qualifyTriageRunner({out:path.join(out,"never"),cli:"/nonexistent/claude",env:{},...options})
+    assert.equal(result.state,"blocked","a measured test process never qualifies")
+  }
+  assert.equal(reserved,0)
+  const refused=await qualifier.qualifyOwnedCatalog({launch:{cli:"/x",env:{},reserve:"not a function"},fixture:{},deadline:Date.now()+1000,evidenceDir:out})
+  assert.equal(refused.reason,"policy_control_unsupported")
+  // Without a launch the qualifier runs the direct checks only; an empty fixture fails them on every host.
+  const direct=await qualifier.qualifyOwnedCatalog({fixture:{},deadline:Date.now()+1000,evidenceDir:path.join(out,"direct")})
+  assert.equal(direct.state,"blocked");assert.equal(direct.resources.launches,0)
+})
+
+posixEnvTest("the pinned engine search answers null from a home with no pinned build, on the default seams",()=>{
+  const home=realpathSync(mkdtempSync(path.join(tmpdir(),"pinned-default-")))
+  try{assert.equal(runner.locatePinnedEngine({env:{HOME:home,PATH:""}}),null)}
+  finally{rmSync(home,{recursive:true,force:true})}
+})
+
+test("no test leaves another platform behind",()=>{
+  assert.deepEqual(Object.getOwnPropertyDescriptor(process,"platform"),REAL_PLATFORM)
 })

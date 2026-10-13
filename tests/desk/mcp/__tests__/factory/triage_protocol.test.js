@@ -65,6 +65,12 @@ test("same_source_first_js_guards_refuse_unknown_or_drifted_identity",async()=>{
     assert.equal(runtime.exitCode,1)
     assert.ok(Buffer.concat(chunks).toString().endsWith("_environment\n"))
   }
+  {
+    const runtime={...good,stderr:new PassThrough()},chunks=[];runtime.stderr.on("data",x=>chunks.push(x))
+    assert.equal(await server.startCatalogServer(runtime,{moduleRoots:()=>{throw Error("module_roots")}}),null)
+    assert.equal(runtime.exitCode,1)
+    assert.equal(Buffer.concat(chunks).toString(),"catalog_bootstrap_failed_module_roots\n","no module root, no hook and no import")
+  }
   const prior=process.exitCode,write=process.stderr.write
   process.stderr.write=()=>true
   try{
