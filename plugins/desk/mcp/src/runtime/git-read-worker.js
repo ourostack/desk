@@ -9,9 +9,10 @@ import { parentPort, Worker, workerData } from "node:worker_threads"
 
 const FAILED = { status: 1, stdout: "" }
 
-/** Run one read from this thread: resolves with `{ status, stdout }`, where `status` is 0 only when Git ran and exited 0. Never rejects. Aborting `signal` kills the Git process, and the read then resolves as failed once that process has exited and its output has closed. */
+/** Run one read from this thread: resolves with `{ status, stdout }`, where `status` is 0 only when Git ran and exited 0. Never rejects. Aborting `signal` kills the Git process, and the read then resolves as failed once that process has exited and its output has closed; a read asked with a signal that has already aborted starts no process. */
 export function runGitRead({ root, args, env, timeoutMs }, { execGit = execFile, signal } = {}) {
   return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(FAILED)
     try {
       // Not execFile's own `signal` option: with it Node calls back as soon as it has sent the kill, while the process may still be working in the folder. A killed child calls back when it has closed.
       const kill = () => child?.kill()

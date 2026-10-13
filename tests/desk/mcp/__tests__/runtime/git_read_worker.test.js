@@ -76,35 +76,40 @@ test("the worker side aborts the read a cancel names, and ignores a cancel for a
   port2.close()
 })
 
-test("a read whose signal aborts resolves only when its Git process has exited", async () => {
+test("a read whose signal aborts resolves only when its process has exited, and one asked after the abort starts nothing", async () => {
   const owner = new AbortController()
   let child
   const marker = path.join(await mkTempRoot("desk-git-read-kill-"), "started.txt")
-  const sleeping = runGitRead({ root: tmpdir(), args: ["-c", `alias.wait=!echo started > "${marker.replaceAll("\\", "/")}"; exec sleep 20 > /dev/null 2>&1 < /dev/null`, "wait"], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal, execGit: (...call) => (child = execFile(...call)) })
+  // A Node process stands in for Git: it dies when killed on every platform. Git for Windows runs Git behind a wrapper, so a killed `git` there ends only when the real Git does.
+  const sleeper = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setTimeout(() => {}, 20000)`
+  const sleeping = runGitRead({ root: tmpdir(), args: [], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal, execGit: (_git, _args, options, done) => (child = execFile(process.execPath, ["-e", sleeper], options, done)) })
   await Promise.race([sleeping, (async () => { while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 20)) })()])
-  assert.ok(existsSync(marker), "Git never started the alias")
+  assert.ok(existsSync(marker), "the process never started")
   const started = Date.now()
   owner.abort()
   assert.deepEqual(await sleeping, FAILED)
   // With execFile's own signal option the answer came while the process was still alive, inside the folder.
-  assert.ok(child.exitCode !== null || child.signalCode !== null, "Git has exited by the time the read answers")
-  assert.ok(Date.now() - started < 10_000, "the read ends when Git is killed, not when the sleep ends")
+  assert.ok(child.exitCode !== null || child.signalCode !== null, "the process has exited by the time the read answers")
+  assert.ok(Date.now() - started < 10_000, "the read ends when the process is killed, not when it would have finished")
+  assert.deepEqual(await runGitRead(read("/desk"), { signal: owner.signal, execGit: () => assert.fail("an aborted read must not start Git") }), FAILED)
+  assert.equal((await runGitRead({ root: tmpdir(), args: ["--version"], env: process.env, timeoutMs: 10_000 })).status, 0, "with no options, real Git runs")
 })
 
-test("a real worker kills the Git process of a read whose owner aborts, and the owner's wait ends once that process has closed", async (t) => {
+test("a real worker kills the Git process of a read whose owner aborts, and the owner's wait covers that read", async (t) => {
   const root = await mkTempRoot("desk-git-read-abort-")
   const marker = path.join(root, "started.txt")
   const reader = createGitReader()
   t.after(() => reader.close())
   const owner = new AbortController()
-  // The alias replaces its shell with a 20 s sleep that holds none of Git's pipes, in the OS temp folder, so killing Git closes the read at once and the orphaned sleep sits in no fixture folder.
-  const sleeping = reader.read({ root: tmpdir(), args: ["-c", `alias.wait=!echo started > "${marker.replaceAll("\\", "/")}"; exec sleep 20 > /dev/null 2>&1 < /dev/null`, "wait"], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal })
+  // Left alone, the alias sleeps 5 s in the OS temp folder and exits 0, so only a killed Git reads as failed. No time is asserted: Git for Windows runs Git behind a wrapper, and a killed wrapper's read ends when the sleep does.
+  const sleeping = reader.read({ root: tmpdir(), args: ["-c", `alias.wait=!echo started > "${marker.replaceAll("\\", "/")}"; exec sleep 5 > /dev/null 2>&1 < /dev/null`, "wait"], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal })
+  let answered = false
+  sleeping.then(() => { answered = true })
   await Promise.race([sleeping, (async () => { while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 20)) })()])
   assert.ok(existsSync(marker), "Git never started the alias")
-  const started = Date.now()
   owner.abort()
   await reader.settled(owner.signal)
-  assert.ok(Date.now() - started < 10_000, "the wait ends when Git is killed, not when the sleep ends")
+  assert.equal(answered, true, "the owner's wait lasts until the read has answered")
   assert.deepEqual(await sleeping, FAILED)
   assert.deepEqual(await reader.read(read(root), { signal: owner.signal }), FAILED, "an aborted owner starts no further read")
 })
@@ -232,8 +237,8 @@ for (const event of ["error", "exit"]) {
     assert.deepEqual(reported, [event === "error" ? "the Git read worker failed: worker failed" : "the Git read worker exited (code 1)"])
     const next = reader.read(read("/c"))
     assert.equal(made.length, 2)
-    // The old worker's exit arrives after its error: it must not fail the new worker's reads, or be reported.
-    made[0].emit("exit", 1)
+    // The old worker's other event arrives late: it must not fail the new worker's reads, or be reported.
+    made[0].emit(event === "error" ? "exit" : "error", 1)
     made[1].emit("message", { id: made[1].posted[0].id, status: 0, stdout: "ok" })
     assert.deepEqual(await next, { status: 0, stdout: "ok" })
     // A second failure is not reported again.

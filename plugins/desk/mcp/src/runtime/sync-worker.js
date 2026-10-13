@@ -220,9 +220,12 @@ function parseAheadBehind(stdout) {
 }
 
 // The same two reads without blocking the caller's thread: desk_status runs on the thread that answers the host, and starting a Git process there holds every other request until the operating system has created it, even through an asynchronous call (see git-read-worker.js). A read that cannot run answers as a failed one.
-const gitReads = createGitReader({
-  onError: (reason) => process.stderr.write(`[desk-mcp] sync status: ${reason}. desk_status treats a Git read that cannot run as failed, so it may report "no remote configured" for a desk that has a remote.\n`),
-})
+/** Says once, on stderr, that the Git read worker cannot run: its failed reads look the same as a desk with no remote. */
+export function reportGitReadFailure(reason) {
+  process.stderr.write(`[desk-mcp] sync status: ${reason}. desk_status treats a Git read that cannot run as failed, so it may report "no remote configured" for a desk that has a remote.\n`)
+}
+
+const gitReads = createGitReader({ onError: reportGitReadFailure })
 
 // `signal` is the status run that asks. Once it aborts, the read throws its reason instead of answering: a read that was killed or never started looks the same as a desk with no remote, and that must not reach a status payload.
 async function runAsync(root, args, signal) {
