@@ -294,6 +294,15 @@ test("the Loop block and the boot findings say what triage last did and why its 
   assert.match(factorySummary({ ...status, loop: { ...LOOP, triage: { last_result: 7, runner_state: null } } }), /triage: last result unavailable$/mu)
   assert.deepEqual(factoryFindingLines({ loop: partial }), [])
   assert.deepEqual(factoryFindingLines({ loop: { ...LOOP, triage: "x" } }), [])
+  // A triage publication held or waiting for three days is one line, with why; one that is not stuck (only stale, say) is none.
+  assert.deepEqual(factoryFindingLines({ triage_publication: [
+    { store: "example-org/store-a", health: "held", pending: 0, waiting: 2, held: "triage_store_not_ready", held_requests: { triage_route_elsewhere: 2 }, stuck_since: "2026-10-01T08:30:00.000Z" },
+    { store: "example-org/store-b", health: "not_published", pending: 1, waiting: 0, stuck_since: "2026-10-02T00:00:00.000Z" },
+    { store: "example-org/store-c", health: "stale", pending: 0, waiting: 0 },
+  ] }), [
+    "example-org/store-a: triage publication has been held or waiting since 2026-10-01T08:30Z (triage_store_not_ready, triage_route_elsewhere x2); this machine's reviews are not reaching the store's improvement queue until it clears.",
+    "example-org/store-b: triage publication has been held or waiting since 2026-10-02T00:00Z (no reason recorded); this machine's reviews are not reaching the store's improvement queue until it clears.",
+  ])
 })
 
 test("the doctor's summary says there is no loop record and never prints zeros for it", async () => {
