@@ -15,6 +15,22 @@ import { request } from "../../../../../plugins/desk/mcp/src/readiness/controlle
 import { startControllerProcess } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
+// DIAGNOSTIC ONLY: processes the MCP side starts, with their durations.
+import { createRequire as diagRequire, syncBuiltinESMExports as diagSync } from "node:module"
+const mcpSpawns = []
+{
+  const cp = diagRequire(import.meta.url)("node:child_process")
+  const spawn = cp.spawn
+  cp.spawn = function (file, args) {
+    const child = spawn.apply(this, arguments)
+    const started = Date.now()
+    const name = `${String(file).split(/[\\/]/u).pop()} ${Array.isArray(args) ? args.slice(0, 2).join(" ") : ""}`
+    mcpSpawns.push(`${new Date().toISOString()} [mcp] spawn ${name} pid ${child.pid}`)
+    child.once("exit", (code) => mcpSpawns.push(`${new Date().toISOString()} [mcp] exit ${name} after ${Date.now() - started} ms code ${code}`))
+    return child
+  }
+  diagSync()
+}
 let sequence = 0
 const update = { track: "work", slug: "one", status: "processing" }
 const text = "---\nname: One\nstatus: drafting\n---\n\n# One\n"
@@ -113,6 +129,31 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   const controllerArm = path.join(base, "controller-block-arm")
   const controllerBlock = path.join(base, "controller-block.json")
   const controllerPreload = path.join(base, "controller-block.mjs")
+  // DIAGNOSTIC ONLY: every controller logs the processes it starts (the Windows ACL provider) and its journal writes.
+  const traceLog = path.join(base, "controller-trace.log")
+  const tracePreload = path.join(base, "controller-trace.mjs")
+  writeFileSync(tracePreload, `
+import { appendFileSync } from "node:fs";
+import { syncBuiltinESMExports, createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const cp = require("node:child_process");
+const fs = require("node:fs");
+const log = (line) => { try { appendFileSync(${JSON.stringify(traceLog)}, new Date().toISOString() + " [ctrl " + process.pid + "] " + line + "\\n") } catch {} };
+const spawn = cp.spawn;
+cp.spawn = function (file, args, options) {
+  const child = spawn.apply(this, arguments);
+  const started = Date.now();
+  log("spawn " + String(file).split(/[\\\\/]/).pop() + " pid " + child.pid);
+  child.once("exit", (code, signal) => log("exit " + String(file).split(/[\\\\/]/).pop() + " pid " + child.pid + " after " + (Date.now() - started) + " ms code " + code + " signal " + signal));
+  return child;
+};
+const fsync = fs.fsyncSync;
+fs.fsyncSync = function () { const t = Date.now(); try { return fsync.apply(this, arguments) } finally { const ms = Date.now() - t; if (ms > 100) log("fsync " + ms + " ms") } };
+syncBuiltinESMExports();
+let last = Date.now();
+setInterval(() => { const now = Date.now(); if (now - last > 600) log("event loop stalled " + (now - last - 500) + " ms"); last = now }, 500).unref();
+log("started");
+`)
   if (controlledController) writeFileSync(controllerPreload, `
 import { existsSync, renameSync, writeFileSync } from "node:fs";
 const stringify = JSON.stringify;
@@ -164,8 +205,10 @@ JSON.stringify = function(...args) {
       policy, embed: null, ephemeral: true,
     }, {
       spawn: (file, args, options) => {
-        child = fork(file, args, controlledController
-          ? { ...options, execArgv: ["--import", pathToFileURL(controllerPreload).href] } : options)
+        child = fork(file, args, { ...options, execArgv: [
+          "--import", pathToFileURL(tracePreload).href,
+          ...(controlledController ? ["--import", pathToFileURL(controllerPreload).href] : []),
+        ] })
         return child
       },
     })
@@ -258,6 +301,8 @@ JSON.stringify = function(...args) {
     resolution: resolutionTrace.slice(-10), dispatch: dispatchTrace.slice(-10), status: statusTrace.slice(-5),
     convergence: convergenceTrace.slice(-5), controllers: controllers.map(({ child, endpoint }) => ({ pid: child.pid, exitCode: child.exitCode, signal: child.signalCode, endpoint })),
     connectedRoots,
+    mcpSpawns: mcpSpawns.slice(-40),
+    controllerTrace: existsSync(traceLog) ? readFileSync(traceLog, "utf8").split("\n").slice(-80) : [],
   })
   t.after(async () => {
     await handle.admission.idle({ waitMs: 15000 })
