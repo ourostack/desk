@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.310 — 2026-10-13
+
+On Windows, `desk_status` no longer fails when its inspection child exits by itself at the moment Desk tries to stop it ([`mcp/src/runtime/status-inspection.js`](mcp/src/runtime/status-inspection.js)). A stop signal that finds no process is now a failure only if the child has still not exited when the wait for it ends. A runtime status that does fail is now reported as `status_error` instead of being served as the status detail, where it read as a ready answer that named no desk.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.309 — 2026-10-13
 
 `task_signoff` records an acceptance for a task whose whole track was archived. [`archive-workflow`](skills/archive-workflow/SKILL.md) moves a track into the desk's `_archive/` once all its tasks are terminal, and the operator's answer to a delivery comes in a later turn, so the track was often archived first; `task_signoff` then answered "there is no task ... in this desk" and nothing was recorded ([ourostack/desk#384](https://github.com/ourostack/desk/issues/384), filed by a session of the cold dry-run rerun, which moved the track back by hand, signed and archived it again). The lookup now also reads `_archive/<track>/<task>/` and `_archive/<track>/_archive/<task>/`, after the live paths ([`mcp/src/tools/task-focus.js`](mcp/src/tools/task-focus.js)); `task_focus` uses the same lookup and finds such a card too. An acceptance is written and committed where the card is, and the track stays archived. A refusal reopens the task, which cannot be worked in an archived track, so it is refused with the `git mv` to run first, written from the desk root, and nothing is recorded ([`mcp/src/tools/task-signoff.js`](mcp/src/tools/task-signoff.js)): the track back, or only the task when a live track of that name exists.
