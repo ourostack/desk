@@ -543,13 +543,20 @@ test("a grant refreshes the worker's lock, so the end-of-turn kick still reads a
   assert.ok(after - before > 25 * MINUTE, "the lock was rewritten when the time was granted")
 }))
 
+// The ceiling is armed when the worker starts, on real time. These two tests arm it far away and move the worker's clock
+// to 1 s before it when the evaluator asks for time, so the steps before the evaluator, however slow the machine, never
+// reach the first ceiling, and the moved ceiling is measured from the grant.
+const FAR_CEILING_MS = 60 * 1000
+const toOneSecondBeforeCeiling = (clock) => clock.advance(FAR_CEILING_MS - 1000)
+
 test("the ceiling moves with the grant: a step that runs past the old ceiling but inside the moved one is not cut off", () => scratch(async (ctx) => {
   const exits = []
+  const clock = fakeClock()
   const impls = fakes([])
   const inner = impls.evaluate
-  impls.evaluate = async (env, options) => { await options.extendDeadline(4000); return inner(env, options) }
+  impls.evaluate = async (env, options) => { toOneSecondBeforeCeiling(clock); await options.extendDeadline(4000); return inner(env, options) }
   impls.mirror = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, result: "done" }), 1500))
-  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, ceilingMs: 1000, exit: (code) => exits.push(code), notify: () => {} })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls, clock: clock.read, ceilingMs: FAR_CEILING_MS, exit: (code) => exits.push(code), notify: () => {} })
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.deepEqual(exits, [])
 }))
@@ -557,11 +564,12 @@ test("the ceiling moves with the grant: a step that runs past the old ceiling bu
 test("the moved ceiling still ends a step that hangs past it", () => scratch(async (ctx) => {
   const late = []
   const grants = []
+  const clock = fakeClock()
   const hung = fakes([])
   const inner = hung.evaluate
-  hung.evaluate = async (env, options) => { grants.push(await options.extendDeadline(100)); return inner(env, options) }
+  hung.evaluate = async (env, options) => { toOneSecondBeforeCeiling(clock); grants.push(await options.extendDeadline(100)); return inner(env, options) }
   hung.mirror = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, result: "done" }), 1500))
-  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: hung, ceilingMs: 1000, exit: (code) => late.push(code), notify: () => {} })
+  await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls: hung, clock: clock.read, ceilingMs: FAR_CEILING_MS, exit: (code) => late.push(code), notify: () => {} })
   assert.deepEqual(grants, [100], "the evaluator step ran and was granted its 100 ms")
   assert.deepEqual(late, [0])
 }))
