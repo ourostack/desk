@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.303 — 2026-10-13
+
+Three text corrections from the rerun of the cold dry run on October 12, 2026.
+
+- **The factory scenario's card check matches the code.** The [evaluation packet](docs/evaluation-packet.md) expected `factory_report_unavailable: desk_not_private` on the card and in the `task_update` result of a run that gives no consent, but without consent a move to `done` writes neither report field ([`mcp/src/factory/local-status.js`](mcp/src/factory/local-status.js)). The packet now says so, and says that `job-link` prints the reason either way because it does not read consent.
+- **A child deletes its scratch by a literal path.** The sentence [`work-orchestration`](skills/work-orchestration/SKILL.md) puts in every child brief now says to write the path out in full in the delete command, never through a shell variable. A reviewer that deleted its own folder through a variable stopped Claude Code for approval, with permission checks bypassed, and the work waited 11 minutes on a human.
+- **The tidy writes no scope line for a track it archives next.** Step 1 of [the one-time tidy](migrations/02-tidy-desk.md) now skips an empty track, and a person-named or catch-all track whose tasks all move out, because step 5 or step 6 moves it into `_archive/`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.302 — 2026-10-13
 
 - **Browser pages no longer fail when they are busy.** If a page is still loading or redirecting when Desk sets up its owner helper, the browser call now goes ahead, and Desk retries the setup on the next call. Before, a 10-second timeout failed that call and every later call on the page.
