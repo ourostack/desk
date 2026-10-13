@@ -216,6 +216,48 @@ const triaged = ({ ranAt, eligible = 2, runner = null, witness, ok = true }) => 
   loop: { steps: { triage: { last_ran_at: new Date(ranAt).toISOString(), last_result: "ran" } }, ...(witness === undefined ? {} : { agent_launch_highwater: witness }) },
 })
 
+test("a first scoped scan blocked before selection resumes when its witnessed quota opens", async () => {
+  const qualifiedAt = Date.parse("2026-10-08T21:30:10.244Z")
+  const opensAt = qualifiedAt + 6 * 60 * MINUTE + MINUTE
+  const observation = {
+    at: new Date(qualifiedAt + 10 * MINUTE).toISOString(), result: "not_due", ok: true,
+    ledger: "window_used", eligible: null, runner: { state: null },
+    run: { failures_in_a_row: 0 }, coverage: { scan: "complete", reviewed: 0, unreviewed: 50 },
+  }
+  const status = {
+    ...scoped(observation),
+    loop: { agent_launch_highwater: witnessAt(qualifiedAt, {
+      max_clock_ms: qualifiedAt + MINUTE, spent_at_max_day: 4,
+      windows: [0, 0, 1, 1], last_triage_at: new Date(qualifiedAt).toISOString(),
+    }) },
+  }
+  assert.equal(triageKickDue(status, opensAt), true, "a completed scan has work to classify once the ledger permits it")
+  assert.equal(actualTriageKickDue(status, opensAt), false, "no context must not borrow this queue's hint")
+  assert.equal(triageKickDue(status, qualifiedAt + 2 * 60 * MINUTE), false, "a hint never overrides the actual cooldown")
+  for (const ledger of ["quota_exhausted", "window_used", "triage_cooldown", "window_protected"]) {
+    assert.equal(triageKickDue(reviseTriage(status, { ledger }), opensAt), true)
+  }
+  for (const change of [
+    { eligible: 0 }, { eligible: -1 }, { eligible: "unknown" }, { eligible: undefined },
+    { result: "runner_unavailable" }, { ledger: "witness_invalid" },
+    ...[undefined, null, false, 0, "false", {}, []].map((ok) => ({ ok })),
+    { runner: { state: "disabled_would_bill" } }, { run: { failures_in_a_row: 1 } },
+    { coverage: undefined }, { coverage: { scan: "truncated", unreviewed: 50 } },
+    ...[0, -1, null, "50"].map((unreviewed) => ({ coverage: { scan: "complete", unreviewed } })),
+  ]) {
+    assert.equal(triageKickDue(reviseTriage(status, change), opensAt), false, JSON.stringify(change))
+  }
+  await scratch(async (env) => {
+    await factoryStateRoot(env)
+    await updateStatus(env, (current) => ({ ...current, ...status }))
+    const spawn = fakeSpawn()
+    assert.deepEqual(await kickLoop(env, { scope: SCOPE, now: qualifiedAt + 2 * 60 * MINUTE, spawn }), { kicked: false, reason: "no_requests" })
+    assert.equal(spawn.calls.length, 0)
+    assert.deepEqual(await kickLoop(env, { scope: SCOPE, now: opensAt, spawn }), { kicked: true, reason: "due" })
+    assert.deepEqual(spawn.calls[0][1], [LOOP_START_SCRIPT, "--desk", SCOPE.deskRoot, "--person-prefix", SCOPE.personPrefix])
+  })
+})
+
 test("triageQuotaFor reads one triage launch from the shared ledger's witness: the window, the six-hour gap, the day and a damaged or future mark", () => {
   const now = Date.parse("2026-10-08T07:00:00.000Z")
   const quota = (over, at = now) => triageQuotaFor({ loop: { agent_launch_highwater: witnessAt(now, over) } }, at)
