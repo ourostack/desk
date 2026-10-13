@@ -2288,6 +2288,13 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_error, "string")
   runtime.callTool = async () => ({ content: [{ type: "text", text: "not json" }] })
   assert.match(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_error, /JSON/u)
+  // The runtime reports its own failure as an error result. Served as a detail, it read as a ready answer with no root.
+  runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "error", tool: "desk_status", message: "status inspection child termination failed" }) }], isError: true })
+  const failed = payload(await session.callTool({ name: "desk_status", input: { detail: true } }))
+  assert.equal(failed.status_error, "status inspection child termination failed")
+  assert.equal(failed.tool, undefined, "the runtime's error result is not served as the detail")
+  runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ code: "refused" }) }], isError: true })
+  assert.equal(payload(await session.callTool({ name: "desk_status", input: { detail: true } })).status_error, '{"code":"refused"}')
   // desk_status's own timer is unreferenced (a real server is kept alive by its stdin), so the test holds the event loop open while a computation it controls is pending.
   const keepAlive = setInterval(() => {}, 1000)
   t.after(() => clearInterval(keepAlive))
