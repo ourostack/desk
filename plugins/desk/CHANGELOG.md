@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.304 — 2026-10-13
+
+`desk-web`'s real-browser mode (a plugin's `desk.browser` declaration) now runs stock Playwright MCP with `--extension` through the stock [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm). It replaces Desk's own native browser layer, which broke more often than it protected. All agents share the operator's one browser, and each session's tabs sit in their own tab group. Desk finds the declared profile and reads the extension's token, so there is no approval prompt. It closes the session's tabs when the session ends, whether by `browser_close`, by its process exiting, or by its process being killed: the extension only ungroups a finished connection's tabs, so [`mcp/web-real-tabs.cjs`](mcp/web-real-tabs.cjs) relays the extension's connection and closes the tabs Playwright attached. The token reader also reads Chromium's newer SQLite local storage, which Chrome 153 and later use. A missing profile or extension now recovers at the next browser call without a reconnect. Install the Playwright Extension from the store in the declared profile; the Desk browser extension and its Load Unpacked step are no longer used.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.303 — 2026-10-13
 
 Three text corrections from the rerun of the cold dry run on October 12, 2026.
