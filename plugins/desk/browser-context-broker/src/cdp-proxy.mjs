@@ -3,7 +3,6 @@ import WebSocket, { WebSocketServer } from 'ws';
 
 import { resolveBrowserWebSocket } from './cdp-client.mjs';
 import { BrokerError } from './claims.mjs';
-import { readRegistry } from './registry.mjs';
 import {
   addOwnedTarget,
   attestLeaseContext,
@@ -99,19 +98,7 @@ export async function startLeaseProxy({
     declaration,
     providerInvoker,
   });
-  const ownedTargets = new Set(lease.targetIds.filter(targetId => targetId !== lease.nativeRouting?.controlTargetId));
-  async function refreshNativeTargets() {
-    if (!lease.nativeRouting) return;
-    const current = (await readRegistry(stateDir)).leases[leaseId];
-    if (!current || ['pid', 'startIdentity', 'owner', 'executable', 'profileRoot'].some(
-      key => current.processIdentity?.[key] !== lease.processIdentity?.[key])) {
-      throw new BrokerError('CONTEXT_DISCONNECTED', 'Native proxy ownership no longer matches its lease generation');
-    }
-    ownedTargets.clear();
-    for (const targetId of current.targetIds) {
-      if (targetId !== current.nativeRouting?.controlTargetId) ownedTargets.add(targetId);
-    }
-  }
+  const ownedTargets = new Set(lease.targetIds);
   const upstreamMetadata = await resolveBrowserWebSocket(lease.rawEndpoint);
   const credentialPath = `/${lease.proxyToken}`;
   const server = http.createServer((request, response) => {
@@ -147,17 +134,6 @@ export async function startLeaseProxy({
     const upstream = new WebSocket(upstreamMetadata.webSocketDebuggerUrl);
     const requests = new Map();
     const ownedSessions = new Set();
-    const ownedSessionParents = new Map();
-    function removeSession(sessionId) {
-      const removed = new Set([sessionId]);
-      for (const [childId, parentId] of ownedSessionParents) {
-        if (removed.has(parentId)) removed.add(childId);
-      }
-      for (const id of removed) {
-        ownedSessions.delete(id);
-        ownedSessionParents.delete(id);
-      }
-    }
     const queued = [];
     let downstreamMessageProcessing = Promise.resolve();
     let upstreamMessageProcessing = Promise.resolve();
@@ -197,7 +173,6 @@ export async function startLeaseProxy({
       rejectPendingRequests(error);
     });
     const processDownstreamMessage = async (data) => {
-      await refreshNativeTargets();
       const message = JSON.parse(data.toString());
       if (ACTIVATION_METHODS.has(message.method)) {
         downstream.send(errorResponse(message.id, -32001, 'Target activation is denied by the lease proxy'));
@@ -400,7 +375,6 @@ export async function startLeaseProxy({
       requests.set(upstreamId, {
         method: message.method,
         targetId: message.params?.targetId,
-        sessionId: message.params?.sessionId,
         downstreamId: message.id,
       });
       sendUpstream({ ...message, id: upstreamId });
@@ -415,7 +389,6 @@ export async function startLeaseProxy({
         });
     });
     const processUpstreamMessage = async (data) => {
-      await refreshNativeTargets();
       const message = JSON.parse(data.toString());
       if (message.id) {
         const request = requests.get(message.id);
@@ -439,8 +412,6 @@ export async function startLeaseProxy({
           await addOwnedTarget(stateDir, leaseId, message.result.targetId);
         } else if (request?.method === 'Target.attachToTarget' && message.result?.sessionId) {
           ownedSessions.add(message.result.sessionId);
-        } else if (request?.method === 'Target.detachFromTarget' && !message.error && request.sessionId) {
-          removeSession(request.sessionId);
         } else if (
           request?.method === 'Target.closeTarget' &&
           message.result?.success &&
@@ -456,20 +427,6 @@ export async function startLeaseProxy({
       }
 
       const targetInfo = message.params?.targetInfo;
-      if (message.method === 'Target.attachedToTarget' && message.sessionId &&
-          ownedSessions.has(message.sessionId) && ['iframe', 'worker'].includes(targetInfo?.type) &&
-          typeof message.params?.sessionId === 'string' && message.params.sessionId) {
-        ownedSessions.add(message.params.sessionId);
-        ownedSessionParents.set(message.params.sessionId, message.sessionId);
-        if (downstream.readyState === WebSocket.OPEN) downstream.send(JSON.stringify(message));
-        return;
-      }
-      if (message.method === 'Target.detachedFromTarget' && message.sessionId &&
-          ownedSessions.has(message.sessionId) && ownedSessions.has(message.params?.sessionId)) {
-        removeSession(message.params.sessionId);
-        if (downstream.readyState === WebSocket.OPEN) downstream.send(JSON.stringify(message));
-        return;
-      }
       if (
         message.method === 'Target.attachedToTarget' &&
         targetInfo?.targetId &&
@@ -481,8 +438,7 @@ export async function startLeaseProxy({
         message.method === 'Target.detachedFromTarget' &&
         message.params?.sessionId
       ) {
-        if (!ownedSessions.has(message.params.sessionId)) return;
-        removeSession(message.params.sessionId);
+        if (!ownedSessions.delete(message.params.sessionId)) return;
       } else if (message.sessionId) {
         if (!ownedSessions.has(message.sessionId)) return;
         if (

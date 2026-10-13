@@ -11,14 +11,7 @@ const { load } = require("js-yaml")
 const workflows = path.resolve(fileURLToPath(new URL("../../../../../.github/workflows", import.meta.url)))
 const read = (name) => load(readFileSync(path.join(workflows, name), "utf8"))
 
-test("native runtime lanes execute the real installed messaging configuration on every host", () => {
-  const job = read("desk-mcp-tests.yml").jobs["desk-runtime-packs"]
-  assert.deepEqual(job.strategy.matrix.include.map(item => item.platform).sort(), ["darwin", "linux", "win32"])
-  assert.ok(job.steps.some(step => step.run?.includes("native_messaging_host_install.test.js")),
-    "source-only builds do not prove the installer publishes configuration the real Go entry accepts")
-})
-
-test("native integration gates install the broker's committed dependencies before testing it", () => {
+test("integration gates install the broker's committed dependencies before testing it", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
   for (const name of ["desk-mcp-coverage-shards", "release-dry-run", "desk-runtime-packs"]) {
     assert.ok(jobs[name].steps.some(step => step["working-directory"] === "plugins/desk/mcp" &&

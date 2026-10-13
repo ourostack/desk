@@ -77,7 +77,7 @@ function browserPolicyBody() {
     "Use status, doctor, and release for the exact lease.",
     "A lease exposes only its owned targets.",
     "A plugin's desk.browser declaration makes desk-web drive the real profile. Each session works in its own tab group, and calls `browser_close` when done.",
-    "This includes the initial native-owned window: there is no first-window focus-stealing exception.",
+    "This includes the first window a context opens: there is no first-window focus-stealing exception.",
   ].join("\n")
 }
 
@@ -287,7 +287,7 @@ test("browser focus validation rejects an initial-window focus exception", () =>
   const errors = []
   docsValidator.validateBrowserFocusPolicy(errors, {
     readFile: () => browserPolicyBody().replace(
-      "This includes the initial native-owned window: there is no first-window focus-stealing exception.",
+      "This includes the first window a context opens: there is no first-window focus-stealing exception.",
       "The bring-to-front rule does not apply to the one new window desk-web opens for you.",
     ),
   })
