@@ -524,6 +524,16 @@ export async function task_move({ deskRoot, input, person = null, readiness, sta
     allowDirty,
     spawnGit,
   })
+  // The tasks tables are edited after the folder moves, so a track card the edit would refuse is found here,
+  // while nothing has changed yet.
+  for (const trackMd of new Set([srcTrackMd, destTrackMd])) {
+    if (!(await pathExists(trackMd))) continue
+    try {
+      await readMarkdown(trackMd)
+    } catch (error) {
+      throw new Error(`task_move: nothing was moved, because a track card cannot be updated: ${error.message}`, { cause: error })
+    }
+  }
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
   if (intoTask !== undefined) {
     await movePath({ root: effectiveRoot, from: path.join(destDir, "task.md"), to: destFile, spawnGit })
