@@ -594,7 +594,7 @@ Online, the flush adds triage files only when all of these hold. Otherwise it ho
 3. A full listing of the default branch's `triage/` folder (`triage_main_unknown` when the listing is truncated).
 4. A known visibility for the store, asked in this flush (`triage_visibility_unknown`).
 
-Visibility is asked afresh for the store and for every repository a pointer names, in the bytes of a waiting batch as much as in a new row. A waiting batch that names a repository that is not positively public now is taken apart and its rows are built again from the acknowledged annotations, without that pointer. When the store's own visibility cannot be learned, waiting batches are taken apart and nothing is sent.
+Visibility is asked afresh, in this flush, for the store and for every repository a pointer names in any bytes about to go: a new row, a waiting batch, a batch built again, or a row sent again. A cached answer is never used for triage. A waiting batch that names a repository that is not positively public now is taken apart and its rows are built again from the acknowledged annotations, without that pointer. When the store's own visibility cannot be learned, waiting batches are taken apart and nothing is sent.
 
 A row that one revision can never give (an ID that is a fingerprint, say) is skipped and remembered with its code; the other rows go, and that card is tried again only at its next revision.
 
@@ -608,10 +608,30 @@ A refusal that names triage (a `triage_` code, or any code that is not a stale o
 
 ### Staying current at the store
 
-The store reads a row, and a machine's coverage, as stale 72 hours after the newest batch that carries them. So about every 48 hours in which nothing else carried it, Desk sends each delivered `reviewed` row again, byte for byte, in a new batch file with the coverage of that day; with no such row it sends one batch with no rows. It does so only while the triage step has scanned the cards within 72 hours, so a machine whose step has stopped lets its rows and coverage age out. A delivered row whose pointer is no longer positively public, or whose desk now routes elsewhere, is not sent again and ages out. Withdrawn and stale rows are not sent again.
+The store reads a row, and a machine's coverage, as stale 72 hours after the newest batch that carries them. So when a delivered `reviewed` row has not been sent for about 48 hours, Desk sends it again, byte for byte, in a new batch file with the coverage of that day, together with every other such row not sent in the last half day. A quiet desk therefore opens one pull request every two days. With no such row, Desk sends one batch with no rows, and only while the desk that was scanned still routes to the store.
+
+A row is sent again only when all of these hold; otherwise it ages out at the store:
+
+1. The triage step scanned the cards within 72 hours.
+2. The desk remote's `main` still holds the row's revision in state `reviewed`. If it holds another revision or state, the row is dropped and the newer revision goes as any annotation does. If the annotation cannot be read, the row waits.
+3. Every repository the row names is positively public now.
+4. The row's desk still routes to the store.
+
+Withdrawn and stale rows are never sent again.
 
 The store takes the newest batch of one coverage generation as that machine's coverage, and the newest commit time among byte-identical rows as the row's time. Coverage is unknown whenever batches of more than one generation are fresh, so two machines, or one machine in the 72 hours after it moves from an older Desk, read as unknown and are never summed.
 
+### Known limits
+
+- A count that changes with no new row (the first completed run turning null counts into numbers, say) is published with the next batch, up to 48 hours later. The health entry says `source_incomplete` until then, as the store does.
+- After a damaged state file, the rows already on the store are forgotten: they are not sent again and read `stale` until each card gets a new revision. Nothing is published twice.
+- The scan time and counts are kept per store, not per desk. Two desks on one machine that route to one store overwrite each other's counts, and one desk's scans keep the other's rows going.
+- A machine that stops scanning still reads `reviewed` at the store for up to about six days: rows go again for 72 hours after the last scan and stay fresh 72 hours after that.
+- The store's `triage/` folder only grows: one file per twenty rows per machine every two days. Pruning it is follow-up work.
+- Two machines can publish one revision with different bytes in one case: one crashes between a push and its readback while the other writes the same card with the same state in the same millisecond. The store reads that as a conflict, and a later revision clears it.
+- A batch that merges between the flush's listing of the default branch and its rebuild under a new ID lands twice, byte-identical. The store reads that as a row sent again.
+- A closed, unmerged intake pull request keeps the bytes pushed while a repository was public until the next flush that sends something.
+
 ### Health
 
-`factoryLocalStatus` reports `triage_publication: [{ store, health, pending, waiting, held?, held_requests?, stuck_since? }]` for each contributing store with a record. `health` is `held`, `not_published`, `source_incomplete` (the store reads this machine's coverage as unknown: the scan was not complete, a count was null, or the state was reset within 72 hours), `stale` (the last batch reached the store more than 72 hours ago) or `current`. `current` is said only when the store, by its own rules, would show this machine's coverage as known and its rows fresh; it cannot see other machines. `held_requests` counts the annotations and rows that are waiting by reason (`triage_route_elsewhere`, `triage_unacknowledged`, `triage_batch_refused`, `triage_evidence_not_public` and the row codes). `desk_doctor` prints one line for a store whose hold or wait is older than three days, and none for routine staleness. Source: [`triagePublicationHealth`](../mcp/src/factory/local-status.js).
+`factoryLocalStatus` reports `triage_publication: [{ store, health, pending, waiting, held?, held_requests?, stuck_since? }]` for each contributing store with a record. `health` is `held`, `not_published`, `source_incomplete` (the store reads this machine's coverage as unknown: the scan was not complete, a count was null, or the state was reset within 72 hours), `stale` (the last batch reached the store more than 72 hours ago, the row sent longest ago was last sent more than 72 hours ago, or a row is no longer sent) or `current`. `current` is said only when the store, by its own rules, would show this machine's coverage as known and its rows fresh; it cannot see other machines. `held_requests` counts the annotations and rows that are waiting by reason (`triage_route_elsewhere`, `triage_unacknowledged`, `triage_batch_refused`, `triage_evidence_not_public` and the row codes). `desk_doctor` prints one line for a store whose hold or wait is older than three days, and none for routine staleness. Source: [`triagePublicationHealth`](../mcp/src/factory/local-status.js).

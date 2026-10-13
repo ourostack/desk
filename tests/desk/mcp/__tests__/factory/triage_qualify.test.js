@@ -152,6 +152,32 @@ test("a ledger that would refuse is answered first: nothing runs, nothing is wri
   assert.equal((await qualify.qualifyTriage(ENV, { now: () => T0, impls: unknown.impls })).state, "qualified")
 })
 
+test("a_clock_set_back_never_prunes_the_record_just_moved_aside", async () => {
+  const root = scratch()
+  const paths = qualify.triagePaths(root)
+  await fs.mkdir(paths.out, { recursive: true })
+  await fs.writeFile(path.join(paths.out, "qualification.json"), "earlier\n")
+  // Two records were set aside while the clock ran ahead, so the one moved now sorts before both.
+  const later = ["qualification.aside-20990101T000000000Z-aaaa", "qualification.aside-20990102T000000000Z-bbbb"]
+  for (const name of later) await fs.mkdir(path.join(paths.dir, name), { recursive: true })
+  const { impls } = world(root, {
+    restore: async () => ({ state: "stale", reason: "source_changed", requalify: true }),
+    reserve: async () => ({ state: "quota_exhausted", retry_at: new Date(T0 + HOUR).toISOString() }),
+    qualify: async (options) => {
+      try {
+        await options.reserve()
+      } catch {
+        return { state: "blocked", reason: "diagnostic_inadequate", resources: { launches: 0 } }
+      }
+      return { state: "qualified", resources: { launches: 2 } }
+    },
+  })
+  // The reservation is refused, so the earlier record is put back: it must still be there to put back.
+  assert.equal((await qualify.qualifyTriage(ENV, { now: () => T0, impls })).reason, "quota_exhausted")
+  assert.equal(await fs.readFile(path.join(paths.out, "qualification.json"), "utf8"), "earlier\n")
+  assert.deepEqual(await listing(root), ["qualification", later[1]], "the bound still holds: the oldest of the others went")
+})
+
 test("a refusal at the reservation launches nothing, leaves no aside and puts the earlier record back", async () => {
   const root = scratch()
   const out = qualify.triagePaths(root).out
