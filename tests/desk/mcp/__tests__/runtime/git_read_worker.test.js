@@ -91,7 +91,9 @@ test("a read whose signal aborts resolves only when its process has exited, and 
   // With execFile's own signal option the answer came while the process was still alive, inside the folder.
   assert.ok(child.exitCode !== null || child.signalCode !== null, "the process has exited by the time the read answers")
   assert.ok(Date.now() - started < 10_000, "the read ends when the process is killed, not when it would have finished")
-  assert.deepEqual(await runGitRead(read("/desk"), { signal: owner.signal, execGit: () => assert.fail("an aborted read must not start Git") }), FAILED)
+  let startedAfterAbort = 0
+  assert.deepEqual(await runGitRead(read("/desk"), { signal: owner.signal, execGit: () => { startedAfterAbort += 1 } }), FAILED)
+  assert.equal(startedAfterAbort, 0, "an aborted read must not start Git")
   assert.equal((await runGitRead({ root: tmpdir(), args: ["--version"], env: process.env, timeoutMs: 10_000 })).status, 0, "with no options, real Git runs")
 })
 
