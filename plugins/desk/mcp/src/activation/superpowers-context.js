@@ -136,6 +136,8 @@ export async function resolveSuperpowersContext(input) {
       ...deskTaskRule(deskRoot, person, taskPath),
       "Never call task_signoff.",
       "verify or validate in your own worktree; never in a checkout your task does not own",
+      // work-orchestration's scratch sentence, verbatim: a reviewer dispatched from a review skill never reads that skill.
+      "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
     ],
     cleanupPaths: [],

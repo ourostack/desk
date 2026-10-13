@@ -86,6 +86,7 @@ test("Superpowers context prints exact paths without introducing a second progre
       "Never call task_focus; your work is credited through the Desk-Task line.",
       "Never call task_signoff.",
       "verify or validate in your own worktree; never in a checkout your task does not own",
+      "Write down the exact path of everything you create when you create it. Delete only those paths, each by that exact path written out in full in the delete command, never through a shell variable or a command substitution; leave anything else in place and list it in your return.",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
     ],
     cleanupPaths: [],
@@ -502,7 +503,7 @@ test("a task path that is not exactly track and slug omits the Desk-Task rule an
     const { briefRules } = await resolve(moved)
     assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
     assert.equal(briefRules.some((rule) => rule.includes("task_focus")), false, segments.join("/"))
-    assert.equal(briefRules.length, 3)
+    assert.equal(briefRules.length, 4)
   }
 })
 
