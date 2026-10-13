@@ -1,10 +1,9 @@
-// The real-browser half of Desk's browser (see web.cjs): when a plugin declares `desk.browser`, `desk-web` drives the operator's own signed-in browser profile through the Playwright Extension instead of its headless, isolated default. Nothing here runs without that declaration.
+// The real-browser half of Desk's browser (see web.cjs): when a plugin declares `desk.browser`, `desk-web` drives the operator's own signed-in browser profile through the stock Playwright Extension instead of its headless, isolated default. Nothing here runs without that declaration.
 //
 // - The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }` in a plugin's `plugin.json`. It is found the way the factory store declaration is found (`src/factory/plugin-sources.cjs` lists the installed plugin folders). When several plugins declare one, the last folder listed wins, so the overlay loaded after Desk decides.
 // - The profile is the one in the browser's own `Local State` profile list whose `user_name` (the signed-in account's address) ends in `@<profileAccountDomain>`.
-// - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once. The token is never printed, stored or put in a command line, and the proxy replaces it in everything it passes on (web-proxy.cjs).
-// - web-native-launch.cjs supplies the official connect-page executable seam: one direct --new-window launch, not a separate holding page and active-window race.
-// - Cleanup waits for pending operations, then closes only the connection's tabs in reverse order, preserving the seed until last. It never lists again after the snapshot, because listing an empty connection can create a tab. browser_close is answered locally; only confirmed cleanup permits a replacement. A final disconnect can leave closure unverified. Session-end cleanup is bounded, never quits the browser, and never borrows another owner's tabs.
+// - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once, so the extension connects without asking. The token is never printed or stored, and web-real-tabs.cjs replaces it in everything Playwright MCP writes to the host. Only the browser launch carries it in a command line, as stock Playwright MCP does, and an already running browser hands that launch off and exits at once.
+// - The extension gives each connection its own tab group; web-real-tabs.cjs closes the connection's tabs when the session ends.
 //
 // Like web.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins (plugin-sources.cjs is loaded only when this mode is on).
 
@@ -20,9 +19,6 @@ var INSTALL_URL = "https://chromewebstore.google.com/detail/playwright-extension
 var CHANNELS = { msedge: "Microsoft Edge", chrome: "Google Chrome" };
 var MANIFESTS = ["plugin.json", path.join(".claude-plugin", "plugin.json"), path.join(".codex-plugin", "plugin.json")];
 var DOMAIN = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
-// Each call to the browser during cleanup, and how many tabs one cleanup closes at most.
-var TAB_CALL_MS = 2500;
-var MAX_TABS = 50;
 var MAX_MANIFEST = 1024 * 1024;
 // plugin-sources.cjs checks plugin names, versions and repositories against these; the patterns match `PATTERNS` in src/factory/schema.js.
 var PATTERNS = {
@@ -158,7 +154,34 @@ function scan(iterator, want) {
   });
 }
 
-// The extension's token in a profile, or null when the profile has none (the extension is not installed there). Reads a copy of `Local Storage/leveldb` made without its LOCK file and removes the copy before it answers, whatever happens. `deps.level` is the `classic-level` module.
+// The token from Chromium's newer local storage, one SQLite file named `LocalStorage` (Chrome 153 and later use it; Edge 155 still uses LevelDB), read from a copy with Node's built-in SQLite. Null when this Node has no built-in SQLite or the file has no token. `deps.sqlite` is for tests.
+function readSqliteToken(file, extensionId, tokenKey, deps) {
+  var sqlite;
+  try {
+    sqlite = deps.sqlite === undefined ? require("node:sqlite") : deps.sqlite;
+  } catch (error) {
+    return null;
+  }
+  if (!sqlite) return null;
+  var copy = fs.mkdtempSync(path.join(deps.tmpdir, "desk-web-ls-"));
+  try {
+    ["", "-wal"].forEach(function (suffix) {
+      if (fs.existsSync(file + suffix)) fs.copyFileSync(file + suffix, path.join(copy, "LocalStorage" + suffix));
+    });
+    var db = new sqlite.DatabaseSync(path.join(copy, "LocalStorage"));
+    try {
+      var row = db.prepare("SELECT e.value AS value, e.value_compression_type AS compression FROM map_entries e JOIN maps m ON m.row_id = e.map_id WHERE m.storage_key = ? AND e.key = ?")
+        .get(Buffer.from("chrome-extension://" + extensionId + "/", "latin1"), Buffer.concat([Buffer.from([1]), Buffer.from(tokenKey, "latin1")]));
+      return row && row.compression === 0 ? decodeToken(Buffer.from(row.value)) : null;
+    } finally {
+      db.close();
+    }
+  } finally {
+    fs.rmSync(copy, { recursive: true, force: true });
+  }
+}
+
+// The extension's token in a profile, or null when the profile has none (the extension is not installed there). Reads a copy of `Local Storage/leveldb` made without its LOCK file and removes the copy before it answers, whatever happens, then Chromium's newer SQLite `LocalStorage` when LevelDB has no token. `deps.level` is the `classic-level` module.
 function readExtensionToken(profileDir, deps) {
   var extensionId = deps.extensionId === undefined ? EXTENSION_ID : deps.extensionId;
   var tokenKey = deps.tokenKey === undefined ? "auth-token" : deps.tokenKey;
@@ -167,7 +190,11 @@ function readExtensionToken(profileDir, deps) {
     return Promise.reject(new Error("browser_token_identity_invalid"));
   }
   var source = path.join(profileDir, "Local Storage", "leveldb");
-  if (!fs.existsSync(source)) return Promise.resolve(null);
+  var sqliteFile = path.join(profileDir, "LocalStorage");
+  function fromSqlite(token) {
+    return token || !fs.existsSync(sqliteFile) ? token : readSqliteToken(sqliteFile, extensionId, tokenKey, deps);
+  }
+  if (!fs.existsSync(source)) return Promise.resolve(null).then(fromSqlite);
   var copy = fs.mkdtempSync(path.join(deps.tmpdir, "desk-web-ls-"));
   function remove() {
     fs.rmSync(copy, { recursive: true, force: true });
@@ -184,7 +211,7 @@ function readExtensionToken(profileDir, deps) {
     return scan(iterator, Buffer.from("_chrome-extension://" + extensionId + "\u0000\u0001" + tokenKey, "latin1"));
   }).then(function (token) {
     return shutdown().then(function () {
-      return token;
+      return fromSqlite(token);
     });
   }, function (error) {
     return shutdown().then(function () {
@@ -203,7 +230,7 @@ function readExtensionToken(profileDir, deps) {
 
 // ---- connecting ----
 
-// What to start Playwright MCP with for a declaration: { args, env } or { payload } (a degraded answer that says what is missing).
+// What to start Playwright MCP with for a declaration: { args, env } or { payload } (a degraded answer that says what is missing). The user-data folder is passed explicitly, so Playwright opens the connect page in the same browser data the profile was found in.
 // `o.declaration`, `o.installed` (the Playwright MCP install, whose folder also holds classic-level), `o.executable` (the browser's real executable, or null when it is not installed), `o.platform`, `o.env`, `o.homeDir`, `o.unavailable(code, summary, fix)` and `o.reconnectFix(action)`; `o.requireModule` and `o.tmpdir` are for tests.
 function connect(o) {
   var declaration = o.declaration;
@@ -239,7 +266,7 @@ function connect(o) {
     if (token === null || token === "") return missing();
     var env = {};
     env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token;
-    return { args: ["--extension", "--browser", declaration.channel, "--profile-dir-name", profile], env: env, secrets: [token], profile: profile, executable: o.executable, app: app };
+    return { args: ["--extension", "--browser", declaration.channel, "--user-data-dir", path.dirname(statePath), "--profile-dir-name", profile], env: env, profile: profile, app: app };
   }, function (error) {
     return { payload: o.unavailable("browser_token_unreadable",
       "Desk could not read the Playwright Extension's connection token from the " + app + " profile " + profile + " (" + describe(error) + "), so the browser is unavailable",
@@ -247,150 +274,12 @@ function connect(o) {
   });
 }
 
-// ---- the agent's own tabs ----
-
-// How many tabs a `browser_tabs` list names: the lines that start `- <index>:`.
-function countTabs(result) {
-  var text = result && Array.isArray(result.content) ? result.content.map(function (part) {
-    return typeof part.text === "string" ? part.text : "";
-  }).join("\n") : "";
-  var lines = text.match(/^\s*-\s*\d+:/gm);
-  return lines === null ? 0 : lines.length;
-}
-
-function noTabs(result) {
-  return Boolean(result && Array.isArray(result.content) && countTabs(result) === 0 && result.content.some(function (part) {
-    return typeof part.text === "string" && /^[ \t]*No open tabs\.?[ \t]*\r?$/m.test(part.text);
-  }));
-}
-
-function cleanupIncomplete(closed, remaining) {
-  return { isError: true, content: [{ type: "text", text: JSON.stringify({
-    status: "degraded",
-    code: "browser_cleanup_incomplete",
-    summary: "Desk could not verify that this connection's browser tabs are closed.",
-    closed: closed,
-    remaining: remaining,
-    fix: "The existing connection is retained. Retry browser_close on this connection before opening a replacement. Do not close another agent's or the operator's window.",
-  }) }] };
-}
-
-// Lists once, then closes no more than that snapshot or MAX_TABS. No final list: Playwright creates a tab when listing an empty connection. Only an explicit no-tabs response proves completion; failures retain the connection for retry.
-function closeOwnTabs(call, callMs) {
-  var ms = either(callMs, TAB_CALL_MS);
-  var closed = 0;
-  var remaining = null;
-  function close(left) {
-    if (left <= 0) return cleanupIncomplete(closed, remaining);
-    return call("browser_tabs", { action: "close", index: remaining - 1 }, ms).then(function (result) {
-      if (!result || result.isError) return cleanupIncomplete(closed, null);
-      if (noTabs(result)) {
-        closed += 1;
-        return CLOSED;
-      }
-      remaining = countTabs(result) || null;
-      if (remaining === null) return cleanupIncomplete(closed, null);
-      closed += 1;
-      return close(left - 1);
-    });
-  }
-  return call("browser_tabs", { action: "list" }, ms).then(function (listed) {
-    if (!listed || listed.isError) return cleanupIncomplete(closed, null);
-    if (noTabs(listed)) return CLOSED;
-    remaining = countTabs(listed) || null;
-    return remaining === null ? cleanupIncomplete(closed, null) : close(Math.min(remaining, MAX_TABS));
-  }).then(null, function () {
-    return cleanupIncomplete(closed, null);
-  });
-}
-
-// What `browser_close` answers once the agent's window is closed. The call is not passed on (see the header).
-var CLOSED = { content: [{ type: "text", text: "The browser window this session opened is closed. The next browser call opens a new one." }] };
-
-// The hooks the proxy calls for the agent's window and tabs. `open()` prepares a
-// connection or resolves an error result. Cleanup never starts a connection.
-function ownTabs(open, callMs) {
-  var used = false;
-  var opening = null;
-  var cleaning = null;
-  var pending = [];
-  function finish(operation) {
-    pending = pending.filter(function (entry) {
-      if (entry.operation !== operation) return true;
-      entry.resolve();
-      return false;
-    });
-  }
-  function waitPending() {
-    if (pending.length === 0) return Promise.resolve(true);
-    return new Promise(function (resolve) {
-      var timer = setTimeout(function () { resolve(false); }, either(callMs, TAB_CALL_MS));
-      Promise.all(pending.map(function (entry) { return entry.done; })).then(function () {
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
-  }
-  function cleanup(api) {
-    if (cleaning !== null) return cleaning;
-    if (!used && pending.length === 0) return Promise.resolve(CLOSED);
-    cleaning = waitPending().then(function (settled) {
-      if (!settled) return cleanupIncomplete(0, null);
-      return used ? closeOwnTabs(api.callTool, callMs) : CLOSED;
-    }).then(function (result) {
-      cleaning = null;
-      if (!result.isError) used = false;
-      return result;
-    });
-    return cleaning;
-  }
-  return {
-    beforeCall: function beforeCall(params, api, operation) {
-      if (operation && operation.cancelled) return Promise.resolve(null);
-      if (params.name === "browser_close") {
-        return cleanup(api).then(function (result) {
-          if (!result.isError) opening = null;
-          return result;
-        });
-      }
-      if (cleaning !== null) {
-        return cleaning.then(function (result) {
-          return result.isError ? result : beforeCall(params, api, operation);
-        });
-      }
-      if (operation !== undefined) {
-        var entry = { operation: operation, resolve: null, done: null };
-        entry.done = new Promise(function (resolve) { entry.resolve = resolve; });
-        pending.push(entry);
-      }
-      if (opening === null) opening = open();
-      var attempt = opening;
-      return attempt.then(function (result) {
-        if (result && result.isError) {
-          finish(operation);
-          if (opening === attempt) opening = null;
-          return result;
-        }
-        return null;
-      });
-    },
-    afterCall: function (params, failed, operation) {
-      if (!failed && params.name !== "browser_close") used = true;
-      finish(operation);
-    },
-    cleanup: cleanup
-  };
-}
-
 module.exports = {
   CHANNELS: CHANNELS,
   EXTENSION_ID: EXTENSION_ID,
   INSTALL_URL: INSTALL_URL,
-  closeOwnTabs: closeOwnTabs,
   connect: connect,
-  countTabs: countTabs,
   findProfileDir: findProfileDir,
-  ownTabs: ownTabs,
   pluginDirs: pluginDirs,
   readDeclaration: readDeclaration,
   readExtensionToken: readExtensionToken,
