@@ -4,8 +4,10 @@
 // (`_fake_github.js`), whose validate and merge use the real immutable-change gate. Nothing reaches the network or a real account.
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import childProcess from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { existsSync, promises as fs, readFileSync } from "node:fs"
+import nodeFs, { existsSync, promises as fs, readFileSync } from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -1282,4 +1284,58 @@ test("a_counts_only_batch_is_not_sent_after_the_route_changes", async () => {
   assert.equal((await run(w, hub, T0 + 6 * HOUR)).result, "delivered_pr_open")
   const sent = (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).map(([, sha]) => batchValue(hub, sha))
   assert.deepEqual(sent.map((value) => [value.rows, value.coverage.scan]), [[[], "truncated"]])
+})
+
+/** What `body` does: every `node:fs` promise call as `<name> <last two path parts>`, and every process started as its command. */
+async function watched(body) {
+  const files = []
+  const processes = []
+  const restore = []
+  const wrap = (object, name, note) => {
+    const original = object[name]
+    object[name] = function (...args) {
+      note(name, args)
+      return original.apply(this, args)
+    }
+    restore.push(() => { object[name] = original })
+  }
+  for (const name of ["readFile", "writeFile", "lstat", "stat", "readdir", "open", "mkdir", "rename", "unlink", "rm"]) wrap(nodeFs.promises, name, (call, args) => files.push(`${call} ${String(args[0]).split(path.sep).slice(-3).join("/")}`))
+  for (const name of ["spawn", "spawnSync", "execFile", "execFileSync"]) wrap(childProcess, name, (_call, args) => processes.push(path.basename(String(args[0]))))
+  syncBuiltinESMExports()
+  try {
+    await body()
+  } finally {
+    for (const undo of restore) undo()
+    syncBuiltinESMExports()
+  }
+  const count = (pattern) => files.filter((call) => pattern.test(call)).length
+  return { triage: files.filter((call) => / (?:[^/]+\/)?triage-outbox\//u.test(call)).map((call) => call.replace(/ .*triage-outbox\//u, " ")), locks: count(/^open .*\.lock$/u), writes: count(/^(rename|writeFile) /u), processes }
+}
+
+test("a_flush_with_nothing_to_publish_adds_no_process_no_lock_no_write_and_no_network_call", async () => {
+  // A machine that never triaged: the triage plan costs every flush one look for the state file and one folder listing.
+  const bare = await world()
+  const none = github()
+  await run(bare, none, T0)
+  const calls = none.calls.length
+  const without = await watched(async () => assert.deepEqual(await run(bare, none, T0 + HOUR), { result: "nothing_pending" }))
+  assert.deepEqual(without.triage, ["lstat example-org__example-store/state.json", "readdir example-org__example-store"])
+  assert.deepEqual([none.calls.length, without.processes.filter((command) => /^git/u.test(command))], [calls, []])
+
+  // A machine that has published and has nothing due: one more read, the state file. No lock is taken, nothing is written (the
+  // summary in the status is as it was), no Git process starts and the store is not called.
+  const { w } = await reviewedWorld()
+  const hub = github()
+  assert.equal((await run(w, hub, T0 + HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * HOUR)
+  await run(w, hub, T0 + 3 * HOUR)
+  const said = (await readStatus(w.env)).triage_publication[STORE]
+  const before = hub.calls.length
+  const quiet = await watched(async () => assert.deepEqual(await run(w, hub, T0 + 4 * HOUR), { result: "nothing_pending" }))
+  assert.deepEqual(quiet.triage.filter((call) => !/^lstat /u.test(call)), ["readFile example-org__example-store/state.json", "readdir example-org__example-store"])
+  assert.deepEqual([hub.calls.length, quiet.processes.filter((command) => /^git/u.test(command))], [before, []])
+  assert.ok(quiet.locks <= without.locks && quiet.writes <= without.writes && quiet.processes.length <= without.processes.length, JSON.stringify([quiet, without]))
+  assert.deepEqual((await readStatus(w.env)).triage_publication[STORE], said, "not written again")
+  assert.equal(said.at, at(T0 + 2 * HOUR))
 })

@@ -1076,7 +1076,7 @@ function triageOutboxFile(root, store, name) {
 /**
  * `readTriageOutbox(env, store, name, { isValid }) -> record | null`: one protected file of the store's triage outbox, `state.json` or
  * `<batch>.json`. A file that does not parse, or that `isValid` (given the parsed value, by default any object) refuses, is moved aside as
- * `<file>.corrupt-json-<n>` and reads as null; `countTriageOutboxDamaged` says how many state files that happened to.
+ * `<file>.corrupt-json-<n>` and reads as null; `readTriageOutboxState` says how many state files that happened to.
  */
 export async function readTriageOutbox(env, store, name, { platform = process.platform, runner = undefined, isValid = isRecordOrNone } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
@@ -1093,11 +1093,17 @@ export async function updateTriageOutbox(env, store, name, mutate, { platform = 
   }, { platform, env, runner }, isValid)
 }
 
-/** `countTriageOutboxDamaged(env, store) -> number`: how many of the store's triage state files were moved aside as damaged. */
-export async function countTriageOutboxDamaged(env, store, { platform = process.platform, runner = undefined } = {}) {
+/**
+ * `readTriageOutboxState(env, store, isValid) -> { state, damaged }`: the store's `state.json` (as `readTriageOutbox` reads it) and how
+ * many state files were moved aside as damaged, with the state folder resolved once. A store with no triage state costs one `lstat` and
+ * one folder listing here: every flush pays this, so it must stay that cheap.
+ */
+export async function readTriageOutboxState(env, store, isValid, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
-  const names = await fsp.readdir(path.dirname(triageOutboxFile(root, store, "state.json"))).catch(() => [])
-  return names.filter((name) => name.startsWith("state.json.corrupt-json-")).length
+  const file = triageOutboxFile(root, store, "state.json")
+  const state = await readJsonFileSafe(file, null, platform, isValid)
+  const names = await fsp.readdir(path.dirname(file)).catch(() => [])
+  return { state, damaged: names.filter((name) => name.startsWith("state.json.corrupt-json-")).length }
 }
 
 // ---------------------------------------------------------------------------

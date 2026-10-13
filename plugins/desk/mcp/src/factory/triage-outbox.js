@@ -70,7 +70,7 @@ import { randomBytes } from "node:crypto"
 import * as path from "node:path"
 
 import { MAX_CARD_FILES, isClaimLive, readCards } from "../desk/improvement-cards.js"
-import { countTriageOutboxDamaged, gitBlobSha, listMarkers, readTriageOutbox, updateStatus, updateTriageOutbox } from "./outbox.js"
+import { gitBlobSha, listMarkers, readTriageOutbox, readTriageOutboxState, updateStatus, updateTriageOutbox } from "./outbox.js"
 import { isPlainObject } from "./schema.js"
 import { markerRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
@@ -315,24 +315,28 @@ const holdRows = (env, store, ids, code, now) => update(env, store, (state) => (
 }))
 
 /**
- * `planTriage(env, { store, now }) -> { work, state, candidates, held, attest, coverageDue }`, from local state and Git only.
+ * `planTriage(env, { store, now, status }) -> { work, state, candidates, held, attest, coverageDue }`, from local state and Git only.
+ * `status` (optional) is the factory status the flush already read: the summary is written only when it differs from the one there.
  * `candidates` are the requests ready to build, `[{ key, id, deskRoot, personPrefix, annotation, identity, ack, card }]`; `attest`
  * the public IDs of the delivered rows to send again, oldest first; `coverageDue` whether a batch with no rows is due, because
  * nothing carried the coverage for two days or the scan's state changed, and the desk that was scanned routes here. `held` counts what waits, by code: `triage_route_elsewhere`, `triage_unacknowledged`,
  * `triage_coverage_unknown`, `triage_runner_unknown`, `triage_batch_refused`, `triage_evidence_not_public`, or the code
  * `triageBatchFor` refused this revision's row with. `work` is true when the flush has to go online for triage. A store with
- * no triage state costs one file read and one folder listing.
+ * no triage state costs one `lstat` and one folder listing, and one with delivered rows and nothing due adds one file read: no
+ * lock, no write, no Git process and no network call.
  */
-export async function planTriage(env, { store, now }) {
-  const kept = await readTriageOutbox(env, store, STATE, VALID_STATE)
-  const damaged = await countTriageOutboxDamaged(env, store)
+export async function planTriage(env, { store, now, status }) {
+  const { state: kept, damaged } = await readTriageOutboxState(env, store, VALID_STATE.isValid)
+  // The summary is written only when it says something new, so a flush with nothing to publish takes no lock and writes no file.
+  const said = isPlainObject(status?.triage_publication?.[store]) ? status.triage_publication[store] : null
+  const summarize = (state) => (said !== null && same({ ...said, at: null }, { ...summaryOf(state, now), at: null }) ? undefined : writeSummary(env, store, state, now))
   const idle = (state) => ({ work: false, state, candidates: [], held: {}, attest: [], coverageDue: false })
   if (kept === null && damaged === 0) return idle(stateOf(null))
   let state = stateOf(kept)
   // A state file was moved aside since this state last looked: what it held is not known, so nothing is sent for a day.
   if (damaged > (state.damaged ?? 0)) state = await update(env, store, (latest) => ({ ...latest, damaged, reset_at: iso(now), held: heldAs(latest, "triage_state_damaged", now) }))
   if (heldNow(state, now) !== null) {
-    await writeSummary(env, store, state, now)
+    await summarize(state)
     return idle(state)
   }
   const held = {}
@@ -428,7 +432,7 @@ export async function planTriage(env, { store, now }) {
       requests: Object.fromEntries(Object.entries(latest.requests).filter(([key]) => decided.get(key) !== null).map(([key, request]) => [key, decided.get(key) ?? request])),
     }))
   }
-  await writeSummary(env, store, state, now)
+  await summarize(state)
   return { work: state.pending.length > 0 || candidates.length > 0 || attest.length > 0 || coverageDue, state, candidates, held, attest, coverageDue }
 }
 
