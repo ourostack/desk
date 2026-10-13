@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.317 — 2026-10-13
+
+Factory triage kicks retain separate desk/person observations and launch only the scope that justified the kick. Legacy history can request a bounded fresh observation without assigning another desk's health. Public last-success ages stay bound to the publishing store and desk/person, so a nonconsenting pass cannot blank or freshen unrelated pending batches. Consent and the shared launch ledger are unchanged. Runtime qualification still fails closed on actual contract drift; documented next-UTC-day recovery preserves its daily guard and launch budget.
+
+Readiness durable change acknowledgements have a five-second deadline. A timeout, disconnect or unverifiable acknowledgement returns a non-retryable partial operation: the canonical files were already written, but journal recording is unknown (`journal_recorded: null`), not falsely failed or successful. The controller retains and serializes its operation; the client closes its timed-out socket, and freshness stays uncertain until reconciliation. Do not repeat the canonical mutation on this response.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.316 — 2026-10-13
 
 Re-sending factory triage rows to keep them fresh at the store is stricter. When a row is due or a re-attestation is waiting, the flush fetches the desk remote's `main` once before accepting its standing and sends again only rows that fresh copy still holds as the same review; a row that cannot be read or fetched waits and no longer makes the others go early. A row dropped because the desk now holds a newer annotation keeps store health at `stale` until a verified higher replacement revision is delivered: age alone never clears its tombstone because the store retains stale rows. A waiting batch that carries only the scan's counts is not sent after the scanned desk's route changes. See [Staying current at the store](docs/factory-local-capture.md#staying-current-at-the-store).
