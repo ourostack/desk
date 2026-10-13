@@ -485,6 +485,9 @@ test("triage publication health is current only when the store would read this m
   assert.equal(triagePublicationHealth({ ...good, rows_oldest_at: ago(TRIAGE_PUBLICATION_FRESH_MS), rows_held: 0 }, now), "current")
   assert.equal(triagePublicationHealth({ ...good, rows_oldest_at: ago(TRIAGE_PUBLICATION_FRESH_MS + 1), rows_held: 0 }, now), "stale")
   assert.equal(triagePublicationHealth({ ...good, rows_oldest_at: ago(0), rows_held: 1 }, now), "stale")
+  // Nor while the store still reads a row this machine dropped for a newer annotation.
+  assert.equal(triagePublicationHealth({ ...good, rows_dropped: 1 }, now), "stale")
+  assert.equal(triagePublicationHealth({ ...good, rows_oldest_at: ago(0), rows_held: 0, rows_dropped: 1 }, now), "stale")
   assert.equal(triagePublicationHealth({ scan: "complete" }, now), "not_published")
   assert.equal(triagePublicationHealth({ ...good, held: "triage_store_not_ready" }, now), "held")
   assert.equal(triagePublicationHealth(good), "stale", "the default clock is now")
