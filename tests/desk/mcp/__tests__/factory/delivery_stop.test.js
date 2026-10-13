@@ -30,7 +30,7 @@ async function fixture(ctx, host, options = {}) {
     { id: "end-1", parentId: "reply-1", type: "assistant.turn_end", timestamp: END, data: { turnId: "final" } },
     { type: "hook.start", timestamp: END, parentId: "end-1", data: { hookInvocationId: "stop-1", hookType: "agentStop", input: payload } },
   ] : [
-    { type: "user", sessionId: ID, cwd: ctx.desk, timestamp: START, message: { role: "user", content: "Go. I am stepping away." } },
+    { type: "user", sessionId: ID, cwd: ctx.desk, timestamp: START, origin: { kind: "human" }, message: { role: "user", content: "Go. I am stepping away." } },
     { type: "assistant", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_use", id: "call-1", name, input: args }] } },
     { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "call-1", content: JSON.stringify(delivery) }] } },
     { type: "assistant", sessionId: ID, timestamp: END, message: { stop_reason: "end_turn", content: [{ type: "text", text: reply }] } },
@@ -95,7 +95,7 @@ for (const host of ["copilot", "claude"]) {
   test(`${host}: prior human turn packet is not current progress`, () => scratch(async ctx => {
     const f = await fixture(ctx, host, { edit(lines) {
       if (host === "copilot") lines.splice(4, 0, { type: "user.message", timestamp: END, data: { content: "Show progress.", interactionId: "human-2" } })
-      else lines.splice(3, 0, { type: "user", sessionId: ID, timestamp: END, message: { content: "Show progress." } })
+      else lines.splice(3, 0, { type: "user", sessionId: ID, timestamp: END, origin: { kind: "human" }, message: { content: "Show progress." } })
     } })
     assert.equal((await check(f)).status, "not_delivery")
   }))
@@ -158,6 +158,72 @@ test("Copilot: continuation changes interaction but never permits a second block
   } })
   assert.equal((await check(f)).status, "unverified")
 }))
+test("Claude: native text/image human prompts establish and reset the human boundary", () => scratch(async ctx => {
+  const form = [{ type: "image", source: { type: "base64", data: "fixture-only" } }, { type: "text", text: "Go." }]
+  const first = await fixture(ctx, "claude", { edit(lines) { lines[0].message.content = form } })
+  assert.equal((await check(first)).status, "correction")
+  const next = await fixture(ctx, "claude", { edit(lines) {
+    lines.splice(3, 0, { type: "user", sessionId: ID, timestamp: END, origin: { kind: "human" }, message: { content: form } })
+  } })
+  assert.equal((await check(next)).status, "not_delivery")
+}))
+test("Copilot: newer non-unsigned native observation cannot borrow prior unsigned proof", () => scratch(async ctx => {
+  const f = await fixture(ctx, "copilot", { edit(lines) {
+    lines.splice(4, 0,
+      { type: "tool.execution_start", timestamp: END, data: { toolCallId: "newer", toolName: "desk-task_archive", arguments: { track: "portable-tools", slug: "integrity-manifests" } } },
+      { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "newer", interactionId: "human-1", success: true, result: { content: '{"status":"archived"}' } } })
+  } })
+  assert.equal((await check(f)).output, undefined)
+}))
+test("Copilot: MCP error is a real error even if its transport succeeded", () => scratch(async ctx => {
+  const f = await fixture(ctx, "copilot", { edit(lines) {
+    lines.splice(4, 0, { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "cleanup", interactionId: "human-1", success: true, result: { isError: true, content: "denied" } } })
+  } })
+  assert.equal((await check(f)).output, undefined)
+}))
+test("Claude: system/meta/compact/scheduled/headless prompt origins never establish a human turn", () => scratch(async ctx => {
+  for (const fields of [
+    { origin: { kind: "system" } }, { promptSource: "system" }, { promptSource: "sdk" },
+    { isMeta: true }, { isCompactSummary: true }, { scheduledTaskId: "tick" }, { turnOrigin: "scheduled" },
+  ]) {
+    const f = await fixture(ctx, "claude", { edit(lines) { Object.assign(lines[0], fields) } })
+    assert.equal((await check(f)).output, undefined)
+  }
+}))
+test("guard diagnostics distinguish malformed/missing/foreign transcripts without blocking", () => scratch(async ctx => {
+  const f = await fixture(ctx, "copilot")
+  await fs.appendFile(f.log, "{broken\n")
+  assert.equal((await check(f)).status, "unavailable")
+  assert.equal((await check(f)).output, undefined)
+  const fresh = await fixture(ctx, "copilot")
+  fresh.payload.cwd = path.join(ctx.desk, "foreign")
+  assert.equal((await check(fresh)).status, "unavailable")
+  const missing = await fixture(ctx, "copilot")
+  await fs.rename(missing.log, missing.log + ".preserved")
+  assert.equal((await check(missing)).status, "unavailable")
+}))
+test("Claude: Stop payload's current final, not a lagging transcript reply, is checked", () => scratch(async ctx => {
+  const f = await fixture(ctx, "claude")
+  f.payload.last_assistant_message = PACKET.join("\n")
+  assert.equal((await check(f)).status, "complete")
+}))
+for (const host of ["copilot", "claude"]) {
+  test(`${host}: archive cannot erase another task's recorded blocker`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { edit(lines) {
+      if (host === "copilot") lines.splice(4, 0,
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "blocked", toolName: "desk-task_update", arguments: { track: "portable-tools", slug: "another-outcome", status: "blocked" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "blocked", interactionId: "human-1", success: true, result: { content: '{"status":"updated"}' } } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "archive", toolName: "desk-task_archive", arguments: { track: "portable-tools", slug: "integrity-manifests" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "archive", interactionId: "human-1", success: true, result: { content: JSON.stringify(RESULT) } } })
+      else lines.splice(3, 0,
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "blocked", name: "mcp__desk__task_update", input: { track: "portable-tools", slug: "another-outcome", status: "blocked" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "blocked", content: '{"status":"updated"}' }] } },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "archive", name: "mcp__desk__task_archive", input: { track: "portable-tools", slug: "integrity-manifests" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "archive", content: JSON.stringify(RESULT) }] } })
+    } })
+    assert.equal((await check(f)).output, undefined)
+  }))
+}
 test("existing hook command relays one decision while retaining the accounting marker", () => scratch(async ctx => {
   const f = await fixture(ctx, "copilot")
   const r = spawnSync(process.execPath, [SCRIPT, "copilot"], { env: ctx.env, input: JSON.stringify(f.payload), encoding: "utf8", timeout: 6000 })

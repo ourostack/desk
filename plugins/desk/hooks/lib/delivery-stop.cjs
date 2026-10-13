@@ -63,8 +63,11 @@ function receipt(s, call, value) {
     s.packets.delete(call.target); return;
   }
   const packet = packetOf(value);
-  if (!packet) return;
-  s.interrupted = false;
+  if (!packet) {
+    // A newer native observation without unsigned evidence cannot keep an older
+    // packet authoritative (accepted/cancelled/returned or no longer evidenced).
+    s.packets.delete(call.target); return;
+  }
   const key = `${call.target}\n${packet.join("\n")}`;
   if (!s.delivered.has(key)) s.packets.set(call.target, { packet, key });
 }
@@ -107,8 +110,8 @@ function copilot(s, e, payload) {
   }
   if (e.type === "tool.execution_complete") {
     const call = s.calls.get(d.toolCallId); s.calls.delete(d.toolCallId);
-    if (d.success === true && d.interactionId === s.human) receipt(s, call, resultOf(d.result?.content));
-    if (d.success === false && d.interactionId === s.human && s.packets.size) s.interrupted = true;
+    if (d.success === true && !d.result?.isError && d.interactionId === s.human) receipt(s, call, resultOf(d.result?.content));
+    if ((d.success === false || d.result?.isError) && d.interactionId === s.human && s.packets.size) s.interrupted = true;
   }
   if (e.type === "assistant.message" && d.interactionId === s.human && !d.toolRequests?.length) reply(s, d.content);
   if (e.type === "hook.end" && d.hookType === "agentStop" && d.output?.decision === "block" && text(d.output.reason) && d.output.reason.startsWith(TAG)) s.corrected = true;
@@ -121,9 +124,14 @@ function claude(s, e, payload) {
   if (e.sessionId && e.sessionId !== payload.session_id) return;
   if (e.cwd === payload.cwd && e.sessionId === payload.session_id) s.envelope = true;
   const blocks = e.message?.content;
-  if (e.type === "user" && text(blocks)) {
-    if (blocks.includes(TAG)) s.corrected = true;
-    else if (!e.isMeta) reset(s, "human");
+  const content = text(blocks) ? blocks : Array.isArray(blocks) ? blocks.filter(x => x?.type === "text" && text(x.text)).map(x => x.text).join("\n") : "";
+  if (e.type === "user") {
+    if (content.includes(TAG) && (e.isMeta || e.promptSource === "system" || e.origin?.kind === "system")) s.corrected = true;
+    else if (!e.isMeta && !e.isCompactSummary && !["system", "sdk"].includes(e.promptSource)
+      && !Object.hasOwn(e, "scheduledTaskId") && !Object.hasOwn(e, "scheduledFireId")
+      && (!Object.hasOwn(e, "turnOrigin") || e.turnOrigin === "human") && e.origin?.kind === "human"
+      && (text(blocks) || Array.isArray(blocks) && blocks.some(x => ["text", "image"].includes(x?.type)))) reset(s, "human");
+    if (content.startsWith("[Request interrupted by user")) s.interrupted = true;
   }
   if (!s.human) return;
   if (e.type === "system" && ["error", "api_error", "stop_hook_error"].includes(e.subtype)) {
