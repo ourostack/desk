@@ -773,11 +773,16 @@ async function deskStatusSession({ command, args, cwd, env }) {
   try {
     child.stdin.write(makeMcpEnvelope(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "copilot-factory-test", version: "1.0.0" } }));
     await waitForResponse(child, 1, stderrChunks);
+    let detailDeadline = null;
     for (let id = 2; ; id += 1) {
       child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: { detail: true } }));
       const status = JSON.parse((await waitForResponse(child, id, stderrChunks, 60000)).result.content[0].text);
-      // A ready answer can still be waiting for its detail, which the next call serves; `factory` is part of the detail.
-      if (status.state !== "admitting" && status.detail_pending !== true) return status;
+      if (status.state === "admitting") continue;
+      // A ready answer can still be waiting for its detail, which a later call serves; `factory` is part of the detail.
+      // Detail that has not arrived 30 s after admission is returned as it is, so the caller's assertion fails and shows it.
+      detailDeadline ??= Date.now() + 30000;
+      if (status.detail_pending !== true || Date.now() > detailDeadline) return status;
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
   } finally {
     child.kill("SIGTERM");
