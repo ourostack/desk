@@ -535,16 +535,37 @@ test("task_archive of a task cancelled writes no signoff", async () => {
   assert.equal(data.flow.deliveries, 0)
 })
 
-test("task_archive of a card already done adds no delivery and keeps its record byte for byte", async () => {
+test("task_archive preserves an unsigned delivery packet without adding a delivery or changing its record", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "kept-record", title: "T" } })
   await task_update({ deskRoot: root, input: { track: "t", slug: "kept-record", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   const before = (await readFront(path.join(root, "t", "kept-record", "task.md"))).data
   const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "kept-record" } })
-  assert.equal(result.signoff, undefined)
+  assert.deepEqual(result.signoff_packet, ["Asked: T", `Delivered: ${DONE_EVIDENCE.ref}`, "Accept or send back?"])
   const { data } = await readFront(path.join(root, "t", "_archive", "kept-record", "task.md"))
   assert.deepEqual(data.signoff, before.signoff)
   assert.deepEqual(data.flow, before.flow)
+  const again = await task_archive({ deskRoot: root, input: { track: "t", slug: "kept-record" } })
+  assert.equal(again.status, "already_archived")
+  assert.deepEqual(again.signoff_packet, result.signoff_packet)
+  assert.deepEqual((await readFront(path.join(root, "t", "_archive", "kept-record", "task.md"))).data, data)
+})
+
+test("archive does not invent a pending packet for an accepted delivery or evidence-free done card", async () => {
+  const root = await mkTempDeskRoot()
+  for (const slug of ["accepted", "no-proof"]) {
+    await task_create({ deskRoot: root, input: { track: "t", slug, title: slug, status: slug === "no-proof" ? "done" : "drafting" } })
+    if (slug === "accepted") {
+      await task_update({ deskRoot: root, input: { track: "t", slug, status: "done", evidence: DONE_EVIDENCE } })
+      const file = path.join(root, "t", slug, "task.md")
+      const card = await readFront(file)
+      card.data.signoff.state = "accepted"
+      await writeMarkdown(file, card.data, card.content)
+    }
+    const result = await task_archive({ deskRoot: root, input: { track: "t", slug } })
+    assert.equal(result.signoff_packet, undefined)
+    assert.equal((await task_archive({ deskRoot: root, input: { track: "t", slug } })).signoff_packet, undefined)
+  }
 })
 
 test("task_archive without evidence writes no signoff", async () => {

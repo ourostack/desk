@@ -1501,7 +1501,7 @@ requires(
 requires(
   "plugins/desk/skills/archive-workflow/SKILL.md",
   "archive-workflow keeps the sign-off lines when the archive is the last tool call",
-  /does not replace the sign-off ask: `task_archive` on a card that is already `done` answers without the three sign-off lines[^\n]+still ends with the lines `task_update` returned/u,
+  /`task_archive` preserves an unsigned, evidenced delivery's three sign-off lines[^\n]+carry those literal lines as a required next action through any compaction or handoff; never make them optional/u,
 );
 contract("the question-form rule names each host's tool where the skills own it, and session start asks in a sentence", () => {
   assert.match(subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms"), /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI[^\n]+write the question as a sentence in your reply, including the resume-or-start question at session start/u);

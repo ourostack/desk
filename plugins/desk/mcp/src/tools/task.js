@@ -361,13 +361,21 @@ function packetTitle(data, slug) {
 
 // What the answer says after a delivery: the state, three lines for the agent to adapt, and one note.
 const SIGNOFF_NOTE =
-  "This task is delivered, not accepted. If the operator is in this conversation, end your reply with the three lines; do not wait for the answer and do not ask again in this session. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
+  "This task is delivered, not accepted. If the operator is in this conversation, end your reply with the three lines; do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
 function deliveryAnswer({ data, slug, ref }) {
   return {
     signoff: "delivered_unsigned",
     signoff_packet: [`Asked: ${packetTitle(data, slug)}`, `Delivered: ${ref}`, "Accept or send back?"],
     signoff_note: SIGNOFF_NOTE,
   }
+}
+
+// Archiving relocates a card; it must not discard an outstanding delivery reply.
+// Replay the existing packet only, without recording a second delivery or acceptance.
+function pendingDeliveryAnswer(data, slug) {
+  return data.status === "done" && data.signoff?.state === "delivered_unsigned" && typeof data.evidence?.ref === "string"
+    ? deliveryAnswer({ data, slug, ref: data.evidence.ref })
+    : null
 }
 
 // The status of the card a delegated step points at (`task:<track>/<slug>`), live or archived; null when there is no readable card.
@@ -1298,11 +1306,18 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   if (!srcExists && dstExists) {
     const archivedStatus = await archivedTaskStatus(archivedFile)
     const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
+    let pending = null
+    try {
+      pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
+    } catch {
+      // Missing or unreadable legacy cards retain the existing idempotent archive result.
+    }
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
     return withArchiveFocus(statusContext, { track, slug }, {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
       ...refilled,
+      ...pending,
     })
   }
   if (!srcExists && !dstExists) {
@@ -1377,6 +1392,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     const existing = await readMarkdown(filePath)
     finalStatus = existing.data.status
     cardBody = existing.content
+    delivered = pendingDeliveryAnswer(existing.data, slug)
     // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
     // every other byte of the card — quoting, date formats, block scalars, key order — survives.
     const patchFields = {}
