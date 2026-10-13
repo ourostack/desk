@@ -87,6 +87,8 @@ The first `briefRules` entry is a `Desk-Task: <track>/<slug>` line, which must b
 
 The mapper also adds the rule `Never call task_signoff.` to `briefRules`, and it is always there, with or without the `Desk-Task` line. Copy it into every brief the same way: only the main agent records the operator's answer to a delivery, so a child never calls `task_signoff`.
 
+The mapper's `briefRules` also carry the scratch sentence from `work-orchestration` ("Write down the exact path of everything you create..."). Copy it into every brief the same way, whether or not the brief mentions scratch: a reviewer may make a temporary copy unasked, and a deletion through a shell variable stops Claude Code for approval.
+
 Also pass the mapper's close-out rule in both brief types: every child returns every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record. `task-lifecycle` owns that return inventory and `git-hygiene` owns its safety gates; the mapper does not infer cleanup paths.
 
 When the work is the factory itself, invoke factory-work first and put its review questions in every reviewer brief.
