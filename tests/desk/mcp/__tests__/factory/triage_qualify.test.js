@@ -32,6 +32,7 @@ function world(root, over = {}) {
     host: () => true,
     measurement: () => false,
     stateRoot: async () => root,
+    legacyEvaluator: async () => undefined,
     restore: async (options) => {
       calls.restore.push(options)
       return { state: "missing" }
@@ -359,9 +360,9 @@ test("the command resets an automatic streak", async () => {
     return { state: "blocked", reason: "launch_chain_unknown", resources: { launches: 2 } }
   } })
   assert.equal((await qualify.qualifyTriage(ENV, { now: () => T0, impls: failing.impls })).state, "failed")
-  assert.deepEqual(await marker(root), { ...suspended, streak: 0 }, "a failed run ends the streak and seals nothing")
+  assert.deepEqual(await marker(root), { ...suspended, streak: 0, day: dayOf(T0) }, "a failed run ends the streak, seals nothing and is today's attempt")
   assert.equal((await qualify.qualifyTriage(ENV, { now: () => T0, impls: world(root).impls })).state, "qualified")
-  assert.deepEqual(await marker(root), { ...suspended, streak: 0, sealed: true })
+  assert.deepEqual(await marker(root), { ...suspended, streak: 0, day: dayOf(T0), sealed: true })
   await fs.writeFile(paths.marker, "damaged")
   assert.equal((await qualify.qualifyTriage(ENV, { now: () => T0 + 1, impls: world(root).impls })).state, "qualified")
   assert.equal(await fs.readFile(paths.marker, "utf8"), "damaged", "a damaged marker is left for the automatic path")
@@ -574,4 +575,90 @@ test("factory.js triage-qualify loads the runner and answers codes only", async 
   const failed = []
   assert.equal(await factory.main({ argv: ["triage-qualify"], env: { ...system, HOME: base, XDG_STATE_HOME: path.join(base, "state"), DESK_FACTORY_HEADLESS: "1" }, write: (text) => failed.push(text) }), 1)
   assert.equal(JSON.parse(failed[0]).state, "refused")
+})
+
+test("a qualification that fails before any launch is the day's one attempt, a failed command counts as it too, and set-aside records stay bounded", async () => {
+  const root = scratch()
+  const lock = await workerLock(root)
+  const paths = qualify.triagePaths(root)
+  let runs = 0
+  // The qualifier's own checks fail every time, before it reserves anything: no launch, and a blocked record left in the folder.
+  const failing = (over = {}) => world(root, { qualify: async (options) => {
+    runs++
+    await fs.mkdir(options.out, { recursive: true })
+    await fs.writeFile(path.join(options.out, "qualification.json"), `blocked ${runs}\n`)
+    return { state: "blocked", reason: "effective_policy_unknown", resources: { launches: 0 } }
+  }, ...over })
+  const auto = (at, run = failing()) => qualify.autoQualifyTriage(ENV, { lock, now: () => at, deadline: at + HOUR, impls: run.impls })
+  const asides = async () => (await listing(root)).filter((name) => name.startsWith("qualification.aside-"))
+  try {
+    // Seven worker generations in three hours: one qualification, the rest quiet.
+    for (let tick = 0; tick < 7; tick++) {
+      const run = failing()
+      assert.deepEqual(await auto(T0 + tick * 25 * 60 * 1000, run), tick === 0 ? { state: "failed", reason: "effective_policy_unknown", launched: false } : { state: "skipped", reason: "attempted_today", launched: false }, String(tick))
+      assert.deepEqual([run.calls.reserve.length, run.calls.finish.length], [0, 0])
+    }
+    assert.equal(runs, 1)
+    assert.deepEqual(await marker(root), { ...BLANK, day: dayOf(T0), started_at: new Date(T0).toISOString(), trigger: "missing", streak: 1, result: "failed", reason: "effective_policy_unknown" })
+    // One a day after that, until the same reason has failed three times in a row; then nothing runs until the command does.
+    assert.equal((await auto(T0 + 24 * HOUR)).state, "failed")
+    assert.equal((await auto(T0 + 48 * HOUR)).state, "failed")
+    assert.deepEqual(await auto(T0 + 72 * HOUR), { state: "skipped", reason: "auto_suspended", launched: false, trigger: "missing" })
+    assert.equal(runs, 3)
+    // A reason a release causes never suspends, so it runs once a day for as long as it lasts: only the newest set-aside records stay.
+    const released = () => failing({ restore: async () => ({ state: "stale", reason: "source_changed", requalify: true }) })
+    for (let day = 4; day < 10; day++) {
+      assert.equal((await auto(T0 + day * 24 * HOUR, released())).state, "failed", String(day))
+      assert.equal((await auto(T0 + day * 24 * HOUR + HOUR, released())).reason, "attempted_today", String(day))
+    }
+    assert.equal(runs, 9)
+    const kept = await asides()
+    assert.equal(kept.length, qualify.KEPT_ASIDES)
+    assert.deepEqual(kept.map((name) => name.slice("qualification.aside-".length, "qualification.aside-".length + 8)), ["20300318", "20300319"], "the newest two")
+    assert.equal(await fs.readFile(path.join(paths.dir, kept[1], "qualification.json"), "utf8"), "blocked 8\n")
+    assert.equal(await fs.readFile(paths.recordFile, "utf8"), "blocked 9\n")
+  } finally {
+    await releaseLock(lock)
+  }
+  // The command shares the bound: after it ran a qualification that failed, the worker does not run the same one again that day.
+  const second = scratch()
+  runs = 0
+  const command = world(second, { qualify: async () => { runs++; return { state: "blocked", reason: "effective_policy_unknown", resources: { launches: 0 } } } })
+  assert.deepEqual(await qualify.qualifyTriage(ENV, { now: () => T0, impls: command.impls }), { state: "failed", reason: "effective_policy_unknown", launched: false })
+  assert.deepEqual(await marker(second), { ...BLANK, day: dayOf(T0) })
+  const held = await workerLock(second)
+  try {
+    assert.deepEqual(await qualify.autoQualifyTriage(ENV, { lock: held, now: () => T0 + HOUR, deadline: T0 + 2 * HOUR, impls: command.impls }), { state: "skipped", reason: "attempted_today", launched: false })
+    assert.equal((await qualify.autoQualifyTriage(ENV, { lock: held, now: () => T0 + 24 * HOUR, deadline: T0 + 25 * HOUR, impls: command.impls })).state, "failed")
+    assert.equal(runs, 2)
+  } finally {
+    await releaseLock(held)
+  }
+})
+
+test("the command passes the stored evaluator record to the ledger: a host with a status file and no ledger file keeps its day", async () => {
+  const { factoryStateRoot, readStatus, updateStatus } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+  const { reserveAgentLaunch } = await import("../../../../../plugins/desk/mcp/src/factory/headless-ledger.js")
+  const system = process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}
+  // The host state: a status file whose evaluator record counts today's launches (three of them), written before the ledger existed,
+  // and no ledger file yet. Every ledger seam is the real one.
+  const now = Date.now()
+  const host = async () => {
+    const base = scratch()
+    const env = { ...system, HOME: base, XDG_STATE_HOME: path.join(base, "state") }
+    await updateStatus(env, (status) => ({ ...status, evaluator: { headless: { day: dayOf(now), jobs: 3 } } }))
+    const root = await factoryStateRoot(env)
+    assert.deepEqual((await fs.readdir(root)).filter((name) => name.includes("ledger")), [])
+    const { impls, calls } = world(root)
+    const { peek: _peek, reserve: _reserve, finish: _finish, legacyEvaluator: _legacy, stateRoot: _root, ...real } = impls
+    return { env, real, calls }
+  }
+  const fixed = await host()
+  assert.deepEqual(await qualify.qualifyTriage(fixed.env, { now: () => now, impls: fixed.real }), { state: "qualified", reason: null, launched: true })
+  // The day is not spent: an evaluation launch is still reserved afterwards.
+  assert.equal((await reserveAgentLaunch(fixed.env, { kind: "evaluate", now: new Date(now + 1000), legacyEvaluator: (await readStatus(fixed.env)).evaluator })).state, "reserved")
+  // Without the record, the same host has its ledger made with the day spent: the defect this guards.
+  const broken = await host()
+  const refused = await qualify.qualifyTriage(broken.env, { now: () => now, impls: { ...broken.real, legacyEvaluator: async () => undefined } })
+  assert.deepEqual([refused.state, refused.reason, refused.launched], ["refused", "quota_exhausted", false])
 })

@@ -69,7 +69,7 @@ import * as path from "node:path"
 
 import { checkPersonPrefix } from "./binding.js"
 import { evaluateDue, LOOP_LOCK_NAME, newestRequestAt, triageQuotaFor, kickLoop } from "./evaluate-kick.js"
-import { HEADLESS_TIMEOUT_MS, billingVariableBlocks, probeSignIn } from "./headless.js"
+import { HEADLESS_TIMEOUT_MS, billingVariableBlocks, findAgentCli, probeSignIn } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import {
   createEvaluationContinuation, evaluationContinuationBasis, evaluationQuotaOpen, finishAgentLaunch, reserveAgentLaunch,
@@ -177,6 +177,14 @@ async function defaultLocateEngine(env, runtime) {
   const found = await runtime.runner.locatePinnedEngine({ env })
   return typeof found === "string" && path.isAbsolute(found) ? found : null
 }
+// Whether any Claude Code is installed: one the session can find, or a version in the home folder's install folder. A host with
+// none has nothing for an engine pin to be behind, so its reason is `no_agent_cli`, never `engine_unpinned`.
+async function defaultEngineInstalled(env) {
+  if (findAgentCli({ env })) return true
+  const versions = await swallow(() => fs.readdir(path.join(path.resolve(String(env.HOME)), ".local", "share", "claude", "versions")), [])
+  return versions.length > 0
+}
+const ENGINE_UNPINNED = "engine_unpinned"
 // A damaged record's reason is kept when it is a code (the restore may name new ones, such as a record copied from another machine).
 const REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/u
 
@@ -193,7 +201,7 @@ const DEFAULT_IMPLS = {
   reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, newestRequestAt,
   readStatus, toSafeTriageReview, writeProtectedTriageFile,
   loadRunner: importTriageRunner, hostSupport: (runtime) => runtime.custody.ownedCatalogHostSupport(), restoreQualification: defaultRestore,
-  autoQualify: (env, options, runtime) => runtime.qualify.autoQualifyTriage(env, options), locateEngine: defaultLocateEngine, childEnvironment: (env, runtime) => runtime.runner.triageChildEnvironment(env),
+  autoQualify: (env, options, runtime) => runtime.qualify.autoQualifyTriage(env, options), engineInstalled: defaultEngineInstalled, locateEngine: defaultLocateEngine, childEnvironment: (env, runtime) => runtime.runner.triageChildEnvironment(env),
   billingVariableBlocks, probeSignIn, runTriageChild: (options, runtime) => runtime.runner.runTriageChild(options),
   evidence: { resolve: resolveSelfDescribing },
 }
@@ -633,7 +641,9 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   if (chosen.selection.selected.length === 0) return quiet("nothing_to_review", { unreviewed: unreviewedNow, deferred: 0, reviewed: 0, refused: 0 })
   // Every refusal from here to the reservation is seen without a launch: quiet, nothing reserved, the slot left to the evaluator.
   // `retryAt` is when the shared ledger said a refused qualification may be tried again; it is kept beside the reason.
-  const unavailable = (state, reason, qualification, retryAt) => {
+  const unavailable = async (state, given, qualification, retryAt) => {
+    // The engine pin is behind only when a Claude Code is installed; with none, the reason is its own and opens no engine-pin card.
+    const reason = given === ENGINE_UNPINNED && !(await swallow(() => functions.engineInstalled(env), true)) ? "no_agent_cli" : given
     record.runner = { state, reason, qualification, ...(typeof retryAt === "string" && Number.isFinite(Date.parse(retryAt)) ? { retry_at: new Date(retryAt).toISOString() } : {}) }
     return quiet("runner_unavailable", { unreviewed: unreviewedNow })
   }

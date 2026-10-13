@@ -140,6 +140,7 @@ export function qualifiedSeams({ runner = fakeRunner(), clock, ...extra } = {}) 
     restoreQualification: async () => ({ state: "qualified", qualification: { state: "qualified" } }),
     locateEngine: async () => "/opt/engine/claude",
     childEnvironment: async (env) => env,
+    engineInstalled: async () => true,
     // The real writer, with room for a slow machine: a test run under load must not turn a slow push into a refused review.
     publishOwnedTriage: (options) => publishOwnedTriage({ ...options, git: { ...options.git, timeoutMs: 60_000 } }),
     probeSignIn: async () => ({ state: "subscription" }),

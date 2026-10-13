@@ -46,7 +46,7 @@
 // pass it.
 
 import { randomUUID } from "node:crypto"
-import { execFile, spawn, spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -58,6 +58,7 @@ import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
+import { createGitReader } from "./git-read-worker.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -218,22 +219,39 @@ function parseAheadBehind(stdout) {
   return { ahead: Number.isFinite(ahead) ? ahead : 0, behind: Number.isFinite(behind) ? behind : 0 }
 }
 
-// The same two reads without blocking the caller's thread: desk_status runs on the thread that answers the host, and a synchronous Git spawn there holds every other request for as long as the spawn takes (a few hundred milliseconds on a busy machine, more where a scanner inspects each new process).
-function runAsync(root, args) {
-  return new Promise((resolve) => {
-    execFile("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, env: gitEnv(), windowsHide: true }, (error, stdout) => {
-      resolve({ status: error ? 1 : 0, stdout })
-    })
-  })
+// The same two reads without blocking the caller's thread: desk_status runs on the thread that answers the host, and starting a Git process there holds every other request until the operating system has created it, even through an asynchronous call (see git-read-worker.js). A read that cannot run answers as a failed one.
+/** Says once, on stderr, that the Git read worker cannot run: its failed reads look the same as a desk with no remote. */
+export function reportGitReadFailure(reason) {
+  process.stderr.write(`[desk-mcp] sync status: ${reason}. desk_status treats a Git read that cannot run as failed, so it may report "no remote configured" for a desk that has a remote.\n`)
 }
 
-export async function hasRemoteConfiguredAsync(root) {
-  const result = await runAsync(root, ["remote"])
+const gitReads = createGitReader({ onError: reportGitReadFailure })
+
+// `signal` is the status run that asks. Once it aborts, the read throws its reason instead of answering: a read that was killed or never started looks the same as a desk with no remote, and that must not reach a status payload.
+async function runAsync(root, args, signal) {
+  signal?.throwIfAborted()
+  const result = await gitReads.read({ root, args, env: gitEnv(), timeoutMs: GIT_TIMEOUT_MS }, { signal })
+  signal?.throwIfAborted()
+  return result
+}
+
+/** Start the Git read worker now, so a status run's first read does not wait for it. desk_status answers from a 90 ms budget, and a worker started at the first read spent most of it. */
+export function warmStatusGitReads() {
+  gitReads.warm()
+}
+
+/** Resolves when no Git read asked with `signal` is still running. */
+export function waitForStatusGitReads(signal) {
+  return gitReads.settled(signal)
+}
+
+export async function hasRemoteConfiguredAsync(root, { signal } = {}) {
+  const result = await runAsync(root, ["remote"], signal)
   return result.status === 0 && result.stdout.trim() !== ""
 }
 
-export async function aheadBehindCountsAsync({ root }) {
-  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+export async function aheadBehindCountsAsync({ root, signal }) {
+  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"], signal)
   return result.status === 0 ? parseAheadBehind(result.stdout) : null
 }
 

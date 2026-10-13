@@ -906,6 +906,34 @@ test('proxy transparently forwards commands for an owned target session', async 
   assert.equal(response.result.result.value, 42);
 });
 
+test('proxy admits an iframe or worker session attached under an owned session, until it detaches', async () => {
+  const { fake, lease, cdp } = await setup();
+  const attached = await cdp.send('Target.attachToTarget', { targetId: lease.targetIds[0], flatten: true });
+  const parent = attached.result.sessionId;
+  const child = { sessionId: 'child-frame', targetInfo: { targetId: 'frame-1', type: 'iframe', url: 'about:blank' }, waitingForDebugger: false };
+  fake.emitSessionEvent(parent, 'Target.attachedToTarget', child);
+  fake.emitSessionEvent('session-of-another-lease', 'Target.attachedToTarget', { ...child, sessionId: 'foreign-frame' });
+  await waitFor(() => cdp.events.some(({ params }) => params?.sessionId === 'child-frame'), 'the child attachment to be forwarded');
+  assert.ok(!cdp.events.some(({ params }) => params?.sessionId === 'foreign-frame'));
+  const evaluated = await cdp.send('Runtime.evaluate', { expression: '40 + 2' }, 'child-frame');
+  assert.equal(evaluated.result.result.value, 42);
+  assert.ok((await cdp.send('Runtime.evaluate', { expression: '1' }, 'foreign-frame')).error);
+
+  fake.emitSessionEvent(parent, 'Target.detachedFromTarget', { sessionId: 'child-frame' });
+  await waitFor(() => cdp.events.some(({ method, params }) => method === 'Target.detachedFromTarget' && params?.sessionId === 'child-frame'), 'the child detachment to be forwarded');
+  assert.ok((await cdp.send('Runtime.evaluate', { expression: '1' }, 'child-frame')).error);
+});
+
+test('detaching an owned session also forgets the child sessions under it', async () => {
+  const { fake, lease, cdp } = await setup();
+  const attached = await cdp.send('Target.attachToTarget', { targetId: lease.targetIds[0], flatten: true });
+  const parent = attached.result.sessionId;
+  fake.emitSessionEvent(parent, 'Target.attachedToTarget', { sessionId: 'child-worker', targetInfo: { targetId: 'worker-1', type: 'worker', url: '' }, waitingForDebugger: false });
+  await waitFor(() => cdp.events.some(({ params }) => params?.sessionId === 'child-worker'), 'the child attachment to be forwarded');
+  await cdp.send('Target.detachFromTarget', { sessionId: parent });
+  assert.ok((await cdp.send('Runtime.evaluate', { expression: '1' }, 'child-worker')).error);
+});
+
 test('proxy forwards Playwright page navigation and lifecycle events for an owned session', async () => {
   const { fake, lease, cdp } = await setup();
   const attached = await cdp.send('Target.attachToTarget', {

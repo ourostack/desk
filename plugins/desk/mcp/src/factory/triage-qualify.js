@@ -5,9 +5,9 @@
 //   - `qualifyTriage(env)`: the supported command (`factory.js triage-qualify`). It takes the loop worker's lock, so no worker
 //     reads a half-written record, and qualifies whenever the record does not restore.
 //   - `autoQualifyTriage(env, { lock, deadline, ... })`: the loop worker, holding its own lock, when restore says `missing` or a
-//     `stale` reason that qualifying again can clear. At most one attempt launches per UTC day (the marker
-//     `triage/auto-qualify.json` is written once the ledger has reserved the launches, and a marker that cannot be read counts as
-//     today's attempt), at least `AUTO_MIN_REMAINING_MS` (6 minutes) must remain before the worker's deadline, and after three failed attempts in a row
+//     `stale` reason that qualifying again can clear. At most one attempt runs per UTC day (the marker
+//     `triage/auto-qualify.json` is written when the qualification starts, so one that fails before any launch counts; a
+//     command run that failed counts as today's too, and a marker that cannot be read counts as today's attempt), at least `AUTO_MIN_REMAINING_MS` (6 minutes) must remain before the worker's deadline, and after three failed attempts in a row
 //     for the same reason it stops until the command runs. A success, or a ledger refusal, does not count toward that.
 //
 // Before anything else, both callers ask the shared launch ledger, read-only, whether it would take two triage launches now; a
@@ -16,7 +16,8 @@
 // account can change, and a subscription sign-in. The two native launches are reserved together only after the qualifier's own
 // checks pass, just before the first launch. A refusal there (the ledger changed since the read) launches nothing, removes this
 // attempt's folder and puts the earlier record back; the worker then waits until the ledger's own `retry_at`. An earlier record
-// is moved aside (`qualification.aside-<UTC stamp>-<hex>`), never deleted.
+// is moved aside (`qualification.aside-<UTC stamp>-<hex>`), never deleted in place; only the newest two set-aside records are kept.
+// The command passes the stored `status.evaluator` to the ledger as the loop does, so the ledger's first migration counts it.
 //
 // The marker also keeps `sealed`: true once a sealed record has qualified on this host (or the marker is damaged), which restore
 // takes as `sealedBefore`, so an unsealed record shape is damaged from then on rather than stale.
@@ -30,7 +31,7 @@ import { billingVariableBlocks, probeSignIn } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { finishAgentLaunch, peekAgentLaunch, reserveAgentLaunch } from "./headless-ledger.js"
 import { ensureOwnerOnlyDirectory } from "./os-protect.js"
-import { factoryStateRoot } from "./outbox.js"
+import { factoryStateRoot, readStatus } from "./outbox.js"
 import { releaseLock, takeLock } from "./process-lock.js"
 import { ownedCatalogHostSupport } from "./triage-custody.js"
 import { locatePinnedEngine, qualificationMeasurementActive, restoreTriageQualification, triageChildEnvironment } from "./triage-runner.js"
@@ -44,6 +45,8 @@ import { locatePinnedEngine, qualificationMeasurementActive, restoreTriageQualif
 export const AUTO_MIN_REMAINING_MS = 6 * 60 * 1000
 /** Failed automatic attempts in a row for the same reason before automatic qualification stops for that reason. */
 export const AUTO_STREAK_LIMIT = 3
+/** Earlier records kept beside the installed one (`qualification.aside-<stamp>-<hex>`); older ones are removed. */
+export const KEPT_ASIDES = 2
 /** The furthest ahead a marker's `retry_after` is believed: the ledger's own answers are never later than the next UTC day. */
 const RETRY_HORIZON_MS = 24 * 60 * 60 * 1000
 // Reasons a new release or engine pin causes, not the host: these never count toward the streak.
@@ -60,6 +63,10 @@ const DEFAULT_IMPLS = Object.freeze({
   host: () => triageQualifyHost(),
   measurement: qualificationMeasurementActive,
   stateRoot: (env) => factoryStateRoot(env),
+  // The stored `status.evaluator`, which the ledger's first migration reads: without it a host that has a status file and no ledger
+  // yet would have its ledger made with the day fully spent.
+  legacyEvaluator: async (env) => (await readStatus(env)).evaluator,
+  list: (dir) => fsp.readdir(dir),
   takeLock,
   releaseLock,
   readLock: async (file) => JSON.parse(await fsp.readFile(file, "utf8")),
@@ -181,12 +188,13 @@ export async function qualifyTriage(env, { now = Date.now, impls = {} } = {}) {
     const before = await readMarker(paths.marker, impl)
     const restored = await impl.restore({ recordFile: paths.recordFile, env, sealedBefore: sealedOn(before) })
     const { outcome } = restored.state === "qualified" ? { outcome: answer("qualified", "already_qualified") }
-      : await qualifyInPlace(env, paths, { now, deadline: null, generation: null, legacyEvaluator: undefined }, impl)
+      : await qualifyInPlace(env, paths, { now, deadline: null, generation: null, legacyEvaluator: await impl.legacyEvaluator(env) }, impl)
     // A command run, whatever its result, ends an automatic streak: a person has looked. A damaged marker stays as it is.
     const marker = await readMarker(paths.marker, impl)
     if (marker === "damaged") return outcome
     const current = marker ?? BLANK_MARKER
-    const next = { ...current, streak: 0, sealed: current.sealed || outcome.state === "qualified" }
+    // A qualification that ran and failed here is today's attempt for the loop worker too: it does not run the same one again today.
+    const next = { ...current, streak: 0, sealed: current.sealed || outcome.state === "qualified", ...(outcome.state === "failed" ? { day: dayOf(now()) } : {}) }
     if (JSON.stringify(next) !== JSON.stringify(current)) await impl.writeMarker(paths.marker, next)
     return outcome
   } finally {
@@ -236,17 +244,20 @@ export async function autoQualifyTriage(env, { lock, now = Date.now, deadline, g
   const started = { ...BLANK_MARKER, day: today, started_at: new Date(nowMs).toISOString(), trigger, streak: counted ? failures + 1 : 0,
     result: "started", sealed: marker?.sealed === true }
   let attempted = false
-  // Written once the ledger has reserved the launches: a refusal before that (no engine, signed out, the ledger) is not an
-  // attempt, and the next due tick may try again.
-  const reserved = async () => {
+  // Written when the qualification starts, before its own checks: one that fails before any launch is today's attempt too, so it
+  // is not run again on every tick. A refusal before that (no engine, signed out, the ledger's read) is not an attempt, and the
+  // next due tick may try again.
+  const onStarted = async () => {
     await impl.writeMarker(paths.marker, started)
     attempted = true
   }
-  const { outcome, ledger } = await qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, reserved }, impl)
+  const { outcome, ledger } = await qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, started: onStarted }, impl)
   // Read before any preflight: nothing ran, nothing was written, and it is not an attempt.
   if (ledger === "read") return { ...outcome, state: "skipped" }
   if (ledger === "reservation") {
+    // The ledger refused the launches after the qualifier's own checks passed: not an attempt, and the marker says when to ask again.
     await impl.writeMarker(paths.marker, { ...(marker ?? BLANK_MARKER), retry_after: outcome.retry_at, retry_reason: outcome.reason })
+    return outcome
   }
   if (attempted) {
     await impl.writeMarker(paths.marker, { ...started, streak: outcome.state === "failed" && counted ? failures + 1 : 0, result: outcome.state,
@@ -255,10 +266,18 @@ export async function autoQualifyTriage(env, { lock, now = Date.now, deadline, g
   return outcome
 }
 
-// The transaction under the lock: ledger read, engine, sign-in, move-aside, qualifier, ledger. `reserved` runs once the ledger
-// reserved the launches, before the first one; a throw there launches nothing. `ledger` names where the ledger refused (`read`
-// or `reservation`), else null.
-async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, reserved: onReserved = async () => {} }, impl) {
+// Earlier records are moved aside, never deleted, but only the newest `KEPT_ASIDES` are kept: a host whose qualification keeps
+// failing would otherwise add a folder a day without end.
+async function pruneAsides(paths, impl) {
+  const prefix = `${path.basename(paths.out)}.aside-`
+  const asides = (await impl.list(paths.dir)).filter((name) => name.startsWith(prefix)).sort()
+  for (const name of asides.slice(0, -KEPT_ASIDES)) await impl.removeTree(path.join(paths.dir, name))
+}
+
+// The transaction under the lock: ledger read, engine, sign-in, move-aside, qualifier, ledger. `started` runs once the refusals
+// that need no qualification have passed, just before the qualifier; a throw there starts nothing. `ledger` names where the
+// ledger refused (`read` or `reservation`), else null.
+async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEvaluator, started: onStarted = async () => {} }, impl) {
   const done = (outcome, ledger = null) => ({ outcome, ledger })
   const peek = await impl.peek(env, { kind: "triage", launches: 2, now: now() })
   if (peek.state !== "ok" && peek.state !== "unknown") return done(answer("refused", peek.state, { retry_at: peek.retry_at }), "read")
@@ -274,7 +293,11 @@ async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEva
   if (signIn.state !== "subscription") return done(answer("refused", signIn.state))
   const nowMs = now()
   const aside = (await impl.exists(paths.out)) ? `${paths.out}.aside-${stamp(nowMs)}-${impl.random()}` : null
-  if (aside) await impl.rename(paths.out, aside)
+  if (aside) {
+    await impl.rename(paths.out, aside)
+    await pruneAsides(paths, impl)
+  }
+  await onStarted()
   let token = null
   let ledger = null
   const reserve = async () => {
@@ -285,7 +308,6 @@ async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEva
       throw new Error("quota_refused")
     }
     token = reservation.token
-    await onReserved()
   }
   let result
   try {

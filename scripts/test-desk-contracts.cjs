@@ -1471,6 +1471,13 @@ requires(
   "the tidy writes no scope line for a track it will archive",
   /1\. Scope lines\.[^\n]+Skip a track that step 5 or step 6 will move into _archive\//u,
 );
+{
+  // The mapper puts the scratch sentence in every brief, so it reaches a reviewer dispatched without work-orchestration loaded;
+  // the skill quotes the same sentence, and the two must not drift.
+  const sentence = /carries this sentence, because the child reads its brief and not this skill: "([^"]+)"/u.exec(text("plugins/desk/skills/work-orchestration/SKILL.md"))[1];
+  assert.ok(text("plugins/desk/mcp/src/activation/superpowers-context.js").includes(JSON.stringify(sentence)), "the Superpowers mapper's briefRules carry work-orchestration's scratch sentence verbatim");
+  assert.match(text("plugins/desk/skills/using-superpowers-with-desk/SKILL.md"), /The mapper's `briefRules` also carry the scratch sentence from `work-orchestration`/u);
+}
 requires(
   "plugins/desk/skills/independent-review/SKILL.md",
   "independent-review points a reviewer's scratch at the child-brief rule",
