@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.306 — 2026-10-13
+
+Desk tool calls that a host sends together are all dispatched. When a turn's batch held two or more gated Desk calls, one of them could come back `code: "admitting"` ("Desk is still admitting or verifying this session's destination") on a session that had been ready for minutes; the agent got through by retrying. Each call's gate checks the destination again, and a call that found another check running after its own asked for one more, so calls that arrived together waited on each other in turn until one ran out of its three rejoins ([`mcp/src/runtime/desk-session.js`](mcp/src/runtime/desk-session.js)). A rejoin now only joins the check that is running; the call's first request stays queued, so a check that started after the call arrived still completes before it is dispatched. Seen seven times in one Agency session of the cold dry-run rerun on October 12, 2026.
+
+The scratch sentence for child briefs now reaches every implementer and reviewer brief on the Superpowers path. It lived only in [`work-orchestration`](skills/work-orchestration/SKILL.md), and a session that dispatched its reviewer through `superpowers:requesting-code-review` never loaded that skill: in the rerun of the cold dry run on alpha.303 the reviewer's brief said only "delete them afterwards". The Superpowers mapper now puts the sentence in `briefRules` ([`mcp/src/activation/superpowers-context.js`](mcp/src/activation/superpowers-context.js)), which [`using-superpowers-with-desk`](skills/using-superpowers-with-desk/SKILL.md) already has the agent copy into every brief. A contract test keeps the mapper's sentence and the skill's the same.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.305 — 2026-10-13
 
 Desk's native browser layer is removed, now that real-browser mode runs stock Playwright MCP and the stock Playwright Extension. Gone are the native messaging host and its Go binaries, the Desk browser extension, the browser context broker's native routing, mediation and ownership-lease code, and their setup, build scripts, CI steps and tests. The headless default and the broker's own leases are unchanged. A machine that used the native mode keeps three leftovers Desk no longer touches: the unpacked Desk extension in the browser profile, the `com.ourostack.desk.browser` native-messaging host registration, and the copied runtime under Desk's browser state folder. Remove the extension from the browser's extensions page; the other two are inert without it.
