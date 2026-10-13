@@ -953,7 +953,7 @@ export function createDeskSession(deps) {
           waitMs: budget,
           // A running status/HEAD attempt may have sampled context before this
           // operation arrived. Join its completion, then resolve inputs anew.
-          // A rejoin only joins: whatever runs now started after this call arrived. Asking for another
+          // A rejoin only joins: the first gate's request stays queued, so a check that started after this call arrived always completes before dispatch. Asking for another
           // fresh sample there made calls that arrive together rejoin in turn, each reading the other's
           // revalidation as a background attempt, until one ran out of rejoins and was refused.
           fresh: gate === 0,
