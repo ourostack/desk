@@ -17,11 +17,15 @@
 // `cancelled`; within a track, tasks sort by `updated`, newest first, and
 // tracks by their newest task. Each card is read through one bounded read of
 // at most 64 KiB, and parsed with the doctor's frontmatter parser, so the
-// listing adds little to desk_status's time budget. It is served from the
+// listing adds little to desk_status's time budget. The folder, card and
+// cleanup-index reads are asynchronous: on Windows a single file read can
+// wait on an antivirus scan for over 100 ms, and desk_status runs this on
+// the Desk session's event loop, which must keep answering tool calls
+// meanwhile. It is served from the
 // Desk MCP server rather than a script so hosts that gate shell commands do
 // not prompt for it at every session start.
 
-import { closeSync, openSync, readdirSync, readSync } from "node:fs"
+import { open, readdir } from "node:fs/promises"
 import * as path from "node:path"
 import { loadFrontmatterParser } from "./organization.js"
 import { redactCredentialLikeText, redactName, redactTitle, REDACTED_SEGMENT, REDACTED_TITLE } from "../util/redact.js"
@@ -36,9 +40,9 @@ const MAX_CARD_BYTES = 64 * 1024
 // gray-matter in the server, so nested fields such as `repos` are read.
 const parseFrontmatter = loadFrontmatterParser()
 
-function listDirs(dir) {
+async function listDirs(dir) {
   try {
-    return readdirSync(dir, { withFileTypes: true })
+    return (await readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("_") && !entry.name.startsWith("."))
       .map((entry) => entry.name)
       .sort()
@@ -161,14 +165,14 @@ function cleanupOf(content, truncated, status) {
 }
 
 // The finished or archived cards this machine's cleanup index lists that still have rows due. A card still unfinished is left out: the scan above counts it.
-function finishedCleanup(deskRoot, env) {
+async function finishedCleanup(deskRoot, env) {
   const out = []
-  for (const rel of readCleanupIndex(deskRoot, env)) {
+  for (const rel of await readCleanupIndex(deskRoot, env)) {
     const [live, archived] = cardFiles(deskRoot, rel)
-    const liveCard = readCardData(live)
+    const liveCard = await readCardData(live)
     const status = liveCard === null ? null : asText(liveCard.data.status)
     if (liveCard !== null && !TERMINAL_STATUSES.has(status)) continue
-    const card = liveCard ?? readCardData(archived)
+    const card = liveCard ?? await readCardData(archived)
     if (card === null) continue
     const due = dueResources(card.content, { status: asText(card.data.status), truncated: card.truncated }).length
     if (due > 0) out.push({ card: rel.split(/[\\/]/u).map(redactName).join("/"), due })
@@ -179,26 +183,46 @@ function finishedCleanup(deskRoot, env) {
 // Boot names this many finished cards; the rest are counted ("and N more"), never left out of the totals.
 const FINISHED_SHOWN = 20
 
-// null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
-function readCardData(filePath) {
-  let fd
+// The card's first 64 KiB as text, or null when the card is missing or unreadable.
+async function readCardText(filePath) {
+  let file
   try {
-    fd = openSync(filePath, "r")
+    file = await open(filePath, "r")
   } catch {
     return null
   }
   try {
     const buffer = Buffer.alloc(MAX_CARD_BYTES)
-    const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
-    try {
-      const parsed = parseFrontmatter(buffer.toString("utf8", 0, bytesRead))
-      return { data: parsed.data, content: parsed.content, truncated: bytesRead === MAX_CARD_BYTES }
-    } catch {
-      return { data: {}, content: "" }
-    }
+    const { bytesRead } = await file.read(buffer, 0, MAX_CARD_BYTES, 0)
+    return { text: buffer.toString("utf8", 0, bytesRead), truncated: bytesRead === MAX_CARD_BYTES }
   } finally {
-    closeSync(fd)
+    await file.close()
   }
+}
+
+// null for a card that was not read; `{ data: {}, content: "" }` when its frontmatter is malformed.
+function parseCard(raw) {
+  if (raw === null) return null
+  try {
+    const parsed = parseFrontmatter(raw.text)
+    return { data: parsed.data, content: parsed.content, truncated: raw.truncated }
+  } catch {
+    return { data: {}, content: "" }
+  }
+}
+
+const readCardData = async (filePath) => parseCard(await readCardText(filePath))
+
+// How many cards of a track are open at once. A whole track at once would need one file descriptor per card, and a card that fails to open reads as absent.
+const CARD_READS = 16
+
+// The raw cards of `files`, in the order given.
+async function readCardTexts(files) {
+  const texts = []
+  for (let start = 0; start < files.length; start += CARD_READS) {
+    texts.push(...await Promise.all(files.slice(start, start + CARD_READS).map(readCardText)))
+  }
+  return texts
 }
 
 function asText(value) {
@@ -230,14 +254,17 @@ function shownRepos(repos) {
     })
 }
 
-function scanDesk(deskRoot, scanRoot, desk, counts) {
+async function scanDesk(deskRoot, scanRoot, desk, counts) {
   const tracks = []
-  for (const trackName of listDirs(scanRoot)) {
+  for (const trackName of await listDirs(scanRoot)) {
     if (desk === null && trackName === "desks") continue
     const trackDir = path.join(scanRoot, trackName)
     const tasks = []
-    for (const taskName of listDirs(trackDir)) {
-      const card = readCardData(path.join(trackDir, taskName, "task.md"))
+    const taskNames = await listDirs(trackDir)
+    // A track's cards are read a few at a time, then parsed and used in folder order.
+    const texts = await readCardTexts(taskNames.map((taskName) => path.join(trackDir, taskName, "task.md")))
+    for (const [index, taskName] of taskNames.entries()) {
+      const card = parseCard(texts[index])
       if (card === null) continue
       const { data, content, truncated } = card
       const status = asText(data.status)
@@ -271,7 +298,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
 }
 
 /**
- * activeTasks(deskRoot) -> { tracks, task_count, track_count, redacted }
+ * activeTasks(deskRoot) -> Promise<{ tracks, task_count, track_count, redacted }>
  *
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
  * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
@@ -281,17 +308,17 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  * track_rename take in place of a name, so a redacted folder can be renamed.
  * `redacted`: `{ names, titles }`, how many names and titles were hidden.
  */
-export function activeTasks(deskRoot, { env = process.env } = {}) {
+export async function activeTasks(deskRoot, { env = process.env } = {}) {
   const counts = { names: 0, titles: 0 }
-  const tracks = scanDesk(deskRoot, deskRoot, null, counts)
-  for (const alias of listDirs(path.join(deskRoot, "desks"))) {
+  const tracks = await scanDesk(deskRoot, deskRoot, null, counts)
+  for (const alias of await listDirs(path.join(deskRoot, "desks"))) {
     const desk = redactName(alias)
     if (desk === REDACTED_SEGMENT) counts.names += 1
-    tracks.push(...scanDesk(deskRoot, path.join(deskRoot, "desks", alias), desk, counts))
+    tracks.push(...await scanDesk(deskRoot, path.join(deskRoot, "desks", alias), desk, counts))
   }
   tracks.sort((a, b) => byUpdatedDesc(a.tasks[0], b.tasks[0]))
   const live = tracks.flatMap((track) => track.tasks.map((task) => task.cleanup_due_count ?? 0)).filter((count) => count > 0)
-  const everyFinished = finishedCleanup(deskRoot, env)
+  const everyFinished = await finishedCleanup(deskRoot, env)
   const finished = everyFinished.slice(0, FINISHED_SHOWN)
   const items = live.reduce((sum, count) => sum + count, 0) + everyFinished.reduce((sum, entry) => sum + entry.due, 0)
   return {

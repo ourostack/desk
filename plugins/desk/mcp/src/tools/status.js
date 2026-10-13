@@ -131,7 +131,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       degraded_modes: degradedModes,
       write_scope: writeScope,
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
-      active_tasks: root.valid ? activeTasks(root.path) : null,
+      active_tasks: root.valid ? await activeTasks(root.path) : null,
       factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
       sync: root.valid ? await syncStatus({ deskRoot: root.path, env }) : null,
       summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),

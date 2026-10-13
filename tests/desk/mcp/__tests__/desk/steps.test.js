@@ -94,7 +94,7 @@ function desk(files) {
   return root
 }
 
-test("activeTasks carries a steps summary only for a card with a readable table that has rows", () => {
+test("activeTasks carries a steps summary only for a card with a readable table that has rows", async () => {
   const empty = "## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n"
   const root = desk({
     chain: HAND_WRITTEN.replace("waits on infra", "set pw hunter2"),
@@ -102,17 +102,17 @@ test("activeTasks carries a steps summary only for a card with a readable table 
     prose: "## Steps\n\nwords\n",
     empty,
   })
-  const tasks = Object.fromEntries(activeTasks(root).tracks[0].tasks.map((task) => [task.slug, task]))
+  const tasks = Object.fromEntries((await activeTasks(root)).tracks[0].tasks.map((task) => [task.slug, task]))
   assert.deepEqual(tasks.chain.steps.ready, ["docs"])
   assert.equal(tasks.chain.steps.total, 4)
   assert.doesNotMatch(JSON.stringify(tasks.chain.steps), /hunter2/u)
   for (const slug of ["plain", "prose", "empty"]) assert.equal("steps" in tasks[slug], false, slug)
 })
 
-test("a card past 64 KiB below its steps still shows them", () => {
+test("a card past 64 KiB below its steps still shows them", async () => {
   const body = `## Outcome\n\nShip.\n\n## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n| a | — | — | delivered | — |\n| b | a | — | pending | — |\n\n## Progress log\n\n${"- 2026-10-01: a long line of progress.\n".repeat(2500)}`
   assert.ok(body.length > 64 * 1024)
-  const [task] = activeTasks(desk({ big: body })).tracks[0].tasks
+  const [task] = (await activeTasks(desk({ big: body }))).tracks[0].tasks
   assert.deepEqual(task.steps, { total: 2, delivered: 1, ready: ["b"], moving: 0, blocked: [] })
 })
 
@@ -142,11 +142,11 @@ test("boot text shows the steps line, and ranks a card with no ready step and a 
   assert.match(withBlocker, /blocker: infra\n  next: go\n  Steps: 0 of 1 delivered/u)
 })
 
-test("a table that runs to the end of the 64 KiB read is not counted, and the same table inside the read is", () => {
+test("a table that runs to the end of the 64 KiB read is not counted, and the same table inside the read is", async () => {
   const table = `## Steps\n\n| Step | Depends on | Repo | State | Evidence |\n|---|---|---|---|---|\n${Array.from({ length: 12 }, (_, index) => `| step-${index} | — | — | pending | — |`).join("\n")}\n`
   const filler = (bytes) => `${"x".repeat(79)}\n`.repeat(Math.floor(bytes / 80))
   const root = desk({ cut: `${filler(65200)}\n${table}`, whole: `${filler(30000)}\n${table}` })
-  const tasks = Object.fromEntries(activeTasks(root).tracks[0].tasks.map((task) => [task.slug, task]))
+  const tasks = Object.fromEntries((await activeTasks(root)).tracks[0].tasks.map((task) => [task.slug, task]))
   assert.equal("steps" in tasks.cut, false)
   assert.equal(tasks.whole.steps.total, 12)
   assert.match(readSteps(`${filler(100)}\n${table.slice(0, -10)}`, { truncated: true }).reason, /cut at the read limit/u)

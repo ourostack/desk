@@ -36,9 +36,9 @@ function desk() {
   return root
 }
 
-test("activeTasks lists non-terminal tasks by track and redacts credential-like names and titles", () => {
+test("activeTasks lists non-terminal tasks by track and redacts credential-like names and titles", async () => {
   const root = desk()
-  const listing = activeTasks(root)
+  const listing = (await activeTasks(root))
   const json = JSON.stringify(listing)
   assert.doesNotMatch(json, /hunter/)
   assert.deepEqual(listing.redacted, { names: 3, titles: 1 })
@@ -68,8 +68,23 @@ test("activeTasks lists non-terminal tasks by track and redacts credential-like 
   assert.equal(listing.tracks[2].tasks[0].status, null, "a non-text status is not shown")
 })
 
-test("activeTasks on a missing folder lists nothing", () => {
-  assert.deepEqual(activeTasks(path.join(tmpdir(), "desk-active-tasks-missing-root")), {
+test("activeTasks on a missing folder lists nothing", async () => {
+  assert.deepEqual((await activeTasks(path.join(tmpdir(), "desk-active-tasks-missing-root"))), {
     tracks: [], task_count: 0, track_count: 0, redacted: { names: 0, titles: 0 },
   })
+})
+
+test("activeTasks lists every card of a large track, in folder order when their times are equal", async () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-active-tasks-large-")))
+  const slugs = Array.from({ length: 40 }, (_, index) => `task-${String(index).padStart(2, "0")}`)
+  // Written in reverse, with the first cards the largest, so neither creation order nor read time matches folder order.
+  for (const [index, slug] of [...slugs.entries()].reverse()) {
+    const dir = path.join(root, "big-track", slug)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, "task.md"), `---\ntitle: ${slug}\nstatus: implementing\nupdated: "2026-09-20T00:00:00Z"\n---\n${"x".repeat((40 - index) * 1500)}\n`)
+  }
+  const listing = await activeTasks(root)
+  assert.equal(listing.task_count, 40)
+  assert.deepEqual(listing.tracks[0].tasks.map((task) => task.slug), slugs)
+  assert.deepEqual(listing.tracks[0].tasks.map((task) => task.title), slugs, "each folder is listed with its own card")
 })

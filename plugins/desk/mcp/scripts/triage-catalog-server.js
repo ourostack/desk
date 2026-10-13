@@ -6,6 +6,7 @@ import fs from "node:fs"
 import * as nodeModule from "node:module"
 import {createHash} from "node:crypto"
 import {fileURLToPath} from "node:url"
+import * as path from "node:path"
 
 export function serverFirstEnvironment(runtime){
   const uid=runtime.getuid?.(),euid=runtime.geteuid?.(),expected={LANG:"C",LC_ALL:"C",TZ:"UTC"}
@@ -18,26 +19,42 @@ export function serverFirstEnvironment(runtime){
 // the default loader returns, so no second read of the file can differ. Only
 // when a loader leaves CommonJS source to Node's own reader (an extra async
 // loader, never the clean production server) is the file read here instead.
-export function catalogModuleLoad(loadedModules,root,url,context,next){
+// `roots` are the source root and the node_modules folder Node resolves the SDK
+// from (catalogModuleRoots); a module loaded from anywhere else refuses.
+export function catalogModuleLoad(loadedModules,roots,url,context,next){
   const loaded=next(url,context)
   if(url.startsWith("file:")){
     const file=fileURLToPath(url),resolved=fs.realpathSync(file)
-    if(resolved!==file||!file.startsWith(root)||loadedModules.size>=512)throw Error("module_custody")
+    if(resolved!==file||![].concat(roots).some(root=>file.startsWith(root))||loadedModules.size>=512)throw Error("module_custody")
     const data=loaded.source==null?fs.readFileSync(file):Buffer.from(loaded.source)
     if(data.length>16*1024*1024)throw Error("module_custody")
     loadedModules.set(file,{path:file,sha256:createHash("sha256").update(data).digest("hex"),bytes:data.length})
   }
   return loaded
 }
-export async function startCatalogServer(runtime=process){
+// The same rule as the parent's ownedSourceRoots, computed before any
+// application import: resolution only, nothing is loaded here.
+export function catalogModuleRoots(resolve=specifier=>fileURLToPath(import.meta.resolve(specifier))){
+  const source=fileURLToPath(new URL("../",import.meta.url)),file=resolve("@modelcontextprotocol/sdk/server/index.js")
+  const segment=`${path.sep}node_modules${path.sep}@modelcontextprotocol${path.sep}sdk${path.sep}`,at=file.lastIndexOf(segment)
+  if(at<0)throw Error("module_roots")
+  const deps=file.slice(0,at+`${path.sep}node_modules${path.sep}`.length)
+  if(!source.startsWith(path.dirname(deps)+path.sep))throw Error("module_roots")
+  return [source,deps]
+}
+// `moduleRoots` is a test seam; the entry point passes nothing.
+export async function startCatalogServer(runtime=process,{moduleRoots=catalogModuleRoots}={}){
   if(!serverFirstEnvironment(runtime)){
     runtime.stderr.write("catalog_bootstrap_failed_environment\n");runtime.exitCode=1;return null
   }
   if(typeof nodeModule.registerHooks!=="function"){
     runtime.stderr.write("catalog_bootstrap_failed_runtime_provenance\n");runtime.exitCode=1;return null
   }
-  const loadedModules=new Map(),root=fileURLToPath(new URL("../",import.meta.url))
-  const loadHooks=nodeModule.registerHooks({load:(url,context,next)=>catalogModuleLoad(loadedModules,root,url,context,next)})
+  let roots
+  try{roots=moduleRoots()}
+  catch{runtime.stderr.write("catalog_bootstrap_failed_module_roots\n");runtime.exitCode=1;return null}
+  const loadedModules=new Map()
+  const loadHooks=nodeModule.registerHooks({load:(url,context,next)=>catalogModuleLoad(loadedModules,roots,url,context,next)})
   const {loadCatalogSnapshot,makeReceipt,makeCatalogObservation,boundedFdWrite,ownedCatalogEnvironment,validateOwnedCatalogEnvironment}=await import("../src/factory/triage-custody.js")
   const {catalogCanonical}=await import("../src/factory/triage-catalog.js")
   const {serveCatalog}=await import("../src/factory/triage-protocol.js")

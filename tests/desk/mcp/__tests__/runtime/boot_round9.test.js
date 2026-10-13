@@ -388,7 +388,7 @@ test("active_tasks carries each task's next step on one line, whole and redacted
   await card("no-step", "Just a body.\n")
   await card("empty-step", "**Next step:**\n\nMore.\n")
   await card("secret-step", "**Next step:** use ghp_abcdefghijklmnopqrstuvwxyz0123456789 to push\n")
-  const tasks = Object.fromEntries(activeTasks(root).tracks[0].tasks.map((task) => [task.slug, task.next_step]))
+  const tasks = Object.fromEntries((await activeTasks(root)).tracks[0].tasks.map((task) => [task.slug, task.next_step]))
   assert.equal(tasks["with-step"], "Wire the relay then run the suite.")
   assert.equal(tasks["long-step"], "word ".repeat(80).trim(), "a long next step is kept whole")
   assert.equal(tasks["no-step"], null)

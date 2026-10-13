@@ -76,7 +76,11 @@ function createPageInitializer(options) {
           reject(new Error("browser_owner_initialization_timeout"));
         }, 10000);
       }),
-    ]).finally(() => clearTimeout(timer));
+    ]).finally(() => clearTimeout(timer)).catch(error => {
+      // A failed attempt must not poison the page: the next call retries.
+      if (initializing.get(page) === operation) initializing.delete(page);
+      throw error;
+    });
     initializing.set(page, operation);
     return operation;
   }
@@ -103,7 +107,12 @@ module.exports = async function initialize(options) {
     });
     lazy.set(options.page.context(), initialize);
   }
-  return initialize(options);
+  try {
+    await initialize(options);
+  } catch {
+    // The owner helper is optional: a busy or redirecting page must never fail
+    // the agent's browser call. Tab ownership is enforced by the provider, not here.
+  }
 };
 module.exports.createPageInitializer = createPageInitializer;
 module.exports.default = module.exports;

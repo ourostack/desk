@@ -21,6 +21,7 @@ import {
   evaluationContinuationBasis,
   evaluationQuotaOpen,
   finishAgentLaunch,
+  peekAgentLaunch,
   quotaFor,
   reserveAgentLaunch,
   validGuard,
@@ -895,4 +896,75 @@ test("a rename that fails for good, or a readback that differs, launches nothing
     })
     assert.deepEqual(await asideMidway.reserveAgentLaunch(env, { kind: "evaluate", now: today }), { state: "readback_mismatch" })
   }))
+})
+
+test("a triage qualification reserves and finishes both launches together", () => scratch(async (env, root) => {
+  const pair = await reserve(env, "triage", at(0, 9), { launches: 2 })
+  assert.equal(pair.state, "reserved")
+  assert.equal(pair.token.launches, 2)
+  let ledger = await ledgerOf(root)
+  assert.equal(ledger.spent, 2)
+  assert.equal(ledger.triage.launched, 2)
+  assert.deepEqual(ledger.windows, [0, 1, 0, 0], "it uses the window's one triage opportunity")
+  assert.deepEqual(await finishAgentLaunch(env, { token: pair.token, state: "failed", now: at(0, 9, 5) }), { state: "recorded" })
+  ledger = await ledgerOf(root)
+  assert.deepEqual(ledger.triage, { launched: 2, ran: 0, failed: 2, not_started: 0, finished_revision: pair.token.revision })
+  assert.deepEqual(await finishAgentLaunch(env, { token: pair.token, state: "ran", now: at(0, 9, 6) }), { state: "stale_token" }, "once")
+  assert.deepEqual(await finishAgentLaunch(env, { token: { ...pair.token, launches: undefined }, state: "ran", now: at(0, 9, 6) }), { state: "stale_token" })
+}))
+
+test("a qualification needs room for both launches", () => scratch(async (env, root) => {
+  await forge(env, root, { spent: 29 })
+  assert.deepEqual(await reserve(env, "triage", at(0, 9), { launches: 2 }), { state: "quota_exhausted", day: dayText(0), remaining: 0, retry_at: new Date(at(1, 0)).toISOString() })
+  const one = await reserve(env, "triage", at(0, 9))
+  assert.equal(one.state, "reserved", "a single triage launch still fits")
+  assert.equal(one.token.launches, undefined)
+}))
+
+test("a qualification leaves each later unused window its protected launch", () => scratch(async (env, root) => {
+  // 09:00 is the second window: it and the two after it are unused. Two launches at 27 spent would leave one for two windows.
+  await forge(env, root, { spent: 27 })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 9) }), { state: "window_protected", retry_at: new Date(at(0, 12)).toISOString() })
+  assert.deepEqual(await reserve(env, "triage", at(0, 9), { launches: 2 }),
+    { state: "window_protected", day: dayText(0), remaining: 0, retry_at: new Date(at(0, 12)).toISOString() })
+  // In the last window nothing later is protected, so the same two launches fit.
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 19) }), { state: "ok" })
+  await forge(env, root, { spent: 26 })
+  assert.equal((await reserve(env, "triage", at(0, 9), { launches: 2 })).state, "reserved", "28 spent leaves the two later windows one each")
+  await forge(env, root, { spent: 27 })
+  assert.equal((await reserve(env, "triage", at(0, 9))).state, "reserved", "a single triage launch is judged as before")
+}))
+
+test("a two-launch refusal says when it could pass, and a peek answers the same without writing", () => scratch(async (env, root) => {
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 9) }), { state: "unknown" }, "no ledger yet: the reservation decides")
+  assert.equal((await reserve(env, "triage", at(0, 9), { launches: 2 })).state, "reserved")
+  const before = await readBytes(root)
+  const marked = await mark(env)
+  // The window is used until 12:00, and the cooldown runs to 15:00.
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 10) }), { state: "window_used", retry_at: new Date(at(0, 12)).toISOString() })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 13) }), { state: "triage_cooldown", retry_at: new Date(at(0, 15)).toISOString() })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 16) }), { state: "ok" })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "evaluate", now: at(0, 10) }), { state: "ok" })
+  assert.deepEqual(await readBytes(root), before, "a peek writes nothing")
+  assert.deepEqual(await mark(env), marked)
+  const refused = await reserve(env, "triage", at(0, 10), { launches: 2 })
+  assert.deepEqual(refused, { state: "window_used", day: dayText(0), remaining: 0, retry_at: new Date(at(0, 12)).toISOString() })
+  assert.deepEqual(await reserve(env, "triage", at(0, 13), { launches: 2 }), { state: "triage_cooldown", day: dayText(0), remaining: 0, retry_at: new Date(at(0, 15)).toISOString() })
+  assert.deepEqual(await reserve(env, "triage", at(0, 13)), { state: "triage_cooldown", day: dayText(0), remaining: 0 }, "a single-launch refusal is unchanged")
+  // A clock behind the ledger's is read as the ledger's, as a reservation reads it.
+  assert.equal((await peekAgentLaunch(env, { kind: "triage", now: at(0, 8) })).state, "window_used")
+  await forge(env, root, { spent: 29 })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 23) }), { state: "quota_exhausted", retry_at: new Date(at(1, 0)).toISOString() })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "evaluate", now: at(0, 23) }), { state: "window_protected", retry_at: new Date(at(1, 0)).toISOString() })
+  await fs.writeFile(path.join(root, LEDGER_FILE), "not json", { mode: 0o600 })
+  assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", now: at(0, 23) }), { state: "unknown" })
+  await assert.rejects(peekAgentLaunch(env, { kind: "other", now: at(0, 1) }), TypeError)
+  await assert.rejects(peekAgentLaunch(env, { kind: "evaluate", launches: 2, now: at(0, 1) }), TypeError)
+  await assert.rejects(peekAgentLaunch(env), TypeError)
+}))
+
+test("launches is 1, or 2 for triage only", async () => {
+  await assert.rejects(reserveAgentLaunch({}, { kind: "evaluate", launches: 2, now: at(0, 1) }), TypeError)
+  await assert.rejects(reserveAgentLaunch({}, { kind: "triage", launches: 3, now: at(0, 1) }), TypeError)
+  await assert.rejects(finishAgentLaunch({}, { token: { kind: "triage", revision: 1, epoch: "x", day: "d", launches: 3 }, state: "ran", now: at(0, 1) }), TypeError)
 })

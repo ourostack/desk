@@ -121,7 +121,16 @@ export function fakeRunner(produce = ({ brief }) => brief.cards.map((card) => ro
 }
 
 /** A loaded runner runtime that holds nothing: the seams that use it are replaced. */
-export const FAKE_RUNTIME = Object.freeze({ state: "loaded", runner: {}, custody: {}, qualify: {} })
+export const FAKE_RUNTIME = Object.freeze({
+  state: "loaded",
+  runner: Object.freeze({ TRIAGE_STALE_REASONS: Object.freeze({
+    record_version: true, qualification_failed: true, source_changed: true, runtime_changed: true, engine_changed: true, engine_unpinned: false,
+    engine_mismatch: false, environment_changed: true, chain_changed: true, policy_changed: true, host_unsupported: false, measurement_active: false,
+    root_unsafe: false,
+  }) }),
+  custody: {},
+  qualify: {},
+})
 
 /** The seams of a qualified, signed-in Darwin host with the fake runner, a test clock and the issue resolver. */
 export function qualifiedSeams({ runner = fakeRunner(), clock, ...extra } = {}) {

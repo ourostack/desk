@@ -25,7 +25,7 @@
 // `damaged` is a failure (`runner_blocked`); a Desk update, an engine update or a session with another environment makes a record stale,
 // never a fault. A stale record whose engine pin is behind the installed engine (`engine_unpinned`) raises the measure step's
 // `loop_alarm:triage_engine_unpinned` card. For a missing record, or a stale one whose reason qualifying again can fix (the
-// qualification module's `TRIAGE_STALE_REASONS`), the step asks the qualifier (`autoQualify`) first, with the loop-worker lock it holds
+// runner's `TRIAGE_STALE_REASONS`), the step asks the qualifier (`autoQualify`) first, with the loop-worker lock it holds
 // as proof: the qualifier makes its own refusals and reservations; when it launched it took the generation's agent slot
 // (`runner_qualified`, or `qualification_failed`, which counts as a failed run), and a skip is quiet, except `auto_suspended` (the
 // qualifier stopped after repeated host-side failures), which counts as a failed run so that it reaches `step_stale:triage`.
@@ -66,7 +66,6 @@ import { randomBytes } from "node:crypto"
 import { promises as fs, constants as fsConstants } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
-import { isDeepStrictEqual } from "node:util"
 
 import { checkPersonPrefix } from "./binding.js"
 import { evaluateDue, LOOP_LOCK_NAME, newestRequestAt, triageQuotaFor, kickLoop } from "./evaluate-kick.js"
@@ -79,6 +78,7 @@ import { recordStep } from "./loop-status.js"
 import { ensureOwnerOnlyDirectory } from "./os-protect.js"
 import { factoryStateRoot, readConsent, readStatus, updateStatus } from "./outbox.js"
 import { releaseLock, takeLock } from "./process-lock.js"
+import { importTriageRunner } from "./triage-home.js"
 import { prepareTriageCatalog, writeTriagePreparedFile } from "./triage-catalog.js"
 import { beginTriageEmission, recordTriageCoverage, routedStore, settleTriageEmission } from "./triage-outbox.js"
 import { readTriageBasis, resolveSelfDescribing, safeDeskPath } from "./triage-basis.js"
@@ -160,84 +160,40 @@ const writeAttempts = (env, attempts) => writeProtectedTriageFile(env, ["attempt
 // ---------------------------------------------------------------------------
 // The runner seams.
 //
-// `loadRunner(env)` is the one place the runner (`triage-runner.js`), its custody (`triage-custody.js`) and the qualifier are loaded. It
-// answers `{state:"loaded",runner,custody,qualify}` or `{state:"unavailable",reason}`, the shape of the dependency-free loader
-// `importTriageRunner(env)` (`triage-home.js`); switching to that loader is the one line in `DEFAULT_IMPLS`. A loader that throws or
-// answers unavailable is a quiet `runner_unavailable` (`runtime_unloadable` unless it named its reason), never a failure: the installed
-// plugin copy may hold no runtime the runner can load. Nothing is loaded until the ledger leaves a launch.
+// `loadRunner(env)` is the one place the runner (`triage-runner.js`), its custody (`triage-custody.js`) and the qualifier
+// (`triage-qualify.js`) are loaded: the dependency-free loader `importTriageRunner(env)` (`triage-home.js`), which answers
+// `{state:"loaded",runner,custody,qualify}` or `{state:"unavailable",reason}`. A loader that throws or answers unavailable is a quiet
+// `runner_unavailable` (`runtime_unloadable` unless it named its reason), never a failure: the installed plugin copy may hold no runtime
+// the runner can load. Nothing is loaded until the ledger leaves a launch.
 
-/**
- * The engine-pin alarm card (`loop_alarm:triage_engine_unpinned`), the shape of the qualification module's `TRIAGE_ENGINE_CARD`. It
- * carries no title: the strict card writer takes the title from its own card table.
- */
-export const TRIAGE_ENGINE_CARD = Object.freeze({ source: "loop_alarm", id: "triage_engine_unpinned" })
-// The qualification states and reasons the restore answers. A reason outside the closed lists reads as the generic one.
-/**
- * Each stale reason, and whether qualifying again can fix it: a mirror of the qualification module's `TRIAGE_STALE_REASONS`, used only
- * while the loaded runtime exports none. The step branches on the runtime's own map when it has one.
- */
-const TRIAGE_STALE_REASONS_MIRROR = Object.freeze({
-  record_version: true, qualification_failed: true, source_changed: true, runtime_changed: true, engine_changed: true, engine_unpinned: false,
-  engine_mismatch: false, environment_changed: true, chain_changed: true, policy_changed: true, host_unsupported: false, measurement_active: false,
-  root_unsafe: false,
-})
 // The qualifier's code for a qualifier stopped after repeated host-side failures: an alarm, never a quiet skip.
 const AUTO_SUSPENDED = "auto_suspended"
-const staleReasons = (runtime) => {
-  const own = runtime.qualify?.TRIAGE_STALE_REASONS ?? runtime.runner.TRIAGE_STALE_REASONS
-  return isObject(own) ? own : TRIAGE_STALE_REASONS_MIRROR
-}
-// The engine the sign-in probe asks: the runtime's own `locatePinnedEngine` (a path, or `{ path }`), never a path from the record.
+// The qualifier's code for a record it would not qualify again; its answer then carries its own restore, read with the marker.
+const NOT_REQUALIFIABLE = "not_requalifiable"
+// Each stale reason, and whether qualifying again can fix it: the runner's own `TRIAGE_STALE_REASONS`.
+const staleReasons = (runtime) => (isObject(runtime.runner.TRIAGE_STALE_REASONS) ? runtime.runner.TRIAGE_STALE_REASONS : {})
+// The engine the sign-in probe asks: the runner's own `locatePinnedEngine`, never a path from the record.
 async function defaultLocateEngine(env, runtime) {
-  const locate = runtime.qualify?.locatePinnedEngine ?? runtime.runner.locatePinnedEngine
-  if (typeof locate !== "function") return null
-  const found = await locate({ env })
-  const where = typeof found === "string" ? found : found?.path
-  return typeof where === "string" && path.isAbsolute(where) ? where : null
+  const found = await runtime.runner.locatePinnedEngine({ env })
+  return typeof found === "string" && path.isAbsolute(found) ? found : null
 }
 // A damaged record's reason is kept when it is a code (the restore may name new ones, such as a record copied from another machine).
 const REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/u
 
-async function defaultLoadRunner() {
-  const [runner, custody] = await Promise.all([import("./triage-runner.js"), import("./triage-custody.js")])
-  return { state: "loaded", runner, custody, qualify: {} }
-}
-
 /**
- * The installed record, restored: `{state:"qualified",qualification}`, `{state:"missing"}`, `{state:"stale",reason,requalify}` or
- * `{state:"damaged",reason}`. The runner's own `restoreTriageQualification` answers this when it has one. Until then the record is
- * classified here: a file that is not the canonical document the qualifier wrote is `damaged` (`unreadable`); a whole document that does
- * not restore is `stale`, `source_changed` when it names other plugin files than this install's, `engine_changed` when the engine it
- * names is gone, else `qualification_failed`.
+ * The installed record, restored by the runner's own `restoreTriageQualification`: `{state:"qualified",qualification}`,
+ * `{state:"missing"}`, `{state:"stale",reason,requalify}` or `{state:"damaged",reason}`.
  */
-async function defaultRestore(env, runtime, functions) {
-  const recordFile = path.join(await factoryStateRoot(env), ...QUALIFICATION_SEGMENTS)
-  if (typeof runtime.runner.restoreTriageQualification === "function") return runtime.runner.restoreTriageQualification({ recordFile, env })
-  try {
-    await fs.lstat(recordFile)
-  } catch {
-    return { state: "missing" }
-  }
-  const readDocument = functions.readQualificationDocument ?? runtime.runner.readTriageQualificationDocument
-  const document = await swallow(() => readDocument(recordFile), null)
-  if (!isObject(document?.record)) return { state: "damaged", reason: "unreadable" }
-  const record = await (functions.loadTriageQualification ?? runtime.runner.loadTriageQualification)({ recordFile, env })
-  if (record?.state === "qualified") return { state: "qualified", qualification: record }
-  const installed = await swallow(() => (functions.sourceIdentity ?? runtime.custody.ownedSourceIdentity)(), null)
-  if (installed !== null && !isDeepStrictEqual(installed, document.record.sourceIdentity)) return { state: "stale", reason: "source_changed" }
-  if ((await swallow(() => fs.stat(String(document.record.cli)), null)) === null) return { state: "stale", reason: "engine_changed" }
-  return { state: "stale", reason: "qualification_failed" }
+async function defaultRestore(env, runtime) {
+  return runtime.runner.restoreTriageQualification({ recordFile: path.join(await factoryStateRoot(env), ...QUALIFICATION_SEGMENTS), env })
 }
-
-// The qualifier's own `autoQualifyTriage`, when the loaded runtime has one; `null` when it has none (nothing is attempted).
-const defaultAutoQualify = (env, options, runtime) => (typeof runtime.qualify?.autoQualifyTriage === "function" ? runtime.qualify.autoQualifyTriage(env, options) : null)
 
 const DEFAULT_IMPLS = {
   readCards: readCardsDefault, readTriageBasis, refreshTriage, publishOwnedTriage, readAcknowledgedAnnotations,
   reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, newestRequestAt,
   readStatus, toSafeTriageReview, writeProtectedTriageFile,
-  loadRunner: defaultLoadRunner, hostSupport: (runtime) => runtime.custody.ownedCatalogHostSupport(), restoreQualification: defaultRestore,
-  autoQualify: defaultAutoQualify, locateEngine: defaultLocateEngine, childEnvironment: (env, runtime) => runtime.runner.triageChildEnvironment(env),
+  loadRunner: importTriageRunner, hostSupport: (runtime) => runtime.custody.ownedCatalogHostSupport(), restoreQualification: defaultRestore,
+  autoQualify: (env, options, runtime) => runtime.qualify.autoQualifyTriage(env, options), locateEngine: defaultLocateEngine, childEnvironment: (env, runtime) => runtime.runner.triageChildEnvironment(env),
   billingVariableBlocks, probeSignIn, runTriageChild: (options, runtime) => runtime.runner.runTriageChild(options),
   evidence: { resolve: resolveSelfDescribing },
 }
@@ -692,12 +648,12 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   let loaded = await restore()
   const reasons = staleReasons(runtime)
   if (loaded.state === "missing" || (loaded.state === "stale" && reasons[loaded.reason] === true)) {
-    // The qualifier makes its own cheap refusals, reserves its own launches and runs at most once a UTC day; `null` is no qualifier.
+    // The qualifier makes its own cheap refusals, reserves its own launches and runs at most once a UTC day.
     const wasWaiting = await evaluationWaiting()
     // The qualifier reads `now()` as milliseconds and `deadline` as whole milliseconds on the same clock.
     const options = { lock, deadline: deadlineMs, generation, legacyEvaluator: status.evaluator, now: () => ctx.nowAt().getTime() }
     const qualified = await swallow(() => functions.autoQualify(env, options, runtime), { state: "failed", reason: "diagnostic_inadequate", launched: true })
-    if (qualified !== null) {
+    {
       const reason = typeof qualified.reason === "string" ? qualified.reason : null
       // `refused` (a gate, the lock, the ledger, no pinned engine, the sign-in) launched nothing and is quiet like `skipped`. A
       // qualifier suspended after repeated host-side failures is a failure to see, skipped or not.
@@ -717,8 +673,10 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
         return finish(false, "qualification_failed", { unreviewed: unreviewedNow })
       }
       // Skipped because the record is qualified after all: restore it again and go on.
-      if (state === "skipped" && reason !== "qualified") return unavailable("scope_unqualified", reason, loaded.state, qualified.retry_at)
-      loaded = await restore()
+      // Not one the qualifier would make again: its own restore (read with its marker) is the verdict, damaged included.
+      if (reason === NOT_REQUALIFIABLE && isObject(qualified.restore)) loaded = qualified.restore
+      else if (state === "skipped" && reason !== "qualified") return unavailable("scope_unqualified", reason, loaded.state, qualified.retry_at)
+      else loaded = await restore()
     }
   }
   if (loaded.state === "damaged") {
