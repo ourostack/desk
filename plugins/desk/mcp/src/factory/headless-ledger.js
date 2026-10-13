@@ -235,6 +235,15 @@ export function quotaFor(ledger, kind, nowMs, launches = 1) {
   return { state: "ok", remaining: DAILY_LAUNCHES - ledger.spent - launches }
 }
 
+// The earliest time a refused triage reservation could pass on the ledger's own terms: the next UTC day once the day's
+// launches are spent, the next window when this one is used, and six hours after the last triage launch during the cooldown.
+// Another refusal may still follow then.
+function retryAt(ledger, nowMs, state) {
+  if (state === "quota_exhausted") return dayStart(dayOf(nowMs)) + WINDOWS_PER_DAY * WINDOW_MS
+  if (state === "triage_cooldown") return instantMs(ledger.last_triage_at) + TRIAGE_GAP_MS
+  return dayStart(dayOf(nowMs)) + (windowOf(nowMs) + 1) * WINDOW_MS
+}
+
 /**
  * `witnessedEvaluationQuota(status, now) -> state`: what the high-water mark in `status` (`status.loop.agent_launch_highwater`) says about one
  * more evaluation at `now`, without the ledger lock: `ok`, `unwitnessed` (no mark yet: the reservation migrates or refuses), `witness_invalid`,
@@ -577,8 +586,8 @@ async function transact(io, env, { nowMs, legacyEvaluator }, body) {
 const DEFAULT_IO = { readStatus, updateStatus, rename: (from, to) => fsp.rename(from, to), fault: async () => {}, platform: process.platform }
 
 /**
- * `createHeadlessLedger(seams) -> { reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, consumeEvaluationContinuation }`:
- * the same four functions over injected `readStatus`, `updateStatus`, `rename`, `platform` and `fault(point)` (called at each of
+ * `createHeadlessLedger(seams) -> { reserveAgentLaunch, peekAgentLaunch, finishAgentLaunch, createEvaluationContinuation,
+ * consumeEvaluationContinuation }`: the same five functions over injected `readStatus`, `updateStatus`, `rename`, `platform` and `fault(point)` (called at each of
  * `FAULT_POINTS`; a throw there stops the transaction as a crash would). The module's own exports use the real ones.
  */
 export function createHeadlessLedger(seams = {}) {
@@ -589,7 +598,8 @@ export function createHeadlessLedger(seams = {}) {
    * `kind` (`evaluate` or `triage`) before the caller starts it, or two (`launches: 2`, triage only) for a triage qualification, which
    * starts two model sessions in one window; the token then carries `launches: 2` and is finished once for both. `state` is `reserved` (with the token `finishAgentLaunch` takes, the
    * ledger's UTC day and the launches of that kind still allowed now), a quota refusal (`quota_exhausted`, `window_protected`,
-   * `window_used`, `triage_cooldown`) or a state that blocks every launch (see the header). `legacyEvaluator` is the stored
+   * `window_used`, `triage_cooldown`; a triage refusal also carries `retry_at`, the earliest instant it could pass) or a state that
+   * blocks every launch (see the header). `legacyEvaluator` is the stored
    * `status.evaluator`, read only by the first migration. A reservation is never given back.
    */
   async function reserveAgentLaunch(env, { kind, generation = null, now, legacyEvaluator, launches = 1 } = {}) {
@@ -600,7 +610,10 @@ export function createHeadlessLedger(seams = {}) {
     return transact(io, env, { nowMs: readMs, legacyEvaluator }, (current, nowMs) => {
       const ledger = rollover(current, nowMs)
       const quota = quotaFor(ledger, kind, nowMs, launches)
-      if (quota.state !== "ok") return { result: { state: quota.state, day: ledger.day, remaining: 0 } }
+      if (quota.state !== "ok") {
+        const refusal = { state: quota.state, day: ledger.day, remaining: 0 }
+        return { result: kind === "triage" ? { ...refusal, retry_at: new Date(retryAt(ledger, nowMs, quota.state)).toISOString() } : refusal }
+      }
       const target = { ...ledger, last_clock_ms: nowMs, spent: ledger.spent + launches, [kind]: { ...ledger[kind], launched: ledger[kind].launched + launches } }
       if (kind === "triage") {
         target.windows = ledger.windows.map((used, index) => (index === windowOf(nowMs) ? 1 : used))
@@ -608,6 +621,24 @@ export function createHeadlessLedger(seams = {}) {
       }
       return { target, result: { state: "reserved", token: { epoch: ledger.epoch, revision: current.revision + 1, kind, day: ledger.day, ...(launches === 1 ? {} : { launches }) }, day: ledger.day, remaining: quota.remaining } }
     })
+  }
+
+  /**
+   * `peekAgentLaunch(env, { kind, launches, now }) -> { state, retry_at? }`: what a reservation would answer now, from the ledger file
+   * alone: no lock, no write, no settling. `state` is `ok`, a quota refusal with `retry_at` (as a triage reservation gives it), or
+   * `unknown` when the ledger is missing or unreadable, which leaves the decision to the reservation. Advisory only: a reservation is
+   * the one authority that spends or refuses.
+   */
+  async function peekAgentLaunch(env, { kind, now, launches = 1 } = {}) {
+    if (!KINDS.has(kind)) throw new TypeError("kind: must be evaluate or triage")
+    if (launches !== 1 && (launches !== 2 || kind !== "triage")) throw new TypeError("launches: must be 1, or 2 for a triage qualification")
+    const readMs = toMs(now, "now")
+    const read = await readRecord(io, await factoryStateRoot(env), LEDGER_FILE, validLedger)
+    if (read.state !== "ok") return { state: "unknown" }
+    const nowMs = Math.max(readMs, read.value.last_clock_ms)
+    const ledger = rollover(read.value, nowMs)
+    const quota = quotaFor(ledger, kind, nowMs, launches)
+    return quota.state === "ok" ? { state: "ok" } : { state: quota.state, retry_at: new Date(retryAt(ledger, nowMs, quota.state)).toISOString() }
   }
 
   /**
@@ -674,8 +705,8 @@ export function createHeadlessLedger(seams = {}) {
     })
   }
 
-  return { reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, consumeEvaluationContinuation }
+  return { reserveAgentLaunch, peekAgentLaunch, finishAgentLaunch, createEvaluationContinuation, consumeEvaluationContinuation }
 }
 
 const DEFAULT_LEDGER = createHeadlessLedger()
-export const { reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, consumeEvaluationContinuation } = DEFAULT_LEDGER
+export const { reserveAgentLaunch, peekAgentLaunch, finishAgentLaunch, createEvaluationContinuation, consumeEvaluationContinuation } = DEFAULT_LEDGER

@@ -1026,14 +1026,15 @@ export async function loadTriageQualification({recordFile,...config}){
   return legacyAnswer(await restoreTriageQualification({recordFile,...config}))
 }
 /**
- * `restoreTriageQualification({recordFile,env,cli?})` answers, launching nothing:
+ * `restoreTriageQualification({recordFile,env,cli?,sealedBefore?})` answers, launching nothing:
  *   {state:"qualified",qualification}         the sealed record runTriageChild accepts
  *   {state:"missing"}                         no record is installed
  *   {state:"stale",reason,requalify}          an intact record that does not fit this install, engine, environment or policy
  *   {state:"damaged",reason}                  unreadable, non-canonical, malformed, edited, sealed elsewhere, or its receipts fail
  * The stale reasons, each with its `requalify` flag (whether a new qualification on this host could clear it), are
  * `TRIAGE_STALE_REASONS`. The damaged reasons, all about the record's own bytes, are unreadable, noncanonical, structure, seal
- * (edited, or sealed on another Mac or account) and receipts.
+ * (edited, sealed on another Mac or account, or an unsealed shape after `sealedBefore`) and receipts. `sealedBefore` is true once a
+ * sealed record has qualified on this host (the automatic-qualification marker keeps that fact).
  */
 export async function restoreTriageQualification({recordFile,...config}){
   return restoreQualification({recordFile,...config},realTransaction)
@@ -1049,17 +1050,28 @@ const BLOCKED_KEYS=["version","protocol_envelope_version","enforcement_scheme","
 const V6_KEYS=["version","protocol_envelope_version","protocol_identity","enforcement_scheme","state","env_recipe_version","sourceIdentity","policy_sources_fingerprint","chain_fingerprint","directReceipts","nativeReceipts","cliMetadata","cli","format_fingerprint","resources","invocationIdentities","recipe_version","controls_schema","control_evidence","predicate_table_sha256","predicate_table","builtin_basis_sha256","optional_off_sha256","registered_set_sha256","effective_off_sha256"]
 // A record is classified stale only when it is one of the shapes this code
 // wrote: an earlier version's closed shape, or this version's closed blocked
-// shape beside its failure capture. Anything else is damaged and stays.
-async function staleShape(record,out,context){
+// shape beside its failure capture. Anything else is damaged and stays. Once
+// a sealed record has qualified on this host (`sealedBefore`), an unsealed
+// shape is no longer believed: an earlier version is `unsealed`, and so is a
+// blocked record without this host's seal (this version seals the blocked
+// records it writes).
+async function staleShape(record,out,context,sealedBefore){
   try{
     if(record.version===6){
       closedObject(record,record.state==="blocked"?BLOCKED_KEYS:V6_KEYS)
-      return ["qualified","blocked"].includes(record.state)?"record_version":null
+      if(!["qualified","blocked"].includes(record.state))return null
+      return sealedBefore?"unsealed":"record_version"
     }
     if(record.version===QUALIFICATION_VERSION&&record.state==="blocked"){
-      closedObject(record,BLOCKED_KEYS)
+      closedObject(record,BLOCKED_KEYS,["host_seal"])
       if(typeof record.reason!=="string"||record.protocol_envelope_version!==2||record.enforcement_scheme!=="owned_catalog_mcp"||
         record.recipe_version!==3||record.controls_schema!=="desk.factory.triage-controls/3"||record.predicate_table!=="E296/3")return null
+      if(record.host_seal===undefined){if(sealedBefore)return "unsealed"}
+      else{
+        let seal
+        try{seal=context.hostSeal(record)}catch{return "host_unsupported"}
+        if(seal!==record.host_seal)return "unsealed"
+      }
       await context.capture(path.join(out,"failure-capture.json"))
       return "qualification_failed"
     }
@@ -1148,8 +1160,8 @@ async function restoreQualification({recordFile,...config},context){
   const out=path.dirname(recordFile)
   if(!policyObject(record))return damaged("structure")
   if(record.version!==QUALIFICATION_VERSION||record.state!=="qualified"){
-    const reason=await staleShape(record,out,context)
-    return reason?stale(reason):damaged("structure")
+    const reason=await staleShape(record,out,context,config.sealedBefore===true)
+    return reason==="unsealed"?damaged("seal"):reason?stale(reason):damaged("structure")
   }
   try{
     closedObject(record,QUALIFIED_KEYS,["host_seal"])
@@ -1212,7 +1224,7 @@ function currentArgv(record,roots){
 // group and world writes, so no other account can swap it after the hash
 // check; admission then re-verifies the hash, the reviewed byte ranges and the
 // signature before any launch.
-export function locatePinnedEngine({env,preferred=[],find=findAgentCli,list=readdirSync,user=userInfo(),...checks}={}){
+export function locatePinnedEngine({env,preferred=[],find=findAgentCli,list=readdirSync,user=userInfo(),...checks}){
   const candidates=[...preferred]
   try{const cli=find({env});if(cli)candidates.push(realpathSync(cli))}catch{}
   const versions=path.join(user.homedir,".local","share","claude","versions")
@@ -1321,7 +1333,7 @@ const realTransaction=Object.freeze({records:ownedQualificationRecords,controlRe
 export function createNonacceptedTriageUnit(config){
   closedObject(config,["record","env","admission","chain"],["failures"])
   const data=JSON.parse(catalogCanonical(config)),failures=data.failures??{}
-  closedObject(failures,[],["native","direct","read","write","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect",
+  closedObject(failures,[],["native","direct","read","noncanonical","write","restoreDirect","restoreNative","restoreAuthNative","restoreAuthDirect",
     "source","prepare","policy","chain","admission","admissionIdentity","chainIdentity","signIn","prepared","invocation",
     "run","postAdmission","postIdentity","throwRun","runTimeout","runBudget","runUnqualified","badSignIn","close",
     "signInChainDrift","signInChainUnknown","runChainDrift","runChainUnknown","nativeMode",
@@ -1373,6 +1385,7 @@ export function createNonacceptedTriageUnit(config){
     },
     async readDocument(file){
       if(failures.read)throw Error("unit_read_failed")
+      if(failures.noncanonical)throw new SyntaxError("unit_noncanonical")
       if(!documents.has(file))throw Object.assign(Error("unit_missing"),{code:"ENOENT"})
       return {record:JSON.parse(documents.get(file)),authority:false}
     },
@@ -1448,11 +1461,14 @@ export function createNonacceptedTriageUnit(config){
       return {authority:false,state:"unit_restored",outcome:legacyAnswer(await restoreQualification({recordFile:unitFile,env,...options},context))}
     },
     async restore(options={}){
-      closedObject(options,[],["cli"])
+      closedObject(options,[],["cli","sealedBefore"])
       return {authority:false,state:"unit_restored",outcome:await restoreQualification({recordFile:unitFile,env,...options},context)}
     },
     // A record as this unit's host would seal it, for tests that need a coherent record with other content.
-    sealDocument(record){return {...structuredClone(record),host_seal:unitSeal(record,"this")}},
+    sealDocument(record){
+      if(failures.hostUnknown)throw Error("host_identity")
+      return {...structuredClone(record),host_seal:unitSeal(record,"this")}
+    },
     async saveDocument(name,value){documents.set(path.join(out,name),catalogCanonical(value));return {authority:false,state:"unit_memory_saved"}},
     async run(qualification){
       admissionReads=0;signedIn=false;hasRun=false

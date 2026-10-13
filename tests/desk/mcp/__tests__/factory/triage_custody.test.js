@@ -5,6 +5,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import * as path from "node:path"
+import {fileURLToPath} from "node:url"
 import moduleBuiltin,{syncBuiltinESMExports} from "node:module"
 import {spawn} from "node:child_process"
 import childProcess from "node:child_process"
@@ -1735,8 +1736,9 @@ await client.close()
   finally{fs.writeFileSync(resultFile,actualBytes)}
 })
 
-test("two module roots: the source tree and the folder Node resolves the SDK from, both closed to other accounts",async()=>{
-  const sep=path.sep,root=path.resolve(new URL("../../../../../plugins/desk/mcp/",import.meta.url).pathname)+sep
+// Both need POSIX owners and modes: on Windows the roots cannot be shown closed, and the product refuses them.
+ownedHostTest("two module roots: the source tree and the folder Node resolves the SDK from, both closed to other accounts","posix",async()=>{
+  const sep=path.sep,root=path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp/",import.meta.url)))+sep
   const roots=custody.ownedSourceRoots()
   assert.equal(roots.source,root)
   assert.ok(roots.deps.endsWith(`${sep}node_modules${sep}`)&&root.startsWith(path.dirname(roots.deps)+sep),"the dependency root is an ancestor's node_modules")
@@ -1773,7 +1775,7 @@ test("two module roots: the source tree and the folder Node resolves the SDK fro
   // A recorded closure from another root verifies against the same bytes here.
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const files=["src/factory/triage-catalog.js","src/factory/triage-protocol.js","src/factory/triage-custody.js",...Array.from({length:7},(_,i)=>["src/factory/headless.js","src/factory/schema.js","src/factory/credential.js","src/factory/os-protect.js","src/factory/triage-schema.js","src/factory/published-schema.js","scripts/triage-catalog-server.js"][i])]
-  const sdkFile=fs.realpathSync(fileURLToPathSafe(import.meta.resolve("@modelcontextprotocol/sdk/server/index.js")))
+  const sdkFile=fs.realpathSync(fileURLToPath(import.meta.resolve("@modelcontextprotocol/sdk/server/index.js")))
   const here=[...files.map(name=>root+name),sdkFile].map(file=>{const b=fs.readFileSync(file);return {path:file,sha256:catalog.catalogHash(b),bytes:b.length}})
   const elsewhere={source:`${sep}qualified${sep}mcp${sep}`,deps:`${sep}qualified${sep}node_modules${sep}`}
   const recorded=here.map(item=>({...item,path:item.path.startsWith(roots.deps)?elsewhere.deps+item.path.slice(roots.deps.length):elsewhere.source+item.path.slice(root.length)}))
@@ -1797,12 +1799,14 @@ test("two module roots: the source tree and the folder Node resolves the SDK fro
   }finally{fs.rmSync(fake,{recursive:true,force:true})}
   const server=await import("../../../../../plugins/desk/mcp/scripts/triage-catalog-server.js")
   assert.deepEqual(server.catalogModuleRoots(),[roots.source,roots.deps])
+  assert.throws(()=>server.catalogModuleRoots(()=>`${sep}elsewhere${sep}index.js`),{message:"module_roots"},"a resolution outside any SDK folder")
+  assert.throws(()=>custody.ownedServerLaunch({sourceRoot:"relative/"}),{message:"launch_source"})
   assert.throws(()=>server.catalogModuleRoots(()=>`${sep}elsewhere${sep}node_modules${sep}@modelcontextprotocol${sep}sdk${sep}x.js`))
 })
 
-test("the identity lists every own file and dependency package the parent actually loads",async()=>{
+ownedHostTest("the identity lists every own file and dependency package the parent actually loads","posix",async()=>{
   // A load hook in a fresh process sees createRequire and dynamic imports too, not just import statements.
-  const root=path.resolve(new URL("../../../../../plugins/desk/mcp/",import.meta.url).pathname)+path.sep
+  const root=path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp/",import.meta.url)))+path.sep
   const hook=`import {registerHooks} from "node:module";import {fileURLToPath} from "node:url";const seen=new Set();registerHooks({load(url,c,next){if(url.startsWith("file:"))seen.add(fileURLToPath(url));return next(url,c)}});process.on("exit",()=>process.stdout.write(JSON.stringify([...seen])))`
   const trace=files=>JSON.parse(childProcess.execFileSync(process.execPath,["--import",`data:text/javascript,${encodeURIComponent(hook)}`,"--input-type=module","-e",
     files.map(file=>`await import(${JSON.stringify(root+file)});`).join("")],{encoding:"utf8",env:{PATH:process.env.PATH,HOME:process.env.HOME}}))
@@ -1823,7 +1827,6 @@ test("the identity lists every own file and dependency package the parent actual
   // Under nyc, its own require hook compiles CommonJS sources, so the load hook sees them only in a plain run.
   if(process.env.DESK_COVERAGE_RUNNER_CHILD!=="1")assert.ok(own.includes("src/factory/headless-flag.cjs"),"createRequire loads are seen")
 })
-function fileURLToPathSafe(url){return new URL(url).pathname}
 ownedHostTest("receipt_frames_authenticate_under_their_own_snapshot_key","posix",async(t)=>{
   const catalog=await import("../../../../../plugins/desk/mcp/src/factory/triage-catalog.js")
   const prepared=catalog.prepareTriageCatalog({brief:fixture.brief,records:fixture.record_inputs,recordRefs:fixture.record_refs,generation:"a".repeat(64)})

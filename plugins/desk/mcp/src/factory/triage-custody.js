@@ -733,7 +733,7 @@ async function restoreDirect(bundle,context) {
   return true
 }
 
-const realLifecycle=Object.freeze({readBytes:file=>fs.readFile(file),source:ownedSourceIdentity,
+const realLifecycle=Object.freeze({readBytes:file=>fs.readFile(file),source:ownedSourceIdentity,roots:()=>ownedSourceRoots(),
   verifyModules:verifyModuleClosure,observe:observeOwnedServer,openControl:openSafe,writeControl:boundedFdWrite,
   pump:fifoPump,live:ownedPidLive,closeFd:close,registry:trustedCustody,requireObservations:true})
 // The production owned-catalog context, fixed lexically: Darwin host support,
@@ -857,7 +857,7 @@ async function runOwnedCatalogLifecycle({nativeChild,native,launch,receiptFd,rec
       if(catalogCanonical(sourceBefore)!==catalogCanonical(sourceAfter)||
         catalogHash(await context.readBytes(launch.identity.bootstrap.snapshotFile))!==launch.identity.bootstrap.expectedSha256)fail("source_changed")
       await context.verifyModules(moduleClosure)
-      const custody={receipts,observations,observation:{...observation,ok:true},moduleClosure,roots:ownedSourceRoots(),sourceCustodyUnchanged:true,sourceIdentity:sourceAfter,
+      const custody={receipts,observations,observation:{...observation,ok:true},moduleClosure,roots:context.roots(),sourceCustodyUnchanged:true,sourceIdentity:sourceAfter,
         briefSha256:catalogHash(catalogCanonical(snapshot.brief)),snapshotSha256:launch.identity.bootstrap.expectedSha256,launchIdentity:structuredClone(launch)}
       context.registry.set(custody,{seal:catalogCanonical(custody),records:snapshot.records})
       return {state:"closed",custody,resources}
@@ -882,6 +882,8 @@ export async function runNonacceptedLifecycleTransaction(config){
     registry,requireObservations:mode==="observationRequired",
     async readBytes(){reads++;return Buffer.from(catalogCanonical(snapshot)+(mode==="snapshot"&&reads>1?" ":""))},
     async source(){sources++;return {unit:sources>1&&mode==="source"?"changed":"nonaccepted"}},
+    // Synthetic roots: this facade loads no modules, so no folder's ownership is in question.
+    roots:()=>({source:path.join(path.sep,"unit","nonaccepted",path.sep),deps:path.join(path.sep,"unit","nonaccepted","node_modules",path.sep)}),
     async verifyModules(value){modules++;if(mode==="modules"||mode==="lateModules"&&modules>1)throw Error("unit_module_changed");return structuredClone(value)},
     async observe(){
       if(mode==="abortObserve")controller.fail(Error("unit_aborted"))

@@ -7,7 +7,7 @@ import * as path from "node:path"
 import {fileURLToPath} from "node:url"
 import {createHash} from "node:crypto"
 import {runChild,probeSignIn,billingVariableBlocks,HEADLESS_TIMEOUT_MS} from "../src/factory/headless.js"
-import {QUALIFICATION_VERSION,triageChildEnvironment,inspectLaunchChain,collectTriageAdmission,hasCollectedTriageControls,validateTriageControls,triagePolicy,sealOwnedQualification,loadTriageQualification,createNonacceptedTriageUnit,qualificationMeasurementActive} from "../src/factory/triage-runner.js"
+import {QUALIFICATION_VERSION,triageChildEnvironment,inspectLaunchChain,collectTriageAdmission,hasCollectedTriageControls,validateTriageControls,triagePolicy,sealOwnedQualification,loadTriageQualification,createNonacceptedTriageUnit,qualificationMeasurementActive,hostRecordSeal} from "../src/factory/triage-runner.js"
 import {assertOutsideGitWorkspace,ensureOwnerOnlyDirectory,protectLeafFile} from "../src/factory/os-protect.js"
 import {runDirectCatalog,runCatalogWireCase,prepareOwnedCatalogRun,runOwnedCatalogNative,runNonacceptedNativeTransaction,retainDirectReceipt,completeDirectBundle,catalogFatalCases,QUALIFICATION_FIXTURE} from "../src/factory/triage-custody.js"
 import {writeTriagePreparedFile,catalogCanonical,closedObject} from "../src/factory/triage-catalog.js"
@@ -91,6 +91,11 @@ async function qualifyCatalogTransaction({launch,reserve,fixture,deadline,eviden
     const allowed=["effective_policy_unknown","applicable_delivery_pending","active_hook_or_helper","unsafe_permission_grant","billing_unresolved","policy_control_unsupported","diagnostic_inadequate","launch_chain_unknown"]
     record.reason=allowed.includes(e.message)?e.message:"diagnostic_inadequate"
   }
+  // A blocked record carries this host's seal too, so that once a sealed
+  // record has qualified here, an unsealed blocked record reads as damaged.
+  // A host that cannot seal leaves it unsealed; restore there is
+  // host_unsupported before any seal matters.
+  if(record.state==="blocked"&&context.hostSeal){try{record.host_seal=context.hostSeal(record)}catch{}}
   let final
   try{
     if(!outReady)throw Error("protected_output_unavailable")
@@ -123,7 +128,7 @@ const realNativeTransaction=Object.freeze({chain:inspectLaunchChain,help:runChil
   policy:triagePolicy,admission:collectTriageAdmission,controls:hasCollectedTriageControls,signIn:probeSignIn,run:runOwnedCatalogNative,seal:sealOwnedQualification})
 const realCatalogTransaction=Object.freeze({outside:assertOutsideGitWorkspace,mkdir:ensureOwnerOnlyDirectory,
   write:protectedWrite,direct:runDirectCatalog,retain:retainDirectReceipt,wire:runCatalogWireCase,complete:completeDirectBundle,
-  native:qualifyNativeRuns,nativeContext:realNativeTransaction,reload:loadTriageQualification})
+  native:qualifyNativeRuns,nativeContext:realNativeTransaction,reload:loadTriageQualification,hostSeal:hostRecordSeal})
 async function qualifyNativeRuns({launch,reserve,fixture,deadline,evidenceDir,resources,directReceipts,nativeReceipts,save},context){
     if(billingVariableBlocks(launch.env))throw Error("billing_unresolved")
     let metadata=launch.cliMetadata
@@ -347,6 +352,7 @@ export async function runNonacceptedCatalogTransaction(config){
       if(result.outcome.state!=="qualified")throw Error("diagnostic_inadequate")
       return unit.seal().record
     },
+    hostSeal:record=>unit.sealDocument(record).host_seal,
     async reload(){
       if(phaseFailure==="reloadThrows")throw Error("unit_reload_failed")
       if(phaseFailure==="reload")return {state:"blocked"}
