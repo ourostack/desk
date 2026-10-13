@@ -799,9 +799,10 @@ test("the restore's answer: the runner's own restore is used when it has one, it
   // A record copied from another machine is damaged, with whatever code the restore names.
   await check({ state: "damaged", reason: "copied_record" }, { ok: false, reason: "copied_record", qualification: "damaged" })
   await check({ state: "damaged", reason: "Not a reason" }, { ok: false, reason: "unreadable", qualification: "damaged" })
+  await check({ state: "damaged" }, { ok: false, reason: "unreadable", qualification: "damaged" })
   assert.deepEqual(asked[0], { recordFile: path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS), env: w.env })
   const record = (await readStatus(w.env)).loop.steps.triage
-  assert.equal(record.failures, 7, "only the seven damaged records counted")
+  assert.equal(record.failures, 8, "only the eight damaged records counted")
   // A qualified record is handed to the runner as the restore gave it.
   const qualification = { state: "qualified", cli: "/opt/engine/claude" }
   const runs = []
