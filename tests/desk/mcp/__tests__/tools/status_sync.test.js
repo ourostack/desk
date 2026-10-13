@@ -9,7 +9,8 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
-import { syncStatusPath } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { waitForStatusInspection } from "../../../../../plugins/desk/mcp/src/server.js"
+import { hasRemoteConfiguredAsync, syncStatusPath } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 
 const env = process.env
 
@@ -128,4 +129,18 @@ test("desk_status's sync section makes no network call: a repo with a remote poi
   assert.ok(Date.now() - started < 2000, "sync status must never attempt to reach the remote")
   // No upstream has ever been fetched, so ahead/behind default to 0/0 rather than erroring.
   assert.deepEqual(body.sync, { blocked: false, ahead: 0, behind: 0, last_push_at: null })
+})
+
+test("the wait a session uses to close a status run also covers the run's Git reads", async () => {
+  const deskRoot = await mkPlainRepo("desk-status-sync-owned-")
+  const run = new AbortController()
+  let ended = false
+  const reading = hasRemoteConfiguredAsync(deskRoot, { signal: run.signal }).catch(() => { ended = true })
+  run.abort(new Error("runtime status context ended"))
+  await waitForStatusInspection(run.signal)
+  await new Promise((resolve) => setImmediate(resolve))
+  // The read had started a Git process in the desk folder. Windows cannot remove a folder a process is working in, so a session must not close before this.
+  assert.equal(ended, true, "the wait lasts until the aborted run's Git read has ended")
+  await reading
+  await waitForStatusInspection(new AbortController().signal)
 })

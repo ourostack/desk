@@ -9,11 +9,11 @@ import { parentPort, Worker, workerData } from "node:worker_threads"
 
 const FAILED = { status: 1, stdout: "" }
 
-/** Run one read from this thread: resolves with `{ status, stdout }`, where `status` is 0 only when Git ran and exited 0. Never rejects. */
-export function runGitRead({ root, args, env, timeoutMs }, { execGit = execFile } = {}) {
+/** Run one read from this thread: resolves with `{ status, stdout }`, where `status` is 0 only when Git ran and exited 0. Never rejects. Aborting `signal` kills the Git process, and the read then resolves as failed once that process has closed. */
+export function runGitRead({ root, args, env, timeoutMs }, { execGit = execFile, signal } = {}) {
   return new Promise((resolve) => {
     try {
-      execGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: timeoutMs, env, windowsHide: true }, (error, stdout) => {
+      execGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: timeoutMs, env, windowsHide: true, signal }, (error, stdout) => {
         resolve(error || typeof stdout !== "string" ? FAILED : { status: 0, stdout })
       })
     } catch {
@@ -25,8 +25,14 @@ export function runGitRead({ root, args, env, timeoutMs }, { execGit = execFile 
 /** The worker side: answer each read on `port`. Does nothing outside a Desk Git read worker, so importing this module elsewhere is harmless. */
 export function attachGitReadWorker(port, data, { execGit } = {}) {
   if (!port || data?.deskGitReadWorker !== true) return false
-  port.on("message", async ({ id, read }) => {
-    port.postMessage({ id, ...await runGitRead(read, { execGit }) })
+  const running = new Map()
+  port.on("message", async ({ id, read, cancel }) => {
+    if (cancel !== undefined) return running.get(cancel)?.abort()
+    const controller = new AbortController()
+    running.set(id, controller)
+    const answer = await runGitRead(read, { execGit, signal: controller.signal })
+    running.delete(id)
+    port.postMessage({ id, ...answer })
   })
   return true
 }
@@ -34,7 +40,9 @@ export function attachGitReadWorker(port, data, { execGit } = {}) {
 attachGitReadWorker(parentPort, workerData)
 
 /**
- * `{ read, close }`. `read({ root, args, env, timeoutMs })` resolves with `{ status, stdout }` and never rejects.
+ * `{ read, settled, close }`. `read({ root, args, env, timeoutMs }, { signal })` resolves with `{ status, stdout }` and never rejects.
+ * `signal` names the read's owner. A read asked after `signal` aborted starts no process and resolves as failed. Aborting `signal` during a read kills its Git process, and the read resolves as failed once that process has closed.
+ * `settled(signal)` resolves when every read asked with `signal` has resolved, so an owner that aborts and then awaits it knows none of its Git processes is still running, for example inside a folder it is about to remove.
  * The worker starts at the first read. If it fails or exits, every read it had not answered resolves as failed, and the next read starts a new worker.
  * `onError(reason)` hears the first such failure only: a failed read answers the same as a repository with no remote, so a worker that cannot run must be said once.
  * `close()` stops the worker; a later read starts another.
@@ -44,6 +52,7 @@ export function createGitReader({ createWorker = (url, options) => new Worker(ur
   let nextId = 0
   let reported = false
   const waiting = new Map()
+  const owned = new WeakMap()
 
   const report = (reason) => {
     if (reported) return
@@ -81,22 +90,48 @@ export function createGitReader({ createWorker = (url, options) => new Worker(ur
     return started
   }
 
-  return {
-    read(read) {
-      return new Promise((resolve) => {
-        const id = nextId += 1
+  const ask = (read, signal) => new Promise((resolve) => {
+    const id = nextId += 1
+    try {
+      worker ??= start()
+      const asked = worker
+      // Runs only while the read waits: its answer, or the loss of its worker, removes this listener.
+      const cancel = () => {
         try {
-          worker ??= start()
-          waiting.set(id, resolve)
-          worker.ref()
-          worker.postMessage({ id, read })
-        } catch (error) {
-          waiting.delete(id)
-          if (waiting.size === 0) worker?.unref()
-          report(`the Git read worker could not take a read: ${error?.message ?? error}`)
-          resolve(FAILED)
+          asked.postMessage({ cancel: id })
+        } catch {
+          // A worker that cannot hear the cancel is ending, which resolves the read.
         }
+      }
+      waiting.set(id, (answer) => {
+        signal?.removeEventListener("abort", cancel)
+        resolve(answer)
       })
+      worker.ref()
+      worker.postMessage({ id, read })
+      signal?.addEventListener("abort", cancel, { once: true })
+    } catch (error) {
+      waiting.delete(id)
+      if (waiting.size === 0) worker?.unref()
+      report(`the Git read worker could not take a read: ${error?.message ?? error}`)
+      resolve(FAILED)
+    }
+  })
+
+  return {
+    read(read, { signal } = {}) {
+      if (signal?.aborted) return Promise.resolve(FAILED)
+      const asked = ask(read, signal)
+      if (signal) {
+        const reads = owned.get(signal) ?? new Set()
+        owned.set(signal, reads)
+        reads.add(asked)
+        asked.then(() => reads.delete(asked))
+      }
+      return asked
+    },
+    async settled(signal) {
+      await Promise.all(owned.get(signal) ?? [])
     },
     async close() {
       const closing = worker

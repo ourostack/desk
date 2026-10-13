@@ -224,17 +224,26 @@ const gitReads = createGitReader({
   onError: (reason) => process.stderr.write(`[desk-mcp] sync status: ${reason}. desk_status treats a Git read that cannot run as failed, so it may report "no remote configured" for a desk that has a remote.\n`),
 })
 
-function runAsync(root, args) {
-  return gitReads.read({ root, args, env: gitEnv(), timeoutMs: GIT_TIMEOUT_MS })
+// `signal` is the status run that asks. Once it aborts, the read throws its reason instead of answering: a read that was killed or never started looks the same as a desk with no remote, and that must not reach a status payload.
+async function runAsync(root, args, signal) {
+  signal?.throwIfAborted()
+  const result = await gitReads.read({ root, args, env: gitEnv(), timeoutMs: GIT_TIMEOUT_MS }, { signal })
+  signal?.throwIfAborted()
+  return result
 }
 
-export async function hasRemoteConfiguredAsync(root) {
-  const result = await runAsync(root, ["remote"])
+/** Resolves when no Git read asked with `signal` is still running. */
+export function waitForStatusGitReads(signal) {
+  return gitReads.settled(signal)
+}
+
+export async function hasRemoteConfiguredAsync(root, { signal } = {}) {
+  const result = await runAsync(root, ["remote"], signal)
   return result.status === 0 && result.stdout.trim() !== ""
 }
 
-export async function aheadBehindCountsAsync({ root }) {
-  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+export async function aheadBehindCountsAsync({ root, signal }) {
+  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"], signal)
   return result.status === 0 ? parseAheadBehind(result.stdout) : null
 }
 

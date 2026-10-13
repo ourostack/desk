@@ -4,7 +4,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync } from "node:child_process"
 import { EventEmitter, once } from "node:events"
-import { writeFileSync } from "node:fs"
+import { existsSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { MessageChannel } from "node:worker_threads"
 import { attachGitReadWorker, createGitReader, runGitRead } from "../../../../../plugins/desk/mcp/src/runtime/git-read-worker.js"
@@ -17,7 +18,7 @@ test("runGitRead runs git in the folder and reports success only when Git exits 
   const calls = []
   const answer = (error, stdout) => runGitRead({ root: "/desk", args: ["remote"], env: { A: "1" }, timeoutMs: 5 }, { execGit: (...call) => { calls.push(call.slice(0, 3)); call[3](error, stdout) } })
   assert.deepEqual(await answer(null, "origin\n"), { status: 0, stdout: "origin\n" })
-  assert.deepEqual(calls[0], ["git", ["-C", "/desk", "remote"], { encoding: "utf8", timeout: 5, env: { A: "1" }, windowsHide: true }])
+  assert.deepEqual(calls[0], ["git", ["-C", "/desk", "remote"], { encoding: "utf8", timeout: 5, env: { A: "1" }, windowsHide: true, signal: undefined }])
   assert.deepEqual(await answer(Object.assign(new Error("exit 128"), { code: 128 }), "partial"), FAILED, "a failed command's output is not passed on")
   assert.deepEqual(await answer(Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }), ""), FAILED)
   assert.deepEqual(await answer(null, undefined), FAILED)
@@ -46,6 +47,49 @@ test("the worker side answers each read with its id, and a read that throws as a
   assert.deepEqual((await once(port2, "message"))[0], { id: 2, ...FAILED })
   port1.close()
   port2.close()
+})
+
+test("the worker side aborts the read a cancel names, and ignores a cancel for a read it is not running", async () => {
+  const { port1, port2 } = new MessageChannel()
+  const signals = []
+  // Git here ends only when its signal aborts, as a killed process does.
+  const execGit = (_git, _args, { signal }, done) => {
+    signals.push(signal)
+    signal.addEventListener("abort", () => done(Object.assign(new Error("aborted"), { name: "AbortError" }), ""))
+  }
+  attachGitReadWorker(port1, { deskGitReadWorker: true }, { execGit })
+  port2.postMessage({ cancel: 7 })
+  port2.postMessage({ id: 1, read: read("/a") })
+  port2.postMessage({ id: 2, read: read("/b") })
+  port2.postMessage({ cancel: 2 })
+  assert.deepEqual((await once(port2, "message"))[0], { id: 2, ...FAILED })
+  assert.deepEqual(signals.map((signal) => signal.aborted), [false, true], "only the named read is aborted")
+  port2.postMessage({ cancel: 1 })
+  assert.deepEqual((await once(port2, "message"))[0], { id: 1, ...FAILED })
+  // A cancel that arrives after the answer finds nothing to abort.
+  port2.postMessage({ cancel: 1 })
+  port2.postMessage({ id: 3, read: read("/c") })
+  port2.postMessage({ cancel: 3 })
+  assert.deepEqual((await once(port2, "message"))[0], { id: 3, ...FAILED })
+  port1.close()
+  port2.close()
+})
+
+test("a real worker kills the Git process of a read whose owner aborts, and the owner's wait ends once that process has closed", async (t) => {
+  const root = await mkTempRoot("desk-git-read-abort-")
+  const marker = path.join(root, "started.txt")
+  const reader = createGitReader()
+  t.after(() => reader.close())
+  const owner = new AbortController()
+  // The alias replaces its shell with a 20 s sleep that holds none of Git's pipes, in the OS temp folder, so killing Git closes the read at once and the orphaned sleep sits in no fixture folder.
+  const sleeping = reader.read({ root: tmpdir(), args: ["-c", `alias.wait=!echo started > "${marker.replaceAll("\\", "/")}"; exec sleep 20 > /dev/null 2>&1 < /dev/null`, "wait"], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal })
+  while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 20))
+  const started = Date.now()
+  owner.abort()
+  await reader.settled(owner.signal)
+  assert.ok(Date.now() - started < 10_000, "the wait ends when Git is killed, not when the sleep ends")
+  assert.deepEqual(await sleeping, FAILED)
+  assert.deepEqual(await reader.read(read(root), { signal: owner.signal }), FAILED, "an aborted owner starts no further read")
 })
 
 test("a real worker reads a real repository, answers concurrent reads separately, reads again after idling, and reads a missing folder as failed", async (t) => {
@@ -104,6 +148,60 @@ test("the reader starts one worker at the first read, holds the process open onl
   assert.equal(made[0].held, false)
   assert.deepEqual(await first, { status: 0, stdout: "one" })
   assert.deepEqual(await second, { status: 0, stdout: "two" })
+})
+
+test("a read belongs to the signal it was asked with: an aborted owner starts nothing, an abort cancels the read, and settled waits for the worker's answer", async () => {
+  const { made, createWorker } = fakeWorkers()
+  const reader = createGitReader({ createWorker })
+  const gone = new AbortController()
+  gone.abort()
+  assert.deepEqual(await reader.read(read("/a"), { signal: gone.signal }), FAILED)
+  assert.equal(made.length, 0, "a read for an aborted owner starts no worker and no process")
+  await reader.settled(gone.signal)
+  await reader.settled(undefined)
+
+  const owner = new AbortController()
+  const other = new AbortController()
+  const first = reader.read(read("/a"), { signal: owner.signal })
+  const second = reader.read(read("/b"), { signal: owner.signal })
+  const unowned = reader.read(read("/c"))
+  const theirs = reader.read(read("/d"), { signal: other.signal })
+  let settled = false
+  const wait = reader.settled(owner.signal).then(() => { settled = true })
+  made[0].emit("message", { id: 1, status: 0, stdout: "one" })
+  assert.deepEqual(await first, { status: 0, stdout: "one" })
+  owner.abort()
+  assert.deepEqual(made[0].posted.slice(4), [{ cancel: 2 }], "only the owner's read that still waits is cancelled")
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false, "the wait lasts until the worker says the Git process has closed")
+  made[0].emit("message", { id: 2, ...FAILED })
+  await wait
+  assert.deepEqual(await second, FAILED)
+  made[0].emit("message", { id: 3, status: 0, stdout: "three" })
+  made[0].emit("message", { id: 4, status: 0, stdout: "four" })
+  assert.deepEqual(await unowned, { status: 0, stdout: "three" })
+  assert.deepEqual(await theirs, { status: 0, stdout: "four" })
+  other.abort()
+  assert.equal(made[0].posted.length, 5, "an abort after the answer cancels nothing")
+})
+
+test("an abort whose cancel cannot be posted, or whose worker is already lost, still lets the read resolve", async () => {
+  const { made, createWorker } = fakeWorkers()
+  const reader = createGitReader({ createWorker })
+  const owner = new AbortController()
+  const stuck = reader.read(read("/a"), { signal: owner.signal })
+  made[0].postMessage = () => { throw new Error("worker is ending") }
+  owner.abort()
+  made[0].emit("exit", 1)
+  assert.deepEqual(await stuck, FAILED)
+  await reader.settled(owner.signal)
+
+  const later = new AbortController()
+  const lost = reader.read(read("/b"), { signal: later.signal })
+  made[1].emit("error", new Error("worker failed"))
+  assert.deepEqual(await lost, FAILED)
+  later.abort()
+  assert.equal(made[1].posted.length, 1, "a read its worker already failed is not cancelled")
 })
 
 for (const event of ["error", "exit"]) {
