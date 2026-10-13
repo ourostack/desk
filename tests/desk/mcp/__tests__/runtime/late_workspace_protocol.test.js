@@ -99,7 +99,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   })
   // DIAGNOSTIC ONLY: what the session was doing when a call did not answer.
   const stderrLines = []
-  let describe = () => ({ stderr: stderrLines.slice(-60) })
+  let describe = () => ({ stderr: stderrLines.slice(-120) })
   const controllers = []
   const focuses = []
   const endpoints = []
@@ -153,6 +153,7 @@ JSON.stringify = function(...args) {
     // without awaiting it (forgetController), so finish that release here:
     // binding the same endpoint while the old child still holds it fails with
     // EADDRINUSE, most often on slower Windows runners.
+    stderrLines.push(`${new Date().toISOString()} [diag] connector for ${path.basename(deskRoot)} (earlier on this endpoint: ${controllers.filter((entry) => entry.endpoint === endpoint).length})`)
     for (const earlier of controllers.filter((entry) => entry.endpoint === endpoint)) {
       await earlier.controller.close()
       await earlier.exited
@@ -177,9 +178,20 @@ JSON.stringify = function(...args) {
     controllers.push({ controller, child, exited, identity, endpoint })
     endpoints.push(endpoint)
     connectedRoots.push(deskRoot)
-    const call = (method, params = {}, timeoutMs = 2000, signal) => request({
-      endpoint, identity, method, params: { ...params, token: controller.owner.token }, timeoutMs, signal,
-    })
+    const tag = `${child.pid}`
+    const call = (method, params = {}, timeoutMs = 2000, signal) => {
+      const started = Date.now()
+      stderrLines.push(`${new Date().toISOString()} [diag] controller ${tag} ${method} start`)
+      return request({
+        endpoint, identity, method, params: { ...params, token: controller.owner.token }, timeoutMs, signal,
+      }).then((value) => {
+        stderrLines.push(`${new Date().toISOString()} [diag] controller ${tag} ${method} ok ${Date.now() - started} ms${method === "status" ? ` ${value?.state} ${value?.convergence?.status ?? ""}` : ""}`)
+        return value
+      }, (error) => {
+        stderrLines.push(`${new Date().toISOString()} [diag] controller ${tag} ${method} failed ${Date.now() - started} ms ${error?.message}`)
+        throw error
+      })
+    }
     assert.equal((await call("handshake")).accepted, true)
     // The same request budgets as the production client (controller-client.js
     // createClient): a durable journal write, convergence and the event fence
@@ -193,7 +205,10 @@ JSON.stringify = function(...args) {
       recordChange: (change) => call("recordChange", typeof change === "string" ? { path: change } : change, null),
       markUncertain: (reason) => call("markUncertain", { reason }),
       fenceEvents: ({ signal } = {}) => call("fenceEvents", {}, null, signal),
-      close: () => controller.close(),
+      close: () => {
+        stderrLines.push(`${new Date().toISOString()} [diag] controller ${tag} close`)
+        return controller.close()
+      },
     }
   }
   const handle = await main({
@@ -224,16 +239,21 @@ JSON.stringify = function(...args) {
         }
       },
       callTool: async (options) => {
+        stderrLines.push(`${new Date().toISOString()} [diag] callTool ${options.name} start`)
+        void Promise.resolve().then(() => null)
         dispatchTrace.push({ name: options.name, root: options.deskRoot,
           admissionRoot: options.statusContext.admission?.root,
           authority: options.statusContext.admission?.authority, person: options.person })
         focuses.push(options.statusContext.focus)
-        return server.callTool(options)
+        const startedCall = Date.now()
+        const value = await server.callTool(options)
+        stderrLines.push(`${new Date().toISOString()} [diag] callTool ${options.name} done ${Date.now() - startedCall} ms`)
+        return value
       },
     }),
   })
   describe = () => ({
-    at: new Date().toISOString(), stderr: stderrLines.slice(-60), admission: handle.admission.snapshot(),
+    at: new Date().toISOString(), stderr: stderrLines.slice(-120), admission: handle.admission.snapshot(),
     admissionRunning: handle.admission.running, phase: handle.session.context.phase,
     resolution: resolutionTrace.slice(-10), dispatch: dispatchTrace.slice(-10), status: statusTrace.slice(-5),
     convergence: convergenceTrace.slice(-5), controllers: controllers.map(({ child, endpoint }) => ({ pid: child.pid, exitCode: child.exitCode, signal: child.signalCode, endpoint })),
