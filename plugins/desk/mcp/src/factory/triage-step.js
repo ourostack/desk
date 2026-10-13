@@ -659,8 +659,9 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   const unreviewedNow = chosen.selection.coverage.unreviewed + chosen.held
   if (chosen.selection.selected.length === 0) return quiet("nothing_to_review", { unreviewed: unreviewedNow, deferred: 0, reviewed: 0, refused: 0 })
   // Every refusal from here to the reservation is seen without a launch: quiet, nothing reserved, the slot left to the evaluator.
-  const unavailable = (state, reason, qualification) => {
-    record.runner = { state, reason, qualification }
+  // `retryAt` is when the shared ledger said a refused qualification may be tried again; it is kept beside the reason.
+  const unavailable = (state, reason, qualification, retryAt) => {
+    record.runner = { state, reason, qualification, ...(typeof retryAt === "string" && Number.isFinite(Date.parse(retryAt)) ? { retry_at: new Date(retryAt).toISOString() } : {}) }
     return quiet("runner_unavailable", { unreviewed: unreviewedNow })
   }
   const noTime = () => deadlineMs - clock() < TRIAGE_RUN_MS
@@ -699,7 +700,7 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
         return finish(false, "qualification_failed", { unreviewed: unreviewedNow })
       }
       // Skipped because the record is qualified after all: restore it again and go on.
-      if (state === "skipped" && reason !== "qualified") return unavailable("scope_unqualified", reason, loaded.state)
+      if (state === "skipped" && reason !== "qualified") return unavailable("scope_unqualified", reason, loaded.state, qualified.retry_at)
       loaded = await restore()
     }
   }

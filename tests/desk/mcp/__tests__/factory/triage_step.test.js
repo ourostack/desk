@@ -906,6 +906,19 @@ test("a missing or requalifiable record asks the qualifier first; a launch it ma
     const status = await readStatus(w.env)
     assert.deepEqual([status.triage.runner, status.triage.run.failures_in_a_row, status.loop.steps.triage.failures_in_a_row], [{ state: "scope_unqualified", reason, qualification: "missing" }, 0, 0], reason)
   }
+  // The ledger's answers carry when to try again: a read-only peek (`skipped`) and a refused reservation (`refused`) are both quiet,
+  // with the reason and `retry_at` in the status. A time that is not one is left out.
+  const retryAt = at(6).toISOString()
+  for (const [state, given, kept] of [["skipped", retryAt, retryAt], ["refused", retryAt, retryAt], ["refused", "soon", undefined], ["skipped", 7, undefined]]) {
+    w = await fresh()
+    const waiting = await step(w, { seams: seams({ qualify: { state, reason: "quota_exhausted", launched: false, retry_at: given }, ...noRun }) })
+    assert.deepEqual([waiting.result, waiting.ok, waiting.launched], ["runner_unavailable", true, false])
+    const status = await readStatus(w.env)
+    assert.deepEqual(status.triage.runner, { state: "scope_unqualified", reason: "quota_exhausted", qualification: "missing", ...(kept === undefined ? {} : { retry_at: kept }) })
+    assert.equal(status.loop.steps.triage.failures, 0)
+  }
+  w = await fresh()
+  await step(w, { seams: seams({ qualify: { state: "refused", reason: "engine_unpinned", launched: false }, ...noRun }) })
   // No pinned engine is one cause and one card: the engine-pin alarm reads the runner's reason, and the step's streak never moves.
   const pinned = await readStatus(w.env)
   assert.deepEqual([pinned.triage.runner.reason, pinned.loop.steps.triage.failures], ["engine_unpinned", 0])
