@@ -28,11 +28,12 @@ jobs:
       - name: Install dependencies
         working-directory: plugins/desk/mcp
         run: npm ci
-      - name: Run the file alone, fifteen times
+      - name: Run three copies of the file at once, ten times
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path prof | Out-Null
-          $command = 'cd plugins\desk\mcp && for /L %%i in (1,1,15) do node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-reporter=tap ..\..\..\tests\desk\mcp\__tests__\runtime\late_workspace_protocol.test.js >> ..\..\..\prof\tap.txt 2>&1'
+          $run = 'node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-reporter=tap ../../../tests/desk/mcp/__tests__/runtime/late_workspace_protocol.test.js'
+          $command = "cd plugins\desk\mcp && for /L %%i in (1,1,10) do ( start /b cmd /c `"${run} > ..\..\..\prof\tap-%%i-1.txt 2>&1`" & start /b cmd /c `"${run} > ..\..\..\prof\tap-%%i-2.txt 2>&1`" & ${run} > ..\..\..\prof\tap-%%i-3.txt 2>&1 & ping -n 20 127.0.0.1 > nul )"
           ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
           exit 0
       - name: Keep the output
