@@ -8,6 +8,7 @@
 "use strict";
 
 var childProcess = require("child_process");
+var crypto = require("crypto");
 var path = require("path");
 
 var CONNECT_PAGE = "chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/connect.html";
@@ -16,17 +17,28 @@ var CONNECT_MS = 120000;
 var CLOSE_MS = 5000;
 // How recently a detached tab still counts as the session's: the extension detaches a tab for a moment while it re-attaches it after some navigations.
 var DETACH_GRACE_MS = 5000;
+// Stands in for the token in the watchdog's command line, which lives as long as the session; the watchdog puts the token back from its environment just before it starts the browser.
+var TOKEN_PLACEHOLDER = "desk-extension-token";
 
 function either(value, fallback) {
   return value === undefined ? fallback : value;
 }
 
-// Replace the token in everything a stream is given.
+function replaceAll(text, from, to) {
+  return text.split(from).join(to);
+}
+
+// Replace the token, as it is and in its URL-encoded and JSON-escaped forms, in everything a stream is given.
 function redact(stream, token) {
+  var forms = [token, encodeURIComponent(token), JSON.stringify(token).slice(1, -1)];
   var write = stream.write;
   stream.write = function (chunk) {
     var args = Array.prototype.slice.call(arguments);
-    if (typeof chunk === "string" || Buffer.isBuffer(chunk)) args[0] = String(chunk).split(token).join("<token>");
+    if (typeof chunk === "string" || Buffer.isBuffer(chunk)) {
+      args[0] = forms.reduce(function (text, form) {
+        return replaceAll(text, form, "<token>");
+      }, String(chunk));
+    }
     return write.apply(stream, args);
   };
 }
@@ -43,9 +55,12 @@ function run(argv, o) {
   }
   var spawn = cp.spawn;
   cp.spawn = function (file, args, options) {
-    var last = args[args.length - 1];
+    var last = Array.isArray(args) ? args[args.length - 1] : null;
     if (typeof last !== "string" || last.indexOf(CONNECT_PAGE) !== 0) return spawn.apply(cp, arguments);
-    return spawn.call(cp, proc.execPath, [__filename, "--watch", cli, file].concat(args), options);
+    var hidden = args.map(function (arg) {
+      return token ? replaceAll(arg, token, TOKEN_PLACEHOLDER) : arg;
+    });
+    return spawn.call(cp, proc.execPath, [__filename, "--watch", cli, file].concat(hidden), options);
   };
   proc.argv = [proc.argv[0], cli].concat(argv.slice(1));
   either(o.load, require)(cli);
@@ -102,8 +117,12 @@ function loadWebSocket(cli) {
   }
 }
 
-// The detached watchdog: relay between the extension and Playwright, then close the connection's tabs when Playwright goes. `o` replaces the browser launch, the exit, the clock, the ws package and the time limits, for tests.
-function watch(cli, file, browserArgs, o) {
+// The detached watchdog: relay between the extension and Playwright, then close the connection's tabs when Playwright goes. `o` replaces the environment, the browser launch, the exit, the clock, the ws package and the time limits, for tests.
+function watch(cli, file, hiddenArgs, o) {
+  var token = either(either(o.env, process.env).PLAYWRIGHT_MCP_EXTENSION_TOKEN, TOKEN_PLACEHOLDER);
+  var browserArgs = hiddenArgs.map(function (arg) {
+    return replaceAll(arg, TOKEN_PLACEHOLDER, token);
+  });
   var launch = either(o.launch, launchBrowser);
   var exit = either(o.exit, process.exit);
   var closeMs = either(o.closeMs, CLOSE_MS);
@@ -113,7 +132,9 @@ function watch(cli, file, browserArgs, o) {
   var WebSocket = either(o.WebSocket, loadWebSocket(cli));
   if (WebSocket === null) return launch(file, args);
   var ledger = tabLedger(either(o.clock, Date.now));
-  var server = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
+  // An unguessable path, as Playwright's own relay uses, so another local process cannot stand in for the extension.
+  var relayPath = "/extension/" + crypto.randomBytes(16).toString("hex");
+  var server = new WebSocket.Server({ host: "127.0.0.1", port: 0, path: relayPath });
   var giveUp = setTimeout(function () {
     server.close();
     exit(0);
@@ -124,7 +145,7 @@ function watch(cli, file, browserArgs, o) {
     exit(0);
   });
   server.on("listening", function () {
-    page.searchParams.set("mcpRelayUrl", "ws://127.0.0.1:" + server.address().port + "/extension");
+    page.searchParams.set("mcpRelayUrl", "ws://127.0.0.1:" + server.address().port + relayPath);
     args[args.length - 1] = page.toString();
     launch(file, args);
   });
@@ -135,6 +156,8 @@ function watch(cli, file, browserArgs, o) {
     var queued = [];
     var finishing = false;
     var answered = function () {};
+    // A protocol fault ends with a close, which does the cleanup; without a listener it would end the watchdog instead.
+    extension.on("error", function () {});
     extension.on("message", function (data) {
       var text = String(data);
       try {

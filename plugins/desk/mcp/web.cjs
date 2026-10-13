@@ -489,10 +489,17 @@ function scrub(text) {
 }
 
 // The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.
+// Whether an install can start as it is, with no npm run first: it has the reader and ws when a real profile needs them, and a reader that could not be installed is not due for another try.
+function complete(installed, reader, clock) {
+  if (installed === null) return false;
+  if (!reader) return true;
+  var retry = installed.unavailableAt !== undefined && clock() - installed.unavailableAt > READER_RETRY_MS;
+  return installed.reader && !retry && Boolean(installed.ws || installed.unavailableAt);
+}
+
 function ensureInstalled(tools, root, deadline, reader) {
   var installed = readInstalled(root);
-  var retry = installed !== null && installed.unavailableAt !== undefined && tools.clock() - installed.unavailableAt > READER_RETRY_MS;
-  if (installed !== null && (!reader || (installed.reader && !retry && (installed.ws || installed.unavailableAt)))) return Promise.resolve({ installed: installed, fresh: false });
+  if (complete(installed, reader, tools.clock)) return Promise.resolve({ installed: installed, fresh: false });
   // An install that only lacks the reader still works without it, so a failed or crowded retry keeps it.
   var current = installed === null ? null : { installed: installed, fresh: false };
   var lock = path.join(root, "refresh.lock");
@@ -777,7 +784,7 @@ function start(o, io) {
       return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
     });
   }
-  if (readInstalled(root) !== null) {
+  if (complete(readInstalled(root), real, clock)) {
     // An installed copy answers the host's handshake itself, so the host sees its real tool list and nothing is swapped later. A real profile that cannot connect yet (no profile, no extension) is served by the proxy below instead, which tries again at the next call.
     return ready().then(function (outcome) {
       if (outcome.payload) return serve(Promise.resolve(outcome));
@@ -797,7 +804,7 @@ function start(o, io) {
       });
     });
   }
-  // No installed copy: answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
+  // No installed copy, or one that needs npm first (a real profile's reader or ws): answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
   return serve(ready());
   function serve(first) {
     return proxy.serve({

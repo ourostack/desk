@@ -665,10 +665,14 @@ function installNpm(calls, options = {}) {
   }
 }
 
-test("a declaration installs the token reader and ws in the same npm call as Playwright MCP, replacing an install without them", posixOnly, async () => {
+test("a declaration installs the token reader and ws in the same npm call as Playwright MCP, replacing an install without them, while the proxy answers the host", posixOnly, async () => {
   const machine = await realMachine({ reader: false })
   const calls = []
-  const [spawned] = await direct(machine, { npmSpawn: installNpm(calls) })
+  const host = session(machine, { npmSpawn: installNpm(calls) })
+  await host.handshake()
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  await host.close()
+  const [spawned] = machine.spawns
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].slice(-3), ["@playwright/mcp@latest", "classic-level@1.4.1", "ws@8.21.3"])
   assert.equal(spawned.argv[0], REAL_TABS)
@@ -720,8 +724,11 @@ test("a marker younger than a day is not retried", posixOnly, async () => {
 test("a marker older than a day is retried once, and the reader installs when npm works now", posixOnly, async () => {
   const machine = await markedMachine(DAY + 60 * 1000)
   const calls = []
-  const [spawned] = await direct(machine, { npmSpawn: installNpm(calls), requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]) })
-  assert.equal(spawned.argv[0], REAL_TABS)
+  const host = session(machine, { npmSpawn: installNpm(calls), requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]) })
+  await host.handshake()
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  await host.close()
+  assert.equal(machine.spawns[0].argv[0], REAL_TABS)
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].slice(-3), ["@playwright/mcp@latest", "classic-level@1.4.1", "ws@8.21.3"])
   const installed = browser.readInstalled(machine.state)
@@ -766,9 +773,12 @@ test("a stale marker does not make a launch wait for another session's install",
 test("when the reader cannot be installed the existing install is kept and npm's reason goes to stderr without credentials", posixOnly, async () => {
   const machine = await realMachine({ reader: false })
   const noise = "npm error code E401 auth failed for https://me:hunter2@registry.example/ _authToken=abc123 Authorization: Bearer bearer111 and Basic basic222 leaked npm_abcdefghijklmnopqrstuvwxyz0123 here GET https://registry.example/x?token=query333&ok=1 and ?password=query444 end https://u:p@ss/word@registry.example/pkg\n"
-  const spawns = await direct(machine, { npmSpawn: installNpm([], { allFail: true, noise }), stderr: { write: (text) => machine.err = (machine.err ?? "") + text } })
-  assert.equal(spawns[0].argv[0], REAL_TABS, "the kept install still starts with its token, read by the injected reader")
-  const err = machine.err
+  const host = session(machine, { npmSpawn: installNpm([], { allFail: true, noise }) })
+  await host.handshake()
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  await host.close()
+  assert.equal(machine.spawns[0].argv[0], REAL_TABS, "the kept install still starts with its token, read by the injected reader")
+  const err = host.stderr.join("")
   assert.match(err, /could not install the connection reader \(.*\); keeping the install without it/u)
   assert.equal(/hunter2|abc123|me:|bearer111|basic222|npm_abcdef|query333|query444|p@ss|ss\/word/u.test(err), false)
   assert.match(err, /ok=1/u)

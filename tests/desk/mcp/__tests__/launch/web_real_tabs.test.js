@@ -15,6 +15,7 @@ const tabs = require(path.join(mcpRoot, "web-real-tabs.cjs"))
 const RUNNER = path.join(mcpRoot, "web-real-tabs.cjs")
 const CONNECT_PAGE = "chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/connect.html"
 const TOKEN = "tok-9f3a-never-print-me"
+const PLACEHOLDER = "desk-extension-token"
 // The broker's own dependency, installed in CI before this suite runs; Desk installs the same package beside Playwright MCP.
 const WS_DIR = path.join(mcpRoot, "..", "browser-context-broker", "node_modules", "ws")
 const WebSocket = existsSync(WS_DIR) ? require(WS_DIR) : null
@@ -51,6 +52,7 @@ test("the runner routes only the connect-page launch through the watchdog, passe
     assert.equal(cp.spawn("/edge", ["--profile-directory=Default", connectPage("ws://127.0.0.1:1/extension/a")], { detached: true }), "child")
     cp.spawn("/other", ["https://example.com"], { stdio: "ignore" })
     cp.spawn("/other", [])
+    cp.spawn("/other")
     proc.stdout.write(`Page URL: ${connectPage("ws://x")}\n`)
     proc.stderr.write(Buffer.from(`token ${TOKEN}\n`))
     proc.stdout.write(new Uint8Array([65]))
@@ -59,9 +61,11 @@ test("the runner routes only the connect-page launch through the watchdog, passe
   assert.deepEqual(loaded, [cli])
   assert.deepEqual(proc.argv, ["/node", cli, "--extension", "--browser", "msedge"])
   assert.deepEqual(spawns.map(({ file, args, options }) => ({ file, args, options })), [
-    { file: "/node", args: [RUNNER, "--watch", cli, "/edge", "--profile-directory=Default", connectPage("ws://127.0.0.1:1/extension/a")], options: { detached: true } },
+    // The watchdog lives as long as the session, so its command line carries a placeholder; it takes the token from its environment.
+    { file: "/node", args: [RUNNER, "--watch", cli, "/edge", "--profile-directory=Default", connectPage("ws://127.0.0.1:1/extension/a").replace(TOKEN, PLACEHOLDER)], options: { detached: true } },
     { file: "/other", args: ["https://example.com"], options: { stdio: "ignore" } },
     { file: "/other", args: [], options: undefined },
+    { file: "/other", args: undefined, options: undefined },
   ])
   assert.ok(spawns.every((call) => call.self === cp))
   assert.equal(out[0], `Page URL: ${connectPage("ws://x").replace(TOKEN, "<token>")}\n`)
@@ -69,11 +73,23 @@ test("the runner routes only the connect-page launch through the watchdog, passe
   assert.deepEqual(out[2], new Uint8Array([65]))
 })
 
-test("without a token the runner leaves the output streams alone", () => {
+test("without a token the runner leaves the output streams and the connect page alone", () => {
   const { proc } = fakeProcess({})
   const write = proc.stdout.write
-  tabs.run(["cli.js"], { process: proc, childProcess: { spawn() {} }, load: () => {} })
+  const spawns = []
+  const cp = { spawn: (file, args) => spawns.push(args) }
+  tabs.run(["cli.js"], { process: proc, childProcess: cp, load: () => cp.spawn("/edge", [connectPage("ws://x")]) })
   assert.equal(proc.stdout.write, write)
+  assert.equal(spawns[0].at(-1), connectPage("ws://x"))
+})
+
+test("the runner also replaces the token's URL-encoded and JSON-escaped forms", () => {
+  const token = 'a b"c/d'
+  const { proc, out } = fakeProcess({ PLAYWRIGHT_MCP_EXTENSION_TOKEN: token })
+  tabs.run(["cli.js"], { process: proc, childProcess: { spawn() {} }, load: () => {
+    proc.stdout.write(`${token} ${encodeURIComponent(token)} ${JSON.stringify({ token })}\n`)
+  } })
+  assert.equal(out[0], '<token> <token> {"token":"<token>"}\n')
 })
 
 // ---- the watchdog, in process ----
@@ -96,7 +112,8 @@ function watchdog(upstreamUrl, o = {}) {
   const launches = []
   const exits = []
   let now = 0
-  tabs.watch("/no/cli.js", "/browser", ["--profile-directory=Default", connectPage(upstreamUrl)], {
+  tabs.watch("/no/cli.js", "/browser", ["--profile-directory=Default", connectPage(upstreamUrl).replace(TOKEN, PLACEHOLDER)], {
+    env: { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN },
     WebSocket, launch: (file, args) => launches.push({ file, args }), exit: (code) => exits.push(code), clock: () => now, ...o,
   })
   return { launches, exits, advance: (ms) => { now += ms } }
@@ -131,7 +148,7 @@ test("the watchdog relays every message both ways and, when Playwright's side dr
   try {
     const w = watchdog(up.url)
     const extension = await extensionFor(w)
-    assert.match(extension.page.searchParams.get("mcpRelayUrl"), /^ws:\/\/127\.0\.0\.1:\d+\/extension$/u)
+    assert.match(extension.page.searchParams.get("mcpRelayUrl"), /^ws:\/\/127\.0\.0\.1:\d+\/extension\/[0-9a-f]{32}$/u)
     assert.equal(extension.page.searchParams.get("token"), TOKEN)
     assert.equal(w.launches[0].file, "/browser")
     assert.equal(w.launches[0].args[0], "--profile-directory=Default")
@@ -197,6 +214,21 @@ test("when the extension goes first, the watchdog closes Playwright's side, clos
     await wait(() => up.state.closed, "Playwright's side to be closed")
     await wait(() => w.exits.length >= 1, "the watchdog to exit")
     assert.deepEqual(removals(extension), [])
+  } finally {
+    up.server.close()
+  }
+})
+
+test("a protocol fault on the extension's side ends the session like a close instead of ending the watchdog", withWs, async () => {
+  const up = await relay()
+  try {
+    const w = watchdog(up.url)
+    const extension = await extensionFor(w)
+    await wait(() => up.state.socket, "the watchdog to reach Playwright")
+    // A masked text frame whose payload is not UTF-8.
+    extension.socket._socket.write(Buffer.from([0x81, 0x82, 0, 0, 0, 0, 0xff, 0xfe]))
+    await wait(() => up.state.closed, "Playwright's side to be closed")
+    await wait(() => w.exits.length, "the watchdog to exit")
   } finally {
     up.server.close()
   }

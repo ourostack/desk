@@ -29,9 +29,9 @@ When an installed plugin declares `desk.browser` in its `plugin.json`, `desk-web
 
 How it behaves:
 
-- All agents share the one browser. Each session's tabs sit in their own tab group, named `Playwright · <client name>`, and the session sees and drives only those tabs.
+- All agents share the one browser. Each session's tabs sit in their own tab group, named `Playwright · <client name>` (`desk-web` when the session started while Desk was still installing the browser), and the session sees and drives only those tabs.
 - When a session connects, the extension brings the browser window to the front once.
-- When the session ends, by `browser_close`, by its process exiting, or by its process being killed, Desk closes the session's tabs ([web-real-tabs.cjs](../../mcp/web-real-tabs.cjs)). A tab you drag out of the group is no longer the session's and stays open. The next browser call after `browser_close` connects again in a new group.
+- When the session ends, by `browser_close`, by its process exiting, or by its process being killed, Desk closes the session's tabs ([web-real-tabs.cjs](../../mcp/web-real-tabs.cjs)). Tabs the session never drove stay open. The next browser call after `browser_close` connects again in a new group.
 - The connect page's address carries the token; Desk replaces it with `<token>` in everything Playwright MCP sends to the host.
 
 The brokered contexts below are for a provider-backed persistent profile that is not the operator's real one. They do not apply to `desk-web` in this mode.
