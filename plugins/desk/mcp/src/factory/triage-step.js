@@ -166,8 +166,11 @@ const writeAttempts = (env, attempts) => writeProtectedTriageFile(env, ["attempt
 // answers unavailable is a quiet `runner_unavailable` (`runtime_unloadable` unless it named its reason), never a failure: the installed
 // plugin copy may hold no runtime the runner can load. Nothing is loaded until the ledger leaves a launch.
 
-/** The engine-pin alarm's id (`loop_alarm:triage_engine_unpinned`), mirrored from the qualification module's `TRIAGE_ENGINE_CARD`. */
-export const TRIAGE_ENGINE_CARD = "triage_engine_unpinned"
+/**
+ * The engine-pin alarm card (`loop_alarm:triage_engine_unpinned`), the shape of the qualification module's `TRIAGE_ENGINE_CARD`. It
+ * carries no title: the strict card writer takes the title from its own card table.
+ */
+export const TRIAGE_ENGINE_CARD = Object.freeze({ source: "loop_alarm", id: "triage_engine_unpinned" })
 // The qualification states and reasons the restore answers. A reason outside the closed lists reads as the generic one.
 /**
  * Each stale reason, and whether qualifying again can fix it: a mirror of the qualification module's `TRIAGE_STALE_REASONS`, used only
@@ -188,7 +191,7 @@ const staleReasons = (runtime) => {
 async function defaultLocateEngine(env, runtime) {
   const locate = runtime.qualify?.locatePinnedEngine ?? runtime.runner.locatePinnedEngine
   if (typeof locate !== "function") return null
-  const found = await locate(env)
+  const found = await locate({ env })
   const where = typeof found === "string" ? found : found?.path
   return typeof where === "string" && path.isAbsolute(where) ? where : null
 }
@@ -234,7 +237,8 @@ const DEFAULT_IMPLS = {
   reserveAgentLaunch, finishAgentLaunch, createEvaluationContinuation, newestRequestAt,
   readStatus, toSafeTriageReview, writeProtectedTriageFile,
   loadRunner: defaultLoadRunner, hostSupport: (runtime) => runtime.custody.ownedCatalogHostSupport(), restoreQualification: defaultRestore,
-  autoQualify: defaultAutoQualify, locateEngine: defaultLocateEngine, billingVariableBlocks, probeSignIn, runTriageChild: (options, runtime) => runtime.runner.runTriageChild(options),
+  autoQualify: defaultAutoQualify, locateEngine: defaultLocateEngine, childEnvironment: (env, runtime) => runtime.runner.triageChildEnvironment(env),
+  billingVariableBlocks, probeSignIn, runTriageChild: (options, runtime) => runtime.runner.runTriageChild(options),
   evidence: { resolve: resolveSelfDescribing },
 }
 
@@ -667,8 +671,9 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   const unreviewedNow = chosen.selection.coverage.unreviewed + chosen.held
   if (chosen.selection.selected.length === 0) return quiet("nothing_to_review", { unreviewed: unreviewedNow, deferred: 0, reviewed: 0, refused: 0 })
   // Every refusal from here to the reservation is seen without a launch: quiet, nothing reserved, the slot left to the evaluator.
-  const unavailable = (state, reason, qualification) => {
-    record.runner = { state, reason, qualification }
+  // `retryAt` is when the shared ledger said a refused qualification may be tried again; it is kept beside the reason.
+  const unavailable = (state, reason, qualification, retryAt) => {
+    record.runner = { state, reason, qualification, ...(typeof retryAt === "string" && Number.isFinite(Date.parse(retryAt)) ? { retry_at: new Date(retryAt).toISOString() } : {}) }
     return quiet("runner_unavailable", { unreviewed: unreviewedNow })
   }
   const noTime = () => deadlineMs - clock() < TRIAGE_RUN_MS
@@ -684,11 +689,15 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   if (loaded.state === "missing" || (loaded.state === "stale" && reasons[loaded.reason] === true)) {
     // The qualifier makes its own cheap refusals, reserves its own launches and runs at most once a UTC day; `null` is no qualifier.
     const wasWaiting = await evaluationWaiting()
-    const qualified = await swallow(() => functions.autoQualify(env, { lock, deadline: new Date(deadlineMs), generation, legacyEvaluator: status.evaluator, now: ctx.nowAt() }, runtime), { state: "failed", reason: "diagnostic_inadequate", launched: true })
+    // The qualifier reads `now()` as milliseconds and `deadline` as whole milliseconds on the same clock.
+    const options = { lock, deadline: deadlineMs, generation, legacyEvaluator: status.evaluator, now: () => ctx.nowAt().getTime() }
+    const qualified = await swallow(() => functions.autoQualify(env, options, runtime), { state: "failed", reason: "diagnostic_inadequate", launched: true })
     if (qualified !== null) {
       const reason = typeof qualified.reason === "string" ? qualified.reason : null
-      // A qualifier suspended after repeated host-side failures is a failure to see, skipped or not.
-      const state = reason === AUTO_SUSPENDED ? "failed" : ["qualified", "skipped"].includes(qualified.state) ? qualified.state : "failed"
+      // `refused` (a gate, the lock, the ledger, no pinned engine, the sign-in) launched nothing and is quiet like `skipped`. A
+      // qualifier suspended after repeated host-side failures is a failure to see, skipped or not.
+      const known = qualified.state === "refused" ? "skipped" : qualified.state
+      const state = reason === AUTO_SUSPENDED ? "failed" : ["qualified", "skipped"].includes(known) ? known : "failed"
       // A qualifier that launched took this generation's agent slot, and owes a waiting evaluation its continuation like any launch.
       if (qualified.launched !== false) {
         record.launched = true
@@ -702,7 +711,8 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
         record.runner = { state: "qualifying", reason, qualification: "failed" }
         return finish(false, "qualification_failed", { unreviewed: unreviewedNow })
       }
-      if (state === "skipped") return unavailable("scope_unqualified", reason, loaded.state)
+      // Skipped because the record is qualified after all: restore it again and go on.
+      if (state === "skipped" && reason !== "qualified") return unavailable("scope_unqualified", reason, loaded.state, qualified.retry_at)
       loaded = await restore()
     }
   }
@@ -717,7 +727,11 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   // 7. Time for a whole run, asked before anything is started or prepared; then the engine's own sign-in.
   if (noTime()) return quiet("no_time_for_a_run", { unreviewed: unreviewedNow })
   const engine = await swallow(() => functions.locateEngine(env, runtime), null)
-  const signIn = engine === null ? null : (await swallow(() => functions.probeSignIn({ cli: engine, env, onChild, onChildExit }), null))?.state
+  if (engine === null) return unavailable("sign_in_unknown", null, "loaded")
+  // The sign-in is asked in the environment the runner launches with.
+  const childEnv = await swallow(() => functions.childEnvironment(env, runtime), null)
+  if (childEnv === null) return unavailable("environment_unsafe", null, "loaded")
+  const signIn = (await swallow(() => functions.probeSignIn({ cli: engine, env: childEnv, onChild, onChildExit }), null))?.state
   if (signIn !== "subscription") return unavailable(["no_credentials", "disabled_would_bill"].includes(signIn) ? signIn : "sign_in_unknown", null, "loaded")
 
   // 8. Prepare the run's protected input.

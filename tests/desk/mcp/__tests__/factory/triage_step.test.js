@@ -6,7 +6,7 @@ import assert from "node:assert/strict"
 import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 
-import { MAX_CARD_FILES, cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { LOOP_ALARMS, MAX_CARD_FILES, cardFile, openImprovement, readCards } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { evaluateDue, newestRequestAt, triageKickDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { createEvaluationContinuation, evaluationQuotaOpen, finishAgentLaunch, reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
 import { runMeasureStep } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
@@ -649,9 +649,18 @@ test("refusals seen before a launch spend nothing: a billing variable, no sign-i
   // A billing variable: the person's decision, seen before the record is even loaded.
   await quietly({ ...w, env: { ...w.env, ANTHROPIC_API_KEY: "placeholder" } }, guarded({ restoreQualification: never("not loaded"), probeSignIn: never("not probed") }), { state: "disabled_would_bill", reason: null, qualification: "not_checked" })
   // The engine's own sign-in, asked of the qualified engine before anything is prepared.
+  // It is asked in the environment the runner launches with (`triageChildEnvironment`), never the raw one.
   const asked = []
-  await quietly(w, guarded({ probeSignIn: async (options) => { asked.push([options.cli, options.env === w.env]); return { state: "no_credentials" } } }), { state: "no_credentials", reason: null, qualification: "loaded" })
-  assert.deepEqual(asked, [["/opt/engine/claude", true]])
+  const childEnv = { HOME: "/home/child" }
+  await quietly(w, guarded({ childEnvironment: async (env, runtime) => { asked.push(["child", env === w.env, runtime === FAKE_RUNTIME]); return childEnv }, probeSignIn: async (options) => { asked.push([options.cli, options.env === childEnv]); return { state: "no_credentials" } } }), { state: "no_credentials", reason: null, qualification: "loaded" })
+  assert.deepEqual(asked, [["child", true, true], ["/opt/engine/claude", true]])
+  // An environment the runner would refuse is quiet, and nothing is probed; the default asks the runtime's own `triageChildEnvironment`.
+  await quietly(w, guarded({ childEnvironment: async () => { throw new Error("environment_unsafe") }, probeSignIn: never("not probed") }), { state: "environment_unsafe", reason: null, qualification: "loaded" })
+  const { childEnvironment: _child, ...ownChild } = guarded({ loadRunner: async () => ({ ...FAKE_RUNTIME, runner: { triageChildEnvironment: (env) => ({ ...env, CHILD: "1" }) } }), probeSignIn: async (options) => { asked.push(options.env.CHILD); return { state: "no_credentials" } } })
+  await quietly(w, ownChild, { state: "no_credentials", reason: null, qualification: "loaded" })
+  const { childEnvironment: _none, ...noChild } = guarded({ probeSignIn: never("not probed") })
+  await quietly(w, noChild, { state: "environment_unsafe", reason: null, qualification: "loaded" })
+  assert.equal(asked.at(-1), "1")
   await quietly(w, guarded({ probeSignIn: async () => ({ state: "disabled_would_bill" }) }), { state: "disabled_would_bill", reason: null, qualification: "loaded" })
   await quietly(w, guarded({ probeSignIn: async () => ({ state: "something_new" }) }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
   await quietly(w, guarded({ probeSignIn: async () => { throw new Error("no engine") } }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
@@ -659,7 +668,8 @@ test("refusals seen before a launch spend nothing: a billing variable, no sign-i
   const noProbe = never("not probed")
   await quietly(w, guarded({ locateEngine: async () => null, probeSignIn: noProbe }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
   const located = []
-  const runtimeWith = (locatePinnedEngine) => async () => ({ ...FAKE_RUNTIME, qualify: locatePinnedEngine === undefined ? {} : { locatePinnedEngine } })
+  const locateCalls = []
+  const runtimeWith = (locatePinnedEngine) => async () => ({ ...FAKE_RUNTIME, qualify: locatePinnedEngine === undefined ? {} : { locatePinnedEngine: (options) => { locateCalls.push(options); return locatePinnedEngine(options) } } })
   for (const [locatePinnedEngine, found] of [[async () => "/opt/pinned/claude", "/opt/pinned/claude"], [async () => ({ path: "/opt/pinned/other" }), "/opt/pinned/other"], [async () => ({ path: "relative/claude" }), null], [async () => null, null], [undefined, null]]) {
     const { locateEngine: _seam, ...ownLocator } = guarded({ loadRunner: runtimeWith(locatePinnedEngine), probeSignIn: async (options) => { located.push(options.cli); return { state: "no_credentials" } } })
     const probes = located.length
@@ -668,6 +678,8 @@ test("refusals seen before a launch spend nothing: a billing variable, no sign-i
     assert.equal(located.length, probes + (found === null ? 0 : 1))
   }
   assert.deepEqual(located, ["/opt/pinned/claude", "/opt/pinned/other"])
+  assert.deepEqual(locateCalls.map((options) => Object.keys(options)), [["env"], ["env"], ["env"], ["env"]], "the locator takes { env }")
+  assert.ok(locateCalls.every((options) => options.env === w.env))
   // The real probe on an engine that does not exist answers without a launch too.
   const { probeSignIn: _fake, ...realProbe } = guarded()
   const probed = await step(w, { seams: realProbe })
@@ -808,7 +820,8 @@ test("the restore's answer: the runner's own restore is used when it has one, it
   const runs = []
   const ran = await step(w, { now: at(1), seams: { ...viaRuntime, reserveAgentLaunch, loadRunner: async () => runtime({ state: "qualified", qualification }), runTriageChild: async (options, loaded) => { runs.push([options.qualification, loaded.state]); return fakeRunner()(options) } } })
   assert.deepEqual([ran.result, ran.reviewed, runs], ["ran", 1, [[qualification, "loaded"]]])
-  assert.equal(TRIAGE_ENGINE_CARD, "triage_engine_unpinned")
+  assert.deepEqual(TRIAGE_ENGINE_CARD, { source: "loop_alarm", id: "triage_engine_unpinned" })
+  assert.ok(LOOP_ALARMS.includes(TRIAGE_ENGINE_CARD.id))
 })
 
 test("a missing or requalifiable record asks the qualifier first; a launch it made takes the slot, and only its failure counts", { skip: NEEDS_PREPARED_RUN }, async () => {
@@ -831,11 +844,16 @@ test("a missing or requalifiable record asks the qualifier first; a launch it ma
   // Launched and qualified: the slot is spent, the evaluation it deferred gets its continuation, and the run is a success.
   let w = await fresh()
   const lock = { proof: "the worker's lock" }
-  const qualified = await step(w, { generation: "gen-q", lock, seams: seams({ qualify: { state: "qualified", reason: null, launched: true }, ...noRun }) })
+  let clockNow = at(0).getTime()
+  const deadline = new Date(clockNow + 17 * 60 * 1000)
+  const qualified = await step(w, { generation: "gen-q", lock, deadline, seams: seams({ clock: () => clockNow, qualify: () => { clockNow += 1000; return { state: "qualified", reason: null, launched: true } }, ...noRun }) })
   assert.deepEqual([qualified.result, qualified.ok, qualified.launched, qualified.continuation?.state], ["runner_qualified", true, true, "issued"])
   const [options, sameRuntime] = calls.at(-1)
+  // The qualifier's own shapes: `now` a function answering milliseconds, `deadline` whole milliseconds on the same clock.
   assert.deepEqual(Object.keys(options).sort(), ["deadline", "generation", "legacyEvaluator", "lock", "now"])
-  assert.deepEqual([options.now instanceof Date, options.deadline instanceof Date, options.generation, options.lock, sameRuntime], [true, true, "gen-q", lock, true])
+  assert.deepEqual([typeof options.now, options.deadline, options.generation, options.lock, sameRuntime], ["function", deadline.getTime(), "gen-q", lock, true])
+  assert.ok(Number.isSafeInteger(options.deadline) && Number.isSafeInteger(options.now()))
+  assert.equal(options.now(), at(0).getTime() + 1000, "now() follows the step's clock")
   assert.deepEqual(options.legacyEvaluator, (await readStatus(w.env)).evaluator)
   let status = await readStatus(w.env)
   assert.deepEqual([status.triage.runner, status.triage.run.failures_in_a_row, status.triage.run.last_result], [{ state: "qualifying", reason: null, qualification: "qualified" }, 0, "runner_qualified"])
@@ -875,6 +893,35 @@ test("a missing or requalifiable record asks the qualifier first; a launch it ma
   assert.equal((await readStatus(w.env)).triage.run.failures_in_a_row, 1)
   const ready = await step(w, { seams: seams({ restore: [{ state: "missing" }, { state: "qualified", qualification: { state: "qualified" } }], qualify: { state: "qualified", launched: false } }) })
   assert.deepEqual([ready.result, ready.ok, ready.launched, ready.reviewed], ["ran", true, true, 1])
+  // Skipped because the record qualified meanwhile: restored again, and the run goes on.
+  w = await fresh()
+  const already = await step(w, { seams: seams({ restore: [{ state: "missing" }, { state: "qualified", qualification: { state: "qualified" } }], qualify: { state: "skipped", reason: "qualified", launched: false } }) })
+  assert.deepEqual([already.result, already.launched, already.reviewed], ["ran", true, 1])
+
+  // Refused (a gate, the lock, the ledger, no pinned engine, the sign-in, an unsafe environment) launched nothing: quiet, with its reason.
+  for (const reason of ["host_unsupported", "headless_session", "lock_not_held", "quota_exhausted", "no_credentials", "environment_unsafe", "engine_unpinned"]) {
+    w = await fresh()
+    const refused = await step(w, { seams: seams({ qualify: { state: "refused", reason, launched: false }, ...noRun }) })
+    assert.deepEqual([refused.result, refused.ok, refused.launched], ["runner_unavailable", true, false], reason)
+    const status = await readStatus(w.env)
+    assert.deepEqual([status.triage.runner, status.triage.run.failures_in_a_row, status.loop.steps.triage.failures_in_a_row], [{ state: "scope_unqualified", reason, qualification: "missing" }, 0, 0], reason)
+  }
+  // The ledger's answers carry when to try again: a read-only peek (`skipped`) and a refused reservation (`refused`) are both quiet,
+  // with the reason and `retry_at` in the status. A time that is not one is left out.
+  const retryAt = at(6).toISOString()
+  for (const [state, given, kept] of [["skipped", retryAt, retryAt], ["refused", retryAt, retryAt], ["refused", "soon", undefined], ["skipped", 7, undefined]]) {
+    w = await fresh()
+    const waiting = await step(w, { seams: seams({ qualify: { state, reason: "quota_exhausted", launched: false, retry_at: given }, ...noRun }) })
+    assert.deepEqual([waiting.result, waiting.ok, waiting.launched], ["runner_unavailable", true, false])
+    const status = await readStatus(w.env)
+    assert.deepEqual(status.triage.runner, { state: "scope_unqualified", reason: "quota_exhausted", qualification: "missing", ...(kept === undefined ? {} : { retry_at: kept }) })
+    assert.equal(status.loop.steps.triage.failures, 0)
+  }
+  w = await fresh()
+  await step(w, { seams: seams({ qualify: { state: "refused", reason: "engine_unpinned", launched: false }, ...noRun }) })
+  // No pinned engine is one cause and one card: the engine-pin alarm reads the runner's reason, and the step's streak never moves.
+  const pinned = await readStatus(w.env)
+  assert.deepEqual([pinned.triage.runner.reason, pinned.loop.steps.triage.failures], ["engine_unpinned", 0])
 
   // A qualifier suspended after repeated host-side failures is a counted failure with its reason, whether it says skipped or failed.
   for (const suspended of ["skipped", "failed"]) {
