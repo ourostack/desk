@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.312 — 2026-10-13
+
+The comment on `idle()` in [`mcp/src/runtime/admission.js`](mcp/src/runtime/admission.js) now says what it does: it waits for the admission attempt that is running when it is called, so another attempt can be running when it resolves. Behaviour is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.311 — 2026-10-13
+
+Factory triage annotations can now reach a factory store. An annotation this machine wrote and the desk's remote acknowledged goes to the store this desk routes to, as one immutable `triage/<batch>.json` file in the existing intake pull request, built only from closed codes, random IDs and pointers the flush has just found public. Nothing is sent until the store's default branch holds a `triage.json` of exactly `{"triage":1}`, read again in every flush that publishes, and only from an account with push permission on the store. A refused batch never quarantines facts, and a batch counts as delivered only when the store's default branch holds its exact bytes; a path that holds other bytes gets a fresh batch, never a change. Visibility is asked afresh for every repository a waiting or new batch names, and a batch that names one no longer public is rebuilt without it. A batch staged before the desk's route changed is not sent. Each machine keeps one coverage generation per store and sends its delivered reviews again about every 48 hours, byte for byte, so a quiet queue stays current at the store; a row's `age` is now `stale` or `recent` from the annotation alone. Three refusals of the same rows stop the resending, an error in the triage code never stops facts, and a damaged outbox state file is moved aside, not overwritten. `status.json` gains a `triage_publication` summary per store, which `factory.js status` prints, and the factory status that `desk_status` reports gains a `triage_publication` health entry per contributing store (`held`, `not_published`, `source_incomplete`, `stale` after 72 hours, or `current`), with one `desk_doctor` line when a hold or wait is older than three days. See [Publishing triage to the store](docs/factory-local-capture.md#publishing-triage-to-the-store).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.310 — 2026-10-13
 
 On Windows, `desk_status` no longer fails when its inspection child exits by itself at the moment Desk tries to stop it ([`mcp/src/runtime/status-inspection.js`](mcp/src/runtime/status-inspection.js)). A stop signal that finds no process is now a failure only if the child has still not exited when the wait for it ends. A runtime status that does fail is now reported as `status_error` instead of being served as the status detail, where it read as a ready answer that named no desk.

@@ -152,7 +152,7 @@ export function createAdmission({
     return snapshot()
   }
 
-  /** Wait until no attempt is running (at most `waitMs`). */
+  /** Wait for the attempt that is running when this is called (at most `waitMs`). Another attempt may already be running when it resolves: a degraded session re-admits at once, and a forced or fresh refresh queues one behind the running attempt. A caller that needs none running asks again while `running` is set. */
   async function idle({ waitMs = 10000 } = {}) {
     if (!running) return snapshot()
     return refresh({ waitMs })
