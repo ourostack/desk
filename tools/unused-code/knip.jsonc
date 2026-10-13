@@ -83,6 +83,8 @@
         "bootstrap.cjs",
         "web.cjs",
         "web-proxy.cjs",
+        // web.cjs starts Playwright MCP through this runner by path, not a static import.
+        "web-real-tabs.cjs",
         "scripts/*.{js,mjs}",
         // Playwright loads this callback through --init-page, not a static import.
         "scripts/real-profile-page.cjs",
