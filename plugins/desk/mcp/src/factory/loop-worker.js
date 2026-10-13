@@ -287,7 +287,7 @@ export async function runLoopWorker(env, {
   // A worker whose evaluator step accepted a job's labels (`evaluator.accepted_last_step`) starts the next one once its lock is free, so the queue drains back to back. The kick starts
   // one only while a job the runner can run today is left within the day's ceiling (`evaluateDue`); a kick that fails changes nothing here.
   // A triage-only generation that minted a new evaluation continuation kicks once instead; never both, and never for a triage that failed.
-  if (outcome.steps.evaluate === "ran" && (await swallow(async () => (await readStatusImpl(env))?.evaluator?.accepted_last_step > 0)) === true) await swallow(() => functions.kick(env))
-  else if (ctx.continuation) await swallow(() => functions.kick(env, { continuation: true }))
+  if (outcome.steps.evaluate === "ran" && (await swallow(async () => (await readStatusImpl(env))?.evaluator?.accepted_last_step > 0)) === true) await swallow(() => functions.kick(env, { scope: { deskRoot, personPrefix } }))
+  else if (ctx.continuation) await swallow(() => functions.kick(env, { continuation: true, scope: { deskRoot, personPrefix } }))
   return outcome
 }

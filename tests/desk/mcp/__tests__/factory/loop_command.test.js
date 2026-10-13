@@ -670,7 +670,7 @@ test("one_agent_slot_and_one_continuation", { skip: NEEDS_PREPARED_RUN }, async 
   assert.equal(after.loop.steps.evaluate, undefined, "a deferred evaluation is not recorded as a run")
   const token = after.loop.evaluation_continuation
   assert.equal(typeof token, "object")
-  assert.deepEqual(first.kicks, [{ options: { continuation: true }, lock: "free" }], "exactly one kick, after the lock is released")
+  assert.deepEqual(first.kicks, [{ options: { continuation: true, scope: { deskRoot: w.deskRoot, personPrefix: "" } }, lock: "free" }], "exactly one kick, after the lock is released")
   assert.deepEqual(first.log.find(([name]) => name === "measure")[1].attempted, ["route", "triage", "mirror", "reconcile", "verify"])
   // Generation two: the evaluator consumes the token under the lock and runs; triage's window is used, so the slot is the evaluator's.
   const second = await generation()
@@ -754,5 +754,5 @@ test("a triage that failed, or that found a continuation already issued, starts 
   impls.kick = async (env, options) => { calls.push(options); throw new Error("PRIVATE kick") }
   await fs.rm(path.join(await factoryStateRoot(ctx.env), "status.json"), { force: true })
   await runLoopWorker(ctx.env, { deskRoot: ctx.desk, pluginVersion: "9.9.9", impls })
-  assert.deepEqual(calls, [{ continuation: true }], "one kick; a kick that fails is not retried")
+  assert.deepEqual(calls, [{ continuation: true, scope: { deskRoot: ctx.desk, personPrefix: "" } }], "one kick; a kick that fails is not retried")
 }))

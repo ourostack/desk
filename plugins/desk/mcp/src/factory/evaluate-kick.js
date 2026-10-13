@@ -46,7 +46,7 @@ import { isHeadlessFactorySession } from "./headless-flag.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
 import { evaluationQuotaOpen, quotaFor, validWitness } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
-import { factoryStateRoot, listEvaluationRequests, readStatus } from "./outbox.js"
+import { factoryStateRoot, listEvaluationRequests, readStatus, updateStatus } from "./outbox.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
 
@@ -56,6 +56,7 @@ export const LOOP_LOCK_NAME = "loop-worker.running"
 export const KICK_LOCK_AGE_MS = 22 * 60 * 1000
 /** The launcher the kick starts, the one the session-start hook starts. */
 export const LOOP_START_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "hooks", "loop-start.cjs")
+export const LOOP_SCOPE_ENV = "DESK_FACTORY_LOOP_SCOPE"
 
 /** `newestRequestAt(env) -> number | null`: the newest waiting evaluation request's own time in milliseconds, `null` when none waits. */
 export async function newestRequestAt(env) {
@@ -65,6 +66,31 @@ export async function newestRequestAt(env) {
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value)
 const tally = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0)
+const PREFIX = /^(?:|desks\/(?!\.{1,2}$)[^/\\]+)$/u
+
+/** An explicit caller scope, or the scope the verified launcher carried into its worker. No context means no triage hint. */
+export function loopScopeFor(env, scope) {
+  if (scope === undefined) {
+    try { scope = JSON.parse(env[LOOP_SCOPE_ENV]) } catch { return null }
+  }
+  return isObject(scope) && typeof scope.deskRoot === "string" && path.isAbsolute(scope.deskRoot) &&
+    typeof scope.personPrefix === "string" && PREFIX.test(scope.personPrefix)
+    ? { deskRoot: path.resolve(scope.deskRoot), personPrefix: scope.personPrefix } : null
+}
+const scopeKey = (scope) => JSON.stringify([scope.deskRoot, scope.personPrefix])
+
+// A missing observation is not healthy. Readable old history only asks for one fresh observation of the positively resolved
+// active scope. A requested-but-unobserved pass keeps the normal retry gap, so a busy/failed spawn never loses the opportunity.
+function needsObservation(status, scope, now) {
+  if (scope === null) return false
+  const scopes = status?.triage_by_desk
+  if (scopes !== undefined && (!isObject(scopes) || scopes[scopeKey(scope)] !== undefined)) return false
+  if (!isObject(status?.triage) && !(isObject(scopes) && Object.keys(scopes).length > 0)) return false
+  const requested = status?.triage_reobserve
+  if (requested !== undefined && !isObject(requested)) return false
+  const last = requested?.[scopeKey(scope)]
+  return last === undefined || (typeof last === "string" && Number.isFinite(Date.parse(last)) && now - Date.parse(last) >= TRIAGE_KICK_GAP_MS)
+}
 
 /**
  * `evaluateDue(status, now, { newWorkAt, kick }) -> boolean`: whether the evaluator step is due. The loop worker asks without `kick`: the step's
@@ -119,12 +145,14 @@ export function triageQuotaFor(status, nowMs) {
  * reach the step is not kicked at every turn's end. Never while the step's last pass failed or its last agent run failed
  * (`status.triage.ok`, `status.triage.run.failures_in_a_row`): the next session-start worker retries, so a failure is not kicked every hour.
  */
-export function triageKickDue(status, now) {
+export function triageKickDue(status, now, scope = null) {
+  if (scope === null || !isObject(status?.triage_by_desk)) return false
   const nowMs = new Date(now).getTime()
-  const triage = isObject(status?.triage) ? status.triage : null
-  const ranAt = Date.parse(status?.loop?.steps?.triage?.last_ran_at)
+  const observed = status.triage_by_desk[scopeKey(scope)]
+  const triage = isObject(observed) ? observed : null
+  const ranAt = Date.parse(triage?.at)
   if (triage === null || Number.isNaN(ranAt) || nowMs - ranAt < TRIAGE_KICK_GAP_MS) return false
-  if (triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
+  if (triage.result === "no_consenting_store" || triage.ok === false || tally(triage.run?.failures_in_a_row) > 0) return false
   if (TRIAGE_RUNNER_UNAVAILABLE.has(triage.runner?.state) || !(Number.isSafeInteger(triage.eligible) && triage.eligible > 0)) return false
   return ["ok", "unwitnessed"].includes(triageQuotaFor(status, nowMs))
 }
@@ -135,23 +163,26 @@ export function triageKickDue(status, now) {
  * `reason` is `due`, `continuation`, `headless_session`, `disabled`, `no_factory_state`, `no_requests` (no request waits and triage is
  * not due), `worker_running` or `not_due`. It never throws: anything it cannot read is `unreadable`, which starts nothing.
  */
-export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl = readStatus, continuation = false } = {}) {
+export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl = readStatus, continuation = false, scope } = {}) {
   if (isHeadlessFactorySession(env)) return { due: false, reason: "headless_session" }
   if (!isLoopEnabled(env)) return { due: false, reason: "disabled" }
   try {
     const root = await factoryStateRoot(env, { create: false })
     if (root === null) return { due: false, reason: "no_factory_state" }
+    const active = loopScopeFor(env, scope)
+    const context = active === null ? {} : { scope: active }
     if (continuation) {
       if (await workerRunning(root, now)) return { due: false, reason: "worker_running" }
-      return { due: true, reason: "continuation" }
+      return { due: true, reason: "continuation", ...context }
     }
     const newest = await newestRequestAt(env)
     const status = await readStatusImpl(env)
-    const triage = triageKickDue(status, now)
-    if (newest === null && !triage) return { due: false, reason: "no_requests" }
+    const triage = triageKickDue(status, now, active)
+    const reobserve = needsObservation(status, active, now)
+    if (newest === null && !triage && !reobserve) return { due: false, reason: "no_requests" }
     if (await workerRunning(root, now)) return { due: false, reason: "worker_running" }
-    const due = triage || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
-    return { due, reason: due ? "due" : "not_due" }
+    const due = triage || reobserve || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
+    return { due, reason: reobserve ? "triage_reobserve" : due ? "due" : "not_due", ...context, ...(reobserve ? { reobserve: true } : {}) }
   } catch {
     return { due: false, reason: "unreadable" }
   }
@@ -178,11 +209,23 @@ async function workerRunning(root, now) {
  * `spawn_failed`; nothing retries it. `continuation` (true) is the one kick a triage-only worker owes its deferred evaluation. `spawn` and
  * `execPath` are seams for tests.
  */
-export async function kickLoop(env, { now = Date.now(), spawn = nodeSpawn, execPath = process.execPath, readStatusImpl = readStatus, continuation = false } = {}) {
-  const { due, reason } = await evaluationKickDue(env, { now, readStatusImpl, continuation })
+export async function kickLoop(env, { now = Date.now(), spawn = nodeSpawn, execPath = process.execPath, readStatusImpl = readStatus, continuation = false, scope, updateStatusImpl = updateStatus } = {}) {
+  const { due, reason, scope: active, reobserve } = await evaluationKickDue(env, { now, readStatusImpl, continuation, scope })
   if (!due) return { kicked: false, reason }
+  if (reobserve) {
+    let requested = false
+    try {
+      await updateStatusImpl(env, (status) => {
+        if (!needsObservation(status, active, now)) return status
+        requested = true
+        return { ...status, triage_reobserve: { ...status.triage_reobserve, [scopeKey(active)]: new Date(now).toISOString() } }
+      })
+    } catch { return { kicked: false, reason: "unreadable" } }
+    if (!requested) return { kicked: false, reason: "not_due" }
+  }
   try {
-    const child = spawn(execPath, [LOOP_START_SCRIPT], { detached: true, stdio: "ignore", windowsHide: true, env })
+    const args = active === undefined ? [] : ["--desk", active.deskRoot, "--person-prefix", active.personPrefix]
+    const child = await spawn(execPath, [LOOP_START_SCRIPT, ...args], { detached: true, stdio: "ignore", windowsHide: true, env })
     child.once?.("error", () => {})
     child.unref?.()
     return { kicked: true, reason }

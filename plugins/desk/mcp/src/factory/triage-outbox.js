@@ -133,6 +133,8 @@ const validState = (value) =>
   isPlainObject(value.rows) && Object.values(value.rows).every((entry) => isPlainObject(entry) && isPlainObject(entry.row) && typeof entry.desk_root === "string" && typeof entry.key === "string" && typeof entry.person_prefix === "string" && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)) &&
   optional(value.held, (held) => isPlainObject(held) && typeof held.code === "string" && isTime(held.until)) &&
   optional(value.coverage, isPlainObject) && optional(value.published, isPlainObject) && optional(value.held_requests, isPlainObject) && optional(value.scan_desk, (root) => typeof root === "string") &&
+  optional(value.scan_person_prefix, (prefix) => typeof prefix === "string") &&
+  optional(value.runner_success, (witness) => isPlainObject(witness) && typeof witness.store === "string" && typeof witness.desk_root === "string" && typeof witness.person_prefix === "string" && optional(witness.at, (at) => at === null || isTime(at))) &&
   optional(value.dropped, (dropped) => isPlainObject(dropped) && Object.values(dropped).every((entry) => isPlainObject(entry) && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)))
 const VALID_STATE = { isValid: (value) => value === null || (isPlainObject(value) && validState(value)) }
 const stateOf = (value) => value ?? { schema: STATE_SCHEMA, generation: hex(16), requests: {}, pending: [], emitted: {}, rows: {} }
@@ -195,13 +197,22 @@ export async function settleTriageEmission(env, { store, key, written, operation
  * `runner` the runner's state code or null. The stored coverage is the public shape without its generation. Refused and deferred
  * counts come from the last step that knew them and stay null until a run has completed. Every count of an incomplete scan is null.
  */
-export async function recordTriageCoverage(env, { store, coverage, counts, runner, now, deskRoot }) {
+const ownerMatches = (entry, deskRoot, personPrefix) => entry?.desk_root === deskRoot && entry.person_prefix === personPrefix
+const ownedEntries = (state) => [...Object.entries(state.requests).map(([key, entry]) => ({ ...entry, key })), ...Object.values(state.rows)]
+const ownsReview = (state, deskRoot, personPrefix, review) => isPlainObject(review) &&
+  ownedEntries(state).some((entry) => ownerMatches(entry, deskRoot, personPrefix) && entry.key === review.key && entry.revision === review.revision)
+
+export async function recordTriageCoverage(env, { store, coverage, counts, runner, now, deskRoot, personPrefix = "", lastSuccessAt = null, lastSuccessStore = null, lastReview = null }) {
   await update(env, store, (state) => {
     const complete = coverage.scan === "complete"
     const added = count(counts.reviewed) ?? 0
     const run = { refused: count(counts.refused) ?? state.run_counts?.refused ?? null, deferred: count(counts.deferred) ?? state.run_counts?.deferred ?? null }
     const reviewed = complete ? count(coverage.reviewed) : null
     const unreviewed = complete ? count(coverage.unreviewed) : null
+    // An omitted witness time is unknown history; only an existing null witness establishes "never".
+    const success = isTime(lastSuccessAt) && (lastSuccessStore === store.toLowerCase() ||
+      (lastSuccessStore == null && lastReview?.at === lastSuccessAt && ownsReview(state, deskRoot, personPrefix, lastReview)))
+      ? lastSuccessAt : ownerMatches(state.runner_success, deskRoot, personPrefix) && state.runner_success.store === store.toLowerCase() ? state.runner_success.at : undefined
     return {
       ...state,
       coverage: {
@@ -214,6 +225,8 @@ export async function recordTriageCoverage(env, { store, coverage, counts, runne
       },
       scan_at: iso(now),
       scan_desk: deskRoot,
+      scan_person_prefix: personPrefix,
+      runner_success: typeof deskRoot === "string" ? { store: store.toLowerCase(), desk_root: deskRoot, person_prefix: personPrefix, at: success } : state.runner_success,
       run_counts: run,
       runner_state: TRIAGE_RUNNER_STATES.includes(runner) ? runner : state.runner_state ?? null,
     }
@@ -654,9 +667,24 @@ async function deliver(env, store, record, now) {
 const pointersOfRow = (row) => [...row.evidence, ...row.basis.evidence_revisions]
 const pointersOfAnnotation = (annotation) => [...(annotation.review?.evidence ?? []), ...annotation.basis.public_evidence_revisions]
 
-const publicRunner = (state, status, now) => {
-  const last = status.triage?.last_success_at
-  return { state: state.runner_state, last_success_age: typeof last === "string" ? coarseAge(now - Date.parse(last)) : "never" }
+const publicRunner = (state, status, now, store) => {
+  if (state.runner_success !== undefined) {
+    const witness = state.runner_success
+    if (!ownerMatches(witness, state.scan_desk, state.scan_person_prefix) || witness.store !== store.toLowerCase()) return { state: state.runner_state, last_success_age: "unknown" }
+    return { state: state.runner_state, last_success_age: witness.at === undefined ? "unknown" : witness.at === null ? "never" : coarseAge(now - Date.parse(witness.at)) }
+  }
+  // Earlier outboxes have no witness. Only a scoped native review paired with this store's own transport metadata can restore it.
+  // Never attribute the latest global diagnostic, or an unscoped legacy success, to a publishing desk.
+  const matches = new Map()
+  for (const entry of ownedEntries(state)) {
+    if (entry.desk_root !== state.scan_desk || (state.scan_person_prefix !== undefined && entry.person_prefix !== state.scan_person_prefix)) continue
+    const key = JSON.stringify([entry.desk_root, entry.person_prefix])
+    const observation = status.triage_by_desk?.[key]
+    if (isTime(observation?.last_success_at) && observation.last_review?.at === observation.last_success_at &&
+        observation.last_review.key === entry.key && observation.last_review.revision === entry.revision &&
+        (observation.last_success_store === undefined || observation.last_success_store === store.toLowerCase())) matches.set(key, observation.last_success_at)
+  }
+  return { state: state.runner_state, last_success_age: matches.size === 1 ? coarseAge(now - Date.parse([...matches.values()][0])) : "unknown" }
 }
 
 /**
@@ -728,7 +756,7 @@ export async function prepareTriage(env, { store, plan, client, ref, direct, con
 
   state = await readState(env, store)
   const coverage = { generation: state.generation, ...state.coverage }
-  const runner = publicRunner(state, status, now)
+  const runner = publicRunner(state, status, now, store)
   const items = []
   const stage = async (projection, options) => {
     const staged = await stageTriageBatch(env, { store, projection, now, ...options })

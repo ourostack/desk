@@ -11,7 +11,7 @@ import { evaluateDue, newestRequestAt, triageKickDue } from "../../../../../plug
 import { createEvaluationContinuation, evaluationQuotaOpen, finishAgentLaunch, reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
 import { runMeasureStep } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 import { staleSteps } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
-import { factoryStateRoot, readStatus, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus, readTriageOutbox, setConsent, updateStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { prepareTriageCatalog, readTriagePreparedFile } from "../../../../../plugins/desk/mcp/src/factory/triage-catalog.js"
 import { readTriageBasis } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
 import { refreshTriage, triagePaths } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
@@ -45,6 +45,32 @@ async function step(w, { now = at(0), seams = qualifiedSeams(), deadline = later
 const runFolders = async (w) => (await fs.readdir(path.join(await factoryStateRoot(w.env), "triage", "runs")).catch(() => [])).sort()
 
 const annotation = (w, key) => remoteJson(w.origin, triagePaths(w.deskRoot, "", key).annotation)
+
+test("a nonconsenting desk cannot erase another desk's due triage or inherit its run health", async () => {
+  const w = await triageWorld({ now: at(0) })
+  await step(w, { seams: qualifiedSeams({ loadRunner: async () => ({ state: "unavailable" }) }) })
+  // A known eligible queue, not a launched run. No quota is spent by the blocked host.
+  await updateStatus(w.env, (status) => ({
+    ...status, triage: { ...status.triage, eligible: 3, runner: { state: "qualified" } },
+    triage_by_desk: {
+      [JSON.stringify([path.resolve(w.deskRoot), ""])]: { ...status.triage, eligible: 3, runner: { state: "qualified" } },
+    },
+  }))
+  const before = await readStatus(w.env)
+  const other = path.join(w.deskRoot, "other-desk")
+  const publication = await readTriageOutbox(w.env, STORE, "state.json")
+  await fs.mkdir(path.join(other, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(other, "_meta", "factory.json"), JSON.stringify({ schema_version: 1, store: "private/not-consented" }))
+  const result = await runTriageStep(w.env, { deskRoot: other, now: at(2), deadline: later() })
+  assert.equal(result.result, "no_consenting_store")
+  const after = await readStatus(w.env)
+  const key = JSON.stringify([path.resolve(w.deskRoot), ""])
+  assert.deepEqual(after.triage_by_desk[key], before.triage_by_desk[key])
+  assert.equal(triageKickDue(after, at(2).getTime(), { deskRoot: path.resolve(w.deskRoot), personPrefix: "" }), true)
+  assert.equal(after.triage_by_desk[JSON.stringify([other, ""])].result, "no_consenting_store")
+  assert.equal(after.triage.coverage, null, "the latest diagnostic is not forged as a successful scan")
+  assert.deepEqual(await readTriageOutbox(w.env, STORE, "state.json"), publication, "a nonconsenting pass cannot blank pending or new published coverage")
+})
 
 async function editCard(w, key, fields) {
   const file = cardFile(w.deskRoot, "", key)
@@ -390,7 +416,7 @@ test("runTriageCommand takes only --desk and --person-prefix, runs under the loo
   const kick = async (env, options) => { kicks.push(options); return { kicked: true } }
   const done = await runTriageCommand({ argv: ["--desk", w.deskRoot, "--person-prefix", ""], env: w.env, pluginVersion: "9.9.9", impls: qualifiedSeams(), kick })
   assert.deepEqual(done, { result: "ran", ok: true, failed: 0, reviewed: 1, refused: 0, deferred: 0, unreviewed: 0 })
-  assert.deepEqual(kicks, [{ continuation: true }])
+  assert.deepEqual(kicks, [{ continuation: true, scope: { deskRoot: w.deskRoot, personPrefix: "" } }])
   const again = await runTriageCommand({ argv: ["--desk", w.deskRoot], env: w.env, pluginVersion: "9.9.9", impls: qualifiedSeams(), kick })
   assert.equal(again.result, "not_due")
   assert.equal(kicks.length, 1, "no continuation, no kick")
@@ -552,7 +578,9 @@ test("six launches that time out reach the stale alarm through the step itself, 
   const timeout = () => qualifiedSeams({ runner: fakeRunner(() => ({ state: "timeout" })) })
   const never = qualifiedSeams({ runTriageChild: async () => assert.fail("no run") })
   // A damaged streak counts from nothing.
-  await updateStatus(w.env, (status) => ({ ...status, triage: { run: { failures_in_a_row: "many" } } }))
+  await updateStatus(w.env, (status) => ({ ...status, triage_by_desk: {
+    [JSON.stringify([path.resolve(w.deskRoot), ""])]: { run: { failures_in_a_row: "many" } },
+  } }))
   const hours = [0, 7, 14, 21, 31, 38]
   for (const [index, hour] of hours.entries()) {
     const launched = await step(w, { now: at(hour), seams: timeout() })
@@ -594,6 +622,14 @@ test("six launches that time out reach the stale alarm through the step itself, 
   assert.deepEqual([settled.result, settled.ok], ["nothing_to_review", true])
   const cleared = await readStatus(other.env)
   assert.deepEqual([cleared.loop.steps.triage.failures_in_a_row, cleared.triage.run.failures_in_a_row, cleared.loop.steps.triage.last_ok_at], [0, 0, at(7).toISOString()])
+})
+
+test("an unavailable emission outbox cannot change an acknowledged canonical review", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  await fs.writeFile(path.join(await factoryStateRoot(w.env), "triage-outbox"), "not a directory")
+  const result = await step(w)
+  assert.equal(result.reviewed, 1)
+  assert.equal(annotation(w, KEYS[0]).attempt.state, "reviewed")
 })
 
 test("more than 200 card files: the refresh reads up to the card bound and every pass is whole and ok", async () => {
