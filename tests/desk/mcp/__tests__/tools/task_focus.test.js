@@ -149,6 +149,19 @@ test("a card found only under _archive is focused and says archived", async () =
   assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
 })
 
+test("a card in a track that was archived whole is focused and says archived", async () => {
+  const root = await mkTempDeskRoot()
+  await card(root, "tr", "alpha-work")
+  await task_archive({ deskRoot: root, input: { track: "tr", slug: "alpha-work", evidence: DONE } })
+  await fs.mkdir(path.join(root, "_archive"), { recursive: true })
+  await fs.rename(path.join(root, "tr"), path.join(root, "_archive", "tr"))
+  const { focus, statusContext } = ctx()
+  const result = await taskFocus({ deskRoot: root, input: { track: "tr", slug: "alpha-work" }, statusContext })
+  assert.equal(result.status, "focused")
+  assert.equal(result.archived, true)
+  assert.deepEqual(focus.get(), { track: "tr", slug: "alpha-work" })
+})
+
 test("input must be exactly track and slug, or clear true, naming the accepted shapes", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")

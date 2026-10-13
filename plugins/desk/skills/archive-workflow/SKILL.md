@@ -40,7 +40,7 @@ when a task is done — merged or set aside — i slide it toward the back of th
 
 ## Archiving a delivered task
 
-Archiving a task at `done` does not accept it, and it does not replace the sign-off ask: `task_archive` on a card that is already `done` answers without the three sign-off lines, so the reply that reports the delivery still ends with the lines `task_update` returned (`task-lifecycle`, "Done is a delivery"). An archived card that is still `delivered_unsigned` stays on the sign-off list until the operator answers, and `task_signoff` still finds it. A refusal brings the card back from the archive and sends it to `processing`; `task_create` refuses a slug that exists in the archive, so reopen archived work with `task_move` (`unarchive: true`) and then `task_update` with `return_reason`.
+Archiving a task at `done` does not accept it, and it does not replace the sign-off ask: `task_archive` on a card that is already `done` answers without the three sign-off lines, so the reply that reports the delivery still ends with the lines `task_update` returned (`task-lifecycle`, "Done is a delivery"). An archived card that is still `delivered_unsigned` stays on the sign-off list until the operator answers, and `task_signoff` still finds it. A refusal brings the card back from the archive and sends it to `processing`; `task_create` refuses a slug that exists in the archive, so reopen archived work with `task_move` (`unarchive: true`) and then `task_update` with `return_reason`. A card whose whole track was archived is found too: an acceptance is recorded where it is, and for a refusal `task_signoff` names the `git mv` that brings the track or the task back first.
 
 ## Archive an iteration
 
