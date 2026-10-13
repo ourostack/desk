@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { execFileSync } from "node:child_process"
+import { execFile, execFileSync } from "node:child_process"
 import { EventEmitter, once } from "node:events"
 import { existsSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -18,7 +18,7 @@ test("runGitRead runs git in the folder and reports success only when Git exits 
   const calls = []
   const answer = (error, stdout) => runGitRead({ root: "/desk", args: ["remote"], env: { A: "1" }, timeoutMs: 5 }, { execGit: (...call) => { calls.push(call.slice(0, 3)); call[3](error, stdout) } })
   assert.deepEqual(await answer(null, "origin\n"), { status: 0, stdout: "origin\n" })
-  assert.deepEqual(calls[0], ["git", ["-C", "/desk", "remote"], { encoding: "utf8", timeout: 5, env: { A: "1" }, windowsHide: true, signal: undefined }])
+  assert.deepEqual(calls[0], ["git", ["-C", "/desk", "remote"], { encoding: "utf8", timeout: 5, env: { A: "1" }, windowsHide: true }])
   assert.deepEqual(await answer(Object.assign(new Error("exit 128"), { code: 128 }), "partial"), FAILED, "a failed command's output is not passed on")
   assert.deepEqual(await answer(Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }), ""), FAILED)
   assert.deepEqual(await answer(null, undefined), FAILED)
@@ -52,10 +52,11 @@ test("the worker side answers each read with its id, and a read that throws as a
 test("the worker side aborts the read a cancel names, and ignores a cancel for a read it is not running", async () => {
   const { port1, port2 } = new MessageChannel()
   const signals = []
-  // Git here ends only when its signal aborts, as a killed process does.
-  const execGit = (_git, _args, { signal }, done) => {
-    signals.push(signal)
-    signal.addEventListener("abort", () => done(Object.assign(new Error("aborted"), { name: "AbortError" }), ""))
+  // Git here ends only when it is killed.
+  const execGit = (_git, _args, _options, done) => {
+    const child = { aborted: false, kill() { this.aborted = true; done(Object.assign(new Error("killed"), { killed: true, signal: "SIGTERM" }), "") } }
+    signals.push(child)
+    return child
   }
   attachGitReadWorker(port1, { deskGitReadWorker: true }, { execGit })
   port2.postMessage({ cancel: 7 })
@@ -75,6 +76,21 @@ test("the worker side aborts the read a cancel names, and ignores a cancel for a
   port2.close()
 })
 
+test("a read whose signal aborts resolves only when its Git process has exited", async () => {
+  const owner = new AbortController()
+  let child
+  const marker = path.join(await mkTempRoot("desk-git-read-kill-"), "started.txt")
+  const sleeping = runGitRead({ root: tmpdir(), args: ["-c", `alias.wait=!echo started > "${marker.replaceAll("\\", "/")}"; exec sleep 20 > /dev/null 2>&1 < /dev/null`, "wait"], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal, execGit: (...call) => (child = execFile(...call)) })
+  await Promise.race([sleeping, (async () => { while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 20)) })()])
+  assert.ok(existsSync(marker), "Git never started the alias")
+  const started = Date.now()
+  owner.abort()
+  assert.deepEqual(await sleeping, FAILED)
+  // With execFile's own signal option the answer came while the process was still alive, inside the folder.
+  assert.ok(child.exitCode !== null || child.signalCode !== null, "Git has exited by the time the read answers")
+  assert.ok(Date.now() - started < 10_000, "the read ends when Git is killed, not when the sleep ends")
+})
+
 test("a real worker kills the Git process of a read whose owner aborts, and the owner's wait ends once that process has closed", async (t) => {
   const root = await mkTempRoot("desk-git-read-abort-")
   const marker = path.join(root, "started.txt")
@@ -83,7 +99,8 @@ test("a real worker kills the Git process of a read whose owner aborts, and the 
   const owner = new AbortController()
   // The alias replaces its shell with a 20 s sleep that holds none of Git's pipes, in the OS temp folder, so killing Git closes the read at once and the orphaned sleep sits in no fixture folder.
   const sleeping = reader.read({ root: tmpdir(), args: ["-c", `alias.wait=!echo started > "${marker.replaceAll("\\", "/")}"; exec sleep 20 > /dev/null 2>&1 < /dev/null`, "wait"], env: process.env, timeoutMs: 60_000 }, { signal: owner.signal })
-  while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 20))
+  await Promise.race([sleeping, (async () => { while (!existsSync(marker)) await new Promise((resolve) => setTimeout(resolve, 20)) })()])
+  assert.ok(existsSync(marker), "Git never started the alias")
   const started = Date.now()
   owner.abort()
   await reader.settled(owner.signal)

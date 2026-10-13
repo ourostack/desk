@@ -9,13 +9,17 @@ import { parentPort, Worker, workerData } from "node:worker_threads"
 
 const FAILED = { status: 1, stdout: "" }
 
-/** Run one read from this thread: resolves with `{ status, stdout }`, where `status` is 0 only when Git ran and exited 0. Never rejects. Aborting `signal` kills the Git process, and the read then resolves as failed once that process has closed. */
+/** Run one read from this thread: resolves with `{ status, stdout }`, where `status` is 0 only when Git ran and exited 0. Never rejects. Aborting `signal` kills the Git process, and the read then resolves as failed once that process has exited and its output has closed. */
 export function runGitRead({ root, args, env, timeoutMs }, { execGit = execFile, signal } = {}) {
   return new Promise((resolve) => {
     try {
-      execGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: timeoutMs, env, windowsHide: true, signal }, (error, stdout) => {
+      // Not execFile's own `signal` option: with it Node calls back as soon as it has sent the kill, while the process may still be working in the folder. A killed child calls back when it has closed.
+      const kill = () => child?.kill()
+      const child = execGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: timeoutMs, env, windowsHide: true }, (error, stdout) => {
+        signal?.removeEventListener("abort", kill)
         resolve(error || typeof stdout !== "string" ? FAILED : { status: 0, stdout })
       })
+      signal?.addEventListener("abort", kill, { once: true })
     } catch {
       resolve(FAILED)
     }
@@ -46,6 +50,7 @@ attachGitReadWorker(parentPort, workerData)
  * The worker starts at the first read. If it fails or exits, every read it had not answered resolves as failed, and the next read starts a new worker.
  * `onError(reason)` hears the first such failure only: a failed read answers the same as a repository with no remote, so a worker that cannot run must be said once.
  * `close()` stops the worker; a later read starts another.
+ * A read that fails because its worker was lost or closed resolves at once, without waiting for a Git process that worker had started; that process ends by itself or at its timeout.
  */
 export function createGitReader({ createWorker = (url, options) => new Worker(url, options), onError = () => {} } = {}) {
   let worker = null
