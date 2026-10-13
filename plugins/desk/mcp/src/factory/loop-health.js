@@ -261,6 +261,34 @@ function stepsSection(status, nowMs) {
   }))
 }
 
+/**
+ * The triage step's last record (`status.triage`, written by `triage-step.js`), field by field: its result and runner codes, the review
+ * counts as Counts (a count the step did not know is `unavailable`, never 0) and when a review was last accepted. Local only: the capture
+ * record's loop slot (`loop-slot.js`) reads none of it.
+ */
+function triageSection(stored) {
+  const triage = isObject(stored) ? stored : null
+  const code = (value) => (typeof value === "string" && RESULT_CODE.test(value) ? value : null)
+  const counts = triage !== null && isObject(triage.counts) ? triage.counts : {}
+  const runner = triage !== null && isObject(triage.runner) ? triage.runner : {}
+  const refresh = triage !== null && isObject(triage.refresh) ? triage.refresh : {}
+  const run = triage !== null && isObject(triage.run) ? triage.run : {}
+  return {
+    last_result: triage === null ? "never_ran" : code(triage.result) ?? "unknown",
+    runner_state: code(runner.state),
+    runner_reason: code(runner.reason),
+    qualification: code(runner.qualification),
+    reviewed: count(counts.reviewed),
+    unreviewed: count(counts.unreviewed),
+    refused: count(counts.refused),
+    deferred: count(counts.deferred),
+    last_success_at: triage === null ? null : isoOrNull(triage.last_success_at),
+    // The card scan (`truncated` past the card bound: a partial refresh, said here) and the agent run's own health, kept apart from the refresh's.
+    scan: code(refresh.scan),
+    run: { last_result: code(run.last_result), last_at: isoOrNull(run.last_at), last_ok_at: isoOrNull(run.last_ok_at), failures_in_a_row: count(run.failures_in_a_row) },
+  }
+}
+
 // The loop worker's last outcome: a code and a time, nothing else (`loop-worker-state.js`).
 function workerSection(stored) {
   const worker = validWorker(stored)
@@ -321,6 +349,7 @@ export function assembleLoop({ status, read, nowMs, version }) {
     },
     reconcile: reconcileSection(stored.reconcile),
     steps: stepsSection(stored, nowMs),
+    triage: triageSection(stored.triage),
     worker: workerSection(loopStatus.worker),
   }
   const blocked = evaluator !== null && isObject(evaluator.headless) && isInteger(evaluator.headless.blocked_days) ? evaluator.headless.blocked_days : null
@@ -383,6 +412,8 @@ export function loopAlarms(loop, signals = {}) {
   if (signals.facts_quarantine_not_settling === true) alarms.push({ name: "facts_quarantine_not_settling", evidence: {} })
   // The record's own slot fails the store's rule, so the capture record goes without it: said once as an alarm, never silence.
   if (signals.slot_invalid === true) alarms.push({ name: "capture_loop_slot", evidence: {} })
+  // The triage runner's record went stale because its engine pin is behind the installed engine: a Desk release must move the pin.
+  if ((signals.attempted ?? []).includes("triage") && loop.triage?.runner_reason === "engine_unpinned") alarms.push({ name: "triage_engine_unpinned", evidence: {} })
   for (const step of signals.attempted ?? []) if (STEPS.includes(step) && steps[step].stale) alarms.push({ name: `step_stale:${step}`, evidence: { failures: steps[step].failures.value } })
   return alarms
 }
@@ -402,6 +433,8 @@ export function unreadAlarms(loop, signals = {}) {
   if (evaluator.label_lag_minutes.state === "unavailable") unread.push("label_lag")
   if (typeof signals.facts_quarantine_not_settling !== "boolean") unread.push("facts_quarantine_not_settling")
   const attempted = signals.attempted ?? []
+  // Only a pass of the triage step says whether its engine pin is still behind.
+  if (!attempted.includes("triage")) unread.push("triage_engine_unpinned")
   for (const step of STEPS) if (!attempted.includes(step)) unread.push(`step_stale:${step}`)
   return unread
 }

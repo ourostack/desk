@@ -125,7 +125,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       const jobs = await outbox.listFinalizeJobs(env);
       for (const job of jobs) await start(script, ["finalize", "--job", job], env, resolveOnce);
       // A finalize run starts the loop worker itself once it has derived the job's sessions; with none pending, the end of a turn
-      // starts it when the evaluator step is due (a request newer than its last run, or requests waiting past its gap).
+      // starts it when the evaluator step is due (a request newer than its last run, or requests waiting past its gap), or, with no request waiting, when improvement triage is due.
       if (jobs.length === 0) await kickAtTurnEnd(env, start, resolveOnce);
     }
     return "written";
@@ -135,7 +135,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
   }
 }
 
-// Starts the loop launcher (hooks/loop-start.cjs) through the same detached launch as every other hook job, only when evaluate-kick.js says the evaluator step is due.
+// Starts the loop launcher (hooks/loop-start.cjs) through the same detached launch as every other hook job, only when evaluate-kick.js says the evaluator step or improvement triage is due.
 async function kickAtTurnEnd(env, start, resolveOnce) {
   const { evaluationKickDue, LOOP_START_SCRIPT } = await import("../../mcp/src/factory/evaluate-kick.js");
   if ((await evaluationKickDue(env)).due) await start(LOOP_START_SCRIPT, [], env, resolveOnce);

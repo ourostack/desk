@@ -5,10 +5,13 @@
 
 import { updateStatus } from "./outbox.js"
 
-export const STEPS = Object.freeze(["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver"])
+export const STEPS = Object.freeze(["evaluate", "route", "mirror", "reconcile", "verify", "measure", "deliver", "triage"])
 
-/** The shortest time between two runs of a step, in hours; 0 means the step runs every time it is asked. */
-export const MIN_GAP_HOURS = Object.freeze({ evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24, measure: 0, deliver: 0 })
+/**
+ * The shortest time between two runs of a step, in hours; 0 means the step runs every time it is asked. Triage's mechanical refresh runs
+ * every time; its agent run keeps its own six-hour gap in the shared launch ledger (`headless-ledger.js`), not here.
+ */
+export const MIN_GAP_HOURS = Object.freeze({ evaluate: 1, route: 6, mirror: 6, reconcile: 24, verify: 24, measure: 0, deliver: 0, triage: 0 })
 
 const STALE_AFTER_HOURS = 72
 const STALE_FAILURES_IN_A_ROW = 3
@@ -40,8 +43,13 @@ function stepsOf(status) {
   return isObject(status?.loop) && isObject(status.loop.steps) ? status.loop.steps : {}
 }
 
-/** `recordStep(env, name, { ok, result, now }) -> step record`: counts one run of `name` in `status.loop.steps.<name>`. `result` is a lowercase code of at most 64 characters. */
-export async function recordStep(env, name, { ok, result, now = new Date() } = {}) {
+/**
+ * `recordStep(env, name, { ok, result, now, carry }) -> step record`: counts one run of `name` in `status.loop.steps.<name>`. `result` is a
+ * lowercase code of at most 64 characters. `carry` (true) records a run that neither succeeded nor failed for the step's health: the
+ * time, the result and the run count move, while `last_ok_at`, `failures` and `failures_in_a_row` stay as they were. The triage step
+ * uses it for a pass that launched nothing while its last agent run failed, so a quiet pass never hides a run that keeps failing.
+ */
+export async function recordStep(env, name, { ok, result, now = new Date(), carry = false } = {}) {
   requireStep(name)
   if (typeof ok !== "boolean") throw new TypeError("ok: must be a boolean")
   if (typeof result !== "string" || !RESULT_CODE.test(result)) throw new TypeError("result: must be a lowercase code of at most 64 characters")
@@ -53,11 +61,11 @@ export async function recordStep(env, name, { ok, result, now = new Date() } = {
     const before = isObject(steps[name]) ? steps[name] : {}
     record = {
       last_ran_at: at,
-      last_ok_at: ok ? at : (before.last_ok_at ?? null),
+      last_ok_at: ok && !carry ? at : (before.last_ok_at ?? null),
       last_result: result,
       runs: counter(before.runs) + 1,
       failures: counter(before.failures) + (ok ? 0 : 1),
-      failures_in_a_row: ok ? 0 : counter(before.failures_in_a_row) + 1,
+      failures_in_a_row: carry ? counter(before.failures_in_a_row) : ok ? 0 : counter(before.failures_in_a_row) + 1,
     }
     return { ...current, loop: { ...loop, steps: { ...steps, [name]: record } } }
   })

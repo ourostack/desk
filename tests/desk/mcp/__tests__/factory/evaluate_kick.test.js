@@ -14,9 +14,12 @@ import {
   LOOP_LOCK_NAME,
   LOOP_START_SCRIPT,
   evaluateDue,
+  TRIAGE_KICK_GAP_MS,
   evaluationKickDue,
   kickLoop,
   newestRequestAt,
+  triageKickDue,
+  triageQuotaFor,
 } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { MAX_HEADLESS_JOBS_PER_DAY } from "../../../../../plugins/desk/mcp/src/factory/headless.js"
@@ -183,3 +186,101 @@ test("evaluateDue reads the shared launch ledger's witnessed quota: triage's unu
   assert.equal(evaluateDue(draining({ ...mark, max_clock_ms: now + 60 * MINUTE }), new Date(now), { kick: true }), false, "a mark dated after the clock")
   assert.equal(evaluateDue(draining({ ...mark, max_day: "2026-10-09" }), new Date(now), { kick: true }), false, "a mark dated a later day")
 })
+
+// A valid shared-ledger witness on 2026-10-08, last written a minute before `now`.
+const witnessAt = (now, over = {}) => ({ schema: "desk.factory.agent-launch-highwater/1", epoch: "ab".repeat(16), max_revision: 9, max_acknowledged_revision: 9, max_day: "2026-10-08", spent_at_max_day: 3, max_clock_ms: now - MINUTE, windows: [0, 0, 0, 0], last_triage_at: null, max_issued_serial: 0, consumed_through: 0, target_sha256: "0".repeat(64), phase: "acknowledged", ...over })
+// A status after a triage step that ran at `ranAt` and left `eligible` cards waiting for a review.
+const triaged = ({ ranAt, eligible = 2, runner = null, witness, ok = true }) => ({
+  triage: { result: "ran", ok, eligible, runner: { state: runner, reason: null, qualification: "loaded" } },
+  loop: { steps: { triage: { last_ran_at: new Date(ranAt).toISOString(), last_result: "ran" } }, ...(witness === undefined ? {} : { agent_launch_highwater: witness }) },
+})
+
+test("triageQuotaFor reads one triage launch from the shared ledger's witness: the window, the six-hour gap, the day and a damaged or future mark", () => {
+  const now = Date.parse("2026-10-08T07:00:00.000Z")
+  const quota = (over, at = now) => triageQuotaFor({ loop: { agent_launch_highwater: witnessAt(now, over) } }, at)
+  assert.equal(triageQuotaFor({}, now), "unwitnessed")
+  assert.equal(triageQuotaFor({ loop: "x" }, now), "unwitnessed")
+  assert.equal(quota({}), "ok")
+  assert.equal(quota({ windows: [0, 1, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T06:10:00.000Z" }), "window_used")
+  assert.equal(quota({ windows: [1, 0, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T05:10:00.000Z" }), "triage_cooldown", "another window, inside six hours of the last launch")
+  assert.equal(quota({ windows: [1, 0, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T00:10:00.000Z" }), "ok")
+  assert.equal(quota({ spent_at_max_day: 30 }), "quota_exhausted")
+  assert.equal(quota({ spent_at_max_day: 30 }, now + 24 * 60 * MINUTE), "ok", "a new day has a new ceiling and new windows")
+  assert.equal(quota({ windows: [0, 1, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T06:10:00.000Z" }, now + 24 * 60 * MINUTE), "ok")
+  assert.equal(quota({ phase: "damaged" }), "witness_invalid")
+  assert.equal(quota({ max_clock_ms: now + 60 * MINUTE }), "clock_regressed")
+  assert.equal(quota({ max_day: "2026-10-09", max_clock_ms: Date.parse("2026-10-09T00:00:00.000Z") }), "clock_regressed")
+  assert.equal(quota({ max_clock_ms: now + 2 * MINUTE, windows: [0, 1, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T06:10:00.000Z" }), "window_used", "inside the skew the witnessed clock is the clock")
+})
+
+test("triageKickDue: only after the step ran once, past its hour, with cards waiting, a runner this host can start and a launch the ledger leaves", () => {
+  const now = Date.parse("2026-10-08T07:00:00.000Z")
+  const long = now - TRIAGE_KICK_GAP_MS
+  assert.equal(TRIAGE_KICK_GAP_MS, 60 * MINUTE)
+  assert.equal(triageKickDue(triaged({ ranAt: long }), now), true, "no witness yet: the reservation decides")
+  assert.equal(triageKickDue(triaged({ ranAt: long, witness: witnessAt(now) }), now), true)
+  assert.equal(triageKickDue({}, now), false, "the step never ran here: the session-start worker runs it first")
+  assert.equal(triageKickDue({ triage: "x", loop: { steps: { triage: { last_ran_at: new Date(long).toISOString() } } } }, now), false)
+  assert.equal(triageKickDue({ ...triaged({ ranAt: long }), loop: {} }, now), false, "no step record")
+  assert.equal(triageKickDue({ ...triaged({ ranAt: long }), loop: { steps: { triage: { last_ran_at: "not a time" } } } }, now), false)
+  assert.equal(triageKickDue(triaged({ ranAt: long + MINUTE }), now), false, "inside the hour")
+  assert.equal(triageKickDue(triaged({ ranAt: now + 10 * MINUTE }), now), false, "a run dated after the clock")
+  for (const eligible of [0, null, -1, 1.5, "2"]) assert.equal(triageKickDue(triaged({ ranAt: long, eligible }), now), false, `eligible ${eligible}`)
+  for (const runner of ["unsupported_host", "scope_unqualified", "no_agent_cli", "no_credentials", "disabled_would_bill", "sign_in_unknown", "headless_session"]) {
+    assert.equal(triageKickDue(triaged({ ranAt: long, runner }), now), false, runner)
+  }
+  // A failing triage is retried by the next session-start worker, never kicked: not after a failed pass, and not while the last launch failed.
+  assert.equal(triageKickDue(triaged({ ranAt: long, ok: false }), now), false, "the last pass failed before any launch")
+  assert.equal(triageKickDue({ ...triaged({ ranAt: long, runner: "timeout" }), triage: { ...triaged({ ranAt: long }).triage, run: { failures_in_a_row: 1 } } }, now), false, "the last launch failed")
+  assert.equal(triageKickDue({ ...triaged({ ranAt: long }), triage: { ...triaged({ ranAt: long }).triage, run: { failures_in_a_row: "x" } } }, now), true, "a damaged streak is no failure")
+  assert.equal(triageKickDue(triaged({ ranAt: long, witness: witnessAt(now, { windows: [0, 1, 0, 0], spent_at_max_day: 4, last_triage_at: "2026-10-08T06:10:00.000Z" }) }), now), false, "this window's launch is used")
+  assert.equal(triageKickDue(triaged({ ranAt: long, witness: witnessAt(now, { phase: "damaged" }) }), now), false, "a damaged witness starts nothing")
+  assert.equal(triageKickDue({ triage: { eligible: 1 }, loop: { steps: { triage: { last_ran_at: new Date(long).toISOString() } } } }, now), true, "a record without a runner state")
+})
+
+test("no_requests_due_triage_kicks", () => scratch(async (env) => {
+  await factoryStateRoot(env)
+  const now = Date.now()
+  const spawn = fakeSpawn()
+  assert.deepEqual(await kickLoop(env, { now, spawn }), { kicked: false, reason: "no_requests" }, "no request and triage never ran: nothing")
+  await updateStatus(env, (current) => ({ ...current, ...triaged({ ranAt: now - 61 * MINUTE }) }))
+  assert.equal(await newestRequestAt(env), null)
+  assert.deepEqual(await evaluationKickDue(env, { now }), { due: true, reason: "due" }, "no request waits, and triage is due")
+  assert.deepEqual(await kickLoop(env, { now, spawn, execPath: "/node" }), { kicked: true, reason: "due" })
+  assert.deepEqual([spawn.calls.length, spawn.calls[0][1]], [1, [LOOP_START_SCRIPT]])
+  // The worker that kick starts runs the step, which stamps it: a failed triage is not kicked again at the next turn's end.
+  await recordStep(env, "triage", { ok: false, result: "timeout", now })
+  await updateStatus(env, (current) => ({ ...current, triage: { ...current.triage, result: "timeout", ok: false, runner: { state: "timeout", reason: null, qualification: "loaded" } } }))
+  const hours = [MINUTE, 30 * MINUTE, 59 * MINUTE, 61 * MINUTE, 3 * 60 * MINUTE, 7 * 60 * MINUTE, 24 * 60 * MINUTE]
+  for (const later of hours) assert.deepEqual(await kickLoop(env, { now: now + later, spawn }), { kicked: false, reason: "no_requests" })
+  assert.equal(spawn.calls.length, 1, "no repeating triage kick, not even an hour or a day later")
+  // The same for a triage that failed before it launched: nothing is kicked again until a session-start worker has retried it.
+  await updateStatus(env, (current) => ({ ...current, triage: { ...current.triage, result: "no_time_for_a_run", ok: false, runner: { state: null, reason: null, qualification: "loaded" } } }))
+  for (const later of hours) assert.deepEqual(await kickLoop(env, { now: now + later, spawn }), { kicked: false, reason: "no_requests" })
+  // And while the last launch failed, however many quiet passes ran since.
+  await recordStep(env, "triage", { ok: true, result: "not_due", now, carry: true })
+  await updateStatus(env, (current) => ({ ...current, triage: { ...current.triage, result: "not_due", ok: true, run: { last_result: "timeout", failures_in_a_row: 1 } } }))
+  for (const later of hours) assert.deepEqual(await kickLoop(env, { now: now + later, spawn }), { kicked: false, reason: "no_requests" })
+  assert.equal(spawn.calls.length, 1)
+  // A worker that is running is left alone whatever is due.
+  await updateStatus(env, (current) => ({ ...current, ...triaged({ ranAt: now - 61 * MINUTE }) }))
+  const root = await factoryStateRoot(env)
+  await fs.mkdir(path.join(root, "locks"), { recursive: true })
+  await fs.writeFile(path.join(root, "locks", LOOP_LOCK_NAME), "{}")
+  assert.deepEqual(await evaluationKickDue(env, { now }), { due: false, reason: "worker_running" })
+}))
+
+test("a continuation kick skips only the due check: the switches, the state folder and a running worker still stop it", () => scratch(async (env) => {
+  const spawn = fakeSpawn()
+  assert.deepEqual(await kickLoop({ ...env, DESK_FACTORY_HEADLESS: "1" }, { spawn, continuation: true }), { kicked: false, reason: "headless_session" })
+  assert.deepEqual(await kickLoop({ ...env, DESK_FACTORY_LOOP: "0" }, { spawn, continuation: true }), { kicked: false, reason: "disabled" })
+  assert.deepEqual(await kickLoop(env, { spawn, continuation: true }), { kicked: false, reason: "no_factory_state" })
+  const root = await factoryStateRoot(env)
+  assert.deepEqual(await kickLoop(env, { spawn }), { kicked: false, reason: "no_requests" })
+  assert.deepEqual(await kickLoop(env, { spawn, continuation: true }), { kicked: true, reason: "continuation" })
+  assert.equal(spawn.calls.length, 1)
+  await fs.mkdir(path.join(root, "locks"), { recursive: true })
+  await fs.writeFile(path.join(root, "locks", LOOP_LOCK_NAME), "{}")
+  assert.deepEqual(await kickLoop(env, { spawn, continuation: true }), { kicked: false, reason: "worker_running" })
+  assert.equal(spawn.calls.length, 1)
+}))
