@@ -302,9 +302,9 @@ export function triagePublicationHealth(entry, now = Date.now()) {
   if (typeof entry.held === "string") return "held"
   if (typeof entry.delivered_at !== "string") return "not_published"
   if (entry.scan !== "complete") return "source_incomplete"
-  // A row is as fresh at the store as the newest batch that carried it; one that is no longer sent is going stale there.
+  // A row is as fresh at the store as the newest batch that carried it; one that is no longer sent is going stale there, and one that was dropped for a newer annotation is read there until it does.
   const rowsFresh = entry.rows_oldest_at === undefined || within(entry.rows_oldest_at, now, TRIAGE_PUBLICATION_FRESH_MS)
-  if (!within(entry.delivered_at, now, TRIAGE_PUBLICATION_FRESH_MS) || !rowsFresh || entry.rows_held > 0) return "stale"
+  if (!within(entry.delivered_at, now, TRIAGE_PUBLICATION_FRESH_MS) || !rowsFresh || entry.rows_held > 0 || entry.rows_dropped > 0) return "stale"
   // What the store shows: coverage it can read as known, and no other generation of this machine still fresh.
   return entry.coverage_known === true && !within(entry.reset_at, now, TRIAGE_PUBLICATION_FRESH_MS) ? "current" : "source_incomplete"
 }
