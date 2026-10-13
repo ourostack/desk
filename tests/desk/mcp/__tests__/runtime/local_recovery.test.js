@@ -4,14 +4,15 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
-import { tmpdir } from "node:os"
 import { realpathSync } from "node:fs"
 import { main } from "../../../../../plugins/desk/mcp/index.js"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { runAdmissionJob } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { statusObservedSince } from "./_status_observation.js"
+import { mkTempRoot } from "../_temp_roots.js"
 
-const here = path.resolve(process.env.DESK_RECOVERY_FIXTURES ?? path.join(realpathSync(tmpdir()), `local-recovery-fixtures-${process.pid}`))
+// A folder of this file's own, removed when the file ends. It was named by the process id alone and never removed, so a later run that got the same process id (Windows reuses them quickly) found the earlier run's repositories and failed 19 tests on their leftover branches, remotes and cards.
+const here = realpathSync(await mkTempRoot("local-recovery-fixtures-"))
 let sequence = 0
 function fixture() {
   const root = path.join(here, `desk-${process.pid}-${++sequence}`)
