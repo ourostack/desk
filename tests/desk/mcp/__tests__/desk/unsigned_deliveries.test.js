@@ -59,10 +59,12 @@ test("a delivered unsigned live task is listed with its age and proof", () => wi
 test("a delivered unsigned archived task is listed", () => withDesk(async (desk) => {
   await put(desk, ["alpha", "_archive", "old-one"], card({ deliveredAt: ago(10) }))
   await put(desk, ["_archive", "gone-track", "older"], card({ deliveredAt: ago(20) }))
+  // The usual order: the task is archived in its track, then the whole track is archived.
+  await put(desk, ["_archive", "gone-track", "_archive", "shelved-first"], card({ deliveredAt: ago(15) }))
   await put(desk, ["desks", "crew", "beta", "_archive", "crewed"], card({ deliveredAt: ago(2) }))
   const found = unsignedDeliveries(desk, { now: NOW })
-  assert.equal(found.count, 3)
-  assert.deepEqual(found.tasks.map((task) => `${task.track}/${task.slug}`), ["gone-track/older", "alpha/old-one", "crew/beta/crewed"])
+  assert.equal(found.count, 4)
+  assert.deepEqual(found.tasks.map((task) => `${task.track}/${task.slug}`), ["gone-track/older", "gone-track/shelved-first", "alpha/old-one", "crew/beta/crewed"])
   assert.equal(found.oldest_age_days, 20)
 }))
 

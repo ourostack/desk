@@ -124,6 +124,8 @@ function cardFiles(deskRoot) {
     }
     for (const track of visible(subfolders(path.join(base, "_archive")))) {
       for (const slug of visible(subfolders(path.join(base, "_archive", track)))) add(track, slug, path.join(base, "_archive", track), true)
+      // A task archived in its track before the whole track was archived.
+      for (const slug of visible(subfolders(path.join(base, "_archive", track, "_archive")))) add(track, slug, path.join(base, "_archive", track, "_archive"), true)
     }
   }
   scanRoot(deskRoot, null)
