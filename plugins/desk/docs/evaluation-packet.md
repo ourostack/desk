@@ -179,7 +179,7 @@ For each host, keep an evidence index with one row per setup gate and scenario: 
 **Good looks like** ([using-desk](../skills/using-desk/SKILL.md#alignment-then-ownership), [RFC §2](agentic-engineering-v2-rfc.md#2-working-together-the-human-and-the-agent)):
 
 - before any change, the agent states its assumptions, asks everything it will need from you in one batch with its recommendations, proposes a definition of done and waits for an explicit go;
-- after go, a task card appears in the throwaway desk, filed under a track whose scope fits or a new track, with a name built from the outcome rather than your words ([using-desk](../skills/using-desk/SKILL.md#durable-context-and-attribution));
+- a task card appears in the throwaway desk before the agent aligns (creating it is not a change to your repository, and it is not the go), filed under a track whose scope fits or a new track, with a name built from the outcome rather than your words ([using-desk](../skills/using-desk/SKILL.md#durable-context-and-attribution));
 - the agent works to done without handing you steps it could do itself, and comes back only for a real decision, missing authority, or the result;
 - the result arrives with its evidence: what was verified, and a link to each artifact ([RFC §6](agentic-engineering-v2-rfc.md#6-verification-visual-proof-and-review)).
 
