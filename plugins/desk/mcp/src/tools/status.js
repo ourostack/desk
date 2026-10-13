@@ -6,7 +6,7 @@ import { personPrefix } from "../util/paths.js"
 import { deskVersion } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
-import { factoryStatus } from "./factory-context.js"
+import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
 import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
 import { createStatusInspection, waitForStatusInspection as waitForInspectionChild } from "../runtime/status-inspection.js"
@@ -62,16 +62,31 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
+// The desk_status calls still running, by the signal that owns them: their card reads hold files in the desk folder open.
+const statusCalls = new WeakMap()
+
 /**
- * Resolves when the status run that owns `signal` has no process left: neither its inspection child nor a Git read.
- * A session aborts the run and awaits this before it reports itself closed, so nothing of the run still holds the desk folder.
- * Rejects as the inspection child's wait does.
+ * Resolves when the status run that owns `signal` has nothing left: neither its inspection child, nor a Git read, nor the
+ * call itself with its file reads. A session aborts the run and awaits this before it reports itself closed, so nothing
+ * of the run still holds the desk folder. Rejects as the inspection child's wait does.
  */
 export async function waitForStatusInspection(signal) {
-  await Promise.all([waitForInspectionChild(signal), waitForStatusGitReads(signal)])
+  await Promise.all([waitForInspectionChild(signal), waitForStatusGitReads(signal), Promise.allSettled(statusCalls.get(signal) ?? [])])
 }
 
-export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
+export function desk_status(request) {
+  const call = statusCall(request)
+  const { signal } = request
+  if (signal !== undefined) {
+    const calls = statusCalls.get(signal) ?? new Set()
+    statusCalls.set(signal, calls)
+    calls.add(call)
+    call.then(() => calls.delete(call), () => calls.delete(call))
+  }
+  return call
+}
+
+async function statusCall({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -143,7 +158,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
       write_scope: writeScope,
       // The redacted active-task listing session start and status render (./desk/active-tasks.js).
       active_tasks: root.valid ? await activeTasks(root.path) : null,
-      factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
+      factory: await factoryStatusAsync({ env, deskRoot: root.valid ? root.path : null, signal }),
       sync: root.valid ? await syncStatus({ deskRoot: root.path, env, signal }) : null,
       summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
     }

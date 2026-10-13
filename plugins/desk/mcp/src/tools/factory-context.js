@@ -24,7 +24,7 @@ import { readSmallText } from "../factory/marker.js"
 import { factoryStateDir } from "../factory/boot-check.js"
 import { PATTERNS, isPlainObject } from "../factory/schema.js"
 import { CAPTURE_CHECK_ADVICE, ORPHAN_FINDING_ADVICE, RETENTION_FINDING_ADVICE, UNASKED_ADVICE, factoryLocalStatus, factoryReportLink } from "../factory/local-status.js"
-import { signoffStatus, unsignedDeliveries } from "../desk/unsigned-deliveries.js"
+import { signoffStatus, unsignedDeliveries, unsignedDeliveriesAsync } from "../desk/unsigned-deliveries.js"
 
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
@@ -62,10 +62,25 @@ function storedLoop(env) {
 }
 
 /** `factoryLocalStatus` for `deskRoot` (or no desk) with this host's plugin set, the sign-off counts, and `loop`: the stored loop record or `null`. */
-export function factoryStatus({ env, deskRoot }) {
+function statusWithoutSignoff({ env, deskRoot }) {
   const { dirs, incomplete, reason } = factoryPluginScan(env)
-  const status = { ...factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete, pluginScanReason: reason }), loop: withLoopSwitch(storedLoop(env), env) }
+  return { ...factoryLocalStatus({ env, deskRoot, pluginDirs: dirs, pluginScanIncomplete: incomplete, pluginScanReason: reason }), loop: withLoopSwitch(storedLoop(env), env) }
+}
+
+export function factoryStatus({ env, deskRoot }) {
+  const status = statusWithoutSignoff({ env, deskRoot })
   return deskRoot === null || deskRoot === undefined ? status : { ...status, signoff: signoffCounts(deskRoot) }
+}
+
+/**
+ * The same answer as `factoryStatus`, with the sign-off scan read without blocking the thread: for `desk_status`, which answers the host on a time budget.
+ * The scan reads nothing more once `signal` aborts, and rejects with its reason.
+ */
+export async function factoryStatusAsync({ env, deskRoot, signal }) {
+  const status = statusWithoutSignoff({ env, deskRoot })
+  if (deskRoot === null || deskRoot === undefined) return status
+  const now = Date.now()
+  return { ...status, signoff: signoffStatus(await unsignedDeliveriesAsync(deskRoot, { now, signal }), now) }
 }
 
 // A Count as a phrase: the number, or `unavailable (reason)`. Anything that is not a Count reads unavailable, never 0.

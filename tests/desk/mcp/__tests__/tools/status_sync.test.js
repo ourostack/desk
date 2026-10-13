@@ -144,3 +144,22 @@ test("the wait a session uses to close a status run also covers the run's Git re
   await reading
   await waitForStatusInspection(new AbortController().signal)
 })
+
+test("the wait a session uses to close a status run also lasts until the desk_status call itself has settled", async () => {
+  const deskRoot = await mkPlainRepo("desk-status-call-owned-")
+  for (const slug of ["one", "two", "three"]) {
+    mkdirSync(path.join(deskRoot, "alpha", slug), { recursive: true })
+    writeFileSync(path.join(deskRoot, "alpha", slug, "task.md"), `---\ntitle: ${slug}\nstatus: doing\n---\n`)
+  }
+  for (const abort of [false, true]) {
+    const run = new AbortController()
+    let settled = false
+    const call = desk_status({ deskRoot, env, signal: run.signal }).then(() => "answered", () => "rejected").finally(() => { settled = true })
+    if (abort) run.abort(new Error("runtime status context ended"))
+    await waitForStatusInspection(run.signal)
+    // The call reads task cards in the desk folder; Windows cannot remove a folder with a file open in it.
+    assert.equal(settled, true, `the wait outlasts the call (aborted: ${abort})`)
+    assert.equal(await call, abort ? "rejected" : "answered")
+  }
+})
+
