@@ -266,12 +266,13 @@ export async function autoQualifyTriage(env, { lock, now = Date.now, deadline, g
   return outcome
 }
 
-// Earlier records are moved aside, never deleted, but only the newest `KEPT_ASIDES` are kept: a host whose qualification keeps
-// failing would otherwise add a folder a day without end.
-async function pruneAsides(paths, impl) {
+// Earlier records are moved aside, never deleted, but only `KEPT_ASIDES` are kept: a host whose qualification keeps failing would
+// otherwise add a folder a day without end. `aside` is the folder this transaction just moved: it is always kept, whatever its name
+// sorts as (a clock set back names it older than the others), because a refusal puts it back.
+async function pruneAsides(paths, aside, impl) {
   const prefix = `${path.basename(paths.out)}.aside-`
-  const asides = (await impl.list(paths.dir)).filter((name) => name.startsWith(prefix)).sort()
-  for (const name of asides.slice(0, -KEPT_ASIDES)) await impl.removeTree(path.join(paths.dir, name))
+  const others = (await impl.list(paths.dir)).filter((name) => name.startsWith(prefix) && name !== path.basename(aside)).sort()
+  for (const name of others.slice(0, Math.max(0, others.length - (KEPT_ASIDES - 1)))) await impl.removeTree(path.join(paths.dir, name))
 }
 
 // The transaction under the lock: ledger read, engine, sign-in, move-aside, qualifier, ledger. `started` runs once the refusals
@@ -295,7 +296,7 @@ async function qualifyInPlace(env, paths, { now, deadline, generation, legacyEva
   const aside = (await impl.exists(paths.out)) ? `${paths.out}.aside-${stamp(nowMs)}-${impl.random()}` : null
   if (aside) {
     await impl.rename(paths.out, aside)
-    await pruneAsides(paths, impl)
+    await pruneAsides(paths, aside, impl)
   }
   await onStarted()
   let token = null
