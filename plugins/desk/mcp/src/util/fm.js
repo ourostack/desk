@@ -17,8 +17,13 @@ import numberRegex from "./unicode-16/number.cjs"
 // gray-matter with its cache off (see `loadFrontmatterParser` in
 // `desk/organization.js`): a cached parse would answer a card whose YAML
 // throws as a card with no frontmatter, and a patch would then write that.
-function parseCard(raw) {
-  return matter(raw, {})
+function parseCard(raw, filePath) {
+  try {
+    return matter(raw, {})
+  } catch (error) {
+    // Name the file and keep the parser's own reason, so the card can be repaired.
+    throw new Error(`${filePath}: the frontmatter is not valid YAML, so the card was left unchanged: ${error.message}`, { cause: error })
+  }
 }
 
 const windowsReservedBasename = /^(?:aux|con|nul|prn|com[1-9¹²³]|lpt[1-9¹²³])$/u
@@ -61,7 +66,7 @@ export async function readMarkdown(filePath) {
     }
     throw err
   }
-  const parsed = parseCard(raw)
+  const parsed = parseCard(raw, filePath)
   return { data: parsed.data, content: parsed.content }
 }
 
@@ -309,7 +314,7 @@ export async function patchMarkdownFrontmatter(filePath, fields) {
     await fs.writeFile(filePath, patched, "utf8")
     return
   }
-  const parsed = parseCard(raw)
+  const parsed = parseCard(raw, filePath)
   const data = { ...parsed.data, ...fields }
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) delete data[key]

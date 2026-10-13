@@ -361,8 +361,10 @@ test("a card whose YAML cannot be parsed is refused on every read and never rewr
   await fs.writeFile(filePath, broken, "utf8")
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    await assert.rejects(() => readMarkdown(filePath), { name: "YAMLException" })
-    await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: `done-${attempt}` }), { name: "YAMLException" })
+    // The error names the card and the YAML problem, so an agent can repair it.
+    const names = (error) => error.message.startsWith(`${filePath}: the frontmatter is not valid YAML`) && /duplicated mapping key/u.test(error.message) && error.cause.name === "YAMLException"
+    await assert.rejects(() => readMarkdown(filePath), names)
+    await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: `done-${attempt}` }), names)
   }
   assert.equal(await fs.readFile(filePath, "utf8"), broken)
 })
