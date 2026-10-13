@@ -359,9 +359,9 @@ function packetTitle(data, slug) {
   return first === undefined ? slug : first.slice(0, TITLE_LIMIT).trimEnd()
 }
 
-// What the answer says after a delivery: the state, three lines for the agent to adapt, and one note.
+// What the answer says after a delivery: state, literal labels with adaptable contents, and one note.
 const SIGNOFF_NOTE =
-  "This task is delivered, not accepted. In an operator conversation, end your delivery reply with the three lines even when the operator is away; do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
+  "This task is delivered, not accepted. End the operator delivery with separate Asked: and Delivered: lines, then exactly Accept or send back? even when the operator is away. Adapt only the outcome and proof, never the labels or final question. Do not wait for the answer and do not ask again in this session. Until that reply is sent, preserve the three literal lines as a required next action in any compaction or handoff summary, never as optional. When they answer, call task_signoff in that later turn. A subagent never calls task_signoff."
 function deliveryAnswer({ data, slug, ref }) {
   return {
     signoff: "delivered_unsigned",

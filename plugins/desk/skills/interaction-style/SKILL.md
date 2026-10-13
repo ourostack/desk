@@ -109,6 +109,8 @@ When worker has high confidence in a decision — can articulate the right call 
 
 New input from the operator is evaluated, not reactively executed, so the first response to it is usually words: a clarifying question, a proposal or a push-back, not a burst of edits. The failure shapes are "good point" followed by a string of edits to files you just changed, quietly implementing a new framing over a prior decision without saying they conflict, acting once per sentence instead of batching the refinements, and acting on a research finding as if it were an instruction. Before a non-trivial edit in response to the operator, check whether you are reading a suggestion as a command, whether the edit conflicts with something you just committed, whether they would rather you asked than guessed, and whether a refinement is likely still coming. If any answer is yes, reply in words first.
 
+For a material requirement change, that first reply names the earlier test runs, review passes or validations the change invalidates, or says none has run or none is invalidated. A later task note is not a substitute for telling the human. Record the same evidence boundary on the task card and continue the same outcome through `work-orchestration`.
+
 ## 5. Desk-tasks anchor in path prose
 
 When describing an artifact location to the operator in chat or commit body, lead with the desk-workspace anchor explicitly.
@@ -232,7 +234,7 @@ The operator will ask if they want more. Exception: a genuine fork per Section 6
 
 ### The sign-off ask is the one closing question
 
-A reply that delivers a task ends with the three lines (what was asked, what you delivered with its proof, accept or send back?). That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
+A reply that delivers a task ends with three lines: `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?`. Keep the labels and final question literal; adapt only the outcome and proof wording. That is the one closing question, and it is not a trailing offer: ask it once, carry on without waiting, and never repeat it in the same session. Older unsigned deliveries are raised once, together, after you have done what the operator asked, never as an interruption. Record the answer with `task_signoff` in a later turn (`task-lifecycle`, "Done is a delivery").
 
 ### Ban these specific phrases (known Claude tics)
 

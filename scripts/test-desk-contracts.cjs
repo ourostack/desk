@@ -50,6 +50,19 @@ contract("delivery has a literal three-line response contract", () => {
   assert.match(foundation, /Required format, not an optional follow-up/iu);
   assert.match(foundation, /Put evidence in Delivered/iu);
 });
+contract("delivery owners preserve the packet labels rather than paraphrasing its shape", () => {
+  const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
+  const style = text("plugins/desk/skills/interaction-style/SKILL.md");
+  assert.doesNotMatch(lifecycle, /three lines in your own words/iu);
+  for (const owner of [lifecycle, style]) {
+    assert.match(owner, /Asked:[\s\S]+Delivered:[\s\S]+Accept or send back\?/u);
+    assert.match(owner, /labels[\s\S]+wording/iu);
+  }
+});
+contract("the first-response owner carries requirement evidence invalidation before edits", () => {
+  const response = subsection("plugins/desk/skills/interaction-style/SKILL.md", "Respond before editing");
+  assert.match(response, /first reply[\s\S]+test runs[\s\S]+review[\s\S]+invalidates[\s\S]+none[\s\S]+task card/iu);
+});
 contract("a changed requirement names the previous check and its missing coverage", () => {
   const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
   assert.match(foundation, /name checks the change invalidates, or say none has run[\s\S]+same durable task[\s\S]+rerun/iu);
