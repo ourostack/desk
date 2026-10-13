@@ -14,6 +14,13 @@ import letterRegex from "./unicode-16/letter.cjs"
 import markRegex from "./unicode-16/mark.cjs"
 import numberRegex from "./unicode-16/number.cjs"
 
+// gray-matter with its cache off (see `loadFrontmatterParser` in
+// `desk/organization.js`): a cached parse would answer a card whose YAML
+// throws as a card with no frontmatter, and a patch would then write that.
+function parseCard(raw) {
+  return matter(raw, {})
+}
+
 const windowsReservedBasename = /^(?:aux|con|nul|prn|com[1-9¹²³]|lpt[1-9¹²³])$/u
 
 function normalizeNfc(value) {
@@ -54,7 +61,7 @@ export async function readMarkdown(filePath) {
     }
     throw err
   }
-  const parsed = matter(raw)
+  const parsed = parseCard(raw)
   return { data: parsed.data, content: parsed.content }
 }
 
@@ -301,7 +308,7 @@ export async function patchMarkdownFrontmatter(filePath, fields) {
     await fs.writeFile(filePath, patched, "utf8")
     return
   }
-  const parsed = matter(raw)
+  const parsed = parseCard(raw)
   const data = { ...parsed.data, ...fields }
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) delete data[key]

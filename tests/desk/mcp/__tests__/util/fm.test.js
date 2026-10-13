@@ -353,6 +353,19 @@ test("readMarkdown returns concrete data and content without frontmatter", async
   })
 })
 
+test("a card whose YAML cannot be parsed is refused on every read and never rewritten by a patch", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "broken.md")
+  const broken = "---\nstatus: drafting\ntrack: t\nstatus: duplicate\n---\nbody\n"
+  await fs.writeFile(filePath, broken, "utf8")
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await assert.rejects(() => readMarkdown(filePath), { name: "YAMLException" })
+    await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: `done-${attempt}` }), { name: "YAMLException" })
+  }
+  assert.equal(await fs.readFile(filePath, "utf8"), broken)
+})
+
 test("serializeMarkdown handles empty and already-prefixed content", () => {
   assert.equal(serializeMarkdown({}, null), "\n")
   assert.equal(serializeMarkdown({}, "\nBody.\n"), "\nBody.\n")

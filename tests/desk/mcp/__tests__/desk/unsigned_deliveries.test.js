@@ -197,6 +197,8 @@ test("a card the scan cannot read is counted as unreadable, never dropped silent
   await fs.mkdir(path.join(desk, "_archive", "t", "no-card"), { recursive: true })
   await put(desk, ["alpha", "no-status"], "---\ntitle: x\n---\n")
   const found = unsignedDeliveries(desk, { now: NOW })
+  // A later scan in the same process counts the same cards: a broken card stays unreadable.
+  assert.deepEqual(unsignedDeliveries(desk, { now: NOW }), found)
   await fs.chmod(locked, 0o644)
   const unreadable = lockHolds ? 3 : 2
   assert.equal(found.count, lockHolds ? 1 : 2)

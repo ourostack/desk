@@ -1424,12 +1424,23 @@ test("an empty task card is read as a card with no fields", async () => {
 })
 
 test("loadFrontmatterParser uses gray-matter when it loads and the dependency-free reader when it doesn't", () => {
-  assert.equal(loadFrontmatterParser(), matter)
-  assert.equal(loadFrontmatterParser(() => matter), matter)
+  const text = "---\nstatus: doing\nrepos:\n  - a/b\n---\nbody\n"
+  assert.deepEqual(loadFrontmatterParser()(text).data, matter(text, {}).data)
+  assert.deepEqual(loadFrontmatterParser(() => matter)(text).data, { status: "doing", repos: ["a/b"] })
   const fallback = loadFrontmatterParser(() => {
     throw new Error("Cannot find module 'gray-matter'")
   })
   assert.equal(fallback, parseFrontmatterLite)
+})
+
+test("a card whose YAML cannot be parsed fails every time it is parsed, and each parse has its own data", () => {
+  const parse = loadFrontmatterParser()
+  const broken = "---\nstatus: [unclosed\ntitle: x\n---\nbody\n"
+  for (let attempt = 0; attempt < 3; attempt++) assert.throws(() => parse(broken), /YAMLException|flow sequence/u)
+  const card = "---\nrepos:\n  - a/b\n---\nbody\n"
+  parse(card).data.repos.push("changed")
+  assert.deepEqual(parse(card).data, { repos: ["a/b"] })
+  assert.equal(parse(card).matter, "\nrepos:\n  - a/b")
 })
 
 test("loadGrayMatter prefers gray-matter beside the plugin and falls back to the restored runtime dependencies", () => {
