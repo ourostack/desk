@@ -1,1 +1,0 @@
-Keep a cold scoped queue observable after a quota-blocked scan: when its normal retry gap and witnessed quota permit, the end-of-turn kick can classify positively scanned unreviewed work without treating it as known eligible work or bypassing runner, consent, billing, failure or launch guards.

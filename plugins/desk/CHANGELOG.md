@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.318 — 2026-10-13
+
+Keep a cold scoped queue observable after a quota-blocked scan: when its normal retry gap and witnessed quota permit, the end-of-turn kick can classify positively scanned unreviewed work without treating it as known eligible work or bypassing runner, consent, billing, failure or launch guards.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.317 — 2026-10-13
 
 Factory triage kicks retain separate desk/person observations and launch only the scope that justified the kick. Legacy history can request a bounded fresh observation without assigning another desk's health. Public last-success ages stay bound to the publishing store and desk/person, so a nonconsenting pass cannot blank or freshen unrelated pending batches. Consent and the shared launch ledger are unchanged. Runtime qualification still fails closed on actual contract drift; documented next-UTC-day recovery preserves its daily guard and launch budget.
