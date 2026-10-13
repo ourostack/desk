@@ -15,7 +15,11 @@ import { factoryStateRoot, readStatus, setConsent, updateStatus } from "../../..
 import { prepareTriageCatalog, readTriagePreparedFile } from "../../../../../plugins/desk/mcp/src/factory/triage-catalog.js"
 import { readTriageBasis } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
 import { refreshTriage, triagePaths } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
-import { KEPT_UNACCEPTED_RUNS, QUALIFICATION_SEGMENTS, TRIAGE_ENGINE_CARD, TRIAGE_BATCH_LIMIT, TRIAGE_RUN_MS, runTriageCommand, runTriageStep, writeTriagePreparedInput } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
+import { KEPT_UNACCEPTED_RUNS, QUALIFICATION_SEGMENTS, TRIAGE_BATCH_LIMIT, TRIAGE_RUN_MS, runTriageCommand, runTriageStep, writeTriagePreparedInput } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
+import { LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
+import { LATER_STEPS_RESERVE_MS, LOOP_BUDGET_MS } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
+import { releaseLock, takeLock } from "../../../../../plugins/desk/mcp/src/factory/process-lock.js"
+import { TRIAGE_ENGINE_CARD, importTriageRunner } from "../../../../../plugins/desk/mcp/src/factory/triage-home.js"
 import { FAKE_RUNTIME, KEYS, NEEDS_PREPARED_RUN, SENTINELS, STORE, fakeRunner, git, pushDesk, qualifiedSeams, remoteBlobs, remoteJson, row, triageWorld } from "./_triage_world.js"
 
 const T0 = Date.parse("2026-10-12T01:00:00.000Z")
@@ -235,52 +239,31 @@ test("the agent waits: cooldown, no time, unavailable host, missing or broken qu
   assert.equal((await readStatus(w.env)).triage.runner.state, "unsupported_host")
   const thrown = await step(w, { seams: { ...untouched, hostSupport: async () => { throw new Error("no custody") } } })
   assert.equal(thrown.result, "runner_unavailable")
-  // The real runtime, its record reader, loader and install identity.
+  // The real runtime (`importTriageRunner`), the runner's own restore and the real qualifier, with no record installed and no lock held.
+  // On a supported host that is not being measured the restore says `missing` and the qualifier refuses without its lock; under a
+  // coverage run or on another host the restore says why it cannot tell. Every one is quiet, and nothing launches.
   const { restoreQualification: _drop, loadRunner: _fake, ...defaults } = untouched
   const missing = await step(w, { seams: defaults })
-  assert.deepEqual([missing.result, missing.ok], ["runner_unavailable", true])
-  assert.equal((await readStatus(w.env)).triage.runner.qualification, "missing")
-  const file = path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS)
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  // A whole canonical document that does not restore here is stale: quiet, with a reason, nothing reserved, no failure counted. The
-  // document reader, the loader and the install identity are the runner's own.
-  await fs.writeFile(file, "{}\n", { mode: 0o600 })
-  const stale = await step(w, { seams: defaults })
-  assert.deepEqual([stale.result, stale.ok, stale.launched], ["runner_unavailable", true, false], JSON.stringify(stale))
-  const staleRunner = (await readStatus(w.env)).triage.runner
-  assert.deepEqual([staleRunner.state, staleRunner.qualification], ["scope_unqualified", "stale"])
-  assert.ok(["source_changed", "engine_changed"].includes(staleRunner.reason), staleRunner.reason)
-  // Each stale reason the step can tell, then the loader's own.
-  const loader = (reason) => ({ ...defaults, loadTriageQualification: async () => ({ state: "scope_unqualified", ...(reason === undefined ? {} : { reason }) }) })
-  const reasonOf = async (seams) => {
-    const result = await step(w, { seams })
-    assert.deepEqual([result.result, result.ok, result.launched], ["runner_unavailable", true, false])
-    return (await readStatus(w.env)).triage.runner.reason
-  }
-  assert.equal(await reasonOf({ ...loader(), sourceIdentity: async () => ({ files: { "/elsewhere/triage-runner.js": "0" } }) }), "source_changed")
-  assert.equal(await reasonOf({ ...loader(), sourceIdentity: async () => undefined }), "engine_changed")
-  assert.equal(await reasonOf({ ...loader(), sourceIdentity: async () => { throw new Error("no identity") } }), "engine_changed")
-  await fs.rm(file)
-  await fs.writeFile(file, `{"cli":${JSON.stringify(process.execPath)}}\n`, { mode: 0o600 })
-  assert.equal(await reasonOf({ ...loader("effective_policy_unknown"), sourceIdentity: async () => undefined }), "qualification_failed")
+  assert.deepEqual([missing.result, missing.ok, missing.launched], ["runner_unavailable", true, false], JSON.stringify(missing))
+  const real = (await readStatus(w.env)).triage.runner
+  assert.ok([["missing", "lock_not_held"], ["missing", "host_unsupported"], ["stale", "measurement_active"], ["stale", "host_unsupported"]].some(([qualification, reason]) => real.qualification === qualification && real.reason === reason), JSON.stringify(real))
   const passes = (await readStatus(w.env)).loop.steps.triage
   assert.deepEqual([passes.failures, passes.failures_in_a_row], [0, 0], "a stale or missing record never counts towards the alarm")
   assert.equal(triageKickDue(await readStatus(w.env), at(48)), false, "and the end of a turn starts no worker for it")
-  // A file that is not the canonical document the qualifier wrote is damaged: the one qualification failure.
-  await fs.rm(file)
-  await fs.writeFile(file, "{ not the canonical document", { mode: 0o600 })
-  const broken = await step(w, { seams: defaults })
+  // A damaged record is the one qualification failure.
+  const broken = await step(w, { seams: { ...untouched, restoreQualification: async () => ({ state: "damaged", reason: "noncanonical" }) } })
   assert.deepEqual([broken.result, broken.ok, broken.launched], ["runner_blocked", false, false])
-  assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: "unreadable", qualification: "damaged" })
+  assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: "noncanonical", qualification: "damaged" })
   const odd = await step(w, { seams: { ...untouched, restoreQualification: async () => ({ state: "invalid" }) } })
   assert.deepEqual([odd.result, odd.ok], ["runner_unavailable", true])
   assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: "qualification_failed", qualification: "stale" })
-  const thrownLoader = await step(w, { seams: { ...untouched, restoreQualification: async () => { throw new Error("x") } } })
+  // A restore that throws reads as a record that failed to qualify, which the qualifier is offered.
+  const thrownLoader = await step(w, { seams: { ...untouched, restoreQualification: async () => { throw new Error("x") }, autoQualify: async () => ({ state: "skipped", reason: "attempted_today", launched: false }) } })
   assert.deepEqual([thrownLoader.result, (await readStatus(w.env)).triage.runner.qualification], ["runner_unavailable", "stale"])
   // The default runner refuses a record it did not restore itself.
   const { runTriageChild: _runner, loadRunner: _runtime, ...realRunner } = qualifiedSeams()
   const unrestored = await step(w, { seams: realRunner })
-  assert.deepEqual([unrestored.result, unrestored.launched], ["scope_unqualified", true])
+  assert.deepEqual([unrestored.ok, unrestored.launched, unrestored.reviewed], [false, true, 0], JSON.stringify(unrestored))
   // That attempt used the window: the next generation is not due.
   const cooling = await step(w, { now: at(1), seams: untouched })
   assert.deepEqual([cooling.result, cooling.ok], ["not_due", true])
@@ -444,16 +427,6 @@ test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review,
   assert.deepEqual(await runFolders(w), [], "no run folder is made for an empty brief")
   const blind = await step(w, { seams: qualifiedSeams({ readStatus: async () => { throw new Error("x") }, runTriageChild: never }) })
   assert.deepEqual([blind.result, blind.ok], ["status_unavailable", false])
-  // The installed record is asked of the runner's own loader: only `qualified` loads.
-  const file = path.join(await factoryStateRoot(w.env), ...QUALIFICATION_SEGMENTS)
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  await fs.writeFile(file, "{}\n", { mode: 0o600 })
-  const { restoreQualification: _injected, loadRunner: _fake, ...viaLoader } = qualifiedSeams({ runTriageChild: never, sourceIdentity: async () => undefined })
-  const asked = []
-  const held = await step(w, { seams: { ...viaLoader, loadTriageQualification: async (options) => { asked.push(options); return { state: "scope_unqualified" } } } })
-  assert.deepEqual([held.result, held.ok, (await readStatus(w.env)).triage.runner.qualification], ["runner_unavailable", true, "stale"])
-  assert.deepEqual(asked, [{ recordFile: file, env: w.env }])
-
   // A review the safe transform refuses is not written, whatever the candidate said.
   let prepared
   const unsafe = await step(w, { seams: qualifiedSeams({ toSafeTriageReview: () => ({ state: "refused" }), runner: fakeRunner((input) => { prepared = input; return input.brief.cards.map((card) => row(card)) }) }) })
@@ -481,7 +454,7 @@ test("defaults and edges: an empty ruling, unreadable rulings, an unsafe review,
   // that was incomplete is still said after a run.
   const quiet = fakeRunner()
   const partial = await step(w, { now: at(21), seams: {
-    ...viaLoader, loadTriageQualification: async () => ({ state: "qualified" }), readTriageBasis: rulings("missing.md", a),
+    ...qualifiedSeams(), readTriageBasis: rulings("missing.md", a),
     refreshTriage: async (options) => ({ ...(await refreshTriage(options)), state: "unreadable" }),
     runTriageChild: async (options) => { await quiet(options); return { state: "ran" } },
   } })
@@ -669,8 +642,8 @@ test("refusals seen before a launch spend nothing: a billing variable, no sign-i
   await quietly(w, guarded({ locateEngine: async () => null, probeSignIn: noProbe }), { state: "sign_in_unknown", reason: null, qualification: "loaded" })
   const located = []
   const locateCalls = []
-  const runtimeWith = (locatePinnedEngine) => async () => ({ ...FAKE_RUNTIME, qualify: locatePinnedEngine === undefined ? {} : { locatePinnedEngine: (options) => { locateCalls.push(options); return locatePinnedEngine(options) } } })
-  for (const [locatePinnedEngine, found] of [[async () => "/opt/pinned/claude", "/opt/pinned/claude"], [async () => ({ path: "/opt/pinned/other" }), "/opt/pinned/other"], [async () => ({ path: "relative/claude" }), null], [async () => null, null], [undefined, null]]) {
+  const runtimeWith = (locatePinnedEngine) => async () => ({ ...FAKE_RUNTIME, runner: locatePinnedEngine === undefined ? {} : { locatePinnedEngine: (options) => { locateCalls.push(options); return locatePinnedEngine(options) } } })
+  for (const [locatePinnedEngine, found] of [[() => "/opt/pinned/claude", "/opt/pinned/claude"], [async () => "/opt/pinned/other", "/opt/pinned/other"], [() => "relative/claude", null], [() => null, null], [undefined, null]]) {
     const { locateEngine: _seam, ...ownLocator } = guarded({ loadRunner: runtimeWith(locatePinnedEngine), probeSignIn: async (options) => { located.push(options.cli); return { state: "no_credentials" } } })
     const probes = located.length
     await step(w, { seams: ownLocator })
@@ -791,10 +764,11 @@ test("the runner is loaded through one seam: a runtime that does not load is qui
 test("the restore's answer: the runner's own restore is used when it has one, its reasons are kept, and anything unknown is read conservatively", { skip: NEEDS_PREPARED_RUN }, async () => {
   const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
   const asked = []
-  const runtime = (answer) => ({ ...FAKE_RUNTIME, runner: { restoreTriageQualification: async (options) => { asked.push(options); return answer } } })
+  const runtime = (answer) => ({ ...FAKE_RUNTIME, runner: { ...FAKE_RUNTIME.runner, restoreTriageQualification: async (options) => { asked.push(options); return answer } } })
   const { restoreQualification: _drop, ...viaRuntime } = qualifiedSeams({ reserveAgentLaunch: async () => assert.fail("nothing reserved") })
   const check = async (answer, expected) => {
-    const result = await step(w, { seams: { ...viaRuntime, loadRunner: async () => runtime(answer) } })
+    // The qualifier, when it is offered the record, makes nothing and hands the same answer back.
+    const result = await step(w, { seams: { ...viaRuntime, loadRunner: async () => runtime(answer), autoQualify: async () => ({ state: "skipped", reason: "not_requalifiable", launched: false, restore: answer }) } })
     assert.deepEqual([result.result, result.ok, result.launched], expected.ok ? ["runner_unavailable", true, false] : ["runner_blocked", false, false], JSON.stringify(answer))
     assert.deepEqual((await readStatus(w.env)).triage.runner, { state: "scope_unqualified", reason: expected.reason, qualification: expected.qualification })
   }
@@ -909,12 +883,12 @@ test("a missing or requalifiable record asks the qualifier first; a launch it ma
   // The ledger's answers carry when to try again: a read-only peek (`skipped`) and a refused reservation (`refused`) are both quiet,
   // with the reason and `retry_at` in the status. A time that is not one is left out.
   const retryAt = at(6).toISOString()
-  for (const [state, given, kept] of [["skipped", retryAt, retryAt], ["refused", retryAt, retryAt], ["refused", "soon", undefined], ["skipped", 7, undefined]]) {
+  for (const [state, given, kept, ledgerReason] of [["skipped", retryAt, retryAt, "quota_exhausted"], ["refused", retryAt, retryAt, "quota_exhausted"], ["refused", retryAt, retryAt, "window_protected"], ["refused", "soon", undefined, "quota_exhausted"], ["skipped", 7, undefined, "quota_exhausted"]]) {
     w = await fresh()
-    const waiting = await step(w, { seams: seams({ qualify: { state, reason: "quota_exhausted", launched: false, retry_at: given }, ...noRun }) })
+    const waiting = await step(w, { seams: seams({ qualify: { state, reason: ledgerReason, launched: false, retry_at: given }, ...noRun }) })
     assert.deepEqual([waiting.result, waiting.ok, waiting.launched], ["runner_unavailable", true, false])
     const status = await readStatus(w.env)
-    assert.deepEqual(status.triage.runner, { state: "scope_unqualified", reason: "quota_exhausted", qualification: "missing", ...(kept === undefined ? {} : { retry_at: kept }) })
+    assert.deepEqual(status.triage.runner, { state: "scope_unqualified", reason: ledgerReason, qualification: "missing", ...(kept === undefined ? {} : { retry_at: kept }) })
     assert.equal(status.loop.steps.triage.failures, 0)
   }
   w = await fresh()
@@ -942,18 +916,127 @@ test("a missing or requalifiable record asks the qualifier first; a launch it ma
   }
   const requalify = await step(w, { seams: seams({ restore: [{ state: "stale", reason: "engine_changed", requalify: false }], qualify: { state: "skipped", reason: "budget", launched: false }, ...noRun }) })
   assert.deepEqual([requalify.result, calls.length, (await readStatus(w.env)).triage.runner.qualification], ["runner_unavailable", before + 1, "stale"])
-  const theirMap = { ...FAKE_RUNTIME, qualify: { TRIAGE_STALE_REASONS: { engine_changed: false, brand_new: true } } }
+  const theirMap = { ...FAKE_RUNTIME, runner: { TRIAGE_STALE_REASONS: { engine_changed: false, brand_new: true } } }
   const mapped = await step(w, { seams: seams({ loadRunner: async () => theirMap, restore: [{ state: "stale", reason: "engine_changed" }], qualify: { state: "qualified", launched: true }, ...noRun }) })
   assert.deepEqual([mapped.result, calls.length], ["runner_unavailable", before + 1], "the runtime's map says qualifying again cannot fix it")
   const offered = await step(w, { seams: seams({ loadRunner: async () => ({ ...FAKE_RUNTIME, runner: { TRIAGE_STALE_REASONS: { brand_new: true } } }), restore: [{ state: "stale", reason: "brand_new" }], qualify: { state: "skipped", reason: "budget", launched: false }, ...noRun }) })
   assert.deepEqual([offered.result, calls.length, (await readStatus(w.env)).triage.runner.reason], ["runner_unavailable", before + 2, "budget"])
   await step(w, { seams: seams({ loadRunner: async () => theirMap, restore: [{ state: "stale", reason: "record_version" }], ...noRun }) })
   assert.equal((await readStatus(w.env)).triage.runner.reason, "qualification_failed", "a reason the map does not name is read as the generic one")
+  // A runtime that names no reasons offers nothing and reads every reason as the generic one.
+  const mapless = await step(w, { seams: seams({ loadRunner: async () => ({ ...FAKE_RUNTIME, runner: {} }), restore: [{ state: "stale", reason: "engine_changed" }], ...noRun }) })
+  assert.deepEqual([mapless.result, calls.length, (await readStatus(w.env)).triage.runner.reason], ["runner_unavailable", before + 2, "qualification_failed"])
+  // A record the qualifier would not make again comes back with the qualifier's own restore, read with its marker: that is the verdict.
+  for (const [restore, result, runner] of [
+    [{ state: "damaged", reason: "seal" }, "runner_blocked", { state: "scope_unqualified", reason: "seal", qualification: "damaged" }],
+    [{ state: "stale", reason: "engine_mismatch", requalify: false }, "runner_unavailable", { state: "scope_unqualified", reason: "engine_mismatch", qualification: "stale" }],
+    [undefined, "runner_unavailable", { state: "scope_unqualified", reason: "not_requalifiable", qualification: "missing" }],
+  ]) {
+    w = await fresh()
+    const verdict = await step(w, { seams: seams({ qualify: { state: "skipped", reason: "not_requalifiable", launched: false, ...(restore ? { restore } : {}) }, ...noRun }) })
+    assert.deepEqual([verdict.result, verdict.launched, (await readStatus(w.env)).triage.runner], [result, false, runner])
+  }
+  // A runtime with no qualifier cannot say that nothing launched: a failed run, the slot taken.
   const { autoQualify: _none, ...noQualifier } = seams({ ...noRun })
-  assert.equal((await step(w, { seams: noQualifier })).result, "runner_unavailable")
+  assert.deepEqual([(await step(w, { seams: noQualifier })).result], ["qualification_failed"])
   // The default asks the loaded runtime's own qualifier.
+  w = await fresh()
   const own = []
   const { autoQualify: _q, ...defaultQualifier } = seams({ ...noRun, loadRunner: async () => ({ ...FAKE_RUNTIME, qualify: { autoQualifyTriage: async (env, options) => { own.push(options.generation); return { state: "skipped", reason: "budget", launched: false } } } }) })
   assert.equal((await step(w, { generation: "gen-own", seams: defaultQualifier })).result, "runner_unavailable")
   assert.deepEqual(own, ["gen-own"])
+})
+
+// The contract with the qualification modules: the step's own default calls against the real `autoQualifyTriage` and
+// `restoreTriageQualification`. Only what would reach a model, the host or the measurement is doubled: the host and measurement gates, the
+// engine lookup, the sign-in, the child environment and the qualifier's two native launches. The lock, the marker and the shared ledger
+// are real.
+async function realRuntime(impls = {}, seen = {}) {
+  const loaded = await importTriageRunner(process.env)
+  assert.equal(loaded.state, "loaded")
+  const lowest = {
+    host: () => true, measurement: () => false, locate: () => "/opt/engine/claude", childEnv: (env) => env, signIn: async () => ({ state: "subscription" }),
+    qualify: async (options) => {
+      await options.reserve()
+      seen.qualify = options
+      return { state: "qualified", resources: { launches: 2 } }
+    },
+    // The real restore, asked as the qualifier asks it; a test run that is itself measured, or on another host, is read as no record.
+    restore: async (options) => {
+      seen.restore = options
+      const answer = await loaded.runner.restoreTriageQualification(options)
+      return answer.state === "stale" && ["measurement_active", "host_unsupported"].includes(answer.reason) ? { state: "missing" } : answer
+    },
+    ...impls,
+  }
+  return {
+    ...loaded,
+    runner: { ...loaded.runner, restoreTriageQualification: (options) => lowest.restore(options) },
+    qualify: { ...loaded.qualify, autoQualifyTriage: (env, options) => { seen.options = options; return loaded.qualify.autoQualifyTriage(env, { ...options, impls: lowest }) } },
+  }
+}
+
+test("the step's default calls fit the real qualifier and restore: shapes, refusals, the ledger and the slot", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const never = async () => assert.fail("the step itself launches and reserves nothing")
+  const drive = async ({ impls, minutes = 17, held = true } = {}) => {
+    const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+    const seen = {}
+    const runtime = await realRuntime(impls, seen)
+    const { restoreQualification: _restore, loadRunner: _loader, ...own } = qualifiedSeams({ runTriageChild: never, reserveAgentLaunch: never })
+    const lock = await takeLock(await factoryStateRoot(w.env), { name: LOOP_LOCK_NAME })
+    const clockNow = Date.now()
+    try {
+      const result = await step(w, { lock: held ? lock : null, generation: "gen-real", deadline: new Date(at(0).getTime() + minutes * 60 * 1000), seams: { ...own, loadRunner: async () => runtime, clock: () => clockNow } })
+      return { w, seen, result, status: await readStatus(w.env) }
+    } finally {
+      await releaseLock(lock)
+    }
+  }
+  // The worker's own deadline (its budget less the later steps' reserve) admits an attempt: the real qualifier reserves its two launches
+  // on the real ledger, runs, and the step counts the slot as taken.
+  const workerMinutes = (LOOP_BUDGET_MS - LATER_STEPS_RESERVE_MS) / 60000
+  const ran = await drive({ minutes: workerMinutes })
+  assert.deepEqual([ran.result.result, ran.result.ok, ran.result.launched], ["runner_qualified", true, true], JSON.stringify([ran.result, ran.status.triage.runner]))
+  assert.deepEqual(Object.keys(ran.seen.restore).sort(), ["env", "recordFile", "sealedBefore"])
+  assert.equal(ran.seen.restore.recordFile, path.join(await factoryStateRoot(ran.w.env), ...QUALIFICATION_SEGMENTS), "the step and the qualifier read the same record")
+  assert.equal(ran.seen.qualify.deadline, at(0).getTime() + workerMinutes * 60 * 1000)
+  assert.ok(ran.seen.options.deadline - ran.seen.options.now() >= ran.seen.options.deadline - at(0).getTime())
+  const marker = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(ran.w.env), "triage", "auto-qualify.json"), "utf8"))
+  assert.deepEqual([marker.result, marker.trigger, marker.day], ["qualified", "missing", at(0).toISOString().slice(0, 10)])
+  assert.deepEqual([ran.status.triage.run.failures_in_a_row, ran.status.loop.steps.triage.failures], [0, 0])
+  // The qualifier's two launches are on the shared ledger: the next pass is not due.
+  const next = await step(ran.w, { now: at(1), seams: qualifiedSeams({ runTriageChild: never, reserveAgentLaunch: never }) })
+  assert.deepEqual([next.result, next.ok], ["not_due", true])
+
+  // Every refusal the real qualifier makes before a launch is quiet, with its reason, and counts nothing.
+  const { AUTO_MIN_REMAINING_MS } = (await importTriageRunner(process.env)).qualify
+  for (const [options, reason] of [
+    [{ held: false }, "lock_not_held"],
+    [{ impls: { host: () => false } }, "host_unsupported"],
+    [{ impls: { measurement: () => true } }, "measurement_active"],
+    [{ impls: { locate: () => null } }, "engine_unpinned"],
+    [{ impls: { childEnv: () => { throw new Error("environment_unsafe") } } }, "environment_unsafe"],
+    [{ impls: { signIn: async () => ({ state: "no_credentials" }) } }, "no_credentials"],
+    [{ minutes: AUTO_MIN_REMAINING_MS / 60000 - 1 }, "no_time"],
+  ]) {
+    const quiet = await drive(options)
+    assert.deepEqual([quiet.result.result, quiet.result.ok, quiet.result.launched], ["runner_unavailable", true, false], reason)
+    assert.deepEqual([quiet.status.triage.runner, quiet.status.loop.steps.triage.failures], [{ state: "scope_unqualified", reason, qualification: "missing" }, 0], reason)
+  }
+  // A qualification that ran and failed is a failed run with the slot taken.
+  const failed = await drive({ impls: { qualify: async (options) => { await options.reserve(); return { state: "blocked", reason: "chain_changed", resources: { launches: 1 } } } } })
+  assert.deepEqual([failed.result.result, failed.result.ok, failed.result.launched, failed.status.triage.runner.reason], ["qualification_failed", false, true, "chain_changed"])
+})
+
+test("the deadlines the step passes clear the qualifier's minimum time, from the worker and from the command", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const { AUTO_MIN_REMAINING_MS } = (await importTriageRunner(process.env)).qualify
+  assert.ok(LOOP_BUDGET_MS - LATER_STEPS_RESERVE_MS >= AUTO_MIN_REMAINING_MS, "the worker's agent deadline")
+  // The command takes the worker's lock and passes its own deadline: the real qualifier does not answer `no_time`.
+  const w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  const seen = {}
+  const runtime = await realRuntime({}, seen)
+  const { restoreQualification: _restore, loadRunner: _loader, ...own } = qualifiedSeams({ runTriageChild: async () => assert.fail("no triage run") })
+  const done = await runTriageCommand({ argv: ["--desk", w.deskRoot], env: w.env, pluginVersion: "9.9.9", impls: { ...own, loadRunner: async () => runtime }, kick: async () => {} })
+  assert.ok(seen.options.deadline - seen.options.now() >= AUTO_MIN_REMAINING_MS, "the command's deadline")
+  assert.deepEqual([done.result, done.ok, (await readStatus(w.env)).triage.runner], ["runner_qualified", true, { state: "qualifying", reason: null, qualification: "qualified" }])
 })
