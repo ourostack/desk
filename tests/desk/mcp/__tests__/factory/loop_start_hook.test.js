@@ -87,7 +87,7 @@ test("the launcher runs the loop command for the bound desk and person in its ow
   assert.equal(command, process.execPath)
   assert.deepEqual(args, [FACTORY_CLI, "loop", "--desk", "/the/desk", "--person-prefix", "desks/ari"])
   assert.deepEqual(options.stdio, ["ignore", "ignore", "ignore", "ipc"], "no output, and one channel the worker uses to move the hard stop")
-  assert.equal(options.env, env)
+  assert.deepEqual(options.env, { ...env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot: "/the/desk", personPrefix: "desks/ari" }) })
   assert.equal(options.windowsHide, true)
   assert.equal(timers.pending.length, 1)
   child.emit("exit", 0)
@@ -105,6 +105,16 @@ test("a solo desk passes no person prefix", async () => {
   assert.deepEqual(spawned[0][1], [FACTORY_CLI, "loop", "--desk", "/d"])
   child.emit("exit", 1)
   assert.equal((await done).started, true)
+})
+
+test("explicit kicks reject malformed scopes and a changed person before spawning", async () => {
+  const spawned = []
+  const spawnImpl = (...args) => { spawned.push(args); return fakeChild() }
+  for (const argv of [["--desk"], ["--desk", "relative", "--person-prefix", ""], ["--root", "/d", "--person-prefix", ""], ["--desk", "/d", "--prefix", ""], ["--desk", "/d", "--person-prefix", "desks/.."]]) {
+    assert.deepEqual(await loopMain({ env: interactive(), argv, spawnImpl, ...found() }), { started: false, reason: "invalid_scope" })
+  }
+  assert.deepEqual(await loopMain({ env: interactive(), argv: ["--desk", "/d", "--person-prefix", "desks/ari"], spawnImpl, ...found("/d", "desks/other") }), { started: false, reason: "person_mismatch" })
+  assert.deepEqual(spawned, [])
 })
 
 test("the hard stop fires after the budget plus a short grace, ends only the child the launcher started, by its handle, and the launcher still finishes", async () => {

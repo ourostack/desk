@@ -13,6 +13,23 @@ import { LOOP_START_SCRIPT } from "../../../../../plugins/desk/mcp/src/factory/e
 import { metadata } from "../../../../../plugins/desk/mcp/src/factory/plugin-sources.cjs"
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
 
+test("an unresolved crew person cannot pass an inherited scope to finalization", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  await fs.mkdir(path.join(ctx.desk, "desks"), { recursive: true })
+  await requestFinalize(ctx.env, { job: "4".repeat(32), deskRoot: ctx.desk })
+  const calls = []
+  const result = await runHook({
+    host: "claude",
+    payload: { session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "Stop" },
+    env: { ...ctx.env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot: "/another-desk", personPrefix: "desks/other" }) },
+    launch: async (...args) => calls.push(args),
+  })
+  assert.equal(result, "written")
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][1][0], "finalize")
+  assert.equal(calls[0][2].DESK_FACTORY_LOOP_SCOPE, undefined)
+}))
+
 for (const event of ["SessionEnd", "Stop", "sessionEnd", "agentStop"]) {
   test(`${event} writes a private marker, ignores content, and derives only on session end`, () => scratch(async (ctx) => {
     const claude = /^[A-Z]/u.test(event)
@@ -492,7 +509,7 @@ test("the end of a turn starts the loop launcher when an evaluation request is n
   assert.deepEqual(calls, [], "no request waits")
   await requestEvaluation(ctx.env, { job: "2".repeat(32), deskRoot: ctx.desk })
   await runHook(options)
-  assert.deepEqual(calls.map((call) => [call[0], call[1]]), [[LOOP_START_SCRIPT, []]])
+  assert.deepEqual(calls.map((call) => [call[0], call[1]]), [[LOOP_START_SCRIPT, ["--desk", ctx.desk, "--person-prefix", ""]]])
   // With a finalize request pending, finalize starts the worker itself once it has derived the job's sessions.
   await requestFinalize(ctx.env, { job: "3".repeat(32), deskRoot: ctx.desk })
   calls.length = 0

@@ -66,7 +66,7 @@ test("a nonconsenting desk cannot erase another desk's due triage or inherit its
   const after = await readStatus(w.env)
   const key = JSON.stringify([path.resolve(w.deskRoot), ""])
   assert.deepEqual(after.triage_by_desk[key], before.triage_by_desk[key])
-  assert.equal(triageKickDue(after, at(2).getTime()), true)
+  assert.equal(triageKickDue(after, at(2).getTime(), { deskRoot: path.resolve(w.deskRoot), personPrefix: "" }), true)
   assert.equal(after.triage_by_desk[JSON.stringify([other, ""])].result, "no_consenting_store")
   assert.equal(after.triage.coverage, null, "the latest diagnostic is not forged as a successful scan")
   assert.deepEqual(await readTriageOutbox(w.env, STORE, "state.json"), publication, "a nonconsenting pass cannot blank pending or new published coverage")
@@ -416,7 +416,7 @@ test("runTriageCommand takes only --desk and --person-prefix, runs under the loo
   const kick = async (env, options) => { kicks.push(options); return { kicked: true } }
   const done = await runTriageCommand({ argv: ["--desk", w.deskRoot, "--person-prefix", ""], env: w.env, pluginVersion: "9.9.9", impls: qualifiedSeams(), kick })
   assert.deepEqual(done, { result: "ran", ok: true, failed: 0, reviewed: 1, refused: 0, deferred: 0, unreviewed: 0 })
-  assert.deepEqual(kicks, [{ continuation: true }])
+  assert.deepEqual(kicks, [{ continuation: true, scope: { deskRoot: w.deskRoot, personPrefix: "" } }])
   const again = await runTriageCommand({ argv: ["--desk", w.deskRoot], env: w.env, pluginVersion: "9.9.9", impls: qualifiedSeams(), kick })
   assert.equal(again.result, "not_due")
   assert.equal(kicks.length, 1, "no continuation, no kick")

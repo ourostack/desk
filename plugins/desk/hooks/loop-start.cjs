@@ -47,15 +47,20 @@ async function resolvePerson({ deskRoot, env }) {
 async function main({
   env = process.env, spawnImpl = spawn, resolveRoot: findRoot = resolveRoot, resolvePerson: findPerson = resolvePerson,
   setTimer = setTimeout, clearTimer = clearTimeout, hardStopMs = HARD_STOP_MS, clock = Date.now,
+  argv = process.argv.slice(2),
 } = {}) {
   if (isHeadless(env)) return { started: false, reason: "headless_session" };
   if (!isEnabled(env)) return { started: false, reason: "disabled" };
+  const explicit = argv.length > 0;
+  if (explicit && (argv.length !== 4 || argv[0] !== "--desk" || typeof argv[1] !== "string" || !path.isAbsolute(argv[1]) ||
+      argv[2] !== "--person-prefix" || typeof argv[3] !== "string" || !/^(?:|desks\/(?!\.{1,2}$)[^/\\]+)$/u.test(argv[3]))) return { started: false, reason: "invalid_scope" };
   let deskRoot = null;
-  try { deskRoot = await findRoot(env); } catch { /* no desk */ }
+  try { deskRoot = explicit ? path.resolve(argv[1]) : await findRoot(env); } catch { /* no desk */ }
   if (!deskRoot) return { started: false, reason: "no_desk" };
   let person = null;
   try { person = await findPerson({ deskRoot, env }); } catch { /* unknown */ }
   if (person?.status !== "ok") return { started: false, reason: "person_unresolved" };
+  if (explicit && person.personPrefix !== argv[3]) return { started: false, reason: "person_mismatch" };
   const args = [FACTORY_CLI, "loop", "--desk", deskRoot, ...(person.personPrefix === "" ? [] : ["--person-prefix", person.personPrefix])];
   return new Promise((resolve) => {
     let child;
@@ -63,7 +68,8 @@ async function main({
     let extension = 0;
     const finish = (value) => { clearTimer(timer); resolve(value); };
     try {
-      child = spawnImpl(process.execPath, args, { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true, env });
+      const workerEnv = { ...env, DESK_FACTORY_LOOP_SCOPE: JSON.stringify({ deskRoot, personPrefix: person.personPrefix }) };
+      child = spawnImpl(process.execPath, args, { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true, env: workerEnv });
     } catch {
       resolve({ started: false, reason: "spawn_failed" });
       return;

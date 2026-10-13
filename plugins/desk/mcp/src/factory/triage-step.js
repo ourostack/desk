@@ -565,9 +565,11 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
   const scope = JSON.stringify([path.resolve(deskRoot), personPrefix])
   // `runOutcome` is the agent launch's own outcome for its health: `ok`, `failed`, or null (no launch, or one that counts neither way).
   const record = { at, result: null, launched: false, runOutcome: null, runner: { state: null, reason: null, qualification: "not_checked" }, coverage: null, held: null, refresh: null, ledger: null }
+  let publicationSuccess
   const finish = async (ok, result, extra = {}) => {
     const answer = { ok, result, launched: record.launched, ...none, ...extra }
     const { runOutcome, ...stored } = record
+    publicationSuccess = { lastSuccessAt: stored.last_success_at, lastSuccessStore: stored.last_success_store, lastReview: stored.last_review }
     let carry = false
     await swallow(() => updateStatus(env, (current) => {
       const scopes = isObject(current.triage_by_desk) ? current.triage_by_desk : {}
@@ -581,13 +583,15 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
       const triage = {
           ...stored, result, ok, run, counts: { reviewed: answer.reviewed, refused: answer.refused, deferred: answer.deferred, unreviewed: answer.unreviewed },
           last_success_at: stored.last_success_at ?? before.last_success_at ?? null, last_review: stored.last_review ?? before.last_review ?? null,
+          last_success_store: stored.last_success_store ?? before.last_success_store ?? null,
           eligible: stored.eligible === undefined ? (before.eligible ?? null) : stored.eligible,
       }
+      publicationSuccess = { lastSuccessAt: triage.last_success_at, lastSuccessStore: triage.last_success_store, lastReview: triage.last_review }
       return { ...current, triage, triage_by_desk: { ...scopes, [scope]: triage } }
     }))
     await swallow(() => recordStep(env, "triage", { ok, result, now: nowDate, carry }))
     // What a published batch says about this scan and the runner (`triage-outbox.js`); only a step that read the cards has anything to say.
-    if (record.coverage !== null) await swallow(() => recordTriageCoverage(env, { store, coverage: record.coverage, counts: answer, runner: record.runner.state, now: nowDate.getTime(), deskRoot }))
+    if (record.coverage !== null) await swallow(() => recordTriageCoverage(env, { store, coverage: record.coverage, counts: answer, runner: record.runner.state, now: nowDate.getTime(), deskRoot, personPrefix, ...publicationSuccess }))
     return answer
   }
 
@@ -797,6 +801,7 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
       const last = accepted.reviewed.at(-1)
       record.runOutcome = "ok"
       record.last_success_at = doneAt
+      record.last_success_store = store.toLowerCase()
       const { protected_result: _token, related_keys: _related, duplicate_keys: _duplicates, evidence: _evidence, ...codes } = last.review
       record.last_review = { key: last.key, revision: last.revision, at: doneAt, ...codes }
     }
@@ -846,7 +851,7 @@ export async function runTriageCommand({ argv, env, pluginVersion, impls = {}, c
   } finally {
     await releaseLock(lock)
   }
-  if (step.continuation?.state === "issued") await swallow(() => kick(env, { continuation: true }))
+  if (step.continuation?.state === "issued") await swallow(() => kick(env, { continuation: true, scope: { deskRoot, personPrefix } }))
   const { ok, result, reviewed, refused, deferred, unreviewed } = step
   return reply(result, ok, { reviewed, refused, deferred, unreviewed })
 }
