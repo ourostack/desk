@@ -79,12 +79,18 @@ async function launch(options) {
     close: async () => {
       // A refusal may arrive before controller admission settles. This fixture
       // owns that asynchronous in-process launch as well as the front door.
-      await handle.admission.idle({ waitMs: 15000 })
-      assert.equal(handle.admission.running, false, "fixture admission must settle before controller disposal")
-      toServer.end()
-      await handle.closed
-      for (const controller of controllers) await controller.close()
-      for (const runtime of runtimeServers) await runtime.close()
+      try {
+        // `idle` waits for the attempt running when it is called, and a degraded session starts another at once, so ask until none is running.
+        const settleBy = Date.now() + 15000
+        while (handle.admission.running && Date.now() < settleBy) await handle.admission.idle({ waitMs: settleBy - Date.now() })
+        assert.equal(handle.admission.running, false, "fixture admission must settle before controller disposal")
+        toServer.end()
+        await handle.closed
+      } finally {
+        // Closed whatever happened above: a server left listening keeps this file's process alive until the job's time limit.
+        await Promise.allSettled(controllers.map((controller) => controller.close()))
+        await Promise.allSettled(runtimeServers.map((runtime) => runtime.close()))
+      }
       assert.ok(runtimeServers.every((runtime) => !runtime.server.listening), "all fixture-owned servers are closed")
     },
   }
