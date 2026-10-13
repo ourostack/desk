@@ -123,7 +123,7 @@ test("protected_windows_and_spent_migration", async (t) => {
     const triage = await reserve(env, "triage", at(0, 18, 30))
     assert.equal(triage.state, "reserved")
     assert.equal(triage.remaining, 0)
-    assert.deepEqual(await reserve(env, "triage", at(0, 23, 59)), { state: "quota_exhausted", day: dayText(0), remaining: 0, retry_at: new Date(at(1, 0)).toISOString() })
+    assert.deepEqual(await reserve(env, "triage", at(0, 23, 59)), { state: "quota_exhausted", day: dayText(0), remaining: 0 })
     assert.equal((await reserve(env, "evaluate", at(0, 23, 59))).state, "quota_exhausted")
     const ledger = await ledgerOf(root)
     assert.equal(ledger.spent, 30, "never more than the ceiling")
@@ -921,7 +921,7 @@ test("a qualification needs room for both launches", () => scratch(async (env, r
   assert.equal(one.token.launches, undefined)
 }))
 
-test("a triage refusal says when it could pass, and a peek answers the same without writing", () => scratch(async (env, root) => {
+test("a two-launch refusal says when it could pass, and a peek answers the same without writing", () => scratch(async (env, root) => {
   assert.deepEqual(await peekAgentLaunch(env, { kind: "triage", launches: 2, now: at(0, 9) }), { state: "unknown" }, "no ledger yet: the reservation decides")
   assert.equal((await reserve(env, "triage", at(0, 9), { launches: 2 })).state, "reserved")
   const before = await readBytes(root)
@@ -935,7 +935,8 @@ test("a triage refusal says when it could pass, and a peek answers the same with
   assert.deepEqual(await mark(env), marked)
   const refused = await reserve(env, "triage", at(0, 10), { launches: 2 })
   assert.deepEqual(refused, { state: "window_used", day: dayText(0), remaining: 0, retry_at: new Date(at(0, 12)).toISOString() })
-  assert.equal((await reserve(env, "triage", at(0, 13))).retry_at, new Date(at(0, 15)).toISOString())
+  assert.deepEqual(await reserve(env, "triage", at(0, 13), { launches: 2 }), { state: "triage_cooldown", day: dayText(0), remaining: 0, retry_at: new Date(at(0, 15)).toISOString() })
+  assert.deepEqual(await reserve(env, "triage", at(0, 13)), { state: "triage_cooldown", day: dayText(0), remaining: 0 }, "a single-launch refusal is unchanged")
   // A clock behind the ledger's is read as the ledger's, as a reservation reads it.
   assert.equal((await peekAgentLaunch(env, { kind: "triage", now: at(0, 8) })).state, "window_used")
   await forge(env, root, { spent: 29 })

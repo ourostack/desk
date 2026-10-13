@@ -598,7 +598,8 @@ export function createHeadlessLedger(seams = {}) {
    * `kind` (`evaluate` or `triage`) before the caller starts it, or two (`launches: 2`, triage only) for a triage qualification, which
    * starts two model sessions in one window; the token then carries `launches: 2` and is finished once for both. `state` is `reserved` (with the token `finishAgentLaunch` takes, the
    * ledger's UTC day and the launches of that kind still allowed now), a quota refusal (`quota_exhausted`, `window_protected`,
-   * `window_used`, `triage_cooldown`; a triage refusal also carries `retry_at`, the earliest instant it could pass) or a state that
+   * `window_used`, `triage_cooldown`; a two-launch qualification refusal also carries `retry_at`, the earliest instant it could
+   * pass, and a single-launch refusal is unchanged) or a state that
    * blocks every launch (see the header). `legacyEvaluator` is the stored
    * `status.evaluator`, read only by the first migration. A reservation is never given back.
    */
@@ -612,7 +613,7 @@ export function createHeadlessLedger(seams = {}) {
       const quota = quotaFor(ledger, kind, nowMs, launches)
       if (quota.state !== "ok") {
         const refusal = { state: quota.state, day: ledger.day, remaining: 0 }
-        return { result: kind === "triage" ? { ...refusal, retry_at: new Date(retryAt(ledger, nowMs, quota.state)).toISOString() } : refusal }
+        return { result: launches === 2 ? { ...refusal, retry_at: new Date(retryAt(ledger, nowMs, quota.state)).toISOString() } : refusal }
       }
       const target = { ...ledger, last_clock_ms: nowMs, spent: ledger.spent + launches, [kind]: { ...ledger[kind], launched: ledger[kind].launched + launches } }
       if (kind === "triage") {

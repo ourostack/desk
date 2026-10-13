@@ -449,6 +449,13 @@ test("restore learns whether a sealed record has qualified on this host", async 
   assert.deepEqual(check.calls.restore.map((x) => x.sealedBefore), [true, true, false])
 })
 
+test("only a host with process provenance on arm64 can qualify", () => {
+  assert.equal(qualify.triageQualifyHost({ provenance: true }, "arm64"), true)
+  assert.equal(qualify.triageQualifyHost({ provenance: true }, "x64"), false)
+  assert.equal(qualify.triageQualifyHost({ provenance: false }, "arm64"), false)
+  assert.equal(qualify.triageQualifyHost(), process.platform === "darwin" && process.arch === "arm64")
+})
+
 test("the default seams answer from the real host", async () => {
   const root = scratch()
   const lock = await workerLock(root)
@@ -505,7 +512,7 @@ test("the loader finds the runner here, in a prepared mirror, or answers a quiet
   assert.equal(typeof loaded.runner.restoreTriageQualification, "function")
   assert.equal(typeof loaded.custody.ownedSourceIdentity, "function")
   assert.equal(typeof loaded.qualify.autoQualifyTriage, "function")
-  assert.deepEqual(home.TRIAGE_ENGINE_CARD, { source: "loop_alarm", id: "triage_engine_unpinned", title: "The triage runner's engine pin is behind the installed Claude Code" })
+  assert.deepEqual(home.TRIAGE_ENGINE_CARD, { source: "loop_alarm", id: "triage_engine_unpinned" })
   // The default preparation reads only the account's home, never an ambient cache selector, and names this exact source.
   const seenPrepare = []
   const bootstrap = { hashCurrentSource: (root) => `hash-of-${root}`, prepareRuntime: (options) => (seenPrepare.push(options), { sourceMirrorPath: mirror }) }

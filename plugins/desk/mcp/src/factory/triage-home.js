@@ -19,11 +19,13 @@ const OWN_ROOT = fileURLToPath(new URL("../../", import.meta.url))
 const PACKAGES = Object.freeze(["gray-matter", "@modelcontextprotocol/sdk"])
 const MODULES = Object.freeze({ runner: "src/factory/triage-runner.js", custody: "src/factory/triage-custody.js", qualify: "src/factory/triage-qualify.js" })
 
-/** The improvement card the loop opens or reuses while restore reports `stale` / `engine_unpinned`. */
+/**
+ * The improvement card the loop opens or reuses while restore reports `stale` / `engine_unpinned`: its source and id only. The
+ * title is the loop's card table's, since the card writer refuses a supplied title.
+ */
 export const TRIAGE_ENGINE_CARD = Object.freeze({
   source: "loop_alarm",
   id: "triage_engine_unpinned",
-  title: "The triage runner's engine pin is behind the installed Claude Code",
 })
 
 // The node_modules folders ESM resolution walks from `from` (never NODE_PATH, which ESM imports ignore).

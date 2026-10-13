@@ -331,7 +331,7 @@ The record is keyed on content, not on where Desk is installed, so a release wit
 | `source_changed` | A runner, custody, catalog, qualifier or helper file, the fixture, `package-lock.json`, a file of the parent's dependency packages, or a loaded server module | yes |
 | `runtime_changed` | The Node runtime's path or bytes | yes |
 | `engine_changed` | The engine pin moved, or the record's engine file changed while the pinned build is still installed elsewhere | yes |
-| `engine_unpinned` | No installed file is the pinned 2.1.296 build; the loop opens the improvement card "The triage runner's engine pin is behind the installed Claude Code" | no: a Desk release must re-derive the engine table |
+| `engine_unpinned` | No installed file is the pinned 2.1.296 build; the loop opens its engine-pin improvement card (`triage_engine_unpinned`) | no: a Desk release must re-derive the engine table |
 | `engine_mismatch` | The caller named a different engine than the record's | no |
 | `environment_changed` | The constructed child environment: HOME, the account, the temporary folder, `CLAUDE_CONFIG_DIR`, proxy or CA variables | yes |
 | `environment_unsafe` | HOME, `CLAUDE_CONFIG_DIR` or the temporary folder is not a private folder of this account | no |

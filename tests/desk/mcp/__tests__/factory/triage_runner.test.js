@@ -1865,6 +1865,9 @@ test("the qualifier takes an optional deadline and ledger callback, and reserves
   assert.equal(reserved,0)
   const refused=await qualifier.qualifyOwnedCatalog({launch:{cli:"/x",env:{},reserve:"not a function"},fixture:{},deadline:Date.now()+1000,evidenceDir:out})
   assert.equal(refused.reason,"policy_control_unsupported")
+  // Without a launch the qualifier runs the direct checks only; an empty fixture fails them on every host.
+  const direct=await qualifier.qualifyOwnedCatalog({fixture:{},deadline:Date.now()+1000,evidenceDir:path.join(out,"direct")})
+  assert.equal(direct.state,"blocked");assert.equal(direct.resources.launches,0)
 })
 
 posixEnvTest("the pinned engine search answers null from a home with no pinned build, on the default seams",()=>{

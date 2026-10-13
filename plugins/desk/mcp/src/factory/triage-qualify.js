@@ -51,8 +51,11 @@ const MARKER_KEYS = ["version", "day", "started_at", "trigger", "streak", "resul
 const BLANK_MARKER = Object.freeze({ version: 1, day: null, started_at: null, trigger: null, streak: 0, result: null, reason: null,
   sealed: false, retry_after: null, retry_reason: null })
 
+/** `triageQualifyHost(support, arch)`: whether this host can qualify: process provenance (Darwin) on arm64. The arguments are test seams. */
+export const triageQualifyHost = (support = ownedCatalogHostSupport(), arch = process.arch) => support.provenance === true && arch === "arm64"
+
 const DEFAULT_IMPLS = Object.freeze({
-  host: () => ownedCatalogHostSupport().provenance && process.arch === "arm64",
+  host: () => triageQualifyHost(),
   measurement: qualificationMeasurementActive,
   stateRoot: (env) => factoryStateRoot(env),
   takeLock,
