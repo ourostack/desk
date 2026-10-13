@@ -64,6 +64,22 @@ test("task_create writes a v1 task.md with required + default fields", async () 
   assert.match(data.created, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
 })
 
+test("a focused drafting task returns the complete alignment reply contract", async () => {
+  const root = await mkTempDeskRoot()
+  const result = await task_create({ deskRoot: root, input: { track: "tools", slug: "folder-report", title: "Folder report", focus: true } })
+  assert.match(result.alignment_note, /outcome, assumptions, recommended decisions and completion checks together/u)
+  assert.match(result.alignment_note, /not just an output-format question/u)
+  assert.match(result.alignment_note, /do not reopen an existing go/u)
+})
+
+test("parked tasks and already-processing work do not restart alignment", async () => {
+  const root = await mkTempDeskRoot()
+  const parked = await task_create({ deskRoot: root, input: { track: "tools", slug: "parked-report", title: "Parked report" } })
+  const processing = await task_create({ deskRoot: root, input: { track: "tools", slug: "active-report", title: "Active report", focus: true, status: "processing" } })
+  assert.equal(parked.alignment_note, undefined)
+  assert.equal(processing.alignment_note, undefined)
+})
+
 test("task_create refuses to overwrite an existing task", async () => {
   const root = await mkTempDeskRoot()
   await task_create({

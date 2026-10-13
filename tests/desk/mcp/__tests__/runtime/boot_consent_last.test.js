@@ -128,7 +128,7 @@ test("unsigned deliveries and open improvement cards reach the operator's sessio
 test("the sentence about contributing is handed out until an agent records having said it; after that the boot says not to raise it", async () => {
   const root = await desk()
   const stateDir = resolveDeskStateDir({ env: { DESK: root }, homeDir: root })
-  const record = /In the same turn, just before the reply that ends with it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never runs the command\./u
+  const record = /In the same turn, just before the reply that includes it, run `node [^`]*mcp.scripts.factory\.js consent --store ourostack\/factory-intake --mentioned yes`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it\. If you already said the sentence in this session, do not say it again\. A child agent never says it and never runs the command\./u
   const first = await boot(root)
   assert.match(first.instructions.find(isConsent), record)
   assert.match(first.text_instructions.at(-1), record)
@@ -143,6 +143,16 @@ test("the sentence about contributing is handed out until an agent records havin
     assert.doesNotMatch(list.join("\n"), /"Desk can contribute|want the details|--mentioned|--contribute/u)
   }
   assert.match(formatBootText(later).trimEnd().split("\n").at(-1), /do not raise it again/u)
+})
+
+test("an undecided factory notice cannot replace a delivery's required sign-off", async () => {
+  const root = await desk()
+  const result = await boot(root)
+  for (const lines of [result.instructions, result.text_instructions]) {
+    const notice = lines.find(isConsent)
+    assert.match(notice, /If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off/u)
+    assert.doesNotMatch(notice, /end your reply|ask nothing|never as its own decision group/u)
+  }
 })
 
 test("a session with no operator, or a store that is decided or held, never reads the record", async () => {

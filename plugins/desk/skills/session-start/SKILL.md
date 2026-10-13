@@ -42,7 +42,7 @@ If the desk already exists and still shows V1 evidence (durable desk state such 
 
 **First reply.** Say only what the operator needs: the open work and the one question (resume which, or start new), written as a sentence in the reply and never put through the host's question form (`interaction-style`, "No question forms"), plus any `degraded`, `pending` or blocked item that changes what they would do. Do not print the host, user or path line, a list of checks that passed, or the boot output itself. A healthy boot with nothing to flag needs no health report; a named task skips the status block and goes straight to its resume reply.
 
-**Factory consent.** Only when the boot's last instruction says it is undecided: after the operator's work, end the reply with the one line it gives, once. The script behind a yes is in `details.md`, "Factory consent".
+**Factory consent.** Only when the boot's last instruction says it is undecided: after the operator's work, include the statement it gives once. If delivering a task, defer that notice to a later turn; never replace the delivery's required sign-off or mix it with another decision group. The script behind a request for details is in `details.md`, "Factory consent".
 
 **Decide, don't ask.** Fix what you can fix yourself (a card's frontmatter, a repair, a tidy-up) and say so in one line. Bring the operator only a true human gate: an account or credential they must act in, a decision that is theirs, an irreversible action. The factory consent question never comes before the work the operator asked for.
 

@@ -761,6 +761,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  if (data.status === "drafting" && values.focus === true) {
+    result.alignment_note = "Your next alignment reply must state the outcome, assumptions, recommended decisions and completion checks together, not just an output-format question. Ask all needed human decisions in that reply, then wait for explicit go. Reuse what the operator already supplied; do not reopen an existing go. This is Desk's alignment contract, not another design-document approval."
+  }
   if (data.status === "done") {
     result.signoff = "delivered_unsigned"
     result.signoff_note = "This task was created already done, with no evidence, so there is nothing to show the operator; it stays unsigned. Create a task at drafting and finish it with evidence instead."
