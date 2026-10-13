@@ -151,7 +151,7 @@ test("an acknowledged review is published once, through the intake pull request,
   }])
   assert.equal(registry(w).entries[0].id, written.id)
   assert.deepEqual(value.coverage, { generation: (await state(w)).generation, scan: "complete", reviewed: 1, unreviewed: 0, refused: null, deferred: null, more_unreviewed: false })
-  assert.deepEqual(value.runner, { state: "unsupported_host", last_success_age: "never" })
+  assert.deepEqual(value.runner, { state: "unsupported_host", last_success_age: "unknown" })
   // Nothing of the desk beyond that: no canonical key, no path, no token, no account.
   const text = hub.blobText(sha)
   for (const secret of [KEY, w.deskRoot, annotationOf(w).review.protected_result, annotationOf(w).basis.protected_basis, annotationOf(w).basis.canonical_revision, ACCOUNT]) assert.ok(!text.includes(secret), `${secret} reached the store`)
@@ -696,7 +696,7 @@ test("a machine with no scan or runner state recorded holds its rows, and unknow
   assert.deepEqual([(await state(w)).held.code, (await state(w)).pending, Object.keys((await state(w)).requests)], ["triage_visibility_unknown", [], [KEY]])
   assert.equal((await run(w, hub, T0 + 2 * HOUR + DAY)).result, "delivered_pr_open")
   const [[, sha]] = await headTriage(w, hub)
-  assert.deepEqual(batchValue(hub, sha).runner, { state: "no_agent_cli", last_success_age: "never" })
+  assert.deepEqual(batchValue(hub, sha).runner, { state: "no_agent_cli", last_success_age: "unknown" })
 })
 
 test("more than twenty acknowledged rows go in immutable batches of at most twenty", { timeout: 600000 }, async () => {

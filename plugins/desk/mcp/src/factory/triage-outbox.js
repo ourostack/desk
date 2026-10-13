@@ -134,7 +134,7 @@ const validState = (value) =>
   optional(value.held, (held) => isPlainObject(held) && typeof held.code === "string" && isTime(held.until)) &&
   optional(value.coverage, isPlainObject) && optional(value.published, isPlainObject) && optional(value.held_requests, isPlainObject) && optional(value.scan_desk, (root) => typeof root === "string") &&
   optional(value.scan_person_prefix, (prefix) => typeof prefix === "string") &&
-  optional(value.runner_success, (witness) => isPlainObject(witness) && typeof witness.store === "string" && typeof witness.desk_root === "string" && typeof witness.person_prefix === "string" && (witness.at === null || isTime(witness.at))) &&
+  optional(value.runner_success, (witness) => isPlainObject(witness) && typeof witness.store === "string" && typeof witness.desk_root === "string" && typeof witness.person_prefix === "string" && optional(witness.at, (at) => at === null || isTime(at))) &&
   optional(value.dropped, (dropped) => isPlainObject(dropped) && Object.values(dropped).every((entry) => isPlainObject(entry) && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)))
 const VALID_STATE = { isValid: (value) => value === null || (isPlainObject(value) && validState(value)) }
 const stateOf = (value) => value ?? { schema: STATE_SCHEMA, generation: hex(16), requests: {}, pending: [], emitted: {}, rows: {} }
@@ -209,9 +209,10 @@ export async function recordTriageCoverage(env, { store, coverage, counts, runne
     const run = { refused: count(counts.refused) ?? state.run_counts?.refused ?? null, deferred: count(counts.deferred) ?? state.run_counts?.deferred ?? null }
     const reviewed = complete ? count(coverage.reviewed) : null
     const unreviewed = complete ? count(coverage.unreviewed) : null
+    // An omitted witness time is unknown history; only an existing null witness establishes "never".
     const success = isTime(lastSuccessAt) && (lastSuccessStore === store.toLowerCase() ||
       (lastSuccessStore == null && lastReview?.at === lastSuccessAt && ownsReview(state, deskRoot, personPrefix, lastReview)))
-      ? lastSuccessAt : ownerMatches(state.runner_success, deskRoot, personPrefix) && state.runner_success.store === store.toLowerCase() ? state.runner_success.at : null
+      ? lastSuccessAt : ownerMatches(state.runner_success, deskRoot, personPrefix) && state.runner_success.store === store.toLowerCase() ? state.runner_success.at : undefined
     return {
       ...state,
       coverage: {
@@ -670,7 +671,7 @@ const publicRunner = (state, status, now, store) => {
   if (state.runner_success !== undefined) {
     const witness = state.runner_success
     if (!ownerMatches(witness, state.scan_desk, state.scan_person_prefix) || witness.store !== store.toLowerCase()) return { state: state.runner_state, last_success_age: "unknown" }
-    return { state: state.runner_state, last_success_age: witness.at === null ? "never" : coarseAge(now - Date.parse(witness.at)) }
+    return { state: state.runner_state, last_success_age: witness.at === undefined ? "unknown" : witness.at === null ? "never" : coarseAge(now - Date.parse(witness.at)) }
   }
   // Earlier outboxes have no witness. Only a scoped native review paired with this store's own transport metadata can restore it.
   // Never attribute the latest global diagnostic, or an unscoped legacy success, to a publishing desk.

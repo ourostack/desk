@@ -184,6 +184,15 @@ test("a stored runner witness from another desk is unknown, not a fresh success"
     const value = JSON.parse((await prepare(w, 1)).items[0].bytes)
     assert.equal(value.runner.last_success_age, "unknown")
   }
+  await updateTriageOutbox(w.env, STORE, "state.json", (state) => ({
+    ...state, runner_success: { store: STORE, desk_root: w.deskRoot, person_prefix: "", at: null },
+  }))
+  assert.equal(JSON.parse((await prepare(w, 1)).items[0].bytes).runner.last_success_age, "never")
+  const before = await readTriageOutbox(w.env, STORE, "state.json")
+  await recordTriageCoverage(w.env, {
+    store: STORE, deskRoot: w.deskRoot, coverage: before.coverage, counts: {}, runner: "ran", now: T0 + HOUR,
+  })
+  assert.equal((await readTriageOutbox(w.env, STORE, "state.json")).runner_success.at, null)
 })
 
 test("legacy success restoration accepts only this desk's matching acknowledged review", { skip: NEEDS_PREPARED_RUN }, async () => {
@@ -202,7 +211,7 @@ test("legacy success restoration accepts only this desk's matching acknowledged 
       now: T0 + HOUR, lastSuccessAt: observation.last_success_at, lastReview: review,
     })
     const kept = await readTriageOutbox(w.env, STORE, "state.json")
-    assert.equal(kept.runner_success.at, review === observation.last_review ? observation.last_success_at : null)
+    assert.equal(kept.runner_success.at, review === observation.last_review ? observation.last_success_at : undefined)
   }
 })
 
@@ -219,4 +228,28 @@ test("a scan without an owning desk retains valid requests and the prior witness
   assert.deepEqual(after.runner_success, before.runner_success)
   assert.equal(after.scan_desk, undefined)
   assert.equal(after.coverage.scan, "truncated")
+})
+
+test("legacy mechanical re-observation retains unknown success history until a native review is acknowledged", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const w = await fixture()
+  await recordTriageCoverage(w.env, {
+    store: STORE, deskRoot: w.deskRoot, now: T0,
+    coverage: { scan: "complete", reviewed: 0, unreviewed: 3 },
+    counts: { reviewed: 0, refused: 0, deferred: 0 }, runner: "ran",
+    lastSuccessAt: new Date(T0).toISOString(), lastSuccessStore: STORE,
+  })
+  await updateTriageOutbox(w.env, STORE, "state.json", (state) => ({ ...state, published: { scan: "unreadable" } }))
+  assert.equal(JSON.parse((await prepare(w, 1)).items[0].bytes).runner.last_success_age, "recent")
+  await updateTriageOutbox(w.env, STORE, "state.json", ({ runner_success: _witness, scan_person_prefix: _prefix, ...state }) => state)
+  await updateStatus(w.env, (status) => ({
+    ...status, triage_by_desk: undefined,
+    triage: { last_success_at: new Date(T0).toISOString() },
+  }))
+  const unavailable = { loadRunner: async () => ({ state: "unavailable" }) }
+  for (const hours of [2, 3]) {
+    await observe(w, w.deskRoot, hours, unavailable)
+    assert.equal(JSON.parse((await prepare(w, hours + 0.5)).items[0].bytes).runner.last_success_age, "unknown")
+  }
+  assert.equal((await observe(w, w.deskRoot, 4)).reviewed, 3)
+  assert.equal(JSON.parse((await prepare(w, 5)).items[0].bytes).runner.last_success_age, "recent")
 })
