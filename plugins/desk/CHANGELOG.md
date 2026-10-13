@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.315 — 2026-10-13
+
+`desk_status` no longer blocks the server while it counts unsigned deliveries ([`mcp/src/desk/unsigned-deliveries.js`](mcp/src/desk/unsigned-deliveries.js), [`mcp/src/tools/factory-context.js`](mcp/src/tools/factory-context.js)). The scan listed every track folder and read every card head synchronously, and one directory listing has taken 192 ms on a Windows runner, more than the 90 ms `desk_status` answer budget. It now reads asynchronously, 16 cards at a time, and stops reading when its status run is abandoned. `desk_doctor` and boot keep the synchronous scan; both scans share the same rules and give the same answer. A session closing a status run now also waits for that run's own file reads to end ([`mcp/src/tools/status.js`](mcp/src/tools/status.js)), so it never reports itself closed while a card in the desk folder is still open. That wait ends with the error `status_call_not_settled` after 1.5 s if the call has not settled, so a read that never returns cannot hold the session open; an aborted run also stops waiting for the controller's status. A folder named `task.md` is now counted as an unreadable card instead of failing the scan, which had made `desk_doctor` fail.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.314 — 2026-10-13
 
 `track_rename` and `task_move` now check the cards they will update before they move anything ([`mcp/src/tools/move.js`](mcp/src/tools/move.js)). `track_rename` patched each task card after the folder had moved, and `task_move` edited the tasks tables in `track.md` after the task folder had moved, so a task card whose `track:` or `updated:` could not be patched in place (for example a duplicated key), or a track card with invalid YAML, stopped the tool half way. Both now refuse with nothing changed, and the error names the card and the YAML problem.
