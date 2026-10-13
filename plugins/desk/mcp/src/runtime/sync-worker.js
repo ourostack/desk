@@ -235,6 +235,11 @@ async function runAsync(root, args, signal) {
   return result
 }
 
+/** Start the Git read worker now, so a status run's first read does not wait for it. desk_status answers from a 90 ms budget, and a worker started at the first read spent most of it. */
+export function warmStatusGitReads() {
+  gitReads.warm()
+}
+
 /** Resolves when no Git read asked with `signal` is still running. */
 export function waitForStatusGitReads(signal) {
   return gitReads.settled(signal)

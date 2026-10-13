@@ -174,6 +174,32 @@ test("the reader starts one worker at the first read, holds the process open onl
   assert.deepEqual(await second, { status: 0, stdout: "two" })
 })
 
+test("warm starts the worker ahead of the first read without holding the process open, and a worker that cannot start is reported", async () => {
+  const { made, createWorker } = fakeWorkers()
+  const reader = createGitReader({ createWorker })
+  reader.warm()
+  assert.equal(made.length, 1)
+  assert.equal(made[0].held, false, "a warm worker with no read does not hold the process open")
+  const first = reader.read(read("/a"))
+  assert.equal(made.length, 1, "the first read uses the warm worker")
+  reader.warm()
+  assert.equal(made[0].held, true, "warming again does not release a worker a read is waiting on")
+  made[0].emit("message", { id: 1, status: 0, stdout: "one" })
+  assert.deepEqual(await first, { status: 0, stdout: "one" })
+
+  const reported = []
+  let fail = true
+  const flaky = createGitReader({ createWorker: (...call) => { if (fail) throw new Error("no threads"); return createWorker(...call) }, onError: (reason) => reported.push(reason) })
+  flaky.warm()
+  assert.deepEqual(reported, ["the Git read worker could not start: no threads"])
+  fail = false
+  flaky.warm()
+  assert.equal(made.length, 2, "a later warm starts the worker")
+  const unnamed = createGitReader({ createWorker: () => { throw "no threads" }, onError: (reason) => reported.push(reason) })
+  unnamed.warm()
+  assert.equal(reported[1], "the Git read worker could not start: no threads")
+})
+
 test("a read belongs to the signal it was asked with: an aborted owner starts nothing, an abort cancels the read, and settled waits for the worker's answer", async () => {
   const { made, createWorker } = fakeWorkers()
   const reader = createGitReader({ createWorker })

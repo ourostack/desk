@@ -45,11 +45,12 @@ export function attachGitReadWorker(port, data, { execGit } = {}) {
 attachGitReadWorker(parentPort, workerData)
 
 /**
- * `{ read, settled, close }`. `read({ root, args, env, timeoutMs }, { signal })` resolves with `{ status, stdout }` and never rejects.
+ * `{ read, warm, settled, close }`. `read({ root, args, env, timeoutMs }, { signal })` resolves with `{ status, stdout }` and never rejects.
  * `signal` names the read's owner. A read asked after `signal` aborted starts no process and resolves as failed. Aborting `signal` during a read kills its Git process, and the read resolves as failed once that process has closed.
  * `settled(signal)` resolves when every read asked with `signal` has resolved, so an owner that aborts and then awaits it knows none of its Git processes is still running, for example inside a folder it is about to remove.
  * The worker starts at the first read. If it fails or exits, every read it had not answered resolves as failed, and the next read starts a new worker.
  * `onError(reason)` hears the first such failure only: a failed read answers the same as a repository with no remote, so a worker that cannot run must be said once.
+ * `warm()` starts the worker ahead of the first read, without holding the process open, so that read does not also wait for a thread to start.
  * `close()` stops the worker; a later read starts another.
  * A read that fails because its worker was lost or closed resolves at once, without waiting for a Git process that worker had started; that process ends by itself or at its timeout.
  */
@@ -135,6 +136,14 @@ export function createGitReader({ createWorker = (url, options) => new Worker(ur
         asked.then(() => reads.delete(asked))
       }
       return asked
+    },
+    warm() {
+      try {
+        worker ??= start()
+        if (waiting.size === 0) worker.unref()
+      } catch (error) {
+        report(`the Git read worker could not start: ${error?.message ?? error}`)
+      }
     },
     async settled(signal) {
       await Promise.all(owned.get(signal) ?? [])

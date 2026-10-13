@@ -8,7 +8,7 @@ import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
-import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads } from "../runtime/sync-worker.js"
+import { aheadBehindCountsAsync, hasRemoteConfiguredAsync, readFetchOkAt, readSyncStatus, waitForStatusGitReads, warmStatusGitReads } from "../runtime/sync-worker.js"
 import { createStatusInspection, waitForStatusInspection as waitForInspectionChild } from "../runtime/status-inspection.js"
 
 
@@ -83,6 +83,8 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
   const reader = createStatusInspection(deskRoot, { signal })
   try {
     const root = await reader.inspect("root", statusContext.root)
+    // The sync section comes last; its worker thread starts while the inspections run.
+    if (root.valid) warmStatusGitReads()
     const runtime = runtimeStatus(statusContext.runtime ?? {}, env)
     const localDb = root.valid
       ? await reader.inspect("local")

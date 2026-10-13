@@ -776,7 +776,8 @@ async function deskStatusSession({ command, args, cwd, env }) {
     for (let id = 2; ; id += 1) {
       child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: { detail: true } }));
       const status = JSON.parse((await waitForResponse(child, id, stderrChunks, 60000)).result.content[0].text);
-      if (status.state !== "admitting") return status;
+      // A ready answer can still be waiting for its detail, which the next call serves; `factory` is part of the detail.
+      if (status.state !== "admitting" && status.detail_pending !== true) return status;
     }
   } finally {
     child.kill("SIGTERM");
