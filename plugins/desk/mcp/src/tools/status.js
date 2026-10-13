@@ -68,8 +68,9 @@ const statusCalls = new WeakMap()
 // How long a session waits for an aborted desk_status call to settle. Once aborted, the call's own waits end at once
 // (its scan, its Git reads, the controller check); what remains is at most one batch of card reads and the
 // active-task listing, which takes no signal. A read that never returns must not hold every later status run and
-// the session's close forever, so the wait ends in an error instead and the run stays retained.
-const STATUS_CALL_SETTLE_MS = 5000
+// the session's close forever, so the wait ends in an error instead and the run stays retained. It is shorter than
+// the server's 3 s shutdown limit (`SHUTDOWN_TIMEOUT_MS` in index.js), so a close reports this error, not a timeout.
+const STATUS_CALL_SETTLE_MS = 1500
 
 function callsSettled(calls, ms) {
   if (calls === undefined || calls.size === 0) return Promise.resolve()
