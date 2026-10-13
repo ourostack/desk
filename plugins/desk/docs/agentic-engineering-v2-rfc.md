@@ -144,7 +144,7 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 
 **As of 28 September 2026: opt-in alpha, ready for evaluation.** An engineer outside the team can now evaluate V2 with the [evaluation packet](evaluation-packet.md) ([#28](https://github.com/ourostack/desk/pull/28)). This section says what works today, what is built but not yet proven live end to end, and what is still open.
 
-**Browser status updated October 11, 2026.** The browser entries below reflect the current native real-profile contract and its carried release. Other status entries retain their September evidence; this bounded update does not re-certify fresh setup, host composition, recovery, organization or the work factory store. The [packet](evaluation-packet.md#how-the-evaluation-works) starts those cold-run gates unrun, and evaluation and promotion remain human decisions.
+**Browser status updated October 12, 2026.** The browser entries below reflect the current real-profile contract (stock Playwright MCP through the stock Playwright Extension) and its carried release. Other status entries retain their September evidence; this bounded update does not re-certify fresh setup, host composition, recovery, organization or the work factory store. The [packet](evaluation-packet.md#how-the-evaluation-works) starts those cold-run gates unrun, and evaluation and promotion remain human decisions.
 
 **Works today.**
 
@@ -178,7 +178,7 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 - A kaizen verdict on live data: the first card needs at least 6 independent groups of finished jobs on each side of its countermeasure's release before the build can confirm it or not.
 - Draining recorded friction into kaizen cards: [#54](https://github.com/ourostack/desk/pull/54) shipped the filing step and made `curator` the kaizen worker; the curator's first pass over the desks' friction has not run yet.
 - A separate factory store for work done under a company overlay, and the admin session that manages it (section 4, “How the data flows”). Routing is built: a session that loads the overlay goes to the overlay's store and never to the public one ([#44](https://github.com/ourostack/desk/pull/44)). Until that store exists and the machine consents to it, such sessions are delivered nowhere.
-- Signed-in browsing without a declared real profile or a separate provider-backed context. A plugin's `desk.browser` declaration now selects the native real-profile path; the older broker still needs its provider for other persistent contexts. A plain personal install with neither stays signed out ([current browser contract](../skills/cdp-headed-browser/SKILL.md)).
+- Signed-in browsing without a declared real profile or a separate provider-backed context. A plugin's `desk.browser` declaration now selects the operator's real profile through stock Playwright MCP and the stock Playwright Extension; the older broker still needs its provider for other persistent contexts. A plain personal install with neither stays signed out ([current browser contract](../skills/cdp-headed-browser/SKILL.md)).
 - A fresh install on Claude Code, from `SETUP.md` through a first `browser_navigate`, recorded end to end on a clean profile. The browser's pieces are each proven (below), but that single run has not been recorded.
 
 **Next.** An evaluation by an engineer outside the team, then the maintainer's decision on promotion.

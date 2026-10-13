@@ -13,6 +13,7 @@ const read = (name) => load(readFileSync(path.join(workflows, name), "utf8"))
 
 test("integration gates install the broker's committed dependencies before testing it", () => {
   const jobs = read("desk-mcp-tests.yml").jobs
+  assert.deepEqual(jobs["desk-runtime-packs"].strategy.matrix.include.map(item => item.platform).sort(), ["darwin", "linux", "win32"])
   for (const name of ["desk-mcp-coverage-shards", "release-dry-run", "desk-runtime-packs"]) {
     assert.ok(jobs[name].steps.some(step => step["working-directory"] === "plugins/desk/mcp" &&
       step.run?.includes("npm ci --prefix ../browser-context-broker")), `${name} must install the broker lock, not rely on local node_modules`)
