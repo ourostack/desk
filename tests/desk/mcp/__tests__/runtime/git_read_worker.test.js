@@ -180,15 +180,22 @@ console.log(answer.status)
   assert.equal(execFileSync(process.execPath, [script], { encoding: "utf8", timeout: 30_000 }).trim(), "0")
 })
 
+// A script that starts a read which blocks for 20 s whatever happens to its input, waits until Git has really started it, then calls process.exit.
+// The Git alias runs in the OS temp folder, so the orphaned sleep never sits in a fixture folder.
+function exitWhileReadingScript(moduleUrl, marker) {
+  const shellMarker = marker.replaceAll("\\", "/")
+  return `import { existsSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { createGitReader } from ${JSON.stringify(moduleUrl)}
+createGitReader().read({ root: tmpdir(), args: ["-c", ${JSON.stringify(`alias.wait=!echo started > "${shellMarker}"; sleep 20`)}, "wait"], env: process.env, timeoutMs: 60000 })
+const poll = setInterval(() => { if (existsSync(${JSON.stringify(marker)})) { clearInterval(poll); console.log("exiting"); process.exit(0) } }, 20)
+`
+}
+
 test("a process can exit at once while a read is still running", async () => {
   const root = await mkTempRoot("desk-git-read-exit-running-")
-  execFileSync("git", ["-C", root, "init", "-q"])
   const script = path.join(root, "exit.mjs")
-  // `cat-file --batch` waits on its input, so this read runs until its 60 s timeout unless the process leaves first.
-  writeFileSync(script, `import { createGitReader } from ${JSON.stringify(new URL("../../../../../plugins/desk/mcp/src/runtime/git-read-worker.js", import.meta.url).href)}
-createGitReader().read({ root: ${JSON.stringify(root)}, args: ["cat-file", "--batch"], env: process.env, timeoutMs: 60000 })
-setTimeout(() => { console.log("exiting"); process.exit(0) }, 500)
-`)
-  // A worker that waited for Git synchronously could not be stopped, and the exit would wait for the read's timeout: this call would then time out.
-  assert.equal(execFileSync(process.execPath, [script], { encoding: "utf8", timeout: 30_000 }).trim(), "exiting")
+  writeFileSync(script, exitWhileReadingScript(new URL("../../../../../plugins/desk/mcp/src/runtime/git-read-worker.js", import.meta.url).href, path.join(root, "started.txt")))
+  // A worker that waited for Git synchronously could not be stopped, so the exit would wait out the 20 s sleep and this call would time out.
+  assert.equal(execFileSync(process.execPath, [script], { encoding: "utf8", timeout: 12_000 }).trim(), "exiting")
 })
