@@ -953,7 +953,7 @@ async function deliver(env, context) {
       return fallback
     }
   }
-  const triage = await triageSafely({ work: false, state: {}, candidates: [], held: {}, attest: [], attestEmpty: false }, () => planTriage(env, { store, now: now() }))
+  const triage = await triageSafely({ work: false, state: {}, candidates: [], held: {}, attest: [], coverageDue: false }, () => planTriage(env, { store, now: now() }))
   if (!triage.work && !capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive

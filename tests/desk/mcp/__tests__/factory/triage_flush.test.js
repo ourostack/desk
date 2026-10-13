@@ -162,10 +162,10 @@ test("an acknowledged review is published once, through the intake pull request,
   kept = await state(w)
   assert.deepEqual([kept.pending, kept.emitted, kept.requests], [[], { [written.id]: 1 }, {}])
   const delivered = await record(w, value.batch)
-  assert.deepEqual([delivered.state, delivered.bytes, delivered.rows], ["delivered", undefined, [{ id: written.id, revision: 1, desk_root: w.deskRoot }]])
+  assert.deepEqual([delivered.state, delivered.bytes, delivered.rows], ["delivered", undefined, [{ id: written.id, revision: 1, desk_root: w.deskRoot, key: KEY, person_prefix: "" }]])
   // The delivered row is kept exactly as the store has it, to be sent again unchanged.
-  assert.deepEqual(kept.rows, { [written.id]: { desk_root: w.deskRoot, revision: 1, row: value.rows[0], attested_at: new Date(T0 + 2 * HOUR).toISOString() } })
-  assert.deepEqual((await readStatus(w.env)).triage_publication[STORE], { at: new Date(T0 + 2 * HOUR).toISOString(), pending: 0, waiting: 0, delivered_at: new Date(T0 + 2 * HOUR).toISOString(), coverage_known: false, scan: "complete" })
+  assert.deepEqual(kept.rows, { [written.id]: { desk_root: w.deskRoot, key: KEY, person_prefix: "", revision: 1, row: value.rows[0], attested_at: new Date(T0 + 2 * HOUR).toISOString() } })
+  assert.deepEqual((await readStatus(w.env)).triage_publication[STORE], { at: new Date(T0 + 2 * HOUR).toISOString(), pending: 0, waiting: 0, delivered_at: new Date(T0 + 2 * HOUR).toISOString(), coverage_known: false, scan: "complete", rows_oldest_at: new Date(T0 + 2 * HOUR).toISOString(), rows_held: 0 })
   // Settled: a later flush has nothing to ask the store.
   const calls = hub.calls.length
   assert.deepEqual(await run(w, hub, T0 + 3 * HOUR), { result: "nothing_pending" })
@@ -292,7 +292,7 @@ test("batch_collision_and_idempotent_retry", async () => {
 
   // Staging is idempotent and never overwrites: the same projection again is the record that exists, other bytes for its batch are a conflict.
   const projection = { path: fresh, bytes: Buffer.from(collided.blobText(freshSha)), sha: freshSha }
-  const rowsOf = [{ id: written.id, revision: 1, desk_root: w.deskRoot }]
+  const rowsOf = [{ id: written.id, revision: 1, desk_root: w.deskRoot, key: KEY, person_prefix: "" }]
   assert.deepEqual(await stageTriageBatch(w.env, { store: STORE, projection, rows: rowsOf }), { state: "exists", path: fresh, sha: freshSha })
   assert.deepEqual(await stageTriageBatch(w.env, { store: STORE, projection }), { state: "invalid" }, "a row whose desk the record would not know")
   assert.deepEqual((await state(w)).pending, [], "a delivered batch is not pending again")
@@ -585,7 +585,7 @@ test("the outbox notes only this machine's writes, and a row a revision cannot g
   // Coverage: counts only from a complete scan, refused and deferred from the last step that knew them (null until a run completed),
   // and one generation whatever the counts do.
   const cover = async (coverage, counts = {}, runner = null) => {
-    await recordTriageCoverage(w.env, { store: STORE, coverage, counts, runner, now: T0 })
+    await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage, counts, runner, now: T0 })
     return state(w)
   }
   const complete = { scan: "complete", reviewed: 2, unreviewed: 3, refused: null, deferred: null, more_unreviewed: true }
@@ -678,12 +678,12 @@ test("a machine with no scan or runner state recorded holds its rows, and unknow
   assert.deepEqual([plan.work, plan.held], [false, { triage_coverage_unknown: 1 }])
   // A scan, but no runner state yet: the step ended before it looked at the host.
   const { recordTriageCoverage } = await load()
-  await recordTriageCoverage(w.env, { store: STORE, coverage: { scan: "complete", reviewed: 1, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: null, now: T0 })
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 1, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: null, now: T0 })
   plan = await planTriage(w.env, { store: STORE, now: T0 + HOUR })
   assert.deepEqual([plan.work, plan.held], [false, { triage_runner_unknown: 1 }])
   assert.deepEqual(await run(w, hub, T0 + HOUR), { result: "nothing_pending" })
   assert.equal(hub.calls.length, 0)
-  await recordTriageCoverage(w.env, { store: STORE, coverage: { scan: "complete", reviewed: 1, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: "no_agent_cli", now: T0 })
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 1, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: "no_agent_cli", now: T0 })
   // The store's own visibility cannot be learned (its repository answer says neither public nor private): nothing is built.
   // The first answer about the store is the one that tells the flush its default branch; the visibility question after it is answered oddly.
   let asked = 0
@@ -783,7 +783,7 @@ test("one_coverage_generation_and_reattestation_keep_a_quiet_queue_current", asy
   await step(w)
   // A machine whose runner has completed a run knows its refused and deferred counts; until then they are null and stay null.
   assert.deepEqual([(await state(w)).coverage.refused, (await state(w)).coverage.deferred], [null, null])
-  await recordTriageCoverage(w.env, { store: STORE, coverage: { scan: "complete", reviewed: 1, unreviewed: 1, more_unreviewed: true }, counts: { reviewed: 0, refused: 0, deferred: 0 }, runner: "ran", now: T0 })
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 1, unreviewed: 1, more_unreviewed: true }, counts: { reviewed: 0, refused: 0, deferred: 0 }, runner: "ran", now: T0 })
   const { generation } = await state(w)
   const hub = github({ visibility })
   const publish = async (now) => {
@@ -807,43 +807,44 @@ test("one_coverage_generation_and_reattestation_keep_a_quiet_queue_current", asy
   let calls = hub.calls.length
   assert.deepEqual(await run(w, hub, T0 + 2 * DAY + HOUR), { result: "nothing_pending" })
   assert.equal(hub.calls.length, calls)
-  // Two days after: the first row goes again, byte for byte, in a new file with the coverage of now. The second is not due yet.
-  const [again] = await publish(T0 + 2 * DAY + 3 * HOUR)
-  assert.notEqual(again.batch, one.batch)
-  assert.deepEqual([again.rows, again.coverage], [one.rows, two.coverage])
+  // Two days after the first row reached the store it is due, and the second goes with it: both byte for byte, in one new file with
+  // the coverage of now, so a quiet desk opens one pull request every two days.
+  const [again, ...more] = await publish(T0 + 2 * DAY + 3 * HOUR)
+  assert.deepEqual([more, again.batch === one.batch, again.rows, again.coverage], [[], false, [...one.rows, ...two.rows], two.coverage])
   const kept = await state(w)
-  assert.deepEqual([kept.rows[first.id].attested_at, kept.rows[second.id].attested_at, kept.emitted], [at(T0 + 2 * DAY + 4 * HOUR), at(T0 + DAY + 2 * HOUR), { [first.id]: 1, [second.id]: 1 }])
-  assert.deepEqual((await record(w, again.batch)).rows, [{ id: first.id, revision: 1, desk_root: w.deskRoot, attest: true }])
+  assert.deepEqual([kept.rows[first.id].attested_at, kept.rows[second.id].attested_at, kept.emitted], [at(T0 + 2 * DAY + 4 * HOUR), at(T0 + 2 * DAY + 4 * HOUR), { [first.id]: 1, [second.id]: 1 }])
+  assert.deepEqual((await record(w, again.batch)).rows, [first, second].map((row, index) => ({ id: row.id, revision: 1, desk_root: w.deskRoot, key: KEYS[index], person_prefix: "", attest: true })))
+  const told = (await readStatus(w.env)).triage_publication[STORE]
+  assert.deepEqual([told.rows_oldest_at, told.rows_held], [at(T0 + 2 * DAY + 4 * HOUR), 0])
 
   // The triage step has not scanned for three days: this machine no longer says its reviews still stand, so nothing is sent and both age out at the store.
   calls = hub.calls.length
-  assert.deepEqual(await run(w, hub, T0 + 4 * DAY + HOUR), { result: "nothing_pending" })
+  assert.deepEqual(await run(w, hub, T0 + 4 * DAY + 5 * HOUR), { result: "nothing_pending" })
   assert.equal(hub.calls.length, calls)
-  // It scans again. The second row is due and goes, and waits in an open pull request.
-  await step(w, T0 + 4 * DAY + 2 * HOUR)
-  assert.equal((await run(w, hub, T0 + 4 * DAY + 3 * HOUR)).result, "delivered_pr_open")
-  const waiting = (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name))
-  assert.deepEqual(waiting.map(([, sha]) => batchValue(hub, sha).rows), [two.rows])
-  const waitingBatch = batchValue(hub, waiting[0][1]).batch
+  // It scans again. Both rows are due and go, and wait in an open pull request.
+  await step(w, T0 + 4 * DAY + 5 * HOUR)
+  assert.equal((await run(w, hub, T0 + 4 * DAY + 6 * HOUR)).result, "delivered_pr_open")
+  const fresh = async () => (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).map(([, sha]) => batchValue(hub, sha))
+  const waiting = await fresh()
+  assert.deepEqual(waiting.map((value) => value.rows), [again.rows])
   // While it waits the counts change: the batch is rebuilt with them under a new batch ID, so every file of one pull request says one coverage.
-  await recordTriageCoverage(w.env, { store: STORE, coverage: { scan: "complete", reviewed: 2, unreviewed: 4, more_unreviewed: true }, counts: {}, runner: null, now: T0 + 4 * DAY + 3 * HOUR })
-  assert.equal((await run(w, hub, T0 + 4 * DAY + 3.5 * HOUR)).result, "delivered_pr_open")
-  const rebuilt = (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).map(([, sha]) => batchValue(hub, sha))
-  assert.deepEqual(rebuilt.map((value) => [value.rows, value.coverage.unreviewed, value.coverage.generation, value.batch === waitingBatch]), [[two.rows, 4, generation, false]])
-  assert.deepEqual([(await record(w, waitingBatch)).state, (await record(w, waitingBatch)).reason], ["replaced", "coverage"])
-  // The pointer's repository turns private before that merges, and by now the first row is due too. Neither is sent again at
-  // its revision: the waiting batch is taken apart, the due row is held before any batch is built, and both say why.
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 2, unreviewed: 4, more_unreviewed: true }, counts: {}, runner: null, now: T0 + 4 * DAY + 6 * HOUR })
+  assert.equal((await run(w, hub, T0 + 4 * DAY + 6.5 * HOUR)).result, "delivered_pr_open")
+  assert.deepEqual((await fresh()).map((value) => [value.rows, value.coverage.unreviewed, value.coverage.generation, value.batch === waiting[0].batch]), [[again.rows, 4, generation, false]])
+  assert.deepEqual([(await record(w, waiting[0].batch)).state, (await record(w, waiting[0].batch)).reason], ["replaced", "coverage"])
+  // The pointer's repository turns private before that merges. Neither row is sent again at its revision: the waiting batch is taken
+  // apart, and both rows say why.
   hub.pulls.at(-1).state = "closed"
   visibility[ISSUE_REPO] = "private"
   const pulls = hub.pullCount()
-  assert.deepEqual(await run(w, hub, T0 + 4 * DAY + 5 * HOUR), { result: "nothing_pending" })
+  assert.deepEqual(await run(w, hub, T0 + 4 * DAY + 8 * HOUR), { result: "nothing_pending" })
   assert.equal(hub.pullCount(), pulls, "nothing is sent")
   const closed = await state(w)
-  const since = { code: "triage_evidence_not_public", since: at(T0 + 4 * DAY + 5 * HOUR) }
+  const since = { code: "triage_evidence_not_public", since: at(T0 + 4 * DAY + 8 * HOUR) }
   assert.deepEqual([closed.pending, closed.rows[second.id].held, closed.rows[first.id].held], [[], since, since])
-  await run(w, hub, T0 + 4 * DAY + 6 * HOUR)
+  await run(w, hub, T0 + 4 * DAY + 9 * HOUR)
   const summary = (await readStatus(w.env)).triage_publication[STORE]
-  assert.deepEqual([summary.held_requests, summary.waiting_since], [{ triage_evidence_not_public: 2 }, at(T0 + 4 * DAY + 5 * HOUR)])
+  assert.deepEqual([summary.held_requests, summary.waiting_since, summary.rows_held], [{ triage_evidence_not_public: 2 }, at(T0 + 4 * DAY + 8 * HOUR), 2])
 })
 
 test("pending_batch_is_not_sent_after_the_route_changes", async () => {
@@ -891,7 +892,7 @@ test("triage_error_never_stops_facts", async () => {
   // A request whose desk folder is not a path: the triage code fails in the local plan, before anything else.
   const other = await world()
   const more = await putFacts(other, 2)
-  await recordTriageCoverage(other.env, { store: STORE, coverage: { scan: "complete", reviewed: 0, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: "no_agent_cli", now: T0 })
+  await recordTriageCoverage(other.env, { deskRoot: other.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 0, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: "no_agent_cli", now: T0 })
   await updateTriageOutbox(other.env, STORE, "state.json", (current) => ({ ...current, requests: { [KEY]: { desk_root: "not/absolute", person_prefix: "", revision: 1 } } }))
   const second = github()
   assert.equal((await run(other, second, T0 + HOUR)).result, "delivered_pr_open")
@@ -1017,7 +1018,7 @@ test("only_a_recorded_batch_is_pushed_and_eight_files_ride_one_pull_request", as
   assert.deepEqual([capped.items.length, (await state(w)).pending.length], [8, 9])
   assert.deepEqual(capped.items.map((item) => item.batch), (await state(w)).pending.slice(0, 8), "as they are, oldest first")
   // A batch that must be built again and cannot be (consent was withdrawn in between) holds everything for a day.
-  await recordTriageCoverage(w.env, { store: STORE, coverage: { scan: "complete", reviewed: 9, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: null, now: T0 + 2 * HOUR })
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 9, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: null, now: T0 + 2 * HOUR })
   assert.deepEqual(await prepare(w, T0 + 3 * HOUR, { consent: { contribute: false } }), { items: [] })
   assert.equal((await state(w)).held.code, "triage_not_opted_in")
 })
@@ -1078,7 +1079,7 @@ test("a_damaged_state_file_is_moved_aside_and_holds", async () => {
   assert.deepEqual((await readStatus(w.env)).triage_publication[STORE], { at: at(T0 + HOUR), pending: 0, waiting: 0, held: "triage_state_damaged", held_since: at(T0 + HOUR), reset_at: at(T0 + HOUR) })
   // A file that parses but whose fields are not the shapes the code relies on is damaged the same way, each one of them.
   let n = 1
-  for (const patch of [{ pending: "all" }, { pending: [7] }, { requests: { [KEY]: "soon" } }, { requests: { [KEY]: { desk_root: w.deskRoot, person_prefix: "", intended: "x" } } }, { requests: { [KEY]: { desk_root: w.deskRoot, person_prefix: "", intent: true } } }, { emitted: { x: "1" } }, { rows: { x: { row: {}, desk_root: "/d", revision: 1, attested_at: "never" } } }, { held: { code: 1, until: at(T0) } }, { coverage: 1 }, { published: 1 }, { held_requests: 1 }, { generation: "short" }, { schema: "another/9" }]) {
+  for (const patch of [{ pending: "all" }, { pending: [7] }, { requests: { [KEY]: "soon" } }, { requests: { [KEY]: { desk_root: w.deskRoot, person_prefix: "", intended: "x" } } }, { requests: { [KEY]: { desk_root: w.deskRoot, person_prefix: "", intent: true } } }, { emitted: { x: "1" } }, { rows: { x: { row: {}, desk_root: "/d", key: "k", person_prefix: "", revision: 1, attested_at: "never" } } }, { held: { code: 1, until: at(T0) } }, { coverage: 1 }, { published: 1 }, { scan_desk: 1 }, { rows: { x: { row: {}, desk_root: "/d", revision: 1, attested_at: at(T0) } } }, { held_requests: 1 }, { generation: "short" }, { schema: "another/9" }]) {
     n += 1
     await fs.writeFile(file, JSON.stringify({ ...kept, ...patch }))
     const plan = await planTriage(w.env, { store: STORE, now: T0 + 2 * HOUR })
@@ -1086,7 +1087,7 @@ test("a_damaged_state_file_is_moved_aside_and_holds", async () => {
     kept = await state(w)
   }
   // A whole state with every optional field is read as it is.
-  const whole = { ...kept, requests: { [KEY]: { desk_root: w.deskRoot, person_prefix: "", intended: [] } }, pending: ["0123456789abcdef"], emitted: { x: 1 }, rows: { x: { row: {}, desk_root: "/d", revision: 1, attested_at: at(T0) } }, coverage: { scan: "complete" }, published: { scan: "complete" }, held_requests: {} }
+  const whole = { ...kept, requests: { [KEY]: { desk_root: w.deskRoot, person_prefix: "", intended: [] } }, pending: ["0123456789abcdef"], emitted: { x: 1 }, rows: { x: { row: {}, desk_root: "/d", key: "k", person_prefix: "", revision: 1, attested_at: at(T0) } }, coverage: { scan: "complete" }, published: { scan: "complete" }, held_requests: {} }
   await fs.writeFile(file, JSON.stringify(whole))
   assert.deepEqual(await readTriageOutbox(w.env, STORE, "state.json"), whole)
   assert.deepEqual((await planTriage(w.env, { store: STORE, now: T0 + 3 * HOUR })).state, whole)
@@ -1149,7 +1150,12 @@ test("the_rarer_paths_of_a_pending_batch_hold_or_wait_rather_than_send", async (
   await updateTriageOutbox(other.env, STORE, "state.json", (current) => ({ ...current, rows: Object.fromEntries(Object.entries(current.rows).map(([id, entry], index) => [id, { ...entry, attested_at: at(T0 + index * HOUR), row: id === rows[0].id ? { ...entry.row, evidence: [job] } : entry.row }])) }))
   await step(other, T0 + 2 * DAY)
   const plan = await planTriage(other.env, { store: STORE, now: T0 + 2 * DAY + 2 * HOUR })
-  assert.equal(plan.attest.length, 2, "oldest first")
+  assert.deepEqual(plan.attest, [rows[0].id, rows[1].id], "oldest first")
+  // A row sent in the last half day does not go again with the one that is due.
+  const stagger = (time) => updateTriageOutbox(other.env, STORE, "state.json", (current) => ({ ...current, rows: { ...current.rows, [rows[1].id]: { ...current.rows[rows[1].id], attested_at: at(time) } } }))
+  await stagger(T0 + 2 * DAY - 6 * HOUR)
+  assert.deepEqual((await planTriage(other.env, { store: STORE, now: T0 + 2 * DAY + 2 * HOUR })).attest, [rows[0].id])
+  await stagger(T0 + HOUR)
   let asked = 0
   const resent = await prepare(other, T0 + 2 * DAY + 2 * HOUR, { readMain: async () => main, publishedJobs: () => { asked += 1; return new Set() } })
   assert.equal(asked, 1)
@@ -1161,4 +1167,119 @@ test("the_rarer_paths_of_a_pending_batch_hold_or_wait_rather_than_send", async (
     await saveTriageRefused(other.env, STORE, "triage_batch_mismatch", T0 + 2 * DAY + 2 * HOUR)
   }
   assert.deepEqual([(await state(other)).pending, (await state(other)).rows[rows[1].id].held.code], [[], "triage_batch_refused"])
+})
+
+test("a_cached_visibility_answer_is_never_trusted_for_bytes_about_to_go", async () => {
+  // The repository the cards point at is private. The first row is built without the pointer and waits in an open pull request.
+  const visibility = { [ISSUE_REPO]: "private" }
+  const w = await world({ keys: KEYS.slice(0, 2) })
+  const first = await review(w, KEYS[0])
+  await step(w)
+  const hub = github({ visibility })
+  assert.equal((await run(w, hub, T0 + HOUR)).result, "delivered_pr_open")
+  // The visibility cache, which the facts flush fills, holds an older answer that says public. A cached answer is never enough:
+  // the second row is built only after the repository is asked again in this flush, and so without the pointer.
+  const stale = (time) => outbox.writeVisibilityCache(w.env, { [ISSUE_REPO.toLowerCase()]: { visibility: "public", checked_at: at(time) } })
+  await stale(T0 + HOUR)
+  const second = await review(w, KEYS[1], { now: T0 + 2 * HOUR })
+  await step(w, T0 + 2 * HOUR)
+  const asked = () => apiCalls(hub, new RegExp(`^repos/${ISSUE_REPO}$`, "u")).length
+  const before = asked()
+  assert.equal((await run(w, hub, T0 + 3 * HOUR)).result, "delivered_pr_open")
+  assert.equal(asked(), before + 1, "asked in this flush, although a batch waits and the cache has an answer")
+  const head = await headTriage(w, hub)
+  assert.deepEqual(head.flatMap(([, sha]) => batchValue(hub, sha).rows.map((row) => [row.id, row.evidence])).sort(), [[first.id, []], [second.id, []]].sort())
+  assert.ok(head.every(([, sha]) => !hub.blobText(sha).includes(ISSUE_REPO)), "the private repository is not named")
+})
+
+test("a_row_sent_again_needs_a_fresh_public_answer_too", async () => {
+  const visibility = { [ISSUE_REPO]: "public" }
+  const w = await world({ keys: KEYS.slice(0, 2) })
+  const first = await review(w, KEYS[0])
+  await step(w)
+  const hub = github({ visibility })
+  assert.equal((await run(w, hub, T0 + HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * HOUR)
+  assert.deepEqual((await state(w)).rows[first.id].row.evidence, [issueOf(KEYS[0])])
+  // The repository turns private. A second row is built without the pointer and waits; then the cache is left saying public.
+  visibility[ISSUE_REPO] = "private"
+  await review(w, KEYS[1], { now: T0 + 2 * DAY })
+  await step(w, T0 + 2 * DAY)
+  assert.equal((await run(w, hub, T0 + 2 * DAY + HOUR)).result, "delivered_pr_open")
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, rows: { [first.id]: { ...current.rows[first.id], held: undefined } } }))
+  await outbox.writeVisibilityCache(w.env, { [ISSUE_REPO.toLowerCase()]: { visibility: "public", checked_at: at(T0 + 2 * DAY + HOUR) } })
+  // The first row is due while that batch waits: it names the repository, the repository is asked again, and the row is held, not sent.
+  await run(w, hub, T0 + 2 * DAY + 3 * HOUR)
+  assert.deepEqual((await state(w)).rows[first.id].held, { code: "triage_evidence_not_public", since: at(T0 + 2 * DAY + 3 * HOUR) })
+  assert.ok((await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).every(([, sha]) => !hub.blobText(sha).includes(ISSUE_REPO)))
+})
+
+test("a_review_the_desk_remote_no_longer_holds_is_not_sent_again", async () => {
+  const { planTriage, recordTriageCoverage } = await load()
+  const w = await world({ keys: KEYS })
+  const ids = []
+  for (const key of KEYS) ids.push((await review(w, key)).id)
+  await step(w)
+  const hub = github()
+  assert.equal((await run(w, hub, T0 + HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * HOUR)
+  assert.deepEqual(Object.keys((await state(w)).rows).sort(), [...ids].sort())
+  // Another writer puts a newer, invalidating revision of the first card on the desk remote's main. This machine did not write it.
+  const invalidate = async (key, now) => {
+    const read = await readTriageBasis({ deskRoot: w.deskRoot, personPrefix: "", key, now: new Date(now), evidence: { resolve: resolveIssue }, env: w.env })
+    const written = await publishOwnedTriage({ env: w.env, deskRoot: w.deskRoot, personPrefix: "", key, store: STORE, expectedBasis: read.basis, review: null, operation: "invalidate", reason: "basis_changed", now: new Date(now), evidence: { resolve: resolveIssue } })
+    assert.equal(written.state, "acknowledged", JSON.stringify(written))
+  }
+  await invalidate(KEYS[0], T0 + DAY)
+  assert.deepEqual([(await annotationOf(w, KEYS[0])).revision, (await annotationOf(w, KEYS[0])).attempt.state], [2, "stale"])
+  // The annotation of the third row cannot be read now: it waits, and is neither sent nor forgotten.
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, rows: { ...current.rows, [ids[2]]: { ...current.rows[ids[2]], key: "andon:o/none#9" } } }))
+  // Two days on the rows are due. Only the one the remote still holds as that review goes again; the first is dropped for good.
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: 3, unreviewed: 0, more_unreviewed: false }, counts: {}, runner: null, now: T0 + 2 * DAY })
+  const plan = await planTriage(w.env, { store: STORE, now: T0 + 2 * DAY + 3 * HOUR })
+  assert.deepEqual([plan.attest, Object.keys(plan.state.rows).sort(), plan.held], [[ids[1]], [ids[1], ids[2]].sort(), { triage_unacknowledged: 1 }])
+  assert.equal((await run(w, hub, T0 + 2 * DAY + 3 * HOUR)).result, "delivered_pr_open")
+  const waiting = (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).map(([, sha]) => batchValue(hub, sha))
+  assert.deepEqual(waiting.map((value) => value.rows.map((row) => [row.id, row.revision, row.state])), [[[ids[1], 1, "reviewed"]]])
+  // While that batch waits, the second card is invalidated too: the batch is taken apart, not sent, and the row is dropped.
+  await invalidate(KEYS[1], T0 + 2 * DAY + 4 * HOUR)
+  const pulls = hub.pullCount()
+  hub.pulls.at(-1).state = "closed"
+  assert.deepEqual(await run(w, hub, T0 + 2 * DAY + 5 * HOUR), { result: "nothing_pending" })
+  assert.equal(hub.pullCount(), pulls)
+  const kept = await state(w)
+  assert.deepEqual([kept.pending, Object.keys(kept.rows), (await record(w, waiting[0].batch)).state, (await record(w, waiting[0].batch)).reason], [[], [ids[2]], "replaced", "superseded"])
+  // A waiting batch that says it re-sends a row this state no longer has is taken apart the same way.
+  await updateTriageOutbox(w.env, STORE, waiting[0].batch + ".json", (current) => ({ ...current, state: "pending", bytes: JSON.stringify(waiting[0]) }))
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, pending: [waiting[0].batch] }))
+  assert.deepEqual((await planTriage(w.env, { store: STORE, now: T0 + 2 * DAY + 6 * HOUR })).state.pending, [])
+})
+
+test("a_counts_only_batch_is_not_sent_after_the_route_changes", async () => {
+  const { recordTriageCoverage } = await load()
+  const { w } = await reviewedWorld()
+  const hub = github()
+  assert.equal((await run(w, hub, T0 + HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * HOUR)
+  // The next scan is cut short, which a batch with no rows would say. But the desk now reports elsewhere: nothing goes to the old store.
+  const truncated = { scan: "truncated", reviewed: null, unreviewed: null, more_unreviewed: null }
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: truncated, counts: {}, runner: null, now: T0 + 3 * HOUR })
+  await declareRoute(w, "example-org/another-store")
+  let calls = hub.calls.length
+  assert.deepEqual(await run(w, hub, T0 + 4 * HOUR), { result: "nothing_pending" })
+  assert.equal(hub.calls.length, calls)
+  // A scan that names no desk cannot be checked against a route, so it is not sent either.
+  await declareRoute(w, STORE)
+  await recordTriageCoverage(w.env, { store: STORE, coverage: truncated, counts: {}, runner: null, now: T0 + 4 * HOUR })
+  calls = hub.calls.length
+  assert.deepEqual(await run(w, hub, T0 + 5 * HOUR), { result: "nothing_pending" })
+  assert.equal(hub.calls.length, calls)
+  // Scanned again by the desk that routes here: the batch with no rows goes.
+  await recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: truncated, counts: {}, runner: null, now: T0 + 5 * HOUR })
+  assert.equal((await run(w, hub, T0 + 6 * HOUR)).result, "delivered_pr_open")
+  const sent = (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).map(([, sha]) => batchValue(hub, sha))
+  assert.deepEqual(sent.map((value) => [value.rows, value.coverage.scan]), [[[], "truncated"]])
 })

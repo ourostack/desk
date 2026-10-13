@@ -579,7 +579,7 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     }))
     await swallow(() => recordStep(env, "triage", { ok, result, now: nowDate, carry }))
     // What a published batch says about this scan and the runner (`triage-outbox.js`); only a step that read the cards has anything to say.
-    if (record.coverage !== null) await swallow(() => recordTriageCoverage(env, { store, coverage: record.coverage, counts: answer, runner: record.runner.state, now: nowDate.getTime() }))
+    if (record.coverage !== null) await swallow(() => recordTriageCoverage(env, { store, coverage: record.coverage, counts: answer, runner: record.runner.state, now: nowDate.getTime(), deskRoot }))
     return answer
   }
 

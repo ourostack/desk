@@ -6,7 +6,7 @@
 //
 //   state.json     { schema, generation, requests, pending, emitted, rows, coverage?, scan_at?, run_counts?, runner_state?,
 //                    held?, held_requests?, pr?, published?, staged_at?, delivered_at?, delivered_known?, damaged?, reset_at? }
-//   <batch>.json   { schema, store, batch, path, sha, bytes?, state, staged_at, rows: [{ id, revision, desk_root, attest? }],
+//   <batch>.json   { schema, store, batch, path, sha, bytes?, state, staged_at, rows: [{ id, revision, desk_root, key, person_prefix, attest? }],
 //                    refusals, pr?, sent_at?, ... }
 //
 // `generation` is this source's coverage generation: random, made once and kept for the life of the state file, whatever the
@@ -23,9 +23,11 @@
 // each public ID; a revision at or below it is never built again.
 //
 // `rows` holds, by public ID, each `reviewed` row the store's default branch has from this machine, with its exact row object:
-// `{ desk_root, revision, row, attested_at, held? }`. A row's bytes are fixed for its revision. They are sent again, unchanged,
-// about every 48 hours (a re-attestation, with the coverage of that day), because a store reads a row and its source as stale
-// 72 hours after the newest batch that carries them. Nothing is re-attested unless the step scanned the cards within 72 hours.
+// `{ desk_root, key, person_prefix, revision, row, attested_at, held? }`. A row's bytes are fixed for its revision. They are sent
+// again, unchanged, about every 48 hours (a re-attestation, with the coverage of that day), because a store reads a row and its
+// source as stale 72 hours after the newest batch that carries them. When one row is due, every row not sent in the last half day
+// goes with it. Nothing is re-attested unless the step scanned the cards within 72 hours, and a row is sent again only while the
+// desk remote's `main` still holds its revision as `reviewed`; otherwise it is dropped from `rows`.
 // `pending` lists the staged batches not yet seen on the store's default branch.
 //
 // A request is only a note of what to look at. What is published is read again, every time, from the desk's remote-tracking
@@ -124,9 +126,9 @@ const validState = (value) =>
   isPlainObject(value.requests) && Object.values(value.requests).every((request) => isPlainObject(request) && typeof request.desk_root === "string" && typeof request.person_prefix === "string" && optional(request.intended, Array.isArray) && (request.intent !== true || request.intended !== undefined)) &&
   Array.isArray(value.pending) && value.pending.every((batch) => typeof batch === "string" && HEX16.test(batch)) &&
   isPlainObject(value.emitted) && Object.values(value.emitted).every(Number.isSafeInteger) &&
-  isPlainObject(value.rows) && Object.values(value.rows).every((entry) => isPlainObject(entry) && isPlainObject(entry.row) && typeof entry.desk_root === "string" && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)) &&
+  isPlainObject(value.rows) && Object.values(value.rows).every((entry) => isPlainObject(entry) && isPlainObject(entry.row) && typeof entry.desk_root === "string" && typeof entry.key === "string" && typeof entry.person_prefix === "string" && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)) &&
   optional(value.held, (held) => isPlainObject(held) && typeof held.code === "string" && isTime(held.until)) &&
-  optional(value.coverage, isPlainObject) && optional(value.published, isPlainObject) && optional(value.held_requests, isPlainObject)
+  optional(value.coverage, isPlainObject) && optional(value.published, isPlainObject) && optional(value.held_requests, isPlainObject) && optional(value.scan_desk, (root) => typeof root === "string")
 const VALID_STATE = { isValid: (value) => value === null || (isPlainObject(value) && validState(value)) }
 const stateOf = (value) => value ?? { schema: STATE_SCHEMA, generation: hex(16), requests: {}, pending: [], emitted: {}, rows: {} }
 const readState = async (env, store) => stateOf(await readTriageOutbox(env, store, STATE, VALID_STATE))
@@ -135,7 +137,7 @@ const heldNow = (state, now) => (state.held !== undefined && now < Date.parse(st
 // A hold for a day. `since` is when this code first held without a break, for the alarm on a hold that never clears.
 const heldAs = (state, code, now) => ({ code, until: iso(now + DAY_MS), since: state.held?.code === code && isTime(state.held.since) ? state.held.since : iso(now) })
 const isPendingRecord = (record) => isPlainObject(record) && record.state === "pending" && typeof record.bytes === "string" && typeof record.path === "string" && typeof record.sha === "string" &&
-  Array.isArray(record.rows) && record.rows.every((row) => isPlainObject(row) && typeof row.id === "string" && Number.isSafeInteger(row.revision) && typeof row.desk_root === "string")
+  Array.isArray(record.rows) && record.rows.every((row) => isPlainObject(row) && typeof row.id === "string" && Number.isSafeInteger(row.revision) && typeof row.desk_root === "string" && typeof row.key === "string" && typeof row.person_prefix === "string")
 const untied = (requests, batch) => Object.fromEntries(Object.entries(requests).map(([key, { batch: tied, ...request }]) => [key, tied === undefined || tied === batch ? request : { ...request, batch: tied }]))
 
 // ---------------------------------------------------------------------------
@@ -182,13 +184,13 @@ export async function settleTriageEmission(env, { store, key, written, operation
 }
 
 /**
- * `recordTriageCoverage(env, { store, coverage, counts, runner, now })`: the triage step's latest scan, at `now` (a millisecond
- * time). `coverage` is `refreshTriage`'s (`{ scan, reviewed, unreviewed, more_unreviewed }`, counts null when the scan was not
+ * `recordTriageCoverage(env, { store, coverage, counts, runner, now, deskRoot })`: the triage step's latest scan of the desk at
+ * `deskRoot`, at `now` (a millisecond time). The desk is kept so a batch that carries only the coverage is checked against its route. `coverage` is `refreshTriage`'s (`{ scan, reviewed, unreviewed, more_unreviewed }`, counts null when the scan was not
  * complete), read before any run; `counts` the step's own `{ reviewed, refused, deferred }` for a run, null where it had none;
  * `runner` the runner's state code or null. The stored coverage is the public shape without its generation. Refused and deferred
  * counts come from the last step that knew them and stay null until a run has completed. Every count of an incomplete scan is null.
  */
-export async function recordTriageCoverage(env, { store, coverage, counts, runner, now }) {
+export async function recordTriageCoverage(env, { store, coverage, counts, runner, now, deskRoot }) {
   await update(env, store, (state) => {
     const complete = coverage.scan === "complete"
     const added = count(counts.reviewed) ?? 0
@@ -206,6 +208,7 @@ export async function recordTriageCoverage(env, { store, coverage, counts, runne
         more_unreviewed: unreviewed === null ? null : unreviewed - added > 0,
       },
       scan_at: iso(now),
+      scan_desk: deskRoot,
       run_counts: run,
       runner_state: TRIAGE_RUNNER_STATES.includes(runner) ? runner : state.runner_state ?? null,
     }
@@ -257,6 +260,8 @@ const summaryOf = (state, now) => {
   const code = heldNow(state, now)
   // The oldest thing still not on the store: a request, or a delivered row that is no longer sent.
   const waits = [...Object.values(state.requests).map((request) => request.since), ...Object.values(state.rows).map((entry) => entry.held?.since)].filter(isTime).sort()
+  // The store reads each row by the newest batch that carried it: the oldest of those times is when the first row goes stale there.
+  const attested = Object.values(state.rows).map((entry) => entry.attested_at).sort()
   return {
     at: iso(now),
     pending: state.pending.length,
@@ -267,6 +272,7 @@ const summaryOf = (state, now) => {
     ...(state.delivered_at === undefined ? {} : { delivered_at: state.delivered_at, coverage_known: state.delivered_known === true }),
     ...(state.coverage === undefined ? {} : { scan: state.coverage.scan }),
     ...(state.reset_at === undefined ? {} : { reset_at: state.reset_at }),
+    ...(attested.length === 0 ? {} : { rows_oldest_at: attested[0], rows_held: Object.values(state.rows).filter((entry) => entry.held !== undefined).length }),
   }
 }
 
@@ -283,6 +289,13 @@ function decideIntent(request, annotation, now) {
     return { ...fresh, revision: annotation.revision, at: iso(now) }
   }
   return intended.every((item) => now - Date.parse(item.at) > INTENT_MS) ? rest : request
+}
+
+// A delivered row against the desk remote's `main`: still that review, a newer or different annotation, or not readable now.
+function standing(entry) {
+  const read = entry === undefined ? null : readAcknowledged({ deskRoot: entry.desk_root, personPrefix: entry.person_prefix, key: entry.key })
+  if (read === null) return "unknown"
+  return read.annotation.revision === entry.revision && read.annotation.attempt.state === "reviewed" ? "reviewed" : "superseded"
 }
 
 // The record of a pending batch is taken out of the state: its requests are free to be built again.
@@ -302,10 +315,10 @@ const holdRows = (env, store, ids, code, now) => update(env, store, (state) => (
 }))
 
 /**
- * `planTriage(env, { store, now }) -> { work, state, candidates, held, attest, attestEmpty }`, from local state and Git only.
- * `candidates` are the requests ready to build, `[{ key, id, deskRoot, annotation, identity, ack, card }]`; `attest` the public
- * IDs of the delivered rows due to be sent again; `attestEmpty` whether a batch with no rows is due because nothing else
- * carried the coverage for two days. `held` counts what waits, by code: `triage_route_elsewhere`, `triage_unacknowledged`,
+ * `planTriage(env, { store, now }) -> { work, state, candidates, held, attest, coverageDue }`, from local state and Git only.
+ * `candidates` are the requests ready to build, `[{ key, id, deskRoot, personPrefix, annotation, identity, ack, card }]`; `attest`
+ * the public IDs of the delivered rows to send again, oldest first; `coverageDue` whether a batch with no rows is due, because
+ * nothing carried the coverage for two days or the scan's state changed, and the desk that was scanned routes here. `held` counts what waits, by code: `triage_route_elsewhere`, `triage_unacknowledged`,
  * `triage_coverage_unknown`, `triage_runner_unknown`, `triage_batch_refused`, `triage_evidence_not_public`, or the code
  * `triageBatchFor` refused this revision's row with. `work` is true when the flush has to go online for triage. A store with
  * no triage state costs one file read and one folder listing.
@@ -313,7 +326,7 @@ const holdRows = (env, store, ids, code, now) => update(env, store, (state) => (
 export async function planTriage(env, { store, now }) {
   const kept = await readTriageOutbox(env, store, STATE, VALID_STATE)
   const damaged = await countTriageOutboxDamaged(env, store)
-  const idle = (state) => ({ work: false, state, candidates: [], held: {}, attest: [], attestEmpty: false })
+  const idle = (state) => ({ work: false, state, candidates: [], held: {}, attest: [], coverageDue: false })
   if (kept === null && damaged === 0) return idle(stateOf(null))
   let state = stateOf(kept)
   // A state file was moved aside since this state last looked: what it held is not known, so nothing is sent for a day.
@@ -342,6 +355,8 @@ export async function planTriage(env, { store, now }) {
     let here = true
     for (const deskRoot of new Set(record.rows.map((row) => row.desk_root))) here &&= await routesHere(deskRoot)
     if (!here) state = await dissolve(env, store, record, "route")
+    // A row sent again must still be the review the desk's remote holds; the rows are looked at again below.
+    else if (record.rows.some((row) => row.attest === true && standing(state.rows[row.id]) !== "reviewed")) state = await dissolve(env, store, record, "superseded")
     else for (const row of record.rows) staged.add(row.id)
   }
 
@@ -373,39 +388,48 @@ export async function planTriage(env, { store, now }) {
         const listing = listings.get(`${deskRoot}\n${personPrefix}`) ?? (await readCards({ deskRoot, personPrefix, limit: MAX_CARD_FILES }))
         listings.set(`${deskRoot}\n${personPrefix}`, listing)
         const found = await readCanonicalCard({ deskRoot, personPrefix, key, readCards: async () => listing })
-        candidates.push({ key, id: entry.id, deskRoot, ...read, card: found === null ? null : { state: found.card.state, claimed: isClaimLive(found.card, now), revision: found.revision } })
+        candidates.push({ key, id: entry.id, deskRoot, personPrefix, ...read, card: found === null ? null : { state: found.card.state, claimed: isClaimLive(found.card, now), revision: found.revision } })
       }
     }
   }
 
   // 3. Delivered rows due to be sent again, oldest first. Only a machine that scanned its cards lately says they still stand.
   const scanned = ready && isTime(state.scan_at) && now - Date.parse(state.scan_at) <= FRESH_MS
-  const attest = []
-  let live = 0
-  let elsewhere = 0
+  const live = []
   for (const [id, entry] of Object.entries(state.rows)) {
     if (entry.held !== undefined) hold(entry.held.code)
-    else if (!(await routesHere(entry.desk_root))) {
-      elsewhere += 1
-      hold("triage_route_elsewhere")
-    } else {
-      live += 1
-      if (scanned && !staged.has(id) && now - Date.parse(entry.attested_at) >= ATTEST_MS) attest.push(id)
+    else if (!(await routesHere(entry.desk_root))) hold("triage_route_elsewhere")
+    else live.push(id)
+  }
+  const sinceSent = (id) => now - Date.parse(state.rows[id].attested_at)
+  const attest = []
+  const superseded = []
+  // When one row is due, every row not sent in the last half day goes with it, so a quiet desk opens one pull request every two days.
+  if (scanned && live.some((id) => !staged.has(id) && sinceSent(id) >= ATTEST_MS)) {
+    for (const id of live) {
+      const still = standing(state.rows[id])
+      if (still === "superseded") superseded.push(id)
+      else if (still === "unknown") hold("triage_unacknowledged")
+      else if (!staged.has(id) && sinceSent(id) >= ATTEST_MS / 4) attest.push(id)
     }
   }
-  attest.sort((left, right) => Date.parse(state.rows[left].attested_at) - Date.parse(state.rows[right].attested_at))
-  // A machine whose delivered rows belong to a desk that now reports elsewhere says nothing for this store, coverage included.
-  const attestEmpty = scanned && live === 0 && elsewhere === 0 && candidates.length === 0 && state.pending.length === 0 && state.published !== undefined && isTime(state.staged_at) && now - Date.parse(state.staged_at) >= ATTEST_MS
+  attest.sort((left, right) => sinceSent(right) - sinceSent(left))
+  // The coverage alone, in a batch with no rows: only for the desk whose scan it is, and only while that desk routes here.
+  const scanHere = typeof state.scan_desk === "string" && (await routesHere(state.scan_desk))
+  const quiet = scanned && live.length === 0 && candidates.length === 0 && state.pending.length === 0 && state.published !== undefined && isTime(state.staged_at) && now - Date.parse(state.staged_at) >= ATTEST_MS
+  const coverageDue = scanHere && (quiet || scanChanged(state))
 
-  if (decided.size > 0 || !same(state.held_requests ?? {}, held)) {
+  if (decided.size > 0 || superseded.length > 0 || !same(state.held_requests ?? {}, held)) {
     state = await update(env, store, (latest) => ({
       ...latest,
       held_requests: held,
+      // A row the desk's remote no longer holds as that review is not sent again; its newer revision goes as any annotation does.
+      rows: Object.fromEntries(Object.entries(latest.rows).filter(([id]) => !superseded.includes(id))),
       requests: Object.fromEntries(Object.entries(latest.requests).filter(([key]) => decided.get(key) !== null).map(([key, request]) => [key, decided.get(key) ?? request])),
     }))
   }
   await writeSummary(env, store, state, now)
-  return { work: state.pending.length > 0 || candidates.length > 0 || attest.length > 0 || attestEmpty || scanChanged(state), state, candidates, held, attest, attestEmpty }
+  return { work: state.pending.length > 0 || candidates.length > 0 || attest.length > 0 || coverageDue, state, candidates, held, attest, coverageDue }
 }
 
 // The scan's state differs from the one the last staged batch said: a store reading that batch reads the wrong source state.
@@ -489,7 +513,7 @@ export const namesTriage = (code, { onTriagePr, stale }) => !stale.has(code) && 
  * again as a trusted added file, then written once as the protected `<batch>.json`; a record that already holds other bytes is
  * never overwritten (`conflict`). The batch joins `pending`, its scan state becomes the one last published, and the requests of
  * `keys` (canonical card keys, optional) are tied to it. `rows` says more about each row of the file, in its order:
- * `[{ id, revision, desk_root, attest? }]`, the desk the row came from and whether it is a delivered row sent again.
+ * `[{ id, revision, desk_root, key, person_prefix, attest? }]`, the desk and card the row came from and whether it is a delivered row sent again.
  * `refusals` carries over how often the store refused these rows. `now` is a millisecond time.
  */
 export async function stageTriageBatch(env, { store, projection, keys = [], rows = [], refusals = 0, now = Date.now() }) {
@@ -573,7 +597,7 @@ async function deliver(env, store, record, now) {
     value.rows.forEach((row, index) => {
       if (row.revision < (state.emitted[row.id] ?? 0)) return
       // Only a reviewed row is sent again; a stale or withdrawn one needs no freshness. A newer revision ends an older row's hold.
-      if (row.state === "reviewed") rows[row.id] = { ...(rows[row.id]?.revision === row.revision ? rows[row.id] : {}), desk_root: record.rows[index].desk_root, revision: row.revision, row, attested_at: iso(now) }
+      if (row.state === "reviewed") rows[row.id] = { ...(rows[row.id]?.revision === row.revision ? rows[row.id] : {}), desk_root: record.rows[index].desk_root, key: record.rows[index].key, person_prefix: record.rows[index].person_prefix, revision: row.revision, row, attested_at: iso(now) }
       else delete rows[row.id]
     })
     return {
@@ -624,7 +648,10 @@ export async function prepareTriage(env, { store, plan, client, ref, direct, con
   const jobs = publishedJobs()
   const ask = async (pointers) => {
     const repos = [store, ...pointers.map((pointer) => REPO_OF_REF.exec(pointer.ref)[1])].filter((repo) => !known.has(repo.toLowerCase()))
-    if (repos.length > 0) for (const [repo, answer] of await visibility(repos)) known.set(repo, answer)
+    if (repos.length === 0) return
+    // Only the answers just asked for are taken: whatever else the map holds may be a cached answer, days old.
+    const answers = await visibility(repos)
+    for (const repo of repos) known.set(repo.toLowerCase(), answers.get(repo.toLowerCase()))
   }
   const allPublic = (pointers) => publicEvidenceFor({ pointers, store, visibility: known, publishedJobs: jobs }).length === pointers.length
   const storeKnown = () => KNOWN_VISIBILITY.has(known.get(store.toLowerCase()))
@@ -656,8 +683,8 @@ export async function prepareTriage(env, { store, plan, client, ref, direct, con
     // The rows of a batch taken apart are built again below, from the acknowledged annotations.
     if (apart && storeKnown()) current = await planTriage(env, { store, now })
   }
-  const due = current.attest.map((id) => [id, current.state.rows[id]]).filter(([, entry]) => entry !== undefined && now - Date.parse(entry.attested_at) >= ATTEST_MS)
-  if (current.candidates.length > 0 || due.length > 0 || current.attestEmpty || scanChanged(state)) await ask([...current.candidates.flatMap(({ annotation }) => pointersOfAnnotation(annotation)), ...due.flatMap(([, entry]) => pointersOfRow(entry.row))])
+  const due = current.attest.map((id) => [id, current.state.rows[id]])
+  if (current.candidates.length > 0 || due.length > 0 || current.coverageDue) await ask([...current.candidates.flatMap(({ annotation }) => pointersOfAnnotation(annotation)), ...due.flatMap(([, entry]) => pointersOfRow(entry.row))])
   if (known.size > 0 && !storeKnown()) return hold("triage_visibility_unknown")
 
   state = await readState(env, store)
@@ -713,16 +740,16 @@ export async function prepareTriage(env, { store, plan, client, ref, direct, con
       return
     }
     const built = chunk.filter((_, index) => !skipped.some((item) => item.index === index))
-    await stage(out, { keys: built.map((candidate) => candidate.key), rows: built.map((candidate) => ({ id: candidate.id, revision: candidate.annotation.revision, desk_root: candidate.deskRoot })) })
+    await stage(out, { keys: built.map((candidate) => candidate.key), rows: built.map((candidate) => ({ id: candidate.id, revision: candidate.annotation.revision, desk_root: candidate.deskRoot, key: candidate.key, person_prefix: candidate.personPrefix })) })
   }
   for (let start = 0; start < current.candidates.length && batchHold === null; start += MAX_ROWS) await build(current.candidates.slice(start, start + MAX_ROWS))
 
   // 5. Delivered rows sent again, byte for byte, while there is room in this pull request; then the coverage alone, when nothing else says it.
   const open = due.filter(([, entry]) => allPublic(pointersOfRow(entry.row)))
   if (open.length < due.length) await holdRows(env, store, due.filter((item) => !open.includes(item)).map(([id]) => id), NOT_PUBLIC, now)
-  const resend = (chunk) => again(chunk.map(([, entry]) => entry.row), { rows: chunk.map(([id, entry]) => ({ id, revision: entry.revision, desk_root: entry.desk_root, attest: true })) })
+  const resend = (chunk) => again(chunk.map(([, entry]) => entry.row), { rows: chunk.map(([id, entry]) => ({ id, revision: entry.revision, desk_root: entry.desk_root, key: entry.key, person_prefix: entry.person_prefix, attest: true })) })
   for (let start = 0; start < open.length && batchHold === null && items.length < MAX_TRIAGE_FILES; start += MAX_ROWS) await resend(open.slice(start, start + MAX_ROWS))
-  if (batchHold === null && items.length === 0 && (current.attestEmpty || scanChanged(await readState(env, store)))) await resend([])
+  if (batchHold === null && items.length === 0 && current.coverageDue) await resend([])
   if (batchHold !== null) return hold(`triage_${batchHold}`)
 
   const after = await update(env, store, ({ held: _held, ...latest }) => latest)
