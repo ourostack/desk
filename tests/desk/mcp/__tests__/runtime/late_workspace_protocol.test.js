@@ -89,7 +89,7 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   })
   const rpc = (method, params) => new Promise((resolve, reject) => {
     const requestId = ++id
-    const deadline = setTimeout(() => reject(new Error(`${method} did not answer`)), 15000)
+    const deadline = setTimeout(() => reject(new Error(`${method} did not answer: ${JSON.stringify({ request: { method, name: params?.name }, diag: describe() })}`)), 15000)
     waiting.set(requestId, (result) => {
       clearTimeout(deadline)
       waiting.delete(requestId)
@@ -97,6 +97,9 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
     })
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`)
   })
+  // DIAGNOSTIC ONLY: what the session was doing when a call did not answer.
+  const stderrLines = []
+  let describe = () => ({ stderr: stderrLines.slice(-60) })
   const controllers = []
   const focuses = []
   const endpoints = []
@@ -196,7 +199,7 @@ JSON.stringify = function(...args) {
   const handle = await main({
     argv: [...(explicit ? ["--root", a] : []), ...(sessionRoot ? ["--host-session-root", a] : []), ...(person ? ["--person", person] : [])],
     env, cwd, homeDir: home, input, output,
-    stderr: { write() {} }, admissionKickoffMs: 0,
+    stderr: { write(line) { stderrLines.push(`${new Date().toISOString()} ${String(line).trimEnd()}`) } }, admissionKickoffMs: 0,
     stateHome: path.join(base, "session-state"),
     offload: async (job, options) => {
       const value = await runInWorker(job, options)
@@ -228,6 +231,13 @@ JSON.stringify = function(...args) {
         return server.callTool(options)
       },
     }),
+  })
+  describe = () => ({
+    at: new Date().toISOString(), stderr: stderrLines.slice(-60), admission: handle.admission.snapshot(),
+    admissionRunning: handle.admission.running, phase: handle.session.context.phase,
+    resolution: resolutionTrace.slice(-10), dispatch: dispatchTrace.slice(-10), status: statusTrace.slice(-5),
+    convergence: convergenceTrace.slice(-5), controllers: controllers.map(({ child, endpoint }) => ({ pid: child.pid, exitCode: child.exitCode, signal: child.signalCode, endpoint })),
+    connectedRoots,
   })
   t.after(async () => {
     await handle.admission.idle({ waitMs: 15000 })

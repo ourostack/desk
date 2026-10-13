@@ -1,0 +1,44 @@
+# DIAGNOSTIC ONLY, never merged: repeats one test file on Windows as the standard user.
+name: diag status latency profile
+on:
+  push:
+    branches: ["diag/status-latency-*"]
+permissions:
+  contents: read
+jobs:
+  profile:
+    name: repeat (${{ matrix.kind }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        kind: [a, b, c, d, e, f]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+      - name: Install dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+      - name: Run the file alone, fifteen times
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path prof | Out-Null
+          $command = 'cd plugins\desk\mcp && for /L %%i in (1,1,15) do node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-reporter=tap ..\..\..\tests\desk\mcp\__tests__\runtime\late_workspace_protocol.test.js >> ..\..\..\prof\tap.txt 2>&1'
+          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
+          exit 0
+      - name: Keep the output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repeat-${{ matrix.kind }}-attempt-${{ github.run_attempt }}
+          path: prof
+          if-no-files-found: warn
