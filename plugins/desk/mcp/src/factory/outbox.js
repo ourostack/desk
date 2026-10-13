@@ -1073,20 +1073,31 @@ function triageOutboxFile(root, store, name) {
   return path.join(root, "triage-outbox", storeSlug(store), name)
 }
 
-/** `readTriageOutbox(env, store, name) -> record | null`: one protected file of the store's triage outbox, `state.json` or `<batch>.json`. */
-export async function readTriageOutbox(env, store, name, { platform = process.platform, runner = undefined } = {}) {
+/**
+ * `readTriageOutbox(env, store, name, { isValid }) -> record | null`: one protected file of the store's triage outbox, `state.json` or
+ * `<batch>.json`. A file that does not parse, or that `isValid` (given the parsed value, by default any object) refuses, is moved aside as
+ * `<file>.corrupt-json-<n>` and reads as null; `countTriageOutboxDamaged` says how many state files that happened to.
+ */
+export async function readTriageOutbox(env, store, name, { platform = process.platform, runner = undefined, isValid = isRecordOrNone } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
-  return readJsonFileSafe(triageOutboxFile(root, store, name), null, platform, isRecordOrNone)
+  return readJsonFileSafe(triageOutboxFile(root, store, name), null, platform, isValid)
 }
 
-/** `updateTriageOutbox(env, store, name, mutate) -> record`: a lock-guarded read, `mutate(current | null) -> record` and atomic write of one triage outbox file. */
-export async function updateTriageOutbox(env, store, name, mutate, { platform = process.platform, runner = undefined } = {}) {
+/** `updateTriageOutbox(env, store, name, mutate, { isValid }) -> record`: a lock-guarded read (as `readTriageOutbox`), `mutate(current | null) -> record` and atomic write of one triage outbox file. */
+export async function updateTriageOutbox(env, store, name, mutate, { platform = process.platform, runner = undefined, isValid = isRecordOrNone } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   return updateJsonLocked(root, triageOutboxFile(root, store, name), null, (current) => {
     const next = mutate(current)
     requirePlainObject(next, "record")
     return next
-  }, { platform, env, runner }, isRecordOrNone)
+  }, { platform, env, runner }, isValid)
+}
+
+/** `countTriageOutboxDamaged(env, store) -> number`: how many of the store's triage state files were moved aside as damaged. */
+export async function countTriageOutboxDamaged(env, store, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const names = await fsp.readdir(path.dirname(triageOutboxFile(root, store, "state.json"))).catch(() => [])
+  return names.filter((name) => name.startsWith("state.json.corrupt-json-")).length
 }
 
 // ---------------------------------------------------------------------------

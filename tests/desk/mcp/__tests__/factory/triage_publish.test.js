@@ -58,7 +58,6 @@ function acknowledged({ key = "evaluator:synthetic-finding", review = {}, annota
     coverage: fixture.public.coverage,
     runner: fixture.public.runner,
     card: { state: "open", claimed: false, revision: CARD_BLOB },
-    now: NOW,
     batch: fixture.public.batch,
     producerVersion: fixture.public.producer_version,
   }
@@ -213,7 +212,7 @@ test("a stale annotation keeps its review as context and a withdrawn one carries
   const { triageFor } = await load()
   const stale = acknowledged({ annotation: { revision: 2, attempt: { state: "stale", at: new Date(NOW - 30 * HOUR).toISOString(), reason: "basis_changed" } }, entry: { revision: 2 } })
   const staleRow = rowOf(triageFor({ ...stale, card: { state: "claimed", claimed: true, revision: CARD_BLOB } }))
-  assert.deepEqual([staleRow.state, staleRow.revision, staleRow.route, staleRow.gate, staleRow.age, staleRow.lifecycle, staleRow.ownership], ["stale", 2, "human_decision", "intent", "aging", "claimed", "claimed"])
+  assert.deepEqual([staleRow.state, staleRow.revision, staleRow.route, staleRow.gate, staleRow.age, staleRow.lifecycle, staleRow.ownership], ["stale", 2, "human_decision", "intent", "stale", "claimed", "claimed"])
   // The card's lifecycle is said only from the exact bytes the annotation was made on.
   for (const card of [undefined, null, { state: "shipped", claimed: true, revision: "d".repeat(40) }]) {
     const row = rowOf(triageFor({ ...stale, card }))
@@ -225,14 +224,14 @@ test("a stale annotation keeps its review as context and a withdrawn one carries
     entry: { revision: 3 },
   })
   const row = rowOf(triageFor(withdrawn))
-  assert.deepEqual(row, { ...PUBLIC_ROW, ...caseOf("withdrawal").row, revision: 3, lifecycle: null, age: "stale" })
+  assert.deepEqual(row, { ...PUBLIC_ROW, ...caseOf("withdrawal").row, revision: 3, lifecycle: null, age: "recent" }, "a row says nothing measured against the clock")
   assert.equal(triageFor({ ...withdrawn, producerVersion: undefined }).held, undefined, "this Desk's own version is the default")
 })
 
 test("a batch holds at most twenty rows, names each row it left out and may carry coverage alone", async () => {
-  const { triageBatchFor, coarseAge } = await load()
+  const { triageBatchFor, triageBatchOf, coarseAge } = await load()
   const one = acknowledged()
-  const shared = { store: one.store, consent: one.consent, visibility: one.visibility, coverage: one.coverage, runner: one.runner, now: NOW, producerVersion: "1.4.0" }
+  const shared = { store: one.store, consent: one.consent, visibility: one.visibility, coverage: one.coverage, runner: one.runner, producerVersion: "1.4.0" }
   const unacknowledged = { ...one, ack: { ...one.ack, commit: "local" } }
   const mixed = triageBatchFor({ ...shared, rows: [unacknowledged, one, null] })
   assert.match(mixed.path, /^triage\/[0-9a-f]{16}\.json$/u, "a random batch ID")
@@ -249,8 +248,22 @@ test("a batch holds at most twenty rows, names each row it left out and may carr
   const empty = triageBatchFor({ ...shared, rows: [], coverage: { ...fixture.public.coverage, ...never.coverage }, runner: never.runner, batch: fixture.public.batch })
   assert.equal(empty.bytes.toString("utf8"), `${JSON.stringify({ ...fixture.public, coverage: { ...fixture.public.coverage, ...never.coverage }, runner: never.runner, rows: [] })}\n`)
   assert.deepEqual([empty.rows, empty.skipped], [[], []])
-  // The default clock is now: an attempt years ago is long past.
+  // A row's bytes are the same whenever they are built: a review made years ago is the same row today, and a store reads how old a
+  // publication is from commit times. Only an attempt time that is no time is unknown.
   const old = acknowledged({ annotation: { attempt: { state: "reviewed", at: "2020-01-01T00:00:00.000Z", reason: "review_accepted" } } })
-  assert.equal(JSON.parse(triageBatchFor({ ...shared, now: undefined, rows: [old] }).bytes.toString("utf8")).rows[0].age, "stale")
+  const built = triageBatchFor({ ...shared, rows: [old], batch: fixture.public.batch })
+  assert.equal(JSON.parse(built.bytes.toString("utf8")).rows[0].age, "recent")
+  assert.deepEqual(triageBatchFor({ ...shared, rows: [old], batch: fixture.public.batch }).bytes, built.bytes, "a pure function of the annotation")
+  const timeless = acknowledged({ annotation: { attempt: { state: "reviewed", at: "2026-13-45T00:00:00.000Z", reason: "review_accepted" } } })
+  assert.equal(JSON.parse(triageBatchFor({ ...shared, rows: [timeless] }).bytes.toString("utf8")).rows[0].age, "unknown")
+  // Rows that were built before go again exactly as they are, in a new file with the coverage of the day.
+  const row = JSON.parse(built.bytes.toString("utf8")).rows[0]
+  const coverage = { ...fixture.public.coverage, reviewed: 7 }
+  const again = triageBatchOf({ ...shared, rows: [row], coverage, batch: "00000000000000aa" })
+  assert.deepEqual(JSON.parse(again.bytes.toString("utf8")), { ...fixture.public, batch: "00000000000000aa", coverage, rows: [row] })
+  assert.deepEqual([again.path, again.sha], ["triage/00000000000000aa.json", gitBlobSha(again.bytes)])
+  assert.match(triageBatchOf({ ...shared, rows: [], producerVersion: undefined }).path, /^triage\/[0-9a-f]{16}\.json$/u, "a random batch ID and this Desk's own version")
+  assert.deepEqual(triageBatchOf({ ...shared, rows: [row], consent: { contribute: false } }), { held: "not_opted_in" })
+  assert.deepEqual(triageBatchOf({ ...shared, rows: [{ ...row, title: "PRIVATE" }] }), { held: "projection_invalid" }, "a row the public schema refuses")
   assert.deepEqual([coarseAge(0), coarseAge(24 * HOUR), coarseAge(24 * HOUR + 1), coarseAge(72 * HOUR), coarseAge(72 * HOUR + 1), coarseAge(-1), coarseAge(Number.NaN)], ["recent", "recent", "aging", "aging", "stale", "unknown", "unknown"])
 })

@@ -42,11 +42,15 @@
 // `[{ store, times }]`. `capture_dropped` is present when a record dropped from a rebuilt intake branch was still not sent six hours later: `[{ store, since }]`. `coverage_kept` is present when the coverage pass was kept back for a quarantine that did not settle within an hour and was recorded anyway: `{ since }`. Like `orphans`, all are pushed to the doctor and the boot status, not only shown by `factory.js status`.
 //
 // `triage_publication` is present when a contributing store has a triage publication record (`triage-outbox.js` writes
-// `status.triage_publication[store]`): `[{ store, health, pending, waiting, held? }]`. `health` is `triagePublicationHealth`'s reading:
-// `held` (emission is held; `held` names the code), `not_published` (no batch of this machine has reached the store), `source_incomplete`
-// (the last card scan was not complete), `stale` (the last batch reached the store more than 72 hours ago) or `current`. Only `current`
-// supports a claim that the store shows this machine's triage as it is now. `pending` counts staged batches not yet on the store's default
-// branch and `waiting` acknowledged annotations not yet staged.
+// `status.triage_publication[store]`): `[{ store, health, pending, waiting, held?, held_requests?, stuck_since? }]`. `health` is
+// `triagePublicationHealth`'s reading: `held` (emission is held; `held` names the code), `not_published` (no batch of this machine has reached
+// the store), `source_incomplete` (the store reads this source as unknown: the last card scan was not complete, the last delivered batch had a
+// count that is not known, as on a machine that has not completed a triage run, or the state was reset within 72 hours so an earlier coverage
+// generation of this machine is still fresh there), `stale` (the last batch reached the store more than 72 hours ago) or `current`. Only
+// `current` supports a claim that the store shows this machine's triage as it is now, as far as this machine can know: it cannot see another
+// machine's batches. `pending` counts staged batches not yet on the store's default branch and `waiting` acknowledged annotations not yet
+// staged. `held_requests` counts what waits by its code (`{ code: count }`). `stuck_since` is present when a hold has lasted, or an annotation
+// has waited, for three days or more: the time it began. A publication that is only `stale` is routine and has none.
 //
 // The result carries store names, codes and counts only: never the machine
 // secret, an account, an intake ID, a token or any content, and no local
@@ -288,24 +292,39 @@ function keptAgeDays(file, now) {
 /** A triage publication older than this cannot support a claim about now; the store reads it as stale too. */
 export const TRIAGE_PUBLICATION_FRESH_MS = 72 * 60 * 60 * 1000
 
+/** A hold or a wait this old is a finding: the publication is stuck, not merely waiting its day. */
+export const TRIAGE_PUBLICATION_STUCK_MS = 3 * 24 * 60 * 60 * 1000
+
+const within = (time, now, limit) => typeof time === "string" && now - Date.parse(time) >= 0 && now - Date.parse(time) <= limit
+
 /** See the header: what one store's `status.triage_publication` entry supports at `now` (milliseconds). */
 export function triagePublicationHealth(entry, now = Date.now()) {
   if (typeof entry.held === "string") return "held"
   if (typeof entry.delivered_at !== "string") return "not_published"
   if (entry.scan !== "complete") return "source_incomplete"
-  const age = now - Date.parse(entry.delivered_at)
-  return age >= 0 && age <= TRIAGE_PUBLICATION_FRESH_MS ? "current" : "stale"
+  if (!within(entry.delivered_at, now, TRIAGE_PUBLICATION_FRESH_MS)) return "stale"
+  // What the store shows: coverage it can read as known, and no other generation of this machine still fresh.
+  return entry.coverage_known === true && !within(entry.reset_at, now, TRIAGE_PUBLICATION_FRESH_MS) ? "current" : "source_incomplete"
 }
 
 function triagePublications(status, contributes, now) {
   const all = isPlainObject(status.triage_publication) ? status.triage_publication : {}
-  return Object.keys(all).filter((store) => PATTERNS.prRepo.test(store) && isPlainObject(all[store]) && contributes(store)).sort().map((store) => ({
-    store,
-    health: triagePublicationHealth(all[store], now),
-    pending: Number.isSafeInteger(all[store].pending) ? all[store].pending : 0,
-    waiting: Number.isSafeInteger(all[store].waiting) ? all[store].waiting : 0,
-    ...(typeof all[store].held === "string" && RESULT_CODE.test(all[store].held) ? { held: all[store].held } : {}),
-  }))
+  return Object.keys(all).filter((store) => PATTERNS.prRepo.test(store) && isPlainObject(all[store]) && contributes(store)).sort().map((store) => {
+    const entry = all[store]
+    const held = typeof entry.held === "string" && RESULT_CODE.test(entry.held) ? entry.held : null
+    const reasons = Object.entries(isPlainObject(entry.held_requests) ? entry.held_requests : {}).filter(([code, count]) => RESULT_CODE.test(code) && Number.isSafeInteger(count) && count > 0)
+    const old = (time) => typeof time === "string" && now - Date.parse(time) >= TRIAGE_PUBLICATION_STUCK_MS
+    const stuck = [...(held !== null && old(entry.held_since) ? [entry.held_since] : []), ...(old(entry.waiting_since) ? [entry.waiting_since] : [])].sort()[0]
+    return {
+      store,
+      health: triagePublicationHealth(entry, now),
+      pending: Number.isSafeInteger(entry.pending) ? entry.pending : 0,
+      waiting: Number.isSafeInteger(entry.waiting) ? entry.waiting : 0,
+      ...(held === null ? {} : { held }),
+      ...(reasons.length === 0 ? {} : { held_requests: Object.fromEntries(reasons) }),
+      ...(stuck === undefined ? {} : { stuck_since: stuck }),
+    }
+  })
 }
 
 /** See the header. Never writes and never throws for missing or unreadable state. */

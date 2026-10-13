@@ -192,7 +192,7 @@ import {
 import { refreshAndon } from "./andon-watch.js"
 import { carriedAccountFault } from "./flush-health.js"
 import { CHECK_UNAVAILABLE, captureOnBranch, judge, namesRecord, planCapture, saveCheckUnavailable, saveDropped, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, sentRecord, storeAcceptsCapture } from "./capture-flush.js"
-import { namesTriage, planTriage, prepareTriage, saveTriageRefused, saveTriageSent, triageOnBranch } from "./triage-outbox.js"
+import { namesTriage, planTriage, prepareTriage, recordTriageError, saveTriageRefused, saveTriageSent, triageOnBranch } from "./triage-outbox.js"
 import { isTriagePath } from "./triage-schema.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { labelBinding, releaseReboundLabels, withdrawLabels } from "./label-binding.js"
@@ -938,7 +938,22 @@ async function deliver(env, context) {
   const capture = planCapture({ status, consent, store, intakeId: record.intake_id, nowMs: now(), mayBeOpen })
   if (capture.invalid) await saveInvalid(env, store, now())
   // Triage batches (`triage-outbox.js`): what waits is read from local state and Git alone, so a flush with no triage work still ends without a network call.
-  const triage = await planTriage(env, { store, now: now() })
+  // Nothing in the triage code may keep facts from going: an error there (never a `Stop`, which is the flush's own) holds triage for a day as
+  // `triage_error`, and the flush goes on as if there were no triage.
+  const triageSafely = async (fallback, body) => {
+    try {
+      return await body()
+    } catch (error) {
+      if (error instanceof Stop) throw error
+      try {
+        await recordTriageError(env, store, now())
+      } catch {
+        // The triage state cannot be written either: the next flush finds the same error.
+      }
+      return fallback
+    }
+  }
+  const triage = await triageSafely({ work: false, state: {}, candidates: [], held: {}, attest: [], attestEmpty: false }, () => planTriage(env, { store, now: now() }))
   if (!triage.work && !capture.work && candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0 && Object.keys(delivered.retracting).length === 0 && Object.keys(delivered.retracted).length === 0 && !mayBeOpen && newer.size === 0 && keptNow.length === 0 && outdated.length === 0) return { result: "nothing_pending" }
 
   // Every session this flush could act on is placed by where it routes now (`session-route.js`): `here` (this store), `away` (a positive
@@ -1263,10 +1278,10 @@ async function deliver(env, context) {
   }
   // Triage batches: a refusal that named them holds them for a day; otherwise the store's readiness, the account's permission and the default branch decide (`prepareTriage`).
   let triageItems = []
-  if (rejections.triageRefused !== null) await saveTriageRefused(env, store, rejections.triageRefused, now())
+  if (rejections.triageRefused !== null) await triageSafely(null, () => saveTriageRefused(env, store, rejections.triageRefused, now()))
   else {
-    triageItems = (await prepareTriage(env, {
-      store, plan: triage, client, branch: target.branch, direct: deliveryRoute(account, infoAnswer.json) === "direct", consent: record, status, now: now(),
+    triageItems = (await triageSafely({ items: [] }, () => prepareTriage(env, {
+      store, plan: triage, client, ref: base.sha, direct: deliveryRoute(account, infoAnswer.json) === "direct", consent: record, status, now: now(),
       visibility: (repos) => resolveVisibility(env, client, account, repos, nowIso, new Set(repos.map((repo) => repo.toLowerCase()))),
       // The job IDs a triage row may point at: those `toPublished` gave the facts this machine delivered here, exactly as delivered.
       publishedJobs: () => new Set([...bytesByName].filter(([name, bytes]) => delivered.blobs[name] === gitBlobSha(bytes)).flatMap(([, bytes]) => JSON.parse(bytes.toString("utf8")).jobs.map((job) => job.job))),
@@ -1274,7 +1289,7 @@ async function deliver(env, context) {
         const listing = newListing()
         return { blobs: await triageOnBranch((sha) => readTree(client, store, requireSha(sha), listing), base.tree), unknown: listing.truncated }
       },
-    })).items
+    }))).items
   }
   const extras = [...(captureItem === null ? [] : [captureItem]), ...triageItems]
   const remaining = []
@@ -1329,7 +1344,7 @@ async function deliver(env, context) {
   const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length + extras.length, retracted: takenDeletes.length })
   progress.intakePrs = [...leftOpen, { number: pr.number, head: head.label }]
   if (captureItem !== null) await saveSent(env, store, { bytes: captureItem.bytes, fresh: capture.due }, pr.number, now())
-  if (triageItems.length > 0) await saveTriageSent(env, store, triageItems, pr.number, now())
+  if (triageItems.length > 0) await triageSafely(null, () => saveTriageSent(env, store, triageItems, pr.number, now()))
   // The deletes are pushed: those sessions are retracting now, and no longer delivered.
   await markRetracting(env, store, takenDeletes.filter((item) => item.from !== "retracting" && !item.unbound))
   await keepRetractedCopies(env, store, takenDeletes.filter((item) => !item.unbound).map((item) => item.session))

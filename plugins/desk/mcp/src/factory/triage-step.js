@@ -80,7 +80,7 @@ import { ensureOwnerOnlyDirectory } from "./os-protect.js"
 import { factoryStateRoot, readConsent, readStatus, updateStatus } from "./outbox.js"
 import { releaseLock, takeLock } from "./process-lock.js"
 import { prepareTriageCatalog, writeTriagePreparedFile } from "./triage-catalog.js"
-import { beginTriageEmission, recordTriageCoverage, settleTriageEmission } from "./triage-outbox.js"
+import { beginTriageEmission, recordTriageCoverage, routedStore, settleTriageEmission } from "./triage-outbox.js"
 import { readTriageBasis, resolveSelfDescribing, safeDeskPath } from "./triage-basis.js"
 import { validateTriageResultBytes } from "./triage-schema.js"
 import { readAcknowledgedAnnotations, refreshTriage, selectTriageCards, toSafeTriageReview } from "./triage-state.js"
@@ -380,9 +380,10 @@ async function prepareBatch({ deskRoot, selected, producerVersion, rubricVersion
 // intent is marked before the write and settled with its answer. Only those are published to the store, and only once acknowledged.
 // The outbox is bookkeeping: a failure to note it never changes what the write answers.
 async function writeAnnotation(env, ctx, input) {
-  const noted = await swallow(() => beginTriageEmission(env, { store: input.store, key: input.key, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix }), null)
+  const mark = { store: input.store, key: input.key, operation: input.operation, at: input.now.getTime() }
+  const noted = await swallow(() => beginTriageEmission(env, { ...mark, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix }), null)
   const written = await swallow(() => ctx.impls.publishOwnedTriage({ env, deskRoot: ctx.deskRoot, personPrefix: ctx.personPrefix, evidence: ctx.impls.evidence, ...input }), { state: "write_failed" })
-  if (noted !== null) await swallow(() => settleTriageEmission(env, { store: input.store, key: input.key, written, prior: noted.prior, now: input.now.getTime() }))
+  if (noted !== null) await swallow(() => settleTriageEmission(env, { ...mark, written }))
   return written
 }
 
@@ -507,10 +508,14 @@ async function mechanicalRefresh(env, ctx, store) {
 // ---------------------------------------------------------------------------
 // The step.
 
-// The first store this machine contributes to, in a stable order: the store the annotation identities are kept for.
-async function triageStore(env) {
+// The store the annotation identities are kept for: the one the desk's facts route to, when this machine contributes to it, because a
+// review is published only to the store its desk routes to. A desk whose route nothing says yet takes the first store this machine
+// contributes to, in a stable order; a desk that routes to a store this machine does not contribute to has none.
+async function triageStore(env, deskRoot) {
   const consent = await readConsent(env)
-  return Object.entries(consent.stores).filter(([, record]) => record?.contribute === true).map(([store]) => store).sort()[0] ?? null
+  const contributing = Object.entries(consent.stores).filter(([, record]) => record?.contribute === true).map(([store]) => store).sort()
+  const routed = await swallow(() => routedStore(env, deskRoot), null)
+  return (routed === null ? contributing[0] : contributing.find((store) => store.toLowerCase() === routed.toLowerCase())) ?? null
 }
 
 async function selectCards(env, ctx, { attempts, freshKeys }) {
@@ -618,11 +623,11 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
     }))
     await swallow(() => recordStep(env, "triage", { ok, result, now: nowDate, carry }))
     // What a published batch says about this scan and the runner (`triage-outbox.js`); only a step that read the cards has anything to say.
-    if (record.coverage !== null) await swallow(() => recordTriageCoverage(env, { store, coverage: record.coverage, counts: answer, runner: record.runner.state }))
+    if (record.coverage !== null) await swallow(() => recordTriageCoverage(env, { store, coverage: record.coverage, counts: answer, runner: record.runner.state, now: nowDate.getTime() }))
     return answer
   }
 
-  const store = await swallow(() => triageStore(env), null)
+  const store = await swallow(() => triageStore(env, deskRoot), null)
   if (store === null) return finish(true, "no_consenting_store")
 
   // 1. The mechanical refresh, always.

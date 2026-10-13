@@ -82,7 +82,7 @@ function digestsOf(values) {
   return out
 }
 
-function rowFor({ annotation, identity, ack, publicEvidence, card }, { store, now, producerVersion }) {
+function rowFor({ annotation, identity, ack, publicEvidence, card }, { store, producerVersion }) {
   const hold = (code) => ({ held: code })
   if (!isPlainObject(ack) || ack.remote !== "origin" || ack.ref !== "refs/heads/main" || ![ack.commit, ack.registry_blob, ack.annotation_blob].every((sha) => typeof sha === "string" && SHA.test(sha))) return hold("unacknowledged")
   if (!isPlainObject(annotation) || gitBlobSha(canonical(annotation)) !== ack.annotation_blob) return hold("unacknowledged")
@@ -116,16 +116,44 @@ function rowFor({ annotation, identity, ack, publicEvidence, card }, { store, no
       basis: { generation: basis.generation, evidence_revisions: kept(basis.public_evidence_revisions) },
       related_ids: review === null ? [] : ids(review.related_keys),
       duplicate_ids: review === null ? [] : ids(review.duplicate_keys),
-      // How long ago the acknowledged attempt was, as a class; no time is published.
-      age: coarseAge(now - Date.parse(attempt.at)),
+      // A row's bytes are fixed for its revision, so they hold nothing measured against the clock: a store reads how old a
+      // publication is from the commit time of the newest batch that carries the row. `age` says only what the annotation does.
+      age: attempt.state === "stale" ? "stale" : Number.isFinite(Date.parse(attempt.at)) ? "recent" : "unknown",
       producer_version: review === null ? producerVersion : review.producer_version,
       rubric_version: review === null ? RUBRIC_VERSION : review.rubric_version,
     },
   }
 }
 
+// The checks that are about the batch, not one row; null when it may be built.
+function batchHold({ store, consent, visibility, coverage, runner, producerVersion, rows, batch }) {
+  if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) return "store_unknown"
+  if (!isPlainObject(consent) || typeof consent.contribute !== "boolean") return "consent_unknown"
+  if (consent.contribute !== true) return "not_opted_in"
+  if (!(visibility instanceof Map) || !KNOWN_VISIBILITY.has(visibility.get(store.toLowerCase()))) return "visibility_unknown"
+  if (!isPlainObject(coverage)) return "coverage_unknown"
+  if (!isPlainObject(runner)) return "runner_unknown"
+  if (typeof producerVersion !== "string") return "producer_unknown"
+  if (!Array.isArray(rows) || rows.length > MAX_ROWS || typeof batch !== "string" || !HEX16.test(batch)) return "projection_invalid"
+  return null
+}
+
 /**
- * `triageBatchFor({ rows, store, consent, visibility, coverage, runner, now, batch, producerVersion })
+ * `triageBatchOf({ rows, store, consent, visibility, coverage, runner, batch, producerVersion }) -> { path, bytes, sha } | { held: code }`:
+ * one batch file around public rows that were already built, exactly as they are: the rows of a batch that goes again under a
+ * new batch ID, or delivered rows sent again with the coverage of today. The batch-level conditions are `triageBatchFor`'s.
+ */
+export function triageBatchOf({ rows, store, consent, visibility, coverage, runner, batch = randomBytes(8).toString("hex"), producerVersion = ownDeskVersion() }) {
+  const held = batchHold({ store, consent, visibility, coverage, runner, producerVersion, rows, batch })
+  if (held !== null) return { held }
+  const bytes = canonical({ schema: TRIAGE_SCHEMA, batch, producer_version: producerVersion, rubric_version: RUBRIC_VERSION, coverage, runner, rows })
+  const path = `triage/${batch}.json`
+  if (!validateTriageChange({ path, status: "added", bytes, trustedMaintainer: true }).ok) return { held: "projection_invalid" }
+  return { path, bytes, sha: gitBlobSha(bytes) }
+}
+
+/**
+ * `triageBatchFor({ rows, store, consent, visibility, coverage, runner, batch, producerVersion })
  *   -> { path, bytes, sha, rows: [{id,revision}], skipped: [{index,code}] } | { held: code, skipped? }`.
  *
  * One immutable batch of at most twenty rows. `rows` is `[{ annotation, identity, ack, publicEvidence, card }]` (see
@@ -135,33 +163,23 @@ function rowFor({ annotation, identity, ack, publicEvidence, card }, { store, no
  * carries coverage only. `batch` is the sixteen-hex batch ID (random unless given), `producerVersion` this Desk's version
  * (its own unless given).
  */
-export function triageBatchFor({ rows, store, consent, visibility, coverage, runner, now = Date.now(), batch = randomBytes(8).toString("hex"), producerVersion = ownDeskVersion() }) {
-  const hold = (code) => ({ held: code })
-  if (typeof store !== "string" || !PATTERNS.prRepo.test(store)) return hold("store_unknown")
-  if (!isPlainObject(consent) || typeof consent.contribute !== "boolean") return hold("consent_unknown")
-  if (consent.contribute !== true) return hold("not_opted_in")
-  if (!(visibility instanceof Map) || !KNOWN_VISIBILITY.has(visibility.get(store.toLowerCase()))) return hold("visibility_unknown")
-  if (!isPlainObject(coverage)) return hold("coverage_unknown")
-  if (!isPlainObject(runner)) return hold("runner_unknown")
-  if (typeof producerVersion !== "string") return hold("producer_unknown")
-  if (!Array.isArray(rows) || rows.length > MAX_ROWS || typeof batch !== "string" || !HEX16.test(batch)) return hold("projection_invalid")
-  const nowMs = new Date(now).getTime()
+export function triageBatchFor({ rows, store, consent, visibility, coverage, runner, batch = randomBytes(8).toString("hex"), producerVersion = ownDeskVersion() }) {
+  const early = batchHold({ store, consent, visibility, coverage, runner, producerVersion, rows, batch })
+  if (early !== null) return { held: early }
   const built = []
   const held = []
   rows.forEach((input, index) => {
-    const out = rowFor(isPlainObject(input) ? input : {}, { store, now: nowMs, producerVersion })
+    const out = rowFor(isPlainObject(input) ? input : {}, { store, producerVersion })
     if (out.held === undefined) built.push(out.row)
     else held.push({ index, code: out.held })
   })
   if (rows.length > 0 && built.length === 0) return { held: held[0].code, skipped: held }
-  const bytes = canonical({ schema: TRIAGE_SCHEMA, batch, producer_version: producerVersion, rubric_version: RUBRIC_VERSION, coverage, runner, rows: built })
-  const path = `triage/${batch}.json`
-  if (!validateTriageChange({ path, status: "added", bytes, trustedMaintainer: true }).ok) return hold("projection_invalid")
-  return { path, bytes, sha: gitBlobSha(bytes), rows: built.map((row) => ({ id: row.id, revision: row.revision })), skipped: held }
+  const out = triageBatchOf({ rows: built, store, consent, visibility, coverage, runner, batch, producerVersion })
+  return out.held === undefined ? { ...out, rows: built.map((row) => ({ id: row.id, revision: row.revision })), skipped: held } : out
 }
 
 /**
- * `triageFor({ annotation, identity, ack, store, consent, visibility, publicEvidence, coverage, runner, card, now, batch, producerVersion })
+ * `triageFor({ annotation, identity, ack, store, consent, visibility, publicEvidence, coverage, runner, card, batch, producerVersion })
  *   -> { path, bytes, sha } | { held: code }`: the batch file for one acknowledged annotation.
  *
  *   - `annotation`: the acknowledged `desk.factory.triage-local/1` annotation, as parsed from Desk `main`.
@@ -175,13 +193,13 @@ export function triageBatchFor({ rows, store, consent, visibility, coverage, run
  *   - `card` (optional): `{state, claimed, revision}` of the canonical card as read now: its lifecycle state, whether it carries
  *     a live claim, and the blob ID of its bytes. It is used only when `revision` is exactly the annotation's
  *     `canonical_revision`; otherwise the row's lifecycle is null and its ownership `not_published`.
- *   - `now`, `batch`, `producerVersion`: the clock for the attempt's age, the batch ID and this Desk's version, for tests.
+ *   - `batch`, `producerVersion`: the batch ID and this Desk's version, for tests.
  *
  * Hold codes: `store_unknown`, `consent_unknown`, `not_opted_in`, `visibility_unknown`, `coverage_unknown`, `runner_unknown`,
  * `producer_unknown`, `unacknowledged`, `annotation_invalid`, `identity_unacknowledged`, `identity_revision_mismatch`, `identity_not_random`,
  * `basis_not_opaque`, `annotation_state`, `projection_invalid`.
  */
-export function triageFor({ annotation, identity, ack, store, consent, visibility, publicEvidence, coverage, runner, card, now, batch, producerVersion }) {
-  const out = triageBatchFor({ rows: [{ annotation, identity, ack, publicEvidence, card }], store, consent, visibility, coverage, runner, now, batch, producerVersion })
+export function triageFor({ annotation, identity, ack, store, consent, visibility, publicEvidence, coverage, runner, card, batch, producerVersion }) {
+  const out = triageBatchFor({ rows: [{ annotation, identity, ack, publicEvidence, card }], store, consent, visibility, coverage, runner, batch, producerVersion })
   return out.held === undefined ? { path: out.path, bytes: out.bytes, sha: out.sha } : { held: out.held }
 }
