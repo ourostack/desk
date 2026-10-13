@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.316 — 2026-10-13
+
+Re-sending factory triage rows to keep them fresh at the store is stricter. When a row is due or a re-attestation is waiting, the flush fetches the desk remote's `main` once before accepting its standing and sends again only rows that fresh copy still holds as the same review; a row that cannot be read or fetched waits and no longer makes the others go early. A row dropped because the desk now holds a newer annotation keeps store health at `stale` until a verified higher replacement revision is delivered: age alone never clears its tombstone because the store retains stale rows. A waiting batch that carries only the scan's counts is not sent after the scanned desk's route changes. See [Staying current at the store](docs/factory-local-capture.md#staying-current-at-the-store).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.315 — 2026-10-13
 
 `desk_status` no longer blocks the server while it counts unsigned deliveries ([`mcp/src/desk/unsigned-deliveries.js`](mcp/src/desk/unsigned-deliveries.js), [`mcp/src/tools/factory-context.js`](mcp/src/tools/factory-context.js)). The scan listed every track folder and read every card head synchronously, and one directory listing has taken 192 ms on a Windows runner, more than the 90 ms `desk_status` answer budget. It now reads asynchronously, 16 cards at a time, and stops reading when its status run is abandoned. `desk_doctor` and boot keep the synchronous scan; both scans share the same rules and give the same answer. A session closing a status run now also waits for that run's own file reads to end ([`mcp/src/tools/status.js`](mcp/src/tools/status.js)), so it never reports itself closed while a card in the desk folder is still open. That wait ends with the error `status_call_not_settled` after 1.5 s if the call has not settled, so a read that never returns cannot hold the session open; an aborted run also stops waiting for the controller's status. A folder named `task.md` is now counted as an unreadable card instead of failing the scan, which had made `desk_doctor` fail.
