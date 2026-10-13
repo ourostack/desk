@@ -1040,3 +1040,39 @@ test("the deadlines the step passes clear the qualifier's minimum time, from the
   assert.ok(seen.options.deadline - seen.options.now() >= AUTO_MIN_REMAINING_MS, "the command's deadline")
   assert.deepEqual([done.result, done.ok, (await readStatus(w.env)).triage.runner], ["runner_qualified", true, { state: "qualifying", reason: null, qualification: "qualified" }])
 })
+
+test("the engine-pin reason needs an installed Claude Code: a host with none is quiet with its own reason and opens no engine-pin card", { skip: NEEDS_PREPARED_RUN }, async () => {
+  const noRun = { runTriageChild: async () => assert.fail("no triage run"), reserveAgentLaunch: async () => assert.fail("nothing reserved") }
+  const refusing = (extra) => qualifiedSeams({ restoreQualification: async () => ({ state: "missing" }), autoQualify: async () => ({ state: "refused", reason: "engine_unpinned", launched: false }), ...noRun, ...extra })
+  const alarmCards = async (w, hour) => {
+    await runMeasureStep(w.env, { deskRoot: w.deskRoot, personPrefix: "", now: at(hour), attempted: ["triage"] })
+    return (await readCards({ deskRoot: w.deskRoot, personPrefix: "" })).cards.filter((card) => card.key.startsWith("loop_alarm:triage") || card.key === "loop_alarm:step_stale:triage").map((card) => card.key)
+  }
+  const reasonAfter = async (w, seams, env = w.env) => {
+    const result = await step({ ...w, env }, { seams })
+    assert.deepEqual([result.result, result.ok, result.launched], ["runner_unavailable", true, false])
+    return (await readStatus(w.env)).triage.runner.reason
+  }
+  // No Claude Code at all: the qualifier's refusal and a stale record alike read `no_agent_cli`, and the measure step opens nothing.
+  let w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  assert.equal(await reasonAfter(w, refusing({ engineInstalled: async () => false })), "no_agent_cli")
+  assert.equal(await reasonAfter(w, qualifiedSeams({ engineInstalled: async () => false, restoreQualification: async () => ({ state: "stale", reason: "engine_unpinned", requalify: false }), ...noRun })), "no_agent_cli")
+  assert.deepEqual(await alarmCards(w, 1), [])
+  // Any other reason is never rewritten, and the check is not asked for it.
+  assert.equal(await reasonAfter(w, qualifiedSeams({ engineInstalled: async () => assert.fail("not asked"), restoreQualification: async () => ({ state: "stale", reason: "engine_mismatch", requalify: false }), ...noRun })), "engine_mismatch")
+  // Claude Code installed without the pinned build, or a check that cannot tell: the pin is behind, and only the engine-pin card opens.
+  w = await triageWorld({ now: at(0), keys: KEYS.slice(0, 1) })
+  assert.equal(await reasonAfter(w, refusing({ engineInstalled: async () => { throw new Error("unreadable") } })), "engine_unpinned")
+  assert.equal(await reasonAfter(w, refusing({ engineInstalled: async () => true })), "engine_unpinned")
+  assert.deepEqual(await alarmCards(w, 1), ["loop_alarm:triage_engine_unpinned"])
+  // The default check: a Claude Code the session can find, else a version in the home folder's install folder, else none.
+  const { engineInstalled: _seam, ...own } = refusing()
+  const bare = { ...w.env, PATH: "", DESK_AGENT_CLI: "" }
+  assert.equal(await reasonAfter(w, own, bare), "no_agent_cli")
+  assert.equal(await reasonAfter(w, own, { ...bare, DESK_AGENT_CLI: process.execPath }), "engine_unpinned")
+  const versions = path.join(w.env.HOME, ".local", "share", "claude", "versions")
+  await fs.mkdir(versions, { recursive: true })
+  assert.equal(await reasonAfter(w, own, bare), "no_agent_cli", "an empty install folder is no install")
+  await fs.writeFile(path.join(versions, "9.9.9"), "")
+  assert.equal(await reasonAfter(w, own, bare), "engine_unpinned")
+})
