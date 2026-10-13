@@ -5,6 +5,7 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
+import matter from "gray-matter"
 import {
   findFilenameEquivalent,
   readMarkdown,
@@ -364,6 +365,16 @@ test("a card whose YAML cannot be parsed is refused on every read and never rewr
     await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: `done-${attempt}` }), { name: "YAMLException" })
   }
   assert.equal(await fs.readFile(filePath, "utf8"), broken)
+})
+
+test("reading, writing and patching cards leaves nothing in the YAML library's cache", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "cached.md")
+  await fs.writeFile(filePath, serializeMarkdown({ status: "doing" }, "Body.\n"), "utf8")
+  await readMarkdown(filePath)
+  await patchMarkdownFrontmatter(filePath, { nested: { field: 1 } })
+  serializeMarkdown({ a: 1 }, "---\nx: [\n---\n")
+  assert.deepEqual(Object.keys(matter.cache), [])
 })
 
 test("serializeMarkdown handles empty and already-prefixed content", () => {

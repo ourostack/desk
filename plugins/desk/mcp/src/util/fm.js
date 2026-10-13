@@ -74,7 +74,8 @@ export function serializeMarkdown(data, content) {
   // body so there's always a blank line between frontmatter and body when
   // body is non-empty.
   const body = content == null ? "" : String(content)
-  return matter.stringify(body.startsWith("\n") ? body : `\n${body}`, data)
+  // The options argument keeps the body out of gray-matter's cache (see `parseCard`).
+  return matter.stringify(body.startsWith("\n") ? body : `\n${body}`, data, {})
 }
 
 /** Write a markdown file with frontmatter, creating parent dirs as needed. */
