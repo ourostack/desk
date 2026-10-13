@@ -52,7 +52,7 @@ export function createStatusInspection(deskRoot, {
   }
   const terminate = (name, next, ms) => {
     resource.signals.push(name)
-    // `kill` returns false when the process no longer exists, which is also what it returns for a child that has just exited by itself and whose exit event has not arrived yet. That is the stop this close wanted, so a false return is a failure only if the child has still not exited when this step's grace ends.
+    // `kill` returns false when the process no longer exists. On Windows that includes a child that has just exited by itself and whose exit event has not arrived yet (POSIX still signals such a child and returns true). That is the stop this close wanted, so a false return is a failure only if the child has still not exited when this step's grace ends.
     let unsent = false
     try {
       unsent = !child.kill(name)
