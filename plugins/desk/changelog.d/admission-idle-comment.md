@@ -1,0 +1,1 @@
+The comment on `idle()` in [`mcp/src/runtime/admission.js`](mcp/src/runtime/admission.js) now says what it does: it waits for the admission attempt that is running when it is called, so another attempt can be running when it resolves. Behaviour is unchanged.
