@@ -166,6 +166,22 @@ function startHosted({ desk, pluginRoot, env = { DESK_HOSTED: "1" }, admissionKi
   return { input, lines, syncs, started }
 }
 
+test("the hosted entrypoint advertises the gateway's icon while ordinary sessions keep their metadata", async () => {
+  const { desk, pluginRoot } = await scratchDesk()
+  for (const [env, expected] of [
+    [{ DESK_HOSTED: "1", DESK_MCP_ICON_URL: "https://desk.example/assets/desk-logo.png" }, [{ src: "https://desk.example/assets/desk-logo.png" }]],
+    [{ DESK_HOSTED: "1" }, undefined],
+    [{ DESK_MCP_ICON_URL: "https://desk.example/assets/desk-logo.png" }, undefined],
+  ]) {
+    const { input, lines, started } = startHosted({ desk, pluginRoot, env })
+    const handle = await started
+    send(input, { id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } })
+    input.end()
+    await handle.closed
+    assert.deepEqual(lines[0].result.serverInfo.icons, expected)
+  }
+})
+
 test("in hosted mode, main answers initialize with the hosted instructions at once and syncs the desk once, after the first tools/list", async () => {
   const { desk, pluginRoot } = await scratchDesk()
   const { input, lines, syncs, started } = startHosted({ desk, pluginRoot, admissionKickoffMs: 0 })

@@ -26,6 +26,18 @@ function serve(options = {}) {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 
+test("initialize advertises configured icons only to icon-capable protocols", async () => {
+  const icons = [{ src: "https://desk.example/assets/desk-logo.png" }]
+  const { lines, send, input, door } = serve({ serverIcons: icons, callTool: () => ({}) })
+  for (const protocolVersion of ["2025-11-25", "2025-06-18", "2024-11-05"]) {
+    send({ id: protocolVersion, method: "initialize", params: { protocolVersion } })
+  }
+  input.end()
+  await door.closed
+  assert.deepEqual(lines[0].result.serverInfo.icons, icons)
+  for (const line of lines.slice(1)) assert.equal(Object.hasOwn(line.result.serverInfo, "icons"), false)
+})
+
 test("the tool list is the canonical one, and desk_doctor takes a format and a repair", () => {
   assert.deepEqual(FRONT_DOOR_TOOLS.map((tool) => tool.name), TOOL_NAMES)
   const doctor = FRONT_DOOR_TOOLS.find((tool) => tool.name === "desk_doctor")

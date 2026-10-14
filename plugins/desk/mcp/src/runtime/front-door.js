@@ -22,6 +22,7 @@ export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.fr
  * Serve MCP on `input`/`output`. `callTool({ name, input, signal })` returns an MCP tool result (or a promise of one).
  * `onHandshake` fires once, after the first tools/list reply is written: hosts send tools/list after notifications/initialized, often as a separate write, and admission must not start before that list is answered.
  * `instructions`, when a non-empty string, goes in the initialize result as the server's MCP instructions.
+ * `serverIcons`, when supplied, is advertised to protocols that support MCP icons (2025-11-25 onward).
  * Returns `{ closed, notifyToolsChanged }`: `closed` resolves when input ends and every call in flight has answered.
  */
 export function startFrontDoor({
@@ -30,6 +31,7 @@ export function startFrontDoor({
   output,
   serverName = "desk-mcp",
   serverVersion = "0.0.0",
+  serverIcons,
   onHandshake = () => {},
   instructions,
 }) {
@@ -112,13 +114,18 @@ export function startFrontDoor({
     }
     if (request.id === undefined) return
     if (request.method === "initialize") {
+      const protocolVersion = request.params?.protocolVersion ?? "2025-06-18"
       write({
         jsonrpc: "2.0",
         id: request.id,
         result: {
-          protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
+          protocolVersion,
           capabilities: { tools: { listChanged: true } },
-          serverInfo: { name: serverName, version: serverVersion },
+          serverInfo: {
+            name: serverName,
+            version: serverVersion,
+            ...(serverIcons?.length && protocolVersion >= "2025-11-25" ? { icons: serverIcons } : {}),
+          },
           ...(typeof instructions === "string" && instructions.length > 0 ? { instructions } : {}),
         },
       })

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { seal } from "../src/auth/seal.js";
+import { createHash } from "node:crypto";
 import { createProvider } from "../src/auth/provider.js";
 import { createApp, createDeepHealth } from "../src/server.js";
 import { execFileSync } from "node:child_process";
@@ -46,6 +47,46 @@ async function start(t, { unavailable } = {}) {
 
 const accessToken = (claims = {}) =>
   seal("access", { clientId: "c", scopes: ["desk"], login: "arimendelow", userId: 16390116, name: "Ari", ...claims }, { key: KEY, ttlSec: 3600 });
+
+test("approved branding assets are public even while sign-in is unavailable", async (t) => {
+  const { base } = await start(t, { unavailable: NOT_SET_UP });
+  for (const [path, type, hash] of [
+    ["/assets/desk-logo.png", "image/png", "76dd2f6958c30d2f6975d287a758376d9c6a58cc5c0b035adc438cc75c4df022"],
+    ["/favicon.svg", "image/svg+xml", "0eedadf4cc9a2797d558f5f97ff6918fb7c44c11c676a8dd2b77083ce554079a"],
+  ]) {
+    const response = await fetch(`${base}${path}`);
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get("content-type").split(";")[0], type);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), hash, "serve the approved asset, not an HTML fallback");
+  }
+  const css = await fetch(`${base}/assets/desk.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get("content-type"), /^text\/css/);
+  for (const path of ["/assets/missing.png", "/assets/%2e%2e%2fsrc%2fserver.js"]) {
+    assert.equal((await fetch(`${base}${path}`)).status, 404, "never serve source files or a success-shaped asset fallback");
+  }
+});
+
+test("branded sign-in pages permit their own image and style without allowing scripts or blocking OAuth redirects", async (t) => {
+  const { base } = await start(t, { unavailable: NOT_SET_UP });
+  const response = await fetch(`${base}/authorize`);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  const policy = response.headers.get("content-security-policy");
+  assert.match(policy, /default-src 'none'/);
+  assert.match(policy, /img-src 'self'/);
+  assert.match(policy, /style-src 'self'/);
+  assert.match(policy, /frame-ancestors 'none'/);
+  assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval|form-action/);
+  const html = await response.text();
+  assert.match(html, /src="\/assets\/desk-logo\.png"/);
+  assert.match(html, /href="\/assets\/desk\.css"/);
+  assert.match(html, /href="\/favicon\.svg"/);
+  assert.match(html, /Hosted Desk is not set up yet/);
+});
 
 const mcpPost = (base, body, token) =>
   fetch(`${base}/mcp`, {

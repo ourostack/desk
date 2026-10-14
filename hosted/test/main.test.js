@@ -102,6 +102,7 @@ test("a Desk child's environment carries the user's Git identity, the token sock
     baseEnv: base,
   });
   assert.equal(env.DESK_HOSTED, "1");
+  assert.equal(env.DESK_MCP_ICON_URL, "https://desk-hosted.example.azurecontainerapps.io/assets/desk-logo.png");
   assert.equal(env.DESK, "/data/desk");
   assert.equal(env.GIT_AUTHOR_NAME, "Ari Mendelow");
   assert.equal(env.GIT_COMMITTER_NAME, "Ari Mendelow");

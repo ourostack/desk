@@ -17,9 +17,15 @@ Some Desk tools, doctor repairs and skills need a shell, the host machine or a c
 ## Connect from claude.ai
 
 1. In claude.ai, install the Desk plugin and its dependencies (superpowers, plain-language) from the ourostack marketplace.
-2. Open **Settings → Connectors → Add custom connector** and enter `https://desk.ouro.bot/mcp`. Leave the OAuth client fields empty; Claude registers itself.
+2. Open **Customize → Connectors → Add custom connector** and enter `https://desk.ouro.bot/mcp`. Leave the OAuth client fields empty; Claude registers itself.
 3. Connect and approve on the Hosted Desk consent page. With Ouro sign-in on, choose **Continue with Apple or email** and sign in through the Ouro tenant. A new person first opens their invite link in the same browser, so the sign-in can redeem it. Ari can also choose **Continue with GitHub** while `DESK_GITHUB_SIGNIN=on`. Without Ouro sign-in, sign in with GitHub as an allowed login (`arimendelow`).
 4. Start a chat. Desk's instructions tell the agent to call `desk_status` first.
+
+## Branding
+
+The consent, invitation and sign-in refusal pages share the approved transparent Desk render at `/assets/desk-logo.png` and the silhouette favicon at `/favicon.svg`. Both are public, fixed files under `hosted/public`; authentication pages stay uncached and refuse framing. The PNG is a lossless conversion of the approved 256px WebP, and the SVG is the approved single-colour silhouette. Replace assets only from an approved logo handoff, not a redraw.
+
+The gateway derives `DESK_MCP_ICON_URL` for each Desk child from `DESK_PUBLIC_URL`. The native Desk front door advertises it in `serverInfo.icons` for protocols from `2025-11-25` onward. Local sessions, hosted sessions without that setting and older protocols retain their existing metadata; the gateway does not rewrite MCP messages.
 
 ## Environment
 

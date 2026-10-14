@@ -3,6 +3,7 @@
 // authenticated MCP request to a Desk child unchanged. With the Ouro tenant configured (`entra` and `invites`),
 // also the tenant's sign-in callback and the invite pages; without it, none of those routes exist.
 import express from "express";
+import { fileURLToPath } from "node:url";
 import { mcpAuthRouter, createOAuthMetadata, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { metadataHandler } from "@modelcontextprotocol/sdk/server/auth/handlers/metadata.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
@@ -15,6 +16,7 @@ import { page, sendPage } from "./auth/pages.js";
 export const DEEP_HEALTH_TTL_MS = 10_000;
 // The account id the deep check reads when no account is mapped, only to show that the store answers.
 const PROBE_ACCOUNT = "healthz-probe";
+const PUBLIC_DIR = fileURLToPath(new URL("../public/", import.meta.url));
 
 // The deep health check (GET /healthz/deep): whether the Ouro tenant's discovery document has loaded and still names
 // the expected issuer (`discovery`), whether the accounts store answers a read (`store`), and whether every account
@@ -79,6 +81,16 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   // Container Apps terminates TLS one hop in front of the app; the SDK's
   // rate limiters read the client address from X-Forwarded-For.
   app.set("trust proxy", 1);
+  app.use("/assets", express.static(PUBLIC_DIR, {
+    index: false,
+    dotfiles: "deny",
+    maxAge: "1h",
+    setHeaders: (res) => res.setHeader("x-content-type-options", "nosniff"),
+  }));
+  app.get("/favicon.svg", (_req, res) => {
+    res.setHeader("x-content-type-options", "nosniff");
+    res.sendFile("favicon.svg", { root: PUBLIC_DIR, maxAge: "1h" });
+  });
 
   app.get("/healthz", (_req, res) => res.type("text").send("ok"));
   app.get("/healthz/deep", async (_req, res) => {
