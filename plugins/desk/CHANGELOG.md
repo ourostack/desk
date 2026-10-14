@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.321 — 2026-10-14
+
+Carry Desk's complete pre-Go alignment and first-amendment evidence disclosure through the existing Superpowers adapter. Focused drafting creation returns a concrete reply scaffold; failing test runs are distinguished from passing evidence. Preserve existing Go, same-task authority, the pristine provider and the bounded delivery hook.
+
+Require actual completion of background refresh recording and actual entry into the blocked inspection phase in runtime tests, without relaxing protocol caps or readiness deadlines.
+
+Return actual worker-authored intake proposal contents from the existing task card and check their correspondence in the existing Stop hook. Recorded execution excludes intake; unknown approval stays unknown and cannot create a question or approval wait. Intake and delivery share one correction budget; no new hook registration, provider fork or agreement store.
+
+Preserve evidenced delivery through a paired read failure or a housekeeping save that subsequently reports its actual commit. Unresolved saves, unknown/unpaired failures, lifecycle errors and native abort/error signals still exclude continuation.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.320 — 2026-10-14
 
 Hosted Desk's consent, invitation and sign-in refusal pages now use the approved Desk render and silhouette favicon. The gateway serves the branding assets publicly without exposing source files, while authentication pages remain uncached and refuse framing. Hosted MCP sessions advertise the same rich icon to icon-capable clients; ordinary local sessions and older protocols keep their existing metadata.
