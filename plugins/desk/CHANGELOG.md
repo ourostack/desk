@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.320 — 2026-10-14
+
+Hosted Desk's consent, invitation and sign-in refusal pages now use the approved Desk render and silhouette favicon. The gateway serves the branding assets publicly without exposing source files, while authentication pages remain uncached and refuse framing. Hosted MCP sessions advertise the same rich icon to icon-capable clients; ordinary local sessions and older protocols keep their existing metadata.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.319 — 2026-10-14
 
 Route new engineering work through the Desk adapter and map whole-outcome go onto agent-owned design and plan review without another human approval. Return the complete alignment contract when focused drafting work is created. Stop the optional factory notice from replacing delivery sign-off; it is deferred to a later turn. Keep an unsigned delivery's existing packet through archive operations, and require its literal ending to survive compaction or handoff until sent, including when the operator is away, without recording another delivery or accepting it. Preserve existing factory-report refill results. Keep delivery labels and the final question literal while adapting outcome and proof. Name checks invalidated by a changed requirement in the first reply, or explicitly say none has run. Add matching evals within the existing startup-size limit.
