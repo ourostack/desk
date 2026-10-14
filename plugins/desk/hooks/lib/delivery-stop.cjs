@@ -293,7 +293,7 @@ async function checkDelivery({ host, payload, env = process.env }) {
     `${["Outcome", "Assumptions", "Recommended decisions", "Completion checks"][i]}: ${parts[key]}`).join("\n\n")).join("\n\n");
   return { status: "correction", output: { decision: "block", reason:
     intakes.length
-      ? `Restate only this existing proposal. ${TAG} Present all actual contents below, retaining existing proof${packets.length ? " and ending with the existing delivery packet" : ""}. Human approval classification is unknown; do not assert Go is absent or reopen it. No tools, new questions, approval waits, implementation, review, commits, external effects or acceptance inference. This is the only correction; continue no further work.\n\n${intakeText}${packets.length ? "\n\n" + packets.flat().join("\n") : ""}`
+      ? `Restate only this existing proposal. ${TAG} Copy all four field contents below VERBATIM: do not paraphrase, shorten, or replace clauses. Retain existing proof${packets.length ? " and end with the existing delivery packet" : ""}. Human approval classification is unknown; do not assert Go is absent or reopen it. No tools, new questions, approval waits, implementation, review, commits, external effects or acceptance inference. This is the only correction; continue no further work.\n\n${intakeText}${packets.length ? "\n\n" + packets.flat().join("\n") : ""}`
       : `Restate only the final delivery reply. ${TAG} End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
 }
 module.exports = { checkDelivery };

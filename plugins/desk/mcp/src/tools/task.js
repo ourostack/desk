@@ -790,7 +790,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   if (data.status === "drafting" && values.focus === true && data.planning_complete !== true) {
     if (proposal) {
       result.alignment_packet = { kind: "intake_proposal", boundary: "awaiting_intake", authority: "unknown", task: `${track}/${slug}`, parts: proposal }
-      result.alignment_note = "Present these actual proposal contents together in normal chat, proportionally. Human approval classification is unknown: consume supplied scope and Go, never assert Go is absent or reopen it. Presenting a proposal is not acceptance or a new approval wait."
+      result.alignment_note = "Your next human reply presents ALL four actual field contents VERBATIM together, proportionally; do not substitute a format question or defer completion checks. Do not invoke ask_user, AskUserQuestion or any form: use normal chat. Human approval classification is unknown: consume supplied scope and Go, never assert Go is absent or reopen it. Presenting a proposal is not acceptance or a new approval wait."
     } else {
       result.alignment_packet_unavailable = "proposal_not_supplied"
       result.alignment_note = "State outcome, assumptions, recommended decisions and completion checks together, not just an output-format question. Outcome: requested result; Assumptions: inferred constraints; Recommended decisions: resolve routine defaults yourself; Done means: usable output, documentation and verification where applicable. Use normal chat, not question forms; do not reopen an existing go. No actual proposal packet was supplied, so correspondence is unverified, not complete."
