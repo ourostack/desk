@@ -295,6 +295,7 @@ export function deskChildEnv({ config, user, author = authorOf(user), socketPath
     PATH: [SHIM_DIR, baseEnv.PATH].filter(Boolean).join(delimiter),
     GIT_TERMINAL_PROMPT: "0",
     DESK_HOSTED: "1",
+    ...(config.issuer ? { DESK_MCP_ICON_URL: new URL("/assets/desk-logo.png", config.issuer).href } : {}),
     DESK: config.cloneDir,
     GIT_AUTHOR_NAME: name,
     GIT_COMMITTER_NAME: name,

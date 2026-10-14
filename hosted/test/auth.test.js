@@ -9,6 +9,29 @@ import { seal, unseal, fingerprint, TTL } from "../src/auth/seal.js";
 import { createProvider, consentHandler } from "../src/auth/provider.js";
 import { githubCallbackHandler } from "../src/auth/github.js";
 import { createRedirectPolicy } from "../src/auth/redirects.js";
+import * as pages from "../src/auth/pages.js";
+
+test("consent, invitation and refusal pages share an accessible logo without changing or unescaping their content", () => {
+  const arguments_ = { clientName: '<img src=x onerror="attack()">', redirectUri: "https://claude.ai/api/mcp/auth_callback", consent: '"<&' };
+  const rendered = [
+    pages.page(400, "<script>attack()</script>"),
+    pages.consentPage(arguments_),
+    pages.consentPage({ ...arguments_, signIn: { entra: true, github: true } }),
+    pages.invitePage({ issuer: "https://desk.ouro.bot" }),
+    ...["startingUpPage", "signInUnavailablePage", "startAgainPage", "inviteOnlyPage", "inviteRefusedPage", "accessOffPage", "noDeskPage", "inviteInvalidPage"].map((name) => pages[name]()),
+  ];
+  for (const { html } of rendered) {
+    assert.match(html, /<img[^>]+src="\/assets\/desk-logo\.png"[^>]+alt=""/);
+    assert.match(html, /href="\/favicon\.svg"/);
+    assert.match(html, /<main>/);
+    assert.doesNotMatch(html, /<script>|<img src=x/);
+  }
+  assert.match(rendered[1].html, /name="consent" value="&quot;&lt;&amp;"/);
+  assert.match(rendered[1].html, /action="\/oauth\/consent"/);
+  assert.match(rendered[1].html, />Approve<\/button>/);
+  assert.match(rendered[2].html, /name="method" value="entra">Continue with Apple or email/);
+  assert.match(rendered[2].html, /name="method" value="github">Continue with GitHub/);
+});
 
 const KEY = "test-key-0123456789abcdef0123456789abcdef";
 const ISSUER = "https://desk.ouro.bot";
@@ -298,7 +321,7 @@ test("the consent page escapes a hostile client name", async (t) => {
   const client = (await register(base, { client_name: hostile })).body;
   const { html } = await consentPage(base, client);
   assert.ok(!html.includes("<script>"), "no raw script tag");
-  assert.ok(!html.includes("<img"), "no raw img tag");
+  assert.ok(!html.includes("<img src=x"), "no raw client-supplied img tag");
   assert.match(html, /Connect &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;&lt;img src=x onerror=&#39;y&#39;&gt;&amp; to Hosted Desk\?/);
 });
 

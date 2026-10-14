@@ -283,6 +283,7 @@ export async function main({
     output,
     serverVersion,
     instructions: hostedInstructionsText,
+    serverIcons: hosted && hasText(env.DESK_MCP_ICON_URL) ? [{ src: env.DESK_MCP_ICON_URL }] : undefined,
     callTool: hosted ? withHostedStartup({ callTool: session.callTool, instructions: hostedInstructionsText }) : (call) => session.callTool(call),
     onHandshake: () => {
       kick()

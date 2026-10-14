@@ -5,7 +5,7 @@ export const escapeHtml = (text) =>
   String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 const document = (body) =>
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Desk sign-in</title></head><body>${body}</body></html>`;
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Desk sign-in</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/assets/desk.css"></head><body><header class="brand"><img src="/assets/desk-logo.png" width="80" height="80" alt=""><h1>Hosted Desk</h1></header><main>${body}</main></body></html>`;
 
 // A page holding one message.
 export const page = (status, message) => ({ status, html: document(`<p>${escapeHtml(message)}</p>`) });
@@ -72,7 +72,7 @@ export function sendPage(res, { status, html, headers = {} }) {
       ...headers,
       "cache-control": "no-store",
       "x-frame-options": "DENY",
-      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-security-policy": "default-src 'none'; img-src 'self'; style-src 'self'; frame-ancestors 'none'",
     })
     .type("html")
     .send(html);

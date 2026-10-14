@@ -1,0 +1,37 @@
+body {
+  max-width: 42rem;
+  margin: 3rem auto;
+  padding: 0 1.25rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+  color: #2b241e;
+  background: #fff;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.brand img {
+  object-fit: contain;
+  flex: none;
+}
+
+.brand h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+button {
+  margin: 0.5rem 0.5rem 0 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid #69462f;
+  border-radius: 0.35rem;
+  font: inherit;
+  color: #fff;
+  background: #69462f;
+  cursor: pointer;
+}
