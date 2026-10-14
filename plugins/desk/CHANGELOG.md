@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.322 — 2026-10-14
+
+The real-profile browser runner now launches the stock Playwright connection directly, without inserting Desk's watchdog or custom relay. Existing profile and token loading, output token redaction, stock tools, and explicit close behavior are unchanged.
+
+Automatic tab deletion on disconnect or process exit is deferred. Close only tabs you created and still own using ordinary browser tools; leave unknown or foreign tabs alone. A disconnect is not proof that every tab was cleaned up.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.321 — 2026-10-14
 
 Carry Desk's complete pre-Go alignment and first-amendment evidence disclosure through the existing Superpowers adapter. Focused drafting creation returns a concrete reply scaffold; failing test runs are distinguished from passing evidence. Preserve existing Go, same-task authority, the pristine provider and the bounded delivery hook.
