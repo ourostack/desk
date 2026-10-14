@@ -206,6 +206,38 @@ for (const held of ["corrected", "blocked", "old quoted marker", "new human", "u
   }))
 }
 for (const host of ["copilot", "claude"]) {
+  for (const name of ["bash", "desk-desk_save"]) {
+    test(`${host}: unresolved ${name} failure remains an error exclusion`, () => scratch(async ctx => {
+      const f = await fixture(ctx, host, { edit(lines) {
+        if (host === "copilot") lines.splice(4, 0,
+          { type: "tool.execution_start", timestamp: END, data: { toolCallId: "unresolved", toolName: name, arguments: {} } },
+          { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "unresolved", success: false, interactionId: "human-1", result: { content: "failed" } } })
+        else lines.splice(3, 0,
+          { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "unresolved", name, input: {} }] } },
+          { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "unresolved", is_error: true, content: "failed" }] } })
+      } })
+      assert.equal((await check(f)).status, "not_delivery")
+    }))
+  }
+  test(`${host}: a non-lifecycle read or recovered housekeeping error cannot erase delivered proof`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { edit(lines) {
+      if (host === "copilot") lines.splice(4, 0,
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "read", toolName: "view", arguments: { path: "/missing/optional-note" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "read", success: false, interactionId: "human-1", result: { content: "Not found." } } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "save", toolName: "desk-desk_save", arguments: { paths: ["card.md"] } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "save", success: false, interactionId: "human-1", result: { content: "Invalid path; nothing changed." } } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "recovered", toolName: "desk-desk_save", arguments: { paths: ["archive/card.md"] } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "recovered", success: true, interactionId: "human-1", result: { content: '{"status":"committed"}' } } })
+      else lines.splice(3, 0,
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "read", name: "Read", input: { path: "/missing/optional-note" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "read", is_error: true, content: "Not found." }] } },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "save", name: "mcp__desk__desk_save", input: { paths: ["card.md"] } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "save", is_error: true, content: "Invalid path; nothing changed." }] } },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "recovered", name: "mcp__desk__desk_save", input: { paths: ["archive/card.md"] } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "recovered", content: '{"status":"committed"}' }] } })
+    } })
+    assert.equal((await check(f)).status, "correction")
+  }))
   test(`${host}: native refusal permits a genuine re-delivery with identical evidence`, () => scratch(async ctx => {
     const f = await fixture(ctx, host, { edit(lines) {
       const target = { track: "portable-tools", slug: "integrity-manifests" }

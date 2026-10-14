@@ -81,15 +81,16 @@ function targetOf(args) {
 }
 const failure = reason => ({ status: "unavailable", diagnostic: reason });
 function state() {
-  return { calls: new Map(), packets: new Map(), intakes: new Map(), unavailableIntake: new Set(), execution: new Set(), delivered: new Set(), sentCurrent: false, human: null,
+  return { calls: new Map(), packets: new Map(), intakes: new Map(), unavailableIntake: new Set(), housekeepingErrors: new Set(), execution: new Set(), delivered: new Set(), sentCurrent: false, human: null,
     corrected: false, interrupted: false, rollover: false, envelope: false, final: null, currentHook: null };
 }
 function reset(s, human) {
-  s.calls.clear(); s.packets.clear(); s.intakes.clear(); s.unavailableIntake.clear(); s.sentCurrent = false;
+  s.calls.clear(); s.packets.clear(); s.intakes.clear(); s.unavailableIntake.clear(); s.housekeepingErrors.clear(); s.sentCurrent = false;
   s.human = human; s.corrected = false; s.interrupted = false; s.rollover = false; s.final = null;
 }
 function receipt(s, call, value) {
   if (!call || !value) return;
+  if (["read", "other", "housekeeping"].includes(call.kind)) return;
   if (call.kind === "task_focus") {
     if (call.clear && value.status === "cleared") { s.intakes.clear(); s.unavailableIntake.clear(); return; }
     if (value.status !== "focused" || `${value.track}/${value.slug}` !== call.target) return;
@@ -158,12 +159,28 @@ function reply(s, content) {
   }
 }
 function callOf(name, args) {
+  if (["view", "Read"].includes(name)) return { kind: "read" };
+  if (text(name) && /^(?:desk-|mcp__[^ ]*desk[^ ]*__)desk_save$/u.test(name)) return { kind: "housekeeping", name };
   const match = text(name) ? DESK.exec(name) : null;
   const target = targetOf(args);
   if (match?.[1] === "task_focus" && plain(args) && args.clear === true) return { kind: "task_focus", clear: true, target: null };
   return match && target ? { kind: match[1], target, status: args.status ?? args.frontmatter?.status,
     focus: args.focus, planningComplete: args.planning_complete === true || args.frontmatter?.planning_complete === true,
-    proposal: args.intake_proposal } : null;
+    proposal: args.intake_proposal } : text(name) ? { kind: "other" } : null;
+}
+function outcome(s, call, failed, value) {
+  // Never infer recovery from prose. Only a paired read has no mutation
+  // authority; a failed housekeeping save remains pending until this owning
+  // turn receives the same tool's actual committed receipt. Unpaired/unknown
+  // failures, other operations and lifecycle failures remain exclusions.
+  if (!failed) {
+    if (call?.kind === "housekeeping" && value?.status === "committed") s.housekeepingErrors.delete(call.name);
+    receipt(s, call, value);
+  } else if (s.packets.size || s.intakes.size) {
+    if (call?.kind === "read") return;
+    if (call?.kind === "housekeeping") s.housekeepingErrors.add(call.name);
+    else s.interrupted = true;
+  }
 }
 function copilot(s, e, payload) {
   const d = e.data ?? {};
@@ -192,8 +209,9 @@ function copilot(s, e, payload) {
   }
   if (e.type === "tool.execution_complete") {
     const call = s.calls.get(d.toolCallId); s.calls.delete(d.toolCallId);
-    if (d.success === true && !d.result?.isError && d.interactionId === s.human) receipt(s, call, resultOf(d.result?.content));
-    if ((d.success === false || d.result?.isError) && d.interactionId === s.human && (s.packets.size || s.intakes.size)) s.interrupted = true;
+    if (d.interactionId === s.human) {
+      if (d.success === true || d.success === false) outcome(s, call, d.success === false || d.result?.isError === true, resultOf(d.result?.content));
+    }
   }
   if (e.type === "assistant.message" && d.interactionId === s.human && !d.toolRequests?.length) reply(s, d.content);
   if (e.type === "hook.end" && d.hookType === "agentStop" && d.output?.decision === "block" && text(d.output.reason) && d.output.reason.includes(TAG)) s.corrected = true;
@@ -232,8 +250,7 @@ function claude(s, e, payload) {
     if (block.type === "text" && text(block.text) && block.text.includes(TAG)) s.corrected = true;
     if (block.type !== "tool_result") continue;
     const call = s.calls.get(block.tool_use_id); s.calls.delete(block.tool_use_id);
-    if (!block.is_error) receipt(s, call, resultOf(block.content));
-    else if (s.packets.size || s.intakes.size) s.interrupted = true;
+    outcome(s, call, block.is_error === true, resultOf(block.content));
   }
 }
 async function checkDelivery({ host, payload, env = process.env }) {
@@ -278,7 +295,7 @@ async function checkDelivery({ host, payload, env = process.env }) {
     } finally { lines.close(); stream.destroy(); }
   } catch { return failure("transcript_unreadable"); }
   if (!s.envelope) return failure("foreign_session");
-  if (!s.human || s.interrupted) return { status: "not_delivery" };
+  if (!s.human || s.interrupted || s.housekeepingErrors.size) return { status: "not_delivery" };
   if (!s.packets.size && !s.intakes.size && s.unavailableIntake.size) return failure("intake_packet_unavailable");
   if (s.packets.size === 0 && s.intakes.size === 0) return { status: s.sentCurrent ? "complete" : "not_delivery" };
   if (host === "copilot" && (!s.currentHook || s.currentHook !== finalEndId)) return { status: "not_delivery" };
