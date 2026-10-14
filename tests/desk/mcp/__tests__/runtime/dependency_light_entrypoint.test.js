@@ -458,6 +458,42 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
   }
 }
 
+function statusHasConverged(body) {
+  return body.local_db?.exists === true
+    && body.local_db.state === "available"
+    && body.lexical_index?.available === true
+    && body.document_vectors?.state === "available"
+    && body.document_vectors.chunks_total > 0
+    && body.document_vectors.vectors_indexed > 0
+    && body.document_vectors.missing_vectors === 0
+    && body.document_vectors.repairable_missing_vectors === 0
+    // The DB snapshot can converge before a controller status probe does.
+    // Wait for the same healthy fallback evidence the caller asserts below.
+    && body.startup_fallback?.mode === "not_checked"
+    && body.startup_fallback.degraded === false
+}
+
+test("convergence waiter rejects a fully indexed but degraded status", () => {
+  const indexed = {
+    local_db: { exists: true, state: "available" },
+    lexical_index: { available: true },
+    document_vectors: {
+      state: "available", chunks_total: 1, vectors_indexed: 1,
+      missing_vectors: 0, repairable_missing_vectors: 0,
+    },
+  }
+  assert.equal(statusHasConverged({
+    ...indexed, startup_fallback: { mode: "not_checked", degraded: true },
+  }), false, "database metrics alone do not establish the healthy status promised by this fixture")
+  assert.equal(statusHasConverged(indexed), false, "missing fallback evidence is not convergence")
+  assert.equal(statusHasConverged({
+    ...indexed, startup_fallback: { mode: "lexical_only", degraded: false },
+  }), false, "a fallback mode cannot satisfy this fixture's full convergence assertion")
+  assert.equal(statusHasConverged({
+    ...indexed, startup_fallback: { mode: "not_checked", degraded: false },
+  }), true)
+})
+
 async function runMcpStatusSession(fixture, {
   timeoutMs = 10000,
   waitForConvergence = false,
@@ -564,6 +600,8 @@ async function runMcpStatusSession(fixture, {
       vectors_indexed: body.document_vectors?.vectors_indexed,
       missing_vectors: body.document_vectors?.missing_vectors,
       repairable_missing_vectors: body.document_vectors?.repairable_missing_vectors,
+      startup_fallback: body.startup_fallback,
+      readiness: body.readiness,
     })
     return body
   }
@@ -606,16 +644,7 @@ async function runMcpStatusSession(fixture, {
     let status = initialStatus
     if (waitForConvergence) {
       const deadline = performance.now() + timeoutMs
-      while (
-        body.local_db?.exists !== true
-        || body.local_db.state !== "available"
-        || body.lexical_index?.available !== true
-        || body.document_vectors?.state !== "available"
-        || !(body.document_vectors.chunks_total > 0)
-        || !(body.document_vectors.vectors_indexed > 0)
-        || body.document_vectors.missing_vectors !== 0
-        || body.document_vectors.repairable_missing_vectors !== 0
-      ) {
+      while (!statusHasConverged(body)) {
         if (performance.now() >= deadline) {
           throw sessionError("timed out waiting for converged desk_status")
         }
