@@ -26,6 +26,27 @@ async function fixture() {
 
 const observedAt = "2026-09-19T16:00:00.000Z"
 
+test("compacting an empty journal preserves its zero cursor under the active generation guard", async () => {
+  const { open } = await fixture()
+  const journal = await open()
+  const db = new Database(":memory:")
+  db.exec("CREATE TABLE lexical_generations (id INTEGER PRIMARY KEY, event_cursor TEXT NOT NULL); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+  const cursor = journal.cursor
+  db.prepare("INSERT INTO lexical_generations VALUES (1, ?)").run(JSON.stringify(cursor))
+  db.prepare("INSERT INTO meta VALUES ('active_lexical_generation', '1')").run()
+  db.prepare("INSERT INTO meta VALUES ('covered_event_cursor', ?)").run(JSON.stringify(cursor))
+  try {
+    await journal.compact({ db, generationId: 1 })
+    assert.deepEqual(journal.cursor, cursor)
+    assert.equal(journal.replay().certain, false, "compaction alone is not a reconciliation proof")
+    journal.reconciled(cursor)
+    assert.equal(journal.replay().certain, true)
+  } finally {
+    db.close()
+    await journal.close()
+  }
+})
+
 test("Windows journal creation never publishes an unprotected final directory", async () => {
   const root = await mkTempRoot("desk-journal-windows-create-")
   const stateDir = path.join(root, "journal")

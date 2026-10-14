@@ -25,9 +25,12 @@
 // `rows` holds, by public ID, each `reviewed` row the store's default branch has from this machine, with its exact row object:
 // `{ desk_root, key, person_prefix, revision, row, attested_at, held? }`. A row's bytes are fixed for its revision. They are sent
 // again, unchanged, about every 48 hours (a re-attestation, with the coverage of that day), because a store reads a row and its
-// source as stale 72 hours after the newest batch that carries them. When one row is due, every row not sent in the last half day
-// goes with it. Nothing is re-attested unless the step scanned the cards within 72 hours, and a row is sent again only while the
-// desk remote's `main` still holds its revision as `reviewed`; otherwise it is dropped from `rows`.
+// source as stale 72 hours after the newest batch that carries them. When one row is due or a re-attestation is pending, the flush fetches its desk remote's
+// `main` once, and a row is sent again only while that fresh copy still holds its revision as `reviewed`; a row that holds
+// another revision or state is moved from `rows` to `dropped` (`{ revision, attested_at }`), which the health counts until this
+// machine verifiably delivers a higher replacement revision; aging the old row to stale never removes it at the store. A row that cannot be read, or whose desk cannot be
+// fetched, waits. When one standing row is due, every standing row not sent in the last half day goes with it. Nothing is
+// re-attested unless the step scanned the cards within 72 hours.
 // `pending` lists the staged batches not yet seen on the store's default branch.
 //
 // A request is only a note of what to look at. What is published is read again, every time, from the desk's remote-tracking
@@ -36,10 +39,11 @@
 //
 // The flush drives the rest (`planTriage`, `prepareTriage`, `saveTriageSent`, `saveTriageRefused`):
 //
-//   - `planTriage` is local. It decides open intents, reads the requests against Git, the desk's route and the canonical card,
+//   - `planTriage` is local, but for the one fetch above when a row is due or a re-attestation is pending. It decides open intents, reads the requests against Git, the desk's route and the canonical card,
 //     and says whether the flush has triage work. A request or a row whose desk does not route to this store waits without
 //     sending the flush online, and a pending batch that holds one is taken apart (its record is marked replaced and its
-//     requests are free again), so a batch staged before the route changed is never sent to the old store.
+//     requests are free again), so a batch staged before the route changed is never sent to the old store. A batch with no rows
+//     carries only the scan's counts and is checked against the route of the desk that was scanned.
 //   - `prepareTriage` is online. It needs the account's own push permission on the store (a fork cannot carry triage: the
 //     store accepts it only from a maintainer), the store's `triage.json` at the commit the flush builds on, a regular file that
 //     is exactly `{"triage":1}` (`readTriageReadiness`), a full listing of the default branch's `triage/` folder, and fresh
@@ -128,7 +132,10 @@ const validState = (value) =>
   isPlainObject(value.emitted) && Object.values(value.emitted).every(Number.isSafeInteger) &&
   isPlainObject(value.rows) && Object.values(value.rows).every((entry) => isPlainObject(entry) && isPlainObject(entry.row) && typeof entry.desk_root === "string" && typeof entry.key === "string" && typeof entry.person_prefix === "string" && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)) &&
   optional(value.held, (held) => isPlainObject(held) && typeof held.code === "string" && isTime(held.until)) &&
-  optional(value.coverage, isPlainObject) && optional(value.published, isPlainObject) && optional(value.held_requests, isPlainObject) && optional(value.scan_desk, (root) => typeof root === "string")
+  optional(value.coverage, isPlainObject) && optional(value.published, isPlainObject) && optional(value.held_requests, isPlainObject) && optional(value.scan_desk, (root) => typeof root === "string") &&
+  optional(value.scan_person_prefix, (prefix) => typeof prefix === "string") &&
+  optional(value.runner_success, (witness) => isPlainObject(witness) && typeof witness.store === "string" && typeof witness.desk_root === "string" && typeof witness.person_prefix === "string" && optional(witness.at, (at) => at === null || isTime(at))) &&
+  optional(value.dropped, (dropped) => isPlainObject(dropped) && Object.values(dropped).every((entry) => isPlainObject(entry) && Number.isSafeInteger(entry.revision) && isTime(entry.attested_at)))
 const VALID_STATE = { isValid: (value) => value === null || (isPlainObject(value) && validState(value)) }
 const stateOf = (value) => value ?? { schema: STATE_SCHEMA, generation: hex(16), requests: {}, pending: [], emitted: {}, rows: {} }
 const readState = async (env, store) => stateOf(await readTriageOutbox(env, store, STATE, VALID_STATE))
@@ -190,13 +197,22 @@ export async function settleTriageEmission(env, { store, key, written, operation
  * `runner` the runner's state code or null. The stored coverage is the public shape without its generation. Refused and deferred
  * counts come from the last step that knew them and stay null until a run has completed. Every count of an incomplete scan is null.
  */
-export async function recordTriageCoverage(env, { store, coverage, counts, runner, now, deskRoot }) {
+const ownerMatches = (entry, deskRoot, personPrefix) => entry?.desk_root === deskRoot && entry.person_prefix === personPrefix
+const ownedEntries = (state) => [...Object.entries(state.requests).map(([key, entry]) => ({ ...entry, key })), ...Object.values(state.rows)]
+const ownsReview = (state, deskRoot, personPrefix, review) => isPlainObject(review) &&
+  ownedEntries(state).some((entry) => ownerMatches(entry, deskRoot, personPrefix) && entry.key === review.key && entry.revision === review.revision)
+
+export async function recordTriageCoverage(env, { store, coverage, counts, runner, now, deskRoot, personPrefix = "", lastSuccessAt = null, lastSuccessStore = null, lastReview = null }) {
   await update(env, store, (state) => {
     const complete = coverage.scan === "complete"
     const added = count(counts.reviewed) ?? 0
     const run = { refused: count(counts.refused) ?? state.run_counts?.refused ?? null, deferred: count(counts.deferred) ?? state.run_counts?.deferred ?? null }
     const reviewed = complete ? count(coverage.reviewed) : null
     const unreviewed = complete ? count(coverage.unreviewed) : null
+    // An omitted witness time is unknown history; only an existing null witness establishes "never".
+    const success = isTime(lastSuccessAt) && (lastSuccessStore === store.toLowerCase() ||
+      (lastSuccessStore == null && lastReview?.at === lastSuccessAt && ownsReview(state, deskRoot, personPrefix, lastReview)))
+      ? lastSuccessAt : ownerMatches(state.runner_success, deskRoot, personPrefix) && state.runner_success.store === store.toLowerCase() ? state.runner_success.at : undefined
     return {
       ...state,
       coverage: {
@@ -209,6 +225,8 @@ export async function recordTriageCoverage(env, { store, coverage, counts, runne
       },
       scan_at: iso(now),
       scan_desk: deskRoot,
+      scan_person_prefix: personPrefix,
+      runner_success: typeof deskRoot === "string" ? { store: store.toLowerCase(), desk_root: deskRoot, person_prefix: personPrefix, at: success } : state.runner_success,
       run_counts: run,
       runner_state: TRIAGE_RUNNER_STATES.includes(runner) ? runner : state.runner_state ?? null,
     }
@@ -222,6 +240,9 @@ function gitOut(deskRoot, args) {
   const result = spawnSync("git", ["-C", deskRoot, ...args], { timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
   return result.status === 0 ? result.stdout : null
 }
+
+// One fetch of the desk remote's `main`, which never asks for a credential. False when it did not end well in time.
+const fetchMain = (deskRoot) => spawnSync("git", ["-C", deskRoot, "fetch", "-q", "origin", "main"], { timeout: GIT_TIMEOUT_MS, stdio: "ignore", windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).status === 0
 
 /**
  * `readAcknowledged({ deskRoot, personPrefix, key }) -> { annotation, identity, ack } | null`: the card's annotation and the
@@ -256,12 +277,15 @@ export async function routedStore(env, deskRoot, markers = () => listMarkers(env
 // ---------------------------------------------------------------------------
 // The flush's local plan.
 
+// The store retains a superseded row even after it goes stale. Only a verified higher replacement delivery clears its tombstone.
+
 const summaryOf = (state, now) => {
   const code = heldNow(state, now)
   // The oldest thing still not on the store: a request, or a delivered row that is no longer sent.
   const waits = [...Object.values(state.requests).map((request) => request.since), ...Object.values(state.rows).map((entry) => entry.held?.since)].filter(isTime).sort()
   // The store reads each row by the newest batch that carried it: the oldest of those times is when the first row goes stale there.
   const attested = Object.values(state.rows).map((entry) => entry.attested_at).sort()
+  const dropped = Object.keys(state.dropped ?? {}).length
   return {
     at: iso(now),
     pending: state.pending.length,
@@ -273,6 +297,7 @@ const summaryOf = (state, now) => {
     ...(state.coverage === undefined ? {} : { scan: state.coverage.scan }),
     ...(state.reset_at === undefined ? {} : { reset_at: state.reset_at }),
     ...(attested.length === 0 ? {} : { rows_oldest_at: attested[0], rows_held: Object.values(state.rows).filter((entry) => entry.held !== undefined).length }),
+    ...(dropped === 0 ? {} : { rows_dropped: dropped }),
   }
 }
 
@@ -293,7 +318,7 @@ function decideIntent(request, annotation, now) {
 
 // A delivered row against the desk remote's `main`: still that review, a newer or different annotation, or not readable now.
 function standing(entry) {
-  const read = entry === undefined ? null : readAcknowledged({ deskRoot: entry.desk_root, personPrefix: entry.person_prefix, key: entry.key })
+  const read = readAcknowledged({ deskRoot: entry.desk_root, personPrefix: entry.person_prefix, key: entry.key })
   if (read === null) return "unknown"
   return read.annotation.revision === entry.revision && read.annotation.attempt.state === "reviewed" ? "reviewed" : "superseded"
 }
@@ -320,7 +345,7 @@ const holdRows = (env, store, ids, code, now) => update(env, store, (state) => (
  * `candidates` are the requests ready to build, `[{ key, id, deskRoot, personPrefix, annotation, identity, ack, card }]`; `attest`
  * the public IDs of the delivered rows to send again, oldest first; `coverageDue` whether a batch with no rows is due, because
  * nothing carried the coverage for two days or the scan's state changed, and the desk that was scanned routes here. `held` counts what waits, by code: `triage_route_elsewhere`, `triage_unacknowledged`,
- * `triage_coverage_unknown`, `triage_runner_unknown`, `triage_batch_refused`, `triage_evidence_not_public`, or the code
+ * `triage_coverage_unknown`, `triage_runner_unknown`, `triage_desk_not_fetched`, `triage_batch_refused`, `triage_evidence_not_public`, or the code
  * `triageBatchFor` refused this revision's row with. `work` is true when the flush has to go online for triage. A store with
  * no triage state costs one `lstat` and one folder listing, and one with delivered rows and nothing due adds one file read: no
  * lock, no write, no Git process and no network call.
@@ -347,8 +372,15 @@ export async function planTriage(env, { store, now, status }) {
     if (!routes.has(deskRoot)) routes.set(deskRoot, (await routedStore(env, deskRoot, () => (markers ??= listMarkers(env))))?.toLowerCase() === store.toLowerCase())
     return routes.get(deskRoot)
   }
+  const fetched = new Map()
+  const unfetched = new Set()
+  const standingFresh = (entry) => {
+    if (entry === undefined) return "unknown"
+    if (!fetched.has(entry.desk_root)) fetched.set(entry.desk_root, fetchMain(entry.desk_root))
+    return fetched.get(entry.desk_root) ? standing(entry) : "unfetched"
+  }
 
-  // 1. Pending batches: one whose record is gone or settled is forgotten, one that holds a row of a desk that no longer routes here is taken apart.
+  // 1. Pending batches: one whose record is gone or settled is forgotten, one of a desk that no longer routes here is taken apart.
   const staged = new Set()
   for (const batch of state.pending) {
     const record = await readTriageOutbox(env, store, `${batch}.json`)
@@ -356,12 +388,17 @@ export async function planTriage(env, { store, now, status }) {
       state = await forget(env, store, batch)
       continue
     }
+    // A batch with no rows carries only the scan's counts: it goes for the desk that was scanned.
     let here = true
-    for (const deskRoot of new Set(record.rows.map((row) => row.desk_root))) here &&= await routesHere(deskRoot)
+    for (const deskRoot of new Set(record.rows.length === 0 ? [state.scan_desk] : record.rows.map((row) => row.desk_root))) here &&= typeof deskRoot === "string" && (await routesHere(deskRoot))
     if (!here) state = await dissolve(env, store, record, "route")
-    // A row sent again must still be the review the desk's remote holds; the rows are looked at again below.
-    else if (record.rows.some((row) => row.attest === true && standing(state.rows[row.id]) !== "reviewed")) state = await dissolve(env, store, record, "superseded")
-    else for (const row of record.rows) staged.add(row.id)
+    else {
+      // Check pending re-attestations only after fetching; staged rows must not bypass the same fresh-read gate as new ones.
+      const checks = record.rows.filter((row) => row.attest === true).map((row) => ({ id: row.id, state: standingFresh(state.rows[row.id]) }))
+      for (const check of checks) if (check.state === "unfetched") unfetched.add(check.id)
+      if (checks.some((check) => check.state !== "reviewed")) state = await dissolve(env, store, record, checks.some((check) => check.state === "unfetched") ? "unfetched" : "superseded")
+      else for (const row of record.rows) staged.add(row.id)
+    }
   }
 
   // 2. Requests not in a pending batch.
@@ -406,17 +443,23 @@ export async function planTriage(env, { store, now, status }) {
     else live.push(id)
   }
   const sinceSent = (id) => now - Date.parse(state.rows[id].attested_at)
-  const attest = []
   const superseded = []
-  // When one row is due, every row not sent in the last half day goes with it, so a quiet desk opens one pull request every two days.
+  const stands = new Set()
+  // Nothing below runs, and no Git process starts, until a row is two days past its last send.
   if (scanned && live.some((id) => !staged.has(id) && sinceSent(id) >= ATTEST_MS)) {
+    // Each row is checked against a copy of its desk remote's `main` fetched now, once for each desk; a row of a desk that cannot be fetched waits.
     for (const id of live) {
-      const still = standing(state.rows[id])
+      const entry = state.rows[id]
+      const still = standingFresh(entry)
       if (still === "superseded") superseded.push(id)
+      else if (still === "unfetched") unfetched.add(id)
       else if (still === "unknown") hold("triage_unacknowledged")
-      else if (!staged.has(id) && sinceSent(id) >= ATTEST_MS / 4) attest.push(id)
+      else if (!staged.has(id)) stands.add(id)
     }
   }
+  for (const _id of unfetched) hold("triage_desk_not_fetched")
+  // Only a row that still stands starts a round. Every standing row not sent in the last half day goes with it, so a quiet desk opens one pull request every two days.
+  const attest = [...stands].some((id) => sinceSent(id) >= ATTEST_MS) ? [...stands].filter((id) => sinceSent(id) >= ATTEST_MS / 4) : []
   attest.sort((left, right) => sinceSent(right) - sinceSent(left))
   // The coverage alone, in a batch with no rows: only for the desk whose scan it is, and only while that desk routes here.
   const scanHere = typeof state.scan_desk === "string" && (await routesHere(state.scan_desk))
@@ -429,6 +472,7 @@ export async function planTriage(env, { store, now, status }) {
       held_requests: held,
       // A row the desk's remote no longer holds as that review is not sent again; its newer revision goes as any annotation does.
       rows: Object.fromEntries(Object.entries(latest.rows).filter(([id]) => !superseded.includes(id))),
+      dropped: Object.fromEntries([...Object.entries(latest.dropped ?? {}), ...superseded.map((id) => [id, { revision: latest.rows[id].revision, attested_at: latest.rows[id].attested_at }])]),
       requests: Object.fromEntries(Object.entries(latest.requests).filter(([key]) => decided.get(key) !== null).map(([key, request]) => [key, decided.get(key) ?? request])),
     }))
   }
@@ -598,8 +642,11 @@ async function deliver(env, store, record, now) {
   const known = value.coverage.scan === "complete" && ["reviewed", "unreviewed", "refused", "deferred", "more_unreviewed"].every((name) => value.coverage[name] !== null)
   return update(env, store, (state) => {
     const rows = { ...state.rows }
+    const dropped = { ...state.dropped }
     value.rows.forEach((row, index) => {
       if (row.revision < (state.emitted[row.id] ?? 0)) return
+      // The newer revision of a row that was dropped is on the store now.
+      if (row.revision > (dropped[row.id]?.revision ?? row.revision)) delete dropped[row.id]
       // Only a reviewed row is sent again; a stale or withdrawn one needs no freshness. A newer revision ends an older row's hold.
       if (row.state === "reviewed") rows[row.id] = { ...(rows[row.id]?.revision === row.revision ? rows[row.id] : {}), desk_root: record.rows[index].desk_root, key: record.rows[index].key, person_prefix: record.rows[index].person_prefix, revision: row.revision, row, attested_at: iso(now) }
       else delete rows[row.id]
@@ -607,6 +654,7 @@ async function deliver(env, store, record, now) {
     return {
       ...state,
       rows,
+      dropped,
       pending: state.pending.filter((id) => id !== record.batch),
       emitted: { ...state.emitted, ...Object.fromEntries(value.rows.map((row) => [row.id, Math.max(row.revision, state.emitted[row.id] ?? 0)])) },
       requests: Object.fromEntries(Object.entries(state.requests).filter(([, request]) => request.batch !== record.batch)),
@@ -619,9 +667,24 @@ async function deliver(env, store, record, now) {
 const pointersOfRow = (row) => [...row.evidence, ...row.basis.evidence_revisions]
 const pointersOfAnnotation = (annotation) => [...(annotation.review?.evidence ?? []), ...annotation.basis.public_evidence_revisions]
 
-const publicRunner = (state, status, now) => {
-  const last = status.triage?.last_success_at
-  return { state: state.runner_state, last_success_age: typeof last === "string" ? coarseAge(now - Date.parse(last)) : "never" }
+const publicRunner = (state, status, now, store) => {
+  if (state.runner_success !== undefined) {
+    const witness = state.runner_success
+    if (!ownerMatches(witness, state.scan_desk, state.scan_person_prefix) || witness.store !== store.toLowerCase()) return { state: state.runner_state, last_success_age: "unknown" }
+    return { state: state.runner_state, last_success_age: witness.at === undefined ? "unknown" : witness.at === null ? "never" : coarseAge(now - Date.parse(witness.at)) }
+  }
+  // Earlier outboxes have no witness. Only a scoped native review paired with this store's own transport metadata can restore it.
+  // Never attribute the latest global diagnostic, or an unscoped legacy success, to a publishing desk.
+  const matches = new Map()
+  for (const entry of ownedEntries(state)) {
+    if (entry.desk_root !== state.scan_desk || (state.scan_person_prefix !== undefined && entry.person_prefix !== state.scan_person_prefix)) continue
+    const key = JSON.stringify([entry.desk_root, entry.person_prefix])
+    const observation = status.triage_by_desk?.[key]
+    if (isTime(observation?.last_success_at) && observation.last_review?.at === observation.last_success_at &&
+        observation.last_review.key === entry.key && observation.last_review.revision === entry.revision &&
+        (observation.last_success_store === undefined || observation.last_success_store === store.toLowerCase())) matches.set(key, observation.last_success_at)
+  }
+  return { state: state.runner_state, last_success_age: matches.size === 1 ? coarseAge(now - Date.parse([...matches.values()][0])) : "unknown" }
 }
 
 /**
@@ -693,7 +756,7 @@ export async function prepareTriage(env, { store, plan, client, ref, direct, con
 
   state = await readState(env, store)
   const coverage = { generation: state.generation, ...state.coverage }
-  const runner = publicRunner(state, status, now)
+  const runner = publicRunner(state, status, now, store)
   const items = []
   const stage = async (projection, options) => {
     const staged = await stageTriageBatch(env, { store, projection, now, ...options })

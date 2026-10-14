@@ -99,7 +99,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     const ended = event === "SessionEnd" || event === "sessionEnd";
     const at = !claude && Number.isSafeInteger(payload.timestamp) && payload.timestamp >= 0 ? new Date(payload.timestamp).toISOString() : new Date().toISOString();
     const agency = path.join(home, ".local", "agency", "plugins", "sessions") + path.sep;
-    let routing = deskRoot === null ? { store: null, source: "invalid_declaration", warnings: [] } : resolveStore({ deskRoot, pluginDirs: dirs, read: (file) => readSmallText(file) });
+    let routing = resolveStore({ deskRoot, pluginDirs: dirs, read: (file) => readSmallText(file) });
     if (incomplete && routing.source !== "desk") routing = { store: null, source: "invalid_declaration", warnings: routing.warnings };
     const marker = {
       schema_version: 1, host: claude ? "claude-code" : codex ? "codex-cli" : "copilot-cli", session_id: id,
@@ -114,6 +114,13 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     await outbox.writeMarker(env, marker);
     // Codex gives SessionEnd at most 3 s (codex-rs/hooks/src/events/session_end.rs#L20-L24), so this hook only records the marker; the next session-start sweep derives it.
     if (codex) return "written";
+    const { improvementPerson } = await import("../../mcp/src/desk/improvement-person.js");
+    let person;
+    try { person = await improvementPerson({ deskRoot, env }); } catch { /* no positive person */ }
+    const scope = person?.status === "ok" ? { deskRoot, personPrefix: person.personPrefix } : null;
+    const workerEnv = { ...env };
+    if (scope === null) delete workerEnv.DESK_FACTORY_LOOP_SCOPE;
+    else workerEnv.DESK_FACTORY_LOOP_SCOPE = JSON.stringify(scope);
     const script = path.join(ownRoot, "mcp", "scripts", "factory.js");
     // One Node search per hook run, however many jobs it starts.
     let resolved;
@@ -123,10 +130,10 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       await start(script, ["derive", "--marker", path.join(root, "markers", `${marker.host}-${id}.json`), "--wait-quiet", "30000"], env, resolveOnce);
     } else if (supportsFinalize ?? cli.SUPPORTED_COMMANDS.includes("finalize")) {
       const jobs = await outbox.listFinalizeJobs(env);
-      for (const job of jobs) await start(script, ["finalize", "--job", job], env, resolveOnce);
+      for (const job of jobs) await start(script, ["finalize", "--job", job], workerEnv, resolveOnce);
       // A finalize run starts the loop worker itself once it has derived the job's sessions; with none pending, the end of a turn
       // starts it when the evaluator step is due (a request newer than its last run, or requests waiting past its gap), or, with no request waiting, when improvement triage is due.
-      if (jobs.length === 0) await kickAtTurnEnd(env, start, resolveOnce);
+      if (jobs.length === 0) await kickAtTurnEnd(workerEnv, start, resolveOnce, scope);
     }
     return "written";
   } catch {
@@ -136,9 +143,12 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
 }
 
 // Starts the loop launcher (hooks/loop-start.cjs) through the same detached launch as every other hook job, only when evaluate-kick.js says the evaluator step or improvement triage is due.
-async function kickAtTurnEnd(env, start, resolveOnce) {
-  const { evaluationKickDue, LOOP_START_SCRIPT } = await import("../../mcp/src/factory/evaluate-kick.js");
-  if ((await evaluationKickDue(env)).due) await start(LOOP_START_SCRIPT, [], env, resolveOnce);
+async function kickAtTurnEnd(env, start, resolveOnce, scope) {
+  const { kickLoop } = await import("../../mcp/src/factory/evaluate-kick.js");
+  await kickLoop(env, { scope, spawn: async (_node, args, options) => {
+    await start(args[0], args.slice(1), options.env, resolveOnce);
+    return {};
+  } });
 }
 
 async function runBoundedHook(host, input, entry) {

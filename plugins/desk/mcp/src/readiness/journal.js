@@ -257,10 +257,10 @@ function normalizeChangePath(value) {
 
 export class CanonicalWriteRecordingError extends Error {
   constructor({ paths, recordedPaths, cause, invalidationError }) {
-    super("Canonical files were written or moved, but durable change recording failed; do not repeat the canonical mutation.", { cause })
+    super("Canonical files were written or moved, but durable change recording was not acknowledged; do not repeat the canonical mutation.", { cause })
     this.code = "canonical_write_recording_failed"
     this.canonical_written = true
-    this.journal_recorded = false
+    this.journal_recorded = cause?.code === "controller_recording_uncertain" ? null : false
     this.retryable = false
     this.paths = paths
     this.recorded_paths = recordedPaths
@@ -294,7 +294,7 @@ export async function recordCanonicalChanges({ root, readiness, changes }) {
     }
   } catch (cause) {
     let invalidationError
-    try { await readiness.markUncertain("journal_write_failed") } catch (error) { invalidationError = error }
+    try { await readiness.markUncertain(cause?.code === "controller_recording_uncertain" ? "journal_recording_uncertain" : "journal_write_failed") } catch (error) { invalidationError = error }
     throw new CanonicalWriteRecordingError({ paths, recordedPaths, cause, invalidationError })
   }
 }

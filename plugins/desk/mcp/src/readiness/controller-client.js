@@ -19,6 +19,7 @@ const localControllers = new Map()
 const ABANDONED_RECHECK_MS = 50
 // A running owner that is only busy gets one longer handshake before the session gives up on it for this attempt.
 const LIVE_OWNER_HANDSHAKE_MS = 1000
+const RECORD_CHANGE_TIMEOUT_MS = 5_000
 // A controller that lost the bind knows another controller is starting; it waits for that one before it gives up on the election and retries on admission backoff. The winner can take its whole start window to publish (controllerStartTimeoutMs: node boot, the runtime, the workspace scan and, on Windows, the capped process start read), so the wait is that window plus a margin on every platform, derived from it so the two cannot drift apart. A winner that dies frees the pipe and ends the wait at once, so the long wait costs nothing when no winner is coming.
 const ELECTION_MARGIN_MS = 2_000
 export const electionWaitMsFor = (platform = process.platform) => controllerStartTimeoutMs(platform) + ELECTION_MARGIN_MS
@@ -68,6 +69,7 @@ export async function connectOrStartController({
   env = process.env,
   electionWaitMs = electionWaitMsFor(process.platform),
   makeDir = mkdir,
+  recordChangeTimeoutMs = RECORD_CHANGE_TIMEOUT_MS,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
@@ -121,7 +123,7 @@ export async function connectOrStartController({
   })
   requireCompatibleHandshake(handshake, identity)
   if (local) local.clients += 1
-  return createClient({ endpoint, ephemeral, identity, local, token })
+  return createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs })
 }
 
 async function startOrReuseController({
@@ -186,7 +188,7 @@ function isControllerElectionCollision(error) {
   return error?.code === "EADDRINUSE" || error?.code === "EEXIST"
 }
 
-function createClient({ endpoint, ephemeral, identity, local, token }) {
+function createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs }) {
   let closed = false
   const call = (method, params, timeoutMs = 2_000, signal) => request({
     endpoint,
@@ -205,11 +207,19 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     beginConvergence: () => call("beginConvergence", {}, null),
     barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
     async recordChange(change) {
-      const result = await call("recordChange", typeof change === "string" ? { path: change } : change, null)
-      if (result?.recorded !== true || !Number.isSafeInteger(result.sequence) || result.sequence < 1 ||
-          typeof result.cursor?.journal_id !== "string" || !result.cursor.journal_id ||
-          !Number.isSafeInteger(result.cursor.sequence) || result.cursor.sequence < result.sequence) {
-        throw new Error("controller returned an unverifiable durable change acknowledgement")
+      let result
+      try {
+        result = await call("recordChange", typeof change === "string" ? { path: change } : change, recordChangeTimeoutMs)
+        if (result?.recorded !== true || !Number.isSafeInteger(result.sequence) || result.sequence < 1 ||
+            typeof result.cursor?.journal_id !== "string" || !result.cursor.journal_id ||
+            !Number.isSafeInteger(result.cursor.sequence) || result.cursor.sequence < result.sequence) {
+          throw new Error("controller returned an unverifiable durable change acknowledgement")
+        }
+      } catch (cause) {
+        // The journal operation belongs to the controller and may finish after this socket ends.
+        throw Object.assign(new Error(`Durable change recording was not acknowledged; its effect is uncertain: ${cause.message}`, { cause }), {
+          code: "controller_recording_uncertain", retryable: false,
+        })
       }
       return result
     },

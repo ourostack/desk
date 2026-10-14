@@ -20,6 +20,7 @@ import { validateTriageBytes } from "../../../../../plugins/desk/mcp/src/factory
 import { triagePaths } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
 import { runTriageStep } from "../../../../../plugins/desk/mcp/src/factory/triage-step.js"
 import { publishOwnedTriage } from "../../../../../plugins/desk/mcp/src/factory/triage-write.js"
+import { triagePublicationHealth } from "../../../../../plugins/desk/mcp/src/factory/local-status.js"
 import { fakeGitHub, httpError } from "./_fake_github.js"
 import { KEYS, NEEDS_PREPARED_RUN, STORE, git, pushDesk, qualifiedSeams, remoteJson, resolveIssue, triageWorld } from "./_triage_world.js"
 
@@ -38,6 +39,7 @@ const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-g
 const T0 = Date.parse("2026-10-12T01:00:00.000Z")
 const HOUR = 3600 * 1000
 const DAY = 24 * HOUR
+const ATTEST = 2 * DAY
 const READY = "{\"triage\":1}\n"
 const ACCOUNT = "someone"
 const KEY = KEYS[0]
@@ -149,7 +151,7 @@ test("an acknowledged review is published once, through the intake pull request,
   }])
   assert.equal(registry(w).entries[0].id, written.id)
   assert.deepEqual(value.coverage, { generation: (await state(w)).generation, scan: "complete", reviewed: 1, unreviewed: 0, refused: null, deferred: null, more_unreviewed: false })
-  assert.deepEqual(value.runner, { state: "unsupported_host", last_success_age: "never" })
+  assert.deepEqual(value.runner, { state: "unsupported_host", last_success_age: "unknown" })
   // Nothing of the desk beyond that: no canonical key, no path, no token, no account.
   const text = hub.blobText(sha)
   for (const secret of [KEY, w.deskRoot, annotationOf(w).review.protected_result, annotationOf(w).basis.protected_basis, annotationOf(w).basis.canonical_revision, ACCOUNT]) assert.ok(!text.includes(secret), `${secret} reached the store`)
@@ -694,7 +696,7 @@ test("a machine with no scan or runner state recorded holds its rows, and unknow
   assert.deepEqual([(await state(w)).held.code, (await state(w)).pending, Object.keys((await state(w)).requests)], ["triage_visibility_unknown", [], [KEY]])
   assert.equal((await run(w, hub, T0 + 2 * HOUR + DAY)).result, "delivered_pr_open")
   const [[, sha]] = await headTriage(w, hub)
-  assert.deepEqual(batchValue(hub, sha).runner, { state: "no_agent_cli", last_success_age: "never" })
+  assert.deepEqual(batchValue(hub, sha).runner, { state: "no_agent_cli", last_success_age: "unknown" })
 })
 
 test("more than twenty acknowledged rows go in immutable batches of at most twenty", { timeout: 600000 }, async () => {
@@ -1284,6 +1286,22 @@ test("a_counts_only_batch_is_not_sent_after_the_route_changes", async () => {
   assert.equal((await run(w, hub, T0 + 6 * HOUR)).result, "delivered_pr_open")
   const sent = (await headTriage(w, hub)).filter(([name]) => !new Map(mainTriage(hub)).has(name)).map(([, sha]) => batchValue(hub, sha))
   assert.deepEqual(sent.map((value) => [value.rows, value.coverage.scan]), [[[], "truncated"]])
+  // While that batch waits in an open pull request, the desk reports elsewhere again: the batch is taken apart, not sent.
+  const { planTriage } = await load()
+  const waiting = async () => [(await state(w)).pending, (await record(w, sent[0].batch)).state, (await record(w, sent[0].batch)).reason]
+  assert.deepEqual(await waiting(), [[sent[0].batch], "pending", undefined])
+  await declareRoute(w, "example-org/another-store")
+  hub.pulls.at(-1).state = "closed"
+  const pulls = hub.pullCount()
+  assert.deepEqual(await run(w, hub, T0 + 7 * HOUR), { result: "nothing_pending" })
+  assert.deepEqual([hub.pullCount(), await waiting()], [pulls, [[], "replaced", "route"]])
+  // A waiting batch with no rows whose state no longer names the scanned desk cannot be checked against a route either.
+  await declareRoute(w, STORE)
+  await updateTriageOutbox(w.env, STORE, sent[0].batch + ".json", ({ reason: _reason, ...current }) => ({ ...current, state: "pending", bytes: JSON.stringify(sent[0]) }))
+  await updateTriageOutbox(w.env, STORE, "state.json", ({ scan_desk: _desk, ...current }) => ({ ...current, pending: [sent[0].batch] }))
+  assert.deepEqual(await waiting(), [[sent[0].batch], "pending", undefined])
+  assert.equal((await planTriage(w.env, { store: STORE, now: T0 + 8 * HOUR })).work, false)
+  assert.deepEqual(await waiting(), [[], "replaced", "route"])
 })
 
 /** What `body` does: every `node:fs` promise call as `<name> <last two path parts>`, and every process started as its command. */
@@ -1338,4 +1356,198 @@ test("a_flush_with_nothing_to_publish_adds_no_process_no_lock_no_write_and_no_ne
   assert.ok(quiet.locks <= without.locks && quiet.writes <= without.writes && quiet.processes.length <= without.processes.length, JSON.stringify([quiet, without]))
   assert.deepEqual((await readStatus(w.env)).triage_publication[STORE], said, "not written again")
   assert.equal(said.at, at(T0 + 2 * HOUR))
+})
+
+/** Another writer puts a newer, invalidating revision of the card on the desk remote's main. This machine notes no request for it. */
+async function invalidateElsewhere(w, key, now) {
+  const read = await readTriageBasis({ deskRoot: w.deskRoot, personPrefix: "", key, now: new Date(now), evidence: { resolve: resolveIssue }, env: w.env })
+  const written = await publishOwnedTriage({ env: w.env, deskRoot: w.deskRoot, personPrefix: "", key, store: STORE, expectedBasis: read.basis, review: null, operation: "invalidate", reason: "basis_changed", now: new Date(now), evidence: { resolve: resolveIssue } })
+  assert.equal(written.state, "acknowledged", JSON.stringify(written))
+}
+
+/** Every card of `keys` reviewed and delivered at two hours past `T0`, with a scan whose counts a store reads as known. */
+async function deliveredWorld(keys) {
+  const { recordTriageCoverage } = await load()
+  const w = await world({ keys })
+  const ids = []
+  for (const key of keys) ids.push((await review(w, key)).id)
+  await step(w)
+  const scan = (now) => recordTriageCoverage(w.env, { deskRoot: w.deskRoot, store: STORE, coverage: { scan: "complete", reviewed: keys.length, unreviewed: 0, more_unreviewed: false }, counts: { reviewed: 0, refused: 0, deferred: 0 }, runner: "ran", now })
+  await scan(T0)
+  const hub = github()
+  assert.equal((await run(w, hub, T0 + HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * HOUR)
+  assert.deepEqual(Object.keys((await state(w)).rows).sort(), [...ids].sort())
+  return { w, ids, hub, scan }
+}
+
+/** How many times `body` starts `git fetch`. */
+async function fetches(body) {
+  const original = childProcess.spawnSync
+  let count = 0
+  childProcess.spawnSync = function (...args) {
+    if (args[1].includes("fetch")) count += 1
+    return original.apply(this, args)
+  }
+  syncBuiltinESMExports()
+  try {
+    await body()
+  } finally {
+    childProcess.spawnSync = original
+    syncBuiltinESMExports()
+  }
+  return count
+}
+
+test("a_row_that_cannot_be_read_does_not_start_a_round_for_the_others", async () => {
+  const { planTriage } = await load()
+  const { w, ids, scan } = await deliveredWorld(KEYS.slice(0, 2))
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  // The first row went again thirteen hours ago. The second is two days old, and its annotation cannot be read.
+  const key = (await state(w)).rows[ids[1]].key
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, rows: { [ids[0]]: { ...current.rows[ids[0]], attested_at: at(now - 13 * HOUR) }, [ids[1]]: { ...current.rows[ids[1]], key: "andon:o/none#9" } } }))
+  // The unreadable row is due, but it does not stand: it waits, and the first row is not sent again on its account.
+  const plan = await planTriage(w.env, { store: STORE, now })
+  assert.deepEqual([plan.attest, plan.held, plan.work, Object.keys(plan.state.rows).sort()], [[], { triage_unacknowledged: 1 }, false, [...ids].sort()])
+  // Readable again, the second row stands and is due: it starts the round, and the first goes with it.
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, rows: { ...current.rows, [ids[1]]: { ...current.rows[ids[1]], key } } }))
+  assert.deepEqual((await planTriage(w.env, { store: STORE, now })).attest, [ids[1], ids[0]])
+  // A row already waiting in a batch is never put in a second one: with the second row staged, the first starts a round alone.
+  assert.equal((await prepare(w, now)).items.length, 1)
+  const [batch] = (await state(w)).pending
+  await updateTriageOutbox(w.env, STORE, `${batch}.json`, (current) => ({ ...current, rows: current.rows.filter((row) => row.id === ids[1]) }))
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, rows: { ...current.rows, [ids[0]]: { ...current.rows[ids[0]], attested_at: at(now - ATTEST) } } }))
+  assert.deepEqual((await planTriage(w.env, { store: STORE, now: now + HOUR })).attest, [ids[0]])
+})
+
+test("a_due_row_is_checked_against_the_desk_remote_fetched_once_and_waits_when_the_fetch_fails", async () => {
+  const { planTriage } = await load()
+  const { w, ids, scan } = await deliveredWorld(KEYS)
+  // Another machine invalidates the first card. This desk's copy of the remote's main is as it was before: it still says the review stands.
+  const before = git(w.deskRoot, ["rev-parse", "refs/remotes/origin/main"])
+  await invalidateElsewhere(w, KEYS[0], T0 + DAY)
+  git(w.deskRoot, ["update-ref", "refs/remotes/origin/main", before])
+  // Nothing is due yet: no fetch.
+  let plan
+  assert.equal(await fetches(async () => { plan = await planTriage(w.env, { store: STORE, now: T0 + DAY + HOUR }) }), 0)
+  assert.deepEqual([plan.attest, plan.work], [[], false])
+  // Two days on the rows are due, but the desk's remote cannot be reached: every row waits, and none is dropped.
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  const origin = git(w.deskRoot, ["remote", "get-url", "origin"])
+  git(w.deskRoot, ["remote", "set-url", "origin", path.join(w.deskRoot, "no-such-remote")])
+  assert.equal(await fetches(async () => { plan = await planTriage(w.env, { store: STORE, now }) }), 1)
+  assert.deepEqual([plan.attest, plan.held, plan.work, Object.keys(plan.state.rows).sort()], [[], { triage_desk_not_fetched: 3 }, false, [...ids].sort()])
+  // Reachable again: one fetch for the three rows of this desk, and the fresh copy says the first review no longer stands.
+  git(w.deskRoot, ["remote", "set-url", "origin", origin])
+  assert.equal(await fetches(async () => { plan = await planTriage(w.env, { store: STORE, now }) }), 1)
+  assert.deepEqual([[...plan.attest].sort(), plan.held, Object.keys(plan.state.rows).sort()], [[ids[1], ids[2]].sort(), {}, [ids[1], ids[2]].sort()])
+})
+
+test("a_waiting_reattestation_fetches_remote_main_before_accepting_its_pending_standing", async () => {
+  const { w, ids, scan } = await deliveredWorld([KEY])
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  const staged = await prepare(w, now)
+  assert.equal(staged.items.length, 1)
+  const [batch] = (await state(w)).pending
+  const cached = git(w.deskRoot, ["rev-parse", "refs/remotes/origin/main"])
+  assert.deepEqual((await record(w, batch)).rows.map((row) => [row.id, row.attest]), [[ids[0], true]])
+  await invalidateElsewhere(w, KEY, now)
+  git(w.deskRoot, ["update-ref", "refs/remotes/origin/main", cached])
+  let outgoing
+  assert.equal(await fetches(async () => { outgoing = await prepare(w, now + HOUR) }), 1)
+  assert.deepEqual(outgoing.items, [], "a cached reviewed row invalidated on the actual remote cannot be retried")
+  assert.equal((await record(w, batch)).reason, "superseded")
+  assert.deepEqual(Object.keys((await state(w)).dropped), ids)
+})
+
+test("a_waiting_reattestation_is_withheld_when_its_fresh_remote_read_fails", async () => {
+  const { w, ids, scan } = await deliveredWorld([KEY])
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  assert.equal((await prepare(w, now)).items.length, 1)
+  const origin = git(w.deskRoot, ["remote", "get-url", "origin"])
+  git(w.deskRoot, ["remote", "set-url", "origin", path.join(w.deskRoot, "absent-remote")])
+  let outgoing
+  assert.equal(await fetches(async () => { outgoing = await prepare(w, now + HOUR) }), 1)
+  assert.deepEqual(outgoing.items, [])
+  assert.deepEqual(Object.keys((await state(w)).rows), ids, "a failed read does not prove supersession")
+  assert.equal((await state(w)).held_requests.triage_desk_not_fetched, 1)
+  git(w.deskRoot, ["remote", "set-url", "origin", origin])
+  assert.equal(await fetches(async () => { outgoing = await prepare(w, now + 2 * HOUR) }), 1)
+  assert.equal(outgoing.items.length, 1, "a subsequent successful fresh read permits rebuilding the retained row")
+})
+
+test("a_dropped_row_is_not_current_until_its_verified_higher_revision_is_delivered", async () => {
+  const { w, ids, hub, scan } = await deliveredWorld(KEYS.slice(0, 2))
+  const told = async (now) => {
+    const entry = (await readStatus(w.env)).triage_publication[STORE]
+    return [entry.rows_dropped, triagePublicationHealth(entry, now)]
+  }
+  assert.deepEqual(await told(T0 + 3 * HOUR), [undefined, "current"])
+  // Another machine invalidates both cards. Two days on this machine finds its rows no longer stand, and drops them.
+  for (const key of KEYS.slice(0, 2)) await invalidateElsewhere(w, key, T0 + DAY)
+  await scan(T0 + 2 * DAY + 3 * HOUR)
+  await run(w, hub, T0 + 2 * DAY + 3 * HOUR)
+  const sent = { revision: 1, attested_at: at(T0 + 2 * HOUR) }
+  assert.deepEqual([(await state(w)).rows, (await state(w)).dropped], [{}, { [ids[0]]: sent, [ids[1]]: sent }])
+  // The scan's counts go on their own and are delivered. The store still reads both old rows, so this machine does not say `current`.
+  assert.equal((await run(w, hub, T0 + 2 * DAY + 4 * HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * DAY + 5 * HOUR)
+  assert.deepEqual(await told(T0 + 2 * DAY + 5 * HOUR), [2, "stale"])
+  // This machine reviews the second card again and its newer revision is delivered: that row is no longer counted.
+  const again = await review(w, KEYS[1], { now: T0 + 2 * DAY + 6 * HOUR })
+  await step(w, T0 + 2 * DAY + 6 * HOUR)
+  assert.equal((await run(w, hub, T0 + 2 * DAY + 7 * HOUR)).result, "delivered_pr_open")
+  assert.equal(hub.settleOpenPr().merged, true)
+  await run(w, hub, T0 + 2 * DAY + 8 * HOUR)
+  const kept = await state(w)
+  assert.deepEqual([again.id, kept.rows[ids[1]].revision > 1, kept.dropped], [ids[1], true, { [ids[0]]: sent }])
+  assert.deepEqual(await told(T0 + 2 * DAY + 8 * HOUR), [1, "stale"])
+  // Aging changes the retained store row to stale; it does not remove the row or prove a higher replacement was delivered.
+  await run(w, hub, T0 + 2 * HOUR + 3 * DAY)
+  assert.deepEqual(await told(T0 + 2 * HOUR + 3 * DAY), [1, "stale"])
+  await run(w, hub, T0 + 2 * HOUR + 3 * DAY + 1)
+  assert.deepEqual([(await state(w)).dropped, await told(T0 + 2 * HOUR + 3 * DAY + 1)], [{ [ids[0]]: sent }, [1, "stale"]])
+})
+
+test("a_waiting_record_without_each_rows_card_and_desk_is_not_waiting", async () => {
+  const { planTriage } = await load()
+  const { w } = await reviewedWorld()
+  assert.equal((await prepare(w, T0 + HOUR)).items.length, 1)
+  const [batch] = (await state(w)).pending
+  const whole = await record(w, batch)
+  assert.deepEqual([whole.state, Object.keys(whole.rows[0]).sort(), (await state(w)).requests[KEY].batch], ["pending", ["desk_root", "id", "key", "person_prefix", "revision"], batch])
+  // A record that does not say which card and desk each row came from cannot be checked against a route or the desk's remote:
+  // it is forgotten, and its request is free to be built again.
+  for (const name of ["key", "desk_root", "person_prefix"]) {
+    await updateTriageOutbox(w.env, STORE, `${batch}.json`, () => ({ ...whole, rows: whole.rows.map(({ [name]: _gone, ...row }) => row) }))
+    await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, pending: [batch], requests: { ...current.requests, [KEY]: { ...current.requests[KEY], batch } } }))
+    const plan = await planTriage(w.env, { store: STORE, now: T0 + 2 * HOUR })
+    assert.deepEqual([plan.state.pending, plan.state.requests[KEY].batch, plan.candidates.map((candidate) => candidate.key)], [[], undefined, [KEY]], name)
+    assert.deepEqual([(await record(w, batch)).state, (await record(w, batch)).reason], ["pending", undefined], `${name}: forgotten, not taken apart`)
+  }
+  // The whole record does count.
+  await updateTriageOutbox(w.env, STORE, `${batch}.json`, () => whole)
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, pending: [batch], requests: { ...current.requests, [KEY]: { ...current.requests[KEY], batch } } }))
+  const plan = await planTriage(w.env, { store: STORE, now: T0 + 2 * HOUR })
+  assert.deepEqual([plan.state.pending, plan.candidates], [[batch], []])
+})
+
+test("a_delivered_row_stands_only_at_its_revision_and_only_as_a_review", async () => {
+  const { planTriage } = await load()
+  const { w, ids, scan } = await deliveredWorld(KEYS)
+  const now = T0 + 2 * DAY + 3 * HOUR
+  await scan(now)
+  // The remote holds the first card's annotation at revision 2, invalidated, and the other two at revision 1, reviewed.
+  await invalidateElsewhere(w, KEYS[0], T0 + DAY)
+  assert.deepEqual((await Promise.all(KEYS.map((key) => annotationOf(w, key)))).map((annotation) => [annotation.revision, annotation.attempt.state]), [[2, "stale"], [1, "reviewed"], [1, "reviewed"]])
+  // The first row's revision is the remote's, and only the state differs. The second row's state is the remote's, and only the revision differs.
+  await updateTriageOutbox(w.env, STORE, "state.json", (current) => ({ ...current, rows: { ...current.rows, [ids[0]]: { ...current.rows[ids[0]], revision: 2 }, [ids[1]]: { ...current.rows[ids[1]], revision: 2 } } }))
+  const plan = await planTriage(w.env, { store: STORE, now })
+  assert.deepEqual([plan.attest, Object.keys(plan.state.rows), Object.keys(plan.state.dropped).sort()], [[ids[2]], [ids[2]], [ids[0], ids[1]].sort()])
 })
