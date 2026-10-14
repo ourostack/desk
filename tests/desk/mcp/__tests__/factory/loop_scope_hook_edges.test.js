@@ -162,9 +162,12 @@ test("end-hook bounded worker closes after pipe failure and stops only its owned
   for (const event of ["error", "close", "deadline"]) {
     const signals = []
     await withHook(endFile, (request) => {
-      if (request === "node:child_process") return { spawn: () => {
+      if (request === "node:child_process") return { spawn: (_node, _args, options) => {
+        assert.deepEqual(options.stdio, ["pipe", "pipe", "pipe"])
         const child = new EventEmitter()
         child.kill = (signal) => { signals.push(signal); child.emit("close", 0) }
+        child.stdout = new EventEmitter()
+        child.stderr = new EventEmitter()
         child.stdin = new EventEmitter()
         child.stdin.end = () => queueMicrotask(() => {
           if (event === "deadline") return
