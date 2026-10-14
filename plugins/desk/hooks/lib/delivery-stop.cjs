@@ -16,7 +16,19 @@ const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_create|task_focus|task_updat
 const INTAKE_FIELDS = ["outcome", "assumptions", "recommended_decisions", "completion_checks"];
 const text = value => typeof value === "string";
 const plain = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const clean = value => value.replace(/(\*\*|__)(.+?)\1/gu, "$2").replace(/`([^`]+)`/gu, "$1").trim();
+function clean(value, intake = false) {
+  const code = [];
+  // Escape native NULs before reserving local tokens: human text cannot
+  // impersonate a token. Restore code only after prose presentation folding.
+  let rendered = value.replace(/\0/gu, "\0\0")
+    .replace(/(?<!`)(`+)(?!`)([\s\S]*?)\1(?!`)/gu, (_, delimiter, content) => `\0c${code.push(content) - 1}\0`)
+    .replace(/(\*\*|__)(.+?)\1/gu, "$2");
+  if (intake) rendered = rendered
+    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/gu, "$1").replace(/(?<!\w)_([^_\n]+)_(?!\w)/gu, "$1")
+    .replace(/^[ \t]*(?:#{1,6}|[-*])\s+/gmu, "").replace(/\s+/gu, " ");
+  return rendered.trim().replace(/\0(?:\0|c(\d+)\0)/gu, (_, index) =>
+    index === undefined ? "\0" : code[Number(index)].replace(/\0\0/gu, "\0"));
+}
 function proofIn(line, ref) {
   const proof = ref.trim();
   if (/^[0-9a-f]{7,40}$/iu.test(proof)) {
@@ -46,9 +58,7 @@ function intakeOf(value, call) {
 }
 function hasIntake(reply, parts) {
   if (!text(reply)) return false;
-  const fold = value => clean(value)
-    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/gu, "$1").replace(/(?<!\w)_([^_\n]+)_(?!\w)/gu, "$1")
-    .replace(/^[ \t]*(?:#{1,6}|[-*])\s+/gmu, "").replace(/\s+/gu, " ").trim();
+  const fold = value => clean(value, true);
   const body = fold(reply);
   let after = 0;
   return INTAKE_FIELDS.every(key => {
@@ -176,7 +186,7 @@ function outcome(s, call, failed, value) {
   if (!failed) {
     if (call?.kind === "housekeeping" && value?.status === "committed") s.housekeepingErrors.delete(call.name);
     receipt(s, call, value);
-  } else if (s.packets.size || s.intakes.size) {
+  } else {
     if (call?.kind === "read") return;
     if (call?.kind === "housekeeping") s.housekeepingErrors.add(call.name);
     else s.interrupted = true;

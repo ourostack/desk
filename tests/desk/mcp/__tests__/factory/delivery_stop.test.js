@@ -106,6 +106,73 @@ for (const host of ["copilot", "claude"]) {
       assert.equal((await check(await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, reply }))).status, "complete")
     }
   }))
+  for (const identifier of ["__init__", "__main__", "_literal_", "a  b"]) {
+    test(`${host}: code-span ${identifier} content cannot be normalized into different bytes`, () => scratch(async ctx => {
+      const parts = { ...INTAKE_PARTS, outcome: `Implement Python \`${identifier}\` exactly; this content is functional.` }
+      const args = { ...INTAKE_ARGS, intake_proposal: parts }
+      const result = { ...INTAKE_RESULT, alignment_packet: { ...INTAKE_RESULT.alignment_packet, parts } }
+      const exact = Object.values(parts).join("\n")
+      assert.equal((await check(await fixture(ctx, host, { tool, args, result, reply: exact }))).status, "complete")
+      const changed = exact.replace(`\`${identifier}\``, `\`${identifier === "a  b" ? "a b" : identifier.replaceAll("_", "")}\``)
+      assert.equal((await check(await fixture(ctx, host, { tool, args, result, reply: changed }))).status, "correction")
+    }))
+  }
+  test(`${host}: ordinary emphasis spanning literal code is presentation only`, () => scratch(async ctx => {
+    const parts = { ...INTAKE_PARTS, outcome: "Implement Python `__init__` exactly; this identifier is functional." }
+    const args = { ...INTAKE_ARGS, intake_proposal: parts }
+    const result = { ...INTAKE_RESULT, alignment_packet: { ...INTAKE_RESULT.alignment_packet, parts } }
+    const exact = Object.values(parts).join("\n")
+    for (const marker of ["**", "*", "__", "_"]) {
+      assert.equal((await check(await fixture(ctx, host, {
+        tool, args, result, reply: exact.replace("Python `__init__`", `${marker}Python \`__init__\`${marker}`),
+      }))).status, "complete")
+    }
+    assert.equal((await check(await fixture(ctx, host, {
+      tool, args, result, reply: exact.replace("`__init__`", "\0c0\0"),
+    }))).status, "correction", "literal human text cannot impersonate a code-normalization token")
+  }))
+  for (const packet of ["intake", "delivery"]) for (const operation of ["bash", "save", "lifecycle", "unpaired"]) {
+    test(`${host}: unresolved ${operation} before ${packet} receipt still suppresses continuation`, () => scratch(async ctx => {
+      const name = operation === "save" ? (host === "copilot" ? "desk-desk_save" : "mcp__desk__desk_save")
+        : operation === "lifecycle" ? (host === "copilot" ? "desk-task_update" : "mcp__desk__task_update") : "bash"
+      const f = await fixture(ctx, host, {
+        ...(packet === "intake" ? { tool, args: INTAKE_ARGS, result: INTAKE_RESULT } : {}),
+        edit(lines) {
+          const args = operation === "lifecycle" ? { track: "portable-tools", slug: "other-work", status: "processing" } : {}
+          if (host === "copilot") lines.splice(2, 0,
+            ...(operation === "unpaired" ? [] : [{ type: "tool.execution_start", timestamp: START, data: { toolCallId: "failed", toolName: name, arguments: args } }]),
+            { type: "tool.execution_complete", timestamp: START, data: { toolCallId: "failed", interactionId: "human-1", success: false } })
+          else lines.splice(1, 0,
+            ...(operation === "unpaired" ? [] : [{ type: "assistant", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_use", id: "failed", name, input: args }] } }]),
+            { type: "user", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_result", tool_use_id: "failed", is_error: true, content: "Operation failed." }] } })
+        },
+      })
+      assert.equal((await check(f)).status, "not_delivery")
+    }))
+  }
+  for (const operation of ["read", "committed save"]) {
+    test(`${host}: qualified ${operation} before the receipt does not invent an unresolved error`, () => scratch(async ctx => {
+      const name = operation === "read" ? (host === "copilot" ? "view" : "Read")
+        : (host === "copilot" ? "desk-desk_save" : "mcp__desk__desk_save")
+      const f = await fixture(ctx, host, { edit(lines) {
+        if (host === "copilot") lines.splice(2, 0,
+          { type: "tool.execution_start", timestamp: START, data: { toolCallId: "before", toolName: name, arguments: {} } },
+          { type: "tool.execution_complete", timestamp: START, data: { toolCallId: "before", interactionId: "human-1", success: false } },
+          ...(operation === "read" ? [] : [
+            { type: "tool.execution_start", timestamp: START, data: { toolCallId: "recovered", toolName: name, arguments: {} } },
+            { type: "tool.execution_complete", timestamp: START, data: { toolCallId: "recovered", interactionId: "human-1", success: true, result: { content: '{"status":"committed"}' } } },
+          ]))
+        else lines.splice(1, 0,
+          { type: "assistant", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_use", id: "before", name, input: {} }] } },
+          { type: "user", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_result", tool_use_id: "before", is_error: true, content: "Operation failed." }] } },
+          ...(operation === "read" ? [] : [
+            { type: "assistant", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_use", id: "recovered", name, input: {} }] } },
+            { type: "user", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_result", tool_use_id: "recovered", content: '{"status":"committed"}' }] } },
+          ]))
+      } })
+      assert.equal((await check(f)).status, "correction")
+    }))
+  }
   test(`${host}: reading the same empty-progress draft does not erase its current proposal`, () => scratch(async ctx => {
     const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, edit(lines) {
       const args = { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug }
