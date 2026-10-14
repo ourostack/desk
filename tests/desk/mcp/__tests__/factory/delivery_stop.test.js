@@ -84,6 +84,41 @@ for (const host of ["copilot", "claude"]) {
     } })
     assert.deepEqual(await check(f), { status: "unverified", diagnostic: "correction_exhausted" })
   }))
+  for (const observation of ["new processing", "new unavailable", "existing processing", "existing progress"]) {
+    test(`${host}: focused ${observation} observation invalidates old intake`, () => scratch(async ctx => {
+      const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, edit(lines) {
+        const create = observation.startsWith("new")
+        const args = create ? { track: "other-tools", slug: "authorized-scope", focus: true, ...(observation === "new processing" ? { status: "processing" } : {}) } : { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug }
+        const result = create ? { status: "created", work_context: { status: observation === "new processing" ? "processing" : "drafting", planning_complete: false }, ...(observation === "new unavailable" ? { alignment_packet_unavailable: "proposal_not_supplied" } : {}) } : { status: "focused", ...args, task_status: observation === "existing processing" ? "processing" : "drafting", recent_progress: observation === "existing progress" ? ["Implementation is in progress."] : [] }
+        if (host === "copilot") lines.splice(4, 0,
+          { type: "tool.execution_start", timestamp: END, data: { toolCallId: "context", toolName: create ? "desk-task_create" : "desk-task_focus", arguments: args } },
+          { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "context", success: true, interactionId: "human-1", result: { content: JSON.stringify(result) } } })
+        else lines.splice(3, 0,
+          { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "context", name: create ? "mcp__desk__task_create" : "mcp__desk__task_focus", input: args }] } },
+          { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "context", content: JSON.stringify(result) }] } })
+      } })
+      assert.equal((await check(f)).status, observation === "new unavailable" ? "unavailable" : "not_delivery")
+    }))
+  }
+  test(`${host}: ordinary italic emphasis preserves actual intake contents`, () => scratch(async ctx => {
+    for (const marker of ["*", "_"]) {
+      const reply = Object.values(INTAKE_PARTS).join("\n").replace("Read-only Python", `Read-only ${marker}Python${marker}`)
+      assert.equal((await check(await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, reply }))).status, "complete")
+    }
+  }))
+  test(`${host}: reading the same empty-progress draft does not erase its current proposal`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, edit(lines) {
+      const args = { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug }
+      const result = { status: "focused", ...args, task_status: "drafting", recent_progress: [] }
+      if (host === "copilot") lines.splice(4, 0,
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "read", toolName: "desk-task_focus", arguments: args } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "read", success: true, interactionId: "human-1", result: { content: JSON.stringify(result) } } })
+      else lines.splice(3, 0,
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "read", name: "mcp__desk__task_focus", input: args }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "read", content: JSON.stringify(result) }] } })
+    } })
+    assert.equal((await check(f)).status, "correction")
+  }))
   for (const context of ["processing", "planning complete", "parked", "foreign", "missing part", "claimed approval"]) {
     test(`${host}: intake excludes ${context} before correction is enabled`, () => scratch(async ctx => {
       const args = { ...INTAKE_ARGS }

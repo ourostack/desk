@@ -12,7 +12,7 @@ const TAG = "[DESK_DELIVERY_CORRECTION]";
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_create|task_update|task_archive|task_signoff)$/u;
+const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_create|task_focus|task_update|task_archive|task_signoff)$/u;
 const INTAKE_FIELDS = ["outcome", "assumptions", "recommended_decisions", "completion_checks"];
 const text = value => typeof value === "string";
 const plain = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -46,7 +46,9 @@ function intakeOf(value, call) {
 }
 function hasIntake(reply, parts) {
   if (!text(reply)) return false;
-  const fold = value => clean(value).replace(/^[ \t]*(?:#{1,6}|[-*])\s+/gmu, "").replace(/\s+/gu, " ").trim();
+  const fold = value => clean(value)
+    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/gu, "$1").replace(/(?<!\w)_([^_\n]+)_(?!\w)/gu, "$1")
+    .replace(/^[ \t]*(?:#{1,6}|[-*])\s+/gmu, "").replace(/\s+/gu, " ").trim();
   const body = fold(reply);
   let after = 0;
   return INTAKE_FIELDS.every(key => {
@@ -88,6 +90,21 @@ function reset(s, human) {
 }
 function receipt(s, call, value) {
   if (!call || !value) return;
+  if (call.kind === "task_focus") {
+    if (call.clear && value.status === "cleared") { s.intakes.clear(); s.unavailableIntake.clear(); return; }
+    if (value.status !== "focused" || `${value.track}/${value.slug}` !== call.target) return;
+    const execution = value.planning_complete === true || (value.task_status && value.task_status !== "drafting")
+      || (Array.isArray(value.recent_progress) && value.recent_progress.some(x => text(x) && x.trim()));
+    if (execution || (!(s.intakes.has(call.target) || s.unavailableIntake.has(call.target)))) {
+      s.intakes.clear(); s.unavailableIntake.clear();
+    }
+    if (execution) s.execution.add(call.target);
+    if (["blocked", "collaborating", "paused"].includes(value.task_status)) s.interrupted = true;
+    return;
+  }
+  if (call.kind === "task_create" && call.focus === true && value.status === "created") {
+    s.intakes.clear(); s.unavailableIntake.clear();
+  }
   if (["blocked", "collaborating", "paused"].includes(call.status)) s.interrupted = true;
   // Existing recorded execution excludes intake; it never proves a human
   // agreement. Keep that conservative exclusion across real human turns.
@@ -143,6 +160,7 @@ function reply(s, content) {
 function callOf(name, args) {
   const match = text(name) ? DESK.exec(name) : null;
   const target = targetOf(args);
+  if (match?.[1] === "task_focus" && plain(args) && args.clear === true) return { kind: "task_focus", clear: true, target: null };
   return match && target ? { kind: match[1], target, status: args.status ?? args.frontmatter?.status,
     focus: args.focus, planningComplete: args.planning_complete === true || args.frontmatter?.planning_complete === true,
     proposal: args.intake_proposal } : null;

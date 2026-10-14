@@ -40,6 +40,16 @@ test("hint strings are the brief's, worded for the main agent", () => {
   assert.deepEqual(TASK_FOCUS_FIELDS, ["track", "slug", "clear"])
 })
 
+test("context observation reflects only an actual planning-complete card flag, never invented agreement", async () => {
+  const root = await mkTempDeskRoot()
+  for (const [slug, flag] of [["completed-plan", true], ["pending-plan", false], ["unknown-plan", "true"]]) {
+    await card(root, "tr", slug, { status: "drafting", planning_complete: flag })
+    const result = await taskFocus({ deskRoot: root, input: { track: "tr", slug } })
+    assert.equal(result.planning_complete, flag === true ? true : undefined)
+    assert.equal(result.approval, undefined)
+  }
+})
+
 test("focus then status returns focused, with status and recent progress", async () => {
   const root = await mkTempDeskRoot()
   await card(root, "tr", "alpha-work")
