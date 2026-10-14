@@ -70,6 +70,14 @@ test("a focused drafting task returns the complete alignment reply contract", as
   assert.match(result.alignment_note, /outcome, assumptions, recommended decisions and completion checks together/u)
   assert.match(result.alignment_note, /not just an output-format question/u)
   assert.match(result.alignment_note, /do not reopen an existing go/u)
+  for (const section of ["Outcome:", "Assumptions:", "Recommended decisions:", "Done means:"]) {
+    assert.ok(result.alignment_note.includes(section), `the next-reply scaffold must include ${section}`)
+  }
+  assert.match(result.alignment_note, /usable output, documentation and verification where applicable/u)
+  assert.match(result.alignment_note, /routine defaults yourself/u)
+  assert.match(result.alignment_note, /normal chat, not question forms/u)
+  const { data } = await readFront(path.join(root, "tools", "folder-report", "task.md"))
+  assert.equal(data.alignment_note, undefined, "the reply scaffold is not a second persisted agreement")
 })
 
 test("parked tasks and already-processing work do not restart alignment", async () => {

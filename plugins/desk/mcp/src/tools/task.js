@@ -770,7 +770,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   const result = { status: "created", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
   if (data.status === "drafting" && values.focus === true) {
-    result.alignment_note = "Your next alignment reply must state the outcome, assumptions, recommended decisions and completion checks together, not just an output-format question. Ask all needed human decisions in that reply, then wait for explicit go. Reuse what the operator already supplied; do not reopen an existing go. This is Desk's alignment contract, not another design-document approval."
+    result.alignment_note = "Your next alignment reply must state the outcome, assumptions, recommended decisions and completion checks together, not just an output-format question. Fill these four parts: Outcome: requested result; Assumptions: what you inferred; Recommended decisions: resolve routine defaults yourself and recommend each remaining human choice; Done means: usable output, documentation and verification where applicable. Ask remaining judgments together in normal chat, not question forms, then wait for explicit go. Reuse what the operator already supplied; do not reopen an existing go."
   }
   if (data.status === "done") {
     result.signoff = "delivered_unsigned"

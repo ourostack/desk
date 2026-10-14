@@ -1,0 +1,1 @@
+Carry Desk's complete pre-Go alignment and first-amendment evidence disclosure through the existing Superpowers adapter. Focused drafting creation returns a concrete reply scaffold; failing test runs are distinguished from passing evidence. Preserve existing Go, same-task authority, the pristine provider and the bounded delivery hook.
