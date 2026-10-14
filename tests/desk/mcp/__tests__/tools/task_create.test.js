@@ -70,6 +70,14 @@ test("a focused drafting task returns the complete alignment reply contract", as
   assert.match(result.alignment_note, /outcome, assumptions, recommended decisions and completion checks together/u)
   assert.match(result.alignment_note, /not just an output-format question/u)
   assert.match(result.alignment_note, /do not reopen an existing go/u)
+  for (const section of ["Outcome:", "Assumptions:", "Recommended decisions:", "Done means:"]) {
+    assert.ok(result.alignment_note.includes(section), `the next-reply scaffold must include ${section}`)
+  }
+  assert.match(result.alignment_note, /usable output, documentation and verification where applicable/u)
+  assert.match(result.alignment_note, /routine defaults yourself/u)
+  assert.match(result.alignment_note, /normal chat, not question forms/u)
+  const { data } = await readFront(path.join(root, "tools", "folder-report", "task.md"))
+  assert.equal(data.alignment_note, undefined, "the reply scaffold is not a second persisted agreement")
 })
 
 test("parked tasks and already-processing work do not restart alignment", async () => {
@@ -78,6 +86,42 @@ test("parked tasks and already-processing work do not restart alignment", async 
   const processing = await task_create({ deskRoot: root, input: { track: "tools", slug: "active-report", title: "Active report", focus: true, status: "processing" } })
   assert.equal(parked.alignment_note, undefined)
   assert.equal(processing.alignment_note, undefined)
+})
+
+const proposal = {
+  outcome: "Inspect local fixture byte usage.",
+  assumptions: "Read-only Python standard-library command; no followed links.",
+  recommended_decisions: "Use a size-sorted child table and grand total; no remaining human choices.",
+  completion_checks: "Runnable command, usage documentation, nested/empty/link/error tests.",
+}
+
+test("focused drafting creation returns the actual four-part proposal stored in its card, not an approval", async () => {
+  const root = await mkTempDeskRoot()
+  const result = await task_create({ deskRoot: root, input: { track: "tools", slug: "byte-inspection", title: "Byte inspection", focus: true, intake_proposal: proposal } })
+  assert.deepEqual(result.alignment_packet, { kind: "intake_proposal", boundary: "awaiting_intake", authority: "unknown", task: "tools/byte-inspection", parts: proposal })
+  const card = await fs.readFile(path.join(root, "tools/byte-inspection/task.md"), "utf8")
+  for (const value of Object.values(proposal)) assert.ok(card.includes(value))
+  assert.equal(result.work_context.status, "drafting")
+  assert.equal(result.work_context.planning_complete, false)
+  assert.doesNotMatch(result.alignment_note, /wait for explicit go/iu)
+})
+
+test("supplied scope and execution context cannot be reopened by a proposal or drafting status", async () => {
+  const root = await mkTempDeskRoot()
+  for (const [slug, extra] of [["direct-implementation", { status: "processing" }], ["approved-draft", { planning_complete: true }], ["parked-proposal", { focus: false }]]) {
+    const result = await task_create({ deskRoot: root, input: { track: "tools", slug, title: "Existing authorized scope", focus: true, intake_proposal: proposal, ...extra } })
+    assert.equal(result.alignment_packet, undefined)
+    assert.equal(result.alignment_note, undefined)
+  }
+})
+
+test("malformed supplied proposal refuses before creation without fabricated empty parts", async () => {
+  const root = await mkTempDeskRoot()
+  for (const value of [null, [], {}, { ...proposal, outcome: "" }, { ...proposal, assumptions: 3 },
+    { ...proposal, outcome: "x".repeat(2001) }, { ...proposal, outcome: "x\0" }, { ...proposal, approval: "go" }]) {
+    await assert.rejects(task_create({ deskRoot: root, input: { track: "tools", slug: "invalid-proposal", title: "Proposal", focus: true, intake_proposal: value } }), /intake_proposal/u)
+    assert.equal(await exists(path.join(root, "tools/invalid-proposal/task.md")), false)
+  }
 })
 
 test("task_create refuses to overwrite an existing task", async () => {

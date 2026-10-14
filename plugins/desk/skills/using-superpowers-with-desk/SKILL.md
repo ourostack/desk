@@ -46,6 +46,10 @@ Superpowers' `writing-plans` is a skill that writes a plan file. It is not the h
 
 Prior approval remains valid; do not reopen it without a scope change.
 
+Carry Desk's next-reply contract into the selected provider. Before go, its understanding note includes **Outcome, Assumptions, Recommended decisions and Done means** together: resolve routine defaults yourself, propose usable output, documentation and verification as applicable, and ask only remaining human judgments in one normal-chat batch. The provider's one-question-at-a-time and multiple-choice defaults must not turn this into a format-only menu or question form. If a raw provider was loaded first, apply this handoff before its next reply; loading it did not replace Desk's agreement.
+
+At `material-redesign`, carry `work-orchestration`'s evidence disclosure into the **first reply after the requirement**: name the earlier checks it invalidates, or accurately say no affected checks have passed yet. A failing test run is not passing evidence and is not "no tests ran." Keep the same task and existing go; do not reopen approval for a scoped amendment.
+
 When the operator delegates a whole outcome, their explicit go authorizes drafting and reviewing the provider's design and plan within that outcome. Written design and plan review remain required, but the agent owns them: use the provider's engineering checks, not another operator approval for each document. The provider's first understanding note is the Desk alignment message governed by `using-desk` "Alignment, then ownership". An approval of an idea without go is still alignment. Preserve a human-only artifact approval when the operator explicitly requested it, and return for changed scope or missing authority, not because an authorized artifact did not exist at go.
 
 Delegation remains limited by the recorded authority.

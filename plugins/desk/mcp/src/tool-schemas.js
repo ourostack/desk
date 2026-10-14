@@ -119,6 +119,18 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     status: text("Initial status; defaults to drafting. Must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
     focus: flag("Pass true to also declare this new task as the one this session is working on (as task_focus does), for work that starts now; leave it out for a parked follow-up. Only if you are the session's main agent."),
+    intake_proposal: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        outcome: text("The actual requested outcome and purpose, reflecting supplied scope."),
+        assumptions: text("Your actual material assumptions/defaults, including relevant runtime, input/data and error behavior for code. Reflect supplied constraints; do not defer routine choices until after a format question or invent requirements."),
+        recommended_decisions: text("Settle routine technical defaults yourself and recommend every remaining human decision together; plainly say all choices are settled when they are. No invented questions."),
+        completion_checks: text("Concrete proposed completion terms: usable/runnable output, usage/documentation and specific behavioral/edge/error verification as applicable, not just the word tests. Do not leave the human to assemble these at Go."),
+      },
+      required: ["outcome", "assumptions", "recommended_decisions", "completion_checks"],
+      description: "For a genuinely unapproved new focused drafting outcome, supply your complete actual first-reply proposal BEFORE creating the card, not a deferred-design placeholder. It is stored in the existing card and returned as alignment_packet: present all four actual contents together before any confirmation, in normal chat, never ask_user or a form. Keep bounded work short. Omit for existing Go/approved/resumed/parked work; reflect execution in status/planning_complete, never reopen approval. No empty defaults, invented agreement or separate ledger.",
+    },
     category: text("general | reminder | coordination | infrastructure | another category."),
     cadence: text("Recurring cadence, such as 30m."),
     scheduledAt: text("One-time scheduled time (ISO 8601)."),

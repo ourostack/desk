@@ -311,7 +311,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", ...OPTIONAL_RUNTIME_FIELDS]
 export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
@@ -701,11 +701,28 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     throw new Error("task_create: `focus` must be true or false")
   }
   refuseRecordKeys("task_create", values, values.frontmatter)
+  // A proposal is the worker's actual content, not manufactured agreement or
+  // a second record. It remains in this card's ordinary Markdown body.
+  let proposal
+  if (Object.hasOwn(values, "intake_proposal")) {
+    const p = values.intake_proposal
+    const fields = ["outcome", "assumptions", "recommended_decisions", "completion_checks"]
+    if (p === null || typeof p !== "object" || Array.isArray(p) || Object.keys(p).length !== fields.length
+      || fields.some((key) => !Object.hasOwn(p, key) || typeof p[key] !== "string" || !p[key].trim() || p[key].length > 2000 || p[key].includes("\0"))) {
+      throw new Error("task_create: intake_proposal needs exactly four nonempty worker-authored strings: outcome, assumptions, recommended_decisions, completion_checks; nothing was created. Reflect supplied scope and existing Go; do not invent choices or agreement.")
+    }
+    proposal = Object.fromEntries(fields.map((key) => [key, p[key].trim()]))
+  }
   // The steps are checked and placed before anything is written: a bad one refuses the whole create.
   let body = values.body ?? ""
   if (values.steps !== undefined) {
     if (!Array.isArray(values.steps)) throw new Error("task_create: `steps` must be a list of step objects; nothing was created")
     for (const step of values.steps) body = applyStep(body, objectInput(step, { ...STEP_INPUT, tool: "task_create" }), "task_create", recordedRepos(values.repos).map((repo) => repo.name), stepVerdict(values.repos, { spawnGit, homeDir: env.HOME, deskRoot })).body
+  }
+  if (proposal) {
+    const labels = ["Outcome", "Assumptions", "Recommended decisions", "Completion checks"]
+    const section = ["## Intake proposal", ...Object.values(proposal).map((value, i) => `### ${labels[i]}\n\n${value}`)].join("\n\n")
+    body = [body.trimEnd(), section].filter(Boolean).join("\n\n")
   }
 
   const filePath = await resolveWriteTarget({
@@ -768,9 +785,16 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   }
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "created", path: relPath(deskRoot, filePath) }
+  result.work_context = { status: data.status, planning_complete: data.planning_complete === true }
   if (commit) result.commit = commit
-  if (data.status === "drafting" && values.focus === true) {
-    result.alignment_note = "Your next alignment reply must state the outcome, assumptions, recommended decisions and completion checks together, not just an output-format question. Ask all needed human decisions in that reply, then wait for explicit go. Reuse what the operator already supplied; do not reopen an existing go. This is Desk's alignment contract, not another design-document approval."
+  if (data.status === "drafting" && values.focus === true && data.planning_complete !== true) {
+    if (proposal) {
+      result.alignment_packet = { kind: "intake_proposal", boundary: "awaiting_intake", authority: "unknown", task: `${track}/${slug}`, parts: proposal }
+      result.alignment_note = "Your next human reply presents ALL four actual field contents VERBATIM together, proportionally; do not substitute a format question or defer completion checks. Do not invoke ask_user, AskUserQuestion or any form: use normal chat. Human approval classification is unknown: consume supplied scope and Go, never assert Go is absent or reopen it. Presenting a proposal is not acceptance or a new approval wait."
+    } else {
+      result.alignment_packet_unavailable = "proposal_not_supplied"
+      result.alignment_note = "State outcome, assumptions, recommended decisions and completion checks together, not just an output-format question. Outcome: requested result; Assumptions: inferred constraints; Recommended decisions: resolve routine defaults yourself; Done means: usable output, documentation and verification where applicable. Use normal chat, not question forms; do not reopen an existing go. No actual proposal packet was supplied, so correspondence is unverified, not complete."
+    }
   }
   if (data.status === "done") {
     result.signoff = "delivered_unsigned"

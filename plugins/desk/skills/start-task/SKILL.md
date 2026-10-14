@@ -50,11 +50,12 @@ Triggers: "start a new task: …", "work on …", "I need to add X to Y", "let's
 2. **Name the task and route it**, as above.
 3. **Create the task** with `task_create` at `$DESK/<track>/<slug>/`, per `desk:task-card-format`, passing these fields:
    - `title: <slug>`
-   - `status: drafting`
+   - `status: drafting` for an outcome still needing agreement; use `processing` when the operator already supplied implementation Go. Do not undo supplied authority by defaulting to drafting.
    - `track: <track-slug>`
    - `initiated_by: operator`
    - `repos: []` — populate only if the description names code repos; otherwise leave empty for non-coding tasks.
    - `focus: true` — the main agent declares the task in this call, so no `task_focus` call follows.
+   - For a genuinely unapproved new outcome, `intake_proposal` with your actual `outcome`, `assumptions`, `recommended_decisions` and `completion_checks`. Reflect the request and resolve relevant runtime/input/error defaults; include concrete usable-result, usage/docs and behavioral/edge/error verification checks as applicable, not a deferred-design placeholder. Settled choices need no invented question. Keep bounded work short. These contents live in the existing card and return as `alignment_packet`: present ALL actual contents verbatim together before any confirmation, in normal chat. Never invoke `ask_user`, `AskUserQuestion` or a form, or substitute a format-only menu. Do not supply a proposal to reopen existing Go. `planning_complete` is only for an actually completed plan, not a substitute for recording Go.
 
    Do not pass `created`, `updated` or `schema_version`: `task_create` sets them itself.
 4. **Add the task's row** to the track's `## Tasks` table, then **commit and push** the task card and track card to the workspace repo.

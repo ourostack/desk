@@ -94,6 +94,7 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
     recent_progress: recentProgress(card.content, PROGRESS_ENTRIES, PROGRESS_ENTRY_CHARS).map(redactCredentialLikeText),
     next_step: nextStepOf(card.content),
   }
+  if (card.data.planning_complete === true) result.planning_complete = true
   if (found.archived) result.archived = true
   return result
 }

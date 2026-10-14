@@ -12,10 +12,23 @@ const TAG = "[DESK_DELIVERY_CORRECTION]";
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_update|task_archive|task_signoff)$/u;
+const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_create|task_focus|task_update|task_archive|task_signoff)$/u;
+const INTAKE_FIELDS = ["outcome", "assumptions", "recommended_decisions", "completion_checks"];
 const text = value => typeof value === "string";
 const plain = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const clean = value => value.replace(/(\*\*|__)(.+?)\1/gu, "$2").replace(/`([^`]+)`/gu, "$1").trim();
+function clean(value, intake = false) {
+  const code = [];
+  // Escape native NULs before reserving local tokens: human text cannot
+  // impersonate a token. Restore code only after prose presentation folding.
+  let rendered = value.replace(/\0/gu, "\0\0")
+    .replace(/(?<!`)(`+)(?!`)([\s\S]*?)\1(?!`)/gu, (_, delimiter, content) => `\0c${code.push(content) - 1}\0`)
+    .replace(/(\*\*|__)(.+?)\1/gu, "$2");
+  if (intake) rendered = rendered
+    .replace(/(?<!\w)\*([^*\n]+)\*(?!\w)/gu, "$1").replace(/(?<!\w)_([^_\n]+)_(?!\w)/gu, "$1")
+    .replace(/^[ \t]*(?:#{1,6}|[-*])\s+/gmu, "").replace(/\s+/gu, " ");
+  return rendered.trim().replace(/\0(?:\0|c(\d+)\0)/gu, (_, index) =>
+    index === undefined ? "\0" : code[Number(index)].replace(/\0\0/gu, "\0"));
+}
 function proofIn(line, ref) {
   const proof = ref.trim();
   if (/^[0-9a-f]{7,40}$/iu.test(proof)) {
@@ -28,6 +41,33 @@ function packetOf(value) {
   const p = value.signoff_packet;
   return Array.isArray(p) && p.length === 3 && p.every(x => text(x) && x.length <= 2000 && !/[\r\n]/u.test(x))
     && /^Asked: \S/u.test(p[0]) && /^Delivered: \S/u.test(p[1]) && p[2] === "Accept or send back?" ? p : null;
+}
+function intakeOf(value, call) {
+  const p = value.alignment_packet;
+  const context = value.work_context;
+  if (call.kind !== "task_create" || call.focus !== true || value.status !== "created"
+    || (call.status && call.status !== "drafting") || call.planningComplete
+    || !plain(context) || context.status !== "drafting" || context.planning_complete !== false
+    || !plain(p) || p.kind !== "intake_proposal" || p.boundary !== "awaiting_intake"
+    || p.authority !== "unknown" || p.task !== call.target || !plain(p.parts) || !plain(call.proposal)
+    || Object.keys(p.parts).length !== INTAKE_FIELDS.length
+    || INTAKE_FIELDS.some(key => !text(p.parts[key]) || !p.parts[key].trim()
+      || p.parts[key].length > 2000 || p.parts[key].includes("\0")
+      || !text(call.proposal[key]) || p.parts[key] !== call.proposal[key].trim())) return null;
+  return p.parts;
+}
+function hasIntake(reply, parts) {
+  if (!text(reply)) return false;
+  const fold = value => clean(value, true);
+  const body = fold(reply);
+  let after = 0;
+  return INTAKE_FIELDS.every(key => {
+    const value = fold(parts[key]);
+    const at = body.indexOf(value, after);
+    if (at < 0) return false;
+    after = at + value.length;
+    return true;
+  });
 }
 function hasEnding(reply, packets) {
   if (!text(reply)) return false;
@@ -51,16 +91,51 @@ function targetOf(args) {
 }
 const failure = reason => ({ status: "unavailable", diagnostic: reason });
 function state() {
-  return { calls: new Map(), packets: new Map(), delivered: new Set(), sentCurrent: false, human: null,
+  return { calls: new Map(), packets: new Map(), intakes: new Map(), unavailableIntake: new Set(), housekeepingErrors: new Set(), execution: new Set(), delivered: new Set(), sentCurrent: false, human: null,
     corrected: false, interrupted: false, rollover: false, envelope: false, final: null, currentHook: null };
 }
 function reset(s, human) {
-  s.calls.clear(); s.packets.clear(); s.sentCurrent = false;
+  s.calls.clear(); s.packets.clear(); s.intakes.clear(); s.unavailableIntake.clear(); s.housekeepingErrors.clear(); s.sentCurrent = false;
   s.human = human; s.corrected = false; s.interrupted = false; s.rollover = false; s.final = null;
 }
 function receipt(s, call, value) {
   if (!call || !value) return;
+  if (["read", "other", "housekeeping"].includes(call.kind)) return;
+  if (call.kind === "task_focus") {
+    if (call.clear && value.status === "cleared") { s.intakes.clear(); s.unavailableIntake.clear(); return; }
+    if (value.status !== "focused" || `${value.track}/${value.slug}` !== call.target) return;
+    const execution = value.planning_complete === true || (value.task_status && value.task_status !== "drafting")
+      || (Array.isArray(value.recent_progress) && value.recent_progress.some(x => text(x) && x.trim()));
+    if (execution || (!(s.intakes.has(call.target) || s.unavailableIntake.has(call.target)))) {
+      s.intakes.clear(); s.unavailableIntake.clear();
+    }
+    if (execution) s.execution.add(call.target);
+    if (["blocked", "collaborating", "paused"].includes(value.task_status)) s.interrupted = true;
+    return;
+  }
+  if (call.kind === "task_create" && call.focus === true && value.status === "created") {
+    s.intakes.clear(); s.unavailableIntake.clear();
+  }
   if (["blocked", "collaborating", "paused"].includes(call.status)) s.interrupted = true;
+  // Existing recorded execution excludes intake; it never proves a human
+  // agreement. Keep that conservative exclusion across real human turns.
+  if (call.planningComplete || value.work_context?.planning_complete === true
+    || (call.status && call.status !== "drafting")
+    || (value.work_context?.status && value.work_context.status !== "drafting")) s.execution.add(call.target);
+  if (s.execution.has(call.target) || call.kind !== "task_create") {
+    s.intakes.delete(call.target); s.unavailableIntake.delete(call.target);
+  }
+  if (call.kind === "task_create") {
+    const proposal = intakeOf(value, call);
+    if (proposal && !s.execution.has(call.target)) {
+      s.intakes.clear(); s.intakes.set(call.target, proposal);
+      s.unavailableIntake.clear();
+    } else if (!s.execution.has(call.target) && call.focus === true
+      && value.alignment_packet_unavailable === "proposal_not_supplied") {
+      s.unavailableIntake.add(call.target);
+    }
+    return;
+  }
   if (call.kind === "task_signoff" || (call.kind === "task_update" && call.status && call.status !== "done")) {
     if (call.kind === "task_update" || value.signoff?.state === "refused") {
       for (const key of s.delivered) if (key.startsWith(`${call.target}\n`)) s.delivered.delete(key);
@@ -79,6 +154,9 @@ function receipt(s, call, value) {
 function reply(s, content) {
   if (!text(content) || !content.trim()) return;
   s.final = content;
+  for (const [target, parts] of s.intakes) if (hasIntake(content, parts)) {
+    s.intakes.delete(target); s.sentCurrent = true;
+  }
   if (s.packets.size && hasEnding(content, [...s.packets.values()].map(x => x.packet))) {
     for (const held of s.packets.values()) s.delivered.add(held.key);
     s.sentCurrent = true;
@@ -91,9 +169,28 @@ function reply(s, content) {
   }
 }
 function callOf(name, args) {
+  if (["view", "Read"].includes(name)) return { kind: "read" };
+  if (text(name) && /^(?:desk-|mcp__[^ ]*desk[^ ]*__)desk_save$/u.test(name)) return { kind: "housekeeping", name };
   const match = text(name) ? DESK.exec(name) : null;
   const target = targetOf(args);
-  return match && target ? { kind: match[1], target, status: args.status ?? args.frontmatter?.status } : null;
+  if (match?.[1] === "task_focus" && plain(args) && args.clear === true) return { kind: "task_focus", clear: true, target: null };
+  return match && target ? { kind: match[1], target, status: args.status ?? args.frontmatter?.status,
+    focus: args.focus, planningComplete: args.planning_complete === true || args.frontmatter?.planning_complete === true,
+    proposal: args.intake_proposal } : text(name) ? { kind: "other" } : null;
+}
+function outcome(s, call, failed, value) {
+  // Never infer recovery from prose. Only a paired read has no mutation
+  // authority; a failed housekeeping save remains pending until this owning
+  // turn receives the same tool's actual committed receipt. Unpaired/unknown
+  // failures, other operations and lifecycle failures remain exclusions.
+  if (!failed) {
+    if (call?.kind === "housekeeping" && value?.status === "committed") s.housekeepingErrors.delete(call.name);
+    receipt(s, call, value);
+  } else {
+    if (call?.kind === "read") return;
+    if (call?.kind === "housekeeping") s.housekeepingErrors.add(call.name);
+    else s.interrupted = true;
+  }
 }
 function copilot(s, e, payload) {
   const d = e.data ?? {};
@@ -122,8 +219,9 @@ function copilot(s, e, payload) {
   }
   if (e.type === "tool.execution_complete") {
     const call = s.calls.get(d.toolCallId); s.calls.delete(d.toolCallId);
-    if (d.success === true && !d.result?.isError && d.interactionId === s.human) receipt(s, call, resultOf(d.result?.content));
-    if ((d.success === false || d.result?.isError) && d.interactionId === s.human && s.packets.size) s.interrupted = true;
+    if (d.interactionId === s.human) {
+      if (d.success === true || d.success === false) outcome(s, call, d.success === false || d.result?.isError === true, resultOf(d.result?.content));
+    }
   }
   if (e.type === "assistant.message" && d.interactionId === s.human && !d.toolRequests?.length) reply(s, d.content);
   if (e.type === "hook.end" && d.hookType === "agentStop" && d.output?.decision === "block" && text(d.output.reason) && d.output.reason.includes(TAG)) s.corrected = true;
@@ -162,8 +260,7 @@ function claude(s, e, payload) {
     if (block.type === "text" && text(block.text) && block.text.includes(TAG)) s.corrected = true;
     if (block.type !== "tool_result") continue;
     const call = s.calls.get(block.tool_use_id); s.calls.delete(block.tool_use_id);
-    if (!block.is_error) receipt(s, call, resultOf(block.content));
-    else if (s.packets.size) s.interrupted = true;
+    outcome(s, call, block.is_error === true, resultOf(block.content));
   }
 }
 async function checkDelivery({ host, payload, env = process.env }) {
@@ -208,16 +305,22 @@ async function checkDelivery({ host, payload, env = process.env }) {
     } finally { lines.close(); stream.destroy(); }
   } catch { return failure("transcript_unreadable"); }
   if (!s.envelope) return failure("foreign_session");
-  if (!s.human || s.interrupted) return { status: "not_delivery" };
-  if (s.packets.size === 0) return { status: s.sentCurrent ? "complete" : "not_delivery" };
+  if (!s.human || s.interrupted || s.housekeepingErrors.size) return { status: "not_delivery" };
+  if (!s.packets.size && !s.intakes.size && s.unavailableIntake.size) return failure("intake_packet_unavailable");
+  if (s.packets.size === 0 && s.intakes.size === 0) return { status: s.sentCurrent ? "complete" : "not_delivery" };
   if (host === "copilot" && (!s.currentHook || s.currentHook !== finalEndId)) return { status: "not_delivery" };
   const packets = [...s.packets.values()].map(x => x.packet);
   // Claude explicitly supplies this field because final transcript persistence can lag Stop.
   const final = host === "claude" ? payload.last_assistant_message : s.final;
   if (!text(final)) return failure("final_reply_unavailable");
-  if (hasEnding(final, packets)) return { status: "complete" };
+  const intakes = [...s.intakes.values()];
+  if ((!packets.length || hasEnding(final, packets)) && intakes.every(parts => hasIntake(final, parts))) return { status: "complete" };
   if (payload.stop_hook_active === true || s.corrected) return { status: "unverified", diagnostic: "correction_exhausted" };
+  const intakeText = intakes.map(parts => INTAKE_FIELDS.map((key, i) =>
+    `${["Outcome", "Assumptions", "Recommended decisions", "Completion checks"][i]}: ${parts[key]}`).join("\n\n")).join("\n\n");
   return { status: "correction", output: { decision: "block", reason:
-    `Restate only the final delivery reply. ${TAG} End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
+    intakes.length
+      ? `Restate only this existing proposal. ${TAG} Copy all four field contents below VERBATIM: do not paraphrase, shorten, or replace clauses. Retain existing proof${packets.length ? " and end with the existing delivery packet" : ""}. Human approval classification is unknown; do not assert Go is absent or reopen it. No tools, new questions, approval waits, implementation, review, commits, external effects or acceptance inference. This is the only correction; continue no further work.\n\n${intakeText}${packets.length ? "\n\n" + packets.flat().join("\n") : ""}`
+      : `Restate only the final delivery reply. ${TAG} End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
 }
 module.exports = { checkDelivery };

@@ -3,7 +3,7 @@
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/using-desk/SKILL.md"],
-  "reviewedSourceFingerprint": "b82006796f2cddf1cd04e7bff666fbea05d75bc7d95e1a04c944e07e8a82e974",
+  "reviewedSourceFingerprint": "827bccf213bac0f4800033959809ab0cfc55769529aecd1429c1ec76823c53b7",
   "requirements": [
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},
     {"id": "plain-human-input", "description": "Use normal conversation, never structured-question tools or forms; forms disrupt conversation (HX) and obscure whether judgment, permission or execution is needed (AX). Explain plain meaning, recommendation and concrete consequence before irreducible human input."},

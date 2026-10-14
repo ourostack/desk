@@ -107,11 +107,11 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     statusTimes.push(Date.now() - start)
     return JSON.parse(response.content[0].text)
   }
-  const current = async (root) => {
+  const current = async (root, requireSeam = false) => {
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
       const value = await status()
-      if (value.root?.path === root && value.local_db?.state === "available") return value
+      if (value.root?.path === root && value.local_db?.state === "available" && (!requireSeam || existsSync(marker))) return value
       if (value.root?.path && value.root.path !== root) {
         assert.equal(value.root.path, a, "only the still-admitted A context may be shown while B is unresolved")
         assert.equal(value.admission.phase, "resolving_inputs")
@@ -123,7 +123,10 @@ test(`actual MCP and controller processes retain 200 ms status/list/ping caps th
     }
     assert.fail(`no completed same-context status for ${root}; ${stderr}`)
   }
-  const first = await current(a)
+  // A cheap or cached same-context DB result can precede the later snapshot
+  // phase. Qualification requires the actual blocked phase, not just that
+  // earlier availability; keep the same readiness deadline and protocol caps.
+  const first = await current(a, true)
   assert.equal(first.write_scope.mode, "workspace")
   assert.ok(first.status_detail_from, "slow current detail must retain its real computation start")
   assert.ok(existsSync(marker), "qualification must traverse the real SQLite seam")

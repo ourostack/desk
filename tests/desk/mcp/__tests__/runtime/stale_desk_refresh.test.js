@@ -347,7 +347,7 @@ test("a refresh that succeeds is recorded as such, and a missing command as not_
   const f = await shimmed("count")
   t.after(() => reapProcessesUnder(f.stateDir))
   await runHarness(f, 4000)
-  assert.equal(await until(() => existsSync(path.join(f.stateDir, REFRESH_STAMP_FILE)) && JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8")).ok === true), true)
+  assert.equal(await until(() => existsSync(path.join(f.stateDir, REFRESH_STAMP_FILE)) && JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8")).ok === true && !existsSync(path.join(f.stateDir, REFRESH_CLAIM_FILE))), true)
   assert.equal(readFileSync(f.log, "utf8"), "run\n")
   assert.match(readFileSync(path.join(f.stateDir, "repairs.log"), "utf8"), /stale Desk refresh ran \(claude: claude plugin update desk@ourostack\); 3\.2\.0-alpha\.153 -> 3\.2\.0-alpha\.172/u)
   const missing = await shimmed("count")
@@ -361,9 +361,24 @@ test("a refresh that succeeds is recorded as such, and a missing command as not_
 test("a command that exits nonzero is recorded as failed", { skip: !posix }, async (t) => {
   const f = await shimmed("count")
   t.after(() => reapProcessesUnder(f.stateDir))
+  // The real runner publishes its terminal stamp before appending the repair
+  // log and releasing the claim. Hold that actual intermediate window open,
+  // rather than relying on a lucky ordering between the two processes.
+  const preload = path.join(f.dir, "delay-repair-log.cjs")
+  await fs.writeFile(preload, `
+const fs = require("node:fs")
+const append = fs.appendFileSync
+fs.appendFileSync = function(file, ...args) {
+  if (file === ${JSON.stringify(path.join(f.stateDir, "repairs.log"))}) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350)
+  }
+  return append.call(this, file, ...args)
+}
+`)
+  f.env = { ...f.env, NODE_OPTIONS: `${f.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`.trim() }
   await fs.writeFile(path.join(f.dir, "claude"), "#!/bin/sh\nexit 3\n", { mode: 0o755 })
   await runHarness(f, 4000)
-  assert.equal(await until(() => JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8")).ok === false), true)
+  assert.equal(await until(() => JSON.parse(readFileSync(path.join(f.stateDir, REFRESH_STAMP_FILE), "utf8")).ok === false && !existsSync(path.join(f.stateDir, REFRESH_CLAIM_FILE))), true)
   assert.match(readFileSync(path.join(f.stateDir, "repairs.log"), "utf8"), /nonzero_exit exit 3/u)
 })
 
