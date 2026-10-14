@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, writeFileSync, promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { pathToFileURL } from "node:url"
 import { factoryStateRoot, gitBlobSha, listMarkers, markDelivered, markRetracting, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
@@ -630,18 +631,51 @@ test("a derive process whose home is removed while it waits exits and leaves not
     assert.equal(typeof deriveFile, "function")
     await fs.utimes(marker.log_path, new Date(), new Date())
     const script = new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url).pathname
-    const child = spawn(process.execPath, [script, "derive", "--marker", file, "--wait-quiet", "3000"], { cwd: ctx.desk, env: ctx.env, stdio: "ignore", detached: true })
+    const ready = path.join(ctx.base, "deriver-waiting")
+    const preload = path.join(ctx.base, "observe-quiet-wait.mjs")
+    await fs.writeFile(preload, `
+import { writeFileSync } from "node:fs";
+import timers from "node:timers/promises";
+import { syncBuiltinESMExports } from "node:module";
+const timer = timers.setTimeout;
+let observed = false;
+timers.setTimeout = (ms, ...args) => {
+  if (!observed && ms > 0 && new Error().stack.includes("derive-run.js")) {
+    observed = true;
+    writeFileSync(${JSON.stringify(ready)}, "waiting");
+  }
+  return timer(ms, ...args);
+};
+syncBuiltinESMExports();
+`)
+    // Keep this fixture's source active while the child boots. An arbitrary
+    // 800 ms sleep raced journal/marker initialization under instrumentation,
+    // so it deleted the home before the wait this test is meant to exercise.
+    const heartbeat = setInterval(() => {
+      const now = new Date()
+      void fs.utimes(marker.log_path, now, now).catch(() => {})
+    }, 50)
+    const child = spawn(process.execPath, ["--import", pathToFileURL(preload).href, script, "derive", "--marker", file, "--wait-quiet", "3000"], { cwd: ctx.desk, env: ctx.env, stdio: "ignore", detached: true })
     const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })))
+    // The existing 15 s ceiling now also covers bootstrap, rather than starting
+    // after removal. No quiet-wait or worker-exit budget is increased.
+    const timer = setTimeout(() => process.kill(-child.pid, "SIGKILL"), 15000)
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800))
+      const deadline = Date.now() + 15000
+      while (!existsSync(ready) && child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      assert.equal(existsSync(ready), true, "remove the home only after the real deriver enters its quiet wait")
+      clearInterval(heartbeat)
       await fs.rm(ctx.base, { recursive: true, force: true })
-      const timer = setTimeout(() => process.kill(-child.pid, "SIGKILL"), 15000)
       const { signal } = await exited
       clearTimeout(timer)
       assert.equal(signal, null, "the worker must exit on its own once its home is gone")
       assert.equal(existsSync(ctx.base), false, "the worker must not recreate the removed home")
       assert.deepEqual(await waitForNoProcessesUnder(ctx.base, 2000), [])
     } finally {
+      clearInterval(heartbeat)
+      clearTimeout(timer)
       try { process.kill(-child.pid, "SIGKILL") } catch { /* already gone */ }
       await reapProcessesUnder(ctx.base)
     }
