@@ -1,3 +1,9 @@
+<!-- ourostack:brand:start -->
+<p align="center">
+  <a href="https://github.com/ourostack"><img src="https://raw.githubusercontent.com/ourostack/.github/main/brand/desk.png" alt="Desk" width="160" height="160"></a>
+</p>
+<!-- ourostack:brand:end -->
+
 # Desk
 
 Desk gives long-running engineering agents durable work state and authority. Tracks, tasks, friction notes and lessons live in the operator's desk, a Git repository, so work survives sessions, machines and harnesses. An MCP server provides desk CRUD and search, and lifecycle skills keep task state current as work moves.
