@@ -18,7 +18,7 @@ async function fixture(ctx, host, options = {}) {
     ? { sessionId: ID, cwd: ctx.desk, timestamp: Date.parse(END), transcriptPath: log, stopReason: "end_turn", stop_hook_active: false }
     : { session_id: ID, cwd: ctx.desk, transcript_path: log, hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: options.reply ?? "Implementation passed." }
   const delivery = options.result ?? RESULT
-  const args = { track: "portable-tools", slug: "integrity-manifests", status: "done", evidence: { kind: "commit", ref: REF } }
+  const args = options.args ?? { track: "portable-tools", slug: "integrity-manifests", status: "done", evidence: { kind: "commit", ref: REF } }
   const name = options.tool ?? (host === "copilot" ? "desk-task_update" : "mcp__desk__task_update")
   const reply = options.reply ?? "Implementation passed."
   const lines = host === "copilot" ? [
@@ -43,6 +43,97 @@ async function fixture(ctx, host, options = {}) {
 async function check(f) {
   assert.equal(typeof checkDelivery, "function", "the existing stop wrapper's bounded delivery helper must exist")
   return checkDelivery(f)
+}
+const INTAKE_PARTS = { outcome: "Inspect fixture bytes.", assumptions: "Read-only Python with no followed links.", recommended_decisions: "Sorted table and grand total; all choices settled.", completion_checks: "Runnable CLI, documentation, nested empty link and error tests." }
+const INTAKE_ARGS = { track: "portable-tools", slug: "integrity-manifests", focus: true, intake_proposal: INTAKE_PARTS }
+const INTAKE_RESULT = { status: "created", work_context: { status: "drafting", planning_complete: false }, alignment_packet: { kind: "intake_proposal", boundary: "awaiting_intake", authority: "unknown", task: "portable-tools/integrity-manifests", parts: INTAKE_PARTS } }
+for (const host of ["copilot", "claude"]) {
+  const tool = host === "copilot" ? "desk-task_create" : "mcp__desk__task_create"
+  test(`${host}: exact proposal correction presents actual contents without inventing approval`, () => scratch(async ctx => {
+    const result = await check(await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT }))
+    assert.equal(result.status, "correction")
+    for (const value of Object.values(INTAKE_PARTS)) assert.ok(result.output.reason.includes(value))
+    assert.match(result.output.reason, /No tools, new questions, approval waits/iu)
+    assert.doesNotMatch(result.output.reason, /wait for go|say go|no go exists|not approved/iu)
+  }))
+  test(`${host}: proposal headings alone fail, actual proportional contents pass`, () => scratch(async ctx => {
+    for (const reply of ["Outcome\nAssumptions\nRecommended decisions\nCompletion checks", Object.values(INTAKE_PARTS).slice(0, 3).join("\n")]) {
+      assert.equal((await check(await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, reply }))).status, "correction")
+    }
+    assert.equal((await check(await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, reply: Object.values(INTAKE_PARTS).map(x => `**${x}**`).join("\n\n") }))).status, "complete")
+  }))
+  test(`${host}: active correction exhausts the same intake and delivery budget`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT })
+    f.payload.stop_hook_active = true
+    assert.equal((await check(f)).diagnostic, "correction_exhausted")
+  }))
+  test(`${host}: missing proposal instrumentation is unavailable, never a correspondence pass`, () => scratch(async ctx => {
+    const result = await check(await fixture(ctx, host, { tool, args: { ...INTAKE_ARGS, intake_proposal: undefined }, result: { status: "created", work_context: INTAKE_RESULT.work_context, alignment_packet_unavailable: "proposal_not_supplied" } }))
+    assert.deepEqual(result, { status: "unavailable", diagnostic: "intake_packet_unavailable" })
+  }))
+  test(`${host}: an intake correction cannot buy a subsequent delivery correction in this turn`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, edit(lines) {
+      if (host === "copilot") lines.splice(4, 0,
+        { type: "hook.end", timestamp: END, data: { hookType: "agentStop", output: { decision: "block", reason: "[DESK_DELIVERY_CORRECTION] present actual proposal only" } } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "delivered", toolName: "desk-task_update", arguments: { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug, status: "done" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "delivered", success: true, interactionId: "human-1", result: { content: JSON.stringify(RESULT) } } })
+      else lines.splice(3, 0,
+        { type: "system", sessionId: ID, timestamp: END, subtype: "stop_hook_error", content: "[DESK_DELIVERY_CORRECTION] present actual proposal only" },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "delivered", name: "mcp__desk__task_update", input: { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug, status: "done" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "delivered", content: JSON.stringify(RESULT) }] } })
+    } })
+    assert.deepEqual(await check(f), { status: "unverified", diagnostic: "correction_exhausted" })
+  }))
+  for (const context of ["processing", "planning complete", "parked", "foreign", "missing part", "claimed approval"]) {
+    test(`${host}: intake excludes ${context} before correction is enabled`, () => scratch(async ctx => {
+      const args = { ...INTAKE_ARGS }
+      const result = structuredClone(INTAKE_RESULT)
+      if (context === "processing") args.status = "processing"
+      if (context === "planning complete") args.planning_complete = true
+      if (context === "parked") args.focus = false
+      if (context === "foreign") result.alignment_packet.task = "other/task"
+      if (context === "missing part") delete result.alignment_packet.parts.completion_checks
+      if (context === "claimed approval") result.alignment_packet.authority = "unapproved"
+      assert.equal((await check(await fixture(ctx, host, { tool, args, result }))).status, "not_delivery")
+    }))
+  }
+  test(`${host}: prior recorded execution overrides a current drafting proposal without reading Go prose`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, edit(lines) {
+      if (host === "copilot") lines.splice(2, 0,
+        { type: "tool.execution_start", timestamp: START, data: { toolCallId: "authority", toolName: "desk-task_update", arguments: { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug, frontmatter: { planning_complete: true } } } },
+        { type: "tool.execution_complete", timestamp: START, data: { toolCallId: "authority", interactionId: "human-1", success: true, result: { content: '{"status":"updated"}' } } },
+        { type: "user.message", timestamp: START, data: { content: "Resume this authorized task.", interactionId: "human-1" } })
+      else lines.splice(1, 0,
+        { type: "assistant", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_use", id: "authority", name: "mcp__desk__task_update", input: { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug, frontmatter: { planning_complete: true } } }] } },
+        { type: "user", sessionId: ID, timestamp: START, message: { content: [{ type: "tool_result", tool_use_id: "authority", content: '{"status":"updated"}' }] } },
+        { type: "user", sessionId: ID, timestamp: START, origin: { kind: "human" }, message: { content: "Resume this authorized task." } })
+    } })
+    assert.equal((await check(f)).status, "not_delivery")
+  }))
+  for (const boundary of ["prior turn", "progress", "child", "error", "prior correction"]) {
+    test(`${host}: intake boundary ${boundary} cannot start a fresh approval/correction loop`, () => scratch(async ctx => {
+      const f = await fixture(ctx, host, { tool, args: INTAKE_ARGS, result: INTAKE_RESULT, edit(lines) {
+        if (host === "copilot") {
+          if (boundary === "child") lines[3].data.agentId = "child"
+          else if (boundary === "error") lines.splice(4, 0, { type: "session.error", timestamp: END, data: {} })
+          else if (boundary === "prior turn") lines.splice(4, 0, { type: "user.message", timestamp: END, data: { content: "A new turn.", interactionId: "human-1" } })
+          else if (boundary === "prior correction") lines.splice(4, 0, { type: "hook.end", timestamp: END, data: { hookType: "agentStop", output: { decision: "block", reason: "[DESK_DELIVERY_CORRECTION]" } } })
+          else lines.splice(4, 0,
+            { type: "tool.execution_start", timestamp: END, data: { toolCallId: "progress", toolName: "desk-task_update", arguments: { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug, status: "processing" } } },
+            { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "progress", success: true, interactionId: "human-1", result: { content: JSON.stringify(boundary === "progress" ? RESULT : {}) } } })
+        } else {
+          if (boundary === "child") lines[2].isSidechain = true
+          else if (boundary === "error") lines.splice(3, 0, { type: "system", sessionId: ID, timestamp: END, subtype: "api_error" })
+          else if (boundary === "prior turn") lines.splice(3, 0, { type: "user", sessionId: ID, timestamp: END, origin: { kind: "human" }, message: { content: "A new turn." } })
+          else if (boundary === "prior correction") lines.splice(3, 0, { type: "system", sessionId: ID, timestamp: END, subtype: "stop_hook_error", content: "[DESK_DELIVERY_CORRECTION]" })
+          else lines.splice(3, 0,
+            { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "progress", name: "mcp__desk__task_update", input: { track: INTAKE_ARGS.track, slug: INTAKE_ARGS.slug, status: "processing" } }] } },
+            { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "progress", content: "{}" }] } })
+        }
+      } })
+      assert.equal((await check(f)).status, boundary === "prior correction" ? "unverified" : "not_delivery")
+    }))
+  }
 }
 for (const replay of [false, true]) {
   test(`Copilot: primary memory rollover retains current human delivery (${replay ? "archive replay" : "done only"})`, () => scratch(async ctx => {

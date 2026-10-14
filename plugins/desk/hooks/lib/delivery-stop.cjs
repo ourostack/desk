@@ -12,7 +12,8 @@ const TAG = "[DESK_DELIVERY_CORRECTION]";
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_update|task_archive|task_signoff)$/u;
+const DESK = /^(?:desk-|mcp__[^ ]*desk[^ ]*__)(task_create|task_update|task_archive|task_signoff)$/u;
+const INTAKE_FIELDS = ["outcome", "assumptions", "recommended_decisions", "completion_checks"];
 const text = value => typeof value === "string";
 const plain = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const clean = value => value.replace(/(\*\*|__)(.+?)\1/gu, "$2").replace(/`([^`]+)`/gu, "$1").trim();
@@ -28,6 +29,33 @@ function packetOf(value) {
   const p = value.signoff_packet;
   return Array.isArray(p) && p.length === 3 && p.every(x => text(x) && x.length <= 2000 && !/[\r\n]/u.test(x))
     && /^Asked: \S/u.test(p[0]) && /^Delivered: \S/u.test(p[1]) && p[2] === "Accept or send back?" ? p : null;
+}
+function intakeOf(value, call) {
+  const p = value.alignment_packet;
+  const context = value.work_context;
+  if (call.kind !== "task_create" || call.focus !== true || value.status !== "created"
+    || (call.status && call.status !== "drafting") || call.planningComplete
+    || !plain(context) || context.status !== "drafting" || context.planning_complete !== false
+    || !plain(p) || p.kind !== "intake_proposal" || p.boundary !== "awaiting_intake"
+    || p.authority !== "unknown" || p.task !== call.target || !plain(p.parts) || !plain(call.proposal)
+    || Object.keys(p.parts).length !== INTAKE_FIELDS.length
+    || INTAKE_FIELDS.some(key => !text(p.parts[key]) || !p.parts[key].trim()
+      || p.parts[key].length > 2000 || p.parts[key].includes("\0")
+      || !text(call.proposal[key]) || p.parts[key] !== call.proposal[key].trim())) return null;
+  return p.parts;
+}
+function hasIntake(reply, parts) {
+  if (!text(reply)) return false;
+  const fold = value => clean(value).replace(/^[ \t]*(?:#{1,6}|[-*])\s+/gmu, "").replace(/\s+/gu, " ").trim();
+  const body = fold(reply);
+  let after = 0;
+  return INTAKE_FIELDS.every(key => {
+    const value = fold(parts[key]);
+    const at = body.indexOf(value, after);
+    if (at < 0) return false;
+    after = at + value.length;
+    return true;
+  });
 }
 function hasEnding(reply, packets) {
   if (!text(reply)) return false;
@@ -51,16 +79,35 @@ function targetOf(args) {
 }
 const failure = reason => ({ status: "unavailable", diagnostic: reason });
 function state() {
-  return { calls: new Map(), packets: new Map(), delivered: new Set(), sentCurrent: false, human: null,
+  return { calls: new Map(), packets: new Map(), intakes: new Map(), unavailableIntake: new Set(), execution: new Set(), delivered: new Set(), sentCurrent: false, human: null,
     corrected: false, interrupted: false, rollover: false, envelope: false, final: null, currentHook: null };
 }
 function reset(s, human) {
-  s.calls.clear(); s.packets.clear(); s.sentCurrent = false;
+  s.calls.clear(); s.packets.clear(); s.intakes.clear(); s.unavailableIntake.clear(); s.sentCurrent = false;
   s.human = human; s.corrected = false; s.interrupted = false; s.rollover = false; s.final = null;
 }
 function receipt(s, call, value) {
   if (!call || !value) return;
   if (["blocked", "collaborating", "paused"].includes(call.status)) s.interrupted = true;
+  // Existing recorded execution excludes intake; it never proves a human
+  // agreement. Keep that conservative exclusion across real human turns.
+  if (call.planningComplete || value.work_context?.planning_complete === true
+    || (call.status && call.status !== "drafting")
+    || (value.work_context?.status && value.work_context.status !== "drafting")) s.execution.add(call.target);
+  if (s.execution.has(call.target) || call.kind !== "task_create") {
+    s.intakes.delete(call.target); s.unavailableIntake.delete(call.target);
+  }
+  if (call.kind === "task_create") {
+    const proposal = intakeOf(value, call);
+    if (proposal && !s.execution.has(call.target)) {
+      s.intakes.clear(); s.intakes.set(call.target, proposal);
+      s.unavailableIntake.clear();
+    } else if (!s.execution.has(call.target) && call.focus === true
+      && value.alignment_packet_unavailable === "proposal_not_supplied") {
+      s.unavailableIntake.add(call.target);
+    }
+    return;
+  }
   if (call.kind === "task_signoff" || (call.kind === "task_update" && call.status && call.status !== "done")) {
     if (call.kind === "task_update" || value.signoff?.state === "refused") {
       for (const key of s.delivered) if (key.startsWith(`${call.target}\n`)) s.delivered.delete(key);
@@ -79,6 +126,9 @@ function receipt(s, call, value) {
 function reply(s, content) {
   if (!text(content) || !content.trim()) return;
   s.final = content;
+  for (const [target, parts] of s.intakes) if (hasIntake(content, parts)) {
+    s.intakes.delete(target); s.sentCurrent = true;
+  }
   if (s.packets.size && hasEnding(content, [...s.packets.values()].map(x => x.packet))) {
     for (const held of s.packets.values()) s.delivered.add(held.key);
     s.sentCurrent = true;
@@ -93,7 +143,9 @@ function reply(s, content) {
 function callOf(name, args) {
   const match = text(name) ? DESK.exec(name) : null;
   const target = targetOf(args);
-  return match && target ? { kind: match[1], target, status: args.status ?? args.frontmatter?.status } : null;
+  return match && target ? { kind: match[1], target, status: args.status ?? args.frontmatter?.status,
+    focus: args.focus, planningComplete: args.planning_complete === true || args.frontmatter?.planning_complete === true,
+    proposal: args.intake_proposal } : null;
 }
 function copilot(s, e, payload) {
   const d = e.data ?? {};
@@ -123,7 +175,7 @@ function copilot(s, e, payload) {
   if (e.type === "tool.execution_complete") {
     const call = s.calls.get(d.toolCallId); s.calls.delete(d.toolCallId);
     if (d.success === true && !d.result?.isError && d.interactionId === s.human) receipt(s, call, resultOf(d.result?.content));
-    if ((d.success === false || d.result?.isError) && d.interactionId === s.human && s.packets.size) s.interrupted = true;
+    if ((d.success === false || d.result?.isError) && d.interactionId === s.human && (s.packets.size || s.intakes.size)) s.interrupted = true;
   }
   if (e.type === "assistant.message" && d.interactionId === s.human && !d.toolRequests?.length) reply(s, d.content);
   if (e.type === "hook.end" && d.hookType === "agentStop" && d.output?.decision === "block" && text(d.output.reason) && d.output.reason.includes(TAG)) s.corrected = true;
@@ -163,7 +215,7 @@ function claude(s, e, payload) {
     if (block.type !== "tool_result") continue;
     const call = s.calls.get(block.tool_use_id); s.calls.delete(block.tool_use_id);
     if (!block.is_error) receipt(s, call, resultOf(block.content));
-    else if (s.packets.size) s.interrupted = true;
+    else if (s.packets.size || s.intakes.size) s.interrupted = true;
   }
 }
 async function checkDelivery({ host, payload, env = process.env }) {
@@ -209,15 +261,21 @@ async function checkDelivery({ host, payload, env = process.env }) {
   } catch { return failure("transcript_unreadable"); }
   if (!s.envelope) return failure("foreign_session");
   if (!s.human || s.interrupted) return { status: "not_delivery" };
-  if (s.packets.size === 0) return { status: s.sentCurrent ? "complete" : "not_delivery" };
+  if (!s.packets.size && !s.intakes.size && s.unavailableIntake.size) return failure("intake_packet_unavailable");
+  if (s.packets.size === 0 && s.intakes.size === 0) return { status: s.sentCurrent ? "complete" : "not_delivery" };
   if (host === "copilot" && (!s.currentHook || s.currentHook !== finalEndId)) return { status: "not_delivery" };
   const packets = [...s.packets.values()].map(x => x.packet);
   // Claude explicitly supplies this field because final transcript persistence can lag Stop.
   const final = host === "claude" ? payload.last_assistant_message : s.final;
   if (!text(final)) return failure("final_reply_unavailable");
-  if (hasEnding(final, packets)) return { status: "complete" };
+  const intakes = [...s.intakes.values()];
+  if ((!packets.length || hasEnding(final, packets)) && intakes.every(parts => hasIntake(final, parts))) return { status: "complete" };
   if (payload.stop_hook_active === true || s.corrected) return { status: "unverified", diagnostic: "correction_exhausted" };
+  const intakeText = intakes.map(parts => INTAKE_FIELDS.map((key, i) =>
+    `${["Outcome", "Assumptions", "Recommended decisions", "Completion checks"][i]}: ${parts[key]}`).join("\n\n")).join("\n\n");
   return { status: "correction", output: { decision: "block", reason:
-    `Restate only the final delivery reply. ${TAG} End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
+    intakes.length
+      ? `Restate only this existing proposal. ${TAG} Present all actual contents below, retaining existing proof${packets.length ? " and ending with the existing delivery packet" : ""}. Human approval classification is unknown; do not assert Go is absent or reopen it. No tools, new questions, approval waits, implementation, review, commits, external effects or acceptance inference. This is the only correction; continue no further work.\n\n${intakeText}${packets.length ? "\n\n" + packets.flat().join("\n") : ""}`
+      : `Restate only the final delivery reply. ${TAG} End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
 }
 module.exports = { checkDelivery };
