@@ -137,7 +137,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     }
     return "written";
   } catch {
-    // Hooks cannot veto lifecycle events. The retained marker is the retry path.
+    // Accounting remains fail-open. The separate wrapper reply check never changes these markers.
     return "unavailable";
   }
 }
@@ -159,10 +159,23 @@ async function runBoundedHook(host, input, entry) {
   // A separate process makes the unchanged deadline effective even during synchronous OS calls.
   await new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, host, "--factory-worker"], {
-      stdio: ["pipe", "ignore", "ignore"], windowsHide: true, env: process.env,
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: process.env,
     });
+    let output = "", diagnostic = "";
+    child.stdout.on("data", chunk => { if (output.length < 16384) output += chunk; });
+    child.stderr.on("data", chunk => { if (diagnostic.length < 2048) diagnostic += chunk; });
     const timer = setTimeout(() => child.kill("SIGKILL"), Math.max(0, deadline - Date.now()));
-    const finish = () => { clearTimeout(timer); resolve(); };
+    const finish = (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        if (diagnostic) process.stderr.write(diagnostic.slice(0, 2048));
+        try {
+          const value = JSON.parse(output);
+          if (value?.decision === "block" && typeof value.reason === "string" && value.reason.includes("[DESK_DELIVERY_CORRECTION]")) process.stdout.write(JSON.stringify(value));
+        } catch { /* Accounting produces no stdout when no correction is due. */ }
+      } else process.stderr.write("[desk-delivery] unverified: hook_worker_unavailable\n");
+      resolve();
+    };
     child.once("error", finish);
     child.once("close", finish);
     child.stdin.on("error", () => {});
@@ -173,9 +186,17 @@ async function runBoundedHook(host, input, entry) {
 // The command line of the entry file `hooks/factory-end.cjs`, which is the file hosts register and the worker process runs again.
 function main(entry, argv = process.argv, stdin = process.stdin) {
   const work = argv[3] === "--factory-worker"
-    ? readInput(stdin).then((payload) => runHook({ host: argv[2], payload }))
+    ? readInput(stdin).then(async (payload) => {
+      const [_, delivery] = await Promise.all([
+        runHook({ host: argv[2], payload }),
+        checkDelivery({ host: argv[2], payload }).catch(() => ({ diagnostic: "guard_unavailable" })),
+      ]);
+      if (delivery.diagnostic) process.stderr.write(`[desk-delivery] unverified: ${delivery.diagnostic}\n`);
+      if (delivery.output) process.stdout.write(JSON.stringify(delivery.output));
+    })
     : runBoundedHook(argv[2], stdin, entry);
   work.then(() => process.exit(0), () => process.exit(0));
 }
 
+const checkDelivery = options => require("./delivery-stop.cjs").checkDelivery(options);
 module.exports = { readInput, runHook, launch, main };

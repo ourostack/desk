@@ -40,6 +40,33 @@ function subsection(file, heading) {
 }
 
 // Work orchestration, the Superpowers seam and the task lifecycle.
+contract("alignment presents the completion checks before asking for go", () => {
+  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
+  assert.match(foundation, /Before go, state the outcome, assumptions, recommended decisions and completion checks together; get explicit go/iu);
+});
+contract("delivery has a literal three-line response contract", () => {
+  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
+  assert.match(foundation, /Asked: <[\s\S]+Delivered: <[\s\S]+Accept or send back\?/u);
+  assert.match(foundation, /Required format, not an optional follow-up/iu);
+  assert.match(foundation, /Put evidence in Delivered/iu);
+});
+contract("delivery owners preserve the packet labels rather than paraphrasing its shape", () => {
+  const lifecycle = text("plugins/desk/skills/task-lifecycle/SKILL.md");
+  const style = text("plugins/desk/skills/interaction-style/SKILL.md");
+  assert.doesNotMatch(lifecycle, /three lines in your own words/iu);
+  for (const owner of [lifecycle, style]) {
+    assert.match(owner, /Asked:[\s\S]+Delivered:[\s\S]+Accept or send back\?/u);
+    assert.match(owner, /labels[\s\S]+wording/iu);
+  }
+});
+contract("the first-response owner carries requirement evidence invalidation before edits", () => {
+  const response = subsection("plugins/desk/skills/interaction-style/SKILL.md", "Respond before editing");
+  assert.match(response, /first reply[\s\S]+test runs[\s\S]+review[\s\S]+invalidates[\s\S]+none[\s\S]+task card/iu);
+});
+contract("a changed requirement names the previous check and its missing coverage", () => {
+  const foundation = text("plugins/desk/skills/using-desk/SKILL.md");
+  assert.match(foundation, /name checks the change invalidates, or say none has run[\s\S]+same durable task[\s\S]+rerun/iu);
+});
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
   "Desk alpha delegates engineering without repeating approval",
@@ -1042,7 +1069,8 @@ contract("session-start asks the factory contribution question once, in plain wo
   assert.match(step, /consent --store \$\{store\} --contribute yes --account <login>/u);
   assert.match(step, /consent --store \$\{store\} --contribute no/u);
   assert.match(step, /a no is a decision too/u);
-  assert.match(step, /never comes before the work the operator asked for[\s\S]+one short line at the end of your reply/u);
+  assert.match(step, /never comes before the work the operator asked for[\s\S]+defer the notice to a later turn and preserve the required sign-off/u);
+  assert.match(step, /raise it at most once as this statement/u);
   assert.match(step, /if \(!consentUndecided\(factory, noninteractive\)\) return \[\]/u);
   assert.doesNotMatch(step, /consent\.json/u, "the script records consent only through factory.js");
   assert.match(step, /never assume gh's active account/u);
@@ -1486,7 +1514,7 @@ requires(
 requires(
   "plugins/desk/skills/archive-workflow/SKILL.md",
   "archive-workflow keeps the sign-off lines when the archive is the last tool call",
-  /does not replace the sign-off ask: `task_archive` on a card that is already `done` answers without the three sign-off lines[^\n]+still ends with the lines `task_update` returned/u,
+  /`task_archive` preserves an unsigned, evidenced delivery's three sign-off lines[^\n]+carry those literal lines as a required next action through any compaction or handoff; never make them optional/u,
 );
 contract("the question-form rule names each host's tool where the skills own it, and session start asks in a sentence", () => {
   assert.match(subsection("plugins/desk/skills/interaction-style/SKILL.md", "No question forms"), /`AskUserQuestion` on Claude Code, `ask_user` on the Copilot CLI[^\n]+write the question as a sentence in your reply, including the resume-or-start question at session start/u);

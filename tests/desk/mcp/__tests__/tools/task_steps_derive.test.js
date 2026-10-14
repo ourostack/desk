@@ -92,6 +92,17 @@ test("a delegated step follows its card: done is delivered, blocked is blocked, 
   assert.equal((await rows(file)).stuck, "in progress")
 })
 
+test("a readable delegated card with no status stays in progress rather than proving delivery", async () => {
+  const { root, file } = await newCard("| a | — | widgets | pending | task:t/card-legacy |")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "card-legacy", title: "Legacy" } })
+  const delegated = path.join(root, "t", "card-legacy", "task.md")
+  await fs.writeFile(delegated, (await fs.readFile(delegated, "utf8")).replace(/^status: drafting\n/mu, ""))
+  const result = await update(root, note)
+  assert.deepEqual(await rows(file), { a: "in progress" })
+  assert.deepEqual(result.steps_refreshed, ["a: pending -> in progress"])
+  assert.equal(result.steps_notes, undefined)
+})
+
 test("dropped steps and blocked steps that point at a PR are left alone", async () => {
   const { root, file } = await newCard(`| a | — | widgets | dropped | no longer needed (was: ${url(1)}) |\n| b | — | widgets | blocked | waits on infra (was: ${url(2)}) |\n| c | — | widgets | dropped | task:t/anything |`)
   const fake = github({ 1: { merged: true, labels: ["released"] }, 2: { merged: true, labels: ["released"] } })

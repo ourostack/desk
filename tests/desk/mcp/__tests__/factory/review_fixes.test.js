@@ -140,7 +140,9 @@ test("I4 an actual activation FIFO cannot hold the end hook past its deadline", 
   })
   assert.equal(result.status, 0, String(result.error))
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr, "")
+  // This legacy accounting fixture has no admitted human-turn envelope. The
+  // reply guard must disclose that it did not verify delivery, without blocking.
+  assert.equal(result.stderr, "[desk-delivery] unverified: foreign_session\n")
   assert.ok(performance.now() - start < 2000)
 }))
 
@@ -173,7 +175,7 @@ test("I4 the hook terminates and reaps its exact worker even when that worker bl
   })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr, "")
+  assert.equal(result.stderr, "[desk-delivery] unverified: hook_worker_unavailable\n")
   const pid = Number(await fs.readFile(receipt, "utf8"))
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
   assert.ok(performance.now() - start < 2000)

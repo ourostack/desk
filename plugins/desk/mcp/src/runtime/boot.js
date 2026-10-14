@@ -896,7 +896,7 @@ const consentUndecided = (factory, noninteractive) => factory?.consent === "unde
 // The command an agent runs when it tells the operator about the store, so that the boot of a later session does not hand the sentence
 // out again (`consent-mentioned.js`). A reply ends the turn, so the command comes before the reply that carries the sentence; a command
 // that fails costs nothing but a repeat in a later session, so it is never retried and never raised with the operator.
-const mentionedStep = (store, cli) => `In the same turn, just before the reply that ends with it, run \`node ${cli} consent --store ${store} --mentioned yes\`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it. If you already said the sentence in this session, do not say it again. A child agent never says it and never runs the command.`
+const mentionedStep = (store, cli) => `In the same turn, just before the reply that includes it, run \`node ${cli} consent --store ${store} --mentioned yes\`, so that no later session says it again; if the command fails or is refused, say the sentence anyway, do not retry and do not mention it. If you already said the sentence in this session, do not say it again. A child agent never says it and never runs the command.`
 
 // The whole consent block once the operator was told: the question is asked once at setup, so nothing is raised again.
 function factoryMentionedLine(factory, pluginRoot) {
@@ -910,7 +910,7 @@ function factoryInstructions(factory, pluginRoot, { noninteractive, mentioned })
   const store = factory.store
   const cli = path.join(pluginRoot, "mcp", "scripts", "factory.js")
   return [
-    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. Afterwards raise it at most once, as one short line at the end of your reply ("Desk can contribute measurement data about your finished tasks to ${store}; want the details?"), never as its own decision group, and only if the operator is in the conversation. ${mentionedStep(store, cli)} If they say yes to hearing it, find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
+    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. Otherwise, only if the operator is in the conversation, raise it at most once as this statement: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." ${mentionedStep(store, cli)} Only if they ask for 'factory details' (or ask what is sent), find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
     `With result account_found, ask this, naming that account as the login: "${FACTORY_QUESTION(store, "<login>")}" With no_account_can_deliver, do not ask: say in one line that no signed-in GitHub account can open pull requests on ${store} (give each account's reason), and that signing in a personal account with \`gh auth login\` lets a later session ask.`,
     `Record the answer only with \`node ${cli} consent --store ${store} --contribute yes --account <login>\` or \`node ${cli} consent --store ${store} --contribute no\`; a no is a decision too and is never asked again.`,
   ]
@@ -1049,7 +1049,7 @@ function remoteRepoInstruction(names, root) {
 function factoryTextLine(factory, pluginRoot) {
   const store = factory.store
   const details = path.join(pluginRoot, "skills", "session-start", "details.md")
-  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, end your reply with this one plain sentence, as a statement and never a question: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." Say it once, and ask nothing. ${mentionedStep(store, path.join(pluginRoot, "mcp", "scripts", "factory.js"))} Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
+  return `Factory consent is undecided for ${store}. Only after the operator's work is done, and only if they are in the conversation, raise this statement once: "Desk can contribute measurement data about finished tasks to ${store}; say 'factory details' to see what it sends." If this reply delivers a task, defer the notice to a later turn and preserve the required sign-off. ${mentionedStep(store, path.join(pluginRoot, "mcp", "scripts", "factory.js"))} Only if they then say 'factory details' (or ask what is sent), follow "Factory consent" in ${details}; the script is \`node ${path.join(pluginRoot, "mcp", "scripts", "factory.js")}\`.`
 }
 
 // The instructions as `{ text, plain }` pairs: `text` is what `--json` carries, `plain` the shorter wording the text boot

@@ -191,7 +191,7 @@ test("state-branch options cannot override undeclared branch policy", async () =
 
 // A fake server that answers every request, after `statusDelayMs` for desk_status, and answers task_update after `updateDelayMs`
 // (never, when it is null). It records each task_update it receives and applies an effect before answering.
-function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch }) {
+function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch, onStatus }) {
   return async () => {
     const toServer = new PassThrough()
     const fromServer = new PassThrough()
@@ -200,10 +200,13 @@ function fakeServer(root, { statusDelayMs = 0, updateDelayMs = null, onDispatch 
       const request = JSON.parse(chunk.toString())
       if (!request.id) return
       if (request.method === "tools/list") return reply(request.id, { tools: [{ name: "task_update" }] }, 0)
-      if (request.params?.name === "desk_status") return reply(request.id, { content: [{ type: "text", text: JSON.stringify({
+      if (request.params?.name === "desk_status") {
+        onStatus?.()
+        return reply(request.id, { content: [{ type: "text", text: JSON.stringify({
         state: "ready", root: { valid: true, path: root }, write_scope: { mode: "workspace", person: null, relative_path: "." },
         sync: "no remote configured",
-      }) }] }, statusDelayMs)
+        }) }] }, statusDelayMs)
+      }
       if (request.params?.name === "task_update") {
         onDispatch()
         writeFileSync(path.join(root, "applied.txt"), "effect before answer")
@@ -251,16 +254,23 @@ test("the whole run ends within its total budget, which caps the dispatched call
   const root = fixture()
   let dispatches = 0
   const { runRecovery } = await import("../../../../../plugins/desk/mcp/scripts/local-recovery.js")
-  // Startup spends 300 ms; the write would answer 300 ms after dispatch, inside its own 2 s budget, but the run's 500 ms total ends first.
-  const started = Date.now()
+  // Advance the budget clock by exactly 300 ms at preflight. Real sleeping made
+  // this test refuse before dispatch when instrumented Git/setup spent the
+  // remaining budget on a loaded host. Keep all budgets and the real elapsed
+  // ceiling: the write's real 300 ms answer must lose to its capped 200 ms timer.
+  const clockStart = Date.now()
+  let clock = clockStart
+  t.mock.method(Date, "now", () => clock)
+  const started = performance.now()
   const result = await runRecovery({
     argv: args(root), env: env(), cwd: root, input: input(update), timeoutMs: 400, dispatchTimeoutMs: 2000, totalTimeoutMs: 500,
-    launch: fakeServer(root, { statusDelayMs: 300, updateDelayMs: 300, onDispatch: () => dispatches++ }),
+    launch: fakeServer(root, { onStatus: () => { clock = clockStart + 300 }, updateDelayMs: 300, onDispatch: () => dispatches++ }),
   })
   assert.equal(dispatches, 1)
   assert.equal(result.report.code, "timeout", JSON.stringify(result.report))
   assert.equal(result.report.effects.mutation, "unknown")
-  assert.ok(Date.now() - started < 1500, "the run ended near its 500 ms total, not after the write's 2 s")
+  assert.equal(readFileSync(path.join(root, "applied.txt"), "utf8"), "effect before answer")
+  assert.ok(performance.now() - started < 1500, "the run ended near its 500 ms total, not after the write's 2 s")
 })
 
 // task_update used to write such a card and skip the commit, and the recovery reported `commit_not_observed`; it now commits the card

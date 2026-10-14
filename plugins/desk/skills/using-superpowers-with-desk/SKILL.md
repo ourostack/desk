@@ -1,6 +1,6 @@
 ---
 name: using-superpowers-with-desk
-description: Map an existing Desk task, approval, plan and progress record onto one pristine Superpowers entry and an explicit artifact map. Invoke at the start of engineering work, at a reconciled resume, or at a material redesign.
+description: Use for any new or resumed engineering work on a Desk, before invoking brainstorming or another Superpowers skill. Select the pristine provider entry from the task's existing approval and map its artifacts. Also use at material redesign; never start a second lifecycle or approval round.
 ---
 
 # Using Superpowers with Desk
@@ -45,6 +45,8 @@ Superpowers' `writing-plans` is a skill that writes a plan file. It is not the h
 ## Authority carried into the provider
 
 Prior approval remains valid; do not reopen it without a scope change.
+
+When the operator delegates a whole outcome, their explicit go authorizes drafting and reviewing the provider's design and plan within that outcome. Written design and plan review remain required, but the agent owns them: use the provider's engineering checks, not another operator approval for each document. The provider's first understanding note is the Desk alignment message governed by `using-desk` "Alignment, then ownership". An approval of an idea without go is still alignment. Preserve a human-only artifact approval when the operator explicitly requested it, and return for changed scope or missing authority, not because an authorized artifact did not exist at go.
 
 Delegation remains limited by the recorded authority.
 

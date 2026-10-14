@@ -268,6 +268,23 @@ test("archiving a card that already carries a reason asks again: the link is fil
   assert.equal(Object.hasOwn(archived, "factory_report_unavailable"), false)
 }))
 
+test("archiving a returned delivery as cancelled still reports an existing factory link refill", () => scratch(async ({ base, desk, env: scratchEnv }) => {
+  const env = await hostEnv(base, scratchEnv)
+  const slug = "cancelled-after-return"
+  await contribute(env)
+  await githubDesk(base, desk, env, null)
+  await task_create({ deskRoot: desk, input: { track: "track", slug, title: "fixture", status: "processing" } })
+  await done(desk, env, slug)
+  await task_update({ deskRoot: desk, env, input: { track: "track", slug, status: "processing", return_reason: "agent_error" } })
+  await visibility(env, "private")
+  const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug, outcome: "cancelled" } })
+  assert.equal(result.factory_report, expectedLink({ slug }))
+  assert.equal(result.signoff_packet, undefined)
+  const archived = await card(desk, `track/_archive/${slug}/task.md`)
+  assert.equal(archived.status, "cancelled")
+  assert.equal(archived.factory_report, expectedLink({ slug }))
+}))
+
 test("a card already in _archive/ with a reason is reached by calling task_archive again, which fills and commits the link", () => scratch(async ({ base, desk, env: scratchEnv }) => {
   const env = await hostEnv(base, scratchEnv)
   await contribute(env)
