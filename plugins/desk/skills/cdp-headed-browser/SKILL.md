@@ -31,7 +31,7 @@ How it behaves:
 
 - All agents share the one browser. Each session's tabs sit in their own tab group, named `Playwright · <client name>` (`desk-web` when the session started while Desk was still installing the browser), and the session sees and drives only those tabs.
 - When a session connects, the extension brings the browser window to the front once.
-- When the session ends, by `browser_close`, by its process exiting, or by its process being killed, Desk closes the session's tabs ([web-real-tabs.cjs](../../mcp/web-real-tabs.cjs)). Tabs the session never drove stay open. The next browser call after `browser_close` connects again in a new group.
+- Desk currently defers automatic tab deletion on exit or kill. Close only tabs you created and can still identify as current session-owned, using stock browser tools; leave unknown or foreign tabs alone. Stock `browser_close` semantics remain unchanged, and the next browser call after it may connect again in a new group. Do not claim a disconnect cleaned up every tab.
 - The connect page's address carries the token; Desk replaces it with `<token>` in everything Playwright MCP sends to the host.
 
 The brokered contexts below are for a provider-backed persistent profile that is not the operator's real one. They do not apply to `desk-web` in this mode.

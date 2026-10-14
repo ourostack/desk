@@ -1,9 +1,9 @@
-// Closes an agent's real-browser tabs when its session ends, however it ends. Stock Playwright MCP drives the operator's browser through the stock Playwright Extension (web.cjs), and the extension gives each connection its own tab group, but when a connection closes it only ungroups the tabs and leaves them open. This file adds the missing cleanup and nothing else.
+// Starts stock Playwright MCP without changing its browser launch or connection relay.
+// Automatic tab cleanup is deferred: a detached-tab candidate can have moved to
+// another connection. Keep token redaction while leaving stock explicit close intact.
 //
-// - Run as `node web-real-tabs.cjs <playwright-mcp cli.js> [options]`, it starts stock Playwright MCP in this process after one change: when Playwright opens the extension's connect page, a detached watchdog (this file again, with --watch) starts instead of the browser. It also replaces the extension token in Playwright MCP's output, because the connect page carries the token in its address and Playwright MCP reports page addresses to the host.
-// - The watchdog points the connect page at its own loopback relay, starts the browser with that page, and passes every message between the extension and Playwright unchanged. It records the tabs Playwright attaches to and forgets the ones that close or leave the group.
-// - When Playwright's side closes (browser_close, the server exiting, or the server being killed, even with SIGKILL), the watchdog closes the tabs it recorded and then disconnects. Because it runs detached, killing the server or its whole process group does not stop it.
-// - Working beats protected: if the watchdog cannot set up its relay, it opens the original connect page, so the browser still works without the cleanup.
+// The legacy watchdog below is retained for its regression history, but run()
+// never starts it. Close only known current session-owned tabs through stock tools.
 
 "use strict";
 
@@ -43,25 +43,15 @@ function redact(stream, token) {
   };
 }
 
-// Start Playwright MCP with the connect-page launch routed through the watchdog. `o` replaces the real process, child_process and require, for tests.
+// Start Playwright MCP with output redaction only. `o` replaces the process and loader for tests.
 function run(argv, o) {
   var proc = either(o.process, process);
-  var cp = either(o.childProcess, childProcess);
   var cli = path.resolve(argv[0]);
   var token = proc.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
   if (token) {
     redact(proc.stdout, token);
     redact(proc.stderr, token);
   }
-  var spawn = cp.spawn;
-  cp.spawn = function (file, args, options) {
-    var last = Array.isArray(args) ? args[args.length - 1] : null;
-    if (typeof last !== "string" || last.indexOf(CONNECT_PAGE) !== 0) return spawn.apply(cp, arguments);
-    var hidden = args.map(function (arg) {
-      return token ? replaceAll(arg, token, TOKEN_PLACEHOLDER) : arg;
-    });
-    return spawn.call(cp, proc.execPath, [__filename, "--watch", cli, file].concat(hidden), options);
-  };
   proc.argv = [proc.argv[0], cli].concat(argv.slice(1));
   either(o.load, require)(cli);
 }
