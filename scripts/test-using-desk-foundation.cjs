@@ -436,7 +436,7 @@ function main() {
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.
   assertSectionPhrases(section(skill, "Requirements that arrive during execution"), "using-desk Requirements that arrive during execution", [
     "same durable task",
-    "name checks the change invalidates, or say none has run",
+    "first reply names invalidated checks or says no affected checks passed",
     "implementation and review gates",
     "`work-orchestration`",
   ]);
@@ -449,8 +449,10 @@ function main() {
     "authority",
     "tests",
     "review evidence",
-    "invalidated evidence",
-    "In your first reply after the change, tell the human which earlier test runs, review passes and validations it invalidates, or that it invalidates none",
+    "evidence status",
+    "In your first reply after the change, tell the human which earlier test runs, review passes and validations it invalidates, or accurately say no affected checks have passed yet",
+    "do not say no tests ran when tests ran red",
+    "prior passing checks remain valid",
     "unaffected authorized work moving",
     "implementation and review gates",
     "must not silently absorb contradictory scope",
