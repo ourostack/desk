@@ -44,6 +44,41 @@ async function check(f) {
   assert.equal(typeof checkDelivery, "function", "the existing stop wrapper's bounded delivery helper must exist")
   return checkDelivery(f)
 }
+for (const replay of [false, true]) {
+  test(`Copilot: primary memory rollover retains current human delivery (${replay ? "archive replay" : "done only"})`, () => scratch(async ctx => {
+    const f = await fixture(ctx, "copilot", { reply: PACKET.join("\n").replace("back?", "back."), edit(lines) {
+      lines[4].data.interactionId = "rollover"
+      lines.splice(4, 0,
+        { type: "session.context_cleared", timestamp: END, data: {} },
+        { type: "user.message", timestamp: END, data: { source: "session-memory-rollover", parentAgentTaskId: "primary-task", interactionId: "rollover", content: "Continue the current approved task." } },
+        ...(replay ? [
+          { type: "tool.execution_start", timestamp: END, data: { toolCallId: "archive", toolName: "desk-task_archive", arguments: { track: "portable-tools", slug: "integrity-manifests" } } },
+          { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "archive", success: true, interactionId: "rollover", result: { content: JSON.stringify(RESULT) } } },
+        ] : []))
+    } })
+    assert.equal((await check(f)).status, "correction")
+  }))
+}
+for (const held of ["corrected", "blocked", "old quoted marker", "new human", "unarmed"]) {
+  test(`Copilot: memory rollover preserves boundaries (${held})`, () => scratch(async ctx => {
+    const f = await fixture(ctx, "copilot", { edit(lines) {
+      lines[4].data.interactionId = "rollover"
+      const before = held === "corrected"
+        ? [{ type: "hook.end", timestamp: END, data: { hookType: "agentStop", output: { decision: "block", reason: "[DESK_DELIVERY_CORRECTION] current correction" } } }]
+        : held === "blocked" ? [
+          { type: "tool.execution_start", timestamp: END, data: { toolCallId: "blocked", toolName: "desk-task_update", arguments: { track: "other", slug: "blocked", status: "blocked" } } },
+          { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "blocked", success: true, interactionId: "human-1", result: { content: '{"status":"updated"}' } } },
+        ] : held === "new human"
+          ? [{ type: "user.message", timestamp: END, data: { content: "A different outcome.", interactionId: "new-human" } }] : []
+      lines.splice(4, 0, ...before,
+        ...(held === "unarmed" ? [] : [{ type: "session.context_cleared", timestamp: END, data: {} }]),
+        { type: "user.message", timestamp: END, data: { source: "session-memory-rollover", interactionId: "rollover", content: held === "old quoted marker" ? "An older turn had [DESK_DELIVERY_CORRECTION]; retain current delivery." : "Continue." } })
+    } })
+    const result = await check(f)
+    assert.equal(result.status, held === "corrected" ? "unverified" : held === "old quoted marker" ? "correction" : "not_delivery")
+    if (held === "corrected") assert.equal(result.diagnostic, "correction_exhausted")
+  }))
+}
 for (const host of ["copilot", "claude"]) {
   test(`${host}: native refusal permits a genuine re-delivery with identical evidence`, () => scratch(async ctx => {
     const f = await fixture(ctx, host, { edit(lines) {

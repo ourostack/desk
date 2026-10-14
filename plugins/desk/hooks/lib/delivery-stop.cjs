@@ -52,11 +52,11 @@ function targetOf(args) {
 const failure = reason => ({ status: "unavailable", diagnostic: reason });
 function state() {
   return { calls: new Map(), packets: new Map(), delivered: new Set(), sentCurrent: false, human: null,
-    corrected: false, interrupted: false, envelope: false, final: null, currentHook: null };
+    corrected: false, interrupted: false, rollover: false, envelope: false, final: null, currentHook: null };
 }
 function reset(s, human) {
   s.calls.clear(); s.packets.clear(); s.sentCurrent = false;
-  s.human = human; s.corrected = false; s.interrupted = false; s.final = null;
+  s.human = human; s.corrected = false; s.interrupted = false; s.rollover = false; s.final = null;
 }
 function receipt(s, call, value) {
   if (!call || !value) return;
@@ -102,8 +102,14 @@ function copilot(s, e, payload) {
     reset(s, null);
     s.envelope = d.sessionId === payload.sessionId && d.context?.cwd === payload.cwd;
   }
+  if (e.type === "session.context_cleared" && s.human) s.rollover = true;
   if (e.type === "user.message") {
-    if (text(d.content) && d.content.includes(TAG)) {
+    // Native memory rollover changes the primary interaction, not the owning
+    // human turn. Keep receipt/interrupt/correction state; summary prose cannot
+    // grant new authority or spend a correction from an older quoted marker.
+    if (s.rollover && d.source === "session-memory-rollover" && text(d.interactionId)) {
+      s.human = d.interactionId; s.rollover = false; s.final = null;
+    } else if (text(d.content) && d.content.includes(TAG)) {
       s.corrected = true;
       if (text(d.interactionId)) s.human = d.interactionId;
     } else if (!d.source && !d.isAutopilotContinuation && text(d.content) && text(d.interactionId)) reset(s, d.interactionId);
