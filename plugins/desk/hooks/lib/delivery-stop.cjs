@@ -62,7 +62,7 @@ function receipt(s, call, value) {
   if (!call || !value) return;
   if (["blocked", "collaborating", "paused"].includes(call.status)) s.interrupted = true;
   if (call.kind === "task_signoff" || (call.kind === "task_update" && call.status && call.status !== "done")) {
-    if (call.kind === "task_update") {
+    if (call.kind === "task_update" || value.signoff?.state === "refused") {
       for (const key of s.delivered) if (key.startsWith(`${call.target}\n`)) s.delivered.delete(key);
     }
     s.packets.delete(call.target); return;

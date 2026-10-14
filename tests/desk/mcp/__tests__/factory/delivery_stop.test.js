@@ -45,6 +45,29 @@ async function check(f) {
   return checkDelivery(f)
 }
 for (const host of ["copilot", "claude"]) {
+  test(`${host}: native refusal permits a genuine re-delivery with identical evidence`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { edit(lines) {
+      const target = { track: "portable-tools", slug: "integrity-manifests" }
+      if (host === "copilot") lines.splice(4, 0,
+        { type: "assistant.message", timestamp: END, data: { interactionId: "human-1", content: PACKET.join("\n"), toolRequests: [] } },
+        { type: "user.message", timestamp: END, data: { content: "Send it back and correct the delivery.", interactionId: "human-2" } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "refused", toolName: "desk-task_signoff", arguments: { ...target, outcome: "refused" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "refused", interactionId: "human-2", success: true, result: { content: '{"status":"recorded","signoff":{"state":"refused"}}' } } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "redelivered", toolName: "desk-task_update", arguments: { ...target, status: "done" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "redelivered", interactionId: "human-2", success: true, result: { content: JSON.stringify(RESULT) } } })
+      else lines.splice(3, 0,
+        { type: "assistant", sessionId: ID, timestamp: END, message: { stop_reason: "end_turn", content: [{ type: "text", text: PACKET.join("\n") }] } },
+        { type: "user", sessionId: ID, timestamp: END, origin: { kind: "human" }, message: { content: "Send it back and correct the delivery." } },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "refused", name: "mcp__desk__task_signoff", input: { ...target, outcome: "refused" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "refused", content: '{"status":"recorded","signoff":{"state":"refused"}}' }] } },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "redelivered", name: "mcp__desk__task_update", input: { ...target, status: "done" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "redelivered", content: JSON.stringify(RESULT) }] } })
+      if (host === "copilot") lines[10].data.interactionId = "human-2"
+    } })
+    assert.equal((await check(f)).status, "correction")
+  }))
+}
+for (const host of ["copilot", "claude"]) {
   test(`${host}: a previous human turn's already-sent packet is not raised by current archive replay`, () => scratch(async ctx => {
     const f = await fixture(ctx, host, { edit(lines) {
       if (host === "copilot") lines.splice(4, 0,
