@@ -171,7 +171,10 @@ export async function startReadinessController({
     convergenceResult = null
     // The operation belongs to the controller, not the requesting socket.
     server.ref()
-    let startedRevision
+    // Capture before asynchronous journal opening/protection. An uncertainty
+    // reported during that work has already moved state to RECOVERING; it must
+    // invalidate this attempt, not be mistaken for its initial revision.
+    const startedRevision = revision
     let eventCursor
     let retryConvergence = false
     convergence = Promise.resolve().then(async () => {
@@ -183,7 +186,6 @@ export async function startReadinessController({
       }
       await withJournal((active) => {
         eventCursor = active.cursor
-        startedRevision = revision
       })
       return handlers.beginConvergence?.({ eventCursor, reason: freshnessReason, journal })
     }).then((result) => {

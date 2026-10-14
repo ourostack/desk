@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
+import * as net from "node:net"
 import * as path from "node:path"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
@@ -25,6 +26,41 @@ function fixture(t, handler) {
   return { root, stateHome: path.join(root, "state"), ephemeral: true,
     handlers: { beginConvergence: handler } }
 }
+
+test("uncertainty during initial journal opening cannot poison controller-owned convergence", async (t) => {
+  const options = fixture(t, async () => ({ indexed: true }))
+  const client = await connectOrStartController(options)
+  const record = JSON.parse(readFileSync(path.join(options.stateHome, client.id, "owner.json")))
+  let socket
+  try {
+    // The two operations enter in one data turn, before the asynchronous journal
+    // snapshot. The immediate uncertainty response closes this initiating socket;
+    // convergence is controller-owned and must still reconcile for a later client.
+    const uncertain = await new Promise((resolve, reject) => {
+      socket = net.createConnection(record.endpoint)
+      let buffer = ""
+      const timer = setTimeout(() => reject(new Error("owned uncertainty request did not reply")), 5000)
+      t.after(() => clearTimeout(timer))
+      socket.once("error", reject)
+      socket.once("connect", () => socket.write([
+        { id: "converge", method: "beginConvergence", params: { token: record.owner.token } },
+        { id: "uncertain", method: "markUncertain", params: { token: record.owner.token, reason: "watcher_starting" } },
+      ].map(value => JSON.stringify(value)).join("\n") + "\n"))
+      socket.on("data", chunk => {
+        buffer += chunk
+        const end = buffer.indexOf("\n")
+        if (end >= 0) { clearTimeout(timer); resolve(JSON.parse(buffer.slice(0, end))) }
+      })
+    })
+    assert.equal(uncertain.result.state, "RECOVERING", JSON.stringify(uncertain))
+    const settled = await client.barrier({ capability: "lexical", wait: true })
+    assert.equal(settled.current, true, JSON.stringify(await client.status()))
+    assert.equal((await client.status()).convergence.status, "succeeded")
+  } finally {
+    socket?.destroy()
+    await client.close()
+  }
+})
 
 test("simultaneous clients share one controller-owned convergence and recover after failure", async (t) => {
   const entered = deferred()
