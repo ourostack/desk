@@ -312,6 +312,49 @@ This scenario depends on the kaizen loop in the selected factory store. Earlier 
 - the store's build has commented a comparison of that measure between jobs before and after that version, with its uncertainty;
 - the result distinguishes a confirmed or not-confirmed statistical verdict from “not enough independent jobs yet” or “no clear change so far”; any `closed_unverified` result carries its documented loop condition and is not presented as statistical confirmation.
 
+## Effortless browser test-first delivery plan
+
+> **For agentic workers:** Use `superpowers:executing-plans` to carry out this plan task by task after written spec/plan approval. Steps use checkbox tracking. This is a design-stage plan, not permission to change an operator's browser, globals or running clients.
+
+**Goal:** Deliver the [effortless-browser contract](agentic-engineering-v2-rfc.md#31-effortless-browser-contract), not another successful catalog handshake.
+
+**Architecture:** Reuse stock MCP/extension, shared bootstrap and the existing profile resolver/child environment. Admit supported provisioning, host identity and background seams before dependent implementation. Use the agent's ordinary first operation as the readiness proof; no protocol interposer or separate readiness/ownership store.
+
+**Tech stack:** Existing CommonJS launcher/provider, Node test runner, stock MCP/extension and normal host lifecycle/tools.
+
+**Global constraints:** Zero operator configuration/export/extension/token chores; no new broker, SDK hook/proxy, database, daemon or configuration UI. No secret output, credential cloning, unknown-connection acceptance, global-env dependence or automatic deletion. Preserve working globals and existing sessions. First connection and follow-ups must preserve foreground tab/window/desktop. Channel versions and actual loaded files are evidence, never install pins.
+
+**Review focus:** Wrong same-domain profile; stale or rotated credential snapshot; inherited-token/provider conflict; resumed child borrowing an older parent's acquisition; foreground or foreign-tab effects. Each is tested below; none is inferred healthy from a token's presence.
+
+### B1. Admit the three required seams — go/no-go, before dependent code
+
+**Inspect:** `mcp/web.cjs::install`, `mcp/web-real-profile.cjs::connect`, supported host MCP client metadata, and the selected stock extension/CLI source. **Produces:** source/version-backed supported interfaces or an explicit blocked requirement; no runtime implementation.
+
+- [ ] Confirm an admitted unattended **stock-extension provisioning** path exists in the current installer/browser contract. Today's launcher installs npm packages only; documented store installation/manual configuration does not pass. If no supported path exists, stop the provisioning implementation lane and seek the narrow upstream mechanism; never install an unpacked extension into an operator profile or replace consent with an automation trick.
+- [ ] Confirm a supported **foreground-safe bootstrap** covers both URL delivery and extension acceptance. Reuse existing upstream [playwright#42973](https://github.com/microsoft/playwright/issues/42973); its open state/version label is not a delivered option. [#42279](https://github.com/microsoft/playwright/pull/42279) was closed unmerged, not an eligible patch. Search both upstream trackers for provisioning duplicates before opening anything; obtain maintainer admission for a small public option. No hidden local patch while waiting.
+- [ ] Verify the host can supply **per-agent `clientInfo.name` and a distinct connection**, including subagents/resume, through a supported existing interface. If unsupported, preserve stock collision-suffix groups as a clearly degraded available path, but mark named 1:1 identity unmet; do not invent a label proxy or collapse agents into a shared context.
+- [ ] Submit exact admitted interfaces and their consuming tests for affected spec/plan review. **No-go means dependent code remains blocked**, not “investigate briefly, then build anyway.” Existing usable access is not disabled to conceal these gaps.
+
+### B2. Pin credential/profile delivery before changing precedence
+
+**Files:** `mcp/web-real-profile.cjs`, `mcp/web.cjs`; tests `tests/desk/mcp/__tests__/launch/web_real_profile.test.js` and `web.test.js`. **Interfaces:** retain `connect(o) -> {args, env, profile, app} | {payload}` and the existing `{launch:{node,indexFile,args,env}}` outcome. No new credential store or alternate caller route.
+
+- [ ] In owned synthetic profiles only, add named controls for `current credential follows selected profile`, `same-domain last-used selection remains bound`, `credential rotation does not serve stale snapshot`, `foreign inherited token cannot replace selected-profile binding`, and `explicit connection route is distinguishable`. Assert actual child profile arguments and `env.PLAYWRIGHT_MCP_EXTENSION_TOKEN` agree with the selected fixture; assert no credential appears in stdout/stderr/errors or Desk/MCP launcher argv. Stock's documented browser connection-URL handoff is unchanged, not a new token transport. Include unreadable/locked LevelDB, SQLite fallback, missing extension and simultaneous profile changes.
+- [ ] Run `node --test tests/desk/mcp/__tests__/launch/web.test.js tests/desk/mcp/__tests__/launch/web_real_profile.test.js`. Retain passing controls. Reproduce a concrete resolver/environment defect before claiming RED; if the controls pass and no failure is isolated, **do not flip precedence or manufacture a patch**. Return the source-binding gap for review.
+- [ ] When a failure is isolated, reduce it to one failing named regression and submit the exact smallest change in `connect(o)`/existing child-env construction for affected review. Only after approval, fix that defect without changing their interfaces or importing a global secret as an unbound fallback. Use existing degraded/error fronts for actionable agent-owned repair; no export/copy-token/operator-setup instructions.
+- [ ] Re-run the failing selector, then all three web selectors including `web_real_tabs.test.js`; require zero failures and retain the intentional historical automatic-cleanup skip. Commit only the approved provider change, tests and directly coupled docs/release fragment. B1's unsupported outcomes cannot be marked implemented by these unit tests.
+
+### B3. Prove admission and maintenance in the actual consuming route
+
+**Files:** existing `tests/desk/mcp/__tests__/launch/web_real_tabs.test.js` for launcher/redaction regressions; this packet and `skills/cdp-headed-browser/SKILL.md` for ordinary agent readiness/failure/cleanup guidance. **Interface:** normal installed host → web.cjs → bootstrap → redacting real-tabs runner → stock MCP/extension. No new transport, prototype hook or latch.
+
+- [ ] Add failing acceptance assertions before any admitted behavior change: initialize/catalog creates no connection; one first navigation plus expected read qualifies usable; a failed first call yields a nonsecret failure category and **zero** retry/cleanup-close calls. Drive these through normal consumer behavior, not a mock-only call count or an unsupported server reset.
+- [ ] After B1 admits all required seams, run one budgeted owned-profile navigation/read/second-operation batch per supported host, then fresh/resume/channel-update acquisitions. Capture the **actual materialized module hash and declared browser/profile binding before exit**; inherited parent roots or selector readback alone cannot qualify acquisition. Do not clone credentials or alter a working global/profile to make a test pass.
+- [ ] In the same admitted route, run two agents with distinct human-readable identity. Assert one live named group each, independent follow-ups, no implicit shared context, foreign-control survival, and ordinary close of only current-owned tabs. Transfer or uncertain ownership must leave the tab untouched. Observe foreground window/tab/desktop before and after first connection and actions; all must be unchanged.
+- [ ] Verify missing-extension cold setup requires **zero operator setup steps**, and authorized repair/update uses the existing provider. If stock/browser policy prevents provisioning, label that cold gate blocked. If no supported per-server refresh exists, do not invent one or claim old clients loaded new code; retain the running route and qualify only an authorized ordinary new generation.
+- [ ] Preserve exact PID/generation/resource budgets and release/readback proofs. Report pass/fail/blocked/unavailable separately. Headless background-target URL delivery, initialize/catalog, unit GREEN and channel publication are not ordinary-host foreground/readiness proof.
+- [ ] Submit actual diff, RED/GREEN and consuming receipts to independent review. Merge only with normal required checks, track the carried release separately, and reconcile temporary selectors only through their owner. Full-contract delivery/promotion waits for every required outcome; no local substitute waives B1.
+
 ## Record what you find
 
 - **`observer` keeps the record** in the evidence folder, outside the throwaway desk. For every step it records the action, the expected outcome, what happened, the evidence and `pass`, `fail`, `blocked` or `unavailable`, and each scenario's elapsed time, measured, not estimated ([evaluate-release](../skills/evaluate-release/SKILL.md#record-every-step)).
