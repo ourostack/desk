@@ -120,7 +120,7 @@ function copilot(s, e, payload) {
     if ((d.success === false || d.result?.isError) && d.interactionId === s.human && s.packets.size) s.interrupted = true;
   }
   if (e.type === "assistant.message" && d.interactionId === s.human && !d.toolRequests?.length) reply(s, d.content);
-  if (e.type === "hook.end" && d.hookType === "agentStop" && d.output?.decision === "block" && text(d.output.reason) && d.output.reason.startsWith(TAG)) s.corrected = true;
+  if (e.type === "hook.end" && d.hookType === "agentStop" && d.output?.decision === "block" && text(d.output.reason) && d.output.reason.includes(TAG)) s.corrected = true;
   if (e.type === "hook.start" && d.hookType === "agentStop" && d.input?.timestamp === payload.timestamp && d.input?.sessionId === payload.sessionId) {
     s.currentHook = e.parentId;
   }
@@ -212,6 +212,6 @@ async function checkDelivery({ host, payload, env = process.env }) {
   if (hasEnding(final, packets)) return { status: "complete" };
   if (payload.stop_hook_active === true || s.corrected) return { status: "unverified", diagnostic: "correction_exhausted" };
   return { status: "correction", output: { decision: "block", reason:
-    `${TAG} Correct only the final delivery reply. End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
+    `Restate only the final delivery reply. ${TAG} End it with the existing packet below, retaining its evidence. Do not rerun completed implementation, call task/card tools, create a commit, reopen approval, infer acceptance, or repeat external effects. This is the only correction; continue no further work.\n\n${packets.flat().join("\n")}` } };
 }
 module.exports = { checkDelivery };

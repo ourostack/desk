@@ -161,7 +161,7 @@ async function runBoundedHook(host, input, entry) {
         if (diagnostic) process.stderr.write(diagnostic.slice(0, 2048));
         try {
           const value = JSON.parse(output);
-          if (value?.decision === "block" && typeof value.reason === "string" && value.reason.startsWith("[DESK_DELIVERY_CORRECTION]")) process.stdout.write(JSON.stringify(value));
+          if (value?.decision === "block" && typeof value.reason === "string" && value.reason.includes("[DESK_DELIVERY_CORRECTION]")) process.stdout.write(JSON.stringify(value));
         } catch { /* Accounting produces no stdout when no correction is due. */ }
       } else process.stderr.write("[desk-delivery] unverified: hook_worker_unavailable\n");
       resolve();

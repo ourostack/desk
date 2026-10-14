@@ -161,10 +161,13 @@ test("Copilot: sidekick and child calls cannot supply a root delivery", () => sc
   }
 }))
 test("Copilot: prior block event self-limits even if native active flag is false", () => scratch(async ctx => {
-  const f = await fixture(ctx, "copilot", { edit(lines) {
-    lines.splice(4, 0, { type: "hook.end", timestamp: END, data: { hookType: "agentStop", output: { decision: "block", reason: "[DESK_DELIVERY_CORRECTION] prior correction" } } })
-  } })
-  assert.equal((await check(f)).status, "unverified")
+  const first = await check(await fixture(ctx, "copilot"))
+  for (const reason of ["[DESK_DELIVERY_CORRECTION] prior correction", first.output.reason]) {
+    const f = await fixture(ctx, "copilot", { edit(lines) {
+      lines.splice(4, 0, { type: "hook.end", timestamp: END, data: { hookType: "agentStop", output: { decision: "block", reason } } })
+    } })
+    assert.equal((await check(f)).status, "unverified")
+  }
 }))
 test("Copilot: actual primary parentAgentTaskId is not a subagent classification", () => scratch(async ctx => {
   const f = await fixture(ctx, "copilot", { edit(lines) { lines[1].data.parentAgentTaskId = "host-primary-task" } })

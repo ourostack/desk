@@ -14,6 +14,8 @@ import { assertActionable, firstSentence } from "./_guard_text.js"
 import { assertNotRealStateUnderTest as assertNotRealRuntimeState } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
 import { assertNotRealStateUnderTest as assertNotRealFactoryState } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
 import { hookScript } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
+import { checkDelivery } from "../../../../../plugins/desk/hooks/lib/delivery-stop.cjs"
+import { scratch, ID, START, END } from "../factory/_session_helpers.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 
@@ -65,11 +67,31 @@ test("the test-isolation refusals open with the fix", () => {
 
 // ---- the registry: a new denial must be added to this file ----
 
+test("the bounded existing stop-hook correction opens with its actionable fix", () => scratch(async ctx => {
+  const log = path.join(ctx.env.COPILOT_HOME, "session-state", ID, "events.jsonl")
+  const payload = { sessionId: ID, cwd: ctx.desk, transcriptPath: log, timestamp: Date.parse(END), stopReason: "end_turn", stop_hook_active: false }
+  const packet = ["Asked: A useful artifact", "Delivered: 1234567890abcdef1234567890abcdef12345678", "Accept or send back?"]
+  mkdirSync(path.dirname(log), { recursive: true })
+  writeFileSync(log, [
+    { type: "session.start", timestamp: START, data: { sessionId: ID, context: { cwd: ctx.desk } } },
+    { type: "user.message", timestamp: START, data: { content: "Go.", interactionId: "human" } },
+    { type: "tool.execution_start", timestamp: START, data: { toolCallId: "done", toolName: "desk-task_update", arguments: { track: "one", slug: "artifact", status: "done" } } },
+    { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "done", success: true, interactionId: "human", result: { content: JSON.stringify({ status: "updated", signoff: "delivered_unsigned", signoff_packet: packet }) } } },
+    { id: "reply", type: "assistant.message", timestamp: END, data: { interactionId: "human", content: "Finished.", toolRequests: [] } },
+    { id: "end", parentId: "reply", type: "assistant.turn_end", timestamp: END, data: {} },
+    { parentId: "end", type: "hook.start", timestamp: END, data: { hookType: "agentStop", input: payload } },
+  ].map(x => JSON.stringify(x)).join("\n") + "\n")
+  const result = await checkDelivery({ host: "copilot", payload, env: ctx.env })
+  assert.equal(result.output.decision, "block")
+  assertActionable(assert, result.output.reason, "delivery reply correction")
+}))
+
 test("every file under plugins/desk that emits a denial is accounted for in this test", () => {
   const sites = /[^.\w]unresolved\(|decision: "block"|permissionDecision: "deny"|permissionDecisionReason: |unstage="git -C|echo "Desk refused this commit|new Error\(\s*`Resolve state/gmu
   // Files that build a denial's own text, with how many sites each has. A new guard adds its messages to the tests above
   // and its count here; a count that moves fails, so a message cannot be added or removed unnoticed.
   const expected = {
+    "hooks/lib/delivery-stop.cjs": 1,
     "mcp/src/runtime/test-state-guard.js": 1, "mcp/src/factory/test-state-guard.js": 1,
     "mcp/src/desk/card-commit-guard.js": 2,
     // Its `unresolved` is a sync outcome, not a denial.
