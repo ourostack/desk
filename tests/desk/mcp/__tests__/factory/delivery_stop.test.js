@@ -45,6 +45,24 @@ async function check(f) {
   return checkDelivery(f)
 }
 for (const host of ["copilot", "claude"]) {
+  test(`${host}: a previous human turn's already-sent packet is not raised by current archive replay`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host, { edit(lines) {
+      if (host === "copilot") lines.splice(4, 0,
+        { type: "assistant.message", timestamp: END, data: { interactionId: "human-1", content: PACKET.join("\n"), toolRequests: [] } },
+        { type: "user.message", timestamp: END, data: { content: "Archive the old task.", interactionId: "human-2" } },
+        { type: "tool.execution_start", timestamp: END, data: { toolCallId: "archive", toolName: "desk-task_archive", arguments: { track: "portable-tools", slug: "integrity-manifests" } } },
+        { type: "tool.execution_complete", timestamp: END, data: { toolCallId: "archive", interactionId: "human-2", success: true, result: { content: JSON.stringify(RESULT) } } })
+      else lines.splice(3, 0,
+        { type: "assistant", sessionId: ID, timestamp: END, message: { stop_reason: "end_turn", content: [{ type: "text", text: PACKET.join("\n") }] } },
+        { type: "user", sessionId: ID, timestamp: END, origin: { kind: "human" }, message: { content: "Archive the old task." } },
+        { type: "assistant", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_use", id: "archive", name: "mcp__desk__task_archive", input: { track: "portable-tools", slug: "integrity-manifests" } }] } },
+        { type: "user", sessionId: ID, timestamp: END, message: { content: [{ type: "tool_result", tool_use_id: "archive", content: JSON.stringify(RESULT) }] } })
+      if (host === "copilot") lines[8].data.interactionId = "human-2"
+    } })
+    assert.equal((await check(f)).output, undefined)
+  }))
+}
+for (const host of ["copilot", "claude"]) {
   test(`${host}: missing evidenced delivery, including away, requests only final-reply correction`, () => scratch(async ctx => {
     const result = await check(await fixture(ctx, host))
     assert.equal(result.status, "correction")
@@ -127,6 +145,13 @@ test("Copilot: prior block event self-limits even if native active flag is false
 }))
 test("Copilot: actual primary parentAgentTaskId is not a subagent classification", () => scratch(async ctx => {
   const f = await fixture(ctx, "copilot", { edit(lines) { lines[1].data.parentAgentTaskId = "host-primary-task" } })
+  assert.equal((await check(f)).status, "correction")
+}))
+test("native legacy task IDs are opaque on read, never revalidated as new names", () => scratch(async ctx => {
+  const f = await fixture(ctx, "copilot", { edit(lines) {
+    lines[2].data.arguments.track = "Legacy Track"
+    lines[2].data.arguments.slug = "old_task_été"
+  } })
   assert.equal((await check(f)).status, "correction")
 }))
 test("Copilot: timestamps cannot borrow a later delivery for an earlier hook", () => scratch(async ctx => {

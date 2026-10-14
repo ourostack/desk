@@ -44,22 +44,27 @@ function resultOf(content) {
   try { return JSON.parse(content); } catch { return null; }
 }
 function targetOf(args) {
-  return plain(args) && [args.track, args.slug].every(x => text(x) && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(x) && x.length < 200)
+  // Native CRUD owns name/path validation, including legacy read identities.
+  // These opaque IDs only pair in-memory receipts; they never form a file path.
+  return plain(args) && [args.track, args.slug].every(x => text(x) && x.length > 0 && x.length <= 4096 && !/[\r\n]/u.test(x))
     ? `${args.track}/${args.slug}` : null;
 }
 const failure = reason => ({ status: "unavailable", diagnostic: reason });
 function state() {
-  return { calls: new Map(), packets: new Map(), delivered: new Set(), human: null,
+  return { calls: new Map(), packets: new Map(), delivered: new Set(), sentCurrent: false, human: null,
     corrected: false, interrupted: false, envelope: false, final: null, currentHook: null };
 }
 function reset(s, human) {
-  s.calls.clear(); s.packets.clear(); s.delivered.clear();
+  s.calls.clear(); s.packets.clear(); s.sentCurrent = false;
   s.human = human; s.corrected = false; s.interrupted = false; s.final = null;
 }
 function receipt(s, call, value) {
   if (!call || !value) return;
   if (["blocked", "collaborating", "paused"].includes(call.status)) s.interrupted = true;
   if (call.kind === "task_signoff" || (call.kind === "task_update" && call.status && call.status !== "done")) {
+    if (call.kind === "task_update") {
+      for (const key of s.delivered) if (key.startsWith(`${call.target}\n`)) s.delivered.delete(key);
+    }
     s.packets.delete(call.target); return;
   }
   const packet = packetOf(value);
@@ -76,11 +81,12 @@ function reply(s, content) {
   s.final = content;
   if (s.packets.size && hasEnding(content, [...s.packets.values()].map(x => x.packet))) {
     for (const held of s.packets.values()) s.delivered.add(held.key);
+    s.sentCurrent = true;
     s.packets.clear(); return;
   }
   for (const [target, held] of s.packets) {
     if (hasEnding(content, [held.packet])) {
-      s.delivered.add(held.key); s.packets.delete(target);
+      s.delivered.add(held.key); s.sentCurrent = true; s.packets.delete(target);
     }
   }
 }
@@ -197,7 +203,7 @@ async function checkDelivery({ host, payload, env = process.env }) {
   } catch { return failure("transcript_unreadable"); }
   if (!s.envelope) return failure("foreign_session");
   if (!s.human || s.interrupted) return { status: "not_delivery" };
-  if (s.packets.size === 0) return { status: s.delivered.size ? "complete" : "not_delivery" };
+  if (s.packets.size === 0) return { status: s.sentCurrent ? "complete" : "not_delivery" };
   if (host === "copilot" && (!s.currentHook || s.currentHook !== finalEndId)) return { status: "not_delivery" };
   const packets = [...s.packets.values()].map(x => x.packet);
   // Claude explicitly supplies this field because final transcript persistence can lag Stop.
