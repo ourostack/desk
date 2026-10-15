@@ -26,6 +26,7 @@ Ship it.
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
 | api | — | widgets | pending | — |
+| ui | api | widgets | pending | — |
 
 ## Progress log
 
