@@ -23,3 +23,10 @@ flow:
 | Step | State |
 |---|---|
 | a | pending |
+
+## Progress log
+
+- 2026-10-14: still works
+
+
+More.
