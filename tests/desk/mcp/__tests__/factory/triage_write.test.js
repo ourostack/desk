@@ -32,6 +32,243 @@ const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
 
+test("private hook context failures and disabled policy never publish a candidate", async () => {
+  for (const mode of ["config-failed", "location-failed", "dispatcher-parent", "dispatcher-child", "disabled"]) {
+    const w = await world()
+    const desk = w.clone("private-context-failure")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: mode === "dispatcher-parent" ? w.base : mode === "dispatcher-child" ? desk.deskRoot : PRIVATE_HOOKS }
+    if (mode === "disabled") git(desk.deskRoot, ["config", "core.hooksPath", "/dev/null"])
+    const before = git(w.origin, ["rev-parse", "main"])
+    let rejected = 0
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      if ((mode === "config-failed" && args[0] === "config") ||
+          (mode === "location-failed" && args[0] === "rev-parse" && args[1] === "--git-path")) {
+        rejected += 1
+        return spawn(command, ["rev-parse", "--verify", "refs/heads/nonexistent-private-context"], options)
+      }
+      return spawn(command, args, options)
+    } } })
+    assert.equal(result.state, mode === "disabled" ? "policy_refused" : "unsynchronized", mode)
+    if (mode.endsWith("-failed")) assert.ok(rejected > 0, "the actual metadata command failed")
+    assert.equal(git(w.origin, ["rev-parse", "main"]), before, mode)
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+  }
+})
+
+test("private hook preparation respects expiry both between metadata reads and before the Git spawn", async (t) => {
+  for (const after of ["config", "location"]) {
+    const w = await world()
+    const desk = w.clone("private-budget")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const realNow = Date.now.bind(Date)
+    let virtualNow = realNow(), expired = false
+    const calls = []
+    t.mock.method(Date, "now", () => virtualNow)
+    try {
+      const result = await publish(desk, { git: { spawn(command, args, options) {
+        calls.push(args)
+        const child = spawn(command, args, options)
+        if (!expired && (after === "config" ? args[0] === "config" : args[0] === "rev-parse" && args[1] === "--git-path")) {
+          child.once("close", () => { virtualNow += 10_001; expired = true })
+        }
+        return child
+      } } })
+      assert.equal(expired, true)
+      assert.equal(result.state, "unsynchronized")
+      assert.ok(!calls.some((args) => args[0] === "fetch"), "expired preparation never starts the requested Git operation")
+      assert.equal(calls.some((args) => args[1] === "--git-path"), after === "location", "expiry between reads avoids the second metadata read")
+      assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    } finally {
+      t.mock.restoreAll()
+    }
+    assert.equal((await publish(desk)).state, "acknowledged", "expiry left no candidate or persistent routing mutation")
+  }
+})
+
+test("private commit metadata damage and syscall denial hold without overwriting evidence", async (t) => {
+  for (const mode of ["not-file", "invalid-gitfile", "backup-present", "backup-stat-denied", "link-denied"]) {
+    const w = await world()
+    const desk = w.clone("private-metadata")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    let dot, backup, bytes, moved
+    const realLstat = fs.lstat.bind(fs), realSymlink = fs.symlink.bind(fs)
+    let denied = 0
+    let result
+    try {
+      result = await publish(desk, { git: { onStep: async (name) => {
+        if (name !== "before_commit") return
+        const [token] = await fs.readdir(path.join(desk.deskRoot, ".git/desk-triage"))
+        dot = path.join(desk.deskRoot, ".git/desk-triage", token, "wt/.git")
+        backup = path.join(path.dirname(path.dirname(dot)), "gitfile")
+        bytes = await fs.readFile(dot, "utf8")
+        if (mode === "not-file") {
+          moved = path.join(w.base, "original-gitfile")
+          await fs.rename(dot, moved)
+          await fs.mkdir(dot)
+        } else if (mode === "invalid-gitfile") {
+          await fs.writeFile(dot, "foreign metadata\n")
+        } else if (mode === "backup-present") {
+          await fs.writeFile(backup, "retained foreign backup\n")
+        } else if (mode === "backup-stat-denied") {
+          t.mock.method(fs, "lstat", async (file, ...args) => {
+            if (file === backup) { denied += 1; throw Object.assign(new Error("backup inspection denied"), { code: "EACCES" }) }
+            return realLstat(file, ...args)
+          })
+        } else {
+          t.mock.method(fs, "symlink", async (target, file, ...args) => {
+            if (file === dot) { denied += 1; throw Object.assign(new Error("directory link denied"), { code: "EACCES" }) }
+            return realSymlink(target, file, ...args)
+          })
+        }
+      } } })
+    } finally {
+      t.mock.restoreAll()
+    }
+    assert.equal(result.state, "write_failed", mode)
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    assert.equal(result.resources.find((resource) => resource.kind === "worktree").disposition, "active")
+    if (mode === "not-file") {
+      assert.equal((await fs.lstat(dot)).isDirectory(), true)
+      assert.equal(await fs.readFile(moved, "utf8"), bytes)
+      await fs.rename(dot, path.join(w.base, "retained-foreign-directory"))
+      await fs.rename(moved, dot)
+    } else if (mode === "invalid-gitfile") {
+      assert.equal(await fs.readFile(dot, "utf8"), "foreign metadata\n")
+      await fs.writeFile(dot, bytes)
+    } else if (mode === "backup-present") {
+      assert.equal(await fs.readFile(backup, "utf8"), "retained foreign backup\n")
+      assert.equal((await publish(desk)).alarm, RESOURCE_ALARM)
+      await fs.rename(backup, path.join(w.base, "retained-foreign-backup"))
+    } else {
+      assert.ok(denied > 0)
+      assert.equal(await fs.readFile(dot, "utf8"), bytes, "the original gitfile survives the failed filesystem boundary")
+      assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT")
+    }
+    assert.equal((await publish(desk)).state, "acknowledged", `${mode}: the fixture's repair permits normal recovery`)
+  }
+})
+
+test("private interrupted recovery handles the pre-link gap and retains malformed or inaccessible metadata", async (t) => {
+  for (const mode of ["gap", "backup-directory", "backup-invalid", "backup-missing-target", "dot-regular", "backup-stat-denied", "dot-stat-denied"]) {
+    const w = await world()
+    const desk = w.clone("interrupted-metadata")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const stopped = await publish(desk, { git: { onStep(name) { if (name === "before_commit") throw new Error("interrupted candidate") } } })
+    assert.equal(stopped.state, "write_failed")
+    const resource = stopped.resources.find((resource) => resource.kind === "worktree")
+    const dot = path.join(resource.path, ".git"), backup = path.join(path.dirname(resource.path), "gitfile")
+    const bytes = await fs.readFile(dot, "utf8")
+    const target = path.resolve(resource.path, bytes.slice(8).trim())
+    if (mode === "backup-directory") await fs.mkdir(backup)
+    else if (mode === "backup-invalid") await fs.writeFile(backup, "foreign backup\n")
+    else if (mode === "backup-missing-target") await fs.writeFile(backup, `gitdir: ${path.join(desk.deskRoot, ".git/missing-admin")}\n`)
+    else if (mode !== "backup-stat-denied") {
+      await fs.rename(dot, backup)
+      if (mode === "dot-regular") await fs.writeFile(dot, "foreign gitfile\n")
+      if (mode === "dot-stat-denied") await fs.symlink(target, dot, process.platform === "win32" ? "junction" : "dir")
+    }
+    const realLstat = fs.lstat.bind(fs)
+    let denied = 0, result
+    try {
+      if (mode.endsWith("stat-denied")) t.mock.method(fs, "lstat", async (file, ...args) => {
+        if (file === (mode === "backup-stat-denied" ? backup : dot)) {
+          denied += 1
+          throw Object.assign(new Error("interrupted metadata inspection denied"), { code: "EACCES" })
+        }
+        return realLstat(file, ...args)
+      })
+      result = await publish(desk)
+    } finally {
+      t.mock.restoreAll()
+    }
+    if (mode === "gap") {
+      assert.equal(result.state, "acknowledged")
+    } else {
+      assert.equal(result.state, "busy", mode)
+      assert.equal(result.alarm, RESOURCE_ALARM)
+      assert.equal(result.resources[0].disposition, "retained")
+      if (mode === "backup-directory") {
+        assert.equal((await fs.lstat(backup)).isDirectory(), true)
+        await fs.rename(backup, path.join(w.base, "retained-backup-directory"))
+      } else if (mode.startsWith("backup-") && !mode.endsWith("stat-denied")) {
+        assert.equal((await fs.lstat(backup)).isFile(), true)
+        await fs.rename(backup, path.join(w.base, "retained-foreign-backup"))
+      } else if (mode === "dot-regular") {
+        assert.equal(await fs.readFile(dot, "utf8"), "foreign gitfile\n")
+        assert.equal(await fs.readFile(backup, "utf8"), bytes)
+        await fs.rename(dot, path.join(w.base, "retained-foreign-dot"))
+      } else {
+        assert.ok(denied > 0)
+      }
+      assert.equal((await publish(desk)).state, "acknowledged", mode)
+    }
+    assert.equal(await fs.lstat(resource.path).catch((error) => error.code), "ENOENT")
+    assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT")
+  }
+})
+
+test("a hook replacing private Git metadata is retained and never acknowledged", async () => {
+  const w = await world()
+  const desk = w.clone("foreign-post-commit")
+  desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  const hook = path.join(desk.deskRoot, ".git/hooks/post-commit")
+  const body = "#!/bin/sh\nmv .git .git.foreign-link || exit $?\nprintf 'foreign metadata\\n' > .git\n"
+  await fs.writeFile(hook, body, { mode: 0o755 })
+  const result = await publish(desk)
+  assert.equal(result.state, "write_failed")
+  const resource = result.resources.find((resource) => resource.kind === "worktree")
+  const dot = path.join(resource.path, ".git"), backup = path.join(path.dirname(resource.path), "gitfile")
+  assert.equal(await fs.readFile(dot, "utf8"), "foreign metadata\n")
+  assert.ok((await fs.readFile(backup, "utf8")).startsWith("gitdir: "))
+  assert.equal((await publish(desk)).alarm, RESOURCE_ALARM)
+  assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+  assert.equal(await fs.readFile(hook, "utf8"), body, "the original hook was not rewritten")
+  await fs.rename(dot, path.join(w.base, "retained-foreign-dot"))
+  await fs.rename(path.join(resource.path, ".git.foreign-link"), dot)
+  await fs.rename(hook, path.join(w.base, "retained-post-commit"))
+  assert.equal((await publish(desk)).state, "acknowledged")
+})
+
+test("protected triage file defaults write real owner-protected state", async () => {
+  const w = await world()
+  const desk = w.clone("protected-defaults")
+  const file = await writeProtectedTriageFile(desk.env, ["basis", "default-options.json"], "{}\n")
+  assert.equal(await fs.readFile(file, "utf8"), "{}\n")
+  assert.ok(file.startsWith(`${w.base}${path.sep}`))
+  if (posix) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+})
+
+test("a self-referential Git metadata report is refused by real Git without publication", async () => {
+  const w = await world()
+  const desk = w.clone("self-referential-admin")
+  desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  const before = git(w.origin, ["rev-parse", "main"])
+  let reports = 0, actualCommit
+  const result = await publish(desk, { git: { spawn(command, args, options) {
+    if (args.includes("--absolute-git-dir")) {
+      reports += 1
+      // Fault at the metadata boundary: return Git's real worktree path in the admin slot.
+      // The subsequent commit is still the real Git command against that unusable context.
+      return spawn(command, args.map((arg) => arg === "--absolute-git-dir" ? "--show-toplevel" : arg), options)
+    }
+    const child = spawn(command, args, options)
+    if (args[0] === "commit") {
+      actualCommit = { gitDir: options.env.GIT_DIR, status: null, stderr: "" }
+      child.stderr.on("data", (chunk) => { actualCommit.stderr += chunk })
+      child.once("close", (status) => { actualCommit.status = status })
+    }
+    return child
+  } } })
+  assert.equal(reports, 1)
+  assert.equal(actualCommit.gitDir, ".")
+  assert.notEqual(actualCommit.status, 0, "an actual Git commit rejects the worktree as its own administrative directory")
+  assert.match(actualCommit.stderr, /not a git repository/)
+  assert.equal(result.state, "policy_refused")
+  assert.equal(git(w.origin, ["rev-parse", "main"]), before)
+  assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+  assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+})
+
 test("private triage keeps guarded nested commit message operands private before honest parent refusal", async () => {
   for (const configured of [null, "nested message hooks", "relative hooks"]) {
     const w = await world()
@@ -978,6 +1215,24 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async () => {
   assert.ok(protectedPaths.includes(file))
   const result = await publish({ ...a, env }, { git: { platform: "win32", aclRunner } })
   assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  for (const platform of ["linux", "win32"]) {
+    let committed = false
+    const privateResult = await publish({ ...a, env: { ...env, DESK: a.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS } }, {
+      review: platform === "linux" ? { ...AGENT, protected_result: hex(16) } : { ...HUMAN, gate: "spend", summary_codes: ["source:andon", "route:human_decision", "gate:spend"], protected_result: hex(16) },
+      git: { platform, aclRunner, spawn(command, args, options) {
+        if (args[0] === "commit") {
+          committed = true
+          assert.equal(options.env.DESK_PRIVATE_HOOK_RUNNER, platform === "linux" ? "/bin/sh" : process.execPath)
+          assert.equal(options.env.DESK_PRIVATE_HOOK_DISPATCH, path.join(PRIVATE_HOOKS, platform === "linux" ? "dispatch.sh" : "dispatch.cjs"))
+        }
+        assert.ok(!args.some((arg) => arg.includes(a.deskRoot)))
+        return spawn(command, args, options)
+      } },
+    })
+    assert.equal(privateResult.state, "acknowledged", `${platform}: ${JSON.stringify(privateResult)}`)
+    assert.equal(committed, true, "platform transport performs a real commit, not adoption")
+    assert.ok(privateResult.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+  }
   // On Windows a timed-out call is ended with its process tree (taskkill /T); here the stand-in push ends by itself, so the call
   // settles either way and is never taken for a refused push.
   const slowPush = (command, args, options) => (args[2] === "push" ? spawn(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], options) : spawn(command, args, options))
