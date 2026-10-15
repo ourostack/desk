@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 title: T
-status: processing
+status: done
 created: '2026-10-15T04:26:06Z'
-updated: '2026-10-15T04:26:06Z'
+updated: '2026-10-15T04:26:07Z'
 track: t
 repos:
   - name: acme/other
@@ -16,11 +16,19 @@ repos:
     mode: local
 flow:
   since: created
-  rev: 1
-  reached: processing
-  first_validating_at: null
-  first_delivered_at: null
-  delivered_at: null
-  deliveries: 0
+  rev: 2
+  reached: done
+  first_validating_at: '2026-10-15T04:26:07Z'
+  first_delivered_at: '2026-10-15T04:26:07Z'
+  delivered_at: '2026-10-15T04:26:07Z'
+  deliveries: 1
+evidence:
+  kind: commit
+  ref: 5baff1092b57c13ae1aa150e90d3787098a0c1c3
+  recorded_at: '2026-10-15T04:26:07Z'
+signoff:
+  state: delivered_unsigned
+  at: null
+  reason: null
 ---
 
