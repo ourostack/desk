@@ -1,0 +1,18 @@
+---
+schema_version: 1
+title: Unique title bad-reason
+status: validating
+created: '2026-10-15T04:27:05Z'
+updated: '2026-10-15T04:27:05Z'
+track: t
+flow:
+  since: created
+  rev: 1
+  reached: validating
+  first_validating_at: '2026-10-15T04:27:05Z'
+  first_delivered_at: null
+  delivered_at: null
+  deliveries: 0
+---
+
+SENTINEL-card-body-text
