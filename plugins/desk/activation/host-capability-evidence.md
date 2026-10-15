@@ -29,7 +29,7 @@ The namespace matches the manifest. The fixture omitted Desk's declared dependen
 
 A separately authorized single corrected probe at 17:45 UTC loaded all three actual worktree roots through repeated `--plugin-dir` arguments, selected `--agent desk:worker`, and used a 60-second timeout. Source HEAD was `56dd397cc3403cf64bfa3fd0f8c0175670bfd2ff`. No agent reconstruction, dependency removal, CLI `--disallowedTools` override, or authentication change was used. Other relevant native flags were `--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources local --strict-mcp-config --mcp-config '{"mcpServers":{}}' --max-turns 1 --no-session-persistence`. The isolated profile had no MCP servers, so this does not qualify MCP preservation.
 
-The native debug log reports each root loaded, then `Loaded 3 directory-loaded plugins`, `Found 6 plugins (6 enabled, 0 disabled)` (including the host's three built-in plugins), and `Total plugin agents loaded: 2`. The native initialization event identifies Desk 3.2.0-alpha.326, Superpowers 6.4.2, and Plain Language 0.2.6 from the actual source paths, and includes `desk:worker` and `desk:observer` in the agent catalog.
+The native debug log reports each root loaded, then `Loaded 3 directory-loaded plugins`, `Found 6 plugins (6 enabled, 0 disabled)` (including the host's three built-in plugins), and `Total plugin agents loaded: 2`. The native initialization event identifies Desk from the qualified `main`-channel source, Superpowers from the selected upstream source, and Plain Language 0.2.6 from the actual source paths, and includes `desk:worker` and `desk:observer` in the agent catalog.
 
 The host's initialization `tools` catalog contains 22 tools:
 
