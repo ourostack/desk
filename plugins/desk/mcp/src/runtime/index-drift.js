@@ -16,8 +16,12 @@
 
 const INDEX_TRACE_TIMEOUT_MS = 1000
 
+import { deskGitInvocation } from "./desk-git-context.js"
+
 function run(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {
+  const invocation = deskGitInvocation({ root, args: ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args] })
+  return spawnGit("git", invocation.args, {
+    ...invocation.options,
     encoding: "utf8",
     timeout: INDEX_TRACE_TIMEOUT_MS,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },

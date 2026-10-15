@@ -12,6 +12,7 @@
 // a normal, silent success or on a non-Git desk.
 
 import { promises as fs } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
@@ -502,7 +503,8 @@ function reportStep(step) {
 
 // The short sha of the desk's HEAD after a card commit, or null when git cannot say.
 function headSha(dir, spawnGit) {
-  const answer = spawnGit("git", ["-C", dir, "rev-parse", "--short", "HEAD"], { encoding: "utf8", timeout: 5000 })
+  const invocation = deskGitInvocation({ root: dir, args: ["rev-parse", "--short", "HEAD"] })
+  const answer = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: 5000 })
   return answer?.status === 0 && typeof answer.stdout === "string" && answer.stdout.trim() !== "" ? answer.stdout.trim() : null
 }
 

@@ -40,6 +40,7 @@ function ownerOf(auth) {
 export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, callTimeoutMs = 200_000, killAfterMs = 10_000 }) {
   // Insertion order is recency order: touching a session moves it to the end.
   const sessions = new Map();
+  const retiring = new Set();
   let starting = 0;
   let closing = false;
 
@@ -73,7 +74,18 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
       .then(() => session.transport.close())
       .catch((error) => log(`could not close transport: ${error.message}`));
     const { child } = session;
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    if (child && child.exitCode === null && child.signalCode === null) {
+      retiring.add(session);
+      child.kill("SIGTERM");
+      const kill = setTimeout(() => {
+        log(`session ${session.id} Desk process ignored SIGTERM for ${killAfterMs / 1000} s; sending SIGKILL`);
+        child.kill("SIGKILL");
+      }, killAfterMs);
+      session.exited.then(() => {
+        clearTimeout(kill);
+        retiring.delete(session);
+      });
+    }
   }
 
   function attachDesk(session, child) {
@@ -216,16 +228,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     closing = true;
     const all = [...sessions.values()];
     for (const session of all) closeSession(session, "gateway closing");
-    await Promise.all(
-      all.map(async (session) => {
-        const kill = setTimeout(() => {
-          log(`session ${session.id} Desk process ignored SIGTERM for ${killAfterMs / 1000} s; sending SIGKILL`);
-          session.child?.kill("SIGKILL");
-        }, killAfterMs);
-        await session.exited;
-        clearTimeout(kill);
-      }),
-    );
+    await Promise.all([...new Set([...all, ...retiring])].map(session => session.exited));
   }
 
   // Ends every session of one account at once (its Desk access was turned

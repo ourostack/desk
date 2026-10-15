@@ -34,6 +34,7 @@
 // cannot be installed (a read-only hooks folder, a chained hook already in the way) is reported by the boot as a degraded line.
 
 import { spawnSync } from "node:child_process"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
@@ -134,7 +135,8 @@ export function isLiveCardPath(relativePath) {
 }
 
 function git(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const invocation = deskGitInvocation({ root, args })
+  return spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
 }
 
 function real(target) {
@@ -182,7 +184,8 @@ export function installCardGuard(root, { spawnGit = spawnSync } = {}) {
     const dir = path.resolve(root, hooksPath.stdout.trim())
     const file = path.join(dir, "pre-commit")
     const wanted = hookScript()
-    const tracked = git(spawnGit, root, ["ls-files", "--", dir])
+    const trackedDir = process.env.DESK_ISOLATED_HOSTED === "1" ? path.relative(root, dir) || "." : dir
+    const tracked = git(spawnGit, root, ["ls-files", "--", trackedDir])
     if (tracked.status === 0 && tracked.stdout.trim() !== "") {
       return {
         state: "tracked",

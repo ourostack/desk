@@ -46,11 +46,122 @@ The gateway derives `DESK_MCP_ICON_URL` for each Desk child from `DESK_PUBLIC_UR
 | `DESK_LEGACY_CUTOFF` | ISO time after which legacy tokens, and every token refreshed from them, are refused. Set once, 14 days after the release is confirmed live; unset, legacy tokens keep working. Tokens from an Ouro or GitHub-fallback sign-in can't be refreshed more than 30 days after that sign-in, whatever the cutoff. |
 | `DESK_REDIRECTS` | Comma-separated exact redirect URLs a client may register or name, each an `https` (or loopback `http`) URL written as a URL parser writes it (lower-case host, no default port), with no fragment or user info; the gateway refuses to start otherwise. Unset, the default is `https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect` (Claude's callbacks and VS Code's, which VS Code registers alongside its loopback ones). Setting it replaces the whole default, so copy every entry you still want; without claude.ai's callback, Ari's claude.ai connector stops working at its next request. The gateway logs the allowlist in force at start and warns when claude.ai's callback is missing. Set it with `DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh`; a rerun without it keeps the app's current value, and passing it empty returns to the default. Loopback (`http://localhost` and `http://127.0.0.1` on any port) and ChatGPT's per-connector callback (`https://chatgpt.com/connector/oauth/<one segment of letters, digits, - and _>`) are always allowed. Every client's redirects are checked again on each use, so removing one shuts out clients that registered it before. |
 | `DESK_CLONE_DIR` | Where the desk is cloned. The image sets `/data/desk`. |
+| `DESK_MULTI_USER` | Experimental owning-UID runtime gate. Unset or `0` preserves the legacy shared clone; only `1` enables account-keyed realms. Other values fail startup. Leave off until complete v1b-2 staging/P3 qualification. Requires Ouro identity and the Linux image entrypoint's kernel boundary; never falls back to legacy execution. |
 | `DESK_PLUGIN_DIR` | Desk's plugin directory. The image sets `/app/plugins/desk`. |
 | `DESK_REAL_GH` | Optional path to the real `gh`. By default the shim uses the next `gh` on `PATH`; the image installs it at `/usr/bin/gh`. |
 | `PORT` | Listening port. Default `8080`. |
 
 Until the GitHub App exists, its four settings hold the placeholder `unset`. The gateway then serves `/healthz` and refuses sign-in with "Hosted Desk is not set up yet: its GitHub App is missing."
+
+### Gated account runtime
+
+`createAccountRuntime({ config, store, mint, baseEnv?, rootDir? })` returns
+`{ prepare(accountId), close() }`. `rootDir` defaults to `/data/realms`; its
+existing ancestors must be protected directories. `mint(repo)` receives only
+the repository verified from the account's committed binding, never HTTP client
+input. Existing admission remains unchanged: the binding must name `DESK_REPO`.
+Repository selection, account administration, capacity policy and initialization
+are separate later units.
+
+`await prepare(accountId)` returns a frozen
+`{ realm: { uid, gid, root }, env, launch(args), git(args), push(), close(), purge() }`.
+Preparation deduplicates concurrent callers, rechecks account access and freezes
+repository/installation/author authority for that manager. UID reservations
+survive preparation failures and manager replacement within the process.
+`launch` returns a relay-compatible ChildProcess whose `kill("SIGTERM"|"SIGKILL")`
+uses an inherited owning-UID supervisor channel, not a gateway PID signal.
+`git` rejects private cwd/repository overrides. `close` stops owned children,
+runs Desk's own sync lock/rebase/push loop, and only then closes its private token
+broker. Push/count failures reject shutdown and retain the broker rather than
+reporting a successful loss of writes. `purge` first closes successfully, then
+deletes that UID's contents; its 0700 root/UID tombstone remains reserved.
+
+Only realm children receive `DESK_ISOLATED_HOSTED=1`; ordinary local sessions
+and legacy `DESK_HOSTED=1` retain their existing subprocess contracts. The
+built-in Git callers use `deskGitInvocation({root,args,env})`: private mode
+validates the root's real containment within `env.DESK`, including symlinks,
+then uses cwd instead of `git -C <root>`. Git's `diff-tree --root` flag is
+unchanged. Private triage candidate worktrees live below `.git/desk-triage`,
+with desk-relative Git operands; protected operation records stay in the
+realm's factory state.
+
+Private triage also keeps Git's hook descendants private. Realm environments
+provide `DESK_PRIVATE_HOOKS_DIR`, a fixed public, read-only dispatcher directory.
+Git invokes those public entrypoints; they execute the original configured
+hooks through relative filenames, forwarding stdin, arguments and exit status.
+Original configured hook policy is still fingerprinted before/after commit;
+the ephemeral public routing override remains effective inside original hooks
+so ordinary nested Git mutations also execute the original hooks privately.
+No persisted configuration is changed. The outer commit keeps its message-file
+arguments relative. During that commit, the owned candidate's `.git` gitfile is
+held outside its worktree and replaced by a directory link to the same validated
+private administrative directory. Git discovery through this link retains a
+relative `.git/COMMIT_EDITMSG` operand even for a guarded nested commit.
+The exact gitfile is restored after the bounded commit, also before recovery
+removes an interrupted candidate; foreign replacement metadata is retained,
+not overwritten. Original hooks use normal Git discovery within the same
+linked worktree, without a forced `GIT_DIR` or `GIT_WORK_TREE`; subdirectory Git
+calls therefore work too. The private context marker and normalized index
+context stay in environment, never argv.
+No executable hook or triage operation is disabled by this transport.
+
+Sync workers/session sync and shared remote/ahead-behind readers use their
+supplied environment for both context selection and actual Git children,
+including when it differs from the ambient process environment.
+
+Detached sync and identity-refresh scripts read their root from `DESK`.
+Their admitted source-mirror filename also travels in environment
+(`DESK_BUILTIN_SCRIPT`), through a fixed Node module loader, never argv.
+Readiness-controller and status-inspection forks use the same private loader,
+retaining their IPC channel and serialization. The controller's guarded entry
+recognizes only its matching admitted script URL in private mode; an ordinary
+module import does not start a controller.
+Explicit script `--root` remains supported for local callers. Automatic
+host-package upgrades and product issue filing are unavailable in the private
+customer context and return an explicit unavailable/not-filed reason before
+spawning or claiming host-side work.
+
+These invocation changes do not implement service/MCP descendant retirement.
+That remains a separate qualification gate; gateway-operation retirement
+below must not be mistaken for proof that MCP service descendants retire.
+
+Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
+a fresh worker session. A worker's result or exit is not retirement proof:
+completion requires the worker and all its descendants, including reparented
+detached children, to be gone. The existing 60-second operation deadline is
+unchanged; cancellation signals the fresh process group only while its exact
+ChildProcess leader is still owned and unreaped. No CAP_KILL or blind PID
+cleanup is used. A separate five-second retirement watchdog does not extend
+the work deadline.
+
+If retirement cannot be proved, `DESK_OPERATION_UNQUIESCENT` puts the account
+in sticky failed-preservation state. Its broker/private root remain intact;
+new preparation and destructive cleanup are refused, and manager shutdown
+rejects even when that account's preparation never returned a prepared object.
+A proved-retired timeout reports `DESK_OPERATION_TIMEOUT` with `quiescent:true`
+and permits safe cleanup/retry or a subsequent final push. Neither rejection
+is silently discarded as an ordinary completed operation.
+The final ahead-count is checked again after the push job's descendants retire,
+within the existing push budget. A hook-produced write omitted from the earlier
+count rejects close and retains the broker rather than producing a success
+based on stale Git state.
+
+The root entrypoint drops into UID 1000 **before tini**. Enabled gateway/tini
+have exactly chown/setgid/setuid and NoNewPrivs; each desk helper/child has no
+active capabilities and NoNewPrivs. Disabled gateway/tini and children retain
+none of those capabilities. Realm roots are opaque 0700 directories under a
+711 common parent; writable HOME/TMP/XDG/config/clone all belong to their UID.
+App key files (and any Azure federated-token file) must be regular, gateway-UID
+owned, inaccessible to group/other, with protected non-symlink ancestors.
+Unsafe mounts fail startup; the runtime does not chmod mounted secrets wider.
+
+Gateway Git uses the private `desk::origin` transport. Its real HTTPS helper
+receives only a fixed public alias, with the verified repository in private Git
+configuration, not argv. `GH_REPO` preserves gh's binding-derived repository
+default. The token socket remains 0600 in its UID's private realm and is ready
+before any clone operation. This milestone does **not** claim that Desk's
+internal detached workers, problem filer, or all internal Git/root arguments
+have completed v1b-2 qualification.
 
 ## Run the tests
 
@@ -78,6 +189,24 @@ DESK_AZURITE=1 npm test
 Set `DESK_AZURITE_ENDPOINT` if Azurite listens somewhere other than `http://127.0.0.1:10002/devstoreaccount1`.
 
 The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end and Azurite tests included, on each pull request and push to main that touches `hosted/`, `plugins/desk/mcp/`, or the `hosted-tests.yml`, `hosted-deploy.yml` or `identity-checks.yml` workflows.
+
+The owning-UID fixture is an additional **local Linux** gate, not a cloud or
+credential test. Build `hosted/test/fixtures/runtime-native.Dockerfile` from the
+repository root. Create an exact-owned container with `--network none` and
+`DESK_MULTI_USER=1`, command `node /app/hosted/test/fixtures/runtime-native.js`;
+copy `runtime-native.js` and `runtime-child.js` into that fixture path before
+starting it (`hosted/test` is excluded from normal image builds). On macOS use
+`COPYFILE_DISABLE=1 tar --no-xattrs` for the copy. It uses a synthetic loopback
+Git HTTP origin and verifies kernel/UID/cwd/socket/argv/signal boundaries,
+concurrent preparation/retry, immutable authority and shutdown preservation.
+No host credentials or credential directories should be mounted.
+Adding `DESK_NATIVE_TIMEOUTS=1` and copying `runtime-timeout-native.js` into the
+same fixture directory runs the bounded real-deadline regression: an actual
+65-second Git pre-commit hook, normal delayed HTTP fetch, and detached delayed
+Git fetch. It checks close **after** timeout rejection, cleanup only after
+quiescence, and retained failed-preparation state when descendants remain.
+These cases exercise the actual 60-second deadline, not a shorter test-only
+timeout; they run concurrently within a 100-second fixture bound.
 
 ## Build the image
 

@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -x "$DESK_PRIVATE_HOOK_ORIGINAL_DIR/p4-pre-submit" ] || exit 0
+exec "$DESK_PRIVATE_HOOK_RUNNER" "$DESK_PRIVATE_HOOK_DISPATCH" p4-pre-submit "$@"

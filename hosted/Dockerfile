@@ -11,7 +11,7 @@ FROM node:22-slim
 # first on each Desk child's PATH; the shim runs this gh with a fresh
 # installation token.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git tini \
+ && apt-get install -y --no-install-recommends ca-certificates curl git tini util-linux \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
  && apt-get update \
@@ -33,17 +33,17 @@ COPY hosted hosted
 
 # The desk clone lives on the container's own disk: it is a cache of
 # arimendelow/desk that the gateway clones again on every start.
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data && chown node:node /data && chmod 755 hosted/bin/entrypoint.sh hosted/bin/git-remote-desk
 
 ENV NODE_ENV=production \
     PORT=8080 \
     DESK_PLUGIN_DIR=/app/plugins/desk \
     DESK_CLONE_DIR=/data/desk
 
-USER node
+USER root
 EXPOSE 8080
 # tini reaps the detached workers Desk leaves behind (its push worker, problem
 # filer and refreshes), which node as PID 1 would leave as zombies, and passes
 # SIGTERM on to the gateway so its shutdown can push the desk.
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/app/hosted/bin/entrypoint.sh"]
 CMD ["node", "hosted/src/main.js"]

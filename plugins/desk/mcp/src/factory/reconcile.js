@@ -82,6 +82,7 @@
 // way the orphan pass decides it.
 
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 
@@ -135,10 +136,11 @@ function msOf(value) {
 
 // The commits of the window: `[{ sha, at, tidy, entries }]`, or `null` when Git failed.
 function gitCommits({ git, root, since, until }) {
-  const result = spawnSync(git, [
-    "-C", root, "-c", "core.quotepath=off", "-c", "log.showSignature=false",
+  const invocation = deskGitInvocation({ root, args: [
+    "-c", "core.quotepath=off", "-c", "log.showSignature=false",
     "log", `--since=${since}`, `--until=${until}`, "--name-status", "-M", "-z", "--format=%x1e%H%x1f%cI%x1f%s%x1f%(trailers:key=Desk-Tidy,valueonly)",
-  ], { encoding: "utf8", env: gitEnv(), timeout: GIT_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+  ] })
+  const result = spawnSync(git, invocation.args, { ...invocation.options, encoding: "utf8", env: gitEnv(), timeout: GIT_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
   if (result.error || result.status !== 0) return null
   const commits = []
   for (const record of result.stdout.split("\x1e")) {

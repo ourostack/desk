@@ -19,6 +19,8 @@ import { createRelay } from "./relay.js";
 import { createApp, createDeepHealth } from "./server.js";
 import { serveTokens } from "./token-socket.js";
 import { ISO_TIME, isSet, keySetting, readIdentity } from "./identity-config.js";
+import { isolatedDeskEnv } from "./isolation.js";
+import { assertAccountRuntimeBoundary, createAccountRuntime } from "./account-runtime.js";
 
 export const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is missing.";
 const APP_SETTINGS = ["DESK_APP_ID", "DESK_APP_KEY_FILE", "DESK_APP_CLIENT_ID", "DESK_APP_CLIENT_SECRET"];
@@ -86,6 +88,7 @@ export function identityStartupLines({ identity }) {
 }
 
 export function readConfig(env) {
+  if (env.DESK_MULTI_USER !== undefined && !["0", "1"].includes(env.DESK_MULTI_USER)) throw new Error("DESK_MULTI_USER must be 0 or 1.");
   const { signingKeys, clientKey, clientKeyFrom } = readKeys(env);
   const publicUrl = (env.DESK_PUBLIC_URL || "https://desk.ouro.bot").replace(/\/+$/, "");
   const appReady = APP_SETTINGS.every((name) => isSet(env[name]));
@@ -113,7 +116,9 @@ export function readConfig(env) {
     cloneDir: env.DESK_CLONE_DIR,
     pluginDir: env.DESK_PLUGIN_DIR,
     identity: readIdentity(env, publicUrl),
+    multiUser: env.DESK_MULTI_USER === "1",
   };
+  if (config.multiUser && !config.identity) throw new Error("DESK_MULTI_USER requires Ouro account identity.");
   if (appReady) {
     for (const name of ["DESK_CLONE_DIR", "DESK_PLUGIN_DIR"]) if (!isSet(env[name])) throw new Error(`${name} must be set.`);
   }
@@ -277,7 +282,10 @@ export function buildGateway({ config, relay, parts, log: write }) {
   return { provider, app };
 }
 
-export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.js"), "--root", config.cloneDir];
+export const deskChildArgs = (config, realm) => [
+  join(config.pluginDir, "mcp", "index.js"),
+  ...(realm ? [] : ["--root", config.cloneDir]),
+];
 
 const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((name) => baseEnv[name] !== undefined).map((name) => [name, baseEnv[name]]));
 
@@ -288,7 +296,8 @@ const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((nam
 //
 // `author` is the Git author: with Ouro accounts, the account's binding's
 // (createAuthorLookup); without, the GitHub user of the token (`user`).
-export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv }) {
+export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv, realm }) {
+  if (realm) return isolatedDeskEnv({ realm, baseEnv, author, issuer: config.issuer });
   const { name, email } = author;
   return {
     ...passedThrough(baseEnv),
@@ -365,6 +374,7 @@ export async function stopGateway({ server, relay, pushDesk: push, closeTokenSoc
 
 export async function main(env = process.env, deps = {}) {
   const config = readConfig(env);
+  if (config.multiUser) assertAccountRuntimeBoundary(config, env);
   log(keysStartupLine(config));
   for (const line of identityStartupLines(config)) log(line);
   let relay = null;
@@ -375,13 +385,28 @@ export async function main(env = process.env, deps = {}) {
   if (parts) checkLegacyAccounts({ store: parts.store, accountIds: parts.accountIds });
   const authorFor = parts ? createAuthorLookup({ store: parts.store, repo: config.repo }) : null;
 
-  if (config.appReady) {
+  if (config.multiUser) {
+    // Prepare a realm only after an authenticated account opens a session.
+    const runtime = createAccountRuntime({
+      config, store: parts?.store, baseEnv: env,
+      mint: (repo) => installationToken({ appId: config.appId, privateKeyPem: readFileSync(config.appKeyFile, "utf8"), repo }),
+    });
+    if (config.appReady) {
+      relay = createRelay({
+        spawnDesk: async ({ auth }) => {
+          const prepared = await runtime.prepare(auth?.extra?.accountId);
+          return prepared.launch(deskChildArgs(config, prepared.realm));
+        },
+      });
+      push = () => runtime.close();
+    }
+  } else if (config.appReady) {
     const runtimeDir = mkdtempSync(join(tmpdir(), "desk-hosted-")); // mode 0700
     const socketPath = join(runtimeDir, "git-token.sock");
     const privateKeyPem = readFileSync(config.appKeyFile, "utf8");
     const mint = () => installationToken({ appId: config.appId, privateKeyPem, repo: config.repo });
     const tokenServer = serveTokens({ socketPath, mint });
-    await once(tokenServer, "listening");
+    await tokenServer.ready;
     closeTokenSocket = () => {
       tokenServer.close();
       rmSync(runtimeDir, { recursive: true, force: true });

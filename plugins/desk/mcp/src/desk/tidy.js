@@ -57,6 +57,7 @@
 //   next session start has the identity.
 
 import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { deskGitInvocation, deskScriptInvocation, isolatedDeskRoot } from "../runtime/desk-git-context.js"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import * as os from "node:os"
@@ -136,8 +137,17 @@ function run(spawn, command, args) {
   }
 }
 
+function git(spawnGit, root, args) {
+  const invocation = deskGitInvocation({ root, args })
+  try {
+    return spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: IDENTITY_TIMEOUT_MS })
+  } catch {
+    return { status: 1, stdout: "" }
+  }
+}
+
 function isGitWorkTree(root, spawnGit) {
-  const result = run(spawnGit, "git", ["-C", root, "rev-parse", "--is-inside-work-tree"])
+  const result = git(spawnGit, root, ["rev-parse", "--is-inside-work-tree"])
   return result.status === 0 && result.stdout.trim() === "true"
 }
 
@@ -210,7 +220,10 @@ function ghIdentity(root, { env, spawnGh, homeDir, now, spawnBackground }) {
   if (freshEntry(cache[key], now)) return cache[key].identity
   if (spawnBackground !== undefined) {
     try {
-      spawnBackground(process.execPath, [TIDY_STATUS_SCRIPT, "--refresh-identity", "--root", root], { env, detached: true, stdio: "ignore", windowsHide: true }).unref()
+      const privateMode = env.DESK_ISOLATED_HOSTED === "1"
+      if (privateMode) isolatedDeskRoot(root, env)
+      const invocation = deskScriptInvocation({ script: TIDY_STATUS_SCRIPT, args: ["--refresh-identity", ...(privateMode ? [] : ["--root", root])], env: privateMode ? { ...env, DESK: root } : env })
+      spawnBackground(process.execPath, invocation.args, { ...invocation.options, detached: true, stdio: "ignore", windowsHide: true }).unref()
     } catch {
       // Could not start it: the next Detect tries again.
     }
@@ -344,7 +357,7 @@ export function tidyStatus({
  * of a merge, rebase, cherry-pick or revert in the desk repository.
  */
 export function tidySafetyProblem(root, { spawnGit = spawnSync } = {}) {
-  const result = run(spawnGit, "git", ["-C", root, "rev-parse", "--absolute-git-dir"])
+  const result = git(spawnGit, root, ["rev-parse", "--absolute-git-dir"])
   if (result.status !== 0) return "the desk is not a Git repository, so a tidy could not be undone"
   const gitDir = result.stdout.trim()
   for (const [marker, what] of IN_PROGRESS_MARKERS) {
@@ -359,8 +372,9 @@ export function tidySafetyProblem(root, { spawnGit = spawnSync } = {}) {
  * like every doctor finding. Another session may be working there.
  */
 export function uncommittedPaths(root, subtree, { spawnGit = spawnSync } = {}) {
-  const top = run(spawnGit, "git", ["-C", root, "rev-parse", "--show-toplevel"])
-  const status = run(spawnGit, "git", ["-C", root, "status", "--porcelain=v1", "-z", "--", subtree])
+  const top = git(spawnGit, root, ["rev-parse", "--show-toplevel"])
+  const target = process.env.DESK_ISOLATED_HOSTED === "1" ? path.relative(root, subtree) || "." : subtree
+  const status = git(spawnGit, root, ["status", "--porcelain=v1", "-z", "--", target])
   if (top.status !== 0 || status.status !== 0) return []
   const toplevel = top.stdout.trim()
   // Git names the top level with its long spelling and forward slashes (`C:/Users/runneradmin/...`), so the desk is read back the same way: `realpathSync.native` also expands an 8.3 short name such as `RUNNER~1`, which plain `realpathSync` leaves alone, and a relative path between the two spellings would climb out of the desk.
@@ -418,7 +432,7 @@ function relSubtreeArg(root, subtree) {
 }
 
 function stagedPaths(root, relSubtree, spawnGit) {
-  const result = run(spawnGit, "git", ["-C", root, "diff", "--cached", "--name-only", "--", relSubtree])
+  const result = git(spawnGit, root, ["diff", "--cached", "--name-only", "--", relSubtree])
   if (result.status !== 0) return []
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 }
@@ -513,7 +527,7 @@ function parseNameStatus(stdout) {
 // rename when both its old and new path match, and reports an unpaired side
 // as a plain add or delete instead — never a rename crossing out of scope.
 function stagedTrackRenameTargets(root, subtree, relSubtree, spawnGit) {
-  const result = run(spawnGit, "git", ["-C", root, "diff", "--cached", "-M", "--name-status", "--", relSubtree])
+  const result = git(spawnGit, root, ["diff", "--cached", "-M", "--name-status", "--", relSubtree])
   if (result.status !== 0) return []
   const targets = new Set()
   for (const record of parseNameStatus(result.stdout)) {
@@ -604,7 +618,7 @@ function stopReason(status, spawnGit) {
 // ── Claim and hold, both in the desk repository's Git folder ─────────────
 
 function gitCommonDir(root, spawnGit) {
-  const result = run(spawnGit, "git", ["-C", root, "rev-parse", "--git-common-dir"])
+  const result = git(spawnGit, root, ["rev-parse", "--git-common-dir"])
   return result.status === 0 && hasText(result.stdout) ? path.resolve(root, result.stdout.trim()) : null
 }
 
@@ -728,7 +742,7 @@ function rosterText(root) {
 function holdFingerprint(kind, status, spawnGit) {
   if (kind === "who") return digest([status.resolved, rosterText(status.resolved.root ?? status.root)])
   if (kind === "busy") return digest(tidySafetyProblem(status.root, { spawnGit }))
-  const head = run(spawnGit, "git", ["-C", status.root, "rev-parse", "HEAD"])
+  const head = git(spawnGit, status.root, ["rev-parse", "HEAD"])
   return digest([head.stdout.trim(), uncommittedPaths(status.root, status.subtree, { spawnGit })])
 }
 
@@ -828,6 +842,10 @@ export function runTidyStatusCli({
   let args
   try {
     args = parseArgs(argv)
+    if (env.DESK_ISOLATED_HOSTED === "1") {
+      args.root ??= env.DESK
+      isolatedDeskRoot(args.root, env)
+    }
     if (args.mode === "defer" && !hasText(args.reason)) throw new Error("tidy-status: --defer needs a one-line reason")
     if (args.mode === "refresh-identity" && !hasText(args.root)) throw new Error("tidy-status: --refresh-identity needs --root")
   } catch (error) {

@@ -26,6 +26,7 @@
 //     reported (a file a hook left is never deleted), and block new resources with a stable alarm until they are recovered.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
+import { deskGitInvocation, isolatedDeskRoot } from "../runtime/desk-git-context.js"
 import { promises as fs, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { createHash, randomBytes } from "node:crypto"
@@ -86,14 +87,61 @@ function killProcessTree(pid, platform) {
   }
 }
 
-// One bounded Git call in its own process group. A time-out kills the whole group, so a hook that hangs, or a process it left
-// behind, does not outlive the call. Resolves `{status, stdout, stderr, timedOut}`; a spawn failure is status null.
-function runGit(ctx, cwd, args, env = ctx.childEnv) {
+// Hook filenames and commit-message arguments need the same private transport as the outer Git command.
+async function privateHookEnvironment(ctx, cwd, args, env, deadline) {
+  const bounded = () => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error("private hook context budget exhausted")
+    return { ...ctx, timeoutMs: remaining }
+  }
+  const config = await runGit(bounded(), cwd, ["config", "--get-all", "core.hooksPath"], env)
+  if (config.status !== 0 && config.status !== 1) throw new Error("private hook policy unavailable")
+  if (config.status === 0 && ["", "/dev/null", "nul"].includes(text(config).toLowerCase())) return env
+  const located = await runGit(bounded(), cwd, ["rev-parse", "--git-path", "hooks", ...(args[0] === "commit" ? ["--absolute-git-dir"] : [])], env)
+  if (located.status !== 0) throw new Error("private hook location unavailable")
+  const [hookDir, gitDir] = text(located).split("\n")
+  const proxy = realpathSync(env.DESK_PRIVATE_HOOKS_DIR)
+  const privateRoot = realpathSync(path.dirname(env.DESK))
+  const relative = path.relative(privateRoot, proxy)
+  if (relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))) throw new Error("private hook dispatcher must be public")
+  const out = {
+    ...env,
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: proxy,
+    DESK_PRIVATE_HOOK_ORIGINAL_DIR: config.status === 0 && !path.isAbsolute(hookDir) ? hookDir : path.resolve(realpathSync(cwd), hookDir),
+    DESK_PRIVATE_HOOK_RUNNER: ctx.platform === "linux" ? "/bin/sh" : process.execPath,
+    DESK_PRIVATE_HOOK_DISPATCH: path.join(proxy, ctx.platform === "linux" ? "dispatch.sh" : "dispatch.cjs"),
+  }
+  // Linked-worktree message-file arguments otherwise contain an absolute Git directory.
+  // Keep outer message arguments relative; originals discover the same worktree from their cwd.
+  if (args[0] === "commit") {
+    isolatedDeskRoot(gitDir, env)
+    out.GIT_DIR = path.relative(realpathSync(cwd), gitDir).split(path.sep).join("/") || "."
+    out.DESK_PRIVATE_HOOK_WORK_TREE = realpathSync(cwd)
+  }
+  return out
+}
+
+// One bounded Git call in its own process group, including private hook-context preparation.
+// A time-out kills the whole group; a spawn failure is status null.
+async function runGit(ctx, cwd, args, env = ctx.childEnv) {
+  let timeoutMs = ctx.timeoutMs
+  if (env.DESK_ISOLATED_HOSTED === "1" && !["config", "rev-parse"].includes(args[0])) {
+    const deadline = Date.now() + ctx.timeoutMs
+    try {
+      deskGitInvocation({ root: cwd, args, env })
+      env = await privateHookEnvironment(ctx, cwd, args, env, deadline)
+    } catch {
+      return { status: null, stdout: Buffer.alloc(0), stderr: "private Git hook context unavailable", timedOut: Date.now() >= deadline }
+    }
+    timeoutMs = deadline - Date.now()
+    if (timeoutMs <= 0) return { status: null, stdout: Buffer.alloc(0), stderr: "", timedOut: true }
+  }
   return new Promise((resolve) => {
     const posix = ctx.platform !== "win32"
     let child
     try {
-      child = ctx.spawn("git", ["-C", cwd, ...args], { env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true })
+      const invocation = deskGitInvocation({ root: cwd, args, env })
+      child = ctx.spawn("git", invocation.args, { ...invocation.options, env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true })
     } catch {
       resolve({ status: null, stdout: Buffer.alloc(0), stderr: "", timedOut: false })
       return
@@ -108,7 +156,7 @@ function runGit(ctx, cwd, args, env = ctx.childEnv) {
     const timer = setTimeout(() => {
       timedOut = true
       killProcessTree(child.pid, ctx.platform)
-    }, ctx.timeoutMs)
+    }, timeoutMs)
     let settled = false
     const settle = (status) => {
       if (settled) return
@@ -245,6 +293,65 @@ async function saveRecord(ctx, record) {
   await writeProtectedTriageFile(ctx.env, ["ops", `${record.token}.json`], `${JSON.stringify(record)}\n`, ctx.protectOptions)
 }
 
+function worktreePath(ctx, dir, token) {
+  return ctx.env.DESK_ISOLATED_HOSTED === "1"
+    ? path.join(ctx.deskRoot, ".git", "desk-triage", token, "wt")
+    : path.join(dir, token, "wt")
+}
+
+function worktreeArgument(ctx, record) {
+  return ctx.env.DESK_ISOLATED_HOSTED === "1" ? path.relative(ctx.deskRoot, record.path) : record.path
+}
+
+// Git canonicalizes a linked worktree's gitfile to an absolute administrative directory.
+// A directory link instead lets discovery retain ".git" as its message-operand prefix,
+// including for nested commits after a hook changes cwd. Only our candidate metadata changes.
+async function privateCommit(ctx, record) {
+  const commit = () => runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, [TOOL_COMMIT_ENV]: "1" })
+  if (ctx.env.DESK_ISOLATED_HOSTED !== "1") return commit()
+  const dot = path.join(record.path, ".git")
+  if (!(await fs.lstat(dot)).isFile()) throw new Error("private Git metadata unavailable")
+  const bytes = await fs.readFile(dot, "utf8")
+  if (!bytes.startsWith("gitdir: ")) throw new Error("private Git metadata unavailable")
+  const target = realpathSync(path.resolve(record.path, bytes.slice(8).trim()))
+  isolatedDeskRoot(target, ctx.env)
+  const backup = path.join(path.dirname(record.path), "gitfile")
+  const saved = await fs.lstat(backup).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+  if (saved !== null) throw new Error("private Git metadata already retained")
+  await fs.rename(dot, backup)
+  try {
+    await fs.symlink(ctx.platform === "win32" ? target : path.relative(record.path, target), dot, ctx.platform === "win32" ? "junction" : "dir")
+    return await commit()
+  } finally {
+    if (!(await restorePrivateGitFile(ctx, record))) throw new Error("private Git metadata retained")
+  }
+}
+
+// Also used by recovery after an interrupted commit. Never replace a hook's foreign metadata.
+async function restorePrivateGitFile(ctx, record) {
+  if (ctx.env.DESK_ISOLATED_HOSTED !== "1") return true
+  const backup = path.join(path.dirname(record.path), "gitfile")
+  try {
+    const saved = await fs.lstat(backup).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+    if (saved === null) return true
+    if (!saved.isFile()) return false
+    const bytes = await fs.readFile(backup, "utf8")
+    if (!bytes.startsWith("gitdir: ")) return false
+    const target = realpathSync(path.resolve(record.path, bytes.slice(8).trim()))
+    isolatedDeskRoot(target, ctx.env)
+    const dot = path.join(record.path, ".git")
+    const stat = await fs.lstat(dot).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+    if (stat !== null) {
+      if (!stat.isSymbolicLink() || realpathSync(dot) !== target) return false
+      await fs.unlink(dot)
+    }
+    await fs.rename(backup, dot)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Whether the worktree holds nothing but the record's own files (staged or written): no other change, and no untracked or
 // ignored file a hook may have left. Only then may the worktree be removed, with `--force` for those own changes.
 async function onlyOwnChanges(ctx, record) {
@@ -257,9 +364,14 @@ async function onlyOwnChanges(ctx, record) {
 // Removes the worktree and its branch only when it holds nothing but its own files: a file a hook left there is never deleted.
 // Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
 async function release(ctx, record, resource) {
+  if (!(await restorePrivateGitFile(ctx, record))) {
+    resource.disposition = "retained"
+    await saveRecord(ctx, { ...record, disposition: "retained" })
+    return false
+  }
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
-    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
+    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", worktreeArgument(ctx, record)])).status === 0
     if (!removed) {
       resource.disposition = "retained"
       await saveRecord(ctx, { ...record, disposition: "retained" })
@@ -292,7 +404,7 @@ async function recover(ctx, resources) {
       record = null
     }
     const owned = record?.schema === OPERATION_SCHEMA && name === `${record.token}.json` && OWNED_REF.test(record.ref) && Array.isArray(record.files) &&
-      record.ref === `desk-triage/${record.token}` && record.path === path.join(dir, record.token, "wt")
+      record.ref === `desk-triage/${record.token}` && record.path === worktreePath(ctx, dir, record.token)
     const resource = { kind: "worktree", path: owned ? record.path : path.join(dir, name), ref: owned ? record.ref : null, owner: record?.owner ?? null, disposition: "retained" }
     resources.push(resource)
     if (!owned || !(await release(ctx, record, resource))) return false
@@ -305,18 +417,22 @@ async function candidate(ctx, base, files, resources) {
   const token = hex(16)
   const dir = await opsDir(ctx)
   const record = {
-    schema: OPERATION_SCHEMA, token, path: path.join(dir, token, "wt"), ref: `desk-triage/${token}`, owner: process.pid,
+    schema: OPERATION_SCHEMA, token, path: worktreePath(ctx, dir, token), ref: `desk-triage/${token}`, owner: process.pid,
     files: files.map((file) => file.path), disposition: "active",
   }
   const resource = { kind: "worktree", path: record.path, ref: record.ref, owner: record.owner, disposition: "active" }
   resources.push(resource)
   await saveRecord(ctx, record)
+  if (ctx.env.DESK_ISOLATED_HOSTED === "1") {
+    isolatedDeskRoot(path.join(ctx.deskRoot, ".git"), ctx.env)
+    await ensureOwnerOnlyDirectory(path.join(ctx.deskRoot, ".git", "desk-triage"), ctx.platform, NAMING)
+  }
   await ensureOwnerOnlyDirectory(path.dirname(record.path), ctx.platform, NAMING)
   const hold = async (state) => {
     await release(ctx, record, resource)
     return { hold: state }
   }
-  if ((await runGit(ctx, ctx.deskRoot, ["worktree", "add", "-q", "-b", record.ref, record.path, base])).status !== 0) return hold("write_failed")
+  if ((await runGit(ctx, ctx.deskRoot, ["worktree", "add", "-q", "-b", record.ref, worktreeArgument(ctx, record), base])).status !== 0) return hold("write_failed")
   for (const file of files) {
     let cursor = record.path
     for (const segment of path.posix.dirname(file.path).split("/")) {
@@ -337,7 +453,7 @@ async function candidate(ctx, base, files, resources) {
   if (before === null) return hold("policy_unknown")
   if (before === "disabled") return hold("policy_refused")
   await ctx.step("before_commit")
-  const commit = await runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, [TOOL_COMMIT_ENV]: "1" })
+  const commit = await privateCommit(ctx, record)
   if (commit.timedOut) return hold("policy_unknown")
   if (commit.status !== 0) return hold("policy_refused")
   if ((await hookPolicy(ctx, record.path)) !== before) return hold("policy_unknown")

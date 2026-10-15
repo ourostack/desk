@@ -12,6 +12,7 @@
 // for tests only; real callers never pass it.
 
 import { mkdtempSync, rmSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -47,7 +48,8 @@ export function commitBranchRefusal(root, spawnGit, stateBranch) {
 }
 
 function run(spawnGit, root, args, extra = {}) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra })
+  const invocation = deskGitInvocation({ root, args, env: extra.env ?? process.env })
+  return spawnGit("git", invocation.args, { encoding: "utf8", timeout: GIT_TIMEOUT_MS, ...extra, ...invocation.options })
 }
 
 /** True when `result` (a `spawnSync`-shaped return value) is `spawnGit` reporting its own timeout kill. */

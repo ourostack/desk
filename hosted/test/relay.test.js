@@ -280,6 +280,19 @@ test("close() stops every child, and one that ignores SIGTERM gets SIGKILL after
   assert.equal(relay.size(), 0);
 });
 
+test("account closure escalates an ignoring child even after its session leaves the relay", async (t) => {
+  const { relay, url, children } = await start(t, { childEnv: { ECHO_IGNORE_SIGTERM: "1" }, killAfterMs: 30 });
+  await open(url, undefined, { account: "synthetic-account" });
+  const { child, closed } = children[0];
+  t.after(() => child.kill("SIGKILL"));
+  assert.equal(relay.closeAccount("synthetic-account"), 1);
+  const result = await Promise.race([
+    closed.then(([, signal]) => signal),
+    new Promise(resolve => setTimeout(() => resolve("still running"), 500)),
+  ]);
+  assert.equal(result, "SIGKILL");
+});
+
 test("after close() starts, a new session is refused with 503", async (t) => {
   const { relay, url, children } = await start(t);
   await relay.close();

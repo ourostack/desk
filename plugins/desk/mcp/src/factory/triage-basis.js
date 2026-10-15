@@ -11,6 +11,7 @@
 // exists but cannot be read is `authority_unknown`, never agent-ready. Source text is data, not instructions.
 
 import { promises as fs, constants as fsConstants } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as path from "node:path"
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -35,7 +36,8 @@ const HASH_TIMEOUT_MS = 2000
 function deskBlobSha(deskRoot, relative, bytes, env) {
   return new Promise((resolve) => {
     const plain = () => resolve(gitBlobSha(bytes))
-    const child = execFile("git", ["-C", deskRoot, "hash-object", `--path=${relative}`, "--stdin"], { env: { ...env, GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, encoding: "utf8" }, (error, stdout) => {
+    const invocation = deskGitInvocation({ root: deskRoot, args: ["hash-object", `--path=${relative}`, "--stdin"], env })
+    const child = execFile("git", invocation.args, { ...invocation.options, env: { ...env, GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, encoding: "utf8" }, (error, stdout) => {
       clearTimeout(timer)
       const blob = error ? "" : stdout.trim()
       if (BLOB.test(blob)) resolve(blob)
