@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:25:58Z'
-updated: '2026-10-15T04:25:59Z'
+updated: '2026-10-15T04:26:00Z'
 track: t
 repos:
   - name: widgets
@@ -27,7 +27,7 @@ Ship it.
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
 | a | — | widgets | pending | — |
-| b | a | widgets | pending | — |
+| b | a | gadgets | pending | — |
 
 ## Progress log
 
