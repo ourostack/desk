@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:26:15Z'
-updated: '2026-10-15T04:26:16Z'
+updated: '2026-10-15T04:26:17Z'
 track: t
 repos: []
 flow:
@@ -24,7 +24,7 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| api | — | — | pending | — |
+| api | — | — | dropped | no |
 
 ## Resources
 
