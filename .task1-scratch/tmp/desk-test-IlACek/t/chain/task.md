@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:25:50Z'
-updated: '2026-10-15T04:25:51Z'
+updated: '2026-10-15T04:25:52Z'
 track: t
 repos:
   - name: widgets
@@ -31,7 +31,7 @@ Ship it.
 
 | Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
 |---|---|---|---|---|---|
-| worktree:/Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-resources-lAxN6t/api | step api | — | remove after merge | — |  |
+| worktree:/Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-resources-lAxN6t/api | step api | — | keep for review | — |  |
 | branch:o/widgets#feat/api | task t/chain | — | — | — |  |
 
 ## Progress log
