@@ -8,6 +8,7 @@ model: inherit
 # declares no `mcp-servers:` block, so it is not affected today — declaring `tools: ["*"]`
 # (unrestricted) future-proofs the substrate base should that visibility rule tighten.
 tools: ["*"]
+disallowedTools: ["AskUserQuestion"]
 background: false
 initialPrompt: "Run the `desk:session-start` skill before any other work."
 ---
