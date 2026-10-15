@@ -25,7 +25,7 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| api | — | widgets | in review | https://github.com/o/widgets/pull/7 |
+| api | — | widgets | delivered | https://github.com/o/widgets/pull/7 |
 
 ## Resources
 
@@ -36,3 +36,4 @@ Ship it.
 ## Progress log
 
 - 2026-10-01: began
+- 2026-10-14: checked
