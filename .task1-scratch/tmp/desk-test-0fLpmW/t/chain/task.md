@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:26:39Z'
-updated: '2026-10-15T04:26:40Z'
+updated: '2026-10-15T04:26:41Z'
 track: t
 repos:
   - name: widgets
@@ -25,7 +25,7 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| api | — | widgets | pending | — |
+| api | — | widgets | in review | https://github.com/o/widgets/pull/7 |
 
 ## Resources
 
