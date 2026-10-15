@@ -1,7 +1,7 @@
 ---
 schema_version: 1
-title: T
-status: drafting
+title: card-stuck
+status: blocked
 created: '2026-10-15T04:25:56Z'
 updated: '2026-10-15T04:25:56Z'
 track: t
