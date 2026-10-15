@@ -1,14 +1,14 @@
 ---
 schema_version: 1
 title: Title changed-mind SENTINEL-card-body-text
-status: done
+status: processing
 created: '2026-10-15T04:26:59Z'
 updated: "2026-10-15T05:25:50Z"
 track: t
 flow:
   since: created
-  rev: 3
-  reached: done
+  rev: 5
+  reached: processing
   first_validating_at: "2026-10-15T04:26:59Z"
   first_delivered_at: "2026-10-15T04:26:59Z"
   delivered_at: "2026-10-15T04:26:59Z"
@@ -18,9 +18,11 @@ evidence:
   ref: 'https://github.com/example-org/example-repo/pull/7'
   recorded_at: '2026-10-15T04:26:59Z'
 signoff:
-  state: accepted
+  state: refused
   at: "2026-10-15T05:25:50.990Z"
-  reason: null
+  reason: defect
+returns:
+  - "2026-10-15T05:25:50.990Z done processing agent_error after_delivery refused=defect"
 ---
 
 SENTINEL-card-body-text
