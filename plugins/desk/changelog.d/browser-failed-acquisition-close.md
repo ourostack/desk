@@ -1,3 +1,0 @@
-The browser no longer starts a new connection when asked to close after acquisition failed. Desk applies a small, audited Playwright lifecycle patch to staged installs, validates a versioned receipt against the installed bundle, and migrates existing compatible package trees offline without changing files used by running clients.
-
-An incompatible upstream update keeps the last verified generation and records the refresh failure; a cold install without compatible code reports a degraded browser rather than running an unverified cleanup path. This fixes failed-acquisition close safety, not unattended extension provisioning, foreground preservation or native all-agent isolation.
