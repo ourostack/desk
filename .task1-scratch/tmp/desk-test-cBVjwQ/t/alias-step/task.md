@@ -13,8 +13,9 @@ flow:
   first_delivered_at: null
   delivered_at: null
   deliveries: 0
+category: general
 ---
 
 Intro
 
-**Next step:** old step
+**Next step:** two
