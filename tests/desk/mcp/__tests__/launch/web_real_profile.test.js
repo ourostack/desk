@@ -349,6 +349,38 @@ async function tickStorage(t, milliseconds) {
   }
 }
 
+test("a persisted credential gap reports an agent-owned boundary, not operator installation work", async (t) => {
+  const root = await mkTempRoot("real-connect-")
+  mkdirSync(path.join(root, "tmp"))
+  const base = localState(path.join(root, "home"), { Default: "me@microsoft.com" })
+  const profile = path.join(base, "Default")
+  leveldb(profile)
+  touch(path.join(profile, "Extensions", real.EXTENSION_ID, "0.4.0", "manifest.json"),
+    JSON.stringify({ name: "Playwright Extension", version: "0.4.0", manifest_version: 3 }))
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
+  const connecting = real.connect(connectOptions(root, {
+    env: { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN },
+    requireModule: () => levelStub([]),
+  }))
+  await new Promise(setImmediate)
+  await tickStorage(t, 10000)
+  const answer = await connecting
+  assert.deepEqual(Object.keys(answer), ["payload"])
+  assert.equal(answer.payload.code, "browser_extension_missing")
+  assert.match(answer.payload.summary, /no usable persisted Playwright Extension credential/u)
+  assert.match(answer.payload.summary, /profile Default/u)
+  assert.doesNotMatch(answer.payload.summary, /is not installed/u)
+  assert.match(answer.payload.fix, /^Stop browser calls/u)
+  assert.match(answer.payload.fix, /preserve the existing browser and profile/u)
+  assert.match(answer.payload.fix, /Automatic extension setup is not available through this launcher/u)
+  assert.match(answer.payload.fix, /agent-owned repair/u)
+  assert.match(answer.payload.fix, /not an operator setup chore/u)
+  assert.ok(answer.payload.fix.includes(real.INSTALL_URL))
+  assert.doesNotMatch(answer.payload.fix, /then retry|install it in that profile|click its toolbar icon/u)
+  assert.doesNotMatch(JSON.stringify(answer), new RegExp(TOKEN, "u"))
+  assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
+})
+
 for (const initial of [null, ""]) {
   test(`connecting waits for ${initial === null ? "a missing" : "an empty"} token to persist, without launching a browser`, async (t) => {
     const root = await mkTempRoot("real-connect-")
@@ -425,7 +457,7 @@ test("a storage error during readiness polling stops immediately instead of beco
   assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
 })
 
-test("connecting names the missing profile, the missing extension and an unreadable token, each in one line with its fix", async () => {
+test("connecting names the missing profile, unavailable credential and unreadable token, each in one line with its fix", async () => {
   const root = await mkTempRoot("real-connect-")
   mkdirSync(path.join(root, "tmp"))
   const home = path.join(root, "home")
@@ -439,7 +471,8 @@ test("connecting names the missing profile, the missing extension and an unreada
   const noExtension = await real.connect(connectOptions(root, { requireModule: modules([]) }))
   assert.equal(noExtension.payload.code, "browser_extension_missing")
   assert.ok(noExtension.payload.fix.includes(real.INSTALL_URL))
-  assert.match(noExtension.payload.fix, /if it is already installed, click its toolbar icon once to open its page, then retry\.$/u)
+  assert.match(noExtension.payload.fix, /^Stop browser calls/u)
+  assert.doesNotMatch(noExtension.payload.fix, /then retry/u)
   assert.match(noExtension.payload.summary, /profile Profile 3/u)
   assert.equal((await real.connect(connectOptions(root, { requireModule: modules([[tokenKey(), latin("")]]) }))).payload.code, "browser_extension_missing")
 
