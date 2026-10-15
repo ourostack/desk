@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chownSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chownSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -29,7 +28,8 @@ if (process.env.DESK_NATIVE_ISOLATION_CHILD === "1") {
   }));
 } else {
   assertGatewayKernelBoundary({ status: status(), uid: 1000 });
-  const root = mkdtempSync(join(tmpdir(), "desk-native-boundary-"));
+  const root = "/data/isolation-native";
+  mkdirSync(root, { mode: 0o755 });
   chmodSync(root, 0o755);
   const realms = [19001, 19002].map(uid => {
     const realm = { uid, gid: uid, root: join(root, `realm-${uid}`) };

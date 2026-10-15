@@ -46,11 +46,52 @@ The gateway derives `DESK_MCP_ICON_URL` for each Desk child from `DESK_PUBLIC_UR
 | `DESK_LEGACY_CUTOFF` | ISO time after which legacy tokens, and every token refreshed from them, are refused. Set once, 14 days after the release is confirmed live; unset, legacy tokens keep working. Tokens from an Ouro or GitHub-fallback sign-in can't be refreshed more than 30 days after that sign-in, whatever the cutoff. |
 | `DESK_REDIRECTS` | Comma-separated exact redirect URLs a client may register or name, each an `https` (or loopback `http`) URL written as a URL parser writes it (lower-case host, no default port), with no fragment or user info; the gateway refuses to start otherwise. Unset, the default is `https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect` (Claude's callbacks and VS Code's, which VS Code registers alongside its loopback ones). Setting it replaces the whole default, so copy every entry you still want; without claude.ai's callback, Ari's claude.ai connector stops working at its next request. The gateway logs the allowlist in force at start and warns when claude.ai's callback is missing. Set it with `DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh`; a rerun without it keeps the app's current value, and passing it empty returns to the default. Loopback (`http://localhost` and `http://127.0.0.1` on any port) and ChatGPT's per-connector callback (`https://chatgpt.com/connector/oauth/<one segment of letters, digits, - and _>`) are always allowed. Every client's redirects are checked again on each use, so removing one shuts out clients that registered it before. |
 | `DESK_CLONE_DIR` | Where the desk is cloned. The image sets `/data/desk`. |
+| `DESK_MULTI_USER` | Experimental owning-UID runtime gate. Unset or `0` preserves the legacy shared clone; only `1` enables account-keyed realms. Other values fail startup. Leave off until complete v1b-2 staging/P3 qualification. Requires Ouro identity and the Linux image entrypoint's kernel boundary; never falls back to legacy execution. |
 | `DESK_PLUGIN_DIR` | Desk's plugin directory. The image sets `/app/plugins/desk`. |
 | `DESK_REAL_GH` | Optional path to the real `gh`. By default the shim uses the next `gh` on `PATH`; the image installs it at `/usr/bin/gh`. |
 | `PORT` | Listening port. Default `8080`. |
 
 Until the GitHub App exists, its four settings hold the placeholder `unset`. The gateway then serves `/healthz` and refuses sign-in with "Hosted Desk is not set up yet: its GitHub App is missing."
+
+### Gated account runtime
+
+`createAccountRuntime({ config, store, mint, baseEnv?, rootDir? })` returns
+`{ prepare(accountId), close() }`. `rootDir` defaults to `/data/realms`; its
+existing ancestors must be protected directories. `mint(repo)` receives only
+the repository verified from the account's committed binding, never HTTP client
+input. Existing admission remains unchanged: the binding must name `DESK_REPO`.
+Repository selection, account administration, capacity policy and initialization
+are separate later units.
+
+`await prepare(accountId)` returns a frozen
+`{ realm: { uid, gid, root }, env, launch(args), git(args), push(), close(), purge() }`.
+Preparation deduplicates concurrent callers, rechecks account access and freezes
+repository/installation/author authority for that manager. UID reservations
+survive preparation failures and manager replacement within the process.
+`launch` returns a relay-compatible ChildProcess whose `kill("SIGTERM"|"SIGKILL")`
+uses an inherited owning-UID supervisor channel, not a gateway PID signal.
+`git` rejects private cwd/repository overrides. `close` stops owned children,
+runs Desk's own sync lock/rebase/push loop, and only then closes its private token
+broker. Push/count failures reject shutdown and retain the broker rather than
+reporting a successful loss of writes. `purge` first closes successfully, then
+deletes that UID's contents; its 0700 root/UID tombstone remains reserved.
+
+The root entrypoint drops into UID 1000 **before tini**. Enabled gateway/tini
+have exactly chown/setgid/setuid and NoNewPrivs; each desk helper/child has no
+active capabilities and NoNewPrivs. Disabled gateway/tini and children retain
+none of those capabilities. Realm roots are opaque 0700 directories under a
+711 common parent; writable HOME/TMP/XDG/config/clone all belong to their UID.
+App key files (and any Azure federated-token file) must be regular, gateway-UID
+owned, inaccessible to group/other, with protected non-symlink ancestors.
+Unsafe mounts fail startup; the runtime does not chmod mounted secrets wider.
+
+Gateway Git uses the private `desk::origin` transport. Its real HTTPS helper
+receives only a fixed public alias, with the verified repository in private Git
+configuration, not argv. `GH_REPO` preserves gh's binding-derived repository
+default. The token socket remains 0600 in its UID's private realm and is ready
+before any clone operation. This milestone does **not** claim that Desk's
+internal detached workers, problem filer, or all internal Git/root arguments
+have completed v1b-2 qualification.
 
 ## Run the tests
 
@@ -78,6 +119,17 @@ DESK_AZURITE=1 npm test
 Set `DESK_AZURITE_ENDPOINT` if Azurite listens somewhere other than `http://127.0.0.1:10002/devstoreaccount1`.
 
 The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end and Azurite tests included, on each pull request and push to main that touches `hosted/`, `plugins/desk/mcp/`, or the `hosted-tests.yml`, `hosted-deploy.yml` or `identity-checks.yml` workflows.
+
+The owning-UID fixture is an additional **local Linux** gate, not a cloud or
+credential test. Build `hosted/test/fixtures/runtime-native.Dockerfile` from the
+repository root. Create an exact-owned container with `--network none` and
+`DESK_MULTI_USER=1`, command `node /app/hosted/test/fixtures/runtime-native.js`;
+copy `runtime-native.js` and `runtime-child.js` into that fixture path before
+starting it (`hosted/test` is excluded from normal image builds). On macOS use
+`COPYFILE_DISABLE=1 tar --no-xattrs` for the copy. It uses a synthetic loopback
+Git HTTP origin and verifies kernel/UID/cwd/socket/argv/signal boundaries,
+concurrent preparation/retry, immutable authority and shutdown preservation.
+No host credentials or credential directories should be mounted.
 
 ## Build the image
 
