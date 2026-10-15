@@ -73,19 +73,19 @@ const FILE_DESK_PROBLEM_SCRIPT = fileURLToPath(new URL("../../scripts/file-desk-
 // SSH-remote desk can never hang this worker either. A caller's own
 // `GIT_SSH_COMMAND` (an already-configured SSH wrapper, a custom identity
 // file) is extended, never replaced.
-function gitEnv() {
-  const existing = process.env.GIT_SSH_COMMAND
+function gitEnv(env) {
+  const existing = env.GIT_SSH_COMMAND
   const sshCommand = typeof existing === "string" && existing.trim() !== "" ? `${existing} -o BatchMode=yes` : "ssh -o BatchMode=yes"
-  return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
 }
 
-function run(spawnGit, root, args) {
-  const invocation = deskGitInvocation({ root, args })
+function run(spawnGit, root, args, env) {
+  const invocation = deskGitInvocation({ root, args, env })
   return spawnGit("git", invocation.args, {
     ...invocation.options,
     encoding: "utf8",
     timeout: GIT_TIMEOUT_MS,
-    env: gitEnv(),
+    env: gitEnv(env),
   })
 }
 
@@ -205,14 +205,14 @@ export async function acquireSyncLock({
 // ---------------------------------------------------------------------------
 
 /** True when `root` has at least one Git remote configured. */
-export function hasRemoteConfigured(root, spawnGit) {
-  const result = run(spawnGit, root, ["remote"])
+export function hasRemoteConfigured(root, spawnGit, env = process.env) {
+  const result = run(spawnGit, root, ["remote"], env)
   return result.status === 0 && result.stdout.trim() !== ""
 }
 
 /** `{ ahead, behind }` against the current branch's upstream, or `null` when there is none (no push target). */
-export function aheadBehindCounts({ root, spawnGit }) {
-  const result = run(spawnGit, root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+export function aheadBehindCounts({ root, spawnGit, env = process.env }) {
+  const result = run(spawnGit, root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"], env)
   if (result.status !== 0 || typeof result.stdout !== "string") return null
   return parseAheadBehind(result.stdout)
 }
@@ -231,9 +231,9 @@ export function reportGitReadFailure(reason) {
 const gitReads = createGitReader({ onError: reportGitReadFailure })
 
 // `signal` is the status run that asks. Once it aborts, the read throws its reason instead of answering: a read that was killed or never started looks the same as a desk with no remote, and that must not reach a status payload.
-async function runAsync(root, args, signal) {
+async function runAsync(root, args, signal, env) {
   signal?.throwIfAborted()
-  const result = await gitReads.read({ root, args, env: gitEnv(), timeoutMs: GIT_TIMEOUT_MS }, { signal })
+  const result = await gitReads.read({ root, args, env: gitEnv(env), timeoutMs: GIT_TIMEOUT_MS }, { signal })
   signal?.throwIfAborted()
   return result
 }
@@ -248,37 +248,37 @@ export function waitForStatusGitReads(signal) {
   return gitReads.settled(signal)
 }
 
-export async function hasRemoteConfiguredAsync(root, { signal } = {}) {
-  const result = await runAsync(root, ["remote"], signal)
+export async function hasRemoteConfiguredAsync(root, { signal, env = process.env } = {}) {
+  const result = await runAsync(root, ["remote"], signal, env)
   return result.status === 0 && result.stdout.trim() !== ""
 }
 
-export async function aheadBehindCountsAsync({ root, signal }) {
-  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"], signal)
+export async function aheadBehindCountsAsync({ root, signal, env = process.env }) {
+  const result = await runAsync(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"], signal, env)
   return result.status === 0 ? parseAheadBehind(result.stdout) : null
 }
 
-function canPush(root, spawnGit) {
-  return hasRemoteConfigured(root, spawnGit) && aheadBehindCounts({ root, spawnGit }) !== null
+function canPush(root, spawnGit, env) {
+  return hasRemoteConfigured(root, spawnGit, env) && aheadBehindCounts({ root, spawnGit, env }) !== null
 }
 
-function conflictedPaths(root, spawnGit) {
-  const result = run(spawnGit, root, ["diff", "--name-only", "--diff-filter=U"])
+function conflictedPaths(root, spawnGit, env) {
+  const result = run(spawnGit, root, ["diff", "--name-only", "--diff-filter=U"], env)
   if (result.status !== 0 || typeof result.stdout !== "string") return []
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 }
 
 // The number of stash entries `root` currently has — used only to notice a
 // `git stash pop` that silently failed to drop its own entry (below).
-export function stashCount(root, spawnGit) {
-  const result = run(spawnGit, root, ["stash", "list"])
+export function stashCount(root, spawnGit, env = process.env) {
+  const result = run(spawnGit, root, ["stash", "list"], env)
   if (result.status !== 0 || typeof result.stdout !== "string") return 0
   return result.stdout.split("\n").filter((line) => line.trim() !== "").length
 }
 
-function abortRebase(root, spawnGit) {
+function abortRebase(root, spawnGit, env) {
   // Best-effort safety net: harmless (and ignored) when there is no rebase in progress.
-  run(spawnGit, root, ["rebase", "--abort"])
+  run(spawnGit, root, ["rebase", "--abort"], env)
 }
 
 /**
@@ -296,22 +296,22 @@ function abortRebase(root, spawnGit) {
  * untracked file colliding with one the stash would restore), which leaves
  * the stash entry behind with no UU marker at all.
  */
-function pushWithRetry(root, spawnGit) {
-  if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
-  const stashBefore = stashCount(root, spawnGit)
-  const pulled = run(spawnGit, root, ["pull", "--rebase", "--autostash"])
+function pushWithRetry(root, spawnGit, env) {
+  if (run(spawnGit, root, ["push"], env).status === 0) return { result: "ok" }
+  const stashBefore = stashCount(root, spawnGit, env)
+  const pulled = run(spawnGit, root, ["pull", "--rebase", "--autostash"], env)
   if (pulled.status !== 0) {
-    const paths = conflictedPaths(root, spawnGit)
-    abortRebase(root, spawnGit)
+    const paths = conflictedPaths(root, spawnGit, env)
+    abortRebase(root, spawnGit, env)
     return { result: "blocked", reason: "pull_rebase_failed", paths }
   }
-  const stashConflictPaths = conflictedPaths(root, spawnGit)
-  if (stashConflictPaths.length > 0 || stashCount(root, spawnGit) > stashBefore) {
-    abortRebase(root, spawnGit)
+  const stashConflictPaths = conflictedPaths(root, spawnGit, env)
+  if (stashConflictPaths.length > 0 || stashCount(root, spawnGit, env) > stashBefore) {
+    abortRebase(root, spawnGit, env)
     return { result: "blocked", reason: "autostash_pop_conflict", paths: stashConflictPaths }
   }
-  if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
-  abortRebase(root, spawnGit)
+  if (run(spawnGit, root, ["push"], env).status === 0) return { result: "ok" }
+  abortRebase(root, spawnGit, env)
   return { result: "blocked", reason: "push_rejected_after_rebase", paths: [] }
 }
 
@@ -516,6 +516,7 @@ export async function runPushWorker({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
   stderr = process.stderr,
 }) {
+  if (env.DESK_ISOLATED_HOSTED === "1") isolatedDeskRoot(root, env)
   const lock = await acquireSyncLock({ root, env })
   if (lock?.refused) {
     // Not silent, even though the CLI's own stdio is ignored (`defaultSpawnWorker`): the reason still lands
@@ -528,11 +529,11 @@ export async function runPushWorker({
   }
   if (lock === null) return { result: "busy" }
   try {
-    if (!canPush(root, spawnGit)) return { result: "skipped" }
+    if (!canPush(root, spawnGit, env)) return { result: "skipped" }
     await clock.sleep(debounceMs)
     let pushed = false
     for (;;) {
-      const counts = aheadBehindCounts({ root, spawnGit })
+      const counts = aheadBehindCounts({ root, spawnGit, env })
       if (counts === null || counts.ahead <= 0) {
         const patch = { blocked: false, reason: null, paths: [] }
         if (pushed) {
@@ -542,7 +543,7 @@ export async function runPushWorker({
         updateSyncStatus(root, env, patch)
         return { result: "ok" }
       }
-      const attempt = pushWithRetry(root, spawnGit)
+      const attempt = pushWithRetry(root, spawnGit, env)
       if (attempt.result === "ok") {
         pushed = true
         continue
@@ -654,8 +655,8 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
  * can't afford to reach synchronously. Never throws.
  */
 export function finalUnpushedCheck({ root, env, spawnGit = spawnSync }) {
-  if (!hasRemoteConfigured(root, spawnGit)) return { state: "clean" }
-  const counts = aheadBehindCounts({ root, spawnGit })
+  if (!hasRemoteConfigured(root, spawnGit, env)) return { state: "clean" }
+  const counts = aheadBehindCounts({ root, spawnGit, env })
   if (counts === null || counts.ahead <= 0) return { state: "clean" }
 
   const existing = readSyncStatus({ root, env })

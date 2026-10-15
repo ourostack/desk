@@ -52,10 +52,10 @@ const FILE_DESK_PROBLEM_SCRIPT = fileURLToPath(new URL("../../scripts/file-desk-
 // gives the HTTPS credential prompt: `-o BatchMode=yes` disables every
 // interactive SSH prompt so an SSH-remote desk can never hang session start
 // either. A caller's own `GIT_SSH_COMMAND` is extended, never replaced.
-function gitEnv() {
-  const existing = process.env.GIT_SSH_COMMAND
+function gitEnv(env) {
+  const existing = env.GIT_SSH_COMMAND
   const sshCommand = typeof existing === "string" && existing.trim() !== "" ? `${existing} -o BatchMode=yes` : "ssh -o BatchMode=yes"
-  return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
 }
 
 // A budget-exhausted caller must never hand `spawnSync` a `timeout` of `0`
@@ -64,14 +64,14 @@ function gitEnv() {
 // `timeoutMs` runs out and reports a synthetic failure instead. Every call
 // site below threads its own budgeted timeout through explicitly (fix
 // round), so `timeoutMs` has no default of its own left to fall back to.
-function run(spawnGit, root, args, timeoutMs) {
+function run(spawnGit, root, args, timeoutMs, env) {
   if (timeoutMs <= 0) return { status: 1, stdout: "", stderr: "sync-workspace budget exhausted" }
-  const invocation = deskGitInvocation({ root, args })
+  const invocation = deskGitInvocation({ root, args, env })
   return spawnGit("git", invocation.args, {
     ...invocation.options,
     encoding: "utf8",
     timeout: timeoutMs,
-    env: gitEnv(),
+    env: gitEnv(env),
   })
 }
 
@@ -88,17 +88,17 @@ async function pathExists(file) {
   }
 }
 
-function pull(root, spawnGit, timeoutMs) {
-  return run(spawnGit, root, ["pull", "--rebase", "--autostash"], timeoutMs)
+function pull(root, spawnGit, timeoutMs, env) {
+  return run(spawnGit, root, ["pull", "--rebase", "--autostash"], timeoutMs, env)
 }
 
-function abortRebase(root, spawnGit, timeoutMs) {
+function abortRebase(root, spawnGit, timeoutMs, env) {
   // Best-effort safety net: harmless (and ignored) when there is no rebase in progress.
-  run(spawnGit, root, ["rebase", "--abort"], timeoutMs)
+  run(spawnGit, root, ["rebase", "--abort"], timeoutMs, env)
 }
 
-function conflictedPaths(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["diff", "--name-only", "--diff-filter=U"], timeoutMs)
+function conflictedPaths(root, spawnGit, timeoutMs, env) {
+  const result = run(spawnGit, root, ["diff", "--name-only", "--diff-filter=U"], timeoutMs, env)
   if (result.status !== 0 || typeof result.stdout !== "string") return []
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 }
@@ -108,8 +108,8 @@ function conflictedPaths(root, spawnGit, timeoutMs) {
 // desks lists `_cache/`; a desk whose `.gitignore` does not would list its
 // earlier quarantines here, and moving those would nest the quarantine folder
 // inside itself, so anything under `_cache/` is left out whatever Git says.
-function untrackedPaths(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["ls-files", "--others", "--exclude-standard"], timeoutMs)
+function untrackedPaths(root, spawnGit, timeoutMs, env) {
+  const result = run(spawnGit, root, ["ls-files", "--others", "--exclude-standard"], timeoutMs, env)
   if (result.status !== 0 || typeof result.stdout !== "string") return []
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith(`${QUARANTINE_FOLDER}/`))
 }
@@ -117,8 +117,8 @@ function untrackedPaths(root, spawnGit, timeoutMs) {
 // The number of stash entries `root` currently has -- used only to notice a
 // `git stash pop` that silently failed to drop its own entry (see
 // `popConflicted`, below).
-function stashCount(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["stash", "list"], timeoutMs)
+function stashCount(root, spawnGit, timeoutMs, env) {
+  const result = run(spawnGit, root, ["stash", "list"], timeoutMs, env)
   if (result.status !== 0 || typeof result.stdout !== "string") return 0
   return result.stdout.split("\n").filter((line) => line.trim() !== "").length
 }
@@ -130,9 +130,9 @@ function stashCount(root, spawnGit, timeoutMs) {
 // merge-conflict markers; `stashCount` growing past `stashBefore` catches
 // the other shape (an untracked file colliding with one the stash would
 // restore), which leaves the stash entry behind with no UU marker at all.
-function popConflicted(root, spawnGit, timeoutMs, stashBefore) {
-  const paths = conflictedPaths(root, spawnGit, timeoutMs)
-  const conflicted = paths.length > 0 || stashCount(root, spawnGit, timeoutMs) > stashBefore
+function popConflicted(root, spawnGit, timeoutMs, stashBefore, env) {
+  const paths = conflictedPaths(root, spawnGit, timeoutMs, env)
+  const conflicted = paths.length > 0 || stashCount(root, spawnGit, timeoutMs, env) > stashBefore
   return { conflicted, paths }
 }
 
@@ -239,8 +239,8 @@ function firstErrorLine(stderr) {
   return line.replace(/\/\/[^/@\s]+@/gu, "//").slice(0, 200)
 }
 
-function originUrl(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["remote", "get-url", "origin"], timeoutMs)
+function originUrl(root, spawnGit, timeoutMs, env) {
+  const result = run(spawnGit, root, ["remote", "get-url", "origin"], timeoutMs, env)
   const url = result.status === 0 && typeof result.stdout === "string" ? result.stdout.trim() : ""
   return url === "" ? null : url.replace(/\/\/[^/@\s]+@/u, "//")
 }
@@ -275,7 +275,7 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
     file: filing?.file ?? "filing in background",
     tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
-  const result = { state: "unresolved", reason, diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: firstErrorLine(failed?.stderr), conflicted }
+  const result = { state: "unresolved", reason, diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs, env), error: firstErrorLine(failed?.stderr), conflicted }
   if (quarantinedPaths !== undefined) result.quarantinedPaths = quarantinedPaths
   return result
 }
@@ -310,8 +310,8 @@ async function runSync({
   root, env, spawnGit = spawnSync, fileProblem = queueDeskProblemFiling, now = () => Date.now(),
 }) {
   // Nothing to sync against is "synced" for every caller, with `nothingToSync` saying which kind so boot never reports it as a sync that worked.
-  if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced", nothingToSync: "no_remote" }
-  if (aheadBehindCounts({ root, spawnGit }) === null) return { state: "synced", nothingToSync: "no_upstream" }
+  if (!hasRemoteConfigured(root, spawnGit, env)) return { state: "synced", nothingToSync: "no_remote" }
+  if (aheadBehindCounts({ root, spawnGit, env }) === null) return { state: "synced", nothingToSync: "no_upstream" }
 
   const deadlineAt = now() + SYNC_WORKSPACE_DEADLINE_MS
   const remaining = () => deadlineAt - now()
@@ -322,25 +322,25 @@ async function runSync({
 
   if (remaining() <= 0) return deadlineExceeded([])
 
-  const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout())
-  const first = pull(root, spawnGit, budgetedTimeout())
+  const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout(), env)
+  const first = pull(root, spawnGit, budgetedTimeout(), env)
   if (first.status === 0) {
-    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst)
+    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst, env)
     if (!conflicted) return { state: "synced" }
-    abortRebase(root, spawnGit, budgetedTimeout())
+    abortRebase(root, spawnGit, budgetedTimeout(), env)
     return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict", conflicted: paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
   // Captured before the abort below, which is what actually clears a genuine
   // mid-rebase conflict: reading it after cleanup would always see nothing.
-  const firstConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
-  abortRebase(root, spawnGit, budgetedTimeout())
+  const firstConflicted = conflictedPaths(root, spawnGit, budgetedTimeout(), env)
+  abortRebase(root, spawnGit, budgetedTimeout(), env)
 
   if (remaining() <= 0) return deadlineExceeded(firstConflicted)
 
   // A remote that cannot be reached, or that refuses our credentials, is not a dirty index: moving
   // stray files aside and pulling again would change nothing and only disturb the desk.
   const firstCause = classifyPullFailure({ stderr: first.stderr, conflicted: firstConflicted, timedOut: first.error?.code === "ETIMEDOUT" || first.signal === "SIGTERM" })
-  const stray = firstCause === "unreachable" || firstCause === "auth_failed" ? [] : untrackedPaths(root, spawnGit, budgetedTimeout())
+  const stray = firstCause === "unreachable" || firstCause === "auth_failed" ? [] : untrackedPaths(root, spawnGit, budgetedTimeout(), env)
   if (stray.length === 0) {
     return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
@@ -348,17 +348,17 @@ async function runSync({
   const quarantinedPaths = await quarantine(root, stray)
   if (remaining() <= 0) return deadlineExceeded(firstConflicted, quarantinedPaths)
 
-  const stashBeforeSecond = stashCount(root, spawnGit, budgetedTimeout())
-  const second = pull(root, spawnGit, budgetedTimeout())
+  const stashBeforeSecond = stashCount(root, spawnGit, budgetedTimeout(), env)
+  const second = pull(root, spawnGit, budgetedTimeout(), env)
   if (second.status === 0) {
-    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond)
+    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond, env)
     if (!conflicted) return { state: "quarantined", quarantinedPaths }
-    abortRebase(root, spawnGit, budgetedTimeout())
+    abortRebase(root, spawnGit, budgetedTimeout(), env)
     return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict_after_quarantine", conflicted: paths, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
 
-  const secondConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
-  abortRebase(root, spawnGit, budgetedTimeout())
+  const secondConflicted = conflictedPaths(root, spawnGit, budgetedTimeout(), env)
+  abortRebase(root, spawnGit, budgetedTimeout(), env)
   return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: secondConflicted, quarantinedPaths, failed: second, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
 }
 

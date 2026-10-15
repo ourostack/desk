@@ -87,9 +87,56 @@ function killProcessTree(pid, platform) {
   }
 }
 
-// One bounded Git call in its own process group. A time-out kills the whole group, so a hook that hangs, or a process it left
-// behind, does not outlive the call. Resolves `{status, stdout, stderr, timedOut}`; a spawn failure is status null.
-function runGit(ctx, cwd, args, env = ctx.childEnv) {
+// Hook filenames and commit-message arguments need the same private transport as the outer Git command.
+async function privateHookEnvironment(ctx, cwd, args, env, deadline) {
+  const bounded = () => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error("private hook context budget exhausted")
+    return { ...ctx, timeoutMs: remaining }
+  }
+  const config = await runGit(bounded(), cwd, ["config", "--get-all", "core.hooksPath"], env)
+  if (config.status !== 0 && config.status !== 1) throw new Error("private hook policy unavailable")
+  if (config.status === 0 && ["", "/dev/null", "nul"].includes(text(config).toLowerCase())) return env
+  const located = await runGit(bounded(), cwd, ["rev-parse", "--git-path", "hooks", ...(args[0] === "commit" ? ["--absolute-git-dir"] : [])], env)
+  if (located.status !== 0) throw new Error("private hook location unavailable")
+  const [hookDir, gitDir] = text(located).split("\n")
+  const proxy = realpathSync(env.DESK_PRIVATE_HOOKS_DIR)
+  const privateRoot = realpathSync(path.dirname(env.DESK))
+  const relative = path.relative(privateRoot, proxy)
+  if (relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))) throw new Error("private hook dispatcher must be public")
+  const out = {
+    ...env,
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: proxy,
+    DESK_PRIVATE_HOOK_ORIGINAL_DIR: config.status === 0 && !path.isAbsolute(hookDir) ? hookDir : path.resolve(realpathSync(cwd), hookDir),
+    DESK_PRIVATE_HOOK_RUNNER: ctx.platform === "linux" ? "/bin/sh" : process.execPath,
+    DESK_PRIVATE_HOOK_DISPATCH: path.join(proxy, ctx.platform === "linux" ? "dispatch.sh" : "dispatch.cjs"),
+  }
+  // Linked-worktree message-file arguments otherwise contain an absolute Git directory.
+  // The public dispatcher restores that directory in env before running the original hook.
+  if (args[0] === "commit") {
+    isolatedDeskRoot(gitDir, env)
+    out.GIT_DIR = path.relative(realpathSync(cwd), gitDir).split(path.sep).join("/") || "."
+    out.DESK_PRIVATE_HOOK_GIT_DIR = gitDir
+    out.DESK_PRIVATE_HOOK_WORK_TREE = realpathSync(cwd)
+  }
+  return out
+}
+
+// One bounded Git call in its own process group, including private hook-context preparation.
+// A time-out kills the whole group; a spawn failure is status null.
+async function runGit(ctx, cwd, args, env = ctx.childEnv) {
+  let timeoutMs = ctx.timeoutMs
+  if (env.DESK_ISOLATED_HOSTED === "1" && !["config", "rev-parse"].includes(args[0])) {
+    const deadline = Date.now() + ctx.timeoutMs
+    try {
+      deskGitInvocation({ root: cwd, args, env })
+      env = await privateHookEnvironment(ctx, cwd, args, env, deadline)
+    } catch {
+      return { status: null, stdout: Buffer.alloc(0), stderr: "private Git hook context unavailable", timedOut: Date.now() >= deadline }
+    }
+    timeoutMs = deadline - Date.now()
+    if (timeoutMs <= 0) return { status: null, stdout: Buffer.alloc(0), stderr: "", timedOut: true }
+  }
   return new Promise((resolve) => {
     const posix = ctx.platform !== "win32"
     let child
@@ -110,7 +157,7 @@ function runGit(ctx, cwd, args, env = ctx.childEnv) {
     const timer = setTimeout(() => {
       timedOut = true
       killProcessTree(child.pid, ctx.platform)
-    }, ctx.timeoutMs)
+    }, timeoutMs)
     let settled = false
     const settle = (status) => {
       if (settled) return

@@ -78,6 +78,7 @@ export function isolatedDeskEnv({ realm, baseEnv, author, issuer }) {
     DESK: join(realm.root, "clone"),
     DESK_HOSTED: "1",
     DESK_ISOLATED_HOSTED: "1",
+    DESK_PRIVATE_HOOKS_DIR: join(SHIM_DIR, "private-hooks"),
     ...(issuer ? { DESK_MCP_ICON_URL: new URL("/assets/desk-logo.png", issuer).href } : {}),
     DESK_TOKEN_SOCKET: join(realm.root, "git-token.sock"),
     GIT_AUTHOR_NAME: author.name,

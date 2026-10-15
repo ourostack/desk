@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { randomBytes } from "node:crypto"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { openImprovement } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
@@ -15,6 +16,7 @@ import {
   readAcknowledgedAnnotations, refreshTriage, resolveAcknowledgedTriage, toSafeTriageReview, triagePaths, validateTriageAnnotation, validateTriageIdentities,
 } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
 import { publishOwnedTriage, writeProtectedTriageFile } from "../../../../../plugins/desk/mcp/src/factory/triage-write.js"
+import { hookArgvScript } from "./_hook_argv.js"
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/v12-triage-local.json", import.meta.url)))
 const KEY = fixture.key
@@ -28,12 +30,82 @@ const slash = (p) => p.split(path.sep).join("/")
 const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue", ref: `https://github.com/example-org/example-repo/issues/${pointer.split("#")[1]}`, revision: 3 } })
 const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
+const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
+
+test("private triage executable hook descendants keep policy, execution and message paths private", async () => {
+  for (const configured of [null, "policy hooks", "relative hooks"]) {
+    const world_ = await world()
+    const desk = world_.clone("private-hook")
+    const root = desk.deskRoot
+    const hooks = configured === null ? path.join(root, ".git/hooks") : path.join(root, configured === "relative hooks" ? "" : ".git", configured)
+    await fs.mkdir(hooks, { recursive: true })
+    for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      await fs.writeFile(path.join(hooks, name), hookArgvScript(), { mode: 0o755 })
+    }
+    if (configured === "relative hooks") {
+      git(root, ["add", "--", configured])
+      git(root, ["commit", "-qm", "seed relative hook policy"])
+      git(root, ["push", "-q", "origin", "main"])
+    }
+    const hooksPath = configured === "relative hooks" ? configured : hooks
+    if (configured !== null) git(root, ["config", "core.hooksPath", hooksPath])
+    assert.equal(installCardGuard(root).state, configured === "relative hooks" ? "tracked" : "installed")
+    const log = path.join(world_.base, "hook-argv.jsonl")
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath }
+    const trace = []
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      const child = spawn(command, args, options)
+      let stdout = "", stderr = ""
+      child.stdout.on("data", (chunk) => { stdout += chunk })
+      child.stderr.on("data", (chunk) => { stderr += chunk })
+      child.on("close", (status) => trace.push({ args, status, stdout: stdout.slice(0, 512), stderr: stderr.slice(0, 512) }))
+      return child
+    } } })
+    const hookLog = await fs.readFile(log, "utf8").catch(() => "")
+    assert.equal(result.state, "acknowledged", JSON.stringify({ result, trace: trace.slice(-16), hookLog }))
+    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      assert.ok(rows.some((row) => row.hook.includes(name)), `hook did not execute: ${name}`)
+    }
+    for (const row of rows) {
+      assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
+      assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`), "original hooks must retain their Git context")
+      assert.equal(row.hooksPath, configured === null ? "" : hooksPath, "the original hook must observe the original hook policy")
+      if (configured === "relative hooks") assert.equal(path.dirname(path.resolve(row.cwd, row.hook)), path.join(row.cwd, configured), "relative policy resolves in the actual hook cwd")
+      if (row.hook.includes("commit-msg")) assert.ok(row.message.includes("Record factory triage annotation"))
+    }
+    assert.ok(result.resources.filter((r) => r.kind === "worktree").every((r) => r.disposition === "removed"))
+    assert.equal(git(root, ["config", "--get", "core.hooksPath"], { allowFail: true }), configured === null ? "" : hooksPath)
+  }
+})
+
+test("private triage still obeys an executable rejecting hook and never acknowledges its commit", async () => {
+  const world_ = await world()
+  const desk = world_.clone("private-reject")
+  const root = desk.deskRoot
+  const log = path.join(world_.base, "rejected-hook.jsonl")
+  await fs.writeFile(path.join(root, ".git/hooks/pre-commit"), hookArgvScript(), { mode: 0o755 })
+  installCardGuard(root)
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_EXIT: "23" }
+  assert.equal((await publish(desk)).state, "policy_refused")
+  const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+  assert.ok(rows.some((row) => row.hook.includes("pre-commit")))
+  assert.equal(remoteText(world_.origin, paths.annotation).status, 128)
+})
+
+test("private triage does not turn an unexecutable hook directory into a successful commit", async () => {
+  const world_ = await world()
+  const desk = world_.clone("private-hook-directory")
+  await fs.mkdir(path.join(desk.deskRoot, ".git/hooks/pre-commit"))
+  desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  assert.equal((await publish(desk)).state, "policy_refused")
+})
 
 test("private built-in triage keeps worktree operands desk-relative and completes real acknowledgement", async () => {
   const world_ = await world()
   const desk = world_.clone("private")
   const root = desk.deskRoot
-  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1" }
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
   const calls = []
   const spawnPrivate = (command, args, options) => {
     assert.ok(!args.includes("-C"))

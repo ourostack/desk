@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { deskChildArgs, deskChildEnv } from "../src/main.js";
 
 const source = new URL("../src/isolation.js", import.meta.url);
@@ -81,6 +82,8 @@ test("a realm receives its own HOME, temp, XDG, Git config, desk and token socke
   assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
   assert.equal(env.GIT_TERMINAL_PROMPT, "0");
   assert.equal(env.DESK_HOSTED, "1");
+  assert.equal(env.DESK_PRIVATE_HOOKS_DIR, fileURLToPath(new URL("../bin/private-hooks", source)));
+  assert.ok(!env.DESK_PRIVATE_HOOKS_DIR.includes(realm.root));
   assert.equal(env.DESK_ISOLATED_HOSTED, "1");
   assert.equal(env.USER, "desk-19001");
   assert.equal(env.GIT_AUTHOR_EMAIL, "16390116+arimendelow@users.noreply.github.com");
@@ -90,7 +93,7 @@ test("a realm receives its own HOME, temp, XDG, Git config, desk and token socke
   assert.equal(env.TZ, "UTC");
   assert.ok(env.PATH.endsWith("/usr/bin:/bin"));
   assert.deepEqual(Object.keys(env).sort(), [
-    "DESK", "DESK_HOSTED", "DESK_ISOLATED_HOSTED", "DESK_MCP_ICON_URL", "DESK_TOKEN_SOCKET",
+    "DESK", "DESK_HOSTED", "DESK_ISOLATED_HOSTED", "DESK_PRIVATE_HOOKS_DIR", "DESK_MCP_ICON_URL", "DESK_TOKEN_SOCKET",
     "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_NAME",
     "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT",
     "HOME", "LANG", "PATH", "TMPDIR", "TZ", "USER",

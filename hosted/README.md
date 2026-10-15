@@ -85,6 +85,19 @@ unchanged. Private triage candidate worktrees live below `.git/desk-triage`,
 with desk-relative Git operands; protected operation records stay in the
 realm's factory state.
 
+Private triage also keeps Git's hook descendants private. Realm environments
+provide `DESK_PRIVATE_HOOKS_DIR`, a fixed public, read-only dispatcher directory.
+Git invokes those public entrypoints; they execute the original configured
+hooks through relative filenames, forwarding stdin, arguments and exit status.
+Original hook policy/configuration is still fingerprinted before/after commit
+and is visible to the original hook. Linked-worktree commit-message filenames
+are relative, with Git directory/worktree context restored through environment.
+No executable hook or triage operation is disabled by this transport.
+
+Sync workers/session sync and shared remote/ahead-behind readers use their
+supplied environment for both context selection and actual Git children,
+including when it differs from the ambient process environment.
+
 Detached sync and identity-refresh scripts read their root from `DESK`.
 Their admitted source-mirror filename also travels in environment
 (`DESK_BUILTIN_SCRIPT`), through a fixed Node module loader, never argv.
