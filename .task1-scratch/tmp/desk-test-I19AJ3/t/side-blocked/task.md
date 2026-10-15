@@ -1,7 +1,7 @@
 ---
 schema_version: 1
 title: Unique title side-blocked
-status: validating
+status: blocked
 created: '2026-10-15T04:27:15Z'
 updated: '2026-10-15T04:27:15Z'
 track: t
