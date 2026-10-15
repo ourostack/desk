@@ -19,6 +19,7 @@ import { createRelay } from "./relay.js";
 import { createApp, createDeepHealth } from "./server.js";
 import { serveTokens } from "./token-socket.js";
 import { ISO_TIME, isSet, keySetting, readIdentity } from "./identity-config.js";
+import { isolatedDeskEnv } from "./isolation.js";
 
 export const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is missing.";
 const APP_SETTINGS = ["DESK_APP_ID", "DESK_APP_KEY_FILE", "DESK_APP_CLIENT_ID", "DESK_APP_CLIENT_SECRET"];
@@ -277,7 +278,10 @@ export function buildGateway({ config, relay, parts, log: write }) {
   return { provider, app };
 }
 
-export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.js"), "--root", config.cloneDir];
+export const deskChildArgs = (config, realm) => [
+  join(config.pluginDir, "mcp", "index.js"),
+  ...(realm ? [] : ["--root", config.cloneDir]),
+];
 
 const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((name) => baseEnv[name] !== undefined).map((name) => [name, baseEnv[name]]));
 
@@ -288,7 +292,8 @@ const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((nam
 //
 // `author` is the Git author: with Ouro accounts, the account's binding's
 // (createAuthorLookup); without, the GitHub user of the token (`user`).
-export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv }) {
+export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv, realm }) {
+  if (realm) return isolatedDeskEnv({ realm, baseEnv, author, issuer: config.issuer });
   const { name, email } = author;
   return {
     ...passedThrough(baseEnv),
