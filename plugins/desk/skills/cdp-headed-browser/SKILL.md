@@ -25,7 +25,7 @@ Keep the default isolated browser when it works. Desk ships it as the `desk-web`
 
 When an installed plugin declares `desk.browser` in its `plugin.json`, `desk-web` drives that existing signed-in browser profile instead of the headless default. The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }`; the last declaring plugin listed wins. Desk picks the profile whose signed-in account ends in `@<domain>`, reads the Playwright Extension's connection token from it so no approval prompt appears, and starts stock Playwright MCP in extension mode. Agents configure nothing else.
 
-**One-time setup:** install the [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) from the store in that profile. If a browser tool answers `browser_extension_missing`, install it, or click its toolbar icon once to open its page, then call the tool again; no reconnect is needed.
+**Current provisioning boundary:** the published [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) must already be available in that profile; the launcher does not install it. A `browser_extension_missing` response means Desk did not obtain a usable persisted credential. Its current remedy still names store installation or toolbar initialization because unattended provisioning is not delivered. Record the blocked binding/category and stop browser calls; do not claim readiness, bypass consent or turn the missing capability into an operator token/export/setup chore.
 
 How it behaves:
 
@@ -33,6 +33,12 @@ How it behaves:
 - When a session connects, the extension brings the browser window to the front once.
 - Desk currently defers automatic tab deletion on exit or kill. Close only tabs you created and can still identify as current session-owned, using stock browser tools; leave unknown or foreign tabs alone. Stock `browser_close` semantics remain unchanged, and the next browser call after it may connect again in a new group. Do not claim a disconnect cleaned up every tab.
 - The connect page's address carries the token; Desk replaces it with `<token>` in everything Playwright MCP sends to the host.
+
+**MCP inheritance is not agent ownership.** Default parent-MCP connections can be shared by subagents, so a separate agent context does not prove a private tab group. Never close or rename tabs/groups on that assumption. Require a qualified independent connection and exact current-owned identity; shared access is degraded access, not a workaround for per-agent isolation. Copilot's agent-specific declarations have a qualified custom-agent seam, but that is not automatic built-in-agent or Claude coverage; see the [admission frontier](../../docs/evaluation-packet.md#b1-admit-the-four-required-seams--gono-go-before-dependent-code).
+
+**Stop after a failed first browser call.** Issue no retry or cleanup-close call, including `browser_close`: the observed stock failure path can attempt another connection. This is containment guidance, not a backend lifecycle fix.
+
+**Token-page qualification is not a production recipe.** The extension's status page contains its credential. Do not automate that page with automatic DOM snapshots enabled, or take an explicit DOM snapshot or screenshot there. Stream redaction does not protect stock's internal snapshot-file writes. The owned group-title qualification used the supported `--snapshot-mode none` option, evaluated only public Chrome tab/group APIs after exact ownership checks, and captured no status-page DOM or raw response. It did not change production defaults or qualify foreground-safe setup. Do not copy the test route into an operator profile while the required admission gates remain open.
 
 The brokered contexts below are for a provider-backed persistent profile that is not the operator's real one. They do not apply to `desk-web` in this mode.
 
