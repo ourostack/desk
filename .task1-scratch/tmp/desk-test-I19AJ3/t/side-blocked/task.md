@@ -1,18 +1,20 @@
 ---
 schema_version: 1
 title: Unique title side-blocked
-status: blocked
+status: processing
 created: '2026-10-15T04:27:15Z'
-updated: '2026-10-15T04:27:15Z'
+updated: '2026-10-15T04:27:16Z'
 track: t
 flow:
   since: created
-  rev: 1
-  reached: validating
+  rev: 2
+  reached: processing
   first_validating_at: '2026-10-15T04:27:15Z'
   first_delivered_at: null
   delivered_at: null
   deliveries: 0
+returns:
+  - '2026-10-15T04:27:16Z blocked processing external at_review'
 ---
 
 SENTINEL-card-body-text
