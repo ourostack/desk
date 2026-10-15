@@ -26,7 +26,7 @@ Ship it.
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
 | api | — | widgets | delivered | https://github.com/o/widgets/pull/7 |
-| ui | api | widgets | pending | — |
+| ui | api | widgets | dropped | not needed |
 
 ## Resources
 
