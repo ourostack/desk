@@ -1,3 +1,0 @@
-# CON
-
-Lesson for CON.

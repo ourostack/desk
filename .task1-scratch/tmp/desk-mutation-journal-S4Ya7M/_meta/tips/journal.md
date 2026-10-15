@@ -1,3 +1,0 @@
-# Journal
-
-new lesson

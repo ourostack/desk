@@ -1,3 +1,0 @@
-# EMU push auth
-
-x
