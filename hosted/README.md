@@ -89,9 +89,12 @@ Private triage also keeps Git's hook descendants private. Realm environments
 provide `DESK_PRIVATE_HOOKS_DIR`, a fixed public, read-only dispatcher directory.
 Git invokes those public entrypoints; they execute the original configured
 hooks through relative filenames, forwarding stdin, arguments and exit status.
-Original hook policy/configuration is still fingerprinted before/after commit
-and is visible to the original hook. Linked-worktree commit-message filenames
-are relative, with Git directory/worktree context restored through environment.
+Original configured hook policy is still fingerprinted before/after commit;
+the ephemeral public routing override remains effective inside original hooks
+so ordinary nested Git mutations also execute the original hooks privately.
+No persisted configuration is changed. Linked-worktree commit-message filenames
+and the Git-directory environment stay relative for nested Git too; worktree
+and index context are preserved through environment.
 No executable hook or triage operation is disabled by this transport.
 
 Sync workers/session sync and shared remote/ahead-behind readers use their

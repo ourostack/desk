@@ -1,5 +1,5 @@
 // A real executable hook records its shell and Node descendant's OS arguments.
-export function hookArgvScript() {
+export function hookArgvScript({ nestedMutation = false } = {}) {
   const probe = `
 const fs = require("node:fs"), cp = require("node:child_process");
 const pid = process.ppid;
@@ -8,6 +8,7 @@ if (process.platform === "linux") kernel = fs.readFileSync("/proc/" + pid + "/cm
 else if (process.platform === "win32") kernel = [cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_Process -Filter 'ProcessId = " + pid + "').CommandLine"], {encoding:"utf8"}).trim()];
 else kernel = [cp.execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], {encoding:"utf8"}).trim()];
 const row = {hook:process.argv[1], args:process.argv.slice(2), kernel, cwd:process.cwd(), gitDir:process.env.GIT_DIR, toolCommit:process.env.DESK_TOOL_COMMIT ?? null};
+row.nestedMutation = process.env.DESK_HOOK_NESTED_MUTATION === "1";
 row.ancestors = [];
 if (process.platform === "linux") {
   let at = pid;
@@ -20,9 +21,16 @@ if (process.platform === "linux") {
   }
 }
 row.top = cp.execFileSync("git", ["rev-parse", "--show-toplevel"], {encoding:"utf8"}).trim();
-row.hooksPath = cp.spawnSync("git", ["config", "--get", "core.hooksPath"], {encoding:"utf8"}).stdout.trim();
+// Observe both the unchanged configured policy and the effective private routing overlay.
+const hookConfig = cp.spawnSync("git", ["config", "--show-scope", "--get-all", "core.hooksPath"], {encoding:"utf8"}).stdout.trim();
+const scopes = hookConfig ? hookConfig.split("\\n").map((line) => {
+  const tab = line.indexOf("\\t");
+  return {scope:line.slice(0, tab), value:line.slice(tab + 1)};
+}) : [];
+row.hooksPath = scopes.filter((entry) => entry.scope !== "command").at(-1)?.value ?? "";
+row.effectiveHooksPath = scopes.at(-1)?.value ?? "";
 if (row.hook.includes("commit-msg") && row.args.length) row.message = fs.readFileSync(row.args[0], "utf8");
 fs.appendFileSync(process.env.DESK_HOOK_LOG, JSON.stringify(row) + "\\n");
 `
-  return `#!/bin/sh\n"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n[ "$code" -eq 0 ] || exit "$code"\ncase "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
+  return `#!/bin/sh\n"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n[ "$code" -eq 0 ] || exit "$code"\n${nestedMutation ? "DESK_HOOK_NESTED_MUTATION=1 git update-index --refresh --force-write-index || exit $?\n" : ""}case "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
 }

@@ -25,7 +25,7 @@ case "$target" in
     ;;
   *) script="./$target/$name";;
 esac
-unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+# Nested Git must retain the public hook-routing override.
 if [ -n "$DESK_PRIVATE_HOOK_GIT_DIR" ]; then
   GIT_DIR=$DESK_PRIVATE_HOOK_GIT_DIR
   GIT_WORK_TREE=$DESK_PRIVATE_HOOK_WORK_TREE

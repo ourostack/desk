@@ -14,9 +14,7 @@ try {
   process.exit(1);
 }
 const env = { ...process.env };
-delete env.GIT_CONFIG_COUNT;
-delete env.GIT_CONFIG_KEY_0;
-delete env.GIT_CONFIG_VALUE_0;
+// Nested Git must discover these same public entrypoints, never private hook filenames.
 if (env.DESK_PRIVATE_HOOK_GIT_DIR) {
   env.GIT_DIR = env.DESK_PRIVATE_HOOK_GIT_DIR;
   env.GIT_WORK_TREE = env.DESK_PRIVATE_HOOK_WORK_TREE;
