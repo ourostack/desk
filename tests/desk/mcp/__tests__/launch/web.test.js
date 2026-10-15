@@ -5,6 +5,7 @@
 import { afterEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -17,6 +18,8 @@ import { openSession } from "./_mcp_session.js"
 const require = createRequire(import.meta.url)
 const browserPath = path.join(mcpRoot, "web.cjs")
 const browser = require(browserPath)
+const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
 
 // ---- fixtures ----
@@ -117,6 +120,9 @@ function main() {
   if (mode !== "nocore") {
     fs.mkdirSync(path.join(modules, "playwright-core"), { recursive: true })
     fs.writeFileSync(path.join(modules, "playwright-core", "package.json"), JSON.stringify({ version: "1.64.0-test" }))
+    fs.mkdirSync(path.join(modules, "playwright-core", "lib"), { recursive: true })
+    const lifecycle = ${JSON.stringify(stockLifecycle)}
+    fs.writeFileSync(path.join(modules, "playwright-core", "lib", "coreBundle.js"), mode === "badlifecycle" ? lifecycle.replace("let backendPromise;", "let backendPromise = factory.promise;") : lifecycle)
   }
 }
 setTimeout(main, Number(process.env.FAKE_NPM_DELAY_MS || 0))
@@ -159,10 +165,15 @@ function npmCalls(log) {
 }
 
 /** Install a stub copy into a state folder, as a finished install would leave it. */
-function preinstall(state, version = "0.0.81", id = "installs/1-1-a", cli = "process.stdout.write('ran ' + process.argv.slice(2).map((a) => '[' + a + ']').join(' ') + '\\n')\n") {
+function preinstall(state, version = "0.0.81", id = "installs/1-1-a", cli = "process.stdout.write('ran ' + process.argv.slice(2).map((a) => '[' + a + ']').join(' ') + '\\n')\n", patched = true) {
   const modules = path.join(state, id, "node_modules")
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), cli)
+  const bundle = patched ? playwrightPatch.patchSource(stockLifecycle) : stockLifecycle
+  touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), bundle)
+  if (patched) touch(path.join(state, id, "playwright-patch.json"), JSON.stringify({
+    revision: 1, mcpVersion: version, coreVersion: null, bundleSha256: createHash("sha256").update(bundle).digest("hex"),
+  }))
   touch(path.join(state, "current.json"), JSON.stringify({ version, dir: id, previous: null }))
   return path.join(modules, "@playwright", "mcp", "cli.js")
 }
@@ -417,7 +428,7 @@ test("only a complete install counts as installed", async () => {
   touch(path.join(pkg, "package.json"), JSON.stringify({ version: "1", bin: "cli.js" }))
   assert.equal(browser.readInstalled(root), null, "no entry script")
   touch(path.join(pkg, "cli.js"))
-  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i"), reader: false, ws: false })
+  assert.deepEqual(browser.readInstalled(root), { version: "1", core: null, cli: path.join(pkg, "cli.js"), dir: path.join(root, "i"), reader: false, ws: false, patchRevision: 0 })
   touch(path.join(root, "i", "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
   assert.equal(browser.readInstalled(root).ws, true, "the tab-cleanup relay's WebSocket package is detected")
   touch(path.join(root, "i", "node_modules", "classic-level", "package.json"), "{}")
@@ -679,6 +690,157 @@ async function refreshMachine(prefix, env = {}) {
   const m = await machine(prefix, { env })
   return { ...m, refresh: (extra = {}) => browser.refresh({ env: m.options.env, platform: "linux", node: m.install.node, npmCli: m.install.cli, ...extra }) }
 }
+
+test("a fresh install is lifecycle-patched before any browser process starts", posixOnly, async () => {
+  const m = await machine("desk-web-patch-fresh-")
+  const h = host(m.options)
+  await h.handshake()
+  const result = await h.call(2)
+  assert.notEqual(result.result.isError, true)
+  assert.equal(browser.readInstalled(m.state).patchRevision, 1)
+  const installed = browser.readInstalled(m.state)
+  const bundle = readFileSync(path.join(installed.dir, "node_modules", "playwright-core", "lib", "coreBundle.js"), "utf8")
+  assert.match(bundle, /No browser session is open/)
+  await h.close()
+})
+
+test("an offline legacy install is copied and patched without changing its live generation", posixOnly, async () => {
+  const m = await machine("desk-web-patch-migrate-", { env: { FAKE_NPM_MODE: "failall" }, startRefresh: () => {} })
+  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
+  const original = path.dirname(path.dirname(path.dirname(cli)))
+  const bundle = path.join(original, "playwright-core", "lib", "coreBundle.js")
+  touch(bundle, stockLifecycle)
+  const bin = path.join(original, ".bin", "playwright-mcp")
+  mkdirSync(path.dirname(bin), { recursive: true })
+  symlinkSync("../@playwright/mcp/cli.js", bin)
+  const l = launch(m.options)
+  await l.ready
+  const installed = browser.readInstalled(m.state)
+  assert.notEqual(installed.cli, cli, "a new client must use a new, patched generation")
+  assert.equal(installed.patchRevision, 1)
+  assert.equal(readFileSync(bundle, "utf8"), stockLifecycle, "a running old client keeps unmodified files")
+  assert.equal(require("node:fs").readlinkSync(path.join(installed.dir, "node_modules", ".bin", "playwright-mcp")), "../@playwright/mcp/cli.js")
+  assert.deepEqual(m.calls(), [], "migration is offline, not a reinstall")
+  l.child.emit("exit", 0, null)
+  await l.running
+})
+
+test("offline migration preserves a recorded reader refusal and its retry age", posixOnly, async () => {
+  const m = await machine("desk-web-patch-refusal-", { startRefresh: () => {} })
+  preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
+  const marker = touch(path.join(m.state, "installs/1-1-a/reader-unavailable"))
+  const age = new Date(Date.now() - 1000)
+  utimesSync(marker, age, age)
+  const l = launch(m.options)
+  await l.ready
+  const installed = browser.readInstalled(m.state)
+  assert.equal(installed.patchRevision, 1)
+  assert.equal(installed.reader, true)
+  assert.ok(Math.abs(installed.unavailableAt - age.getTime()) < 1)
+  assert.deepEqual(m.calls(), [])
+  l.child.emit("exit", 0, null)
+  await l.running
+})
+
+test("a patch-incompatible fresh install degrades without publishing an unsafe pointer", posixOnly, async () => {
+  const m = await machine("desk-web-patch-unsupported-", { env: { FAKE_NPM_MODE: "badlifecycle" } })
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.equal(answer.result.isError, true)
+  assert.equal(toolPayload(answer).code, "browser_patch_unsupported")
+  assert.equal(existsSync(path.join(m.state, "current.json")), false)
+  assert.deepEqual(m.calls().map(call => call.args[0]), ["install"], "compatibility is not a registry or operator configuration fault")
+  await h.close()
+})
+
+test("an unchanged npm version still migrates a missing lifecycle patch", posixOnly, async () => {
+  const m = await refreshMachine("desk-web-patch-same-version-", { FAKE_NPM_VERSION: "0.0.81" })
+  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
+  touch(path.join(path.dirname(path.dirname(path.dirname(cli))), "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+  assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: true })
+  assert.equal(browser.readInstalled(m.state).patchRevision, 1)
+  assert.deepEqual(m.calls().map(call => call.args[0]), ["view"])
+})
+
+test("concurrent legacy clients publish one patched generation without npm", posixOnly, async () => {
+  const m = await machine("desk-web-patch-concurrent-", { startRefresh: () => {} })
+  preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI, false)
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    const h = host(m.options)
+    await h.handshake()
+    assert.notEqual((await h.call(2)).result.isError, true)
+    await h.close()
+  }))
+  assert.equal(readdirSync(path.join(m.state, "installs")).length, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, 1)
+  assert.deepEqual(m.calls(), [])
+})
+
+test("a changed bundle invalidates its receipt and migrates instead of mutating the old generation", posixOnly, async () => {
+  const m = await machine("desk-web-patch-receipt-", { startRefresh: () => {} })
+  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI)
+  const bundle = path.join(path.dirname(path.dirname(path.dirname(cli))), "playwright-core", "lib", "coreBundle.js")
+  const changed = readFileSync(bundle, "utf8") + "\n// Owned changed package tree.\n"
+  writeFileSync(bundle, changed)
+  assert.equal(browser.readInstalled(m.state).patchRevision, 0)
+  const h = host(m.options)
+  await h.handshake()
+  assert.notEqual((await h.call(2)).result.isError, true)
+  assert.equal(browser.readInstalled(m.state).patchRevision, 1)
+  assert.notEqual(browser.readInstalled(m.state).cli, cli)
+  assert.equal(readFileSync(bundle, "utf8"), changed)
+  assert.deepEqual(m.calls(), [])
+  await h.close()
+})
+
+test("migration rejects package symlinks outside the install without reading or modifying their target", posixOnly, async () => {
+  const m = await machine("desk-web-patch-external-", { startRefresh: () => {} })
+  const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI, false)
+  const outside = touch(path.join(m.root, "outside-package.txt"), "owned outside fixture")
+  symlinkSync(outside, path.join(path.dirname(path.dirname(path.dirname(cli))), "outside"))
+  const before = readFileSync(path.join(m.state, "current.json"), "utf8")
+  const h = host(m.options)
+  await h.handshake()
+  const answer = await h.call(2)
+  assert.equal(answer.result.isError, true)
+  assert.equal(toolPayload(answer).code, "browser_patch_failed")
+  assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
+  assert.equal(readFileSync(outside, "utf8"), "owned outside fixture")
+  assert.deepEqual(m.calls(), [])
+  await h.close()
+})
+
+test("an incompatible refresh retains the compatible pointer and surfaces its failure on next launch", posixOnly, async () => {
+  const m = await refreshMachine("desk-web-patch-refresh-fail-", { FAKE_NPM_MODE: "badlifecycle", FAKE_NPM_VERSION: "0.0.99" })
+  const cli = preinstall(m.state)
+  const before = readFileSync(path.join(m.state, "current.json"), "utf8")
+  const result = await m.refresh()
+  assert.equal(result.ok, false)
+  assert.equal(result.code, "browser_patch_unsupported")
+  assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
+  assert.equal(browser.readInstalled(m.state).patchRevision, 1)
+  const l = launch({ ...m.options, startRefresh: () => {} })
+  await l.ready
+  assert.equal(l.spawns[0].argv[0], cli)
+  assert.match(l.errors.join(""), /last browser refresh failed/i)
+  l.child.emit("exit", 0, null)
+  await l.running
+})
+
+test("a pruning failure cannot publish a pointer to the generation being discarded", posixOnly, async (t) => {
+  const m = await refreshMachine("desk-web-patch-prune-fail-", { FAKE_NPM_VERSION: "0.0.99" })
+  preinstall(m.state)
+  const before = readFileSync(path.join(m.state, "current.json"), "utf8")
+  const realReadDir = require("node:fs").readdirSync
+  t.mock.method(require("node:fs"), "readdirSync", (dir, ...args) => {
+    if (dir === path.join(m.state, "installs")) throw Object.assign(new Error("owned pruning failure"), { code: "EACCES" })
+    return realReadDir(dir, ...args)
+  })
+  assert.equal((await m.refresh()).ok, false)
+  assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
+  assert.equal(browser.readInstalled(m.state).patchRevision, 1)
+})
 
 test("a refresh that finds the channel unchanged installs nothing", posixOnly, async () => {
   const m = await refreshMachine("desk-web-same-", { FAKE_NPM_VERSION: "0.0.81" })
@@ -1478,7 +1640,7 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")

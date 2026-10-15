@@ -77,6 +77,24 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  browser-lifecycle-install:
+    name: Browser latest-channel lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify actual installation and warm browser consumption
+        env:
+          DESK_BROWSER_INSTALL_SMOKE: "1"
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web_playwright_package.test.js
+
   # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
   # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the
   # coverage gate once, over the combined result.
@@ -661,6 +679,7 @@ jobs:
   ci-gate:
     name: CI gate
     needs:
+      - browser-lifecycle-install
       - desk-mcp-coverage-shards
       - offline-eval-tests
       - release-dry-run
