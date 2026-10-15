@@ -16,3 +16,7 @@ flow:
 ---
 
 **Next step:** wire the check.
+
+## Progress log
+
+- 2026-10-14: wired it
