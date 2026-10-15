@@ -1,0 +1,1 @@
+Isolated Hosted Desk keeps private desk paths out of built-in subprocess arguments and admits readiness controllers using matching real and effective Linux kernel UIDs, without requiring a passwd entry for each private realm. Invalid or unavailable kernel ownership is refused; ordinary local and legacy hosted identity behavior is unchanged.

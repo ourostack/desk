@@ -12,7 +12,7 @@ export function controllerIdentity({
 } = {}) {
   const canonicalRoot = realpathSync(path.resolve(root))
   const stat = statSync(canonicalRoot)
-  const user = os.userInfo()
+  const user = process.env.DESK_ISOLATED_HOSTED === "1" ? privateKernelUser() : os.userInfo()
   const contract = stableStringify({
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
@@ -38,6 +38,29 @@ export function controllerIdentity({
       username: user.username,
     }),
   })
+}
+
+function privateKernelUser() {
+  const invalid = () => Object.assign(
+    new Error("readiness controller requires matching Linux kernel UID and effective UID"),
+    { code: "DESK_CONTROLLER_KERNEL_IDENTITY_INVALID" },
+  )
+  if (process.platform !== "linux"
+    || typeof process.getuid !== "function" || typeof process.geteuid !== "function") {
+    throw invalid()
+  }
+  let uid, euid
+  try {
+    uid = process.getuid()
+    euid = process.geteuid()
+  } catch {
+    throw invalid()
+  }
+  if (!Number.isSafeInteger(uid) || uid <= 0 || uid >= 0xffffffff
+    || !Number.isSafeInteger(euid) || euid !== uid) {
+    throw invalid()
+  }
+  return { uid, username: "isolated-kernel" }
 }
 
 export function lexicalControllerIdentity(identity) {

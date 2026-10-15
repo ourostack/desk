@@ -1195,7 +1195,7 @@ test("foreign_or_vanished_operation_records", async () => {
   assert.equal((await publish(a)).state, "busy")
 })
 
-test("windows_platform_paths_use_tree_kill_and_acl_protection", async () => {
+test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
   const w = await world()
   const a = w.clone("a")
   const systemRoot = path.join(w.base, "fake-system-root")
@@ -1217,21 +1217,52 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async () => {
   assert.equal(result.state, "acknowledged", JSON.stringify(result))
   for (const platform of ["linux", "win32"]) {
     let committed = false
-    const privateResult = await publish({ ...a, env: { ...env, DESK: a.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS } }, {
-      review: platform === "linux" ? { ...AGENT, protected_result: hex(16) } : { ...HUMAN, gate: "spend", summary_codes: ["source:andon", "route:human_decision", "gate:spend"], protected_result: hex(16) },
-      git: { platform, aclRunner, spawn(command, args, options) {
-        if (args[0] === "commit") {
-          committed = true
-          assert.equal(options.env.DESK_PRIVATE_HOOK_RUNNER, platform === "linux" ? "/bin/sh" : process.execPath)
-          assert.equal(options.env.DESK_PRIVATE_HOOK_DISPATCH, path.join(PRIVATE_HOOKS, platform === "linux" ? "dispatch.sh" : "dispatch.cjs"))
-        }
-        assert.ok(!args.some((arg) => arg.includes(a.deskRoot)))
-        return spawn(command, args, options)
-      } },
-    })
+    let candidateDot
+    let linked = 0
+    const before = git(w.origin, ["rev-parse", "main"])
+    const realSymlink = fs.symlink.bind(fs)
+    // Simulate an ordinary Windows provider, without Developer Mode, on every host.
+    const windowsLink = async (target, file, type) => {
+      if (type !== "junction") throw Object.assign(new Error("unprivileged directory symlink denied"), { code: "EPERM" })
+      assert.equal(path.isAbsolute(target), true)
+      return realSymlink(target, file, process.platform === "win32" ? "junction" : "dir")
+    }
+    let privateResult
+    try {
+      privateResult = await publish({ ...a, env: { ...env, DESK: a.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS } }, {
+        review: platform === "linux" ? { ...AGENT, protected_result: hex(16) } : { ...HUMAN, gate: "spend", summary_codes: ["source:andon", "route:human_decision", "gate:spend"], protected_result: hex(16) },
+        git: { platform, aclRunner, onStep: async (name) => {
+          if (name !== "before_commit") return
+          const [token] = await fs.readdir(path.join(a.deskRoot, ".git/desk-triage"))
+          candidateDot = path.join(a.deskRoot, ".git/desk-triage", token, "wt/.git")
+          t.mock.method(fs, "symlink", async (target, file, type) => {
+            if (file !== candidateDot) return realSymlink(target, file, type)
+            assert.equal(type, platform === "linux" ? "dir" : "junction")
+            assert.equal(path.isAbsolute(target), platform === "win32")
+            linked += 1
+            return windowsLink(path.resolve(path.dirname(file), target), file, "junction")
+          })
+        }, spawn(command, args, options) {
+          if (args[0] === "commit") {
+            committed = true
+            assert.equal(options.env.DESK_PRIVATE_HOOK_RUNNER, platform === "linux" ? "/bin/sh" : process.execPath)
+            assert.equal(options.env.DESK_PRIVATE_HOOK_DISPATCH, path.join(PRIVATE_HOOKS, platform === "linux" ? "dispatch.sh" : "dispatch.cjs"))
+          }
+          assert.ok(!args.some((arg) => arg.includes(a.deskRoot)))
+          return spawn(command, args, options)
+        } },
+      })
+    } finally {
+      t.mock.restoreAll()
+    }
     assert.equal(privateResult.state, "acknowledged", `${platform}: ${JSON.stringify(privateResult)}`)
     assert.equal(committed, true, "platform transport performs a real commit, not adoption")
+    assert.equal(linked, 1, "only the exact candidate metadata uses the host-safe provider")
+    assert.notEqual(git(w.origin, ["rev-parse", "main"]), before, "the real commit reached the remote")
+    assert.equal(remoteText(w.origin, paths.annotation).status, 0)
+    assert.equal(privateResult.resources.filter((resource) => resource.kind === "worktree").length, 1)
     assert.ok(privateResult.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    assert.equal(await fs.lstat(path.dirname(candidateDot)).catch((error) => error.code), "ENOENT", "the real candidate directory was removed")
   }
   // On Windows a timed-out call is ended with its process tree (taskkill /T); here the stand-in push ends by itself, so the call
   // settles either way and is never taken for a refused push.
