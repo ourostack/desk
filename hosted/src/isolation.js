@@ -35,11 +35,13 @@ export function createUidAllocator({ firstUid = FIRST_UID, lastUid = LAST_UID } 
 export function isolationArgs({ uid, gid = uid, command, args = [] }) {
   requireIdentity(uid, gid);
   requireValid(typeof command === "string" && isAbsolute(command) && !command.includes("\0"));
-  requireValid(Array.isArray(args) && args.every(arg => typeof arg === "string" && !arg.includes("\0")));
+  requireValid(Array.isArray(args));
+  const launchArgs = [...args];
+  requireValid(launchArgs.every(arg => typeof arg === "string" && !arg.includes("\0")));
   return [
     `--reuid=${uid}`, `--regid=${gid}`, "--clear-groups",
     "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
-    "--", command, ...args,
+    "--", command, ...launchArgs,
   ];
 }
 

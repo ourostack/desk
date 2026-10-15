@@ -50,7 +50,7 @@ test("the child launcher refuses privileged/mismatched identities and malformed 
   const valid = { uid: 19001, gid: 19001, command: "/usr/bin/node", args: [] };
   for (const change of [
     { uid: 0 }, { uid: 1000 }, { uid: "19001" }, { uid: 1.1 }, { gid: 0 }, { gid: 19002 },
-    { command: "node" }, { command: "/usr/bin/no\0de" }, { args: "--root" }, { args: [null] },
+    { command: "node" }, { command: "/usr/bin/no\0de" }, { args: "--root" }, { args: [null] }, { args: Array(1) },
   ]) assert.throws(() => isolation.isolationArgs({ ...valid, ...change }), { code: "DESK_ISOLATION_INVALID" });
 });
 
