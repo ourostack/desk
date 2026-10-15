@@ -18,7 +18,7 @@ evidence:
   ref: 'https://github.com/example-org/example-repo/pull/1'
   recorded_at: '2026-10-15T04:25:25Z'
 signoff:
-  state: delivered_unsigned
+  state: accepted
   at: null
   reason: null
 ---
