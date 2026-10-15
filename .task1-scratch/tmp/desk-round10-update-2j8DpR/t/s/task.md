@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 title: S
-status: drafting
+status: cancelled
 created: '2026-10-15T04:22:22Z'
-updated: '2026-10-15T04:22:22Z'
+updated: '2026-10-15T04:22:23Z'
 track: t
 flow:
   since: created
@@ -16,3 +16,7 @@ flow:
 ---
 
 **Next step:** wire the check.
+
+## Progress log
+
+- 2026-10-14: abandoned

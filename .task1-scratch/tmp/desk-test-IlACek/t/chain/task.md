@@ -21,6 +21,12 @@ flow:
 
 Ship it.
 
+## Steps
+
+| Step | Depends on | Repo | State | Evidence |
+|---|---|---|---|---|
+| api | — | widgets | pending | — |
+
 ## Progress log
 
 - 2026-10-01: began
