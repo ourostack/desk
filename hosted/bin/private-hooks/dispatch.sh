@@ -27,10 +27,8 @@ case "$target" in
 esac
 # Nested Git must retain the public hook-routing override.
 if [ -n "$DESK_PRIVATE_HOOK_WORK_TREE" ]; then
-  # Let Git discover this same worktree even after the original hook changes cwd.
-  unset GIT_DIR
-  GIT_WORK_TREE=$DESK_PRIVATE_HOOK_WORK_TREE
-  export GIT_WORK_TREE
+  # Discover the candidate's directory link, without canonicalizing nested message operands.
+  unset GIT_DIR GIT_WORK_TREE
   case "${GIT_INDEX_FILE-}" in
     ""|/*) ;;
     *) GIT_INDEX_FILE="$here/$GIT_INDEX_FILE"; export GIT_INDEX_FILE;;

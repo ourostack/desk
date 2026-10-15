@@ -16,9 +16,10 @@ try {
 const env = { ...process.env };
 // Nested Git must discover these same public entrypoints, never private hook filenames.
 if (env.DESK_PRIVATE_HOOK_WORK_TREE) {
-  // A cwd-relative Git directory breaks ordinary same-worktree subdirectory calls.
+  // Discover the candidate's directory link from cwd. An explicit worktree also
+  // makes Git canonicalize nested message operands to the private absolute path.
   delete env.GIT_DIR;
-  env.GIT_WORK_TREE = env.DESK_PRIVATE_HOOK_WORK_TREE;
+  delete env.GIT_WORK_TREE;
   if (env.GIT_INDEX_FILE) env.GIT_INDEX_FILE = path.resolve(process.cwd(), env.GIT_INDEX_FILE);
 }
 const relative = path.relative(process.cwd(), original).split(path.sep).join("/");

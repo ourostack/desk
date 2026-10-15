@@ -93,9 +93,16 @@ Original configured hook policy is still fingerprinted before/after commit;
 the ephemeral public routing override remains effective inside original hooks
 so ordinary nested Git mutations also execute the original hooks privately.
 No persisted configuration is changed. The outer commit keeps its message-file
-arguments relative. Original hooks use normal Git discovery within the same
-linked worktree, without a cwd-bound `GIT_DIR`; subdirectory Git calls therefore
-work too. Absolute worktree/index context stays in environment, never argv.
+arguments relative. During that commit, the owned candidate's `.git` gitfile is
+held outside its worktree and replaced by a directory link to the same validated
+private administrative directory. Git discovery through this link retains a
+relative `.git/COMMIT_EDITMSG` operand even for a guarded nested commit.
+The exact gitfile is restored after the bounded commit, also before recovery
+removes an interrupted candidate; foreign replacement metadata is retained,
+not overwritten. Original hooks use normal Git discovery within the same
+linked worktree, without a forced `GIT_DIR` or `GIT_WORK_TREE`; subdirectory Git
+calls therefore work too. The private context marker and normalized index
+context stay in environment, never argv.
 No executable hook or triage operation is disabled by this transport.
 
 Sync workers/session sync and shared remote/ahead-behind readers use their

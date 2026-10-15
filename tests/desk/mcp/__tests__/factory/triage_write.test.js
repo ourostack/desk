@@ -32,6 +32,91 @@ const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
 
+test("private triage keeps guarded nested commit message operands private before honest parent refusal", async () => {
+  for (const configured of [null, "nested message hooks", "relative hooks"]) {
+    const w = await world()
+    const desk = w.clone("nested-message-hook")
+    const root = desk.deskRoot
+    await fs.mkdir(path.join(root, "project"))
+    await fs.writeFile(path.join(root, "project/.keep"), "")
+    const hooks = configured === "relative hooks" ? path.join(root, configured) : path.join(root, ".git", configured ?? "hooks")
+    await fs.mkdir(hooks, { recursive: true })
+    const originals = new Map()
+    for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      const body = hookArgvScript({ nestedCommit: name === "post-commit" })
+      originals.set(name, body)
+      if (configured !== null) await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
+    }
+    // Seed without enabling the fixture hooks; the nested operation belongs only to triage.
+    git(root, ["add", "--", "project", ...(configured === "relative hooks" ? [configured] : [])])
+    git(root, ["commit", "-qm", "seed project and policy"])
+    git(root, ["push", "-q", "origin", "main"])
+    if (configured === null) for (const [name, body] of originals) await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
+    const hooksPath = configured === "relative hooks" ? configured : hooks
+    if (configured !== null) git(root, ["config", "core.hooksPath", hooksPath])
+    const log = path.join(w.base, "nested-message-argv.jsonl")
+    const subdirectoryLog = path.join(w.base, "nested-message-discovery.txt")
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog }
+    const result = await publish(desk)
+    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
+    assert.deepEqual((await fs.readFile(subdirectoryLog, "utf8")).trim().split("\n"), [path.join(worktree, "project"), worktree])
+    for (const name of ["prepare-commit-msg", "commit-msg", "post-commit"]) {
+      assert.ok(rows.some((row) => row.hook.includes(name) && row.nestedCommit), `guarded nested original ${name} executed`)
+    }
+    if (process.platform === "darwin") {
+      for (const name of ["prepare-commit-msg", "commit-msg"]) {
+        const row = rows.find((row) => row.hook.includes(name) && row.nestedCommit)
+        assert.ok(row.ancestors.flat().some((arg) => arg.includes("private-hooks/dispatch.cjs") && arg.includes(`${name} .git/COMMIT_EDITMSG`)), "actual public dispatcher kernel argv, not only original forwarded arguments")
+      }
+    }
+    for (const row of rows) {
+      assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
+      assert.equal(row.top, worktree)
+      assert.equal(row.hooksPath, configured === null ? "" : hooksPath)
+      assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS)
+      if (row.hook.includes("commit-msg")) assert.ok(row.message.includes(row.nestedCommit ? "nested message witness" : "Record factory triage annotation"))
+    }
+    assert.equal(result.state, "policy_unknown", "a second commit must still fail the unchanged parent check")
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    for (const [name, body] of originals) assert.equal(await fs.readFile(path.join(hooks, name), "utf8"), body, `original ${name} unchanged`)
+  }
+})
+
+test("private triage recovers its interrupted gitfile swap but retains foreign replacement metadata", async () => {
+  for (const foreign of [false, true]) {
+    const w = await world()
+    const desk = w.clone("gitfile-recovery")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const stopped = await publish(desk, { git: { onStep(name) { if (name === "before_commit") throw new Error("interrupted candidate") } } })
+    assert.equal(stopped.state, "write_failed")
+    const resource = stopped.resources.find((resource) => resource.kind === "worktree")
+    const dot = path.join(resource.path, ".git")
+    const backup = path.join(path.dirname(resource.path), "gitfile")
+    const bytes = await fs.readFile(dot, "utf8")
+    const target = path.resolve(resource.path, bytes.slice(8).trim())
+    // Reproduce the exact durable metadata shape left by a stopped process during privateCommit.
+    await fs.rename(dot, backup)
+    await fs.symlink(foreign ? desk.deskRoot : target, dot, process.platform === "win32" ? "junction" : "dir")
+    if (foreign) {
+      const blocked = await publish(desk)
+      assert.equal(blocked.state, "busy")
+      assert.equal(blocked.alarm, RESOURCE_ALARM)
+      assert.equal(blocked.resources[0].disposition, "retained")
+      assert.equal(await fs.realpath(dot), await fs.realpath(desk.deskRoot), "foreign metadata was not replaced")
+      assert.equal(await fs.readFile(backup, "utf8"), bytes, "the original gitfile is still retained")
+      await fs.unlink(dot)
+      await fs.symlink(target, dot, process.platform === "win32" ? "junction" : "dir")
+    }
+    const recovered = await publish(desk)
+    assert.equal(recovered.state, "acknowledged", JSON.stringify(recovered))
+    assert.ok(recovered.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT")
+    assert.equal(await fs.lstat(resource.path).catch((error) => error.code), "ENOENT")
+  }
+})
+
 test("private triage keeps same-worktree subdirectory Git, nested hooks and message argv valid together", async () => {
   const w = await world()
   const desk = w.clone("subdirectory-hook")

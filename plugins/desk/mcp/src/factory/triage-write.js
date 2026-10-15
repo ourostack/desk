@@ -303,6 +303,55 @@ function worktreeArgument(ctx, record) {
   return ctx.env.DESK_ISOLATED_HOSTED === "1" ? path.relative(ctx.deskRoot, record.path) : record.path
 }
 
+// Git canonicalizes a linked worktree's gitfile to an absolute administrative directory.
+// A directory link instead lets discovery retain ".git" as its message-operand prefix,
+// including for nested commits after a hook changes cwd. Only our candidate metadata changes.
+async function privateCommit(ctx, record) {
+  const commit = () => runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, [TOOL_COMMIT_ENV]: "1" })
+  if (ctx.env.DESK_ISOLATED_HOSTED !== "1") return commit()
+  const dot = path.join(record.path, ".git")
+  if (!(await fs.lstat(dot)).isFile()) throw new Error("private Git metadata unavailable")
+  const bytes = await fs.readFile(dot, "utf8")
+  if (!bytes.startsWith("gitdir: ")) throw new Error("private Git metadata unavailable")
+  const target = realpathSync(path.resolve(record.path, bytes.slice(8).trim()))
+  isolatedDeskRoot(target, ctx.env)
+  const backup = path.join(path.dirname(record.path), "gitfile")
+  const saved = await fs.lstat(backup).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+  if (saved !== null) throw new Error("private Git metadata already retained")
+  await fs.rename(dot, backup)
+  try {
+    await fs.symlink(ctx.platform === "win32" ? target : path.relative(record.path, target), dot, ctx.platform === "win32" ? "junction" : "dir")
+    return await commit()
+  } finally {
+    if (!(await restorePrivateGitFile(ctx, record))) throw new Error("private Git metadata retained")
+  }
+}
+
+// Also used by recovery after an interrupted commit. Never replace a hook's foreign metadata.
+async function restorePrivateGitFile(ctx, record) {
+  if (ctx.env.DESK_ISOLATED_HOSTED !== "1") return true
+  const backup = path.join(path.dirname(record.path), "gitfile")
+  try {
+    const saved = await fs.lstat(backup).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+    if (saved === null) return true
+    if (!saved.isFile()) return false
+    const bytes = await fs.readFile(backup, "utf8")
+    if (!bytes.startsWith("gitdir: ")) return false
+    const target = realpathSync(path.resolve(record.path, bytes.slice(8).trim()))
+    isolatedDeskRoot(target, ctx.env)
+    const dot = path.join(record.path, ".git")
+    const stat = await fs.lstat(dot).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+    if (stat !== null) {
+      if (!stat.isSymbolicLink() || realpathSync(dot) !== target) return false
+      await fs.unlink(dot)
+    }
+    await fs.rename(backup, dot)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Whether the worktree holds nothing but the record's own files (staged or written): no other change, and no untracked or
 // ignored file a hook may have left. Only then may the worktree be removed, with `--force` for those own changes.
 async function onlyOwnChanges(ctx, record) {
@@ -315,6 +364,11 @@ async function onlyOwnChanges(ctx, record) {
 // Removes the worktree and its branch only when it holds nothing but its own files: a file a hook left there is never deleted.
 // Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
 async function release(ctx, record, resource) {
+  if (!(await restorePrivateGitFile(ctx, record))) {
+    resource.disposition = "retained"
+    await saveRecord(ctx, { ...record, disposition: "retained" })
+    return false
+  }
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
     const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", worktreeArgument(ctx, record)])).status === 0
@@ -399,7 +453,7 @@ async function candidate(ctx, base, files, resources) {
   if (before === null) return hold("policy_unknown")
   if (before === "disabled") return hold("policy_refused")
   await ctx.step("before_commit")
-  const commit = await runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, [TOOL_COMMIT_ENV]: "1" })
+  const commit = await privateCommit(ctx, record)
   if (commit.timedOut) return hold("policy_unknown")
   if (commit.status !== 0) return hold("policy_refused")
   if ((await hookPolicy(ctx, record.path)) !== before) return hold("policy_unknown")
