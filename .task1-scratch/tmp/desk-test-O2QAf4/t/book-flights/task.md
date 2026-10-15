@@ -1,18 +1,19 @@
 ---
 schema_version: 1
 title: T
-status: drafting
+status: processing
 created: '2026-10-15T04:26:05Z'
-updated: '2026-10-15T04:26:05Z'
+updated: '2026-10-15T04:26:06Z'
 track: t
 flow:
   since: created
-  rev: 0
-  reached: drafting
+  rev: 1
+  reached: processing
   first_validating_at: null
   first_delivered_at: null
   delivered_at: null
   deliveries: 0
+category: general
 ---
 
 Hello
