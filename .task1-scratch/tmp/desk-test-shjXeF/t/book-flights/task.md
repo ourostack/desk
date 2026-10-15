@@ -15,4 +15,11 @@ flow:
   deliveries: 0
 ---
 
-**Next step:** old one.
+**Next step:** open the PR
+
+## Progress log
+
+- 2026-10-14: opened the branch
+
+
+Extra.
