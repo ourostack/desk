@@ -28,6 +28,7 @@ Ship it.
 |---|---|---|---|---|
 | z | — | o/widgets | pending | — |
 | b | — | o/widgets | in review | https://github.com/o/widgets/pull/1 |
+| c | — | label | pending | https://github.com/o/gadgets/pull/1 |
 
 ## Progress log
 

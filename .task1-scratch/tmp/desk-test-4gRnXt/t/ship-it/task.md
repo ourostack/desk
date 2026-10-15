@@ -2,13 +2,14 @@
 schema_version: 1
 title: T
 status: processing
-created: '2026-10-15T04:26:45Z'
-updated: '2026-10-15T04:26:45Z'
+created: '2026-10-15T04:26:25Z'
+updated: '2026-10-15T04:26:25Z'
 track: t
 repos:
   - name: acme/widgets
-    local_path: ''
-    mode: remote
+    local_path: >-
+      /Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-done-repo-86FYdT/clone
+    mode: local
 flow:
   since: created
   rev: 1

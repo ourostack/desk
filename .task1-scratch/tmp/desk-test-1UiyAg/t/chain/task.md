@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:26:21Z'
-updated: '2026-10-15T04:26:21Z'
+updated: '2026-10-15T04:26:22Z'
 track: t
 repos:
   - name: widgets
@@ -26,6 +26,12 @@ Ship it.
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
 | api | — | widgets | pending | — |
+
+## Resources
+
+| Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
+|---|---|---|---|---|---|
+| branch:o/widgets#feat/x | task t/chain | — | — | — |  |
 
 ## Progress log
 

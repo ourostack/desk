@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 title: T
-status: processing
+status: done
 created: '2026-10-15T04:26:27Z'
-updated: '2026-10-15T04:26:27Z'
+updated: '2026-10-15T04:26:28Z'
 track: t
 repos:
   - name: acme/widgets
@@ -12,11 +12,19 @@ repos:
     mode: local
 flow:
   since: created
-  rev: 1
-  reached: processing
-  first_validating_at: null
-  first_delivered_at: null
-  delivered_at: null
-  deliveries: 0
+  rev: 2
+  reached: done
+  first_validating_at: '2026-10-15T04:26:28Z'
+  first_delivered_at: '2026-10-15T04:26:28Z'
+  delivered_at: '2026-10-15T04:26:28Z'
+  deliveries: 1
+evidence:
+  kind: pr
+  ref: 'https://www.github.com/Acme/Widgets/pull/5/files'
+  recorded_at: '2026-10-15T04:26:28Z'
+signoff:
+  state: delivered_unsigned
+  at: null
+  reason: null
 ---
 

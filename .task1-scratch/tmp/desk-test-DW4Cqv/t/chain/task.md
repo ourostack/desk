@@ -25,11 +25,12 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| a | — | widgets | pending | https://github.com/o/widgets/pull/1 and https://github.com/o/widgets/pull/2 |
-| b | — | widgets | pending | https://github.com/o/widgets/pull/3 and https://github.com/o/widgets/pull/4 |
+| a | — | widgets | merged | https://github.com/o/widgets/pull/1 and https://github.com/o/widgets/pull/2 |
+| b | — | widgets | delivered | https://github.com/o/widgets/pull/3 and https://github.com/o/widgets/pull/4 |
 | c | — | widgets | pending | https://github.com/o/widgets/pull/4 and https://github.com/o/widgets/pull/9 |
-| d | — | widgets | pending | https://github.com/o/widgets/pull/5 and https://github.com/o/widgets/pull/5 |
+| d | — | widgets | in review | https://github.com/o/widgets/pull/5 and https://github.com/o/widgets/pull/5 |
 
 ## Progress log
 
 - 2026-10-01: began
+- 2026-10-14: checked

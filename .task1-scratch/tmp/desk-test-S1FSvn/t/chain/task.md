@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: done
 created: '2026-10-15T04:26:29Z'
-updated: '2026-10-15T04:26:32Z'
+updated: '2026-10-15T04:26:33Z'
 track: t
 repos: []
 flow:
@@ -39,7 +39,7 @@ Ship it.
 | Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
 |---|---|---|---|---|---|
 | worktree:/Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-resources-lAxN6t/idx-51d2ca8465f5f | step api | — | — | — | removed-and-absent: gone |
-| branch:o/widgets#feat/idx | task t/chain | — | — | — |  |
+| branch:o/widgets#feat/idx | task t/chain | — | — | — | removed-and-absent: gone |
 
 ## Progress log
 
