@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 title: T
-status: processing
+status: done
 created: '2026-10-15T04:26:39Z'
-updated: '2026-10-15T04:26:39Z'
+updated: '2026-10-15T04:26:40Z'
 track: t
 repos:
   - name: widgets
@@ -12,11 +12,20 @@ repos:
     mode: local
 flow:
   since: created
-  rev: 1
-  reached: processing
-  first_validating_at: null
-  first_delivered_at: null
-  delivered_at: null
-  deliveries: 0
+  rev: 2
+  reached: done
+  first_validating_at: '2026-10-15T04:26:40Z'
+  first_delivered_at: '2026-10-15T04:26:40Z'
+  delivered_at: '2026-10-15T04:26:40Z'
+  deliveries: 1
+evidence:
+  kind: commit
+  ref: >-
+    https://dev.azure.com/o/p/_git/widgets/commit/eca304b6b6564de93e7e52fe923896f06899d2bd
+  recorded_at: '2026-10-15T04:26:40Z'
+signoff:
+  state: delivered_unsigned
+  at: null
+  reason: null
 ---
 
