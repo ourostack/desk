@@ -26,7 +26,7 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| a | — | widgets | merged | https://dev.azure.com/o/p/_git/r/pullrequest/3 |
+| a | — | widgets | delivered | a1b2c3d4 on origin/main |
 
 ## Progress log
 
