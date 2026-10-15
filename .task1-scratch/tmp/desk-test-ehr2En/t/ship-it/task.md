@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 title: T
-status: processing
+status: done
 created: '2026-10-15T04:25:34Z'
-updated: '2026-10-15T04:25:34Z'
+updated: '2026-10-15T04:25:36Z'
 track: t
 repos:
   - name: greenhouse
@@ -13,11 +13,19 @@ repos:
     local_only: true
 flow:
   since: created
-  rev: 1
-  reached: processing
-  first_validating_at: null
-  first_delivered_at: null
-  delivered_at: null
-  deliveries: 0
+  rev: 2
+  reached: done
+  first_validating_at: '2026-10-15T04:25:36Z'
+  first_delivered_at: '2026-10-15T04:25:36Z'
+  delivered_at: '2026-10-15T04:25:36Z'
+  deliveries: 1
+evidence:
+  kind: commit
+  ref: 89b847fbbbbf8afeea8b128218e4a04c828b727e
+  recorded_at: '2026-10-15T04:25:36Z'
+signoff:
+  state: delivered_unsigned
+  at: null
+  reason: null
 ---
 
