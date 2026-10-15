@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:25:56Z'
-updated: '2026-10-15T04:25:56Z'
+updated: '2026-10-15T04:25:58Z'
 track: t
 repos:
   - name: widgets
@@ -25,12 +25,14 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| done | — | widgets | pending | task:t/card-done |
-| stuck | — | widgets | pending | task:t/card-stuck |
-| going | — | widgets | pending | task:t/card-going |
-| gone | — | widgets | pending | task:t/card-gone |
+| done | — | widgets | delivered | task:t/card-done |
+| stuck | — | widgets | in progress | task:t/card-stuck |
+| going | — | widgets | in progress | task:t/card-going |
+| gone | — | widgets | delivered | task:t/card-gone |
 | ghost | — | widgets | pending | task:t/card-none |
 
 ## Progress log
 
 - 2026-10-01: began
+- 2026-10-14: checked
+- 2026-10-14: checked
