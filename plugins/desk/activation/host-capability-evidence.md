@@ -23,6 +23,25 @@ The isolated native probe used the actual Desk plugin with `--plugin-dir`, `--ag
 - `Total plugin agents loaded: 0`
 - `--agent 'desk:worker' not found`
 
-The namespace matches the manifest. The fixture omitted Desk's declared dependency closure: Superpowers and Plain Language were not supplied. The settings-scope hypothesis did not resolve the failure. This is **fixture composition failure**, not an unsupported native activation verdict. Neither `AskUserQuestion` absence nor ordinary-chat decision behavior was observed; both remain **unqualified**. A later authorized probe must supply all three actual source roots through the supported loader, rather than rename the agent, strip dependencies, or replace it with a reconstructed agent fixture.
+The namespace matches the manifest. The fixture omitted Desk's declared dependency closure: Superpowers and Plain Language were not supplied. The settings-scope hypothesis did not resolve the failure. This was **fixture composition failure**, not an unsupported native activation verdict. Those incomplete runs established neither tool absence nor ordinary-chat behavior.
+
+### Complete-closure native result
+
+A separately authorized single corrected probe at 17:45 UTC loaded all three actual worktree roots through repeated `--plugin-dir` arguments, selected `--agent desk:worker`, and used a 60-second timeout. Source HEAD was `56dd397cc3403cf64bfa3fd0f8c0175670bfd2ff`. No agent reconstruction, dependency removal, CLI `--disallowedTools` override, or authentication change was used. Other relevant native flags were `--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources local --strict-mcp-config --mcp-config '{"mcpServers":{}}' --max-turns 1 --no-session-persistence`. The isolated profile had no MCP servers, so this does not qualify MCP preservation.
+
+The native debug log reports each root loaded, then `Loaded 3 directory-loaded plugins`, `Found 6 plugins (6 enabled, 0 disabled)` (including the host's three built-in plugins), and `Total plugin agents loaded: 2`. The native initialization event identifies Desk 3.2.0-alpha.326, Superpowers 6.4.2, and Plain Language 0.2.6 from the actual source paths, and includes `desk:worker` and `desk:observer` in the agent catalog.
+
+The host's initialization `tools` catalog contains 22 tools:
+
+```text
+Task, Bash, CronCreate, CronDelete, CronList, DesignSync, Edit,
+EnterWorktree, ExitWorktree, ListAgents, NotebookEdit, Read, ReportFindings,
+ScheduleWakeup, SendMessage, Skill, TaskStop, ToolSearch, WebFetch,
+WebSearch, Workflow, Write
+```
+
+`AskUserQuestion` is absent and the process-control tool `TaskStop` is present. `TodoWrite` is also absent; this profile supplies no evidence for its preservation or why the host omitted it. This is actual native startup-catalog evidence for the selected Desk worker, not a model's self-report, a denied tool call, or a fixture-generated catalog.
+
+The requested ordinary-chat question was `Which file should I inspect?`. The host did not execute a model response: it emitted `Not logged in · Please run /login`, `is_error: true`, and exited 1. There were zero tool-use events and no files written in the owned workspace. **Startup tool absence is observed; ordinary-chat question/decision behavior remains unqualified because authentication failed.** No browser or sign-in flow was attempted. The exact native PID/process group, 93130, was verified absent after exit.
 
 Copilot CLI 1.0.97 exposes native `--excluded-tools`; installed `agency copilot --help` exposes it through the documented `[EXTRA_ARGS]` forwarding surface. Desk's production activation surfaces do not own that external argv construction. Its bundle `launch` object contains agent and MCP paths only. The evaluation-only `copilotFlags()` builder is not ordinary consumer activation. See [the exact launcher integration seam](../docs/agent-files.md#copilot-cli).

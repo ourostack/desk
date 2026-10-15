@@ -64,7 +64,7 @@ Claude plugin `settings.json` supports only `agent` and `subagentStatusLine`; pu
 
 Primary host references: [Copilot CLI flags and agent fields](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference), [Claude agent tool policy](https://code.claude.com/docs/en/sub-agents#available-tools), and [Claude plugin settings](https://code.claude.com/docs/en/plugins-reference#settings). Installed help checked on October 15, 2026: Copilot CLI 1.0.97 and Claude Code 2.1.300. These contracts describe activation inputs, not consumer runtime qualification.
 
-The October 15 native qualification did not reach a host tool catalog: the isolated probe loaded only Desk, and Claude disabled it because its declared Superpowers dependency was absent. That is a fixture composition failure, not evidence that Claude rejects the tool-policy field, and not proof of tool absence or ordinary-chat behavior. See the [recorded loader boundary](../activation/host-capability-evidence.md#structured-question-policy-qualification).
+The October 15 complete-closure native probe loaded all three actual source roots and emitted a host startup catalog without `AskUserQuestion`, retaining `TaskStop`. It did not expose `TodoWrite`, and MCP servers were disabled for isolation, so those surfaces are not runtime-qualified by this probe. The host then exited with `Not logged in · Please run /login`: ordinary-chat question/decision behavior remains unqualified, and no sign-in flow was attempted. Earlier probes that omitted the dependency roots failed before producing a catalog; see the [native qualification record](../activation/host-capability-evidence.md#complete-closure-native-result).
 
 ## What if I want a context-specific overlay?
 
