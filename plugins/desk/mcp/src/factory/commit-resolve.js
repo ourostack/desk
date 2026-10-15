@@ -26,10 +26,11 @@
 // `core.fsmonitor` never runs. Any failure reads as "not found", never a
 // throw, and nothing Git prints is kept but SHAs and the normalized origin.
 //
-// `src/factory/**` imports only `node:` built-ins and other `src/factory/`
-// files.
+// The shared Git invocation context, Node built-ins and factory modules
+// keep this reader independent of the server and its native dependencies.
 
 import { execFileSync } from "node:child_process"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
 
@@ -45,7 +46,9 @@ const isDirectory = (value) => typeof value === "string" && path.isAbsolute(valu
 export function createCommitResolver({ git = "git", timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const run = (root, args, input) => {
     try {
-      return execFileSync(git, ["-C", root, ...args], {
+      const invocation = deskGitInvocation({ root, args })
+      return execFileSync(git, invocation.args, {
+        ...invocation.options,
         encoding: "utf8",
         env: gitEnv(),
         timeout: timeoutMs,

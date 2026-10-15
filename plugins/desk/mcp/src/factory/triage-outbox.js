@@ -70,6 +70,7 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
 import { spawnSync } from "node:child_process"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import { randomBytes } from "node:crypto"
 import * as path from "node:path"
 
@@ -237,12 +238,16 @@ export async function recordTriageCoverage(env, { store, coverage, counts, runne
 // Reading what is acknowledged.
 
 function gitOut(deskRoot, args) {
-  const result = spawnSync("git", ["-C", deskRoot, ...args], { timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
+  const invocation = deskGitInvocation({ root: deskRoot, args })
+  const result = spawnSync("git", invocation.args, { ...invocation.options, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
   return result.status === 0 ? result.stdout : null
 }
 
 // One fetch of the desk remote's `main`, which never asks for a credential. False when it did not end well in time.
-const fetchMain = (deskRoot) => spawnSync("git", ["-C", deskRoot, "fetch", "-q", "origin", "main"], { timeout: GIT_TIMEOUT_MS, stdio: "ignore", windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).status === 0
+const fetchMain = (deskRoot) => {
+  const invocation = deskGitInvocation({ root: deskRoot, args: ["fetch", "-q", "origin", "main"] })
+  return spawnSync("git", invocation.args, { ...invocation.options, timeout: GIT_TIMEOUT_MS, stdio: "ignore", windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).status === 0
+}
 
 /**
  * `readAcknowledged({ deskRoot, personPrefix, key }) -> { annotation, identity, ack } | null`: the card's annotation and the

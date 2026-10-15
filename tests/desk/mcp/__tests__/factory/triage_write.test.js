@@ -29,6 +29,27 @@ const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue",
 const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 
+test("private built-in triage keeps worktree operands desk-relative and completes real acknowledgement", async () => {
+  const world_ = await world()
+  const desk = world_.clone("private")
+  const root = desk.deskRoot
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1" }
+  const calls = []
+  const spawnPrivate = (command, args, options) => {
+    assert.ok(!args.includes("-C"))
+    assert.ok(!args.some((arg) => arg.includes(root) || arg.includes(world_.base)))
+    assert.ok(options.cwd === root || options.cwd.startsWith(`${root}${path.sep}`))
+    calls.push(args)
+    return spawn(command, args, options)
+  }
+  const result = await publish(desk, { git: { spawn: spawnPrivate } })
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  assert.ok(calls.some((args) => args[0] === "worktree" && args[1] === "add"))
+  assert.ok(calls.some((args) => args[0] === "push"))
+  assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+  assert.ok(remoteJson(world_.origin, paths.annotation))
+})
+
 function git(cwd, args, { allowFail = false } = {}) {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" })
   if (result.status !== 0 && !allowFail) throw new Error(`git ${args.join(" ")}: ${result.stderr}`)

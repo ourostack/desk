@@ -88,6 +88,7 @@ export function copilotInstalled({ env, pluginRoot, homeDir }) {
 
 /** `{ host, command, args, doing }` for the host's own refresh, or null when none can be derived and the manual step stands. */
 export function refreshPlan({ env, pluginRoot, agentHost, running, homeDir, readFile }) {
+  if (env.DESK_ISOLATED_HOSTED === "1") return null
   if (isAgencySession({ env, pluginRoot })) {
     const spec = deriveAgencySpec({ env, agentHost, pluginRoot, running, homeDir, readFile })
     return spec === null ? null : { host: "agency", command: "agency", args: ["plugin", "cache", "remove", "-f", spec], doing: "refreshing the Agency plugin cache" }
@@ -162,6 +163,7 @@ function writeFileAtomic(file, record) {
  * `unavailable` (no command can be derived). Never throws. `allowInTest` lifts the node:test off switch.
  */
 export function planStaleRefresh({ finding, env, pluginRoot, agentHost, homeDir, now = Date.now, stateDir, readFile, allowInTest = false }) {
+  if (env.DESK_ISOLATED_HOSTED === "1") return { state: "unavailable", reason: "host-package refresh is unavailable in isolated hosted context" }
   try {
     if (String(env[REFRESH_SWITCH] ?? "").trim() === "0") return { state: "disabled" }
     if (!allowInTest && looksLikeNodeTestRunner(env)) return { state: "disabled" }
@@ -202,6 +204,7 @@ function claim(file, now) {
  * concurrent boots start one refresh. Never throws and never waits; the runner outlives this process. `spawn` is for tests.
  */
 export function startStaleRefresh({ prepared, finding, env, root, now = Date.now, spawn = nodeSpawn, timeoutMs = REFRESH_TIMEOUT_MS }) {
+  if (env.DESK_ISOLATED_HOSTED === "1") return { state: "unavailable", reason: "host-package refresh is unavailable in isolated hosted context" }
   const { plan, dir } = prepared
   const stamp = path.join(dir, REFRESH_STAMP_FILE)
   const claimFile = path.join(dir, REFRESH_CLAIM_FILE)

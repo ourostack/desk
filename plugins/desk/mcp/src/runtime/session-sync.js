@@ -34,6 +34,7 @@ import { formatDeskProblem } from "./index-drift.js"
 import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, recordPullOutcome } from "./sync-worker.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
+import { deskGitInvocation } from "./desk-git-context.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_QUARANTINE_SUFFIX = 1000
@@ -65,7 +66,9 @@ function gitEnv() {
 // round), so `timeoutMs` has no default of its own left to fall back to.
 function run(spawnGit, root, args, timeoutMs) {
   if (timeoutMs <= 0) return { status: 1, stdout: "", stderr: "sync-workspace budget exhausted" }
-  return spawnGit("git", ["-C", root, ...args], {
+  const invocation = deskGitInvocation({ root, args })
+  return spawnGit("git", invocation.args, {
+    ...invocation.options,
     encoding: "utf8",
     timeout: timeoutMs,
     env: gitEnv(),
@@ -189,6 +192,7 @@ async function quarantine(root, paths) {
  * way, since a filing that is merely deduped is not itself a new failure.
  */
 export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
+  if (env.DESK_ISOLATED_HOSTED === "1") return { file: "not filed: automatic product filing is unavailable in isolated hosted context" }
   const safeReason = argvSafeReason(reason)
   if (!shouldLaunchFiler({ env, mechanism: "session-sync", signature: safeReason })) {
     return { file: "filing already queued (within the last hour)" }

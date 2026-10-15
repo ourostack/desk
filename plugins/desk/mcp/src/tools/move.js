@@ -13,6 +13,7 @@
 // far as either goes on a non-Git desk.
 
 import { promises as fs } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { TERMINAL_STATES } from "../desk/lifecycle.js"
@@ -214,14 +215,18 @@ async function moveInto({ root, from, to, spawnGit }) {
   const relFrom = relPath(root, from)
   const relTo = relPath(root, to)
 
-  const addResult = spawnGit("git", ["-C", root, "add", "-A", "--", relFrom], {
+  const addInvocation = deskGitInvocation({ root, args: ["add", "-A", "--", relFrom] })
+  const addResult = spawnGit("git", addInvocation.args, {
+    ...addInvocation.options,
     encoding: "utf8",
   })
   if (addResult.status !== 0) {
     throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging ${shownPath(relFrom)}: ${addResult.stderr}`))
   }
 
-  const mvResult = spawnGit("git", ["-C", root, "mv", relFrom, relTo], {
+  const mvInvocation = deskGitInvocation({ root, args: ["mv", relFrom, relTo] })
+  const mvResult = spawnGit("git", mvInvocation.args, {
+    ...mvInvocation.options,
     encoding: "utf8",
   })
   if (mvResult.status !== 0) {

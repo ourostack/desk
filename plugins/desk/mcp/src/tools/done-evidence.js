@@ -20,6 +20,7 @@
 // A card with no repos is unaffected here (`task.js` keeps its own per-kind shape checks for it).
 
 import { realpathSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { resolveLocalPath } from "../util/paths.js"
@@ -67,7 +68,8 @@ function describeRepos(repos) {
 }
 
 function git(spawnGit, dir, args) {
-  const result = spawnGit("git", ["-C", dir, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const invocation = deskGitInvocation({ root: dir, args })
+  const result = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result?.status === 0 && typeof result.stdout === "string" ? result.stdout : null
 }
 
