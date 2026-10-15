@@ -260,9 +260,20 @@ function connect(o) {
       "Desk could not load the reader for the Playwright Extension's connection token (" + describe(error) + "), so the browser is unavailable",
       o.reconnectFix("Check that this machine can reach the npm registry") + " If the problem persists after npm works, delete " + o.installed.dir + " so Desk installs the browser again.") });
   }
-  return Promise.resolve().then(function () {
-    return readExtensionToken(path.join(path.dirname(statePath), profile), { level: level, tmpdir: either(o.tmpdir, os.tmpdir()) });
-  }).then(function (token) {
+  var deadline = Date.now() + 10000;
+  var delay = 100;
+  function readWhenPersisted() {
+    return readExtensionToken(path.join(path.dirname(statePath), profile), { level: level, tmpdir: either(o.tmpdir, os.tmpdir()) }).then(function (token) {
+      if (token !== null && token !== "") return token;
+      var remaining = deadline - Date.now();
+      if (remaining <= 0) return token;
+      var wait = Math.min(delay, remaining);
+      delay = Math.min(delay * 2, 1000);
+      return new Promise(function (resolve) { setTimeout(resolve, wait); }).then(readWhenPersisted);
+    });
+  }
+  // A newly initialized extension can take several seconds to commit its token.
+  return Promise.resolve().then(readWhenPersisted).then(function (token) {
     if (token === null || token === "") return missing();
     var env = {};
     env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token;
