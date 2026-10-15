@@ -15,8 +15,9 @@ try {
 }
 const env = { ...process.env };
 // Nested Git must discover these same public entrypoints, never private hook filenames.
-if (env.DESK_PRIVATE_HOOK_GIT_DIR) {
-  env.GIT_DIR = env.DESK_PRIVATE_HOOK_GIT_DIR;
+if (env.DESK_PRIVATE_HOOK_WORK_TREE) {
+  // A cwd-relative Git directory breaks ordinary same-worktree subdirectory calls.
+  delete env.GIT_DIR;
   env.GIT_WORK_TREE = env.DESK_PRIVATE_HOOK_WORK_TREE;
   if (env.GIT_INDEX_FILE) env.GIT_INDEX_FILE = path.resolve(process.cwd(), env.GIT_INDEX_FILE);
 }

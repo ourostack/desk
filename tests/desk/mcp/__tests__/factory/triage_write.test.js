@@ -32,6 +32,42 @@ const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
 
+test("private triage keeps same-worktree subdirectory Git, nested hooks and message argv valid together", async () => {
+  const w = await world()
+  const desk = w.clone("subdirectory-hook")
+  const root = desk.deskRoot
+  await fs.mkdir(path.join(root, "project"))
+  await fs.writeFile(path.join(root, "project/.keep"), "")
+  git(root, ["add", "--", "project"])
+  git(root, ["commit", "-qm", "seed project"])
+  git(root, ["push", "-q", "origin", "main"])
+  const hooks = path.join(root, ".git/hooks")
+  const originals = new Map()
+  for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-index-change"]) {
+    const body = hookArgvScript({ nestedMutation: name === "pre-commit", subdirectory: name === "pre-commit" })
+    originals.set(name === "pre-commit" ? "pre-commit.desk-chained" : name, body)
+    await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
+  }
+  assert.equal(installCardGuard(root).state, "installed")
+  const log = path.join(w.base, "subdirectory-hook-argv.jsonl")
+  const subdirectoryLog = path.join(w.base, "subdirectory-git.txt")
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog }
+  const result = await publish(desk)
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+  const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
+  assert.deepEqual((await fs.readFile(subdirectoryLog, "utf8")).trim().split("\n"), [path.join(worktree, "project"), worktree], "actual subdirectory cwd and real Git top-level result")
+  assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), "subdirectory mutation triggered the original nested hook")
+  for (const row of rows) {
+    assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
+    assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`))
+    assert.equal(row.hooksPath, "")
+    assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS)
+    if (row.hook.includes("commit-msg")) assert.ok(row.message.includes("Record factory triage annotation"))
+  }
+  for (const [name, body] of originals) assert.equal(await fs.readFile(path.join(hooks, name), "utf8"), body, `original ${name} is unchanged`)
+})
+
 test("private triage preserves routing for a nested hook-triggering Git mutation", async () => {
   for (const configured of [null, "nested policy hooks"]) {
     const w = await world()
@@ -56,7 +92,7 @@ test("private triage preserves routing for a nested hook-triggering Git mutation
       assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`), "nested Git retains its linked worktree context")
       assert.equal(row.hooksPath, configured === null ? "" : hooks)
       assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS, "nested Git retains public routing over the original policy")
-      if (row.toolCommit === "1") assert.equal(path.isAbsolute(row.gitDir), false, "nested Git retains relative message/index directory context")
+      if (row.toolCommit === "1") assert.equal(row.gitDir, undefined, "original hooks use same-worktree discovery, not a cwd-bound Git directory")
     }
     assert.equal(git(root, ["config", "--get", "core.hooksPath"], { allowFail: true }), configured === null ? "" : hooks)
     assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
@@ -103,7 +139,7 @@ test("private triage executable hook descendants keep policy, execution and mess
       assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`), "original hooks must retain their Git context")
       assert.equal(row.hooksPath, configured === null ? "" : hooksPath, "the original hook must observe the original hook policy")
       assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS, "original hooks retain the effective private routing overlay")
-      if (row.toolCommit === "1") assert.equal(path.isAbsolute(row.gitDir), false, "commit context remains relative inside original hooks")
+      if (row.toolCommit === "1") assert.equal(row.gitDir, undefined, "original hooks have no cwd-bound Git directory")
       if (configured === "relative hooks") assert.equal(path.dirname(path.resolve(row.cwd, row.hook)), path.join(row.cwd, configured), "relative policy resolves in the actual hook cwd")
       if (row.hook.includes("commit-msg")) assert.ok(row.message.includes("Record factory triage annotation"))
     }

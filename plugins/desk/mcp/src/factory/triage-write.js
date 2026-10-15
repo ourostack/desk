@@ -112,11 +112,10 @@ async function privateHookEnvironment(ctx, cwd, args, env, deadline) {
     DESK_PRIVATE_HOOK_DISPATCH: path.join(proxy, ctx.platform === "linux" ? "dispatch.sh" : "dispatch.cjs"),
   }
   // Linked-worktree message-file arguments otherwise contain an absolute Git directory.
-  // The dispatcher preserves that relative context for nested Git/message arguments too.
+  // Keep outer message arguments relative; originals discover the same worktree from their cwd.
   if (args[0] === "commit") {
     isolatedDeskRoot(gitDir, env)
     out.GIT_DIR = path.relative(realpathSync(cwd), gitDir).split(path.sep).join("/") || "."
-    out.DESK_PRIVATE_HOOK_GIT_DIR = out.GIT_DIR
     out.DESK_PRIVATE_HOOK_WORK_TREE = realpathSync(cwd)
   }
   return out

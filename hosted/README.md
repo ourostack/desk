@@ -92,9 +92,10 @@ hooks through relative filenames, forwarding stdin, arguments and exit status.
 Original configured hook policy is still fingerprinted before/after commit;
 the ephemeral public routing override remains effective inside original hooks
 so ordinary nested Git mutations also execute the original hooks privately.
-No persisted configuration is changed. Linked-worktree commit-message filenames
-and the Git-directory environment stay relative for nested Git too; worktree
-and index context are preserved through environment.
+No persisted configuration is changed. The outer commit keeps its message-file
+arguments relative. Original hooks use normal Git discovery within the same
+linked worktree, without a cwd-bound `GIT_DIR`; subdirectory Git calls therefore
+work too. Absolute worktree/index context stays in environment, never argv.
 No executable hook or triage operation is disabled by this transport.
 
 Sync workers/session sync and shared remote/ahead-behind readers use their

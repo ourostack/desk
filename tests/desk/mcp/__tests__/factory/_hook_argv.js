@@ -1,5 +1,5 @@
 // A real executable hook records its shell and Node descendant's OS arguments.
-export function hookArgvScript({ nestedMutation = false } = {}) {
+export function hookArgvScript({ nestedMutation = false, subdirectory = false } = {}) {
   const probe = `
 const fs = require("node:fs"), cp = require("node:child_process");
 const pid = process.ppid;
@@ -32,5 +32,7 @@ row.effectiveHooksPath = scopes.at(-1)?.value ?? "";
 if (row.hook.includes("commit-msg") && row.args.length) row.message = fs.readFileSync(row.args[0], "utf8");
 fs.appendFileSync(process.env.DESK_HOOK_LOG, JSON.stringify(row) + "\\n");
 `
-  return `#!/bin/sh\n"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n[ "$code" -eq 0 ] || exit "$code"\n${nestedMutation ? "DESK_HOOK_NESTED_MUTATION=1 git update-index --refresh --force-write-index || exit $?\n" : ""}case "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
+  const readFromProject = subdirectory ? 'expected=$(pwd -P)\ncd project || exit 41\ntop=$(git rev-parse --show-toplevel) || exit $?\n[ "$top" = "$expected" ] || exit 42\nif [ -n "$DESK_HOOK_SUBDIRECTORY_LOG" ]; then printf "%s\\n" "$(pwd -P)" "$top" >> "$DESK_HOOK_SUBDIRECTORY_LOG" || exit $?; fi\ncd .. || exit 41\n' : ""
+  const mutation = nestedMutation ? `${subdirectory ? "cd project || exit 41\n" : ""}DESK_HOOK_NESTED_MUTATION=1 git update-index --refresh --force-write-index || exit $?\n` : ""
+  return `#!/bin/sh\n${readFromProject}"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n[ "$code" -eq 0 ] || exit "$code"\n${mutation}case "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
 }
