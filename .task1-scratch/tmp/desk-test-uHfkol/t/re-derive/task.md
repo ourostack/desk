@@ -1,14 +1,14 @@
 ---
 schema_version: 1
 title: Unique title re-derive
-status: processing
+status: validating
 created: '2026-10-15T04:27:06Z'
 updated: '2026-10-15T04:27:07Z'
 track: t
 flow:
   since: created
-  rev: 2
-  reached: processing
+  rev: 3
+  reached: validating
   first_validating_at: '2026-10-15T04:27:06Z'
   first_delivered_at: null
   delivered_at: null
