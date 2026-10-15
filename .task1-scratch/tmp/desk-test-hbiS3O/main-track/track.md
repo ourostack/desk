@@ -15,4 +15,4 @@ Fixture body.
 
 | Slug | State | Repos | Tracker link | Doing doc |
 |------|-------|-------|--------------|-----------|
-| `old-name` | drafting | - | - | - |
+| `old-name` | done | - | - | - |
