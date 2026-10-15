@@ -1,7 +1,7 @@
 ---
 schema_version: 1
 title: Unique title side-collaborating
-status: validating
+status: collaborating
 created: '2026-10-15T04:27:14Z'
 updated: '2026-10-15T04:27:14Z'
 track: t
