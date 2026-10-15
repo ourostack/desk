@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: done
 created: '2026-10-15T04:26:18Z'
-updated: '2026-10-15T04:26:20Z'
+updated: '2026-10-15T04:26:21Z'
 track: t
 repos: []
 flow:
@@ -40,6 +40,8 @@ Ship it.
 |---|---|---|---|---|---|
 | worktree:/Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-resources-lAxN6t/idx-bd8c5570bda7b | step api | — | — | — |  |
 | branch:o/widgets#feat/idx | task t/chain | — | — | — |  |
+| branch:o/widgets#feat/more | task t/chain | — | — | — |  |
+| branch:o/widgets#feat/more2 | task t/chain | — | — | — |  |
 
 ## Progress log
 
