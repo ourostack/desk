@@ -3,7 +3,7 @@ schema_version: 1
 title: T
 status: drafting
 created: '2026-10-15T04:26:39Z'
-updated: '2026-10-15T04:26:39Z'
+updated: '2026-10-15T04:26:40Z'
 track: t
 repos:
   - name: widgets
@@ -20,6 +20,18 @@ flow:
 ## Outcome
 
 Ship it.
+
+## Steps
+
+| Step | Depends on | Repo | State | Evidence |
+|---|---|---|---|---|
+| api | — | widgets | pending | — |
+
+## Resources
+
+| Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
+|---|---|---|---|---|---|
+| worktree:/Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-resources-lAxN6t/derived | step api | — | — | — |  |
 
 ## Progress log
 
