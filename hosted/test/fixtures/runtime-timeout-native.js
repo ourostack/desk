@@ -39,18 +39,25 @@ export async function runTimeoutCases({ config, store, binding, root, waitForSlo
   const manager = createAccountRuntime({
     config, store, rootDir, baseEnv, mint: async () => ({ token: "synthetic-token" }),
   });
-  const pushDesk = await manager.prepare("deadline-push");
+  const pushManager = createAccountRuntime({
+    config, store, rootDir: join(root, "push-retirement-realms"), baseEnv,
+    mint: async () => ({ token: "synthetic-token" }),
+  });
+  const pushDesk = await pushManager.prepare("deadline-push");
   await pushDesk.git(["commit", "--quiet", "--allow-empty", "-m", "before retirement push"]);
   const setupPush = pushDesk.launch([SCRIPT, "setup-push-hook"]);
   assert.equal((await once(setupPush, "close"))[0], 0);
   const pushClose = await outcome(pushDesk.close());
   const afterPush = await probe(pushDesk.realm, pushDesk.env);
   const writePushed = originSubjects().includes("post-push retirement write");
-  console.log(JSON.stringify({ pushRetirementObservation: { pushClose, afterPush, writePushed } }));
+  console.log(JSON.stringify({ pushRetirementObservation: { root: pushDesk.realm.root, pushClose, afterPush, writePushed } }));
   assert.match(afterPush.subjects, /post-push retirement write/);
   if (!writePushed) {
     assert.equal(pushClose.status, "rejected", "retirement must not turn a stale push count into a successful close");
     assert.equal(afterPush.socketExists, true, "a retired but unpushed write retains its broker");
+    await assert.rejects(pushManager.close(), /preserv|shutdown/i);
+  } else {
+    await pushManager.close();
   }
   const desk = await manager.prepare("deadline-a");
   const setup = desk.launch([SCRIPT, "setup-hook"]);
