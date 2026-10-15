@@ -181,7 +181,7 @@ function readSqliteToken(file, extensionId, tokenKey, deps) {
   }
 }
 
-// The extension's token in a profile, or null when the profile has none (the extension is not installed there). Reads a copy of `Local Storage/leveldb` made without its LOCK file and removes the copy before it answers, whatever happens, then Chromium's newer SQLite `LocalStorage` when LevelDB has no token. `deps.level` is the `classic-level` module.
+// The profile's persisted extension token, or null when this reader finds none; this is not an extension-installation check. Reads a copy of `Local Storage/leveldb` made without its LOCK file and removes the copy before it answers, whatever happens, then Chromium's newer SQLite `LocalStorage` when LevelDB has no token. `deps.level` is the `classic-level` module.
 function readExtensionToken(profileDir, deps) {
   var extensionId = deps.extensionId === undefined ? EXTENSION_ID : deps.extensionId;
   var tokenKey = deps.tokenKey === undefined ? "auth-token" : deps.tokenKey;
@@ -249,8 +249,8 @@ function connect(o) {
   }
   var missing = function () {
     return { payload: o.unavailable("browser_extension_missing",
-      "The Playwright Extension is not installed in the " + app + " profile " + profile + " (the one signed in to @" + declaration.domain + "), so the browser is unavailable",
-      o.reconnectFix("If the extension is not installed, install it in that profile from " + INSTALL_URL + "; if it is already installed, click its toolbar icon once to open its page")) };
+      "Desk found no usable persisted Playwright Extension credential in the " + app + " profile " + profile + " (the one signed in to @" + declaration.domain + "), so the browser is unavailable",
+      "Stop browser calls and preserve the existing browser and profile. Automatic extension setup is not available through this launcher; record this binding as blocked for an admitted agent-owned repair, not an operator setup chore. Stock extension reference: " + INSTALL_URL + ".") };
   };
   var level;
   try {
@@ -260,9 +260,20 @@ function connect(o) {
       "Desk could not load the reader for the Playwright Extension's connection token (" + describe(error) + "), so the browser is unavailable",
       o.reconnectFix("Check that this machine can reach the npm registry") + " If the problem persists after npm works, delete " + o.installed.dir + " so Desk installs the browser again.") });
   }
-  return Promise.resolve().then(function () {
-    return readExtensionToken(path.join(path.dirname(statePath), profile), { level: level, tmpdir: either(o.tmpdir, os.tmpdir()) });
-  }).then(function (token) {
+  var deadline = Date.now() + 10000;
+  var delay = 100;
+  function readWhenPersisted() {
+    return readExtensionToken(path.join(path.dirname(statePath), profile), { level: level, tmpdir: either(o.tmpdir, os.tmpdir()) }).then(function (token) {
+      if (token !== null && token !== "") return token;
+      var remaining = deadline - Date.now();
+      if (remaining <= 0) return token;
+      var wait = Math.min(delay, remaining);
+      delay = Math.min(delay * 2, 1000);
+      return new Promise(function (resolve) { setTimeout(resolve, wait); }).then(readWhenPersisted);
+    });
+  }
+  // A newly initialized extension can take several seconds to commit its token.
+  return Promise.resolve().then(readWhenPersisted).then(function (token) {
     if (token === null || token === "") return missing();
     var env = {};
     env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token;

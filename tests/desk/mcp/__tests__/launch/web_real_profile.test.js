@@ -342,7 +342,122 @@ function connectOptions(root, overrides = {}) {
   return { declaration: { state: "declared", channel: "msedge", domain: "microsoft.com" }, installed, executable: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", platform: "darwin", env: {}, homeDir: path.join(root, "home"), unavailable, reconnectFix: fixAfter, tmpdir: path.join(root, "tmp"), ...overrides }
 }
 
-test("connecting names the missing profile, the missing extension and an unreadable token, each in one line with its fix", async () => {
+async function tickStorage(t, milliseconds) {
+  for (let elapsed = 0; elapsed < milliseconds; elapsed += 100) {
+    t.mock.timers.tick(Math.min(100, milliseconds - elapsed))
+    await new Promise(setImmediate)
+  }
+}
+
+test("a persisted credential gap reports an agent-owned boundary, not operator installation work", async (t) => {
+  const root = await mkTempRoot("real-connect-")
+  mkdirSync(path.join(root, "tmp"))
+  const base = localState(path.join(root, "home"), { Default: "me@microsoft.com" })
+  const profile = path.join(base, "Default")
+  leveldb(profile)
+  touch(path.join(profile, "Extensions", real.EXTENSION_ID, "0.4.0", "manifest.json"),
+    JSON.stringify({ name: "Playwright Extension", version: "0.4.0", manifest_version: 3 }))
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
+  const connecting = real.connect(connectOptions(root, {
+    env: { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN },
+    requireModule: () => levelStub([]),
+  }))
+  await new Promise(setImmediate)
+  await tickStorage(t, 10000)
+  const answer = await connecting
+  assert.deepEqual(Object.keys(answer), ["payload"])
+  assert.equal(answer.payload.code, "browser_extension_missing")
+  assert.match(answer.payload.summary, /no usable persisted Playwright Extension credential/u)
+  assert.match(answer.payload.summary, /profile Default/u)
+  assert.doesNotMatch(answer.payload.summary, /is not installed/u)
+  assert.match(answer.payload.fix, /^Stop browser calls/u)
+  assert.match(answer.payload.fix, /preserve the existing browser and profile/u)
+  assert.match(answer.payload.fix, /Automatic extension setup is not available through this launcher/u)
+  assert.match(answer.payload.fix, /agent-owned repair/u)
+  assert.match(answer.payload.fix, /not an operator setup chore/u)
+  assert.ok(answer.payload.fix.includes(real.INSTALL_URL))
+  assert.doesNotMatch(answer.payload.fix, /then retry|install it in that profile|click its toolbar icon/u)
+  assert.doesNotMatch(JSON.stringify(answer), new RegExp(TOKEN, "u"))
+  assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
+})
+
+for (const initial of [null, ""]) {
+  test(`connecting waits for ${initial === null ? "a missing" : "an empty"} token to persist, without launching a browser`, async (t) => {
+    const root = await mkTempRoot("real-connect-")
+    mkdirSync(path.join(root, "tmp"))
+    const base = localState(path.join(root, "home"), { Default: "me@microsoft.com" })
+    leveldb(path.join(base, "Default"))
+    const entries = initial === null ? [] : [[tokenKey(), latin(initial)]]
+    const seen = {}
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
+    let settled = false
+    const connecting = real.connect(connectOptions(root, {
+      requireModule: () => levelStub(entries, seen),
+    })).then((answer) => { settled = true; return answer })
+    await new Promise(setImmediate)
+    await tickStorage(t, 5100)
+    assert.equal(settled, false, "a cold token can take more than five seconds to reach disk")
+    entries.splice(0, entries.length, [tokenKey(), latin(TOKEN)])
+    await tickStorage(t, 1000)
+    assert.equal(settled, true, "the next storage poll must return the persisted token")
+    const answer = await connecting
+    assert.deepEqual(answer.env, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN })
+    assert.equal(answer.profile, "Default")
+    assert.ok(seen.iteratorClosed && seen.dbClosed)
+    assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
+  })
+}
+
+test("connecting bounds absent-token polling to ten seconds and releases every storage copy", async (t) => {
+  const root = await mkTempRoot("real-connect-")
+  mkdirSync(path.join(root, "tmp"))
+  const base = localState(path.join(root, "home"), { Default: "me@microsoft.com" })
+  leveldb(path.join(base, "Default"))
+  let reads = 0
+  const reader = levelStub([])
+  const level = { ClassicLevel: class extends reader.ClassicLevel {
+    constructor(...args) { super(...args); reads += 1 }
+  } }
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
+  let settled = false
+  const connecting = real.connect(connectOptions(root, { requireModule: () => level }))
+    .then((answer) => { settled = true; return answer })
+  await new Promise(setImmediate)
+  await tickStorage(t, 9900)
+  assert.equal(settled, false)
+  await tickStorage(t, 100)
+  assert.equal(settled, true)
+  assert.equal((await connecting).payload.code, "browser_extension_missing")
+  assert.ok(reads > 1 && reads <= 20, "storage polling must back off instead of busy-waiting")
+  assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
+  const finalReads = reads
+  await tickStorage(t, 1000)
+  assert.equal(reads, finalReads, "no polling survives the result")
+})
+
+test("a storage error during readiness polling stops immediately instead of becoming a missing-extension timeout", async (t) => {
+  const root = await mkTempRoot("real-connect-")
+  mkdirSync(path.join(root, "tmp"))
+  const base = localState(path.join(root, "home"), { Default: "me@microsoft.com" })
+  leveldb(path.join(base, "Default"))
+  const options = {}
+  const level = levelStub([], {}, options)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
+  let answer
+  const connecting = real.connect(connectOptions(root, { requireModule: () => level }))
+    .then((result) => { answer = result })
+  await new Promise(setImmediate)
+  await tickStorage(t, 500)
+  assert.equal(answer, undefined)
+  options.failRead = true
+  await tickStorage(t, 1000)
+  assert.equal(answer?.payload.code, "browser_token_unreadable")
+  assert.match(answer.payload.summary, /corrupt table/u)
+  await connecting
+  assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
+})
+
+test("connecting names the missing profile, unavailable credential and unreadable token, each in one line with its fix", async () => {
   const root = await mkTempRoot("real-connect-")
   mkdirSync(path.join(root, "tmp"))
   const home = path.join(root, "home")
@@ -356,7 +471,8 @@ test("connecting names the missing profile, the missing extension and an unreada
   const noExtension = await real.connect(connectOptions(root, { requireModule: modules([]) }))
   assert.equal(noExtension.payload.code, "browser_extension_missing")
   assert.ok(noExtension.payload.fix.includes(real.INSTALL_URL))
-  assert.match(noExtension.payload.fix, /if it is already installed, click its toolbar icon once to open its page, then retry\.$/u)
+  assert.match(noExtension.payload.fix, /^Stop browser calls/u)
+  assert.doesNotMatch(noExtension.payload.fix, /then retry/u)
   assert.match(noExtension.payload.summary, /profile Profile 3/u)
   assert.equal((await real.connect(connectOptions(root, { requireModule: modules([[tokenKey(), latin("")]]) }))).payload.code, "browser_extension_missing")
 
@@ -374,11 +490,12 @@ test("connecting names the missing profile, the missing extension and an unreada
   for (const answer of [noProfile, noExtension, unreadable, noReader]) assert.doesNotMatch(JSON.stringify(answer), new RegExp(TOKEN, "u"))
 })
 
-test("connecting passes the user-data folder and profile in the arguments and the token only in the environment", async () => {
+test("connecting passes the user-data folder and profile in the arguments and the token only in the environment without waiting", async (t) => {
   const root = await mkTempRoot("real-connect-")
   mkdirSync(path.join(root, "tmp"))
   const base = localState(path.join(root, "home"), { Default: "me@microsoft.com" }, "Default", "chrome")
   leveldb(path.join(base, "Default"))
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
   const answer = await real.connect(connectOptions(root, {
     declaration: { state: "declared", channel: "chrome", domain: "microsoft.com" },
     requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]),
@@ -524,7 +641,7 @@ function session(machine, extra = {}) {
     stdout,
   })
   const wait = async (check, what) => {
-    for (let i = 0; i < 1500; i += 1) {
+    for (let i = 0; i < 3000; i += 1) {
       const found = check()
       if (found) return found
       await new Promise((resolve) => setTimeout(resolve, 5))

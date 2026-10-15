@@ -1,5 +1,29 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.325 — 2026-10-15
+
+### Fixed
+
+- Report a missing persisted browser-extension credential without falsely asserting the extension is absent or returning operator install/toolbar/retry instructions. Keep the existing error code and binding. Automatic extension setup is not available through this launcher yet: this is an explicit blocked boundary, not a new provisioning capability.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.324 — 2026-10-15
+
+### Changed
+
+- Clarify the qualified custom-agent MCP isolation and owned-group naming seams, the limits of parent-MCP inheritance, and secret-safe token-page and failed-call cleanup guidance. Full effortless setup, foreground-safe bootstrap and stock failed-close safety remain gated; this documentation release changes no runtime or agent configuration.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.323 — 2026-10-15
+
+### Fixed
+
+- Wait up to ten seconds for a newly initialized browser extension token to reach profile storage instead of immediately reporting a missing extension. Existing tokens connect without a delay, and storage errors still surface immediately. Automatic extension provisioning, stale-token rotation and foreground-safe first connection remain separate delivery gates.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.322 — 2026-10-14
 
 The real-profile browser runner now launches the stock Playwright connection directly, without inserting Desk's watchdog or custom relay. Existing profile and token loading, output token redaction, stock tools, and explicit close behavior are unchanged.
