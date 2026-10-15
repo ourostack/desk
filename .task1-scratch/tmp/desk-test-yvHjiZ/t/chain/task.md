@@ -25,8 +25,9 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| a | — | widgets | pending | task:t/card-x |
+| a | — | widgets | blocked | task:t/card-x |
 
 ## Progress log
 
 - 2026-10-01: began
+- 2026-10-14: checked
