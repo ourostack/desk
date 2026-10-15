@@ -13,7 +13,10 @@ flow:
   first_delivered_at: null
   delivered_at: null
   deliveries: 0
-category: general
+category: c
 flavor: x
+next_review: soon
+Blockage: 'y'
+waits: z
 ---
 
