@@ -5,6 +5,7 @@
 // file in the desk changes and nothing needs a commit.
 
 import { spawnSync } from "node:child_process"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 
@@ -18,10 +19,13 @@ const handled = new Set()
 export function ensureStateIgnored(root, { spawnGit = spawnSync } = {}) {
   if (handled.has(root)) return false
   try {
-    const exclude = spawnGit("git", ["-C", root, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8", timeout: 5000 })
+    const context = (args) => deskGitInvocation({ root, args })
+    const excludeContext = context(["rev-parse", "--git-path", "info/exclude"])
+    const exclude = spawnGit("git", excludeContext.args, { ...excludeContext.options, encoding: "utf8", timeout: 5000 })
     if (exclude.status !== 0) return false
     handled.add(root)
-    if (spawnGit("git", ["-C", root, "check-ignore", "-q", ".state/desk-index.sqlite"], { timeout: 5000 }).status === 0) return false
+    const checkContext = context(["check-ignore", "-q", ".state/desk-index.sqlite"])
+    if (spawnGit("git", checkContext.args, { ...checkContext.options, timeout: 5000 }).status === 0) return false
     const file = path.resolve(root, exclude.stdout.trim())
     mkdirSync(path.dirname(file), { recursive: true })
     const existing = existsSync(file) ? readFileSync(file, "utf8") : ""

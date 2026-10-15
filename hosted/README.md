@@ -76,6 +76,27 @@ broker. Push/count failures reject shutdown and retain the broker rather than
 reporting a successful loss of writes. `purge` first closes successfully, then
 deletes that UID's contents; its 0700 root/UID tombstone remains reserved.
 
+Only realm children receive `DESK_ISOLATED_HOSTED=1`; ordinary local sessions
+and legacy `DESK_HOSTED=1` retain their existing subprocess contracts. The
+built-in Git callers use `deskGitInvocation({root,args,env})`: private mode
+validates the root's real containment within `env.DESK`, including symlinks,
+then uses cwd instead of `git -C <root>`. Git's `diff-tree --root` flag is
+unchanged. Private triage candidate worktrees live below `.git/desk-triage`,
+with desk-relative Git operands; protected operation records stay in the
+realm's factory state.
+
+Detached sync and identity-refresh scripts read their root from `DESK`.
+Their admitted source-mirror filename also travels in environment
+(`DESK_BUILTIN_SCRIPT`), through a fixed Node module loader, never argv.
+Explicit script `--root` remains supported for local callers. Automatic
+host-package upgrades and product issue filing are unavailable in the private
+customer context and return an explicit unavailable/not-filed reason before
+spawning or claiming host-side work.
+
+These invocation changes do not implement service/MCP descendant retirement.
+That remains a separate qualification gate; gateway-operation retirement
+below must not be mistaken for proof that MCP service descendants retire.
+
 Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
 a fresh worker session. A worker's result or exit is not retirement proof:
 completion requires the worker and all its descendants, including reparented

@@ -26,6 +26,7 @@
 //     reported (a file a hook left is never deleted), and block new resources with a stable alarm until they are recovered.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
+import { deskGitInvocation, isolatedDeskRoot } from "../runtime/desk-git-context.js"
 import { promises as fs, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { createHash, randomBytes } from "node:crypto"
@@ -93,7 +94,8 @@ function runGit(ctx, cwd, args, env = ctx.childEnv) {
     const posix = ctx.platform !== "win32"
     let child
     try {
-      child = ctx.spawn("git", ["-C", cwd, ...args], { env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true })
+      const invocation = deskGitInvocation({ root: cwd, args, env })
+      child = ctx.spawn("git", invocation.args, { ...invocation.options, env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true })
     } catch {
       resolve({ status: null, stdout: Buffer.alloc(0), stderr: "", timedOut: false })
       return
@@ -245,6 +247,16 @@ async function saveRecord(ctx, record) {
   await writeProtectedTriageFile(ctx.env, ["ops", `${record.token}.json`], `${JSON.stringify(record)}\n`, ctx.protectOptions)
 }
 
+function worktreePath(ctx, dir, token) {
+  return ctx.env.DESK_ISOLATED_HOSTED === "1"
+    ? path.join(ctx.deskRoot, ".git", "desk-triage", token, "wt")
+    : path.join(dir, token, "wt")
+}
+
+function worktreeArgument(ctx, record) {
+  return ctx.env.DESK_ISOLATED_HOSTED === "1" ? path.relative(ctx.deskRoot, record.path) : record.path
+}
+
 // Whether the worktree holds nothing but the record's own files (staged or written): no other change, and no untracked or
 // ignored file a hook may have left. Only then may the worktree be removed, with `--force` for those own changes.
 async function onlyOwnChanges(ctx, record) {
@@ -259,7 +271,7 @@ async function onlyOwnChanges(ctx, record) {
 async function release(ctx, record, resource) {
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
-    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
+    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", worktreeArgument(ctx, record)])).status === 0
     if (!removed) {
       resource.disposition = "retained"
       await saveRecord(ctx, { ...record, disposition: "retained" })
@@ -292,7 +304,7 @@ async function recover(ctx, resources) {
       record = null
     }
     const owned = record?.schema === OPERATION_SCHEMA && name === `${record.token}.json` && OWNED_REF.test(record.ref) && Array.isArray(record.files) &&
-      record.ref === `desk-triage/${record.token}` && record.path === path.join(dir, record.token, "wt")
+      record.ref === `desk-triage/${record.token}` && record.path === worktreePath(ctx, dir, record.token)
     const resource = { kind: "worktree", path: owned ? record.path : path.join(dir, name), ref: owned ? record.ref : null, owner: record?.owner ?? null, disposition: "retained" }
     resources.push(resource)
     if (!owned || !(await release(ctx, record, resource))) return false
@@ -305,18 +317,22 @@ async function candidate(ctx, base, files, resources) {
   const token = hex(16)
   const dir = await opsDir(ctx)
   const record = {
-    schema: OPERATION_SCHEMA, token, path: path.join(dir, token, "wt"), ref: `desk-triage/${token}`, owner: process.pid,
+    schema: OPERATION_SCHEMA, token, path: worktreePath(ctx, dir, token), ref: `desk-triage/${token}`, owner: process.pid,
     files: files.map((file) => file.path), disposition: "active",
   }
   const resource = { kind: "worktree", path: record.path, ref: record.ref, owner: record.owner, disposition: "active" }
   resources.push(resource)
   await saveRecord(ctx, record)
+  if (ctx.env.DESK_ISOLATED_HOSTED === "1") {
+    isolatedDeskRoot(path.join(ctx.deskRoot, ".git"), ctx.env)
+    await ensureOwnerOnlyDirectory(path.join(ctx.deskRoot, ".git", "desk-triage"), ctx.platform, NAMING)
+  }
   await ensureOwnerOnlyDirectory(path.dirname(record.path), ctx.platform, NAMING)
   const hold = async (state) => {
     await release(ctx, record, resource)
     return { hold: state }
   }
-  if ((await runGit(ctx, ctx.deskRoot, ["worktree", "add", "-q", "-b", record.ref, record.path, base])).status !== 0) return hold("write_failed")
+  if ((await runGit(ctx, ctx.deskRoot, ["worktree", "add", "-q", "-b", record.ref, worktreeArgument(ctx, record), base])).status !== 0) return hold("write_failed")
   for (const file of files) {
     let cursor = record.path
     for (const segment of path.posix.dirname(file.path).split("/")) {

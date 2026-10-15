@@ -11,6 +11,7 @@
 // is real work in the recorded repo, so accepting it is correct.
 
 import { realpathSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -20,7 +21,8 @@ import { deskRelativePath, resolveLocalPath, isPathContained } from "../util/pat
 const GIT_TIMEOUT_MS = 5000
 
 function git(spawnGit, dir, args) {
-  const result = spawnGit("git", ["-C", dir, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const invocation = deskGitInvocation({ root: dir, args })
+  const result = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result?.status === 0 && typeof result.stdout === "string" ? result.stdout : null
 }
 
@@ -137,4 +139,3 @@ export function assertLocalOnlyUnchanged(repos, prior) {
     }
   }
 }
-

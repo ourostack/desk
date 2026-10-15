@@ -59,6 +59,7 @@ import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 import { createGitReader } from "./git-read-worker.js"
+import { deskGitInvocation, deskScriptInvocation, isolatedDeskRoot } from "./desk-git-context.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -79,7 +80,9 @@ function gitEnv() {
 }
 
 function run(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], {
+  const invocation = deskGitInvocation({ root, args })
+  return spawnGit("git", invocation.args, {
+    ...invocation.options,
     encoding: "utf8",
     timeout: GIT_TIMEOUT_MS,
     env: gitEnv(),
@@ -455,6 +458,7 @@ function text(value) {
  * failure to report.
  */
 export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
+  if (env.DESK_ISOLATED_HOSTED === "1") return { file: "not filed: automatic product filing is unavailable in isolated hosted context" }
   const safeReason = argvSafeReason(reason)
   if (!shouldLaunchFiler({ env, mechanism: "desk-sync", signature: safeReason })) {
     return { file: "filing already queued (within the last hour)" }
@@ -564,11 +568,14 @@ export async function runPushWorker({
  * not just inferred from a slower end-to-end test. `spawnImpl` is a test seam.
  */
 export function defaultSpawnWorker({ root, env, debounceMs, spawnImpl = spawn }) {
-  const child = spawnImpl(process.execPath, [SYNC_PUSH_SCRIPT, "--root", root, "--debounce-ms", String(debounceMs)], {
+  const privateMode = env.DESK_ISOLATED_HOSTED === "1"
+  if (privateMode) isolatedDeskRoot(root, env)
+  const invocation = deskScriptInvocation({ script: SYNC_PUSH_SCRIPT, args: [...(privateMode ? [] : ["--root", root]), "--debounce-ms", String(debounceMs)], env: privateMode ? { ...env, DESK: root } : env })
+  const child = spawnImpl(process.execPath, invocation.args, {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env,
+    ...invocation.options,
   })
   child.on("error", () => {})
   child.unref()
@@ -614,8 +621,9 @@ function parseSyncPushArgs(argv) {
  */
 export async function runSyncPushCli({ argv = process.argv.slice(2), env = process.env, runWorker = runPushWorker } = {}) {
   const options = parseSyncPushArgs(argv)
-  const root = options.get("root")
+  const root = options.get("root") ?? env.DESK
   if (typeof root !== "string" || root === "") throw new Error("sync-push.js: --root <path> is required")
+  if (env.DESK_ISOLATED_HOSTED === "1") isolatedDeskRoot(root, env)
   const debounceMs = Number.parseInt(options.get("debounce-ms") ?? "", 10)
   await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
   return 0

@@ -81,6 +81,7 @@ test("a realm receives its own HOME, temp, XDG, Git config, desk and token socke
   assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
   assert.equal(env.GIT_TERMINAL_PROMPT, "0");
   assert.equal(env.DESK_HOSTED, "1");
+  assert.equal(env.DESK_ISOLATED_HOSTED, "1");
   assert.equal(env.USER, "desk-19001");
   assert.equal(env.GIT_AUTHOR_EMAIL, "16390116+arimendelow@users.noreply.github.com");
   assert.equal(env.GIT_COMMITTER_EMAIL, env.GIT_AUTHOR_EMAIL);
@@ -89,7 +90,7 @@ test("a realm receives its own HOME, temp, XDG, Git config, desk and token socke
   assert.equal(env.TZ, "UTC");
   assert.ok(env.PATH.endsWith("/usr/bin:/bin"));
   assert.deepEqual(Object.keys(env).sort(), [
-    "DESK", "DESK_HOSTED", "DESK_MCP_ICON_URL", "DESK_TOKEN_SOCKET",
+    "DESK", "DESK_HOSTED", "DESK_ISOLATED_HOSTED", "DESK_MCP_ICON_URL", "DESK_TOKEN_SOCKET",
     "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_NAME",
     "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT",
     "HOME", "LANG", "PATH", "TMPDIR", "TZ", "USER",

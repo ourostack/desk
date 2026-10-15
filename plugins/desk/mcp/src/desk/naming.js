@@ -14,6 +14,7 @@
 // "api-key-rotation" or "token-budget-report" are not credential_like.
 
 import { spawnSync } from "node:child_process"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as os from "node:os"
 import { readCrewRoster } from "./crew-roster.js"
 import { ghLogins } from "./gh-logins.js"
@@ -300,10 +301,12 @@ function readDesksRegistryNames(deskRoot) {
   return names
 }
 
-function readGitUserName(deskRoot, spawnGitConfig) {
+function readGitUserName(deskRoot, spawnGitConfig, env) {
   let result
   try {
-    result = spawnGitConfig("git", ["-C", deskRoot, "config", "user.name"], {
+    const invocation = deskGitInvocation({ root: deskRoot, args: ["config", "user.name"], env })
+    result = spawnGitConfig("git", invocation.args, {
+      ...invocation.options,
       encoding: "utf8",
     })
   } catch {
@@ -326,7 +329,7 @@ function readGitUserName(deskRoot, spawnGitConfig) {
  */
 export function operatorNames(deskRoot, { spawnGitConfig = spawnSync, env = process.env, platform = process.platform, homeDir = os.homedir() } = {}) {
   const names = [...readDesksRegistryNames(deskRoot)]
-  const gitUserName = readGitUserName(deskRoot, spawnGitConfig)
+  const gitUserName = readGitUserName(deskRoot, spawnGitConfig, env)
   if (gitUserName) names.push(gitUserName)
   names.push(...ghLogins({ env, platform, homeDir }))
   return [...new Set(names.map(kebabCase).filter((name) => name !== ""))]
