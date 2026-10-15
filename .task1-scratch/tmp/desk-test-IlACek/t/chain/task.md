@@ -32,6 +32,7 @@ Ship it.
 | Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
 |---|---|---|---|---|---|
 | worktree:/Users/microsoft/code/desk-worktrees/v1b2-multiuser/.task1-scratch/tmp/desk-resources-lAxN6t/api | step api | — | remove after merge | — |  |
+| branch:o/widgets#feat/api | task t/chain | — | — | — |  |
 
 ## Progress log
 
