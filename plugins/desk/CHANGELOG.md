@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.326 — 2026-10-15
+
+### Fixed
+
+- Correct the browser admission evidence: only the two custom children used scoped connections in the earlier fixture; its parent fell back to a plugin-global tool. Record the separate installed default-headless parent/children navigation, read and healthy-close qualification without treating it as real-profile or full production acceptance.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.325 — 2026-10-15
 
 ### Fixed
