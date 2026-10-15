@@ -28,6 +28,16 @@ The root `plugin.json` names `agents/` as the agent directory. Select `ourostack
 copilot --agent desk:worker
 ```
 
+For conversations that ask questions in ordinary chat, the host launcher must exclude the structured-question tool before starting the session:
+
+```bash
+copilot --agent desk:worker --excluded-tools=ask_user
+```
+
+This is a native Copilot CLI launch flag, not a Desk plugin setting. Copilot CLI 1.0.97 documents `--excluded-tools` as removing tools from the model's available tools; its agent frontmatter supports an allowlist, not an exclusion field, and `copilot help config` lists no equivalent setting. Do not enumerate an allowlist to simulate this exclusion: that would drop unlisted MCP, in-session todo or process-control tools. Do not substitute `--no-ask-user`, whose documented autonomous mode says the agent works without asking questions. Ordinary chat questions and waiting for the operator remain allowed.
+
+The launch owner must carry this flag through the supported native invocation, including an Agency-managed launch. Desk's plugin metadata, startup instructions and deny hooks cannot install a host CLI flag after launch. Until that owner supplies the flag and a fresh host catalog is observed, Copilot tool absence is **unqualified**; a blocked call or a model's own tool list is not catalog evidence. No personal/global configuration change is required by this package.
+
 The root package carries generated flattened Superpowers metadata for Copilot-compatible hosts. Desk + Superpowers and the declared companion closure must be loaded from the admitted roots; metadata alone is not runtime proof. The existing overlay keeps its own worker instead of launching the standalone agent above.
 
 The root plugin also registers a Desk-owned `sessionStart` hook. Copilot executes that hook with the installed plugin root, and the hook reads `skills/using-desk/SKILL.md` at runtime to emit the canonical foundation as `additionalContext`; `worker.agent.md` does not carry a copied foundation body.
@@ -43,6 +53,14 @@ Use `manual-only` when Desk should remain available as a plugin/MCP substrate wi
 No bespoke Desk CLI is required for the default worker path; the host plugin profile, activation adapter, and bundled MCP metadata carry the setup.
 
 For verification and repair of marketplace/plugin exposure, the activation-owned Desk MCP bridge, runtime-pack health, and owned worker-default blocks, see `desk:codex-onboarding`.
+
+## Structured questions on Claude Code
+
+Desk's Claude `worker.md` and `observer.md` declare `disallowedTools: ["AskUserQuestion"]` while retaining `tools: ["*"]`. This is the host-supported agent tool policy, scoped to those selected agent definitions, not a host-wide permission change. It leaves in-session todos, process-control tools, MCP tools and ordinary chat questions alone. It does not establish inheritance into independently defined overlays, arbitrary subagents, or another host.
+
+Claude plugin `settings.json` supports only `agent` and `subagentStatusLine`; putting `permissions.deny` there would be silently dropped. A launcher that owns a wider session policy can use native `claude --disallowedTools AskUserQuestion` or its owned settings' `permissions.deny` instead. Permission denial is not, by itself, evidence that the tool is hidden from the model: qualify the actual new session's host-reported catalog separately. Do not add a tool-call hook just to reject a form after the model has already spent the call.
+
+Primary host references: [Copilot CLI flags and agent fields](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference), [Claude agent tool policy](https://code.claude.com/docs/en/sub-agents#available-tools), and [Claude plugin settings](https://code.claude.com/docs/en/plugins-reference#settings). Installed help checked on October 15, 2026: Copilot CLI 1.0.97 and Claude Code 2.1.300. These contracts describe activation inputs, not consumer runtime qualification.
 
 ## What if I want a context-specific overlay?
 

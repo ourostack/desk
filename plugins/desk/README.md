@@ -108,8 +108,10 @@ The plugin ships a substrate-default agent named `worker` — a long-running eng
 claude --agent desk:worker
 
 # Copilot CLI
-copilot --agent worker
+copilot --agent worker --excluded-tools=ask_user
 ```
+
+Questions still belong in ordinary chat. Claude's Desk agent definitions exclude only `AskUserQuestion`; Copilot's launcher must supply the native exclusion flag above. Plugin instructions or a denied call do not prove catalog removal. See [agent tool policy and host boundaries](docs/agent-files.md#structured-questions-on-claude-code); Agency/overlay launch inheritance requires separate qualification.
 
 Copilot startup uses the root plugin's Desk-owned `sessionStart` hook to read `skills/using-desk/SKILL.md` at runtime and emit it as `additionalContext`. The agent file keeps the worker identity and operating context without copying the foundation body.
 
