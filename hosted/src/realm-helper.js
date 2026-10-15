@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { assertChildKernelBoundary } from "./isolation.js";
@@ -14,30 +14,147 @@ delete env.DESK_RUNTIME_WORKER;
 const root = dirname(env.DESK);
 process.chdir(root);
 
+function directChildren(pid) {
+  const children = new Set();
+  for (const tid of readdirSync(`/proc/${pid}/task`)) {
+    let text;
+    try {
+      text = readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!/^(?:\d+(?:\s+\d+)*)?$/.test(text)) throw new Error("Unreadable operation descendants.");
+    for (const value of text ? text.split(/\s+/) : []) children.add(Number(value));
+  }
+  return children;
+}
+
+function superviseOperation(child, guardian) {
+  // A dedicated subreaper retains even setsid/detached Git descendants when
+  // their parent dies. It stays alive until this supervisor certifies silence.
+  let result;
+  let code = 1;
+  let completed = false;
+  let cancelled = false;
+  let killed = false;
+  let released = false;
+  let workerClosed = false;
+  let failed = false;
+  let finishing = false;
+  let timer;
+  let deadline;
+  const alive = () => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  const only = (pid, expected) => {
+    const actual = directChildren(pid);
+    return actual.size === expected.length && expected.every(value => actual.has(value));
+  };
+  const quiescent = () =>
+    process.ppid === guardian &&
+    only(guardian, [process.pid]) &&
+    only(process.pid, alive() ? [child.pid] : []) &&
+    (!alive() || directChildren(child.pid).size === 0) &&
+    only(guardian, [process.pid]);
+  const cancel = () => {
+    cancelled = true;
+    code = 1;
+    // Only signal the fresh session while its exact ChildProcess leader is
+    // still ours and unreaped. Never retry a numeric group after leader exit.
+    if (!killed && alive()) {
+      killed = true;
+      try { process.kill(-child.pid, "SIGKILL"); } catch {
+        // A failed signal is never retirement proof; the watchdog fails closed.
+      }
+    }
+  };
+  const check = () => {
+    if (finishing) return;
+    let quiet = false;
+    try { quiet = (!alive() || completed) && quiescent(); } catch {}
+    if (quiet && alive()) {
+      if (!released) {
+        released = true;
+        child.send({ release: true }, () => {});
+      }
+    } else if (quiet && workerClosed) {
+      finishing = true;
+      clearInterval(timer);
+      if (process.connected) process.send({ retired: true, quiescent: true, result }, () => process.exit(code));
+      else process.exit(code);
+    }
+    if (!finishing && Date.now() >= deadline && !failed) {
+      failed = true;
+      if (process.connected) process.send({ retired: false, quiescent: false });
+      cancel();
+    }
+  };
+  const retire = () => {
+    if (finishing) return;
+    if (!timer) {
+      deadline = Date.now() + 5_000;
+      timer = setInterval(check, 50);
+    }
+    check();
+  };
+  child.on("message", message => {
+    if (!message.operationFinished) return;
+    completed = true;
+    if (!cancelled) code = message.code;
+    result = message.result;
+    retire();
+  });
+  child.once("error", () => { workerClosed = true; retire(); });
+  child.once("exit", () => retire());
+  child.once("close", () => { workerClosed = true; retire(); });
+  process.on("message", message => {
+    if (["SIGTERM", "SIGKILL"].includes(message.signal)) { cancel(); retire(); }
+  });
+  process.once("disconnect", () => { cancel(); retire(); });
+}
+
 if (process.env.DESK_RUNTIME_WORKER !== "1") {
   const launching = job.action === "launch";
+  const supervised = !launching && job.action !== "broker";
+  const guardian = process.ppid;
+  if (supervised) {
+    assertChildKernelBoundary({ status: readFileSync(`/proc/${guardian}/status`, "utf8"), uid: process.getuid() });
+    if (readFileSync(`/proc/${guardian}/comm`, "utf8").trim() !== "tini") throw new Error("Missing operation subreaper.");
+  }
   const child = spawn(process.execPath, launching ? job.args : [fileURLToPath(import.meta.url)], {
     cwd: launching ? env.DESK : root,
     env: launching ? env : { ...env, DESK_RUNTIME_JOB: JSON.stringify(job), DESK_RUNTIME_WORKER: "1" },
     stdio: ["inherit", "inherit", "inherit", "ipc"],
+    detached: supervised,
   });
-  let ended = false;
-  let requestedSignal;
-  child.on("message", message => { if (process.connected) process.send(message); });
-  child.once("error", () => process.exit(1));
-  child.once("close", code => { ended = true; process.exit(code ?? (requestedSignal === "SIGTERM" ? 0 : 1)); });
-  process.on("message", message => {
-    if (ended) return;
-    if (["SIGTERM", "SIGKILL"].includes(message.signal)) {
-      requestedSignal = message.signal;
-      child.kill(message.signal);
-    }
-    else if (child.connected) child.send(message);
-  });
-  process.once("disconnect", () => { if (!ended) child.kill("SIGKILL"); });
+  if (supervised) {
+    superviseOperation(child, guardian);
+  } else {
+    let ended = false;
+    let requestedSignal;
+    child.on("message", message => { if (process.connected) process.send(message); });
+    child.once("error", () => process.exit(1));
+    child.once("close", code => { ended = true; process.exit(code ?? (requestedSignal === "SIGTERM" ? 0 : 1)); });
+    process.on("message", message => {
+      if (ended) return;
+      if (["SIGTERM", "SIGKILL"].includes(message.signal)) {
+        requestedSignal = message.signal;
+        child.kill(message.signal);
+      }
+      else if (child.connected) child.send(message);
+    });
+    process.once("disconnect", () => { if (!ended) child.kill("SIGKILL"); });
+  }
 } else {
   process.env = env;
   const git = args => runGit(args, { cwd: env.DESK, env });
+  let finalCode;
+  if (job.action !== "broker") process.on("message", message => {
+    if (message.release && finalCode !== undefined) process.exit(finalCode);
+  });
+  const finish = (code, result) => {
+    finalCode = code;
+    process.send({ operationFinished: true, code, result });
+  };
   try {
     let result;
     switch (job.action) {
@@ -104,11 +221,12 @@ if (process.env.DESK_RUNTIME_WORKER !== "1") {
         throw new Error("Unknown owning-UID operation.");
     }
     if (job.action !== "broker") {
-      process.send({ result }, () => process.exit(0));
+      finish(0, result);
     }
   } catch (error) {
     const message = error.message.replaceAll(root, "[realm]").replaceAll(job.repo ?? "\0", "[repo]");
     process.stderr.write(`Owning-UID desk ${job.action} failed: ${message}\n`);
-    process.exit(1);
+    if (job.action === "broker") process.exit(1);
+    else finish(1);
   }
 }

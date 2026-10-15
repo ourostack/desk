@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { main, readConfig } from "../src/main.js";
 import { serveTokens } from "../src/token-socket.js";
 
 const base = { DESK_SIGNING_KEY: "synthetic" };
+const scratch = () => mkdtempSync(join(process.env.TMPDIR ?? fileURLToPath(new URL("../../", import.meta.url)), "desk-rt-"));
 
 test("multi-user gate preserves legacy defaults and rejects ambiguous or identity-less enablement", () => {
   assert.equal(readConfig(base).multiUser, false);
@@ -20,9 +21,8 @@ test("multi-user gate preserves legacy defaults and rejects ambiguous or identit
 });
 
 test("token socket readiness includes final private mode and requested ownership; listen failure rejects", async () => {
-  const parent = new URL("./.runtime-socket-test/", import.meta.url);
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const path = join(parent.pathname, "token.sock");
+  const parent = scratch();
+  const path = join(parent, "token.sock");
   const server = serveTokens({
     socketPath: path, uid: process.getuid(), gid: process.getgid(),
     mint: async () => ({ token: "synthetic" }),
@@ -37,7 +37,7 @@ test("token socket readiness includes final private mode and requested ownership
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
-  const failed = serveTokens({ socketPath: join(parent.pathname, "missing", "token.sock"), mint: async () => ({ token: "" }) });
+  const failed = serveTokens({ socketPath: join(parent, "missing", "token.sock"), mint: async () => ({ token: "" }) });
   assert.ok(failed.ready instanceof Promise);
   await assert.rejects(failed.ready);
 });
@@ -67,8 +67,7 @@ test("enabled main fails the local kernel guard before making identity discovery
 test("the private remote transport speaks the actual Git helper protocol using private repository context", async () => {
   const helper = fileURLToPath(new URL("../bin/git-remote-desk", import.meta.url));
   assert.ok(existsSync(helper), "sparse-argv remote transport is missing");
-  const dir = fileURLToPath(new URL("./.runtime-socket-test/remote", import.meta.url));
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const dir = scratch();
   execFileSync("git", ["init", "--quiet"], { cwd: dir });
   writeFileSync(join(dir, ".git", "desk-repository"), "synthetic/desk", { mode: 0o600 });
   const child = spawn(process.execPath, [helper, "origin", "origin"], {

@@ -76,6 +76,27 @@ broker. Push/count failures reject shutdown and retain the broker rather than
 reporting a successful loss of writes. `purge` first closes successfully, then
 deletes that UID's contents; its 0700 root/UID tombstone remains reserved.
 
+Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
+a fresh worker session. A worker's result or exit is not retirement proof:
+completion requires the worker and all its descendants, including reparented
+detached children, to be gone. The existing 60-second operation deadline is
+unchanged; cancellation signals the fresh process group only while its exact
+ChildProcess leader is still owned and unreaped. No CAP_KILL or blind PID
+cleanup is used. A separate five-second retirement watchdog does not extend
+the work deadline.
+
+If retirement cannot be proved, `DESK_OPERATION_UNQUIESCENT` puts the account
+in sticky failed-preservation state. Its broker/private root remain intact;
+new preparation and destructive cleanup are refused, and manager shutdown
+rejects even when that account's preparation never returned a prepared object.
+A proved-retired timeout reports `DESK_OPERATION_TIMEOUT` with `quiescent:true`
+and permits safe cleanup/retry or a subsequent final push. Neither rejection
+is silently discarded as an ordinary completed operation.
+The final ahead-count is checked again after the push job's descendants retire,
+within the existing push budget. A hook-produced write omitted from the earlier
+count rejects close and retains the broker rather than producing a success
+based on stale Git state.
+
 The root entrypoint drops into UID 1000 **before tini**. Enabled gateway/tini
 have exactly chown/setgid/setuid and NoNewPrivs; each desk helper/child has no
 active capabilities and NoNewPrivs. Disabled gateway/tini and children retain
@@ -130,6 +151,13 @@ starting it (`hosted/test` is excluded from normal image builds). On macOS use
 Git HTTP origin and verifies kernel/UID/cwd/socket/argv/signal boundaries,
 concurrent preparation/retry, immutable authority and shutdown preservation.
 No host credentials or credential directories should be mounted.
+Adding `DESK_NATIVE_TIMEOUTS=1` and copying `runtime-timeout-native.js` into the
+same fixture directory runs the bounded real-deadline regression: an actual
+65-second Git pre-commit hook, normal delayed HTTP fetch, and detached delayed
+Git fetch. It checks close **after** timeout rejection, cleanup only after
+quiescence, and retained failed-preparation state when descendants remain.
+These cases exercise the actual 60-second deadline, not a shorter test-only
+timeout; they run concurrently within a 100-second fixture bound.
 
 ## Build the image
 

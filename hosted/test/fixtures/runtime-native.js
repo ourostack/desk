@@ -30,12 +30,20 @@ fixtureGit(seed, ["add", "."]);
 fixtureGit(seed, ["commit", "--quiet", "-m", "seed"]);
 fixtureGit(seed, ["push", "--quiet", bare, "main"]);
 fixtureGit(bare, ["config", "http.receivepack", "true"]);
+fixtureGit(bare, ["config", "uploadpack.allowFilter", "true"]);
 for (const entry of readdirSync(bare, { recursive: true })) {
   const path = join(bare, entry);
   chmodSync(path, statSync(path).isDirectory() ? 0o755 : 0o644);
 }
 chmodSync(bare, 0o755);
+const slowFetches = new Set();
 const http = createServer(async (req, res) => {
+  const delayMode = req.headers["x-desk-timeout"];
+  if (delayMode && !slowFetches.has(delayMode)) {
+    slowFetches.add(delayMode);
+    await new Promise(resolve => setTimeout(resolve, delayMode === "escaped" ? 70_000 : 65_000));
+    if (res.destroyed) return;
+  }
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const body = Buffer.concat(chunks);
@@ -49,6 +57,7 @@ const http = createServer(async (req, res) => {
     },
   });
   const output = [];
+  backend.stdin.on("error", error => { if (error.code !== "EPIPE") throw error; });
   backend.stdout.on("data", chunk => output.push(chunk));
   backend.stderr.pipe(process.stderr, { end: false });
   backend.stdin.end(body);
@@ -70,7 +79,7 @@ await new Promise(resolve => http.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${http.address().port}/runtime-native-remote`;
 writeFileSync("/data/runtime-native-bin/git", `#!/usr/bin/env node
 const { existsSync, appendFileSync } = require("node:fs");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 if (existsSync("/data/runtime-native-fail") && process.argv[2] === "fetch") process.exit(1);
 if (existsSync("/data/runtime-native-fail-push") && process.argv[2] === "rev-list") process.exit(1);
 appendFileSync(process.env.XDG_STATE_HOME + "/git-argv.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");
@@ -81,6 +90,22 @@ const env = {
   GIT_CONFIG_KEY_1: "safe.bareRepository", GIT_CONFIG_VALUE_1: "all",
 };
 const run = () => {
+  if (process.argv[2] === "fetch" && existsSync("/data/runtime-native-slow-fetch")) {
+    const fs = require("node:fs"), path = require("node:path");
+    const mode = fs.readFileSync("/data/runtime-native-slow-fetch", "utf8");
+    const child = spawn("/usr/bin/git", process.argv.slice(2), {
+      env: { ...env, GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_2: "http.extraHeader", GIT_CONFIG_VALUE_2: "X-Desk-Timeout: " + mode },
+      stdio: "inherit", detached: mode === "escaped",
+    });
+    import("file:///app/plugins/desk/mcp/src/readiness/process-start.js").then(async ({ readProcessStart }) => {
+      fs.writeFileSync(path.join(path.dirname(process.env.DESK), "fetch-started"), JSON.stringify({ mode, pid: child.pid, start: await readProcessStart(child.pid) }));
+    });
+    child.once("close", code => {
+      fs.writeFileSync(path.join(path.dirname(process.env.DESK), "fetch-finished"), "finished");
+      process.exit(code ?? 1);
+    });
+    return;
+  }
   const result = spawnSync("/usr/bin/git", process.argv.slice(2), { env, stdio: "inherit" });
   process.exit(result.status ?? 1);
 };
@@ -227,6 +252,19 @@ retainedSocket.stdin.end("protocol=https\nhost=github.com\n\n");
 assert.equal((await once(retainedSocket, "close"))[0], 0);
 assert.match(retainedToken, /synthetic-token/, "failed shutdown retains the broker rather than silently losing writes");
 unlinkSync("/data/runtime-native-fail-push");
+let timeoutCases;
+if (process.env.DESK_NATIVE_TIMEOUTS === "1") {
+  const { runTimeoutCases } = await import("./runtime-timeout-native.js");
+  timeoutCases = await runTimeoutCases({
+    config, store, binding, root,
+    originSubjects: () => fixtureGit(bare, ["log", "--format=%s"]),
+    async waitForSlowFetch(mode) {
+      const deadline = Date.now() + 10_000;
+      while (!slowFetches.has(mode) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+      assert.ok(slowFetches.has(mode), `real HTTP ${mode} fetch must reach the fixture`);
+    },
+  });
+}
 let mainRouted = false;
 if (process.env.DESK_NATIVE_MAIN === "1") {
   const { main } = await import("../../src/main.js");
@@ -269,6 +307,7 @@ console.log(JSON.stringify({
   signalBoundary: true, immutableAuthority: true, retry: true, shutdownPush: true,
   uidNeverRecycled: true, shutdownFailureSurfaced: true, failedPushSocketRetained: true,
   mainRouted,
+  timeoutCases,
   retainedRoots: readdirSync(join(root, "realms")).map(name => join(root, "realms", name)),
   nextRoots: readdirSync(join(root, "next-realms")).map(name => join(root, "next-realms", name)),
 }));

@@ -31,8 +31,11 @@ function protectedAncestors(path) {
 // One supervisor owns one exact ChildProcess generation. Signals travel over
 // its inherited IPC channel, never through a gateway kill(pid) or PID lookup.
 function launch(realm, env, job) {
+  const supervised = !["launch", "broker"].includes(job.action);
   const child = spawn("/usr/bin/setpriv", isolationArgs({
-    uid: realm.uid, command: process.execPath, args: [HELPER],
+    uid: realm.uid,
+    command: supervised ? "/usr/bin/tini" : process.execPath,
+    args: supervised ? ["-s", "--", process.execPath, HELPER] : [HELPER],
   }), {
     env: { ...env, DESK_RUNTIME_JOB: JSON.stringify(job) },
     stdio: ["pipe", "pipe", "pipe", "ipc"],
@@ -48,16 +51,40 @@ function launch(realm, env, job) {
   return child;
 }
 
-function completion(child, timeoutMs = 60_000) {
-  let result;
-  child.on("message", message => { if (Object.hasOwn(message, "result")) result = message.result; });
+function completion(child, timeoutMs = 60_000, requireRetirement = false) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    child.once("error", error => { clearTimeout(timer); reject(error); });
+    let result;
+    let retired = !requireRetirement;
+    let timedOut = false;
+    let retirementTimer;
+    const failure = () => Object.assign(new Error(retired
+      ? `Owning-UID desk operation ${timedOut ? "timed out" : "failed"}.`
+      : "Owning-UID desk operation could not establish quiescence; preservation is required."), {
+      code: retired ? (timedOut ? "DESK_OPERATION_TIMEOUT" : "DESK_OPERATION_FAILED") : "DESK_OPERATION_UNQUIESCENT",
+      quiescent: retired,
+    });
+    const stopTimers = () => { clearTimeout(timer); clearTimeout(retirementTimer); };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+      if (requireRetirement) retirementTimer = setTimeout(() => reject(failure()), 5_000);
+    }, timeoutMs);
+    child.on("message", message => {
+      if (Object.hasOwn(message, "result")) result = message.result;
+      if (requireRetirement && message.retired === true && message.quiescent === true) retired = true;
+      if (requireRetirement && message.retired === false) {
+        stopTimers();
+        reject(failure());
+      }
+    });
+    child.once("disconnect", () => {
+      if (requireRetirement && !retired) { stopTimers(); reject(failure()); }
+    });
+    child.once("error", () => { stopTimers(); reject(failure()); });
     child.once("close", code => {
-      clearTimeout(timer);
-      if (code === 0) resolve(result);
-      else reject(new Error("Owning-UID desk operation failed."));
+      stopTimers();
+      if (code === 0 && retired && !timedOut) resolve(result);
+      else reject(failure());
     });
   });
 }
@@ -85,10 +112,12 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   const authorities = new Map();
   const preparing = new Map();
   const prepared = new Map();
+  const preservationFailures = new Map();
   let closed = false;
   let closing;
 
   async function prepare(accountId) {
+    if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId)) throw refused();
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
     if (closed || account?.accountId !== accountId || account.deskAccess !== true ||
@@ -124,9 +153,15 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     const run = (job, timeoutMs) => {
       const child = launch(realm, env, job);
       child.stderr.pipe(process.stderr, { end: false });
-      const done = completion(child, timeoutMs);
+      const done = completion(child, timeoutMs, true);
       operations.add(done);
-      done.then(() => operations.delete(done), () => operations.delete(done));
+      done.then(() => operations.delete(done), error => {
+        if (error.quiescent !== true) {
+          stopped = true;
+          preservationFailures.set(accountId, { error, child });
+        }
+        operations.delete(done);
+      });
       return done;
     };
     const closeBroker = async () => {
@@ -154,9 +189,11 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       });
       await run({ action: "clone", repo: binding.repo });
     } catch (error) {
+      if (preservationFailures.has(accountId)) throw error;
       await closeBroker();
       // Remove incomplete contents as the owning UID; the UID remains reserved.
       await run({ action: "purge" }).catch(() => {});
+      if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
       throw error;
     }
     const git = async args => {
@@ -167,7 +204,16 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       }
       return run({ action: "git", args });
     };
-    const push = () => run({ action: "push", pluginDir }, 65_000);
+    const push = async () => {
+      const deadline = Date.now() + 65_000;
+      await run({ action: "push", pluginDir }, 65_000);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || (await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, remaining)).trim()) {
+        throw Object.assign(new Error("Desk writes were not verified pushed after operation retirement."), {
+          code: "DESK_PUSH_UNPRESERVED", quiescent: true,
+        });
+      }
+    };
     const value = Object.freeze({
       realm, env,
       launch(args) {
@@ -186,7 +232,10 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       git,
       push() {
         if (stopped || closed) throw new Error("Hosted desk runtime is closed.");
-        return push();
+        const done = push();
+        operations.add(done);
+        done.then(() => operations.delete(done), () => operations.delete(done));
+        return done;
       },
       close() {
         if (closePromise) return closePromise;
@@ -198,6 +247,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
             await done;
           }));
           await Promise.all([...operations]);
+          if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
           await push();
           await closeBroker();
         })();
@@ -218,8 +268,11 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       closing ??= (async () => {
         await Promise.allSettled([...preparing.values()]);
         const results = await Promise.allSettled([...prepared.values()].map(value => value.close()));
-        const failed = results.filter(result => result.status === "rejected");
-        if (failed.length) throw new AggregateError(failed.map(result => result.reason), "Hosted desk shutdown could not preserve every desk.");
+        const failed = new Set([
+          ...results.filter(result => result.status === "rejected").map(result => result.reason),
+          ...[...preservationFailures.values()].map(({ error }) => error),
+        ]);
+        if (failed.size) throw new AggregateError([...failed], "Hosted desk shutdown could not preserve every desk.");
       })();
       return closing;
     },
