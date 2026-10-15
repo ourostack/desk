@@ -16,3 +16,9 @@ flow:
 ---
 
 x
+
+## Resources
+
+| Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
+|---|---|---|---|---|---|
+| branch:o/r#new | task t/new | — | — | — |  |
