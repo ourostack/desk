@@ -13,5 +13,7 @@ flow:
   first_delivered_at: null
   delivered_at: null
   deliveries: 0
+category: general
+flavor: x
 ---
 
