@@ -1,19 +1,27 @@
 ---
 schema_version: 1
 title: T
-status: drafting
+status: done
 created: '2026-10-15T04:26:29Z'
-updated: '2026-10-15T04:26:30Z'
+updated: '2026-10-15T04:26:31Z'
 track: t
 repos: []
 flow:
   since: created
-  rev: 0
-  reached: drafting
-  first_validating_at: null
-  first_delivered_at: null
-  delivered_at: null
-  deliveries: 0
+  rev: 1
+  reached: done
+  first_validating_at: '2026-10-15T04:26:31Z'
+  first_delivered_at: '2026-10-15T04:26:31Z'
+  delivered_at: '2026-10-15T04:26:31Z'
+  deliveries: 1
+evidence:
+  kind: steps
+  ref: 'all 1 steps settled: 0 delivered, 1 dropped'
+  recorded_at: '2026-10-15T04:26:31Z'
+signoff:
+  state: delivered_unsigned
+  at: null
+  reason: null
 ---
 
 ## Outcome
@@ -24,7 +32,7 @@ Ship it.
 
 | Step | Depends on | Repo | State | Evidence |
 |---|---|---|---|---|
-| api | — | — | pending | — |
+| api | — | — | dropped | not needed |
 
 ## Resources
 
