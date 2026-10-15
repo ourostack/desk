@@ -30,3 +30,14 @@ export function deskScriptInvocation({ script, args, env }) {
     options: { env: { ...env, DESK_BUILTIN_SCRIPT: pathToFileURL(script).href } },
   }
 }
+
+/** Keep fork's IPC/test seam while using the same private module loader as spawned scripts. */
+export function deskForkInvocation({ script, env = process.env }) {
+  if (env.DESK_ISOLATED_HOSTED !== "1") return { modulePath: script, args: [], options: { execArgv: [] } }
+  const invocation = deskScriptInvocation({ script, args: [], env })
+  return {
+    modulePath: "--",
+    args: [],
+    options: { ...invocation.options, execArgv: invocation.args.slice(0, -1) },
+  }
+}

@@ -88,6 +88,10 @@ realm's factory state.
 Detached sync and identity-refresh scripts read their root from `DESK`.
 Their admitted source-mirror filename also travels in environment
 (`DESK_BUILTIN_SCRIPT`), through a fixed Node module loader, never argv.
+Readiness-controller and status-inspection forks use the same private loader,
+retaining their IPC channel and serialization. The controller's guarded entry
+recognizes only its matching admitted script URL in private mode; an ordinary
+module import does not start a controller.
 Explicit script `--root` remains supported for local callers. Automatic
 host-package upgrades and product issue filing are unavailable in the private
 customer context and return an explicit unavailable/not-filed reason before
