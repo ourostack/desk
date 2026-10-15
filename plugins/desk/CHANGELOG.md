@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.323 — 2026-10-15
+
+### Fixed
+
+- Wait up to ten seconds for a newly initialized browser extension token to reach profile storage instead of immediately reporting a missing extension. Existing tokens connect without a delay, and storage errors still surface immediately. Automatic extension provisioning, stale-token rotation and foreground-safe first connection remain separate delivery gates.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.322 — 2026-10-14
 
 The real-profile browser runner now launches the stock Playwright connection directly, without inserting Desk's watchdog or custom relay. Existing profile and token loading, output token redaction, stock tools, and explicit close behavior are unchanged.
