@@ -56,9 +56,52 @@ const row = {shellPwdRaw:fs.readFileSync(0, "utf8"), cwd, topRaw, top:topRaw.tri
 if (process.env.DESK_HOOK_SUBDIRECTORY_LOG) fs.appendFileSync(process.env.DESK_HOOK_SUBDIRECTORY_LOG, JSON.stringify(row) + "\\n");
 if (path.basename(cwd) !== "project" || row.topReal !== row.parentReal) process.exit(42);
 `
-  const verifyProject = `pwd -P | "$DESK_HOOK_NODE" -e '${discovery.replace(/'/gu, "'\\''")}' || exit $?\n`
+  const projectProbe = `pwd -P | "$DESK_HOOK_NODE" -e '${discovery.replace(/'/gu, "'\\''")}'`
+  const verifyProject = `${projectProbe} || exit $?\n`
   const readFromProject = subdirectory ? `cd project || exit 41\n${verifyProject}cd .. || exit 41\n` : ""
   const mutation = nestedMutation ? `${subdirectory ? "cd project || exit 41\n" : ""}DESK_HOOK_NESTED_MUTATION=1 git update-index --refresh --force-write-index || exit $?\n` : ""
-  const commit = nestedCommit ? `[ "$DESK_HOOK_NESTED_COMMIT" = "1" ] && exit 0\ncd project || exit 41\n${verifyProject}DESK_HOOK_NESTED_COMMIT=1 git commit --allow-empty -qm "nested message witness" || exit $?\n` : ""
-  return `#!/bin/sh\n${readFromProject}"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n[ "$code" -eq 0 ] || exit "$code"\n${mutation}${commit}case "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
+  const journal = nestedCommit ? `desk_nested_event() {
+  [ -n "$DESK_HOOK_NESTED_LOG" ] || return 0
+  desk_nested=false
+  [ "$DESK_HOOK_NESTED_COMMIT" = "1" ] && desk_nested=true
+  printf '{"phase":"%s","nested":%s,"status":%s}\\n' "$1" "$desk_nested" "$2" >> "$DESK_HOOK_NESTED_LOG"
+}
+desk_nested_head() {
+  [ -n "$DESK_HOOK_NESTED_LOG" ] || return 0
+  desk_head=$(git rev-parse --verify HEAD)
+  desk_head_status=$?
+  if [ "$desk_head_status" -eq 0 ]; then
+    printf '{"phase":"%s","nested":false,"status":0,"head":"%s"}\\n' "$1" "$desk_head" >> "$DESK_HOOK_NESTED_LOG"
+  else
+    desk_nested_event "$1" "$desk_head_status"
+  fi
+}
+desk_nested_event post-enter null || exit 43
+` : ""
+  const commit = nestedCommit ? `if [ "$DESK_HOOK_NESTED_COMMIT" = "1" ]; then
+  desk_nested_event guard-exit 0 || exit 43
+  exit 0
+fi
+cd project
+code=$?
+desk_nested_event project-cd "$code" || exit 43
+[ "$code" -eq 0 ] || exit 41
+${projectProbe}
+code=$?
+desk_nested_event discovery-exit "$code" || exit 43
+[ "$code" -eq 0 ] || exit "$code"
+desk_nested_head head-before || exit 43
+set -- git commit --allow-empty -qm "nested message witness"
+if [ -n "$DESK_HOOK_NESTED_LOG" ]; then
+  printf '{"phase":"nested-start","nested":false,"argv":["%s","%s","%s","%s","%s"]}\\n' "$@" >> "$DESK_HOOK_NESTED_LOG" || exit 43
+fi
+DESK_HOOK_NESTED_COMMIT=1 "$@"
+code=$?
+desk_nested_event nested-exit "$code" || exit 43
+desk_nested_head head-after || exit 43
+[ "$code" -eq 0 ] || exit "$code"
+` : ""
+  const probeEvent = nestedCommit ? 'desk_nested_event post-probe "$code" || exit 43\n' : ""
+  const exitEvent = nestedCommit ? "desk_nested_event post-exit 0 || exit 43\n" : ""
+  return `#!/bin/sh\n${journal}${readFromProject}"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n${probeEvent}[ "$code" -eq 0 ] || exit "$code"\n${mutation}${commit}${exitEvent}case "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
 }

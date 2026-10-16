@@ -146,6 +146,74 @@ function assertSubdirectoryReceipt(receipt, worktree) {
   if (process.platform !== "win32") assert.equal(row.shellPwdRaw, "/c/deskstd-tmp/shell-spelling-witness\n")
 }
 
+function receiptRows(receipt) {
+  if (receipt?.error) return { code: receipt.error.code ?? receipt.error.name, rows: [] }
+  if (typeof receipt?.text !== "string") return { code: "UNOBSERVED", rows: [] }
+  try {
+    const rows = receipt.text.trim().split("\n").filter(Boolean).map(JSON.parse)
+    return rows.some((row) => row === null || typeof row !== "object" || Array.isArray(row)) ? { code: "ROW_TYPE", rows: [] } : { code: null, rows }
+  } catch {
+    return { code: "PARSE_ERROR", rows: [] }
+  }
+}
+
+function nestedFailureMessage(evidence) {
+  const hooks = receiptRows(evidence.hooksReceipt), context = receiptRows(evidence.discoveryReceipt), journal = receiptRows(evidence.nestedReceipt)
+  const commits = evidence.trace.filter((row) => row.args[0] === "commit")
+  const event = (phase, nested = false) => journal.rows.findLast((row) => row.phase === phase && row.nested === nested)
+  const status = (phase, nested = false) => event(phase, nested)?.status ?? null
+  const head = (name) => evidence.trace.findLast((row) => row.args.length === 2 && row.args[0] === "rev-parse" && row.args[1] === name)?.stdout?.trim() ?? null
+  const snapshot = (value) => value?.status === 0 ? value.stdout.trim() : value ? { status: value.status, error: value.error?.code ?? null } : null
+  const post = hooks.rows.findLast((row) => typeof row.hook === "string" && row.hook.includes("post-commit"))
+  const project = context.rows.at(-1)
+  for (const limit of [160, 96, 48, 16]) {
+    const preview = (value) => {
+      if (typeof value !== "string") return null
+      const bytes = Buffer.from(value)
+      if (bytes.length <= limit) return value
+      const half = Math.floor(limit / 2)
+      return { first: bytes.subarray(0, half).toString("utf8"), last: bytes.subarray(-half).toString("utf8"), bytes: bytes.length }
+    }
+    const summary = {
+      schema: "nested-git/1", configured: evidence.configured, state: evidence.result?.state,
+      installed: evidence.installed ?? null, initialNestedFlag: preview(evidence.initialNestedFlag),
+      errors: { hooks: hooks.code, context: context.code, journal: journal.code },
+      commitCount: commits.length,
+      commits: commits.slice(-2).map((row) => ({
+        argv: row.args, status: row.status, signal: row.signal, error: row.error ? { code: row.error.code, errno: row.error.errno, syscall: preview(row.error.syscall) } : null,
+        stderr: preview(row.stderr), elapsedMs: Number.isFinite(row.elapsedMs) ? Math.round(row.elapsedMs) : null,
+      })),
+      post: {
+        events: journal.rows.length, last: preview(journal.rows.at(-1)?.phase),
+        outerProbe: status("post-probe"), nestedProbe: status("post-probe", true), guard: status("guard-exit", true),
+        cd: status("project-cd"), discovery: status("discovery-exit"), argv: event("nested-start")?.argv ?? null,
+        nestedExit: status("nested-exit"), outerExit: status("post-exit"),
+      },
+      heads: {
+        nestedBefore: event("head-before")?.head ?? null, nestedAfter: event("head-after")?.head ?? null,
+        candidate: head("HEAD"), parent: head("HEAD^"),
+        remote: [snapshot(evidence.refs?.remoteBefore), snapshot(evidence.refs?.remoteAfter)],
+        live: [snapshot(evidence.refs?.liveBefore), snapshot(evidence.refs?.liveAfter)],
+      },
+      hookCounts: ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"].map((name) => [
+        name, hooks.rows.filter((row) => typeof row.hook === "string" && path.basename(row.hook) === name && !row.nestedCommit).length,
+        hooks.rows.filter((row) => typeof row.hook === "string" && path.basename(row.hook) === name && row.nestedCommit).length,
+      ]),
+      rawPost: post ? { nested: post.nestedCommit, cwd: preview(post.cwd), top: preview(post.topRaw) } : null,
+      rawProject: project ? { pwd: preview(project.shellPwdRaw), cwd: preview(project.cwd), top: preview(project.topRaw), samePhysical: typeof project.topReal === "string" && typeof project.parentReal === "string" ? project.topReal === project.parentReal : null } : null,
+      previewBytes: limit,
+    }
+    const prefix = JSON.stringify(summary)
+    if (Buffer.byteLength(prefix) <= 2200) return `${prefix}\nFULL_EVIDENCE ${JSON.stringify(evidence)}`
+  }
+  throw new Error("nested diagnostic prefix exceeds its independently tested retention budget")
+}
+
+function headSnapshot(root) {
+  const result = spawnSync("git", ["-C", root, "rev-parse", "--verify", "HEAD"], { encoding: "utf8", timeout: 10_000 })
+  return { status: result.status, signal: result.signal, error: result.error ? processError(result.error) : null, stdout: result.stdout, stderr: result.stderr }
+}
+
 test("private commit carries the physical common directory across lexical junction traversal", async (t) => {
   for (const root of [String.raw`C:\deskstd-tmp\fixture`, "C:/deskstd-tmp/fixture"]) {
     for (const operand of [String.raw`C:\deskstd-tmp\fixture\.git`, "C:/deskstd-tmp/fixture/.git", String.raw`--git-dir=C:\deskstd-tmp/fixture\.git`]) {
@@ -533,6 +601,31 @@ test("a self-referential Git metadata report is refused by real Git without publ
 })
 
 test("private triage keeps guarded nested commit message operands private before honest parent refusal", async (t) => {
+  const clippedEvidence = {
+    configured: null, result: { state: "acknowledged" },
+    trace: [
+      { args: ["config"], stdout: "preparation".repeat(1000) },
+      { args: ["commit", "-q", "-m", "Record factory triage annotation"], status: 0, error: null, signal: null, stderr: "NESTED_RECEIPT_MARKER" },
+    ],
+    hooksReceipt: { text: null, error: { code: "ENOENT" } },
+    discoveryReceipt: { text: null, error: { code: "EACCES" } },
+    nestedReceipt: { text: '{"phase":"nested-exit","nested":false,"status":1}\n', error: null },
+  }
+  const retained = nestedFailureMessage(clippedEvidence).slice(0, 3000)
+  assert.ok(retained.includes("NESTED_RECEIPT_MARKER"), "relevant commit diagnostics survive the native runner's 3000-character retention limit")
+  const firstLine = retained.split("\n")[0]
+  assert.ok(Buffer.byteLength(firstLine) <= 2200)
+  const compact = JSON.parse(firstLine)
+  assert.equal(compact.post.nestedExit, 1)
+  assert.equal(compact.errors.hooks, "ENOENT")
+  assert.equal(compact.errors.context, "EACCES")
+  clippedEvidence.trace[1].stderr += "large stderr".repeat(1000)
+  clippedEvidence.hooksReceipt = { text: `${JSON.stringify({ hook: "post-commit", cwd: String.raw`C:\long\path`.repeat(500), topRaw: "C:/long/path".repeat(500), nestedCommit: false })}\n`, error: null }
+  clippedEvidence.discoveryReceipt = { text: `${JSON.stringify({ shellPwdRaw: "/c/long/path".repeat(500), cwd: String.raw`C:\long\path`.repeat(500), topRaw: "C:/long/path".repeat(500) })}\n`, error: null }
+  const stressPrefix = nestedFailureMessage(clippedEvidence).slice(0, 3000).split("\n")[0]
+  assert.ok(Buffer.byteLength(stressPrefix) <= 2200)
+  assert.equal(JSON.parse(stressPrefix).post.nestedExit, 1)
+  assert.ok(stressPrefix.includes("NESTED_RECEIPT_MARKER"))
   for (const configured of [null, "nested message hooks", "relative hooks"]) {
     const w = await world()
     const desk = w.clone("nested-message-hook")
@@ -557,15 +650,50 @@ test("private triage keeps guarded nested commit message operands private before
     if (configured !== null) git(root, ["config", "core.hooksPath", hooksPath])
     const log = path.join(w.base, "nested-message-argv.jsonl")
     const subdirectoryLog = path.join(w.base, "nested-message-discovery.txt")
-    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog }
+    const nestedLog = path.join(w.base, "nested-commit-events.jsonl")
+    await fs.writeFile(nestedLog, "", { flag: "wx", mode: 0o600 })
+    const postReceipt = await hookReceipt(path.join(hooks, "post-commit"))
+    const installed = { postMatches: postReceipt.text === originals.get("post-commit"), postError: postReceipt.error?.code ?? null, journalCreated: true }
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog, DESK_HOOK_NESTED_LOG: slash(nestedLog) }
+    const refs = { remoteBefore: headSnapshot(w.origin), liveBefore: headSnapshot(root) }
     const trace = []
     const result = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(trace, command, args, options) } })
-    const hooksReceipt = await hookReceipt(log), discoveryReceipt = await hookReceipt(subdirectoryLog)
-    const evidence = { configured, result, trace, hooksReceipt, discoveryReceipt }
-    diagnostic(t, "nested-message-context", evidence)
-    assert.equal(result.state, "policy_unknown", JSON.stringify(evidence))
-    assert.equal(typeof hooksReceipt.text, "string", JSON.stringify(evidence))
-    assert.equal(typeof discoveryReceipt.text, "string", JSON.stringify(evidence))
+    refs.remoteAfter = headSnapshot(w.origin)
+    refs.liveAfter = headSnapshot(root)
+    const hooksReceipt = await hookReceipt(log), discoveryReceipt = await hookReceipt(subdirectoryLog), nestedReceipt = await hookReceipt(nestedLog)
+    const evidence = { configured, result, trace, hooksReceipt, discoveryReceipt, nestedReceipt, installed, refs, initialNestedFlag: desk.env.DESK_HOOK_NESTED_COMMIT ?? null }
+    const failureMessage = nestedFailureMessage(evidence)
+    diagnostic(t, "nested-message-context", { summary: JSON.parse(failureMessage.split("\n")[0]), ...evidence })
+    assert.equal(installed.postMatches, true, failureMessage)
+    assert.equal(result.state, "policy_unknown", failureMessage)
+    assert.equal(typeof hooksReceipt.text, "string", failureMessage)
+    assert.equal(typeof discoveryReceipt.text, "string", failureMessage)
+    const journal = receiptRows(nestedReceipt)
+    assert.equal(journal.code, null, failureMessage)
+    const event = (phase, nested = false) => journal.rows.findLast((row) => row.phase === phase && row.nested === nested)
+    assert.equal(event("nested-exit")?.status, 0, failureMessage)
+    assert.equal(event("post-probe")?.status, 0, failureMessage)
+    assert.equal(event("post-probe", true)?.status, 0, failureMessage)
+    assert.equal(event("guard-exit", true)?.status, 0, failureMessage)
+    assert.equal(event("post-exit")?.status, 0, failureMessage)
+    assert.deepEqual(event("nested-start")?.argv, ["git", "commit", "--allow-empty", "-qm", "nested message witness"], failureMessage)
+    const before = event("head-before"), after = event("head-after")
+    assert.equal(before?.status, 0, failureMessage)
+    assert.equal(after?.status, 0, failureMessage)
+    assert.notEqual(before.head, after.head, failureMessage)
+    const outerCommits = trace.filter((row) => row.args[0] === "commit")
+    assert.equal(outerCommits.length, 1, failureMessage)
+    assert.equal(outerCommits[0].status, 0, failureMessage)
+    assert.equal(outerCommits[0].signal, null, failureMessage)
+    assert.equal(outerCommits[0].error, null, failureMessage)
+    assert.equal(trace.findLast((row) => row.args.length === 2 && row.args[0] === "rev-parse" && row.args[1] === "HEAD")?.stdout.trim(), after.head, failureMessage)
+    assert.equal(trace.findLast((row) => row.args.length === 2 && row.args[0] === "rev-parse" && row.args[1] === "HEAD^")?.stdout.trim(), before.head, failureMessage)
+    for (const scope of ["remote", "live"]) {
+      assert.equal(refs[`${scope}Before`].status, 0, failureMessage)
+      assert.equal(refs[`${scope}After`].status, 0, failureMessage)
+      assert.equal(refs[`${scope}After`].stdout, refs[`${scope}Before`].stdout, failureMessage)
+    }
+    assert.ok(!trace.some((row) => row.args[0] === "push"), failureMessage)
     const rows = hooksReceipt.text.trim().split("\n").map(JSON.parse)
     const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
     assert.equal(path.relative(result.resources.find((resource) => resource.kind === "worktree").path, worktree), "")
