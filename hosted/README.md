@@ -200,13 +200,18 @@ Set `DESK_AZURITE_ENDPOINT` if Azurite listens somewhere other than `http://127.
 
 The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end and Azurite tests included, on each pull request and push to main that touches `hosted/`, `plugins/desk/mcp/`, or the `hosted-tests.yml`, `hosted-deploy.yml` or `identity-checks.yml` workflows.
 
-The owning-UID fixture is an additional **local Linux** gate, not a cloud or
-credential test. Build `hosted/test/fixtures/runtime-native.Dockerfile` from the
-repository root. Create an exact-owned container with `--network none` and
-`DESK_MULTI_USER=1`, command `node /app/hosted/test/fixtures/runtime-native.js`;
-copy `runtime-native.js` and `runtime-child.js` into that fixture path before
-starting it (`hosted/test` is excluded from normal image builds). On macOS use
-`COPYFILE_DISABLE=1 tar --no-xattrs` for the copy. It uses a synthetic loopback
+The owning-UID fixture is a **native Linux** gate, not a cloud or credential
+test. First build the actual `hosted/Dockerfile` production image as
+`desk-hosted-native:production`, including its real compiled native dependencies.
+Then build `hosted/test/fixtures/runtime-native.Dockerfile` using a separate
+small context containing it as `Dockerfile` and `runtime-native.js`,
+`runtime-child.js`, `runtime-timeout-native.js`, `runtime-service-native.js`.
+The overlay is COPY-only and inherits the production entrypoint; it does not
+install or replace any dependency. A separate context is necessary because
+the production root `.dockerignore` excludes `hosted/test`.
+Create an exact-owned container with `--network none`, `--cap-drop ALL` and
+only `CHOWN`, `SETUID`, `SETGID` added, with `DESK_MULTI_USER=1`, command
+`node /app/hosted/test/fixtures/runtime-native.js`. It uses a synthetic loopback
 Git HTTP origin and verifies kernel/UID/cwd/socket/argv/signal boundaries,
 concurrent preparation/retry, immutable authority and shutdown preservation.
 No host credentials or credential directories should be mounted.
@@ -218,9 +223,8 @@ quiescence, and retained failed-preparation state when descendants remain.
 These cases exercise the actual 60-second deadline, not a shorter test-only
 timeout; they run concurrently within a 100-second fixture bound.
 
-For real service consumption, use the cached production dependency image with
-a COPY-only source overlay and also copy `runtime-service-native.js`.
-`DESK_NATIVE_SERVICES=1` selects actual MCP SDK initialize/status/save/reindex/
+In this production fixture overlay, `DESK_NATIVE_SERVICES=1` selects actual
+MCP SDK initialize/status/save/reindex/
 search, native SQLite inspection, automatic Git sync, natural protocol EOF,
 explicit termination, same-realm concurrent sessions and a neighboring realm.
 An actual MCP-triggered Git hook starts a detached writer with ignored stdio;
@@ -232,6 +236,22 @@ guard; production operation/push/retirement budgets are unchanged. They use
 arbitrary kernel UIDs absent from passwd, not fixture NSS entries or native
 dependency substitutes. This is two-realm single-configured-repository
 qualification, not multirepository admission or cloud deployment qualification.
+
+The existing `.github/workflows/hosted-tests.yml` also maintains a separate
+native Linux/amd64 job on `ubuntu-latest`, alongside the unchanged gateway
+E2E/Azurite job. It builds the production image once, adds this small fixture
+overlay, then runs service success, sticky service preservation and the
+**unchanged** `DESK_NATIVE_TIMEOUTS=1` I1 fixture sequentially. Each container
+has two CPUs and 4 GiB of memory; this is a consuming boundary, not a
+twelve-session capacity qualification. Any case or evidence-collection failure
+makes the job fail; later cases still produce diagnostic evidence. An always-run
+artifact step retains the exact checkout/tree and hashes, image IDs/metadata,
+runner kernel/architecture, actual fixture kernel/native-source observations,
+separate stdout/stderr, exit status, container configuration/state and synthetic
+realm filesystem archives. The twenty-minute outer job allowance covers builds
+and all three cases; it does not change production deadlines, I1's 100-second
+fixture guard or its 75-second observation. A native I1 failure remains red,
+and a later native pass does not relabel an earlier emulated run as passing.
 
 ## Build the image
 
