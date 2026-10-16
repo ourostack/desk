@@ -108,7 +108,7 @@ The plugin ships a substrate-default agent named `worker` — a long-running eng
 claude --agent desk:worker
 
 # Copilot CLI
-copilot --agent worker
+copilot --agent worker --excluded-tools=ask_user
 ```
 
 Copilot startup uses the root plugin's Desk-owned `sessionStart` hook to read `skills/using-desk/SKILL.md` at runtime and emit it as `additionalContext`. The agent file keeps the worker identity and operating context without copying the foundation body.
@@ -120,6 +120,10 @@ See [`docs/agent-files.md`](./docs/agent-files.md) for the per-harness agent fil
 Three agent files (`agents/worker.md`, `agents/worker.agent.md`, `agents/worker.toml`) ship the same canonical body in each harness's expected format. A sibling agent, `observer`, ships the same way (`agents/observer.md`, `agents/observer.agent.md`, `agents/observer.toml`): it evaluates work it did not do, from evidence, and never fixes or certifies it; it is never the default. It evaluates a release with the [evaluation packet](docs/evaluation-packet.md), and labels a finished job's waste in the background when its task reaches `done` ([factory-evaluator](skills/factory-evaluator/SKILL.md)). If you want a context-specific overlay (corporate-engineering, autonomous-agent, personal-coding), author it as a sibling plugin that depends on `desk` and provides its own agent file; the substrate stays generic.
 
 For deeper stacks, depend on the most specific layer you need. The adapter enables the selected overlay chain alongside Desk and Superpowers, with one Desk MCP. Generated instructions and `desk_status` report the declared chain; actual host loading still needs verification.
+
+## Structured questions
+
+Questions still belong in ordinary chat. Claude's Desk agent definitions declare an exclusion for only `AskUserQuestion`; Copilot's launcher must supply `--excluded-tools=ask_user` before startup. Plugin instructions or a denied call do not prove catalog removal. See [agent tool policy and host boundaries](docs/agent-files.md#structured-questions-on-claude-code); Agency/overlay launch inheritance requires separate qualification.
 
 ## what desk gives an agent
 

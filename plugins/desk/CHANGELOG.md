@@ -1,5 +1,21 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.328 — 2026-10-15
+
+The browser no longer starts a new connection when asked to close after acquisition failed. Desk applies a small, audited Playwright lifecycle patch to staged installs, validates a versioned receipt against the installed bundle, and migrates existing compatible package trees offline without changing files used by running clients.
+
+An incompatible upstream update keeps the last verified generation and records the refresh failure; a cold install without compatible code reports a degraded browser rather than running an unverified cleanup path. This fixes failed-acquisition close safety, not unattended extension provisioning, foreground preservation or native all-agent isolation.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.327 — 2026-10-15
+
+### Fixed
+
+- Claude's Desk worker and observer now declare an `AskUserQuestion` exclusion through native agent tool policy, preserving the inherited tool pool and ordinary chat questions. Document Copilot's launcher-owned `--excluded-tools=ask_user` boundary: plugin instructions and deny hooks do not hide tools, and plugin metadata does not impose a CLI flag. Overlay and consumer catalog visibility remain separately qualified.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.326 — 2026-10-15
 
 ### Fixed

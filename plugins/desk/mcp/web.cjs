@@ -3,6 +3,7 @@
 // - Session start never waits on the network once a copy is installed. The launcher starts the installed copy at once and then starts a detached refresher, which asks npm for the channel's current release and, when it differs, installs it into a new folder and switches the `current.json` pointer with an atomic rename. The next launch uses the new release, so a session is at most one launch behind the channel. There is no pinned version or commit.
 // - The first launch on a machine answers the host's handshake at once and installs the copy meanwhile; web-proxy.cjs holds browser calls until the install finishes and then passes them to Playwright MCP, so a first call waits instead of failing and the tool catalog never changes under the host. Every npm call runs with no fetch retries and a short fetch timeout, so an unreachable registry fails in seconds with a message naming the registry, instead of after minutes.
 // - Installs and refreshes run under one lock file, so sessions that start together never race: one installs while the others wait for it or, with a copy already installed, skip the refresh.
+// - Desk applies a small, exact-source Playwright lifecycle patch before publishing an install, so closing a session after failed acquisition never starts another browser. A cached stock generation migrates offline into a new folder; live generations are never edited. Unsupported upstream code cannot replace a verified generation and is reported explicitly.
 // - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
 // - Desk's default browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
 // - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
@@ -20,6 +21,7 @@ var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
 var proxy = require("./web-proxy.cjs");
 var realProfile = require("./web-real-profile.cjs");
+var playwrightPatch = require("./web-playwright-patch.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
@@ -351,6 +353,7 @@ function readInstall(root, dir) {
   var found = { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null,
     cli: cli, dir: path.join(root, dir), reader: exists(path.join(modules, "classic-level", "package.json")),
     ws: exists(path.join(modules, "ws", "package.json")) };
+  found.patchRevision = playwrightPatch.readRevision(found);
   if (found.reader) return found;
   var marker = path.join(root, dir, READER_UNAVAILABLE);
   if (exists(marker)) {
@@ -373,6 +376,44 @@ function writeAtomic(file, text) {
   fs.renameSync(temp, file);
 }
 
+function newGeneration(tools, root) {
+  var id = "installs/" + tools.clock() + "-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
+  var dir = path.join(root, id);
+  mkdirp(dir);
+  return { id: id, dir: dir };
+}
+
+function publishGeneration(tools, root, generation) {
+  var installed = readInstall(root, generation.id);
+  playwrightPatch.apply(installed);
+  installed = readInstall(root, generation.id);
+  var previous = readJson(path.join(root, "current.json"));
+  var previousDir = previous && typeof previous.dir === "string" ? previous.dir : null;
+  prune(root, [generation.id, previousDir], tools.clock);
+  writeAtomic(path.join(root, "current.json"), JSON.stringify({ version: installed.version, dir: generation.id, previous: previousDir }, null, 2) + "\n");
+  return { ok: true, installed: installed };
+}
+
+function generationFailed(generation, error) {
+  removeTree(generation.dir);
+  return { ok: false, error: describe(error), code: error.code === "PLAYWRIGHT_PATCH_UNSUPPORTED" ? "browser_patch_unsupported" : "browser_patch_failed" };
+}
+
+function migrate(tools, root, installed) {
+  var generation = newGeneration(tools, root);
+  return playwrightPatch.copyPackages(path.join(installed.dir, "node_modules"), path.join(generation.dir, "node_modules")).then(function () {
+    fs.writeFileSync(path.join(generation.dir, "package.json"), "{\"private\":true}\n");
+    var marker = path.join(installed.dir, READER_UNAVAILABLE);
+    if (exists(marker)) {
+      var copy = path.join(generation.dir, READER_UNAVAILABLE);
+      fs.copyFileSync(marker, copy);
+      var stat = fs.statSync(marker);
+      fs.utimesSync(copy, stat.atime, stat.mtime);
+    }
+    return publishGeneration(tools, root, generation);
+  }).catch(function (error) { return generationFailed(generation, error); });
+}
+
 // Remove installs other than the ones to keep, once they are older than KEEP_MS.
 function prune(root, keep, clock) {
   var installs = path.join(root, "installs");
@@ -389,9 +430,9 @@ function prune(root, keep, clock) {
 
 // Install the channel's current release into a new folder, then point current.json at it. With `withReader` the token reader goes in the same npm call; if that fails the browser alone is installed and the folder is marked, so a machine without a reader still gets the browser and the real-profile mode answers that it cannot read the token. The caller holds the lock.
 function install(tools, root, timeoutMs, withReader) {
-  var id = "installs/" + tools.clock() + "-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
-  var dir = path.join(root, id);
-  mkdirp(dir);
+  var generation = newGeneration(tools, root);
+  var id = generation.id;
+  var dir = generation.dir;
   fs.writeFileSync(path.join(dir, "package.json"), "{\"private\":true}\n");
   function run(packages) {
     return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock"].concat(packages), timeoutMs);
@@ -410,11 +451,11 @@ function install(tools, root, timeoutMs, withReader) {
       removeTree(dir);
       return { ok: false, error: npmError(result, "npm install") };
     }
-    var previous = readJson(path.join(root, "current.json"));
-    var previousDir = previous && typeof previous.dir === "string" ? previous.dir : null;
-    writeAtomic(path.join(root, "current.json"), JSON.stringify({ version: installed.version, dir: id, previous: previousDir }, null, 2) + "\n");
-    prune(root, [id, previousDir], tools.clock);
-    return { ok: true, installed: installed };
+    try {
+      return publishGeneration(tools, root, generation);
+    } catch (error) {
+      return generationFailed(generation, error);
+    }
   });
 }
 
@@ -491,7 +532,7 @@ function scrub(text) {
 // The installed copy, installing it first when there is none (or, when `reader` is set, none with the token reader). Resolves { installed, fresh } or { error }.
 // Whether an install can start as it is, with no npm run first: it has the reader and ws when a real profile needs them, and a reader that could not be installed is not due for another try.
 function complete(installed, reader, clock) {
-  if (installed === null) return false;
+  if (installed === null || installed.patchRevision !== playwrightPatch.REVISION) return false;
   if (!reader) return true;
   var retry = installed.unavailableAt !== undefined && clock() - installed.unavailableAt > READER_RETRY_MS;
   return installed.reader && !retry && Boolean(installed.ws || installed.unavailableAt);
@@ -501,15 +542,17 @@ function ensureInstalled(tools, root, deadline, reader) {
   var installed = readInstalled(root);
   if (complete(installed, reader, tools.clock)) return Promise.resolve({ installed: installed, fresh: false });
   // An install that only lacks the reader still works without it, so a failed or crowded retry keeps it.
-  var current = installed === null ? null : { installed: installed, fresh: false };
+  var current = installed === null || installed.patchRevision !== playwrightPatch.REVISION ? null : { installed: installed, fresh: false };
   var lock = path.join(root, "refresh.lock");
   if (takeLock(lock, tools.clock)) {
     return Promise.resolve().then(function () {
+      if (installed !== null && installed.patchRevision !== playwrightPatch.REVISION) return migrate(tools, root, installed);
       return install(tools, root, Math.max(deadline - tools.clock(), 1000), reader);
     }).then(function (result) {
       releaseLock(lock);
       if (!result.ok && current !== null) tools.stderr.write("[web] could not install the connection reader (" + scrub(result.error) + "); keeping the install without it\n");
-      return result.ok ? { installed: result.installed, fresh: true } : current || { error: result.error };
+      if (result.ok && !complete(result.installed, reader, tools.clock)) return ensureInstalled(tools, root, deadline, reader);
+      return result.ok ? { installed: result.installed, fresh: installed === null || installed.patchRevision === playwrightPatch.REVISION } : current || { error: result.error, code: result.code };
     }, function (error) {
       releaseLock(lock);
       throw error;
@@ -554,8 +597,10 @@ function refresh(o) {
       var latest = view.code === 0 ? lastLine(view.stdout) : "";
       if (!latest) return { ok: false, error: npmError(view, "npm view") };
       var installed = readInstalled(root);
-      if (installed !== null && installed.version === latest && (!installed.reader || installed.ws || installed.unavailableAt)) return { ok: true, version: latest, changed: false };
-      return install(tools, root, REFRESH_MS, installed !== null && installed.reader).then(function (result) {
+      var same = installed !== null && installed.version === latest;
+      if (same && installed.patchRevision === playwrightPatch.REVISION && (!installed.reader || installed.ws || installed.unavailableAt)) return { ok: true, version: latest, changed: false };
+      var work = same && installed.patchRevision !== playwrightPatch.REVISION ? migrate(tools, root, installed) : install(tools, root, REFRESH_MS, installed !== null && installed.reader);
+      return work.then(function (result) {
         return result.ok ? { ok: true, version: result.installed.version, changed: true } : result;
       });
     });
@@ -743,6 +788,10 @@ function start(o, io) {
   // Resolves { launch } when Playwright MCP is installed and can start, or { payload } with the degraded answer when it cannot; rejects only when the state folder itself fails.
   function prepare(got) {
     if (!got.installed) {
+      if (got.code === "browser_patch_unsupported" || got.code === "browser_patch_failed") {
+        return { payload: failure(io, got.code, "Desk could not prepare a verified Playwright browser install: " + got.error,
+          "The browser integration needs a compatible maintained patch; Desk remains available. No browser configuration change is required.") };
+      }
       return npm(tools, ["config", "get", "registry"], REGISTRY_MS).then(function (answer) {
         var registry = answer.code === 0 && lastLine(answer.stdout) ? lastLine(answer.stdout) : "the configured npm registry";
         return { retry: got.retry === true, payload: failure(io, "install_failed",
@@ -751,7 +800,11 @@ function start(o, io) {
       });
     }
     var installed = got.installed;
-    io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
+    io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + " (Desk lifecycle patch " + installed.patchRevision + ")\n");
+    var lastRefresh = readJson(path.join(root, "last-refresh.json"));
+    if (lastRefresh && lastRefresh.result && lastRefresh.result.ok === false) {
+      io.stderr.write("[web] last browser refresh failed: " + scrub(lastRefresh.result.error) + "; keeping the verified installed generation\n");
+    }
     // A copy installed just now is already the channel's current release.
     if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
     var launchEnv = withNodeFirst(env, node, platform);

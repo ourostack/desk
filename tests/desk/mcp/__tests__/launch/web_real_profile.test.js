@@ -15,6 +15,8 @@ import { mcpRoot } from "./_mcp_handshake.js"
 const require = createRequire(import.meta.url)
 const browser = require(path.join(mcpRoot, "web.cjs"))
 const real = require(path.join(mcpRoot, "web-real-profile.cjs"))
+const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
+const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
 const TOKEN = "tok-9f3a-never-print-me"
 const posixOnly = { skip: process.platform === "win32" ? "the fixture Node is a POSIX link" : false }
 
@@ -563,6 +565,8 @@ async function realMachine(options = {}) {
   const modules = path.join(state, id, "node_modules")
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version: "0.0.83", bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), "")
+  touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+  playwrightPatch.apply({ dir: path.join(state, id), version: "0.0.83", core: null })
   if (options.reader !== false) {
     touch(path.join(modules, "classic-level", "package.json"), JSON.stringify({ name: "classic-level" }))
     touch(path.join(modules, "ws", "package.json"), '{"version":"8.21.3"}')
@@ -774,6 +778,7 @@ function installNpm(calls, options = {}) {
       const prefix = argv[argv.indexOf("--prefix") + 1]
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.84", bin: { "playwright-mcp": "cli.js" } }))
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "cli.js"), "")
+      touch(path.join(prefix, "node_modules", "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
       if (withReader) touch(path.join(prefix, "node_modules", "classic-level", "package.json"), "{}")
       if (argv.includes("ws@8.21.3")) touch(path.join(prefix, "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
       child.emit("close", 0)
@@ -796,6 +801,22 @@ test("a declaration installs the token reader and ws in the same npm call as Pla
   assert.match(spawned.argv[1], /installs\/.*\/node_modules\/@playwright\/mcp\/cli\.js$/u)
   assert.notEqual(path.dirname(path.dirname(path.dirname(path.dirname(spawned.argv[1])))), path.join(machine.state, "installs", "1-1-a"))
   assert.equal(JSON.stringify(calls).includes(TOKEN), false)
+})
+
+test("a legacy real-profile generation migrates safely before acquiring its missing reader", posixOnly, async () => {
+  const machine = await realMachine({ reader: false })
+  writeFileSync(path.join(machine.state, "installs/1-1-a/playwright-patch.json"), "null")
+  const calls = []
+  const host = session(machine, { npmSpawn: installNpm(calls) })
+  await host.handshake()
+  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
+  await host.close()
+  const installed = browser.readInstalled(machine.state)
+  assert.equal(installed.patchRevision, 1)
+  assert.equal(installed.reader, true)
+  assert.equal(installed.ws, true)
+  assert.equal(calls.length, 1)
+  assert.equal(readdirSync(path.join(machine.state, "installs")).length, 3)
 })
 
 test("a reader that cannot be installed leaves the browser installed and marked, and the real profile answers that the token cannot be read", posixOnly, async () => {
