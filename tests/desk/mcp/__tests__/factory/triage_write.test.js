@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { promises as fs, readFileSync } from "node:fs"
+import { promises as fs, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { randomBytes } from "node:crypto"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -29,8 +29,16 @@ const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue",
 const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 
-function git(cwd, args, { allowFail = false } = {}) {
-  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" })
+const restrictiveProfile = {
+  GIT_CONFIG_COUNT: "3",
+  GIT_CONFIG_KEY_0: "safe.bareRepository", GIT_CONFIG_VALUE_0: "explicit",
+  GIT_CONFIG_KEY_1: "credential.interactive", GIT_CONFIG_VALUE_1: "never",
+  GIT_CONFIG_KEY_2: "core.fsmonitor", GIT_CONFIG_VALUE_2: "false",
+  GIT_OPTIONAL_LOCKS: "0",
+}
+
+function git(cwd, args, { allowFail = false, env = process.env } = {}) {
+  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", env })
   if (result.status !== 0 && !allowFail) throw new Error(`git ${args.join(" ")}: ${result.stderr}`)
   return result.stdout.trim()
 }
@@ -631,6 +639,322 @@ test("unsafe_inputs_and_environment_are_refused_before_git", async () => {
   assert.equal((await publish(a, { expectedBasis: basis, review: undefined, operation: "invalidate" })).state, "policy_refused", "nothing to invalidate yet")
   assert.equal((await publish(a, { expectedBasis: { ...(await basisFor(a)), public_evidence_revisions: [{ kind: "issue", ref: "not a pointer", revision: 1 }] } })).state, "policy_refused", "an unsafe public pointer never reaches the annotation")
   assert.equal(remoteJson(w.origin, paths.registry), null)
+})
+
+test("restrictive_command_profile_keeps_command_scope_and_acknowledges_real_git", async () => {
+  const w = await world()
+  const a = w.clone("profile")
+  const seen = []
+  const result = await publish(a, {
+    env: { ...a.env, ...restrictiveProfile },
+    git: { spawn: (command, args, options) => {
+      seen.push({ command, args, env: options.env })
+      return spawn(command, args, options)
+    } },
+  })
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  assert.ok(result.ack)
+  assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+  assert.equal(remoteJson(w.origin, paths.registry).entries[0].id, result.id)
+  for (const call of seen.filter((call) => !call.args.includes("--version"))) {
+    for (const [name, value] of Object.entries(restrictiveProfile)) assert.equal(call.env[name], value, `${call.args}: ${name}`)
+  }
+})
+
+test("restrictive_profile_accepts_all_six_bijections_and_optional_locks_zero_only", async () => {
+  const w = await world()
+  const permutations = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+  for (const [index, order] of permutations.entries()) {
+    const a = w.clone(`permutation-${index}`)
+    const profile = { GIT_CONFIG_COUNT: "3" }
+    for (const [slot, source] of order.entries()) {
+      profile[`GIT_CONFIG_KEY_${slot}`] = restrictiveProfile[`GIT_CONFIG_KEY_${source}`]
+      profile[`GIT_CONFIG_VALUE_${slot}`] = restrictiveProfile[`GIT_CONFIG_VALUE_${source}`]
+    }
+    if (index % 2 === 0) profile.GIT_OPTIONAL_LOCKS = "0"
+    const calls = []
+    const result = await publish(a, {
+      env: { ...a.env, ...profile },
+      review: { ...HUMAN, protected_result: hex(16), gate: index % 2 ? "voice" : "account", summary_codes: ["source:andon", "route:human_decision", `gate:${index % 2 ? "voice" : "account"}`] },
+      git: { spawn: (command, args, options) => {
+        calls.push(args)
+        if (!args.includes("--version")) {
+          for (const [name, value] of Object.entries(profile)) assert.equal(options.env[name], value, `${args}: ${name}`)
+          if (!Object.hasOwn(profile, "GIT_OPTIONAL_LOCKS")) assert.equal(Object.hasOwn(options.env, "GIT_OPTIONAL_LOCKS"), false)
+        }
+        return spawn(command, args, options)
+      } },
+    })
+    assert.equal(result.state, "acknowledged", JSON.stringify({ index, result }))
+    assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    assert.equal(calls.filter((args) => args.includes("--version")).length, 1)
+    for (const subcommand of ["worktree", "add", "commit", "push", "fetch", "branch"]) assert.ok(calls.some((args) => args[2] === subcommand), subcommand)
+  }
+  for (const extra of [{}, { GIT_OPTIONAL_LOCKS: "0" }]) {
+    const a = w.clone(`scalar-${hex(2)}`)
+    assert.equal((await publish(a, { env: { ...a.env, ...extra }, review: { ...HUMAN, gate: "voice", summary_codes: ["source:andon", "route:human_decision", "gate:voice"], protected_result: hex(16) }, git: { spawn: (command, args, options) => {
+      assert.equal(args.includes("--version"), false, "legacy/scalar callers do not acquire a semantic prerequisite")
+      return spawn(command, args, options)
+    } } })).state, "adopted")
+  }
+})
+
+test("restrictive_profile_malformed_inputs_refuse_before_any_git_or_writer_effect", async () => {
+  const w = await world()
+  const a = w.clone("malformed")
+  const expectedBasis = await basisFor(a)
+  const before = liveState(a.deskRoot)
+  const remoteBefore = git(w.origin, ["rev-parse", "main"])
+  const invalid = []
+  const change = (name, value) => invalid.push({ ...restrictiveProfile, [name]: value })
+  for (const name of Object.keys(restrictiveProfile).filter((name) => name !== "GIT_OPTIONAL_LOCKS")) {
+    const missing = { ...restrictiveProfile }
+    delete missing[name]
+    invalid.push(missing)
+    for (const value of [undefined, null, 3, false, "", " ", "\n"]) change(name, value)
+    change(name.toLowerCase(), restrictiveProfile[name])
+  }
+  invalid.push({ GIT_CONFIG_COUNT: "3" }, { GIT_CONFIG_KEY_0: "safe.bareRepository" }, { GIT_CONFIG_VALUE_0: "explicit" })
+  for (const count of ["0", "1", "2", "4", "03", "+3", "-3", "3.0", " 3", "3 ", "3\n", "3\0"]) change("GIT_CONFIG_COUNT", count)
+  for (const value of ["1", "false", "", "00", " 0", "0\n", 0, false, null, undefined]) {
+    change("GIT_OPTIONAL_LOCKS", value)
+    invalid.push({ GIT_OPTIONAL_LOCKS: value })
+  }
+  for (const name of [
+    "GIT_CONFIG_KEY_3", "GIT_CONFIG_VALUE_3", "GIT_CONFIG_KEY_00", "GIT_CONFIG_VALUE_01",
+    "GIT_CONFIG_KEY_-1", "GIT_CONFIG_VALUE_x", "GIT_CONFIG_KEY_1.0", "GIT_CONFIG_KEY_+1",
+    "GIT_CONFIG_KEY", "GIT_CONFIG_VALUE", "GIT_CONFIG_COUNT_EXTRA", "Git_CONFIG_COUNT", "GIT_OPTIONAL_lockS",
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_SYSTEM", "GIT_FUTURE_OVERRIDE",
+  ]) change(name, "0")
+  for (const [name, value] of [
+    ["GIT_CONFIG_KEY_0", "safe.barerepository"], ["GIT_CONFIG_KEY_0", "safe.bareRepository "],
+    ["GIT_CONFIG_KEY_0", "core.hooksPath"], ["GIT_CONFIG_VALUE_0", "all"], ["GIT_CONFIG_VALUE_1", "Never"],
+    ["GIT_CONFIG_VALUE_2", "0"], ["GIT_CONFIG_VALUE_2", "false "], ["GIT_CONFIG_KEY_1", "safe.bareRepository"],
+    ["DESK_CARD_GUARD_RUNNING", "1"],
+  ]) change(name, value)
+  invalid.push({ ...restrictiveProfile, GIT_CONFIG_KEY_1: "safe.bareRepository", GIT_CONFIG_VALUE_1: "explicit" })
+  let spawned = 0
+  for (const profile of invalid) {
+    const result = await publish(a, { expectedBasis, env: { ...a.env, ...profile }, git: { spawn: () => { spawned += 1; throw new Error("must not run") } } })
+    assert.deepEqual(result, { state: "policy_refused", resources: [] }, JSON.stringify(profile))
+  }
+  assert.equal(spawned, 0)
+  assert.deepEqual(liveState(a.deskRoot), before)
+  assert.equal(git(w.origin, ["rev-parse", "main"]), remoteBefore)
+  await assert.rejects(fs.stat(a.env.XDG_STATE_HOME), { code: "ENOENT" })
+})
+
+test("restrictive_profile_version_diagnostic_is_bounded_fail_closed_and_not_cached", async () => {
+  const w = await world()
+  const a = w.clone("versions")
+  const expectedBasis = await basisFor(a)
+  const env = { ...a.env, ...restrictiveProfile }
+  const rejected = [
+    "git version 2.35.99\n", "git version 2.35.1\n", "git version 1.99.99\n", "git version 3.0.0\n",
+    "git version 2.36.0-rc1\n", "git version 2.36.0 arbitrary vendor\n", "git version 02.36.0\n",
+    "git version 2.036.0\n", "git version 2.36.00\n", "git version 2.36\n", "git version 2.36.0.1\n",
+    "git version 2.36.0\njunk", "git version 2.36.0\n\n", " git version 2.36.0\n",
+    "git version 2.36.0 (Apple Git-157) junk\n", "git version 2.36.0.windows.0\n",
+    "git version 2.9007199254740992.0\n", "git version 2.36.9007199254740992\n", "", "not git\n",
+    "git version 2.36.0\n".repeat(200),
+  ]
+  const queries = []
+  const attempt = (script, { throws = false, missing = false, timeoutMs = 1000 } = {}) => publish(a, {
+    expectedBasis, env,
+    git: { timeoutMs, spawn: (command, args, options) => {
+      queries.push({ command, args, options })
+      assert.deepEqual(args, ["--version"], "a rejected diagnostic must be the only Git invocation")
+      assert.ok(path.isAbsolute(command))
+      assert.equal(options.cwd, path.parse(a.deskRoot).root)
+      assert.equal(options.shell, undefined)
+      assert.equal(options.env.GIT_TERMINAL_PROMPT, "0")
+      const wanted = { ...env, GIT_TERMINAL_PROMPT: "0" }
+      for (const name of Object.keys(restrictiveProfile).filter((name) => name !== "GIT_OPTIONAL_LOCKS")) delete wanted[name]
+      assert.deepEqual(options.env, wanted)
+      if (throws) throw new Error("spawn failure")
+      return spawn(missing ? `${command}-not-present` : process.execPath, ["-e", script], options)
+    } },
+  })
+  for (const banner of rejected) assert.deepEqual(await attempt(`process.stdout.write(${JSON.stringify(banner)})`), { state: "policy_refused", resources: [] }, banner)
+  for (const script of [
+    "process.exit(1)", "process.kill(process.pid, 'SIGTERM')",
+    "process.stderr.write('x'.repeat(4096))", "process.stdout.write('git version 2.36.0\\n'); process.stderr.write('warning')",
+    "process.stdout.write('git version 2.36.0\\n'); setTimeout(() => {}, 60000)",
+  ]) assert.equal((await attempt(script)).state, "policy_refused", script)
+  assert.equal((await attempt("", { throws: true })).state, "policy_refused")
+  assert.equal((await attempt("", { missing: true })).state, "policy_refused")
+  assert.ok(queries.length > rejected.length)
+  await assert.rejects(fs.stat(a.env.XDG_STATE_HOME), { code: "ENOENT" })
+
+  for (const banner of ["git version 2.36.0\n", "git version 2.36.1", "git version 2.100.0\r\n", "git version 2.54.0 (Apple Git-157)\n", "git version 2.40.1 (Apple Git-157.1)\n", "git version 2.47.0.windows.1\n"]) {
+    let count = 0
+    const result = await publish(a, { expectedBasis, env, git: { spawn: (command, args, options) => {
+      if (args.includes("--version")) {
+        count += 1
+        return spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(banner)})`], options)
+      }
+      return spawn(command, args, options)
+    } } })
+    assert.ok(["acknowledged", "adopted"].includes(result.state), JSON.stringify({ banner, result }))
+    assert.equal(count, 1, "every operation checks its own selected consumer")
+  }
+  assert.equal((await attempt("process.stdout.write('git version 2.35.99\\n')")).state, "policy_refused", "a prior accepted banner cannot license this operation")
+})
+
+test("restrictive_profile_resolves_once_and_never_checks_A_then_uses_PATH_B", { skip: !posix }, async () => {
+  const w = await world()
+  const a = w.clone("binding")
+  const realGit = realpathSync(spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim())
+  const first = path.join(w.base, "first")
+  const second = path.join(w.base, "second")
+  await fs.mkdir(first)
+  await fs.mkdir(second)
+  const logA = path.join(w.base, "A.log")
+  const logB = path.join(w.base, "B.log")
+  const executable = path.join(first, "git")
+  await fs.writeFile(executable, `#!/bin/sh\necho "$*|$GIT_CONFIG_COUNT|$GIT_CONFIG_KEY_0|$GIT_CONFIG_VALUE_0|$GIT_CONFIG_KEY_1|$GIT_CONFIG_VALUE_1|$GIT_CONFIG_KEY_2|$GIT_CONFIG_VALUE_2|$GIT_OPTIONAL_LOCKS" >> "${slash(logA)}"\nexec "${slash(realGit)}" "$@"\n`, { mode: 0o755 })
+  await fs.writeFile(path.join(second, "git"), `#!/bin/sh\necho used >> "${slash(logB)}"\nexit 99\n`, { mode: 0o755 })
+  const env = { ...a.env, ...restrictiveProfile, PATH: `${first}${path.delimiter}${process.env.PATH}` }
+  const calls = []
+  const result = await publish(a, { env, git: { spawn: (command, args, options) => {
+    assert.equal(command, executable)
+    calls.push(args)
+    const child = spawn(command, args, options)
+    if (args.includes("--version")) {
+      env.PATH = second
+      options.env.PATH = second
+    }
+    return child
+  } } })
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  const lines = (await fs.readFile(logA, "utf8")).trim().split("\n").map((line) => line.split("|"))
+  assert.equal(lines.filter(([args]) => !args.includes(" hash-object ")).length, calls.length)
+  assert.ok(lines.some(([args]) => args.includes(" hash-object ")), "canonical card reads use the same verified executable too")
+  assert.deepEqual(lines[0], ["--version", "", "", "", "", "", "", "", "0"])
+  for (const [args, ...values] of lines.slice(1)) {
+    assert.deepEqual(values, ["3", "safe.bareRepository", "explicit", "credential.interactive", "never", "core.fsmonitor", "false", "0"], args)
+  }
+  await assert.rejects(fs.stat(logB), { code: "ENOENT" })
+})
+
+test("restrictive_profile_missing_or_non_executable_PATH_refuses_before_git", async () => {
+  const w = await world()
+  const a = w.clone("no-git")
+  const expectedBasis = await basisFor(a)
+  const noExec = path.join(w.base, "no-exec")
+  const directory = path.join(w.base, "directory")
+  await fs.mkdir(noExec)
+  await fs.mkdir(path.join(directory, "git"), { recursive: true })
+  await fs.writeFile(path.join(noExec, "git"), "not executable", { mode: 0o600 })
+  let spawns = 0
+  for (const PATH of [undefined, "", noExec, directory, path.join(w.base, "missing")]) {
+    assert.deepEqual(await publish(a, { expectedBasis, env: { ...a.env, ...restrictiveProfile, PATH }, git: {
+      spawn: () => { spawns += 1; throw new Error("not resolved") },
+    } }), { state: "policy_refused", resources: [] })
+  }
+  assert.equal(spawns, 0)
+})
+
+test("restrictive_profile_windows_resolution_uses_case_insensitive_PATH_and_exe", async () => {
+  const w = await world()
+  const a = w.clone("windows-resolution")
+  const expectedBasis = await basisFor(a)
+  const bin = path.join(w.base, "bin")
+  await fs.mkdir(bin)
+  const executable = path.join(bin, "git.exe")
+  await fs.writeFile(executable, "fixture; the existing spawn seam supplies the process", { mode: 0o755 })
+  const env = { ...a.env, ...restrictiveProfile }
+  for (const name of Object.keys(env).filter((name) => name.toUpperCase() === "PATH")) delete env[name]
+  env.Path = `${path.join(w.base, "absent")};${bin}`
+  const seen = []
+  const result = await publish(a, { expectedBasis, env, git: { platform: "win32", spawn: (command, args, options) => {
+    assert.equal(command, realpathSync(executable))
+    seen.push(args)
+    if (args.includes("--version")) return spawn(process.execPath, ["-e", "process.stdout.write('git version 2.36.0.windows.1\\n')"], options)
+    return spawn(process.execPath, ["-e", "process.exit(1)"], options)
+  } } })
+  assert.equal(result.state, "not_git", "the new profile was semantically admitted; only the subsequent repository read fails")
+  assert.deepEqual(seen, [["--version"], ["-C", a.deskRoot, "rev-parse", "--show-toplevel"]])
+})
+
+test("restrictive_profile_preserves_real_parent_and_generated_worktree_precedence_and_hooks", async () => {
+  const w = await world()
+  const a = w.clone("precedence")
+  const sentinel = path.join(w.base, "unexpected-execution")
+  const disabled = path.join(w.base, "fsmonitor-or-askpass")
+  await fs.writeFile(disabled, `#!/bin/sh\necho unsafe >> "${slash(sentinel)}"\nexit 1\n`, { mode: 0o755 })
+  const global = path.join(w.base, "global.config")
+  const parentInclude = path.join(w.base, "parent.config")
+  const branchInclude = path.join(w.base, "branch.config")
+  const worktreeInclude = path.join(w.base, "worktree.config")
+  const opposed = `[safe]\n bareRepository = all\n[credential]\n interactive = always\n[core]\n fsmonitor = "${slash(disabled)}"\n`
+  for (const file of [parentInclude, branchInclude, worktreeInclude]) await fs.writeFile(file, opposed)
+  await fs.writeFile(global, `${opposed}[includeIf "gitdir:${slash(a.deskRoot)}/.git"]\n path = "${slash(parentInclude)}"\n[includeIf "onbranch:desk-triage/**"]\n path = "${slash(branchInclude)}"\n[includeIf "gitdir:${slash(a.deskRoot)}/.git/worktrees/**"]\n path = "${slash(worktreeInclude)}"\n`)
+  git(a.deskRoot, ["config", "extensions.worktreeConfig", "true"])
+  const conflicts = [["safe.bareRepository", "all"], ["credential.interactive", "always"], ["core.fsmonitor", slash(disabled)]]
+  for (const [key, value] of conflicts) {
+    git(a.deskRoot, ["config", "--local", key, value])
+    git(a.deskRoot, ["config", "--worktree", key, value])
+  }
+  const env = { ...a.env, ...restrictiveProfile, GIT_CONFIG_GLOBAL: global, GIT_ASKPASS: disabled, SSH_ASKPASS: disabled }
+  const hookLog = path.join(w.base, "normal-hook.log")
+  await writeHook(a, `git config --show-scope --get safe.bareRepository >> "${slash(hookLog)}"\ngit config --show-scope --get credential.interactive >> "${slash(hookLog)}"\ngit config --show-scope --get core.fsmonitor >> "${slash(hookLog)}"\nexit 0`)
+  const contexts = new Set()
+  const original = { ...env }
+  const seamErrors = []
+  const result = await publish(a, { env, git: { spawn: (command, args, options) => {
+    try {
+      if (args.includes("--version")) return spawn(command, args, options)
+      for (const [name, value] of Object.entries(restrictiveProfile)) assert.equal(options.env[name], value, `${args}: ${name}`)
+      const cwd = args[1]
+      if (!contexts.has(cwd)) {
+        contexts.add(cwd)
+        const rawEnv = { ...options.env }
+        for (const name of Object.keys(restrictiveProfile).filter((name) => name !== "GIT_OPTIONAL_LOCKS")) delete rawEnv[name]
+        for (const [key, value] of conflicts) {
+          assert.equal(git(cwd, ["config", "--get", key], { env: rawEnv }), value)
+          const effective = git(cwd, ["config", "--show-scope", "--get", key], { env: options.env })
+          const wanted = key === "safe.bareRepository" ? "explicit" : key === "credential.interactive" ? "never" : "false"
+          assert.equal(effective, `command\t${wanted}`)
+        }
+        const all = git(cwd, ["config", "--show-origin", "--show-scope", "--get-all", "core.fsmonitor"], { env: options.env })
+        assert.match(all, /local\t/u)
+        assert.match(all, /worktree\t/u)
+        assert.ok(all.includes(slash(cwd === a.deskRoot ? parentInclude : branchInclude)), all)
+        if (cwd !== a.deskRoot) assert.ok(all.includes(slash(worktreeInclude)), all)
+      }
+      const child = spawn(command, args, options)
+      if (args[2] === "worktree" && args[3] === "add") child.on("close", (code) => {
+        if (code !== 0) return
+        const writer = args.at(-2)
+        for (const [key, value] of conflicts) git(writer, ["config", "--worktree", key, value], { env: options.env })
+      })
+      return child
+    } catch (error) {
+      seamErrors.push(error)
+      throw error
+    }
+  } } })
+  assert.deepEqual(seamErrors, [])
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  assert.equal(contexts.size, 2, "both actual consuming contexts were examined")
+  assert.deepEqual(env, original, "the caller's full profile is not rewritten")
+  assert.equal(await fs.readFile(hookLog, "utf8"), "command\texplicit\ncommand\tnever\ncommand\tfalse\n")
+  await assert.rejects(fs.stat(sentinel), { code: "ENOENT" })
+  assert.equal(remoteJson(w.origin, paths.registry).entries[0].id, result.id)
+
+  for (const [name, body, state] of [
+    ["refusing", "exit 1", "policy_refused"],
+    ["mutating", 'echo "# changed" >> "$0"\nexit 0', "policy_unknown"],
+  ]) {
+    const b = w.clone(name)
+    await writeHook(b, body)
+    const before = git(w.origin, ["rev-parse", "main"])
+    const held = await publish(b, { env: { ...b.env, ...restrictiveProfile }, review: { ...AGENT, protected_result: hex(16) } })
+    assert.equal(held.state, state, JSON.stringify(held))
+    assert.equal(held.ack, undefined)
+    assert.equal(git(w.origin, ["rev-parse", "main"]), before)
+  }
 })
 
 test("non_git_unsynchronized_busy_and_failed_git_calls_hold", async () => {
