@@ -256,6 +256,110 @@ test("channel portable launch writer cannot create files or write before native 
   assert.equal(files.has("missing"), false)
 })
 
+function channelLeaseModel(log, name, options = {}) {
+  const state = { cancelled: false, dataResumed: false, controlResumed: false }
+  return {
+    deadline: Date.now() + 1000, generation: name, expectedMissing: false,
+    create: () => ({ name }),
+    watch() {},
+    cancel() { state.cancelled = true; log.push("cancel-" + name) },
+    resumeData() { state.dataResumed = true; log.push("data-" + name) },
+    resumeControl() { state.controlResumed = true; log.push("control-" + name) },
+    async join() {
+      log.push("join-" + name)
+      assert.equal(state.cancelled && state.dataResumed && state.controlResumed, true)
+      return { ownerClosed: true, stdoutEOF: true, stderrEOF: true, controlEOF: true,
+        stdoutClosed: true, stderrClosed: true, controlClosed: true, transportFailure: false,
+        code: 0, signal: null }
+    },
+    collect() { log.push("receipt-" + name); return { retirement: "proved" } },
+    ...options,
+  }
+}
+test("channel portable unwind MODEL owns acquired child before constructor setup failure", async () => {
+  const log = [], core = channelPortable(), original = Error("constructor failed")
+  assert.equal(typeof core.leaseScope, "function")
+  const scope = core.leaseScope()
+  assert.throws(() => scope.acquire(channelLeaseModel(log, "a"), () => { throw original }), (e) => e === original)
+  const result = await scope.finish({ error: original })
+  assert.equal(result.error, original)
+  assert.deepEqual(log, ["cancel-a", "data-a", "control-a", "join-a", "receipt-a"])
+  assert.equal(result.generations[0].status, "SETTLED")
+})
+test("channel portable unwind MODEL diagnostic failure cannot gate cancellation or replace original", async () => {
+  const log = [], original = Error("assertion failed"), scope = channelPortable().leaseScope()
+  scope.acquire(channelLeaseModel(log, "a"), () => {})
+  const result = await scope.finish({ error: original, persist: () => { log.push("save"); throw Error("disk failure") } })
+  assert.equal(result.error, original); assert.equal(result.generations[0].retirement, "proved")
+  assert.deepEqual(log.slice(0, 3), ["cancel-a", "data-a", "control-a"])
+  assert.ok(result.failures.includes("persistence"))
+})
+test("channel portable unwind MODEL replacement close failure cannot gate generation join", async () => {
+  const log = [], scope = channelPortable().leaseScope(), original = Error("case failed")
+  scope.acquire(channelLeaseModel(log, "a"), () => {})
+  const result = await scope.finish({ error: original, auxiliary: () => { throw Error("close failed") } })
+  assert.equal(result.error, original)
+  assert.equal(result.generations[0].status, "SETTLED"); assert.ok(log.includes("receipt-a"))
+  assert.ok(result.failures.includes("auxiliary-close"))
+})
+test("channel portable unwind MODEL restores paused stdout stderr and control before waiting", async () => {
+  const log = [], scope = channelPortable().leaseScope()
+  scope.acquire(channelLeaseModel(log, "paused"), () => {})
+  const result = await scope.finish({})
+  assert.equal(result.error, undefined)
+  assert.deepEqual(log, ["cancel-paused", "data-paused", "control-paused", "join-paused", "receipt-paused"])
+})
+test("channel portable unwind MODEL cancels second ready generation before joining either", async () => {
+  const log = [], scope = channelPortable().leaseScope()
+  scope.acquire(channelLeaseModel(log, "ready"), () => {})
+  scope.acquire(channelLeaseModel(log, "peer", { join: async () => {
+    assert.ok(log.includes("cancel-ready") && log.includes("cancel-peer"))
+    throw Error("join failed")
+  } }), () => {})
+  const original = Error("peer setup failed"), result = await scope.finish({ error: original })
+  assert.deepEqual(log.slice(0, 2), ["cancel-ready", "cancel-peer"])
+  assert.equal(result.error, original); assert.equal(result.generations.length, 2)
+  assert.equal(result.generations[0].status, "SETTLED")
+  assert.equal(result.generations[1].status, "HOLD")
+})
+test("channel portable unwind MODEL missing proof and expired deadline never synthesize retirement", async () => {
+  const log = [], scope = channelPortable().leaseScope()
+  scope.acquire(channelLeaseModel(log, "missing", { expectedMissing: true, collect() { throw Error("ENOENT") } }), () => {})
+  scope.acquire(channelLeaseModel(log, "expired", { deadline: Date.now() - 1,
+    join: () => new Promise(() => {}) }), () => {})
+  const result = await scope.finish({})
+  assert.equal(result.generations.length, 2)
+  for (const value of result.generations) {
+    assert.equal(value.status, "HOLD"); assert.equal(value.retirement, "unknown")
+  }
+  assert.equal(log.includes("receipt-expired"), false)
+})
+test("channel portable new model-query uses owned wrong-type event, never current-job NULL", () => {
+  const body = namedChannelNativeBody.slice(namedChannelNativeBody.indexOf('if (!strcmp(s->mode, "model-query"))'))
+    .split('s->retiring = 1; goto done;')[0]
+  assert.match(body, /QueryInformationJobObject\(wrong_type\.hEvent,/)
+  assert.match(body, /nc_event\(s, &wrong_type, "model-query-wrong-type-event"\)/)
+  assert.match(body, /nc_close\(s, wrong_type\.hEvent\)/)
+  assert.doesNotMatch(body, /QueryInformationJobObject\(NULL,/)
+})
+test("channel portable stranded assignment root cannot retain parent data readers (source guard)", () => {
+  const launch = namedChannelNativeBody.slice(namedChannelNativeBody.indexOf("static int nc_launch("))
+    .split("static int nc_wrong_peer(")[0]
+  assert.match(launch, /i == 0 \|\| !strcmp\(s->mode, "model-assignment"\) \? nul/)
+})
+test("channel portable unwind MODEL closes diagnostic authority before synchronous persistence", async () => {
+  const log = [], scope = channelPortable().leaseScope()
+  let released = false
+  scope.acquire(channelLeaseModel(log, "a", { release() { released = true } }), () => {})
+  const result = await scope.finish({ persist() { assert.equal(released, true) } })
+  assert.equal(result.error, undefined); assert.equal(released, true)
+})
+test("channel portable unwind MODEL preserves a thrown undefined primary failure", async () => {
+  const scope = channelPortable().leaseScope()
+  const result = await scope.finish({ failed: true, error: undefined, persist() { throw Error("secondary") } })
+  assert.equal(result.failed, true); assert.equal(result.error, undefined)
+})
+
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
   const hex = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
@@ -420,8 +524,75 @@ function channelCore({ timingSafeEqual }) {
       io.writeFileSync(fd, bytes); io.fsyncSync(fd)
     } finally { io.closeSync(fd) }
   }
+  function leaseScope(contextDeadline = Date.now() + 10000) {
+    const leases = []
+    async function bounded(deadline, operation) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw Error("original settlement deadline")
+      let timer
+      try {
+        return await Promise.race([
+          new Promise((_, reject) => { timer = setTimeout(() => reject(Error("original settlement deadline")), remaining) }),
+          Promise.resolve().then(operation),
+        ])
+      } finally { clearTimeout(timer) }
+    }
+    return {
+      wait: bounded,
+      acquire(operations, setup) {
+        const entry = { ...operations, resource: undefined }
+        entry.resource = operations.create()
+        leases.push(entry) // No diagnostics/setup may run between acquisition and registration.
+        entry.watch(entry)
+        return setup(entry)
+      },
+      async finish({ error, failed = error !== undefined, auxiliary, persist } = {}) {
+        const failures = []
+        const attempt = (label, operation) => { try { operation() } catch { failures.push(label) } }
+        for (const entry of leases) attempt("cancel", () => entry.cancel(entry))
+        for (const entry of leases) {
+          attempt("resume-data", () => entry.resumeData(entry))
+          attempt("resume-control", () => entry.resumeControl(entry))
+        }
+        const generations = leases.map(async (entry) => {
+          let actual = {}, retirement = "unknown", proof, reason
+          const deadline = Math.min(contextDeadline, entry.deadline)
+          try { actual = await bounded(deadline, () => entry.join(entry)) }
+          catch { reason = "owner-data-control-incomplete"; attempt("snapshot", () => { actual = entry.snapshot?.(entry) ?? {} }) }
+          try {
+            if (Date.now() >= deadline) throw Error("original receipt deadline")
+            proof = entry.collect(entry)
+            if (Date.now() >= deadline) throw Error("original receipt deadline")
+            if (proof?.retirement === "proved") retirement = "proved"
+          } catch { reason ??= "receipt-unavailable-or-invalid" }
+          attempt("snapshot", () => {
+            const latest = entry.snapshot?.(entry)
+            if (latest) actual = latest
+          })
+          const joined = actual.ownerClosed === true && actual.stdoutEOF === true &&
+            actual.stderrEOF === true && actual.controlEOF === true && actual.stdoutClosed === true &&
+            actual.stderrClosed === true && actual.controlClosed === true && actual.transportFailure === false
+          const status = joined && retirement === "proved" ? "SETTLED" : "HOLD"
+          if (!joined) reason ??= "owner-data-control-not-clean"
+          if (status === "HOLD" && !entry.expectedMissing && !entry.expectedTransportLoss) failures.push("generation-settlement")
+          return { generation: entry.generation, deadline, status, retirement, actual, proof, reason,
+            expectedMissing: !!entry.expectedMissing, expectedTransportLoss: !!entry.expectedTransportLoss }
+        })
+        const auxiliaryClose = auxiliary ? bounded(contextDeadline, auxiliary).catch(() => failures.push("auxiliary-close")) : undefined
+        const result = { generations: await Promise.all(generations), failures, error }
+        await auxiliaryClose
+        for (const entry of leases) attempt("release-diagnostics", () => entry.release?.(entry))
+        if (persist) {
+          try { persist(result) } catch { failures.push("persistence") }
+        }
+        result.failed = failed || failures.length > 0
+        result.error = failed ? error : failures.length ? Error("generation settlement or diagnostic failure") : undefined
+        return result
+      },
+    }
+  }
   return { encode, parser, writer, rootState, resultBoundary, downstreamEnvironment, tail,
-    artifactGate, preparedFileWrite }
+    artifactGate, preparedFileWrite, leaseScope }
 }
 test("calibration portable preload options pin exact quoted forward-slash bytes", () => {
   const options = observationOptions('D:\\Probe Public\\observation preload.cjs', path.win32.resolve)
@@ -2290,11 +2461,13 @@ static int nc_launch(NC_STATE *s, const char *suffix) {
   if (ok || error == ERROR_PIPE_CONNECTED) s->connected = 1;
   else if (error == ERROR_IO_PENDING) s->connecting = 1;
   else goto done;
-  SetLastError(0); nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL); error = GetLastError();
+  SetLastError(0); nul = CreateFileW(L"NUL", GENERIC_READ | (!strcmp(s->mode, "model-assignment") ? GENERIC_WRITE : 0),
+    FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL); error = GetLastError();
   nc_trace(s, "CreateFileW-NUL", "root-stdin-NUL", nul != INVALID_HANDLE_VALUE, error, 0);
   if (!nc_adopt(s, nul, "root-stdin-NUL") || !nc_flags(s, nul, "root-stdin-NUL", 0)) goto done;
   for (i = 0; i < 3; i++) {
-    HANDLE source = i == 0 ? nul : GetStdHandle(i == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    /* The deliberately stranded suspended root must not retain parent data pipes. */
+    HANDLE source = i == 0 || !strcmp(s->mode, "model-assignment") ? nul : GetStdHandle(i == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
     const char *role = i == 0 ? "root-stdin-data-duplicate" : i == 1 ? "root-stdout-data-duplicate" : "root-stderr-data-duplicate";
     SetLastError(0); ok = DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &stdio[i], 0, TRUE, DUPLICATE_SAME_ACCESS); error = GetLastError();
     nc_trace(s, "DuplicateHandle-data-only", role, ok, error, (unsigned long long)(uintptr_t)stdio[i]);
@@ -2498,9 +2671,11 @@ static void nc_message(NC_STATE *s, NC_IO *io, const char *raw) {
     }
     if (!strcmp(m->type, "SEAL") && m->fields == 31 && s->control_complete) {
       if (!strcmp(s->mode, "model-query")) {
-        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION a;
-        SetLastError(0); ok = QueryInformationJobObject(NULL, JobObjectBasicAccountingInformation, &a, sizeof(a), NULL); error = GetLastError();
-        nc_trace(s, "QueryInformationJobObject-MODEL-invalid", "MODEL-null-job", ok, error, 0);
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION a; OVERLAPPED wrong_type;
+        if (!nc_event(s, &wrong_type, "model-query-wrong-type-event")) { nc_fail(s, "model-event-create"); goto done; }
+        SetLastError(0); ok = QueryInformationJobObject(wrong_type.hEvent, JobObjectBasicAccountingInformation, &a, sizeof(a), NULL); error = GetLastError();
+        nc_trace(s, "QueryInformationJobObject-MODEL-wrong-type", "model-query-wrong-type-event", ok, error, 0);
+        if (!nc_close(s, wrong_type.hEvent)) goto done;
         if (ok || !error) { nc_fail(s, "model-query-not-refused"); goto done; }
       }
       s->retiring = 1; goto done;
@@ -3005,7 +3180,47 @@ function verify() {
     assert.equal(actual.status, 0); assert.equal(actual.stdout.trim(), identity.version);
   }
 }
-function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
+function observeLease(child) {
+  const actual = { ownerExited: false, ownerClosed: false, stdoutEOF: false, stderrEOF: false, controlEOF: false,
+    stdoutClosed: false, stderrClosed: false, controlClosed: false, transportFailure: false,
+    code: null, signal: null };
+  let resolve, exitResolve;
+  const done = new Promise((accept) => { resolve = accept });
+  const exited = new Promise((accept) => { exitResolve = accept });
+  const update = () => {
+    if (actual.ownerClosed && actual.stdoutClosed && actual.stderrClosed && actual.controlClosed) resolve({ ...actual });
+  };
+  child.once("close", (code, signal) => { Object.assign(actual, { ownerClosed: true, code, signal }); update() });
+  child.once("exit", (code, signal) => {
+    Object.assign(actual, { ownerExited: true, code, signal }); exitResolve({ code, signal });
+  });
+  child.on("error", () => { actual.transportFailure = true });
+  for (const [stream, prefix] of [[child.stdout, "stdout"], [child.stderr, "stderr"], [child.stdio[3], "control"]]) {
+    stream.on("end", () => { actual[prefix + "EOF"] = true; update() });
+    stream.on("close", () => { actual[prefix + "Closed"] = true; update() });
+    stream.on("error", () => { actual.transportFailure = true });
+  }
+  return { done, exited, snapshot: () => ({ ...actual }) };
+}
+function collectLeaseReceipt(receipt, base, offeredDigest, startIssued, mode) {
+  assert.ok(fs.statSync(receipt).size <= 16380);
+  const proof = JSON.parse(fs.readFileSync(receipt, "utf8"));
+  assert.equal(proof.protocol, base.protocol); assert.equal(proof.purpose, "probe");
+  assert.equal(proof.generation, base.generation); assert.equal(proof.preparationDigest, base.preparationDigest);
+  assert.equal(proof.sealed, true); assert.equal(proof.exactJobZero, true); assert.equal(proof.rootRetired, true);
+  assert.equal(proof.privateRootProtected, true); assert.equal(proof.startIssued, startIssued);
+  assert.ok(proof.payloadDigest === (offeredDigest || null) || (!startIssued && proof.payloadDigest === null));
+  const closePath = receipt + ".owner-close.json";
+  assert.ok(fs.statSync(closePath).size <= 16380);
+  const close = JSON.parse(fs.readFileSync(closePath, "utf8"));
+  assert.equal(close.kind, "owner-close-diagnostic"); assert.equal(close.protocol, base.protocol);
+  assert.equal(close.generation, base.generation); assert.equal(close.preparationDigest, base.preparationDigest);
+  assert.equal(close.ownedCreated, close.ownedClosed); assert.equal(close.ownedHandlesClosed, true);
+  assert.equal(close.crtControlClosed, true); assert.equal(close.kernelCertificateIssued, true);
+  assert.equal(close.modelStranded, false);
+  return { retirement: "proved", certificate: proof };
+}
+function session(identity, mode, tag, scope, sharedDeadline) {
   const deadline = sharedDeadline;
   const generation = crypto.randomBytes(32).toString("hex"), capability = crypto.randomBytes(32).toString("hex");
   const name = crypto.randomBytes(32).toString("hex");
@@ -3013,15 +3228,43 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
     purpose: "probe", generation, role: mode, sequence: tag })));
   const base = { protocol: "desk.owned-git-channel-probe/1", generation, preparationDigest, payloadDigest: "" };
   const receipt = path.join(config.evidence, tag + ".receipt.json");
-  const child = spawn(config.owner, ["--named-channel", identity.path, config.shim], {
-    cwd: config.neutral, env: cleanEnvironment(), stdio: ["ignore", "pipe", "pipe", "overlapped"],
-  });
+  let payloadDigest = "", send, observed, timer, failure, startIssued = false, authorityOpen = true;
+  return scope.acquire({
+    generation, deadline,
+    expectedMissing: ["model-assignment", "helper-loss", "owner-loss-before-start", "owner-loss-name-reuse"].includes(mode),
+    expectedTransportLoss: mode === "parent-loss",
+    create: () => spawn(config.owner, ["--named-channel", identity.path, config.shim], {
+      cwd: config.neutral, env: cleanEnvironment(), stdio: ["ignore", "pipe", "pipe", "overlapped"],
+    }),
+    watch(entry) { observed = observeLease(entry.resource) },
+    cancel(entry) {
+      if (entry.resource.exitCode !== null || entry.resource.signalCode !== null) return;
+      if (send) send("CANCEL");
+      else if (!entry.resource.kill()) throw Error("unprepared owner termination incomplete");
+    },
+    resumeData(entry) {
+      let failed = false;
+      for (const stream of [entry.resource.stdout, entry.resource.stderr]) {
+        try { stream.resume() } catch { failed = true }
+      }
+      if (failed) throw Error("data reader resume incomplete");
+    },
+    resumeControl(entry) { entry.resource.stdio[3].resume() },
+    join: () => observed.done,
+    snapshot: () => observed ? { ...observed.snapshot(),
+      transportFailure: observed.snapshot().transportFailure || !!failure } : undefined,
+    collect: () => collectLeaseReceipt(receipt, base, payloadDigest, startIssued, mode),
+    release() { authorityOpen = false; clearTimeout(timer) },
+  }, (entry) => {
+  const child = entry.resource;
   const events = [], backlog = [], data = [];
   const privateGate = core.artifactGate(base), deferred = [];
   let stderrTail = Buffer.alloc(0);
-  let payloadDigest = "", failure, stdoutBytes = 0, stderrBytes = 0, eof = false, stderrEOF = false, controlEOF = false;
+  let stdoutBytes = 0, stderrBytes = 0, eof = false, stderrEOF = false, controlEOF = false;
   const log = path.join(config.evidence, tag + ".jsonl");
   const append = (value) => {
+    if (!authorityOpen || Date.now() >= deadline) return;
+    try {
     const text = JSON.stringify(value);
     assert.ok(!text.includes(capability) && !text.includes(name), "secret diagnostic refusal");
     if (!privateGateReady) {
@@ -3029,12 +3272,11 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
       deferred.push(text); return;
     }
     fs.appendFileSync(log, text + "\n");
+    } catch { failure ??= Error("bounded diagnostic failure") }
   };
   let privateGateReady = false;
-  const closed = new Promise((resolve) => child.on("close", (code, signal) => {
-    clearTimeout(timer); append({ ownerClose: { code, signal } }); resolve({ code, signal });
-  }));
-  const refuse = () => { failure = Error("bounded transport failure"); };
+  child.on("close", (code, signal) => { clearTimeout(timer); append({ ownerClose: { code, signal } }) });
+  const refuse = () => { failure ??= Error("bounded transport failure"); };
   child.on("error", refuse); child.stdio[3].on("error", refuse);
   child.stdout.on("error", refuse); child.stderr.on("error", refuse);
   child.stdout.on("data", (chunk) => {
@@ -3070,33 +3312,39 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
   child.stdio[3].on("data", (bytes) => { try { parser.push(bytes) } catch { refuse() } });
   child.stdio[3].on("end", () => { try { parser.end(); controlEOF = true } catch { refuse() } });
   const out = core.writer(child.stdio[3], refuse, mode === "parent-overlapped-fragment" ? 2 : 0);
-  const send = (type, extra = {}) => {
+  send = (type, extra = {}) => {
+    if (!authorityOpen) throw Error("retired generation authority");
     if (type === "SEAL") sealBoundary.seal();
+    if (type === "START") startIssued = true;
     out.send({ ...base, payloadDigest, type, ...extra });
   };
-  const timer = setTimeout(() => { refuse(); try { send("CANCEL") } catch {} }, Math.max(0, deadline - Date.now()));
+  timer = setTimeout(() => { refuse(); try { send("CANCEL") } catch {} }, Math.max(0, deadline - Date.now()));
   send("PREPARE", { capability, name, remaining: String(Math.max(1, deadline - Date.now())), mode, receipt,
     path: path.join(config.evidence, tag) });
   return {
-    child, closed, events, base, receipt, send, deadline, mode,
+    child, events, base, receipt, send, deadline, mode,
+    get closed() { return scope.wait(deadline, () => observed.done).then(({ code, signal }) => ({ code, signal })) },
+    get exited() { return scope.wait(deadline, () => observed.exited) },
     get configuredPayload() { return payloadDigest !== "" },
     writePayload: (filename, bytes) => core.preparedFileWrite(fs, filename, bytes, privateGate),
-    async rebindName() {
-      let connections = 0;
+    async rebindName(acquire) {
+      let connections = 0, bindTimer;
       const server = net.createServer((socket) => { connections++; socket.destroy() });
+      const replacement = { connections: () => connections, close: () => new Promise((resolve, reject) =>
+        server.close((error) => error ? reject(Error("replacement namespace close failed")) : resolve())) };
+      acquire(replacement);
       try {
         await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(Error("replacement namespace bind incomplete")),
+          if (Date.now() >= deadline) { reject(Error("original namespace deadline")); return }
+          bindTimer = setTimeout(() => reject(Error("replacement namespace bind incomplete")),
             Math.max(1, Math.min(2000, deadline - Date.now())));
-          server.once("error", () => { clearTimeout(timer); reject(Error("replacement namespace bind failed")) });
-          server.listen({ path: "\\\\.\\pipe\\desk-owned-git-" + name }, () => { clearTimeout(timer); resolve() });
+          server.once("error", () => reject(Error("replacement namespace bind failed")));
+          server.listen({ path: "\\\\.\\pipe\\desk-owned-git-" + name }, resolve);
         });
       } catch {
-        try { server.close(() => {}) } catch {}
         throw Error("replacement namespace preparation failed");
-      }
-      return { connections: () => connections, close: () => new Promise((resolve, reject) =>
-        server.close((error) => error ? reject(Error("replacement namespace close failed")) : resolve())) };
+      } finally { clearTimeout(bindTimer) }
+      return replacement;
     },
     setDigest: (digest) => { payloadDigest = digest },
     pressure: () => child.stdio[3].pause(), resume: () => child.stdio[3].resume(),
@@ -3104,7 +3352,7 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
     eof: () => eof, stderrEOF: () => stderrEOF, controlEOF: () => controlEOF, failed: () => !!failure,
     stdout: () => Buffer.concat(data).toString("utf8"),
     async take(stage) {
-      const until = Date.now() + 2000;
+      const until = Math.min(Date.now() + 2000, deadline);
       while (Date.now() < until) {
         if (failure) throw failure;
         const at = backlog.findIndex((x) => x.stage === stage);
@@ -3118,6 +3366,7 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
       stdoutEOF: eof, stderrEOF, controlEOF, failure: !!failure,
       outbound: out.diagnostic(), parserHighWater: parser.highWater() }),
   };
+  });
 }
 function payload(identity, marker, mode) {
   const options = '--require "' + config.preload.replaceAll("\\", "/") + '"';
@@ -3137,7 +3386,7 @@ function validateOwnerClose(s) {
   assert.equal(value.kind, "owner-close-diagnostic"); assert.equal(value.protocol, s.base.protocol);
   assert.equal(value.generation, s.base.generation); assert.equal(value.preparationDigest, s.base.preparationDigest);
   const expected = s.mode === "first-instance-collision" ? 11 : s.mode === "wrong-same-job-peer" ? 22 :
-    s.configuredPayload ? 17 : 16;
+    s.mode === "model-query" ? 18 : s.configuredPayload ? 17 : 16;
   assert.equal(value.ownedCreated, expected); assert.equal(value.ownedClosed, expected);
   assert.equal(value.ownedHandlesClosed, true); assert.equal(value.crtControlClosed, true);
   assert.equal(value.modelStranded, s.mode === "model-assignment");
@@ -3158,10 +3407,13 @@ function validateCertificate(s, digest, started, failure) {
 }
 async function one(identity, mode, tag) {
   const record = { mode, parent: process.version, root: identity.version, status: "ATTEMPTED" };
-  report.cases.push(record); save();
-  const s = session(identity, mode, tag), marker = path.join(config.evidence, tag);
-  let digest = null, started = false, rootPid, other, replacement, expectedFailure = false;
+  const deadline = Date.now() + 10000, scope = core.leaseScope(deadline);
+  const marker = path.join(config.evidence, tag);
+  let s, digest = null, started = false, rootPid, other, replacement, expectedFailure = false, originalError, originalFailed = false;
+  report.cases.push(record);
   try {
+    save();
+    s = session(identity, mode, tag, scope, deadline);
     if (mode === "first-instance-collision") {
       const closed = await s.closed; assert.equal(closed.code, 1);
       record.proof = validateCertificate(s, null, false, true);
@@ -3178,8 +3430,9 @@ async function one(identity, mode, tag) {
     else {
       s.send("ASSIGN");
       if (mode === "model-assignment") {
-        await s.take("modeled-assignment-refusal"); assert.equal((await s.closed).code, 0);
-        assert.equal(fs.existsSync(s.receipt), false); report.stranded.push(rootPid);
+        await s.take("modeled-assignment-refusal"); report.stranded.push(rootPid);
+        assert.equal((await s.exited).code, 0);
+        assert.equal(fs.existsSync(s.receipt), false);
         record.ownerClose = validateOwnerClose(s);
         record.status = "OBSERVED_EXPECTED"; return;
       }
@@ -3238,29 +3491,27 @@ async function one(identity, mode, tag) {
             const until = Math.min(Date.now() + 2000, s.deadline);
             while (!fs.existsSync(marker + ".channel-closed") && Date.now() < until) await delay(5);
             assert.equal(fs.existsSync(marker + ".channel-closed"), true);
-            replacement = await s.rebindName();
+            replacement = await s.rebindName((value) => { replacement = value });
             await delay(100);
             assert.equal(replacement.connections(), 0);
             assert.equal(fs.readFileSync(marker + ".channel-open", "utf8"), "open\n");
             record.originalConnections = 1; record.replacementConnections = replacement.connections();
             assert.equal(s.child.exitCode, null);
-            await replacement.close(); replacement = undefined;
             record.boundary = "server endpoint closed; native owner and retained root observed live, NOT process death";
             record.replacementNameReused = true; expectedFailure = true; s.send("CANCEL");
           } else if (mode === "owner-loss-name-reuse") {
             assert.equal(s.child.kill(), true); await s.closed;
             await delay(100);
-            replacement = await s.rebindName(); await delay(100);
+            replacement = await s.rebindName((value) => { replacement = value }); await delay(100);
             assert.equal(replacement.connections(), 0);
             record.replacementConnections = replacement.connections();
-            await replacement.close(); replacement = undefined;
             assert.equal(fs.existsSync(s.receipt), false);
             assert.ok(!s.events.some((e) => e.stage === "sealed-zero"));
             assert.equal(fs.existsSync(marker + ".command"), false);
             record.boundary = "literal native owner process termination; no private certificate";
             record.replacementNameReused = true; record.status = "OWNER_LOSS_UNKNOWN_EXPECTED"; return;
           } else if (mode === "ready-peer-failure") {
-            other = session(identity, "first-instance-collision", tag + ".other", s.deadline);
+            other = session(identity, "first-instance-collision", tag + ".other", scope, s.deadline);
             assert.equal((await other.closed).code, 1);
             record.otherProof = validateCertificate(other, null, false, true);
             const creates = other.events.flatMap((e) => e.apis ?? []).filter((a) => a.api === "CreateNamedPipeW");
@@ -3402,20 +3653,28 @@ async function one(identity, mode, tag) {
       assert.ok(record.proof.parentPendingReads >= 1);
     }
     assert.deepEqual(terminal.certificate, record.proof);
+    if (mode === "model-query") {
+      const injected = terminal.apis.find((api) => api.api === "QueryInformationJobObject-MODEL-wrong-type");
+      assert.ok(injected); assert.equal(injected.ok, false); assert.ok(injected.error > 0);
+      assert.ok(terminal.apis.some((api) => api.api === "CloseHandle" &&
+        api.resource === "model-query-wrong-type-event" && api.ok === true));
+    }
     assert.equal(s.failed(), false);
     if (!started) assert.equal(fs.existsSync(marker + ".command"), false);
     record.status = "OBSERVED_EXPECTED";
+  } catch (error) {
+    originalError = error; originalFailed = true;
   } finally {
-    if (replacement) await replacement.close();
-    record.diagnostics = s.finalDiagnostics(); save();
-    if (other && other.child.exitCode === null && other.child.signalCode === null) {
-      try { other.send("CANCEL") } catch {}
-      other.child.stdio[3].resume();
-    }
-    if (s.child.exitCode === null && s.child.signalCode === null) {
-      try { s.send("CANCEL") } catch {}
-      s.child.stdio[3].resume();
-    }
+    const cleanup = await scope.finish({
+      error: originalError, failed: originalFailed,
+      auxiliary: replacement ? () => replacement.close() : undefined,
+      persist(result) {
+        record.generations = result.generations; record.cleanupFailures = [...result.failures];
+        record.diagnostics = s?.finalDiagnostics(); save();
+      },
+    });
+    record.generations = cleanup.generations; record.cleanupFailures = cleanup.failures;
+    if (cleanup.failed) throw cleanup.error;
   }
 }
 async function main() {
@@ -3455,9 +3714,9 @@ export const channelProbeMaterial = {
 
 function assertChannelCandidateSources(material = channelProbeMaterial) {
   const expected = {
-    "probe-owner.c": "6bde1098cce18a11a9f035a1dd65d3b1dbd720c8f4dde3482ad1e695e800b865",
-    "probe-shim.cjs": "c6564e7df22084e008445e29b4eff45db9f4c5ae93e2a34e1615d8a9abe0975b",
-    "probe.test.cjs": "e70f948913f4adb951a819b04d3a29c4bc302d095d31623429049bdb6bb50aec",
+    "probe-owner.c": "595d7ec2c32f587cc852e8d6363729fc02453a90cca82f42dd7136bba5a1606c",
+    "probe-shim.cjs": "5cf1401904ff1b85ea45942c734c8f12831139f7173bea578705f44394b44607",
+    "probe.test.cjs": "46ce317d453acef2ad19c6ad1882abf492af6e6d8d6806d0cd78d799acf8b82d",
     "channel-workload.cjs": "1c199c86a26d922c24b08c8ecfcb2b6985ac8c1cc200f0c5fad8961400bcf68a",
     "build.ps1": "92b6e73068ae95d9b74163793c1afc628c729c4e1ebf9244013dc8eb075db751",
     "preload.cjs": "ee455a699ce6c23f1dd7a7e84ef7c365894b8dfa9c60c43dd87b4cce73960457",
