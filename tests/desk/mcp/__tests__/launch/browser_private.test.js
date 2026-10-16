@@ -142,7 +142,8 @@ exports.program=async () => {
   if(args.includes("json-error")) { console.log(JSON.stringify({isError:true,error:"upstream command failed"})); return; }
   if(args.includes("transport-error")) throw Error("Bearer secret-value https://user:password@example.test/?token=abc");
   console.log(JSON.stringify({ args, cwd:process.cwd(), home:process.env.HOME, config:process.env.XDG_CONFIG_HOME,
-    temp:process.env.TMPDIR, pid:process.pid, inherited:Object.keys(process.env).filter(k=>/^(PLAYWRIGHT|PWTEST|DESK_BROWSER|NODE_OPTIONS|CDP)/.test(k)) }));
+    temp:process.env.TMPDIR, pid:process.pid, nodeOptions:process.env.NODE_OPTIONS,
+    inherited:Object.keys(process.env).filter(k=>/^(PLAYWRIGHT|PWTEST|DESK_BROWSER|CDP)/.test(k)) }));
 };
 `)
   const stateRoot = path.join(root, "state")
@@ -157,6 +158,8 @@ exports.program=async () => {
     // Keep short namespaces inside the exact-owned fixture for non-native tests.
     socketRoot: path.join(root, "sockets"),
     execute: async (node, args, opts) => {
+      // Coverage may inject its own preload after this product boundary.
+      assert.equal(opts.env.NODE_OPTIONS, undefined, "private runner must not inherit caller preloads")
       const result = await exec(node, ["--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
         .catch(error => {
           const payload = JSON.parse(error.stdout)
@@ -195,7 +198,26 @@ test("two fresh private creations isolate HOME/cwd/config/session and disable id
   assert.ok(a.payload.result.args.includes("--idle-timeout=0"))
   assert.ok(!a.payload.result.args.includes("--persistent"))
   assert.deepEqual(a.payload.result.inherited, [])
+  assert.doesNotMatch(a.payload.result.nodeOptions || "", /--not-allowed/)
   if (process.platform !== "win32") assert.equal(fs.statSync(a.payload.result.temp).mode & 0o777, 0o700)
+})
+
+test("private environment rejects caller preloads even when the test harness instruments the child", async () => {
+  const f = await fixture()
+  const instrumentation = path.join(f.root, "instrumentation.cjs")
+  put(instrumentation, "process.env.NODE_OPTIONS=(process.env.NODE_OPTIONS||'')+' --require=owned-test-instrumentation';")
+  let forwarded
+  const result = await f.invoke(["create"], {
+    contextId: () => A,
+    execute: (node, args, opts) => {
+      forwarded = opts.env.NODE_OPTIONS
+      return f.options.execute(node, ["--require", instrumentation, ...args], opts)
+    },
+  })
+  assert.equal(result.exitCode, 0)
+  assert.equal(forwarded, undefined)
+  assert.deepEqual(result.payload.result.inherited, [])
+  assert.doesNotMatch(result.payload.result.nodeOptions || "", /--not-allowed/)
 })
 
 test("independent keep/resume/run clients reuse the same context and never recreate a missing one", async () => {
