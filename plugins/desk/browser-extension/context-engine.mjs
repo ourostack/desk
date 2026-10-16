@@ -43,6 +43,10 @@ export function createBrowserExtension(api, options = {}) {
   const { WebSocket: Socket = globalThis.WebSocket, sourceDigest, onStatus = () => {} } = options
   const bindings = new Map()
   const owners = new Map()
+  // This is debugger-effect custody, not command authority. Revocation removes
+  // owners immediately but cannot erase an in-flight attach/detach generation.
+  const debuggerCustody = new Map()
+  let nextDebuggerGeneration = 0
   const requests = new Set()
   const listeners = []
   let port, starting, tokenDocument, update, stopped = false
@@ -67,6 +71,11 @@ export function createBrowserExtension(api, options = {}) {
       pendingEffects: b.pending,
       unconfirmedCreates: b.unconfirmedCreates,
       uncertainTabs: [...b.uncertainTabs.values()],
+      groupingObligations: [...b.groupingObligations.values()],
+      debuggerCustody: [...debuggerCustody.values()].filter(c => c.binding === b).map(c => ({
+        tabId: c.tabId, windowId: c.record.windowId, generation: c.generation,
+        state: c.state, revoked: c.revoked, ...(c.reason ? { reason: c.reason } : {}),
+      })),
     }
   }
   function current(b, tabId, record) {
@@ -81,42 +90,75 @@ export function createBrowserExtension(api, options = {}) {
       finally { --b.pending; --totalEffects }
     })()
   }
+  function forgetDebuggerCustody(c) {
+    if (debuggerCustody.get(c.tabId) !== c) return
+    debuggerCustody.delete(c.tabId)
+    c.record.attached = false
+    c.record.sessions.clear()
+  }
+  function unknownDebuggerCustody(c, reason) {
+    c.state = "unknown"
+    c.reason = reason
+    c.record.attached = false
+    c.binding.state = "unavailable"
+    publish({ event: "context.unavailable", contextId: c.binding.id, code: reason })
+    return fail(reason)
+  }
+  function releaseDebuggerCustody(c) {
+    if (c.releasePromise) return c.releasePromise
+    // Admission fences every cooperative binding on this exact tab generation.
+    // An observed external detach while attach was pending breaks our evidence
+    // of that generation: never compensate by blindly detaching a new peer.
+    const fenced = () => debuggerCustody.get(c.tabId) === c && !c.externalBoundary &&
+      (!owners.has(c.tabId) || current(c.binding, c.tabId, c.record))
+    if (!fenced() || c.state !== "attached")
+      return Promise.reject(unknownDebuggerCustody(c, "native_debugger_generation_unconfirmed"))
+    c.state = "detaching"
+    c.record.attached = false
+    c.releasePromise = track(c.binding, async () => {
+      // No await between the final generation fence and the Chrome invocation.
+      if (!fenced()) throw unknownDebuggerCustody(c, "native_debugger_generation_unconfirmed")
+      try { await api.debugger.detach({ tabId: c.tabId }) }
+      catch { throw unknownDebuggerCustody(c, "native_debugger_detach_unconfirmed") }
+      forgetDebuggerCustody(c)
+    })
+    return c.releasePromise
+  }
   function revoke(b, tabId) {
     const record = b.tabs.get(tabId)
     if (!record || owners.get(tabId) !== b) return
-    // Invoke detach only while this exact live binding is current. A delayed
-    // result never reinstates it, and no detached-grace candidate is retained.
-    if (record.attached) {
-      record.attached = false
-      track(b, () => api.debugger.detach({ tabId })).catch(() => {
-        b.state = "unavailable"
-        publish({ event: "context.unavailable", contextId: b.id, code: "native_detach_unconfirmed" })
-      })
-    }
     owners.delete(tabId)
     b.tabs.delete(tabId)
     b.revoked.set(tabId, { windowId: record.windowId })
     b.state = "unavailable"
+    const custody = debuggerCustody.get(tabId)
+    if (custody?.binding === b && custody.record === record) {
+      custody.revoked = true
+      if (!custody.pendingAttach && custody.state === "attached")
+        releaseDebuggerCustody(custody).catch(() => {}) // Named retained obligation is published above.
+    }
     b.connection?.detachTab(tabId)
     publish({ event: "context.ownershipChanged", contextId: b.id, tabId })
   }
   async function own(b, tabId) {
     const record = b.tabs.get(tabId)
     if (!record || owners.get(tabId) !== b) throw fail("native_target_not_owned")
+    if (record.groupUnknown) throw fail("native_group_custody_unknown")
     let tab
     try { tab = await api.tabs.get(tabId) }
     catch { throw fail("native_target_unavailable") }
     if (!current(b, tabId, record)) throw fail("native_context_ownership_changed")
     if (tab.id !== tabId || tab.windowId !== record.windowId ||
-        (!record.grouping && record.groupId !== null && tab.groupId !== record.groupId)) {
+        (!record.grouping && tab.groupId !== record.groupId)) {
       revoke(b, tabId)
       throw fail("native_context_ownership_changed")
     }
     return { tab, record }
   }
   function admit(b, tab) {
-    if (!integer(tab?.id) || tab.windowId !== b.windowId || owners.has(tab.id)) throw fail("native_tab_admission_failed")
-    b.tabs.set(tab.id, { windowId: tab.windowId, groupId: null, grouping: false, attached: false, sessions: new Set() })
+    if (!integer(tab?.id) || tab.windowId !== b.windowId || owners.has(tab.id) || debuggerCustody.has(tab.id) ||
+        !Number.isSafeInteger(tab.groupId) || tab.groupId < -1) throw fail("native_tab_admission_failed")
+    b.tabs.set(tab.id, { windowId: tab.windowId, groupId: tab.groupId, grouping: false, groupUnknown: false, attached: false, sessions: new Set() })
     owners.set(tab.id, b)
   }
   function effectsAllowed(b) {
@@ -128,6 +170,8 @@ export function createBrowserExtension(api, options = {}) {
         (groupId !== undefined && groupId !== b.groupId)) throw fail("native_target_not_owned")
     const tabId = tabIds[0]
     const { record } = await own(b, tabId)
+    const obligation = { tabId, windowId: record.windowId, priorGroupId: record.groupId, state: "pending" }
+    b.groupingObligations.set(tabId, obligation)
     record.grouping = true
     try {
       const id = await api.tabs.group({ tabIds: [tabId], ...(groupId === undefined ? {} : { groupId }) })
@@ -135,9 +179,18 @@ export function createBrowserExtension(api, options = {}) {
         throw fail("native_group_unconfirmed")
       b.groupId = id
       record.groupId = id
+      obligation.attemptedGroupId = id
       const { tab } = await own(b, tabId)
       if (tab.groupId !== id) throw fail("native_group_unconfirmed")
+      b.groupingObligations.delete(tabId)
       return id
+    } catch (error) {
+      record.groupUnknown = true
+      obligation.state = "unknown"
+      b.state = "unavailable"
+      // A failed API/readback can have taken effect. Later queries or title
+      // matches cannot turn this unknown custody into permission to discard.
+      throw error
     } finally { record.grouping = false }
   }
   async function createTab(b, url) {
@@ -222,16 +275,39 @@ export function createBrowserExtension(api, options = {}) {
           effectsAllowed(b)
           if (!target || Object.keys(target).some(key => key !== "tabId") || version !== "1.3") throw fail("native_target_not_owned")
           const { record } = await own(b, target.tabId)
-          await api.debugger.attach({ tabId: target.tabId }, version)
-          await own(b, target.tabId)
+          if (!current(b, target.tabId, record)) throw fail("native_target_not_owned")
+          effectsAllowed(b)
+          if (debuggerCustody.has(target.tabId)) throw fail("native_debugger_custody_busy")
+          const custody = {
+            binding: b, record, tabId: target.tabId, generation: ++nextDebuggerGeneration,
+            state: "attaching", pendingAttach: true, revoked: false, externalBoundary: false,
+          }
+          debuggerCustody.set(target.tabId, custody)
+          try { await api.debugger.attach({ tabId: target.tabId }, version) }
+          catch { throw unknownDebuggerCustody(custody, custody.externalBoundary ?
+            "native_debugger_generation_unconfirmed" : "native_debugger_attach_unconfirmed") }
+          finally { custody.pendingAttach = false }
+          if (custody.externalBoundary)
+            throw unknownDebuggerCustody(custody, "native_debugger_generation_unconfirmed")
+          custody.state = "attached"
+          try {
+            await own(b, target.tabId)
+            if (custody.revoked || stopped || debuggerCustody.get(target.tabId) !== custody)
+              throw fail("native_target_not_owned")
+          } catch (error) {
+            b.state = "unavailable"
+            await releaseDebuggerCustody(custody)
+            throw error
+          }
           record.attached = true
         }),
         detach: target => track(b, async () => {
           const { record } = await own(b, target?.tabId)
           if (target?.sessionId || target?.targetId) throw fail("native_target_not_owned")
-          await api.debugger.detach({ tabId: target.tabId })
-          record.attached = false
-          record.sessions.clear()
+          const custody = debuggerCustody.get(target.tabId)
+          if (!custody) return
+          if (custody.binding !== b || custody.record !== record) throw fail("native_debugger_custody_busy")
+          await releaseDebuggerCustody(custody)
         }),
         sendCommand: (target, method, params = {}) => track(b, async () => {
           effectsAllowed(b)
@@ -257,13 +333,17 @@ export function createBrowserExtension(api, options = {}) {
   listen(api.tabs.onUpdated, (tabId, changes, tab) => {
     const b = owners.get(tabId), record = b?.tabs.get(tabId)
     if (record && (tab.windowId !== record.windowId ||
-        (changes.groupId !== undefined && !record.grouping && record.groupId !== null && tab.groupId !== record.groupId))) revoke(b, tabId)
+        (changes.groupId !== undefined && !record.grouping && tab.groupId !== record.groupId))) revoke(b, tabId)
   })
   if (api.tabs.onDetached) listen(api.tabs.onDetached, tabId => {
     const b = owners.get(tabId)
     if (b) revoke(b, tabId)
   })
   listen(api.tabs.onRemoved, tabId => {
+    const custody = debuggerCustody.get(tabId)
+    // An already settled attachment cannot survive its exact target's removal.
+    // Do not erase a pending effect or unknown generation on an earlier event.
+    if (custody?.state === "attached" && !custody.pendingAttach) forgetDebuggerCustody(custody)
     const b = owners.get(tabId)
     if (!b) return
     owners.delete(tabId)
@@ -277,6 +357,13 @@ export function createBrowserExtension(api, options = {}) {
     if (method === "Target.detachedFromTarget") record.sessions.delete(params?.sessionId)
   })
   listen(api.debugger.onDetach, source => {
+    const custody = debuggerCustody.get(source.tabId)
+    if (custody?.pendingAttach) {
+      custody.externalBoundary = true
+      custody.reason = "native_debugger_generation_unconfirmed"
+    } else if (custody?.state === "attached") forgetDebuggerCustody(custody)
+    // A detach API response, not this bare-tabId event, settles "detaching".
+    // An unknown generation is never silently recovered from a later event.
     const b = owners.get(source.tabId), record = b?.tabs.get(source.tabId)
     if (record) { record.attached = false; record.sessions.clear() }
   })
@@ -286,7 +373,13 @@ export function createBrowserExtension(api, options = {}) {
         tab.windowId !== b.windowId || tab.groupId !== -1 || !/^(https?:|about:blank$)/u.test(tab.url ?? "")) return
     // Supported opener admission is exact, current, same-window and inactive.
     // A foreign/manual group member without that opener is never adopted.
-    admit(b, tab)
+    try { admit(b, tab) }
+    catch {
+      b.state = "unavailable"
+      b.uncertainTabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId })
+      publish({ event: "context.unavailable", contextId: b.id, code: "native_tab_admission_failed" })
+      return
+    }
     b.admitting.add(tab.id)
     track(b, async () => {
       await own(b, tab.openerTabId)
@@ -338,7 +431,7 @@ export function createBrowserExtension(api, options = {}) {
     if (!labelValid(params.label) || !relayValid(params.relayUrl)) throw fail("native_context_parameters_invalid")
     const b = {
       id: contextId, label: params.label, state: "creating", groupId: null,
-      tabs: new Map(), revoked: new Map(), closed: new Set(), uncertainTabs: new Map(), admitting: new Set(), pending: 0, unconfirmedCreates: 0, mutating: false,
+      tabs: new Map(), revoked: new Map(), closed: new Set(), uncertainTabs: new Map(), groupingObligations: new Map(), admitting: new Set(), pending: 0, unconfirmedCreates: 0, mutating: false,
     }
     bindings.set(contextId, b)
     try {
@@ -375,7 +468,9 @@ export function createBrowserExtension(api, options = {}) {
   }
   async function discard(b) {
     if (b.pending || b.mutating || b.state === "creating") throw fail("native_context_busy", projection(b))
-    if (b.unconfirmedCreates || b.uncertainTabs.size) throw fail("native_cleanup_unconfirmed", projection(b))
+    if ([...debuggerCustody.values()].some(c => c.binding === b && c.state !== "attached"))
+      throw fail("native_debugger_cleanup_unconfirmed", projection(b))
+    if (b.unconfirmedCreates || b.uncertainTabs.size || b.groupingObligations.size) throw fail("native_cleanup_unconfirmed", projection(b))
     if (b.revoked.size) throw fail("native_context_ownership_changed", projection(b))
     b.mutating = true
     const closedTabIds = [], ids = [...b.tabs.keys()]
@@ -410,7 +505,7 @@ export function createBrowserExtension(api, options = {}) {
     await authorize(params)
     if (stopped) throw fail("native_extension_stopped")
     if (PROVIDER.has(method)) {
-      if (requests.size !== 1 || totalEffects || [...bindings.values()].some(b => b.tabs.size || b.revoked.size || b.pending || b.unconfirmedCreates || b.uncertainTabs.size || b.mutating || b.state === "creating"))
+      if (requests.size !== 1 || totalEffects || debuggerCustody.size || [...bindings.values()].some(b => b.tabs.size || b.revoked.size || b.pending || b.unconfirmedCreates || b.uncertainTabs.size || b.groupingObligations.size || b.mutating || b.state === "creating"))
         throw fail("native_update_effects_pending")
       if (!TOKEN.test(params.updateToken ?? "") || (method.endsWith(".commit") && (!update || params.updateToken !== update.token || update.committing)))
         throw fail("native_update_token_invalid")
@@ -498,7 +593,10 @@ export function createBrowserExtension(api, options = {}) {
     port = undefined
     update = undefined
     connected?.disconnect()
-    for (const b of bindings.values()) b.connection?.close("native_extension_stopped")
+    for (const b of bindings.values()) {
+      b.connection?.close("native_extension_stopped")
+      for (const id of b.tabs.keys()) revoke(b, id)
+    }
     for (const remove of listeners.splice(0)) remove()
   }
   return Object.freeze({ dispatch, start, stop })

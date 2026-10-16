@@ -68,6 +68,8 @@ All context responses use `contextId`, `state`, `label`, `groupId`, exact
 `tabs:[{tabId,windowId}]`, `revokedTabIds`, `revokedTabs`, `pendingEffects`,
 `unconfirmedCreates` and `uncertainTabs`. The latter fields are cleanup
 obligations, **not** permission to adopt or close a foreign resource.
+Projections also expose `groupingObligations` and `debuggerCustody` (below);
+zero `pendingEffects` alone is never evidence of quiescence.
 
 ## Lifetime and relay
 
@@ -80,6 +82,29 @@ explicit admissions and inactive same-window ungrouped supported owned-opener
 HTTP(S)/blank tabs can join. A manual group move never admits a foreign member.
 Moving/detaching an owned tab revokes its binding; attaching a debugger alone
 does not restore it.
+
+Membership is recorded from the actual admitted Chrome tab, including ungrouped
+`groupId:-1`; there is no wildcard initial membership. A grouping API or
+membership-readback failure retains
+`groupingObligations:[{tabId,windowId,priorGroupId,attemptedGroupId?,state}]`.
+`unknown` is non-discardable even if a later query succeeds. Presentation moves
+still revoke the old binding; neither a query nor a matching title can clear
+unknown custody or authorize closing a manually moved tab.
+
+Debugger custody is independent of command ownership:
+`debuggerCustody:[{tabId,windowId,generation,state,revoked,reason?}]`.
+Each attach reserves a live-worker generation before invocation. Revocation
+removes command authority immediately but retains attaching/detaching custody
+and fences cooperative admission of that exact Chrome identity until settlement.
+A late attach success is compensated only while the exact generation fence is
+intact; a single exact detach response settles that custody. Rejection or
+unconfirmed cleanup stays `unknown`, with a bounded reason, and blocks
+discard/update even after the last task tab disappears. An observed debugger
+detach while attach is pending breaks generation evidence: a new external
+binding must not receive a blind late bare-tab-ID detach. Unknown generations
+have no automatic title/query/event-based recovery or handoff in this kernel.
+These are in-memory current-worker fences, not Chrome atomic generation-aware
+APIs or a restart-recovery database.
 
 The exact maintained Chrome-API wire protocol remains unchanged:
 `chrome.debugger.attach/detach/sendCommand`, `chrome.tabs.create/remove`, the

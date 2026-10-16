@@ -38,6 +38,8 @@ function fixture() {
   const effects = []
   const messages = []
   const hooks = {}
+  const debuggerBindings = new Map()
+  let debuggerGeneration = 0
   const api = {
     tabs: {
       onCreated: event(), onRemoved: event(), onUpdated: event(), onDetached: event(),
@@ -66,6 +68,7 @@ function fixture() {
         await hooks.remove?.(id)
         if (!tabs.has(id)) throw new Error("No tab")
         tabs.delete(id)
+        if (debuggerBindings.delete(id)) api.debugger.onDetach.emit({ tabId: id }, "target_closed")
         effects.push(["remove", id])
         api.tabs.onRemoved.emit(id, { windowId: 7, isWindowClosing: false })
       },
@@ -88,8 +91,17 @@ function fixture() {
     },
     debugger: {
       onEvent: event(), onDetach: event(),
-      async attach(target, version) { effects.push(["attach", target, version]); await hooks.attach?.(target) },
-      async detach(target) { effects.push(["detach", target]); api.debugger.onDetach.emit(target, "canceled_by_user") },
+      async attach(target, version) {
+        effects.push(["attach", target, version])
+        await hooks.attach?.(target)
+        debuggerBindings.set(target.tabId, { generation: ++debuggerGeneration, owner: "extension" })
+      },
+      async detach(target) {
+        effects.push(["detach", target])
+        await hooks.detach?.(target)
+        debuggerBindings.delete(target.tabId)
+        api.debugger.onDetach.emit(target, "canceled_by_user")
+      },
       async sendCommand(target, method, params) {
         effects.push(["cdp", target, method, params])
         if (hooks.command) return hooks.command(target, method, params)
@@ -126,7 +138,7 @@ function fixture() {
       return eventually(() => this.sent.find(m => m.id === id))
     }
   }
-  return { api, tabs, groups, sockets, effects, hooks, messages, Socket }
+  return { api, tabs, groups, sockets, effects, hooks, messages, Socket, debuggerBindings }
 }
 
 async function eventually(read) {
@@ -726,4 +738,217 @@ test("signed-in creation never falls back to an incognito normal window", async 
   const refused = await onlyPrivate.engine.dispatch(create())
   assert.equal(refused.error?.code, "native_normal_window_unavailable")
   assert.deepEqual(onlyPrivate.effects, [])
+})
+
+// K-001: a completed foreign move after a failed group is not the Chrome
+// conditional-remove race. No remove may even be invoked for that tab.
+test("K001 failed grouping before effect cannot leave an ungrouped tab as wildcard ownership", async () => {
+  const f = await kernel()
+  f.hooks.group = () => { throw new Error("group rejected before effect") }
+  assert.ok((await f.engine.dispatch(create())).error)
+  f.hooks.group = undefined
+  const peer = await f.engine.dispatch(create(B))
+  assert.ok(peer.result)
+  await f.api.tabs.group({ groupId: peer.result.groupId, tabIds: [10] })
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.revokedTabIds, [10])
+  const discard = await f.engine.dispatch(request("context.discard", A))
+  assert.ok(discard.error)
+  assert.equal(f.tabs.has(10), true)
+  assert.equal(f.tabs.has(11), true)
+  assert.equal(f.effects.some(effect => effect[0] === "remove"), false)
+})
+
+test("K001 rejected grouping after effect retains non-discardable unknown custody even without event rediscovery", async () => {
+  const f = fixture(), group = f.api.tabs.group
+  f.api.tabs.group = async args => { await group(args); throw new Error("group result lost after effect") }
+  const k = await kernel(f)
+  assert.ok((await k.engine.dispatch(create())).error)
+  const status = await k.engine.dispatch(request("context.status", A))
+  assert.equal(status.result.groupingObligations?.[0]?.state, "unknown")
+  assert.equal((await k.engine.dispatch(request("context.discard", A))).error?.code, "native_cleanup_unconfirmed")
+  f.api.tabs.group = group
+  const peer = await k.engine.dispatch(create(B))
+  assert.ok(peer.result)
+  await f.api.tabs.group({ groupId: peer.result.groupId, tabIds: [10] })
+  assert.ok((await k.engine.dispatch(request("context.discard", A))).error)
+  assert.equal(f.tabs.has(10), true)
+  assert.equal(f.effects.some(effect => effect[0] === "remove"), false)
+})
+
+test("K001 failed membership readback never authorizes discard from a later successful query", async () => {
+  const f = fixture(), get = f.api.tabs.get
+  let grouped = false
+  const group = f.api.tabs.group
+  f.api.tabs.group = async args => { const id = await group(args); grouped = true; return id }
+  f.api.tabs.get = async id => {
+    if (id === 10 && grouped) throw new Error("readback unavailable")
+    return get(id)
+  }
+  const k = await kernel(f)
+  assert.ok((await k.engine.dispatch(create())).error)
+  f.api.tabs.get = get
+  assert.equal((await k.engine.dispatch(request("context.discard", A))).error?.code, "native_cleanup_unconfirmed")
+  assert.equal((await k.engine.dispatch(request("context.status", A))).result.groupingObligations?.[0]?.state, "unknown")
+  assert.equal(f.tabs.has(10), true)
+  assert.equal(f.effects.some(effect => effect[0] === "remove"), false)
+})
+
+test("K002 late attach success after revocation detaches the exact fenced custody and preserves the peer", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  assert.ok((await f.engine.dispatch(create(B))).result)
+  await f.sockets[1].command("chrome.debugger.attach", [{ tabId: 11 }, "1.3"])
+  const peerGeneration = f.debuggerBindings.get(11).generation
+  let finish
+  f.hooks.attach = target => target.tabId === 10 ? new Promise(resolve => { finish = resolve }) : undefined
+  const attaching = f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  await eventually(() => finish)
+  await f.api.tabs.group({ tabIds: [10] })
+  const pending = await f.engine.dispatch(request("context.status", A))
+  assert.ok(pending.result.pendingEffects > 0)
+  finish()
+  assert.ok((await attaching).error)
+  assert.equal(f.debuggerBindings.has(10), false, "late successful physical attach must not be leaked")
+  assert.equal(f.debuggerBindings.get(11).generation, peerGeneration)
+  assert.deepEqual(f.effects.filter(effect => effect[0] === "detach").map(effect => effect[1].tabId), [10])
+  assert.equal((await f.engine.dispatch(request("context.status", A))).result.debuggerCustody?.length, 0)
+})
+
+test("K002 late attach rejection remains a named unknown obligation and fences cooperative admission", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let finish
+  f.hooks.attach = () => new Promise((resolve, reject) => { finish = () => reject(new Error("attach result unknown")) })
+  const attaching = f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  await eventually(() => finish)
+  await f.api.tabs.group({ tabIds: [10] })
+  finish()
+  assert.ok((await attaching).error)
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.equal(status.result.debuggerCustody?.[0]?.state, "unknown")
+  assert.equal(status.result.debuggerCustody?.[0]?.reason, "native_debugger_attach_unconfirmed")
+  // A Chrome-identity replay/returned existing identity is not a new admitted
+  // resource. Exercise the real factory's common admission fence, not a fake
+  // test-only handoff API.
+  f.api.tabs.create = async () => ({ ...f.tabs.get(10) })
+  const attemptedPeer = await f.engine.dispatch(create(B))
+  assert.ok(attemptedPeer.error)
+  assert.equal(f.effects.filter(effect => effect[0] === "attach").length, 1)
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+})
+
+test("K002 failed detach after late attach stays explicit and blocks discard and reload", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let finish
+  f.hooks.attach = () => new Promise(resolve => { finish = resolve })
+  f.hooks.detach = () => { throw new Error("detach result unknown") }
+  const attaching = f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  await eventually(() => finish)
+  await f.api.tabs.group({ tabIds: [10] })
+  finish()
+  assert.ok((await attaching).error)
+  assert.equal(f.debuggerBindings.has(10), true)
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.equal(status.result.debuggerCustody?.[0]?.state, "unknown")
+  assert.equal(status.result.debuggerCustody?.[0]?.reason, "native_debugger_detach_unconfirmed")
+  assert.ok((await f.engine.dispatch(request("context.discard", A))).error)
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+  assert.equal(f.effects.some(effect => effect[0] === "remove"), false)
+})
+
+test("K002 observed debugger generation boundary forbids a blind late detach of a new peer", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let finish
+  f.api.debugger.attach = async target => {
+    f.debuggerBindings.set(target.tabId, { owner: "old-extension", generation: 100 })
+    await new Promise(resolve => { finish = resolve })
+  }
+  const attaching = f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  await eventually(() => finish)
+  await f.api.tabs.group({ tabIds: [10] })
+  f.api.debugger.onDetach.emit({ tabId: 10 }, "replaced_with_devtools")
+  f.debuggerBindings.set(10, { owner: "external-peer", generation: 101 })
+  finish()
+  assert.ok((await attaching).error)
+  assert.deepEqual(f.debuggerBindings.get(10), { owner: "external-peer", generation: 101 })
+  assert.equal(f.effects.some(effect => effect[0] === "detach"), false)
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.equal(status.result.debuggerCustody?.[0]?.state, "unknown")
+  assert.equal(status.result.debuggerCustody?.[0]?.reason, "native_debugger_generation_unconfirmed")
+})
+
+test("K002 pending detach keeps its admission fence and update barrier until settlement", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let attachDone, detachDone
+  f.hooks.attach = () => new Promise(resolve => { attachDone = resolve })
+  f.hooks.detach = () => new Promise(resolve => { detachDone = resolve })
+  const attaching = f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  await eventually(() => attachDone)
+  await f.api.tabs.group({ tabIds: [10] })
+  attachDone()
+  try {
+    await eventually(() => detachDone)
+    const status = await f.engine.dispatch(request("context.status", A))
+    assert.equal(status.result.debuggerCustody?.[0]?.state, "detaching")
+    assert.ok(status.result.pendingEffects > 0)
+    f.api.tabs.create = async () => ({ ...f.tabs.get(10) })
+    assert.ok((await f.engine.dispatch(create(B))).error)
+    assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+  } finally {
+    detachDone?.()
+    await attaching
+  }
+  assert.equal(f.debuggerBindings.has(10), false)
+})
+
+test("K002 terminal stop also compensates a late successful attach without retaining command authority", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let finish
+  f.hooks.attach = () => new Promise(resolve => { finish = resolve })
+  f.sockets[0].input({ id: "attach-before-stop", method: "chrome.debugger.attach", params: [{ tabId: 10 }, "1.3"] })
+  await eventually(() => finish)
+  // Observe the physical resource and request outcome directly: the closed
+  // stock socket cannot deliver an acknowledgment after stop.
+  f.engine.stop()
+  finish()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(f.debuggerBindings.has(10), false)
+})
+
+test("K002 unknown custody cannot appear quiescent after the last task tab disappears", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  f.hooks.attach = () => { throw new Error("attach outcome unconfirmed") }
+  assert.ok((await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])).error)
+  await f.api.tabs.remove(10)
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.tabs, [])
+  assert.deepEqual(status.result.revokedTabIds, [])
+  assert.equal(status.result.pendingEffects, 0)
+  assert.equal(status.result.debuggerCustody[0].state, "unknown")
+  assert.equal((await f.engine.dispatch(request("context.discard", A))).error?.code, "native_debugger_cleanup_unconfirmed")
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+})
+
+test("K002 completed revocation between ownership await and attach invocation prevents the attach", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  const get = f.api.tabs.get
+  let moved = false
+  f.api.tabs.get = async id => {
+    const tab = await get(id)
+    if (id === 10 && !moved) {
+      moved = true
+      queueMicrotask(() => queueMicrotask(() => { void f.api.tabs.group({ tabIds: [10] }) }))
+    }
+    return tab
+  }
+  const attaching = await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  assert.ok(attaching.error)
+  assert.equal(f.effects.some(effect => effect[0] === "attach"), false)
 })
