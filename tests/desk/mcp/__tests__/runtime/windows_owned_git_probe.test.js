@@ -926,6 +926,57 @@ test("channel portable retention signal disposition cannot bypass deadline PID o
     }
 })
 
+// Test-only MODEL bindings; evaluate the actual functions with real portable fs/guard,
+// without exposing a workspace/platform override on the production setup function.
+function shimReadinessSetupModel(workspace) {
+  return new Function("fs", "path", "process", "shimReadinessWorkspace", "namedRetentionGuard", "namedRetentionRoles",
+    `return { setup: ${setupShimReadinessFixture.toString()}, construct: ${makeNamedRetention.toString()} }`
+  )(fs, path, { platform: "win32", pid: process.pid }, workspace, namedRetentionGuard, namedRetentionRoles)
+}
+test("channel portable predecessor actual setup then exclusive staging construction has no namespace collision MODEL", () => {
+  const { repo, nodes } = retentionFixture("shim-predecessor")
+  const model = shimReadinessSetupModel(repo), fixture = model.setup()
+  const reservedAbsent = !fs.existsSync(path.join(repo, "owned-git-probe-output"))
+  let staging
+  assert.doesNotThrow(() => { staging = model.construct(repo, { nodes }) })
+  assert.equal(reservedAbsent, true)
+  assert.equal(fs.statSync(fixture).isDirectory(), true)
+  assert.equal(staging.root, path.join(repo, "owned-git-probe-output"))
+  assert.equal(fs.existsSync(staging.privateRoot), false)
+  fs.writeFileSync(path.join(staging.root, "sentinel"), "first construction retained")
+  assert.throws(() => model.construct(repo, { nodes }), { code: "EEXIST" })
+  assert.equal(fs.readFileSync(path.join(staging.root, "sentinel"), "utf8"), "first construction retained")
+})
+test("channel portable predecessor setup cannot adopt or alter preexisting reserved staging MODEL", () => {
+  const { repo, nodes } = retentionFixture("shim-reserved")
+  const reserved = path.join(repo, "owned-git-probe-output")
+  fs.mkdirSync(reserved); fs.writeFileSync(path.join(reserved, "sentinel"), "foreign staging")
+  const model = shimReadinessSetupModel(repo)
+  model.setup()
+  assert.throws(() => model.construct(repo, { nodes }), { code: "EEXIST" })
+  assert.deepEqual(fs.readdirSync(reserved), ["sentinel"])
+  assert.equal(fs.readFileSync(path.join(reserved, "sentinel"), "utf8"), "foreign staging")
+})
+test("channel portable shim setup refuses caller selected reserved parent and descendants MODEL", () => {
+  const { repo } = retentionFixture("shim-no-root-override")
+  const model = shimReadinessSetupModel(repo), reserved = path.join(repo, "owned-git-probe-output")
+  for (const forbidden of [reserved, path.join(reserved, "fixture"), path.join(reserved, "evidence"),
+    path.join(reserved, "safe-evidence")]) assert.throws(() => model.setup(forbidden))
+  assert.equal(fs.existsSync(reserved), false)
+  const fixture = model.setup()
+  assert.equal(path.dirname(path.dirname(fixture)), repo)
+  assert.throws(() => model.setup(), { code: "EEXIST" })
+})
+test("channel portable shim setup refuses existing foreign fixture parent without reuse MODEL", () => {
+  const { repo } = retentionFixture("shim-foreign-parent")
+  const parent = path.join(repo, "owned-git-shim-readiness-fixtures")
+  fs.mkdirSync(parent); fs.writeFileSync(path.join(parent, "sentinel"), "foreign fixture parent")
+  assert.throws(() => shimReadinessSetupModel(repo).setup(), { code: "EEXIST" })
+  assert.deepEqual(fs.readdirSync(parent), ["sentinel"])
+  assert.equal(fs.readFileSync(path.join(parent, "sentinel"), "utf8"), "foreign fixture parent")
+  assert.equal(fs.existsSync(path.join(repo, "owned-git-probe-output")), false)
+})
+
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
   const hex = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
@@ -1195,11 +1246,22 @@ test("result-channel provenance never accepts a control role", () => {
   assert.throws(() => decoder("shim").push(frame({ role: "owner" })), /role/)
 })
 
-test("real shim stays ready without starting a command before explicit start", { timeout: 5000 }, async () => {
-  const root = process.platform === "win32"
-    ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../owned-git-probe-output/fixture")
-    : "/Users/microsoft/.copilot/session-state/8f8c7288-cd47-4544-8dcf-0ad9bbadfeb5/files/owned-git-probe/fixture"
+const shimReadinessWorkspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..")
+function setupShimReadinessFixture() {
+  if (arguments.length) throw Error("shim fixture setup accepts no caller paths")
+  if (process.platform === "win32") {
+    const parent = path.join(shimReadinessWorkspace, "owned-git-shim-readiness-fixtures")
+    fs.mkdirSync(parent)
+    const root = path.join(parent, "ready-" + process.pid + "-" + Date.now())
+    fs.mkdirSync(root)
+    return root
+  }
+  const root = "/Users/microsoft/.copilot/session-state/8f8c7288-cd47-4544-8dcf-0ad9bbadfeb5/files/owned-git-probe/fixture"
   fs.mkdirSync(root, { recursive: true })
+  return root
+}
+test("real shim stays ready without starting a command before explicit start", { timeout: 5000 }, async () => {
+  const root = setupShimReadinessFixture()
   const source = path.join(root, "probe-shim.cjs")
   const marker = path.join(root, "ready-" + process.pid + "-" + Date.now())
   fs.writeFileSync(source, shimSource)
