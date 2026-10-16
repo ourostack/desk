@@ -68,7 +68,7 @@ are separate later units.
 Preparation deduplicates concurrent callers, rechecks account access and freezes
 repository/installation/author authority for that manager. UID reservations
 survive preparation failures and manager replacement within the process.
-`launch` returns a relay-compatible ChildProcess whose `kill("SIGTERM"|"SIGKILL")`
+`launch` returns a relay-compatible service handle whose `kill("SIGTERM"|"SIGKILL")`
 uses an inherited owning-UID supervisor channel, not a gateway PID signal.
 `git` rejects private cwd/repository overrides. `close` stops owned children,
 runs Desk's own sync lock/rebase/push loop, and only then closes its private token
@@ -121,9 +121,19 @@ host-package upgrades and product issue filing are unavailable in the private
 customer context and return an explicit unavailable/not-filed reason before
 spawning or claiming host-side work.
 
-These invocation changes do not implement service/MCP descendant retirement.
-That remains a separate qualification gate; gateway-operation retirement
-below must not be mistaken for proof that MCP service descendants retire.
+MCP services also run below an owning-UID `tini -s` and a retained worker-session
+leader. The service handle's stdout/stderr bytes and protocol close are relayed
+in order over inherited IPC; protocol EOF is not a synthetic guardian exit.
+Natural MCP exit and individual session signals leave the guardian tracked
+while descendants remain. In particular, closing one session does not signal
+the group containing readiness/sync activity another session may still use.
+Realm close retires all of its service groups, then positively confirms each
+guardian's quiescence before final push or broker close. Detached writers may
+finish within the five-second retirement watchdog; an escaped writer that
+cannot retire in time fails closed instead of being blindly PID-signalled.
+The service-close boundary retains its existing ten-second deadline. Failed,
+missing or malformed retirement proof is sticky preservation, even if the MCP
+protocol already ended or descendants eventually finish later.
 
 Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
 a fresh worker session. A worker's result or exit is not retirement proof:
@@ -207,6 +217,21 @@ Git fetch. It checks close **after** timeout rejection, cleanup only after
 quiescence, and retained failed-preparation state when descendants remain.
 These cases exercise the actual 60-second deadline, not a shorter test-only
 timeout; they run concurrently within a 100-second fixture bound.
+
+For real service consumption, use the cached production dependency image with
+a COPY-only source overlay and also copy `runtime-service-native.js`.
+`DESK_NATIVE_SERVICES=1` selects actual MCP SDK initialize/status/save/reindex/
+search, native SQLite inspection, automatic Git sync, natural protocol EOF,
+explicit termination, same-realm concurrent sessions and a neighboring realm.
+An actual MCP-triggered Git hook starts a detached writer with ignored stdio;
+successful realm close must preserve its commit on the loopback origin.
+Adding `DESK_SERVICE_UNPROVEN=1` instead checks the real five-second retirement
+failure, retained broker/root and sticky repeated refusal while the escaped
+writer finishes later. These service cases have a 180-second outer fixture
+guard; production operation/push/retirement budgets are unchanged. They use
+arbitrary kernel UIDs absent from passwd, not fixture NSS entries or native
+dependency substitutes. This is two-realm single-configured-repository
+qualification, not multirepository admission or cloud deployment qualification.
 
 ## Build the image
 

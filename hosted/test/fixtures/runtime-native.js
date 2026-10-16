@@ -125,6 +125,21 @@ for (const accountId of ["account-a", "account-b"]) {
   await store.putBinding(accountId, binding);
 }
 const config = { identity: {}, repo: binding.repo, pluginDir: "/app/plugins/desk", appKeyFile: key };
+if (process.env.DESK_NATIVE_SERVICES === "1") {
+  try {
+    const { runServiceCases } = await import("./runtime-service-native.js");
+    const serviceCases = await runServiceCases({
+      config, store, binding, root,
+      originSubjects: () => fixtureGit(bare, ["log", "--format=%s"]),
+      originRefs: () => fixtureGit(bare, ["show-ref"]),
+    });
+    console.log(JSON.stringify({ serviceCases }));
+    process.exit(0);
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  }
+}
 chmodSync(root, 0o777);
 assert.throws(() => runtime.createAccountRuntime({ config, store, rootDir: join(root, "unsafe-parent") }), /protected|confined/);
 chmodSync(root, 0o711);

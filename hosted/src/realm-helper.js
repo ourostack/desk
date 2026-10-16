@@ -30,7 +30,7 @@ function directChildren(pid) {
   return children;
 }
 
-function superviseOperation(child, guardian) {
+function superviseOperation(child, guardian, service = false) {
   // A dedicated subreaper retains even setsid/detached Git descendants when
   // their parent dies. It stays alive until this supervisor certifies silence.
   let result;
@@ -57,7 +57,8 @@ function superviseOperation(child, guardian) {
     only(guardian, [process.pid]);
   const cancel = () => {
     cancelled = true;
-    code = 1;
+    code = service ? 0 : 1;
+    deadline ??= Date.now() + 5_000;
     // Only signal the fresh session while its exact ChildProcess leader is
     // still ours and unreaped. Never retry a numeric group after leader exit.
     if (!killed && alive()) {
@@ -91,12 +92,27 @@ function superviseOperation(child, guardian) {
   const retire = () => {
     if (finishing) return;
     if (!timer) {
-      deadline = Date.now() + 5_000;
+      if (!service) deadline = Date.now() + 5_000;
       timer = setInterval(check, 50);
     }
     check();
   };
   child.on("message", message => {
+    if (service && message?.serviceClosed === true) {
+      if (process.connected) process.send(message);
+      completed = true;
+      code = 0;
+      retire();
+      return;
+    }
+    if (service && message && Object.hasOwn(message, "serviceMessage")) {
+      if (process.connected) process.send(message);
+      return;
+    }
+    if (service && (typeof message?.serviceStdout === "string" || typeof message?.serviceStderr === "string")) {
+      if (process.connected) process.send(message);
+      return;
+    }
     if (!message.operationFinished) return;
     completed = true;
     if (!cancelled) code = message.code;
@@ -108,26 +124,27 @@ function superviseOperation(child, guardian) {
   child.once("close", () => { workerClosed = true; retire(); });
   process.on("message", message => {
     if (["SIGTERM", "SIGKILL"].includes(message.signal)) { cancel(); retire(); }
+    else if (service && child.connected) child.send(message, () => {});
   });
   process.once("disconnect", () => { cancel(); retire(); });
 }
 
 if (process.env.DESK_RUNTIME_WORKER !== "1") {
   const launching = job.action === "launch";
-  const supervised = !launching && job.action !== "broker";
+  const supervised = job.action !== "broker";
   const guardian = process.ppid;
   if (supervised) {
     assertChildKernelBoundary({ status: readFileSync(`/proc/${guardian}/status`, "utf8"), uid: process.getuid() });
     if (readFileSync(`/proc/${guardian}/comm`, "utf8").trim() !== "tini") throw new Error("Missing operation subreaper.");
   }
-  const child = spawn(process.execPath, launching ? job.args : [fileURLToPath(import.meta.url)], {
-    cwd: launching ? env.DESK : root,
-    env: launching ? env : { ...env, DESK_RUNTIME_JOB: JSON.stringify(job), DESK_RUNTIME_WORKER: "1" },
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+    cwd: root,
+    env: { ...env, DESK_RUNTIME_JOB: JSON.stringify(job), DESK_RUNTIME_WORKER: "1" },
     stdio: ["inherit", "inherit", "inherit", "ipc"],
     detached: supervised,
   });
   if (supervised) {
-    superviseOperation(child, guardian);
+    superviseOperation(child, guardian, launching);
   } else {
     let ended = false;
     let requestedSignal;
@@ -158,6 +175,39 @@ if (process.env.DESK_RUNTIME_WORKER !== "1") {
   try {
     let result;
     switch (job.action) {
+      case "launch": {
+        const child = spawn(process.execPath, job.args, {
+          cwd: env.DESK, env, stdio: ["pipe", "pipe", "pipe", "ipc"],
+        });
+        process.stdin.pipe(child.stdin);
+        child.stdin.on("error", error => {
+          if (!["EPIPE", "ERR_STREAM_DESTROYED"].includes(error.code)) throw error;
+        });
+        child.stdout.on("data", chunk => {
+          if (process.connected) process.send({ serviceStdout: chunk.toString("base64") });
+        });
+        child.stderr.on("data", chunk => {
+          if (process.connected) process.send({ serviceStderr: chunk.toString("base64") });
+        });
+        let ended = false;
+        child.on("message", message => {
+          if (process.connected) process.send({ serviceMessage: message });
+        });
+        child.once("error", () => {
+          if (process.connected) process.send({ serviceClosed: true, code: 1, signal: null });
+        });
+        child.once("close", (code, signal) => {
+          ended = true;
+          finalCode = 0;
+          if (process.connected) process.send({ serviceClosed: true, code, signal });
+        });
+        process.on("message", message => {
+          if (ended) return;
+          if (["SIGTERM", "SIGKILL"].includes(message.serviceSignal)) child.kill(message.serviceSignal);
+          else if (Object.hasOwn(message, "serviceMessage") && child.connected) child.send(message.serviceMessage, () => {});
+        });
+        break;
+      }
       case "init":
         for (const name of ["clone", "home", "tmp", "config", "cache", "data", "state"]) {
           mkdirSync(join(root, name), { mode: 0o700 });
@@ -202,8 +252,8 @@ if (process.env.DESK_RUNTIME_WORKER !== "1") {
           await runPushWorker({
             root: env.DESK, env, debounceMs: 0,
             spawnGit(command, args, options) {
-              if (command !== "git" || args[0] !== "-C" || args[1] !== env.DESK) throw new Error("Invalid desk push context.");
-              return spawnSync("git", args.slice(2), { ...options, cwd: env.DESK, env, timeout: Math.max(1, deadline - Date.now()) });
+              if (command !== "git" || options.cwd !== env.DESK) throw new Error("Invalid desk push context.");
+              return spawnSync("git", args, { ...options, cwd: env.DESK, env, timeout: Math.max(1, deadline - Date.now()) });
             },
             fileProblem: () => {},
           });
@@ -220,7 +270,7 @@ if (process.env.DESK_RUNTIME_WORKER !== "1") {
       default:
         throw new Error("Unknown owning-UID operation.");
     }
-    if (job.action !== "broker") {
+    if (!["broker", "launch"].includes(job.action)) {
       finish(0, result);
     }
   } catch (error) {

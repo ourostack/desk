@@ -4,6 +4,7 @@ import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync } from "node:f
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertGatewayKernelBoundary, createUidAllocator, isolatedDeskEnv, isolationArgs } from "./isolation.js";
+import { serviceHandle } from "./service-lifetime.js";
 
 const HELPER = fileURLToPath(new URL("./realm-helper.js", import.meta.url));
 const allocateUid = createUidAllocator();
@@ -31,7 +32,7 @@ function protectedAncestors(path) {
 // One supervisor owns one exact ChildProcess generation. Signals travel over
 // its inherited IPC channel, never through a gateway kill(pid) or PID lookup.
 function launch(realm, env, job) {
-  const supervised = !["launch", "broker"].includes(job.action);
+  const supervised = job.action !== "broker";
   const child = spawn("/usr/bin/setpriv", isolationArgs({
     uid: realm.uid,
     command: supervised ? "/usr/bin/tini" : process.execPath,
@@ -51,7 +52,7 @@ function launch(realm, env, job) {
   return child;
 }
 
-function completion(child, timeoutMs = 60_000, requireRetirement = false) {
+export function completion(child, timeoutMs = 60_000, requireRetirement = false) {
   return new Promise((resolve, reject) => {
     let result;
     let retired = !requireRetirement;
@@ -64,17 +65,20 @@ function completion(child, timeoutMs = 60_000, requireRetirement = false) {
       quiescent: retired,
     });
     const stopTimers = () => { clearTimeout(timer); clearTimeout(retirementTimer); };
-    const timer = setTimeout(() => {
+    const timer = timeoutMs === null ? undefined : setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
       if (requireRetirement) retirementTimer = setTimeout(() => reject(failure()), 5_000);
     }, timeoutMs);
     child.on("message", message => {
+      if (!message || typeof message !== "object") return;
       if (Object.hasOwn(message, "result")) result = message.result;
-      if (requireRetirement && message.retired === true && message.quiescent === true) retired = true;
-      if (requireRetirement && message.retired === false) {
-        stopTimers();
-        reject(failure());
+      if (requireRetirement && Object.hasOwn(message, "retired")) {
+        retired = message.retired === true && message.quiescent === true;
+        if (!retired) {
+          stopTimers();
+          reject(failure());
+        }
       }
     });
     child.once("disconnect", () => {
@@ -224,10 +228,15 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
               arg === "-C" || arg.startsWith("--root"))) {
           throw new Error("Hosted desk launch arguments must contain public context only.");
         }
-        const child = launch(realm, env, { action: "launch", args });
-        children.add(child);
-        child.once("close", () => children.delete(child));
-        return child;
+        const guardian = launch(realm, env, { action: "launch", args });
+        const done = completion(guardian, null, true);
+        const entry = { guardian, done };
+        children.add(entry);
+        done.then(() => children.delete(entry), error => {
+          stopped = true;
+          preservationFailures.set(accountId, { error, child: guardian });
+        });
+        return serviceHandle(guardian);
       },
       git,
       push() {
@@ -241,10 +250,15 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
         if (closePromise) return closePromise;
         stopped = true;
         closePromise = (async () => {
-          await Promise.all([...children].map(async child => {
-            const done = completion(child, 10_000);
-            child.kill("SIGTERM");
-            await done;
+          await Promise.all([...children].map(async ({ guardian, done }) => {
+            const retirement = completion(guardian, 10_000, true);
+            guardian.kill("SIGTERM");
+            try {
+              await Promise.all([done, retirement]);
+            } catch (error) {
+              preservationFailures.set(accountId, { error, child: guardian });
+              throw error;
+            }
           }));
           await Promise.all([...operations]);
           if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
