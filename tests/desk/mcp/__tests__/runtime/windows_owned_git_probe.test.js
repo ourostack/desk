@@ -201,6 +201,60 @@ test("channel portable stderr tail keeps exactly the last65536 bytes of an overs
   assert.equal(value.subarray(-3).toString(), "END"); assert.equal(value.includes(Buffer.from("old")), false)
   assert.equal(core.tail(Buffer.from("abc"), Buffer.from("def")).toString(), "abcdef")
 })
+test("channel portable ROOT fault bytes remain bounded and force real parser refusal", () => {
+  const core = channelPortable()
+  for (const [kind, hex] of [["partial-header", "0800"], ["partial-body", "080000007b"],
+    ["trailing-byte", "ff"], ["malformed", "010000007b"], ["oversized", "fd3f0000"]]) {
+    const bytes = [], callbacks = []
+    const out = core.writer({ write: (b, cb) => { bytes.push(Buffer.from(b)); callbacks.push(cb) }, end: () => {} })
+    assert.equal(typeof out.fault, "function")
+    out.fault(kind)
+    assert.equal(Buffer.concat(bytes).toString("hex"), hex)
+    assert.equal(out.diagnostic().frames, 1)
+    out.send({ type: "bounded-second" })
+    assert.throws(() => out.fault(kind), /queue/)
+    const parse = core.parser(() => {})
+    assert.throws(() => { parse.push(bytes[0]); parse.end() })
+    callbacks.shift()(); callbacks.shift()()
+    assert.equal(out.diagnostic().frames, 0)
+  }
+})
+test("channel portable private evidence gate rejects foreign or incomplete native preparation", () => {
+  const core = channelPortable()
+  assert.equal(typeof core.artifactGate, "function")
+  const gate = core.artifactGate(portableBinding)
+  assert.throws(() => gate.requireReady(), /private/)
+  for (const patch of [{ generation: "0".repeat(64) }, { privateRootProtected: false },
+    { payloadPlaceholderProtected: false }, { stage: "ready" }]) {
+    assert.equal(gate.observe({ ...portableBinding, role: "owner", stage: "private-root-protected",
+      privateRootProtected: true, payloadPlaceholderProtected: true, ...patch }), false)
+    assert.throws(() => gate.requireReady(), /private/)
+  }
+  assert.equal(gate.observe({ ...portableBinding, role: "owner", stage: "private-root-protected",
+    privateRootProtected: true, payloadPlaceholderProtected: true }), true)
+  gate.requireReady()
+})
+test("channel portable launch writer cannot create files or write before native protection", () => {
+  const core = channelPortable()
+  assert.equal(typeof core.preparedFileWrite, "function")
+  const files = new Map([["reserved", Buffer.alloc(0)]])
+  let open = false
+  const io = {
+    openSync(name, flags) { assert.equal(flags, "r+"); if (!files.has(name)) throw Error("ENOENT"); open = name; return 1 },
+    fstatSync() { return { isFile: () => true, size: files.get(open).length } },
+    writeFileSync(_fd, bytes) { files.set(open, Buffer.from(bytes)) },
+    fsyncSync() {}, closeSync() { open = false },
+  }
+  const gate = core.artifactGate(portableBinding)
+  assert.throws(() => core.preparedFileWrite(io, "reserved", Buffer.from("abc"), gate), /private/)
+  assert.equal(open, false); assert.equal(files.get("reserved").length, 0)
+  gate.observe({ ...portableBinding, role: "owner", stage: "private-root-protected",
+    privateRootProtected: true, payloadPlaceholderProtected: true })
+  core.preparedFileWrite(io, "reserved", Buffer.from("abc"), gate)
+  assert.equal(files.get("reserved").toString(), "abc"); assert.equal(open, false)
+  assert.throws(() => core.preparedFileWrite(io, "missing", Buffer.from("abc"), gate), /ENOENT/)
+  assert.equal(files.has("missing"), false)
+})
 
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
@@ -262,13 +316,24 @@ function channelCore({ timingSafeEqual }) {
         pump()
       })
     }
+    function enqueue(buffer) {
+      if (finishing || ended) { buffer.fill(0); throw Error("closed writer") }
+      if (queue.length >= 2) { buffer.fill(0); throw Error("outbound queue full") }
+      if (bytes + buffer.length > 32768) { buffer.fill(0); throw Error("outbound queue byte bound") }
+      queue.push(buffer); bytes += buffer.length; pump()
+    }
+    function available() {
+      if (finishing || ended) throw Error("closed writer")
+      if (queue.length >= 2) throw Error("outbound queue full")
+    }
     return {
-      send(value) {
-        if (finishing || ended) throw Error("closed writer")
-        if (queue.length >= 2) throw Error("outbound queue full")
-        const buffer = encode(value)
-        if (bytes + buffer.length > 32768) { buffer.fill(0); throw Error("outbound queue byte bound") }
-        queue.push(buffer); bytes += buffer.length; pump()
+      send(value) { available(); enqueue(encode(value)) },
+      fault(kind) {
+        available()
+        const hex = { "partial-header": "0800", "partial-body": "080000007b",
+          "trailing-byte": "ff", malformed: "010000007b", oversized: "fd3f0000" }[kind]
+        if (!hex) throw Error("unknown diagnostic wire fault")
+        enqueue(Buffer.from(hex, "hex"))
       },
       finish() { if (finishing || ended) throw Error("closed writer"); finishing = true; pump() },
       diagnostic: () => ({ frames: queue.length, bytes, busy, finishing, ended }),
@@ -332,7 +397,31 @@ function channelCore({ timingSafeEqual }) {
     const latest = chunk.subarray(-65536), take = Math.min(previous.length, 65536 - latest.length)
     return Buffer.concat([previous.subarray(previous.length - take), latest], take + latest.length)
   }
-  return { encode, parser, writer, rootState, resultBoundary, downstreamEnvironment, tail }
+  function artifactGate(binding) {
+    let ready = false
+    return {
+      observe(event) {
+        if (event.protocol !== binding.protocol || event.generation !== binding.generation ||
+            event.preparationDigest !== binding.preparationDigest || event.role !== "owner" ||
+            event.stage !== "private-root-protected" || event.privateRootProtected !== true ||
+            event.payloadPlaceholderProtected !== true) return false
+        ready = true; return true
+      },
+      requireReady() { if (!ready) throw Error("private native preparation not confirmed") },
+    }
+  }
+  function preparedFileWrite(io, filename, bytes, gate) {
+    gate.requireReady()
+    if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 1048576) throw Error("payload bound")
+    const fd = io.openSync(filename, "r+")
+    try {
+      const stat = io.fstatSync(fd)
+      if (!stat.isFile() || stat.size !== 0) throw Error("reserved payload changed")
+      io.writeFileSync(fd, bytes); io.fsyncSync(fd)
+    } finally { io.closeSync(fd) }
+  }
+  return { encode, parser, writer, rootState, resultBoundary, downstreamEnvironment, tail,
+    artifactGate, preparedFileWrite }
 }
 test("calibration portable preload options pin exact quoted forward-slash bytes", () => {
   const options = observationOptions('D:\\Probe Public\\observation preload.cjs', path.win32.resolve)
@@ -1675,8 +1764,13 @@ function execute() {
       length: value.input === null ? 0 : value.input.length, written: bytes, error: inputError };
     const detail = { command: { state: spawnError ? "spawn_error" : "exited", ...outcome, spawnError }, input: inputFinal,
       runtime: { version: process.version, execPath: process.execPath } };
-    send("RESULT", { detail: Buffer.from(JSON.stringify(detail)).toString("base64") });
-    out.finish(); // Result is final; actual socket EOF precedes parent's SEAL.
+    const encoded = Buffer.from(JSON.stringify(detail)).toString("base64");
+    send("RESULT", { detail: encoded });
+    if (diagnosticMode === "root-extra-result-after-result") send("RESULT", { detail: encoded });
+    const fault = { "root-malformed-after-result": "malformed", "root-trailing-byte-after-result": "trailing-byte",
+      "root-partial-header-after-result": "partial-header", "root-partial-body-after-result": "partial-body" }[diagnosticMode];
+    if (fault) out.fault(fault);
+    out.finish(); // Only named negative fixtures append faults; normal RESULT remains final.
     if (value.keepalive === true && !keepalive) keepalive = setInterval(() => {}, 1000);
   }
   let child;
@@ -1699,6 +1793,7 @@ function execute() {
     child.stdin.on("close", () => { inputClosed = true; final() });
     child.stdin.end(value.input);
   }
+  if (diagnosticMode === "root-eof-before-result") out.finish();
 }
 const parse = core.parser((value) => {
   const action = state.accept(value);
@@ -1714,16 +1809,24 @@ const parse = core.parser((value) => {
     digest = value.payloadDigest; send("CONFIGURED");
   } else if (action === "START") execute();
 });
-socket.on("connect", () => { try { send("HELLO", { nonce }) } catch { refuse() } });
+socket.on("connect", () => {
+  try { fs.appendFileSync(marker + ".channel-open", "open\n"); send("HELLO", { nonce }) } catch { refuse() }
+});
 socket.on("data", (chunk) => { try { parse.push(chunk) } catch { refuse() } });
 socket.on("error", refuse);
 socket.on("end", () => { try { parse.end(); if (!resultSent) refuse() } catch { refuse() } });
-socket.on("close", () => { state.close(); if (!resultSent) refuse() });
+socket.on("close", () => {
+  state.close();
+  try { fs.writeFileSync(marker + ".channel-closed", "closed without reconnect") } catch { refuse() }
+  if (!resultSent) refuse();
+});
 `
 
 const namedChannelNativeBody = String.raw`
 /* NC1 disposable constructed channel. All I/O below is overlapped, no workers. */
 #include <errno.h>
+#include <aclapi.h>
+#include <fcntl.h>
 #define NC_BODY 16380
 #define NC_FRAME 16384
 typedef struct {
@@ -1748,6 +1851,11 @@ typedef struct {
   HANDLE job; PROCESS_INFORMATION pi; int assigned, resumed, start_issued;
   int prepared, authenticated, configuring, configured, result_seen, control_complete;
   int retiring, terminated, sealed, zero, root_retired, certificate, failed, model_stranded, auxiliary_unproved, allow_peer_hello, root_hold;
+  int private_ready, server_close_requested, server_closed;
+  BYTE private_sid[SECURITY_MAX_SID_SIZE]; DWORD private_sid_length;
+  HANDLE private_directory, payload_file;
+  wchar_t private_root[32768];
+  char payload_path[NC_BODY + 1];
   char generation[65], preparation[65], payload[65], pending_payload[65], nonce[65], capability[65], suffix[65], mode[40];
   char result[NC_BODY + 1], receipt[NC_BODY + 1], marker[NC_BODY + 1], trace[11000], reason[64];
   size_t trace_used; DWORD trace_count;
@@ -1885,6 +1993,151 @@ static int nc_root_frame(NC_STATE *s, const char *type, const char *extra) {
   int ok = n > 0 && n <= NC_BODY && nc_queue(s, &s->root, text);
   SecureZeroMemory(text, sizeof(text)); return ok;
 }
+typedef struct {
+  BYTE bytes[sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + SECURITY_MAX_SID_SIZE];
+  SECURITY_DESCRIPTOR descriptor; SECURITY_ATTRIBUTES attributes;
+} NC_FILE_SECURITY;
+static int nc_copy_private_sid(NC_STATE *s, PSID sid) {
+  DWORD length, error; BOOL ok;
+  if (!IsValidSid(sid)) return 0;
+  length = GetLengthSid(sid); if (!length || length > sizeof(s->private_sid)) return 0;
+  if (s->private_sid_length) return EqualSid(s->private_sid, sid);
+  SetLastError(0); ok = CopySid(sizeof(s->private_sid), s->private_sid, sid); error = GetLastError();
+  nc_trace(s, "CopySid-TokenUser-only", "private-file-SID", ok, error, length);
+  if (ok) s->private_sid_length = length;
+  return ok;
+}
+static int nc_file_security(NC_STATE *s, NC_FILE_SECURITY *security, DWORD mask, BYTE flags) {
+  PACL acl = (PACL)security->bytes; PACL checked = NULL; ACCESS_ALLOWED_ACE *ace = NULL;
+  DWORD size, revision, error; SECURITY_DESCRIPTOR_CONTROL control_bits; ACL_SIZE_INFORMATION info;
+  BOOL ok, present = FALSE, defaulted = TRUE;
+  if (!s->private_sid_length || !IsValidSid(s->private_sid)) return 0;
+  ZeroMemory(security, sizeof(*security));
+  size = (DWORD)(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + s->private_sid_length);
+#define NC_FILE_SD(call, label) do { SetLastError(0); ok = (call); error = GetLastError(); nc_trace(s, label, "private-file-DACL", ok, error, mask); if (!ok) return 0; } while (0)
+  NC_FILE_SD(InitializeAcl(acl, size, ACL_REVISION), "InitializeAcl-private");
+  NC_FILE_SD(AddAccessAllowedAceEx(acl, ACL_REVISION, flags, mask, s->private_sid), "AddAccessAllowedAceEx-private");
+  NC_FILE_SD(InitializeSecurityDescriptor(&security->descriptor, SECURITY_DESCRIPTOR_REVISION), "InitializeSecurityDescriptor-private");
+  NC_FILE_SD(SetSecurityDescriptorOwner(&security->descriptor, s->private_sid, FALSE), "SetSecurityDescriptorOwner-TokenUser");
+  NC_FILE_SD(SetSecurityDescriptorDacl(&security->descriptor, TRUE, acl, FALSE), "SetSecurityDescriptorDacl-private");
+  NC_FILE_SD(SetSecurityDescriptorControl(&security->descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED), "SetSecurityDescriptorControl-private");
+  NC_FILE_SD(IsValidAcl(acl), "IsValidAcl-private");
+  NC_FILE_SD(IsValidSecurityDescriptor(&security->descriptor), "IsValidSecurityDescriptor-private");
+  NC_FILE_SD(GetSecurityDescriptorDacl(&security->descriptor, &present, &checked, &defaulted), "GetSecurityDescriptorDacl-private");
+  NC_FILE_SD(GetSecurityDescriptorControl(&security->descriptor, &control_bits, &revision), "GetSecurityDescriptorControl-private");
+  NC_FILE_SD(GetAclInformation(acl, &info, sizeof(info), AclSizeInformation), "GetAclInformation-private");
+  NC_FILE_SD(GetAce(acl, 0, (LPVOID *)&ace), "GetAce-private");
+#undef NC_FILE_SD
+  if (!present || defaulted || checked != acl || !(control_bits & SE_DACL_PROTECTED) ||
+      info.AceCount != 1 || ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE ||
+      ace->Header.AceFlags != flags || ace->Mask != mask ||
+      !IsValidSid(&ace->SidStart) || !EqualSid(&ace->SidStart, s->private_sid)) return 0;
+  security->attributes.nLength = sizeof(security->attributes);
+  security->attributes.bInheritHandle = FALSE;
+  security->attributes.lpSecurityDescriptor = &security->descriptor;
+  return 1;
+}
+static int nc_check_file_security(NC_STATE *s, HANDLE handle, DWORD mask, BYTE flags) {
+  PSECURITY_DESCRIPTOR descriptor = NULL; PSID owner = NULL; PACL acl = NULL;
+  ACCESS_ALLOWED_ACE *ace = NULL; ACL_SIZE_INFORMATION info; SECURITY_DESCRIPTOR_CONTROL bits;
+  DWORD error, revision; BOOL good = FALSE, ok;
+  error = GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+    &owner, NULL, &acl, NULL, &descriptor);
+  nc_trace(s, "GetSecurityInfo-private", "private-file-DACL", error == ERROR_SUCCESS, error, mask);
+  if (error != ERROR_SUCCESS || !descriptor || !acl) goto done;
+  SetLastError(0); ok = GetSecurityDescriptorControl(descriptor, &bits, &revision); error = GetLastError();
+  nc_trace(s, "GetSecurityDescriptorControl-readback", "private-file-DACL", ok, error, ok ? bits : 0);
+  if (!ok || !(bits & SE_DACL_PROTECTED) || !IsValidSecurityDescriptor(descriptor) ||
+      !IsValidAcl(acl) || !IsValidSid(owner) || !EqualSid(owner, s->private_sid)) goto done;
+  SetLastError(0); ok = GetAclInformation(acl, &info, sizeof(info), AclSizeInformation); error = GetLastError();
+  nc_trace(s, "GetAclInformation-readback", "private-file-DACL", ok, error, ok ? info.AceCount : 0);
+  if (!ok || info.AceCount != 1) goto done;
+  SetLastError(0); ok = GetAce(acl, 0, (LPVOID *)&ace); error = GetLastError();
+  nc_trace(s, "GetAce-readback", "private-file-DACL", ok, error, ok ? ace->Mask : 0);
+  good = ok && ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == flags &&
+    ace->Mask == mask && IsValidSid(&ace->SidStart) && EqualSid(&ace->SidStart, s->private_sid);
+done:
+  if (descriptor) {
+    SetLastError(0); ok = LocalFree(descriptor) == NULL; error = GetLastError();
+    nc_trace(s, "LocalFree-security-readback", "private-file-DACL", ok, error, 0); if (!ok) good = FALSE;
+  }
+  return good;
+}
+static int nc_private_directory(NC_STATE *s, const wchar_t *root) {
+  NC_FILE_SECURITY security; BY_HANDLE_FILE_INFORMATION info; DWORD error; BOOL ok;
+  if (!nc_file_security(s, &security, FILE_ALL_ACCESS, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) return 0;
+  SetLastError(0); ok = CreateDirectoryW(root, &security.attributes); error = GetLastError();
+  nc_trace(s, "CreateDirectoryW-protected-atomic", "private-evidence-root", ok, error, 0);
+  if (!ok && error != ERROR_ALREADY_EXISTS) return 0;
+  SetLastError(0);
+  s->private_directory = CreateFileW(root, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL,
+    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  error = GetLastError();
+  nc_trace(s, "CreateFileW-directory-no-delete-share", "private-evidence-root", s->private_directory != INVALID_HANDLE_VALUE, error, 0);
+  if (!nc_adopt(s, s->private_directory, "private-evidence-root") ||
+      !nc_flags(s, s->private_directory, "private-evidence-root", 0)) return 0;
+  SetLastError(0); ok = GetFileInformationByHandle(s->private_directory, &info); error = GetLastError();
+  nc_trace(s, "GetFileInformationByHandle-directory", "private-evidence-root", ok, error, ok ? info.dwFileAttributes : 0);
+  if (!ok || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+      !nc_check_file_security(s, s->private_directory, FILE_ALL_ACCESS, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) return 0;
+  return wcscpy_s(s->private_root, 32768, root) == 0;
+}
+static int nc_private_leaf(NC_STATE *s, const wchar_t *filename) {
+  size_t n = wcslen(s->private_root); const wchar_t *leaf;
+  if (!n || _wcsnicmp(filename, s->private_root, n) || filename[n] != L'\\') return 0;
+  leaf = filename + n + 1;
+  return *leaf && !wcschr(leaf, L'\\') && !wcschr(leaf, L'/') && !wcschr(leaf, L':') &&
+    wcscmp(leaf, L".") && wcscmp(leaf, L"..");
+}
+static HANDLE nc_new_private_file(NC_STATE *s, const wchar_t *filename, const char *role) {
+  NC_FILE_SECURITY security; HANDLE handle; DWORD error;
+  if (!nc_private_leaf(s, filename) || !nc_file_security(s, &security, FILE_ALL_ACCESS, 0)) return INVALID_HANDLE_VALUE;
+  SetLastError(0);
+  handle = CreateFileW(filename, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+    &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  error = GetLastError();
+  nc_trace(s, "CreateFileW-private-CREATE_NEW", role, handle != INVALID_HANDLE_VALUE, error, (unsigned long long)(uintptr_t)handle);
+  if (handle == INVALID_HANDLE_VALUE) return handle;
+  if (!nc_flags(s, handle, role, 0) || !nc_check_file_security(s, handle, FILE_ALL_ACCESS, 0)) {
+    SetLastError(0); { BOOL ok = CloseHandle(handle); error = GetLastError(); nc_trace(s, "CloseHandle-private-create-failure", role, ok, error, 0); }
+    return INVALID_HANDLE_VALUE;
+  }
+  return handle;
+}
+static int nc_prepare_private_files(NC_STATE *s, PSID sid) {
+  wchar_t root[32768], payload[32768]; wchar_t *slash; HANDLE file;
+  if (s->private_ready) return EqualSid(s->private_sid, sid);
+  if (!nc_copy_private_sid(s, sid) ||
+      !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s->receipt, -1, root, 32768)) return 0;
+  slash = wcsrchr(root, L'\\'); if (!slash) return 0; *slash = 0;
+  if (!nc_private_directory(s, root)) return 0;
+  if (snprintf(s->payload_path, sizeof(s->payload_path), "%s.payload.json", s->marker) < 0 ||
+      strlen(s->marker) + strlen(".payload.json") >= sizeof(s->payload_path) ||
+      !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s->payload_path, -1, payload, 32768)) return 0;
+  file = nc_new_private_file(s, payload, "reserved-payload");
+  if (!nc_adopt(s, file, "reserved-payload") || !nc_close(s, file)) return 0;
+  s->private_ready = 1;
+  return nc_parent(s, "private-root-protected", "\"privateRootProtected\":true,\"payloadPlaceholderProtected\":true");
+}
+static int nc_lock_payload(NC_STATE *s, const char *filename) {
+  wchar_t path[32768]; BY_HANDLE_FILE_INFORMATION info; LARGE_INTEGER size; BOOL ok; DWORD error;
+  if (!s->private_ready || strcmp(filename, s->payload_path) ||
+      !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename, -1, path, 32768) ||
+      !nc_private_leaf(s, path)) return 0;
+  SetLastError(0);
+  s->payload_file = CreateFileW(path, GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, NULL,
+    OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL); error = GetLastError();
+  nc_trace(s, "CreateFileW-lock-reserved-payload", "configured-payload", s->payload_file != INVALID_HANDLE_VALUE, error, 0);
+  if (!nc_adopt(s, s->payload_file, "configured-payload") || !nc_flags(s, s->payload_file, "configured-payload", 0)) return 0;
+  SetLastError(0); ok = GetFileInformationByHandle(s->payload_file, &info); error = GetLastError();
+  nc_trace(s, "GetFileInformationByHandle-payload", "configured-payload", ok, error, ok ? info.dwFileAttributes : 0);
+  if (!ok || (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+      !nc_check_file_security(s, s->payload_file, FILE_ALL_ACCESS, 0)) return 0;
+  SetLastError(0); ok = GetFileSizeEx(s->payload_file, &size); error = GetLastError();
+  nc_trace(s, "GetFileSizeEx-payload", "configured-payload", ok, error, ok ? (unsigned long long)size.QuadPart : 0);
+  return ok && size.QuadPart > 0 && size.QuadPart <= 1048576;
+}
 static int nc_server(NC_STATE *s, const char *suffix) {
   HANDLE token = NULL; TOKEN_USER *user = NULL; DWORD needed = 0, error, acl_size;
   PACL acl = NULL, checked = NULL; SECURITY_DESCRIPTOR descriptor; SECURITY_DESCRIPTOR_CONTROL bits;
@@ -1912,6 +2165,7 @@ static int nc_server(NC_STATE *s, const char *suffix) {
   SetLastError(0); ok = GetTokenInformation(token, TokenUser, user, needed, &needed); error = GetLastError();
   nc_trace(s, "GetTokenInformation-TokenUser", "token-user", ok, error, needed);
   if (!ok || !IsValidSid(user->User.Sid)) goto done;
+  if (!nc_prepare_private_files(s, user->User.Sid)) goto done;
   acl_size = (DWORD)(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(user->User.Sid));
   acl = (PACL)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, acl_size); if (!acl) goto done;
 #define NC_ACL(call, label) do { SetLastError(0); ok = (call); error = GetLastError(); nc_trace(s, label, "server-DACL", ok, error, 0); if (!ok) goto done; } while (0)
@@ -2234,6 +2488,7 @@ static void nc_message(NC_STATE *s, NC_IO *io, const char *raw) {
     }
     if (!strcmp(m->type, "CONFIG") && s->authenticated && !s->configuring && !s->configured &&
         m->fields == (31u | (1u << 10)) && nc_hex(m->payload) && m->path[0]) {
+      if (!nc_lock_payload(s, m->path)) { nc_fail(s, "payload-protection-or-lock"); goto done; }
       /* CONFIG changes the accepted digest only upon root CONFIGURED. */
       strcpy_s(s->pending_payload, sizeof(s->pending_payload), m->payload); s->configuring = 1;
       if (!nc_queue(s, &s->root, raw)) nc_fail(s, "config-delivery"); goto done;
@@ -2285,6 +2540,7 @@ peer_bad:
         !s->authenticated && !strcmp(m->nonce, s->nonce) && nc_base64(m->detail)) {
       s->authenticated = 1; SecureZeroMemory(s->capability, sizeof(s->capability));
       if (!strcmp(s->mode, "root-write-pressure")) s->root_hold = 1;
+      if (!strcmp(s->mode, "server-loss-name-reuse")) s->server_close_requested = 1;
       { char extra[NC_BODY + 1]; int n = snprintf(extra, sizeof(extra), "\"detail\":\"%s\"", m->detail);
         if (n < 0 || n > NC_BODY || !nc_parent(s, "ready", extra)) nc_fail(s, "ready-forward"); }
       goto done;
@@ -2292,12 +2548,18 @@ peer_bad:
     if (!strcmp(m->type, "CONFIGURED") && m->fields == 31 && s->configuring && !s->configured) {
       strcpy_s(s->payload, sizeof(s->payload), s->pending_payload);
       SecureZeroMemory(s->pending_payload, sizeof(s->pending_payload));
-      s->configured = 1; s->configuring = 0; nc_parent(s, "configured", NULL); goto done;
+      s->configured = 1; s->configuring = 0;
+      if (!nc_close(s, s->payload_file)) { nc_fail(s, "payload-unlock"); goto done; }
+      s->payload_file = NULL;
+      nc_parent(s, "configured", "\"payloadProtected\":true,\"payloadLockedDuringRootRead\":true"); goto done;
     }
     if (!strcmp(m->type, "RESULT") && m->fields == (31u | (1u << 11)) &&
         s->start_issued && !s->result_seen && m->detail[0]) {
       if (!nc_base64(m->detail)) { nc_fail(s, "result-encoding"); goto done; }
-      strcpy_s(s->result, sizeof(s->result), m->detail); s->result_seen = 1; goto done;
+      strcpy_s(s->result, sizeof(s->result), m->detail); s->result_seen = 1;
+      { char extra[NC_BODY + 1]; int n = snprintf(extra, sizeof(extra), "\"detail\":\"%s\"", s->result);
+        if (n < 0 || n > NC_BODY || !nc_parent(s, "root-result-observed", extra)) nc_fail(s, "result-observation"); }
+      goto done;
     }
     nc_fail(s, "root-role-replay");
   }
@@ -2437,12 +2699,69 @@ static void nc_retire(NC_STATE *s) {
     else if (n != WAIT_TIMEOUT) { nc_trace(s, "WaitForSingleObject-root-retired", "root-process", FALSE, error, n); nc_fail(s, "root-wait"); }
   } else if (!s->pi.hProcess) s->root_retired = 1;
 }
-static int nc_receipt(NC_STATE *s, const char *text, int closure) {
-  wchar_t filename[32768]; FILE *file = NULL; int n, printed, closed;
+static FILE *nc_receipt_stream(NC_STATE *s, int closure) {
+  wchar_t filename[32768]; HANDLE handle; FILE *file; int n, fd;
+  if (!s->private_ready) return NULL;
   n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s->receipt, -1, filename, 32768);
-  if (n && closure && wcscat_s(filename, 32768, L".owner-close.json") != 0) return 0;
-  if (!n || _wfopen_s(&file, filename, L"wb") != 0 || !file) return 0;
+  if (!n || (closure && wcscat_s(filename, 32768, L".owner-close.json") != 0)) return NULL;
+  handle = nc_new_private_file(s, filename, closure ? "owner-close-file" : "kernel-receipt-file");
+  if (handle == INVALID_HANDLE_VALUE) return NULL;
+  fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDWR);
+  if (fd < 0) { CloseHandle(handle); return NULL; }
+  file = _fdopen(fd, "wb");
+  if (!file) { _close(fd); return NULL; }
+  return file;
+}
+static int nc_receipt(NC_STATE *s, const char *text) {
+  FILE *file = nc_receipt_stream(s, 0); int printed, closed;
+  if (!file) return 0;
   printed = fprintf(file, "%s\n", text); closed = fclose(file); return printed > 0 && closed == 0;
+}
+static int nc_protected_supervise(int argc, wchar_t **argv) {
+  NC_STATE *s; HANDLE token = NULL, file = INVALID_HANDLE_VALUE; TOKEN_USER *user = NULL;
+  DWORD size = 0, error, i, n; BOOL ok; wchar_t root[32768]; int result = 1;
+  TOKEN_ELEVATION elevation; SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+  PSID administrators = NULL; BOOL admin = TRUE;
+  if (argc != 6) return 90;
+  s = (NC_STATE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*s)); if (!s) return 91;
+  s->parent.h = s->root.h = INVALID_HANDLE_VALUE;
+  n = GetEnvironmentVariableW(L"DESK_CHANNEL_EVIDENCE_ROOT", root, 32768);
+  if (!n || n >= 32768 || !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argv[5], -1, s->receipt, sizeof(s->receipt), NULL, NULL)) goto done;
+  SetLastError(0); ok = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token); error = GetLastError();
+  nc_trace(s, "OpenProcessToken", "supervisor-TokenUser", ok, error, 0);
+  if (!ok || !nc_adopt(s, token, "supervisor-TokenUser") || !nc_flags(s, token, "supervisor-TokenUser", 0)) goto done;
+  SetLastError(0); ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size); error = GetLastError();
+  nc_trace(s, "GetTokenInformation-elevation", "supervisor-TokenUser", ok, error, ok ? elevation.TokenIsElevated : 0);
+  if (!ok || elevation.TokenIsElevated) goto done;
+  SetLastError(0); ok = AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
+    0,0,0,0,0,0, &administrators); error = GetLastError();
+  nc_trace(s, "AllocateAndInitializeSid-admin-check-only", "supervisor-standard-token", ok, error, 0);
+  if (!ok) goto done;
+  SetLastError(0); ok = CheckTokenMembership(NULL, administrators, &admin); error = GetLastError();
+  nc_trace(s, "CheckTokenMembership", "supervisor-standard-token", ok, error, admin);
+  if (!ok || admin) goto done;
+  size = 0;
+  SetLastError(0); ok = GetTokenInformation(token, TokenUser, NULL, 0, &size); error = GetLastError();
+  if (ok || error != ERROR_INSUFFICIENT_BUFFER || size < sizeof(TOKEN_USER) || size > 65536) goto done;
+  user = (TOKEN_USER *)HeapAlloc(GetProcessHeap(), 0, size); if (!user) goto done;
+  SetLastError(0); ok = GetTokenInformation(token, TokenUser, user, size, &size); error = GetLastError();
+  nc_trace(s, "GetTokenInformation-TokenUser", "supervisor-TokenUser", ok, error, size);
+  if (!ok || !nc_copy_private_sid(s, user->User.Sid) || !nc_close(s, token)) goto done;
+  token = NULL;
+  if (!nc_private_directory(s, root)) goto done;
+  s->private_ready = 1;
+  file = nc_new_private_file(s, argv[5], "reserved-broader-receipt");
+  if (!nc_adopt(s, file, "reserved-broader-receipt") || !nc_close(s, file)) goto done;
+  file = INVALID_HANDLE_VALUE;
+  if (!SetEnvironmentVariableW(L"DESK_CHANNEL_PRIVATE_READY", L"1")) goto done;
+  /* The frozen supervisor keeps its same job, children, wait bound and real zero query. */
+  result = supervise(argc, argv);
+done:
+  for (i = s->created; i > 0; i--) if (!s->owned[i - 1].closed && !nc_close(s, s->owned[i - 1].handle)) result = 1;
+  if (administrators && FreeSid(administrators) != NULL) result = 1;
+  if (user && !HeapFree(GetProcessHeap(), 0, user)) result = 1;
+  SecureZeroMemory(s, sizeof(*s)); if (!HeapFree(GetProcessHeap(), 0, s)) result = 1;
+  return result;
 }
 static int nc_main(int argc, wchar_t **argv) {
   NC_STATE *s; DWORD i, error, waited, type; int result = 1, crt_rc, crt_error; ULONGLONG original_end;
@@ -2472,6 +2791,21 @@ static int nc_main(int argc, wchar_t **argv) {
   for (;;) {
     HANDLE waits[6]; DWORD count = 0, timeout; ULONGLONG now;
     nc_poll(s, &s->parent); if (s->root.h != INVALID_HANDLE_VALUE) nc_poll(s, &s->root); nc_connect_poll(s);
+    if (s->server_close_requested && !s->server_closed && !s->retiring) {
+      nc_cancel(s, &s->root); nc_poll(s, &s->root);
+      if (!s->root.reading && !s->root.writing && !s->connecting) {
+        DWORD live; char extra[256];
+        if (!nc_close(s, s->root.h)) nc_fail(s, "server-loss-close");
+        else {
+          s->root.h = INVALID_HANDLE_VALUE; s->connected = 0; s->server_closed = 1;
+          s->failed = 1; strcpy_s(s->reason, sizeof(s->reason), "diagnostic-server-loss");
+          live = WaitForSingleObject(s->pi.hProcess, 0);
+          snprintf(extra, sizeof(extra), "\"nativeOwnerPid\":%lu,\"ownerAlive\":true,\"rootAlive\":%s,\"controlComplete\":false",
+            GetCurrentProcessId(), live == WAIT_TIMEOUT ? "true" : "false");
+          nc_parent(s, "server-closed-owner-live", extra);
+        }
+      }
+    }
     if (s->model_stranded) {
       /* Deliberately suspended in broader supervisor job; no private zero claim. */
       s->retiring = 1; nc_retire(s);
@@ -2501,20 +2835,23 @@ static int nc_main(int argc, wchar_t **argv) {
         /* Retain parent control/events until final proof is delivered and joined. */
         for (i = s->created; i > 0; i--) {
           HANDLE h = s->owned[i - 1].handle;
-          if (!s->owned[i - 1].closed && h != s->parent.read.hEvent && h != s->parent.write.hEvent) nc_close(s, h);
+          if (!s->owned[i - 1].closed && h != s->parent.read.hEvent && h != s->parent.write.hEvent &&
+              h != s->private_directory) nc_close(s, h);
         }
         n = snprintf(cert, sizeof(cert),
           "{\"protocol\":\"desk.owned-git-channel-probe/1\",\"purpose\":\"probe\",\"generation\":\"%s\","
           "\"preparationDigest\":\"%s\",\"payloadDigest\":%s%s%s,\"sealed\":true,\"exactJobZero\":true,"
           "\"rootRetired\":true,\"startIssued\":%s,\"commandState\":\"%s\",\"controlComplete\":%s,\"failure\":%s,"
           "\"parentMaxQueued\":%lu,\"parentPendingReads\":%lu,\"parentPendingWrites\":%lu,"
-          "\"rootMaxQueued\":%lu,\"rootPendingReads\":%lu,\"rootPendingWrites\":%lu,\"parentPartialReads\":%lu}",
+          "\"rootMaxQueued\":%lu,\"rootPendingReads\":%lu,\"rootPendingWrites\":%lu,\"parentPartialReads\":%lu,"
+          "\"rootBytesAtEOF\":%lu,\"privateRootProtected\":%s}",
           s->generation, s->preparation, s->payload[0] ? "\"" : "", s->payload[0] ? s->payload : "null", s->payload[0] ? "\"" : "",
           s->start_issued ? "true" : "false", !s->start_issued ? "not_started" : s->result_seen ? "reported" : "unknown",
           s->control_complete ? "true" : "false", s->failed ? "true" : "false",
           s->parent.max_queued, s->parent.pending_reads, s->parent.pending_writes,
-          s->root.max_queued, s->root.pending_reads, s->root.pending_writes, s->parent.partial_reads);
-        if (n < 0 || n >= (int)sizeof(cert) || !nc_receipt(s, cert, 0)) nc_fail(s, "proof-file-delivery");
+          s->root.max_queued, s->root.pending_reads, s->root.pending_writes, s->parent.partial_reads,
+          s->root.eof ? s->root.used : 0, s->private_ready ? "true" : "false");
+        if (n < 0 || n >= (int)sizeof(cert) || !nc_receipt(s, cert)) nc_fail(s, "proof-file-delivery");
         s->certificate = 1;
         { char extra[4300]; snprintf(extra, sizeof(extra), "\"certificate\":%s,\"reason\":\"%s\"", cert, s->reason);
           if (!s->parent.eof) nc_parent(s, "sealed-zero", extra); }
@@ -2547,8 +2884,11 @@ static int nc_main(int argc, wchar_t **argv) {
     if (waited == WAIT_FAILED) nc_fail(s, "wait-loop");
   }
   if (s->parent.reading || s->parent.writing || s->root.reading || s->root.writing || s->connecting) ExitProcess(1);
+  /* Open the protected final stream while the no-delete-share directory lock is live. */
+  {
+  FILE *close_file = nc_receipt_stream(s, 1);
   for (i = s->created; i > 0; i--) if (!s->owned[i - 1].closed && !nc_close(s, s->owned[i - 1].handle)) result = 1;
-  if (s->closed != s->created) result = 1;
+  if (s->closed != s->created || !close_file) result = 1;
   errno = 0; crt_rc = _close(3); crt_error = errno;
   nc_trace(s, "CRT-_close3-errno", "parent-fd3", crt_rc == 0, (DWORD)crt_error, crt_rc == 0);
   if (crt_rc != 0) result = 1;
@@ -2561,7 +2901,11 @@ static int nc_main(int argc, wchar_t **argv) {
       "\"modelStranded\":%s,\"apis\":[%s]}",
       s->generation, s->preparation, s->created, s->closed, s->created == s->closed ? "true" : "false",
       crt_rc == 0 ? "true" : "false", s->certificate ? "true" : "false", s->model_stranded ? "true" : "false", s->trace);
-    if (n < 0 || n > NC_BODY || !nc_receipt(s, text, 1)) result = 1;
+    if (close_file) {
+      int printed = n > 0 && n <= NC_BODY ? fprintf(close_file, "%s\n", text) : -1;
+      int closed = fclose(close_file); if (printed <= 0 || closed != 0) result = 1;
+    }
+  }
   }
   original_end = s->deadline;
   SecureZeroMemory(s, sizeof(*s)); if (!HeapFree(GetProcessHeap(), 0, s)) result = 1;
@@ -2573,7 +2917,7 @@ static int nc_main(int argc, wchar_t **argv) {
 const namedChannelOwnerSource = ownerSource
   .replace("int wmain(int argc, wchar_t **argv) {", namedChannelNativeBody + "\nint wmain(int argc, wchar_t **argv) {")
   .replace('  if (argc > 1 && wcscmp(argv[1], L"--supervise") == 0)',
-    '  if (argc > 1 && wcscmp(argv[1], L"--named-channel") == 0) return nc_main(argc, argv);\n  if (argc > 1 && wcscmp(argv[1], L"--supervise") == 0)')
+    '  if (argc > 1 && wcscmp(argv[1], L"--named-channel") == 0) return nc_main(argc, argv);\n  if (argc > 1 && wcscmp(argv[1], L"--protected-supervise") == 0) return nc_protected_supervise(argc, argv);\n  if (argc > 1 && wcscmp(argv[1], L"--supervise") == 0)')
 
 const namedChannelWorkloadSource = String.raw`
 "use strict";
@@ -2621,6 +2965,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const net = require("node:net");
 const { spawn, spawnSync } = require("node:child_process");
 const core = (${channelCore.toString().replace(/\r\n?/g, "\n")})(crypto);
 ` + String.raw`
@@ -2634,14 +2979,21 @@ const original = ["normal", "cancel-created", "cancel-assigned", "ready-abort", 
   "model-resume", "model-assignment", "parent-loss", "helper-loss"];
 const authentication = ["auth-wrong-capability", "auth-wrong-nonce", "auth-wrong-generation",
   "auth-wrong-role", "auth-replay"];
+const rootFraming = ["root-malformed-after-result", "root-trailing-byte-after-result",
+  "root-partial-header-after-result", "root-partial-body-after-result",
+  "root-extra-result-after-result", "root-eof-before-result"];
 const supplemental24 = ["first-instance-collision", "wrong-same-job-peer", "configured-cancel",
   "immediate-seal", "failed-git", "parent-control-pressure", "server-read-only", "server-write-only",
   "owner-loss-before-start", "pending-connect-cancel", "root-write-pressure", "full-data-pressure",
-  "parent-overlapped-fragment", "ready-peer-failure"];
+  "parent-overlapped-fragment", "ready-peer-failure", "server-loss-name-reuse", "owner-loss-name-reuse"];
 const report = { status: "RUNNING", cases: [], stranded: [], nativeQualified: false,
   driver: { version: process.version, execPath: process.execPath }, originalHistorical27Qualified: false };
 const reportPath = index === null ? config.report : config.report + "." + index;
-const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+const requireProtectedSupervisor = () => {
+  if (process.env.DESK_CHANNEL_PRIVATE_READY !== "1" ||
+      process.env.DESK_CHANNEL_EVIDENCE_ROOT !== config.evidence) throw Error("protected native supervisor required");
+};
+const save = () => { requireProtectedSupervisor(); fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)) };
 function verify() {
   assert.equal(process.cwd(), config.neutral);
   for (const item of config.manifest) assert.equal(sha(fs.readFileSync(item.path)), item.sha256);
@@ -2665,14 +3017,20 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
     cwd: config.neutral, env: cleanEnvironment(), stdio: ["ignore", "pipe", "pipe", "overlapped"],
   });
   const events = [], backlog = [], data = [];
+  const privateGate = core.artifactGate(base), deferred = [];
   let stderrTail = Buffer.alloc(0);
   let payloadDigest = "", failure, stdoutBytes = 0, stderrBytes = 0, eof = false, stderrEOF = false, controlEOF = false;
   const log = path.join(config.evidence, tag + ".jsonl");
   const append = (value) => {
     const text = JSON.stringify(value);
     assert.ok(!text.includes(capability) && !text.includes(name), "secret diagnostic refusal");
+    if (!privateGateReady) {
+      if (deferred.length >= 64) throw Error("private diagnostic queue full");
+      deferred.push(text); return;
+    }
     fs.appendFileSync(log, text + "\n");
   };
+  let privateGateReady = false;
   const closed = new Promise((resolve) => child.on("close", (code, signal) => {
     clearTimeout(timer); append({ ownerClose: { code, signal } }); resolve({ code, signal });
   }));
@@ -2697,6 +3055,11 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
     if (value.role !== "owner" || value.protocol !== base.protocol || value.generation !== generation ||
         value.preparationDigest !== preparationDigest || value.payloadDigest !== (payloadDigest || null)) { refuse(); return; }
     if (events.length >= 64) { refuse(); return; }
+    if (privateGate.observe(value)) {
+      requireProtectedSupervisor(); privateGateReady = true;
+      for (const text of deferred) fs.appendFileSync(log, text + "\n");
+      deferred.length = 0;
+    }
     if (value.stage === "root-control-complete") {
       if (value.controlEOF !== true) { refuse(); return; }
       sealBoundary.result(); sealBoundary.eof(0);
@@ -2716,6 +3079,25 @@ function session(identity, mode, tag, sharedDeadline = Date.now() + 10000) {
     path: path.join(config.evidence, tag) });
   return {
     child, closed, events, base, receipt, send, deadline, mode,
+    get configuredPayload() { return payloadDigest !== "" },
+    writePayload: (filename, bytes) => core.preparedFileWrite(fs, filename, bytes, privateGate),
+    async rebindName() {
+      let connections = 0;
+      const server = net.createServer((socket) => { connections++; socket.destroy() });
+      try {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(Error("replacement namespace bind incomplete")),
+            Math.max(1, Math.min(2000, deadline - Date.now())));
+          server.once("error", () => { clearTimeout(timer); reject(Error("replacement namespace bind failed")) });
+          server.listen({ path: "\\\\.\\pipe\\desk-owned-git-" + name }, () => { clearTimeout(timer); resolve() });
+        });
+      } catch {
+        try { server.close(() => {}) } catch {}
+        throw Error("replacement namespace preparation failed");
+      }
+      return { connections: () => connections, close: () => new Promise((resolve, reject) =>
+        server.close((error) => error ? reject(Error("replacement namespace close failed")) : resolve())) };
+    },
     setDigest: (digest) => { payloadDigest = digest },
     pressure: () => child.stdio[3].pause(), resume: () => child.stdio[3].resume(),
     pauseData: () => child.stdout.pause(), resumeData: () => child.stdout.resume(),
@@ -2754,7 +3136,8 @@ function validateOwnerClose(s) {
   const value = JSON.parse(fs.readFileSync(filename, "utf8"));
   assert.equal(value.kind, "owner-close-diagnostic"); assert.equal(value.protocol, s.base.protocol);
   assert.equal(value.generation, s.base.generation); assert.equal(value.preparationDigest, s.base.preparationDigest);
-  const expected = s.mode === "first-instance-collision" ? 9 : s.mode === "wrong-same-job-peer" ? 20 : 14;
+  const expected = s.mode === "first-instance-collision" ? 11 : s.mode === "wrong-same-job-peer" ? 22 :
+    s.configuredPayload ? 17 : 16;
   assert.equal(value.ownedCreated, expected); assert.equal(value.ownedClosed, expected);
   assert.equal(value.ownedHandlesClosed, true); assert.equal(value.crtControlClosed, true);
   assert.equal(value.modelStranded, s.mode === "model-assignment");
@@ -2768,6 +3151,7 @@ function validateCertificate(s, digest, started, failure) {
   assert.equal(proof.preparationDigest, s.base.preparationDigest); assert.equal(proof.purpose, "probe");
   assert.equal(proof.payloadDigest, digest); assert.equal(proof.sealed, true);
   assert.equal(proof.exactJobZero, true); assert.equal(proof.rootRetired, true);
+  assert.equal(proof.privateRootProtected, true);
   assert.equal(proof.startIssued, started); assert.equal(proof.failure, failure);
   if (!started) assert.equal(proof.commandState, "not_started");
   return proof;
@@ -2776,7 +3160,7 @@ async function one(identity, mode, tag) {
   const record = { mode, parent: process.version, root: identity.version, status: "ATTEMPTED" };
   report.cases.push(record); save();
   const s = session(identity, mode, tag), marker = path.join(config.evidence, tag);
-  let digest = null, started = false, rootPid, other;
+  let digest = null, started = false, rootPid, other, replacement, expectedFailure = false;
   try {
     if (mode === "first-instance-collision") {
       const closed = await s.closed; assert.equal(closed.code, 1);
@@ -2844,10 +3228,38 @@ async function one(identity, mode, tag) {
           assert.equal(bootstrap.execPath.toLowerCase(), identity.path.toLowerCase());
           assert.equal(bootstrap.bootstrapNodeOptions, null); assert.equal(bootstrap.bootstrapNodePath, null);
           assert.equal(fs.existsSync(marker), true);
-          await delay(100);
+          if (mode !== "server-loss-name-reuse") await delay(100);
           assert.equal(fs.existsSync(marker + ".command"), false);
           assert.equal(fs.existsSync(marker + ".preload-shim"), false);
-          if (mode === "ready-peer-failure") {
+          if (mode === "server-loss-name-reuse") {
+            const loss = await s.take("server-closed-owner-live");
+            assert.equal(loss.ownerAlive, true); assert.equal(loss.rootAlive, true);
+            assert.equal(s.child.exitCode, null); assert.equal(loss.controlComplete, false);
+            const until = Math.min(Date.now() + 2000, s.deadline);
+            while (!fs.existsSync(marker + ".channel-closed") && Date.now() < until) await delay(5);
+            assert.equal(fs.existsSync(marker + ".channel-closed"), true);
+            replacement = await s.rebindName();
+            await delay(100);
+            assert.equal(replacement.connections(), 0);
+            assert.equal(fs.readFileSync(marker + ".channel-open", "utf8"), "open\n");
+            record.originalConnections = 1; record.replacementConnections = replacement.connections();
+            assert.equal(s.child.exitCode, null);
+            await replacement.close(); replacement = undefined;
+            record.boundary = "server endpoint closed; native owner and retained root observed live, NOT process death";
+            record.replacementNameReused = true; expectedFailure = true; s.send("CANCEL");
+          } else if (mode === "owner-loss-name-reuse") {
+            assert.equal(s.child.kill(), true); await s.closed;
+            await delay(100);
+            replacement = await s.rebindName(); await delay(100);
+            assert.equal(replacement.connections(), 0);
+            record.replacementConnections = replacement.connections();
+            await replacement.close(); replacement = undefined;
+            assert.equal(fs.existsSync(s.receipt), false);
+            assert.ok(!s.events.some((e) => e.stage === "sealed-zero"));
+            assert.equal(fs.existsSync(marker + ".command"), false);
+            record.boundary = "literal native owner process termination; no private certificate";
+            record.replacementNameReused = true; record.status = "OWNER_LOSS_UNKNOWN_EXPECTED"; return;
+          } else if (mode === "ready-peer-failure") {
             other = session(identity, "first-instance-collision", tag + ".other", s.deadline);
             assert.equal((await other.closed).code, 1);
             record.otherProof = validateCertificate(other, null, false, true);
@@ -2879,13 +3291,48 @@ async function one(identity, mode, tag) {
           } else {
             const bytes = Buffer.from(JSON.stringify(payload(identity, marker, mode)));
             assert.ok(bytes.length <= 1048576); digest = sha(bytes);
-            const filename = marker + ".payload.json"; fs.writeFileSync(filename, bytes, { mode: 0o600 });
+            const filename = marker + ".payload.json"; s.writePayload(filename, bytes);
             s.send("CONFIG", { payloadDigest: digest, path: filename });
-            s.setDigest(digest); await s.take("configured");
+            s.setDigest(digest);
+            const configured = await s.take("configured");
+            assert.equal(configured.payloadProtected, true); assert.equal(configured.payloadLockedDuringRootRead, true);
             if (mode === "configured-cancel") s.send("CANCEL");
             else {
               if (mode === "full-data-pressure") s.pauseData();
               started = true; s.send("START");
+              if (rootFraming.includes(mode)) {
+                if (mode !== "root-eof-before-result") {
+                  const observed = await s.take("root-result-observed");
+                  const result = JSON.parse(Buffer.from(observed.detail, "base64").toString("utf8"));
+                  assert.equal(result.command.code, 0); assert.equal(result.command.signal, null);
+                  assert.equal(result.command.spawnError, null);
+                  assert.deepEqual(result.input, { state: "complete", length: 6, written: 6, error: null });
+                  assert.equal(result.runtime.version, identity.version);
+                  assert.equal(result.runtime.execPath.toLowerCase(), identity.path.toLowerCase());
+                  record.result = result;
+                }
+                const closed = await s.closed; assert.equal(closed.code, 1);
+                record.proof = validateCertificate(s, digest, true, true);
+                assert.equal(record.proof.controlComplete, false);
+                assert.ok(!s.events.some((e) => e.stage === "root-control-complete"));
+                assert.throws(() => s.send("SEAL"), /EOF/);
+                if (mode === "root-eof-before-result") {
+                  assert.equal(record.proof.commandState, "unknown");
+                  assert.ok(!s.events.some((e) => e.stage === "root-result-observed"));
+                } else {
+                  assert.equal(record.proof.commandState, "reported");
+                  assert.match(s.stdout(), /ce013625030ba8dba906f756967f9e9ca394464a/);
+                  const preload = JSON.parse(fs.readFileSync(marker + ".preload-downstream", "utf8"));
+                  assert.equal(preload.role, "downstream"); assert.equal(preload.nodePath, config.publicRoot);
+                  assert.equal(fs.existsSync(marker + ".preload-shim"), false);
+                }
+                assert.equal(s.eof(), true); assert.equal(s.stderrEOF(), true); assert.equal(s.controlEOF(), true);
+                assert.equal(s.failed(), false);
+                const partial = { "root-trailing-byte-after-result": 1,
+                  "root-partial-header-after-result": 2, "root-partial-body-after-result": 5 }[mode];
+                if (partial) assert.equal(record.proof.rootBytesAtEOF, partial);
+                record.status = "ROOT_CONTROL_REFUSAL_WITH_REAL_RETIREMENT_EXPECTED"; return;
+              }
               if (mode === "full-data-pressure") {
                 const until = Date.now() + 2000;
                 while (!fs.existsSync(marker + ".command") && Date.now() < until) await delay(5);
@@ -2947,9 +3394,9 @@ async function one(identity, mode, tag) {
     }
     const terminal = await s.take("sealed-zero");
     const closed = await s.closed;
-    assert.equal(closed.code, 0); assert.equal(s.controlEOF(), true);
+    assert.equal(closed.code, expectedFailure ? 1 : 0); assert.equal(s.controlEOF(), true);
     assert.equal(closed.signal, null); assert.equal(s.eof(), true); assert.equal(s.stderrEOF(), true);
-    record.proof = validateCertificate(s, digest, started, false);
+    record.proof = validateCertificate(s, digest, started, expectedFailure);
     if (mode === "parent-overlapped-fragment") {
       assert.ok(record.proof.parentPartialReads >= 1);
       assert.ok(record.proof.parentPendingReads >= 1);
@@ -2959,6 +3406,7 @@ async function one(identity, mode, tag) {
     if (!started) assert.equal(fs.existsSync(marker + ".command"), false);
     record.status = "OBSERVED_EXPECTED";
   } finally {
+    if (replacement) await replacement.close();
     record.diagnostics = s.finalDiagnostics(); save();
     if (other && other.child.exitCode === null && other.child.signalCode === null) {
       try { other.send("CANCEL") } catch {}
@@ -2971,12 +3419,13 @@ async function one(identity, mode, tag) {
   }
 }
 async function main() {
-  verify();
+  requireProtectedSupervisor(); verify();
   if (index === null) {
     for (let i = 0; i < config.nodes.length; i++) {
       const identity = config.nodes[i];
       const child = spawn(identity.path, [__filename, process.argv[2], String(i)], {
-        cwd: config.neutral, env: cleanEnvironment(), stdio: "inherit" });
+        cwd: config.neutral, env: { ...cleanEnvironment(), DESK_CHANNEL_PRIVATE_READY: "1",
+          DESK_CHANNEL_EVIDENCE_ROOT: config.evidence }, stdio: "inherit" });
       const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve) });
       assert.equal(code, 0);
       const worker = JSON.parse(fs.readFileSync(config.report + "." + i, "utf8"));
@@ -2986,7 +3435,7 @@ async function main() {
   } else {
     assert.equal(process.version, config.nodes[index].version);
     assert.equal(sha(fs.readFileSync(process.execPath)), config.nodes[index].sha256.toLowerCase());
-    for (const mode of [...original, ...authentication, ...(index === 2 ? supplemental24 : [])])
+    for (const mode of [...original, ...authentication, ...rootFraming, ...(index === 2 ? supplemental24 : [])])
       await one(config.nodes[index], mode, index + "-" + mode);
     if (index === 0) await one(config.nodes[2], "immediate-seal", "cross-parent20-root24");
   }
@@ -3006,9 +3455,9 @@ export const channelProbeMaterial = {
 
 function assertChannelCandidateSources(material = channelProbeMaterial) {
   const expected = {
-    "probe-owner.c": "16da74a1533b7c78a1b6407d2d2511b199c77607f191dcc729cc573a320f8736",
-    "probe-shim.cjs": "8419fb454648bce15b92951ce58d4d9e0c11e733a7b003bd37dec54321d99169",
-    "probe.test.cjs": "dd9c087579775be5dd01a900b1a05e2cdebdf1a0def43f34d21650c914453e1e",
+    "probe-owner.c": "6bde1098cce18a11a9f035a1dd65d3b1dbd720c8f4dde3482ad1e695e800b865",
+    "probe-shim.cjs": "c6564e7df22084e008445e29b4eff45db9f4c5ae93e2a34e1615d8a9abe0975b",
+    "probe.test.cjs": "e70f948913f4adb951a819b04d3a29c4bc302d095d31623429049bdb6bb50aec",
     "channel-workload.cjs": "1c199c86a26d922c24b08c8ecfcb2b6985ac8c1cc200f0c5fad8961400bcf68a",
     "build.ps1": "92b6e73068ae95d9b74163793c1afc628c729c4e1ebf9244013dc8eb075db751",
     "preload.cjs": "ee455a699ce6c23f1dd7a7e84ef7c365894b8dfa9c60c43dd87b4cce73960457",
@@ -3030,15 +3479,16 @@ test("Windows constructed owned-Git channel candidate (separate admission requir
   const root = path.join(repo, "owned-git-probe-output")
   const sourceRoot = path.join(root, "source"), publicRoot = path.join(root, "artifacts", "owned-git", "win32-x64")
   const neutral = path.join(root, "neutral"), evidence = path.join(root, "evidence")
-  for (const folder of [sourceRoot, publicRoot, neutral, evidence]) fs.mkdirSync(folder, { recursive: true })
+  for (const folder of [sourceRoot, publicRoot, neutral]) fs.mkdirSync(folder, { recursive: true })
   const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
   const status = { status: "STAGING", experiment: "constructed-channel1",
-    historical27Qualified: false, nativeQualified: false, originalSemanticCases: 27, supplementalCases: 30 }
+    historical27Qualified: false, nativeQualified: false, originalSemanticCases: 27, supplementalCases: 50 }
   const save = () => fs.writeFileSync(path.join(root, "report.json"), JSON.stringify(status, null, 2))
   const exec = (command, args, label, options = {}) => {
     const value = spawnSync(command, args, { encoding: "utf8", cwd: neutral, timeout: 120000, ...options })
-    fs.writeFileSync(path.join(evidence, label + ".stdout"), value.stdout ?? "")
-    fs.writeFileSync(path.join(evidence, label + ".stderr"), value.stderr ?? "")
+    // Only compiler/bootstrap telemetry goes here; per-lease private records stay in the protected root.
+    fs.writeFileSync(path.join(sourceRoot, label + ".stdout"), value.stdout ?? "")
+    fs.writeFileSync(path.join(sourceRoot, label + ".stderr"), value.stderr ?? "")
     status[label] = { code: value.status, signal: value.signal, error: !!value.error }; save()
     assert.equal(value.status, 0, label + " STOP; inspect bounded retained evidence")
   }
@@ -3076,11 +3526,12 @@ test("Windows constructed owned-Git channel candidate (separate admission requir
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       /^(SystemRoot|WINDIR|SystemDrive|COMSPEC|PATH|TEMP|TMP|PATHEXT|LANG|LC_ALL)$/i.test(key)))
     const receipt = path.join(evidence, "channel-broader-owner.json")
-    exec(config.owner, ["--supervise", nodes[2].path, path.join(publicRoot, "probe.test.cjs"), filename, receipt], "broader-supervisor", { env })
+    exec(config.owner, ["--protected-supervise", nodes[2].path, path.join(publicRoot, "probe.test.cjs"), filename, receipt],
+      "broader-supervisor", { env: { ...env, DESK_CHANNEL_EVIDENCE_ROOT: evidence } })
     const worker = JSON.parse(fs.readFileSync(config.report, "utf8"))
     const broader = JSON.parse(fs.readFileSync(receipt, "utf8"))
     assert.equal(worker.status, "CORPUS_OBSERVED_NOT_ADJUDICATED")
-    assert.equal(worker.cases.length, 57)
+    assert.equal(worker.cases.length, 77)
     assert.equal(broader.sealed, true); assert.equal(broader.exactJobZero, true)
     assert.deepEqual([...broader.retiredPids].sort((a, b) => a - b), [...worker.stranded].sort((a, b) => a - b))
     status.status = "CORPUS_OBSERVED_NOT_ADJUDICATED"; status.broader = broader; save()
