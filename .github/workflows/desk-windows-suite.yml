@@ -158,8 +158,26 @@ jobs:
         with:
           name: owned-git-probe-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
-            owned-git-probe-output/
+            owned-git-probe-output/source/probe-owner.c
+            owned-git-probe-output/source/probe-shim.cjs
+            owned-git-probe-output/source/probe.test.cjs
+            owned-git-probe-output/source/channel-workload.cjs
+            owned-git-probe-output/source/build.ps1
+            owned-git-probe-output/source/preload.cjs
+            owned-git-probe-output/artifacts/owned-git/win32-x64/probe-owner.exe
+            owned-git-probe-output/artifacts/owned-git/win32-x64/probe-shim.cjs
+            owned-git-probe-output/artifacts/owned-git/win32-x64/probe.test.cjs
+            owned-git-probe-output/artifacts/owned-git/win32-x64/channel-workload.cjs
+            owned-git-probe-output/artifacts/owned-git/win32-x64/observation preload.cjs
+            owned-git-probe-output/artifacts/owned-git/win32-x64/sha256-manifest.json
+            owned-git-probe-output/report.json
+            owned-git-probe-output/safe-evidence/**
             owned-git-probe-interpreters.json
+            !owned-git-probe-output/evidence/**
+            !owned-git-probe-output/**/*.payload.json
+            !owned-git-probe-output/**/channel-config.json
+            !owned-git-probe-output/**/*.stdout
+            !owned-git-probe-output/**/*.stderr
           if-no-files-found: warn
           retention-days: 7
 

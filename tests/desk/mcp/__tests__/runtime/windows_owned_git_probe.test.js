@@ -382,6 +382,475 @@ test("channel portable unwind MODEL expired scope still invokes owned auxiliary 
   }
 })
 
+let retentionFixtureSequence = 0
+function retentionFixture(label) {
+  const base = process.env.DESK_RETENTION_FIXTURES ?? path.resolve("owned-git-retention-portable-fixtures")
+  fs.mkdirSync(base, { recursive: true })
+  const repo = path.join(base, label + "-" + process.pid + "-" + Date.now() + "-" + retentionFixtureSequence++)
+  fs.mkdirSync(repo)
+  const nodes = [{ version: process.version, path: process.execPath, sha256: "a".repeat(64) }]
+  return { repo, nodes }
+}
+function retentionKernel() {
+  return { protocol: "desk.owned-git-channel-probe/1", purpose: "probe", generation: "1".repeat(64),
+    preparationDigest: "2".repeat(64), payloadDigest: null, sealed: false, exactJobZero: false,
+    rootRetired: false, startIssued: false, commandState: "not_started", controlComplete: false,
+    failure: true, parentMaxQueued: 2, parentPendingReads: 1, parentPendingWrites: 0,
+    rootMaxQueued: 1, rootPendingReads: 1, rootPendingWrites: 0, parentPartialReads: 0,
+    rootBytesAtEOF: 0, privateRootProtected: true }
+}
+async function retentionClosedModel(ctx, code = 1) {
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const child = Object.assign(new EventEmitter(), { pid: 123, stdout: new PassThrough(),
+    stderr: new PassThrough(), kill: () => true })
+  const result = observeNamedProducer(ctx, child, Date.now() + 1000)
+  child.stdout.end(); child.stderr.end()
+  await new Promise((resolve) => setImmediate(resolve))
+  child.emit("close", code, null)
+  return result
+}
+test("channel portable retention projects known nested schema without favorable flag coercion", () => {
+  assert.equal(typeof projectNamedRole, "function")
+  const kernel = retentionKernel()
+  assert.deepEqual(projectNamedRole("kernel", kernel, {}), kernel)
+  assert.equal(projectNamedRole("kernel", kernel, {}).exactJobZero, false)
+})
+test("channel portable retention rejects nested secrets opaque errors and unknown fields", () => {
+  assert.equal(typeof projectNamedRole, "function")
+  const canary = "SECRET_CAPABILITY_ENDPOINT_ENV"
+  assert.throws(() => projectNamedRole("kernel", { ...retentionKernel(), env: { secret: canary } }, {}))
+  assert.throws(() => projectNamedRole("result", { command: { state: "exited", code: 0, signal: null,
+    spawnError: canary }, input: { state: "complete", length: 6, written: 6, error: null },
+    runtime: { version: "v24.18.0", execPath: canary } }, { nodes: [] }))
+  assert.throws(() => parseNamedJSON('{"failure":true,"failure":false}'))
+})
+test("channel portable retention fresh parent refuses reuse and does not infer alias absence", () => {
+  assert.equal(typeof makeNamedRetention, "function")
+  const { repo, nodes } = retentionFixture("fresh")
+  const ctx = makeNamedRetention(repo, { nodes })
+  assert.equal(fs.existsSync(ctx.privateRoot), false)
+  assert.throws(() => makeNamedRetention(repo, { nodes }))
+})
+test("channel portable retention rejects source ancestor links nonregular and escaping paths", () => {
+  assert.equal(typeof namedRetentionGuard, "function")
+  const { repo } = retentionFixture("guard")
+  fs.mkdirSync(path.join(repo, "real"))
+  fs.symlinkSync(path.join(repo, "real"), path.join(repo, "linked"), process.platform === "win32" ? "junction" : "dir")
+  const guard = namedRetentionGuard(repo)
+  assert.throws(() => guard.walk(path.join(repo, "linked"), "directory"))
+  assert.throws(() => guard.walk(path.join(repo, "..", "outside"), "directory"))
+  assert.throws(() => guard.walk(repo, "file"))
+})
+test("channel portable retention bounds metadata depth and entries across repeated scans MODEL", () => {
+  assert.equal(typeof namedRetentionGuard, "function")
+  const { repo } = retentionFixture("bounds")
+  assert.throws(() => namedRetentionGuard(repo, { entries: 0 }).walk(repo, "directory"))
+  assert.throws(() => namedRetentionGuard(repo, { depth: 1 }).walk(repo, "directory"))
+})
+test("channel portable retention unknown producer never reads private corpus MODEL", async () => {
+  assert.equal(typeof makeNamedRetention, "function")
+  const { repo, nodes } = retentionFixture("unknown")
+  const ctx = makeNamedRetention(repo, { nodes })
+  const value = await exportNamedChannelEvidence(ctx)
+  assert.equal(value.status, "incomplete"); assert.equal(value.sourceBytes, 0)
+  assert.equal(value.outerReadback, "UNMEASURED")
+  assert.ok(value.gaps.some((g) => g.reason === "producer-not-closed-bound"))
+})
+test("channel portable retention bound closed failed producer exports only safe schema MODEL", async () => {
+  assert.equal(typeof observeNamedProducer, "function")
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const { repo, nodes } = retentionFixture("settled")
+  const roles = [{ name: "case.receipt.json", kind: "kernel", required: true }]
+  const ctx = makeNamedRetention(repo, { nodes, roles })
+  fs.mkdirSync(ctx.privateRoot)
+  fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"),
+    JSON.stringify({ stage: "broader-test-owner", sealed: true, exactJobZero: true,
+      retiredPids: [], activeBefore: 0, workerCode: 1 }))
+  fs.writeFileSync(path.join(ctx.privateRoot, "case.receipt.json"), JSON.stringify(retentionKernel()))
+  fs.writeFileSync(path.join(ctx.privateRoot, "case.payload.json"), "SECRET_ENV_BODY")
+  const child = Object.assign(new EventEmitter(), { pid: 321, stdout: new PassThrough(),
+    stderr: new PassThrough(), kill: () => true })
+  const pending = observeNamedProducer(ctx, child, Date.now() + 1000)
+  child.stdout.resume(); child.stderr.resume(); child.stdout.end(); child.stderr.end()
+  await new Promise((resolve) => setImmediate(resolve))
+  child.emit("close", 1, null)
+  await pending
+  const out = await exportNamedChannelEvidence(ctx)
+  assert.equal(out.status, "complete")
+  assert.equal(out.native.exitCode, 1)
+  const projection = fs.readFileSync(path.join(ctx.exportRoot, "0001.json"), "utf8")
+  assert.equal(projection.includes("SECRET_ENV_BODY"), false)
+  assert.equal(JSON.parse(projection).facts.exactJobZero, false)
+  assert.equal(out.files[1].sourceSha256, createHash("sha256").update(
+    fs.readFileSync(path.join(ctx.privateRoot, "case.receipt.json"))).digest("hex"))
+})
+test("channel portable retention missing malformed nozero and oversize bootstrap withhold corpus MODEL", async () => {
+  assert.equal(typeof makeNamedRetention, "function")
+  for (const body of [null, "{", JSON.stringify({ stage: "broader-test-owner", sealed: false,
+    exactJobZero: false, retiredPids: [], activeBefore: 1, workerCode: 1 }), "x".repeat(1025)]) {
+    const { repo, nodes } = retentionFixture("bootstrap")
+    const ctx = makeNamedRetention(repo, { nodes, fileBytes: 1024 })
+    fs.mkdirSync(ctx.privateRoot)
+    if (body !== null) fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), body)
+    await retentionClosedModel(ctx)
+    const out = await exportNamedChannelEvidence(ctx)
+    assert.equal(out.status, "incomplete")
+    assert.equal(out.files.length, body?.includes('"sealed":false') ? 1 : 0)
+  }
+})
+test("channel portable retention export status failure preserves primary including undefined MODEL", async () => {
+  assert.equal(typeof finishNamedRetention, "function")
+  for (const primary of [Error("native failed"), undefined]) {
+    let exported = 0
+    await assert.rejects(async () => {
+      try {
+        await finishNamedRetention({ failed: true, primary,
+          exportEvidence() { exported++; throw Error("export failed") },
+          persist() { throw Error("status failed") } })
+      } catch (error) { assert.equal(error, primary); throw Error("original preserved") }
+    }, /original preserved/)
+    assert.equal(exported, 1)
+  }
+})
+test("channel portable retention workflow allowlist excludes config telemetry payload and private root", () => {
+  const text = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),
+    "../../../../../.github/workflows/desk-windows-suite.yml"), "utf8")
+  const block = text.split("- name: Keep full owned-Git diagnostic evidence")[1].split("retention-days:")[0]
+  assert.doesNotMatch(block, /^\s+owned-git-probe-output\/\s*$/m)
+  assert.doesNotMatch(block, /^\s+owned-git-probe-output\/(?:source|artifacts)\/(?:\*\*)?\s*$/m)
+  assert.match(block, /!owned-git-probe-output\/evidence\/\*\*/)
+  assert.match(block, /!owned-git-probe-output\/\*\*\/\*\.payload\.json/)
+  assert.match(block, /!owned-git-probe-output\/\*\*\/channel-config\.json/)
+  assert.match(block, /!owned-git-probe-output\/\*\*\/\*\.stdout/)
+  assert.match(block, /safe-evidence\/\*\*/)
+})
+test("channel portable retention refuses arbitrary Windows anchor shapes MODEL", () => {
+  assert.equal(typeof namedRetentionAnchor, "function")
+  for (const invalid of ["C:desk", "\\\\server\\share\\desk", "\\\\?\\C:\\desk", "C:\\a\\..\\desk", "C:\\SHORT~1\\desk"])
+    assert.throws(() => namedRetentionAnchor(invalid, "win32"))
+  assert.equal(namedRetentionAnchor("C:\\a\\desk", "win32"), "C:\\")
+})
+test("channel portable retention detects bigint identity drift rather than treating snapshots as pins MODEL", () => {
+  const { repo } = retentionFixture("drift")
+  let drift = false
+  const io = { ...fs, statSync(name, options) {
+    const st = fs.statSync(name, options)
+    if (drift && name === repo) Object.defineProperty(st, "ino", { value: 987654321n })
+    return st
+  } }
+  const guard = namedRetentionGuard(repo, {}, io)
+  guard.walk(repo, "directory"); drift = true
+  assert.throws(() => guard.walk(repo, "directory"), /identity/)
+})
+test("channel portable retention refuses existing destination without overwriting", async () => {
+  const { repo, nodes } = retentionFixture("destination")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+  fs.mkdirSync(ctx.exportRoot); fs.writeFileSync(path.join(ctx.exportRoot, "keep"), "original")
+  await assert.rejects(exportNamedChannelEvidence(ctx))
+  assert.equal(fs.readFileSync(path.join(ctx.exportRoot, "keep"), "utf8"), "original")
+})
+test("channel portable retention marker schema cannot swap unrelated known marker literals", () => {
+  assert.throws(() => projectNamedMarker({ name: "0-normal.channel-closed" }, "first instruction", {}))
+})
+test("channel portable retention late and expired producer events cannot grant bootstrap authority MODEL", async () => {
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const { repo, nodes } = retentionFixture("expired")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+  let kills = 0
+  const child = Object.assign(new EventEmitter(), { pid: 456, stdout: new PassThrough(),
+    stderr: new PassThrough(), kill() { kills++; return true } })
+  await observeNamedProducer(ctx, child, Date.now() - 1)
+  const before = JSON.stringify(ctx.producer)
+  child.stdout.end(); child.stderr.end(); child.emit("close", 0, null)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(JSON.stringify(ctx.producer), before); assert.equal(kills, 1)
+  const out = await exportNamedChannelEvidence(ctx)
+  assert.equal(out.status, "incomplete"); assert.equal(out.sourceBytes, 0)
+})
+test("channel portable retention unknown filenames do not leak opaque names or become a favorable subset MODEL", async () => {
+  const { repo, nodes } = retentionFixture("unknown-role")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+  fs.mkdirSync(ctx.privateRoot)
+  fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), JSON.stringify({
+    stage: "broader-test-owner", sealed: true, exactJobZero: true, retiredPids: [], activeBefore: 0, workerCode: 1 }))
+  fs.writeFileSync(path.join(ctx.privateRoot, "SECRET_ENDPOINT.note"), "SECRET_ENV_BODY")
+  await retentionClosedModel(ctx)
+  const out = await exportNamedChannelEvidence(ctx)
+  assert.equal(out.status, "incomplete")
+  assert.equal(JSON.stringify(out).includes("SECRET_"), false)
+  assert.ok(out.gaps.some((g) => g.reason === "undeclared-source-role"))
+})
+test("channel portable retention rejects malformed nested journals and opaque base64 AUTH", () => {
+  const event = { protocol: "desk.owned-git-channel-probe/1", generation: "1".repeat(64),
+    preparationDigest: "2".repeat(64), payloadDigest: null, role: "owner", stage: "ready",
+    ownedCreated: 16, ownedClosed: 6, apis: [],
+    detail: Buffer.from(JSON.stringify({ capability: "SECRET_AUTH", env: "SECRET_ENV" })).toString("base64") }
+  assert.throws(() => projectNamedRole("journal", { event }, { nodes: [] }))
+  assert.throws(() => projectNamedRole("journal", { ownerClose: { code: "SECRET_ERROR", signal: null } }, {}))
+})
+test("channel portable retention full-close callback cannot win after deadline before timeout task MODEL", async () => {
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const { repo, nodes } = retentionFixture("deadline-race")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+  const child = Object.assign(new EventEmitter(), { pid: 333, stdout: new PassThrough(),
+    stderr: new PassThrough(), kill: () => true })
+  const done = observeNamedProducer(ctx, child, Date.now() - 1)
+  child.stdout.emit("end"); child.stdout.emit("close")
+  child.stderr.emit("end"); child.stderr.emit("close"); child.emit("close", 0, null)
+  const facts = await done
+  assert.equal(facts.timedOut, true)
+  assert.equal((await exportNamedChannelEvidence(ctx)).sourceBytes, 0)
+})
+test("channel portable retention metadata cannot pass through nested candidate env or opaque fields", async () => {
+  const { repo, nodes } = retentionFixture("candidate")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [], candidate: { env: { token: "SECRET_METADATA" } } })
+  await assert.rejects(exportNamedChannelEvidence(ctx))
+})
+test("channel portable retention source aggregate and output caps refuse before unbounded work MODEL", async () => {
+  for (const outputBound of [false, true]) {
+    const { repo, nodes } = retentionFixture("aggregate")
+    const body = JSON.stringify({ stage: "broader-test-owner", sealed: true, exactJobZero: true,
+      retiredPids: [], activeBefore: 0, workerCode: 1 })
+    const ctx = makeNamedRetention(repo, { nodes, roles: [], fileBytes: outputBound ? Buffer.byteLength(body) : 33554432 })
+    fs.mkdirSync(ctx.privateRoot); fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), body)
+    await retentionClosedModel(ctx)
+    if (!outputBound) ctx.sourceBytes = 67108863
+    const before = ctx.sourceBytes, out = await exportNamedChannelEvidence(ctx)
+    assert.equal(out.status, "incomplete"); assert.equal(out.files.length, 0)
+    if (!outputBound) assert.equal(out.sourceBytes, before)
+  }
+})
+test("channel portable retention preserves closed bootstrap adverse flags and malformed source hash MODEL", async () => {
+  for (const malformed of [false, true]) {
+    const { repo, nodes } = retentionFixture("adverse-bootstrap")
+    const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+    fs.mkdirSync(ctx.privateRoot)
+    const text = malformed ? "{" : JSON.stringify({ stage: "broader-test-owner", sealed: false,
+      exactJobZero: false, retiredPids: [123], activeBefore: 1, workerCode: 1 })
+    fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), text)
+    fs.writeFileSync(path.join(ctx.privateRoot, "SECRET_UNSTABLE"), "MUST_NOT_READ")
+    await retentionClosedModel(ctx)
+    const out = await exportNamedChannelEvidence(ctx)
+    assert.equal(out.status, "incomplete")
+    assert.equal(out.sourceBytes, Buffer.byteLength(text))
+    if (malformed) assert.equal(out.gaps[0].sourceSha256, createHash("sha256").update(text).digest("hex"))
+    else {
+      assert.equal(out.files.length, 1)
+      const facts = JSON.parse(fs.readFileSync(path.join(ctx.exportRoot, "0000.json"), "utf8")).facts
+      assert.equal(facts.sealed, false); assert.equal(facts.exactJobZero, false)
+    }
+  }
+})
+test("channel portable retention full receipt API journal and worker schema set binds every inspected digest MODEL", async () => {
+  const { repo, nodes } = retentionFixture("all-roles")
+  const roles = [{ name: "case.receipt.json", kind: "kernel", required: true },
+    { name: "case.receipt.json.owner-close.json", kind: "close", required: true },
+    { name: "case.jsonl", kind: "journal", required: true },
+    { name: "channel-worker-report.json", kind: "report", required: true }]
+  const ctx = makeNamedRetention(repo, { nodes, roles })
+  fs.mkdirSync(ctx.privateRoot)
+  const kernel = retentionKernel()
+  const api = { api: "QueryInformationJobObject-MODEL-wrong-type", resource: "model-query-wrong-type-event",
+    ok: false, error: 6, value: 0 }
+  const close = { kind: "owner-close-diagnostic", protocol: kernel.protocol, generation: kernel.generation,
+    preparationDigest: kernel.preparationDigest, ownedCreated: 18, ownedClosed: 17, ownedHandlesClosed: false,
+    crtControlClosed: true, kernelCertificateIssued: true, modelStranded: false, apis: [api] }
+  const journal = { event: { protocol: kernel.protocol, generation: kernel.generation,
+    preparationDigest: kernel.preparationDigest, payloadDigest: null, role: "owner", stage: "sealed-zero",
+    ownedCreated: 18, ownedClosed: 15, apis: [api], certificate: kernel, reason: "prepare-resources" } }
+  const report = { status: "STOP", cases: [{ mode: "normal", parent: process.version, root: process.version,
+    status: "ATTEMPTED", proof: kernel, ownerClose: close, cleanupFailures: ["generation-settlement"],
+    generations: [{ generation: kernel.generation, deadline: Date.now(), status: "HOLD", retirement: "unknown",
+      actual: { ownerClosed: false, code: null, signal: null }, expectedMissing: false, expectedTransportLoss: false }] }],
+    stranded: [], nativeQualified: false, driver: { version: process.version, execPath: process.execPath },
+    originalHistorical27Qualified: false, failure: "bounded candidate failure; inspect typed receipts" }
+  const data = { "channel-broader-owner.json": { stage: "broader-test-owner", sealed: true, exactJobZero: true,
+    retiredPids: [], activeBefore: 0, workerCode: 1 }, "case.receipt.json": kernel,
+  "case.receipt.json.owner-close.json": close, "case.jsonl": journal, "channel-worker-report.json": report }
+  for (const [name, facts] of Object.entries(data)) fs.writeFileSync(path.join(ctx.privateRoot, name), JSON.stringify(facts))
+  await retentionClosedModel(ctx)
+  const out = await exportNamedChannelEvidence(ctx)
+  assert.equal(out.status, "complete"); assert.equal(out.files.length, 5)
+  for (const item of out.files) {
+    assert.equal(item.sourceSha256, createHash("sha256").update(fs.readFileSync(path.join(ctx.privateRoot, item.role))).digest("hex"))
+    assert.equal(item.output.sha256, createHash("sha256").update(fs.readFileSync(path.join(ctx.exportRoot, item.output.name))).digest("hex"))
+  }
+  const projected = ctx.projections.get("case.receipt.json.owner-close.json")
+  assert.equal(projected.ownedHandlesClosed, false); assert.equal(projected.apis[0].error, 6)
+  assert.equal(out.outputBytes, fs.readdirSync(ctx.exportRoot).reduce((n, name) => n + fs.statSync(path.join(ctx.exportRoot, name)).size, 0))
+})
+test("channel portable retention metadata cursor closes on refusal and ambiguous case is never absence MODEL", () => {
+  const { repo } = retentionFixture("cursor")
+  fs.mkdirSync(path.join(repo, "Mixed"))
+  let opens = 0, closes = 0
+  const io = { ...fs, opendirSync(...args) {
+    opens++
+    const dir = fs.opendirSync(...args), close = dir.closeSync.bind(dir)
+    dir.closeSync = () => { closes++; close() }
+    return dir
+  } }
+  assert.throws(() => namedRetentionGuard(repo, { entries: 0 }, io).walk(repo, "directory"))
+  assert.equal(opens, closes)
+  assert.throws(() => namedRetentionGuard(repo).walk(path.join(repo, "mixed"), "directory"), /ambiguous/)
+  const guard = namedRetentionGuard(repo)
+  for (const kind of ["file", "directory"]) assert.throws(() => guard.type({
+    isSymbolicLink: () => false, isDirectory: () => false, isFile: () => false }, kind))
+})
+test("channel portable retention export failure is visible even when native had no primary failure MODEL", async () => {
+  let saved
+  await assert.rejects(finishNamedRetention({ failed: false,
+    exportEvidence() { throw Error("disk unavailable") }, persist(value) { saved = value } }), /evidence incomplete/)
+  assert.equal(saved.status, "failed"); assert.equal(saved.outerReadback, "UNMEASURED")
+})
+test("channel portable retention preserves native unsigned handle sentinel without numeric rounding", () => {
+  const text = '{"event":{"protocol":"desk.owned-git-channel-probe/1","generation":"' + "1".repeat(64) +
+    '","preparationDigest":"' + "2".repeat(64) + '","payloadDigest":null,"role":"owner","stage":"modeled-resume-refusal",' +
+    '"ownedCreated":16,"ownedClosed":6,"apis":[{"api":"GetHandleInformation-fresh","resource":"root-thread",' +
+    '"ok":false,"error":6,"value":18446744073709551615}]}}'
+  const result = projectNamedRole("journal", parseNamedJSON(text), {})
+  assert.deepEqual(result.event.apis[0].value, { unsigned64: "18446744073709551615" })
+})
+test("channel portable retention early producer error with missing pipes remains observable and preserves original MODEL", async () => {
+  const { EventEmitter } = await import("node:events")
+  const { repo, nodes } = retentionFixture("producer-error")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+  const child = Object.assign(new EventEmitter(), { stdout: null, stderr: null, kill: () => false })
+  const pending = observeNamedProducer(ctx, child, Date.now() + 1000).catch((error) => error)
+  const original = Error("spawn failed")
+  assert.doesNotThrow(() => child.emit("error", original))
+  child.emit("close", null, null)
+  const facts = await pending
+  assert.equal(facts.error, true); assert.equal(ctx.nativeError, original)
+  const out = await exportNamedChannelEvidence(ctx)
+  assert.equal(out.status, "incomplete"); assert.equal(out.sourceBytes, 0)
+})
+test("channel portable retention binds each runtime version to its matching executable identity", () => {
+  const nodes = [{ version: "v20.0.0", path: "C:\\node20.exe" }, { version: "v24.18.0", path: "C:\\node24.exe" }]
+  const value = { command: { state: "exited", code: 0, signal: null, spawnError: null },
+    input: { state: "none", length: 0, written: 0, error: null },
+    runtime: { version: "v20.0.0", execPath: "C:\\node24.exe" } }
+  assert.throws(() => projectNamedRole("result", value, { nodes }))
+})
+test("channel portable retention public binding hashes share source envelope and never inspect oversize bytes", () => {
+  assert.equal(typeof hashNamedPublic, "function")
+  const { repo, nodes } = retentionFixture("metadata-bound")
+  const ctx = makeNamedRetention(repo, { nodes, roles: [], fileBytes: 1024 })
+  fs.writeFileSync(path.join(repo, "small"), "meta")
+  fs.writeFileSync(path.join(repo, "large"), "x".repeat(1025))
+  assert.throws(() => hashNamedPublic(ctx, path.join(repo, "large")))
+  assert.equal(ctx.sourceBytes, 0)
+  assert.equal(hashNamedPublic(ctx, path.join(repo, "small")), createHash("sha256").update("meta").digest("hex"))
+  assert.equal(ctx.sourceBytes, 4); assert.equal(ctx.privateSourceBytes, 0)
+})
+test("channel portable retention native vocabulary and DWORD domains are role-specific", () => {
+  const kernel = retentionKernel()
+  const event = { protocol: kernel.protocol, generation: kernel.generation,
+    preparationDigest: kernel.preparationDigest, payloadDigest: null, role: "owner",
+    stage: "modeled-resume-refusal", ownedCreated: 16, ownedClosed: 6,
+    apis: [{ api: "GetHandleInformation-fresh", resource: "root-role-replay", ok: false, error: 6, value: 0 }] }
+  assert.throws(() => projectNamedRole("journal", { event }, {}))
+  assert.throws(() => projectNamedRole("broader", { stage: "broader-test-owner", sealed: true,
+    exactJobZero: true, retiredPids: [], activeBefore: 4294967296, workerCode: 0 }, {}))
+})
+test("channel portable retention missing job metadata never becomes a default trusted workspace MODEL", () => {
+    assert.equal(typeof namedRetentionJob, "function")
+    const repo = "C:\\a\\desk"
+    const meta = { GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_WORKFLOW: "desk MCP tests on Windows",
+      RUNNER_ENVIRONMENT: "github-hosted", RUNNER_OS: "Windows", GITHUB_WORKSPACE: repo,
+      GITHUB_SHA: "a".repeat(40), GITHUB_RUN_ID: "123" }
+    assert.deepEqual(namedRetentionJob(repo, meta), { dispatchCommit: "a".repeat(40), dispatchRun: "123" })
+    for (const key of ["GITHUB_WORKSPACE", "GITHUB_SHA", "GITHUB_RUN_ID", "RUNNER_ENVIRONMENT"]) {
+      const bad = { ...meta }; delete bad[key]
+      assert.throws(() => namedRetentionJob(repo, bad))
+    }
+})
+test("channel portable retention supervisor opaque output overflow is failed not buffered or exported MODEL", async () => {
+    const { EventEmitter } = await import("node:events")
+    const { PassThrough } = await import("node:stream")
+    const { repo, nodes } = retentionFixture("producer-output")
+    const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+    let kills = 0
+    const child = Object.assign(new EventEmitter(), { pid: 444, stdout: new PassThrough(),
+      stderr: new PassThrough(), kill() { kills++; return true } })
+    const done = observeNamedProducer(ctx, child, Date.now() + 1000)
+    child.stdout.write(Buffer.alloc(1048577, 120)); child.stdout.end(); child.stderr.end()
+    await new Promise((resolve) => setImmediate(resolve)); child.emit("close", 1, null)
+    const facts = await done
+    assert.equal(facts.error, true); assert.equal(kills, 1); assert.equal(facts.stdoutBytes, 1048577)
+    assert.equal((await exportNamedChannelEvidence(ctx)).sourceBytes, 0)
+})
+test("channel portable retention closed producer transport failure retains failure but may export bound retired diagnostics MODEL", async () => {
+    const { EventEmitter } = await import("node:events")
+    const { PassThrough } = await import("node:stream")
+    const { repo, nodes } = retentionFixture("closed-error")
+    const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+    fs.mkdirSync(ctx.privateRoot)
+    fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), JSON.stringify({
+      stage: "broader-test-owner", sealed: true, exactJobZero: true, retiredPids: [], activeBefore: 0, workerCode: 1 }))
+    const child = Object.assign(new EventEmitter(), { pid: 555, stdout: new PassThrough(),
+      stderr: new PassThrough(), kill: () => true })
+    const done = observeNamedProducer(ctx, child, Date.now() + 1000), original = Error("transport failed")
+    child.stderr.emit("error", original); child.stdout.end(); child.stderr.end()
+    await new Promise((resolve) => setImmediate(resolve)); child.emit("close", 1, null); await done
+    const out = await exportNamedChannelEvidence(ctx)
+    assert.equal(out.status, "complete"); assert.equal(out.native.error, true)
+    assert.equal(ctx.nativeError, original); assert.equal(out.native.exitCode, 1)
+})
+test("channel portable retention interpreter status forbids unknown nested metadata MODEL", () => {
+    const nodes = [{ version: "v24.18.0", path: "C:\\nodes\\node.exe", sha256: "a".repeat(64) }]
+    assert.deepEqual(projectNamedRole("interpreters", nodes, { nodes }), nodes)
+    assert.throws(() => projectNamedRole("interpreters", [{ ...nodes[0], env: { AUTH: "never-export" } }], { nodes }))
+})
+test("channel portable retention success and settled failure export before return using fresh serialized objects MODEL", async () => {
+    for (const [code, failed, primary] of [[0, false, undefined], [1, true, Error("native failed")], [1, true, undefined]]) {
+      const { repo, nodes } = retentionFixture("before-return"), order = []
+      const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+      fs.mkdirSync(ctx.privateRoot)
+      const filename = path.join(ctx.privateRoot, "channel-broader-owner.json")
+      const text = JSON.stringify({ stage: "broader-test-owner", sealed: true, exactJobZero: true,
+        retiredPids: [], activeBefore: 0, workerCode: code })
+      fs.writeFileSync(filename, text, { mode: 0o400 })
+      await retentionClosedModel(ctx, code)
+      let caught = false, saved
+      try {
+        await finishNamedRetention({ failed, primary,
+          async exportEvidence() { order.push("export"); return exportNamedChannelEvidence(ctx) },
+          persist(value) {
+            order.push("persist"); saved = value
+          } })
+      } catch (error) { caught = true; assert.equal(error, primary) }
+      order.push("returned")
+      assert.equal(caught, failed); assert.deepEqual(order, ["export", "persist", "returned"])
+      assert.equal(saved.status, "complete"); assert.equal(saved.native.exitCode, code)
+      assert.equal(saved.outerReadback, "UNMEASURED")
+      const output = path.join(ctx.exportRoot, saved.files[0].output.name)
+      assert.notEqual(fs.statSync(output, { bigint: true }).ino, fs.statSync(filename, { bigint: true }).ino)
+      assert.notEqual(fs.readFileSync(output, "utf8"), text)
+      assert.equal(fs.readFileSync(filename, "utf8"), text)
+      if (process.platform !== "win32") assert.equal(fs.statSync(filename).mode & 0o777, 0o400)
+    }
+})
+test("channel portable retention actual child close nested inside final stdio close joins both callbacks MODEL", async () => {
+    const { EventEmitter } = await import("node:events")
+    const { repo, nodes } = retentionFixture("nested-close")
+    const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+    fs.mkdirSync(ctx.privateRoot)
+    fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), JSON.stringify({
+      stage: "broader-test-owner", sealed: true, exactJobZero: true, retiredPids: [], activeBefore: 0, workerCode: 1 }))
+    const child = Object.assign(new EventEmitter(), { pid: 777, stdout: new EventEmitter(),
+      stderr: new EventEmitter(), kill: () => true })
+    child.stderr.on("close", () => child.emit("close", 1, null))
+    const pending = observeNamedProducer(ctx, child, Date.now() + 1000)
+    child.stdout.emit("end"); child.stdout.emit("close"); child.stderr.emit("end"); child.stderr.emit("close")
+    const facts = await pending
+    assert.equal(facts.stderrClosed, true); assert.equal(facts.fullClose, true)
+    assert.equal((await exportNamedChannelEvidence(ctx)).status, "complete")
+})
+
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
   const hex = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
@@ -3758,26 +4227,602 @@ function assertChannelCandidateSources(material = channelProbeMaterial) {
   return true
 }
 
+function parseNamedJSON(text) {
+  if (typeof text !== "string" || text.length > 33554432) throw Error("json-bound")
+  let at = 0, nodes = 0
+  const bad = () => { throw Error("malformed-or-bounded-json") }
+  const space = () => { while (/[ \r\n\t]/.test(text[at] ?? "") && at < text.length) at++ }
+  const string = () => {
+    if (text[at] !== '"') return bad()
+    const start = at++
+    while (at < text.length && text[at] !== '"') { if (text[at] === "\\") at++; at++ }
+    if (at >= text.length) return bad()
+    return JSON.parse(text.slice(start, ++at))
+  }
+  const value = (depth) => {
+    if (depth > 32 || ++nodes > 262144) return bad()
+    space()
+    if (text[at] === '"') return string()
+    if (text[at] === "{" || text[at] === "[") {
+      const object = text[at++] === "{", out = object ? {} : [], keys = new Set(), end = object ? "}" : "]"
+      space()
+      if (text[at] === end) { at++; return out }
+      for (;;) {
+        space()
+        let key
+        if (object) {
+          key = string()
+          if (keys.has(key)) return bad()
+          keys.add(key); space()
+          if (text[at++] !== ":") return bad()
+        }
+        const item = value(depth + 1)
+        if (object) Object.defineProperty(out, key, { value: item, enumerable: true })
+        else out.push(item)
+        space()
+        if (text[at] === end) { at++; return out }
+        if (text[at++] !== ",") return bad()
+      }
+    }
+    for (const [token, result] of [["true", true], ["false", false], ["null", null]])
+      if (text.startsWith(token, at)) { at += token.length; return result }
+    const start = at
+    while (at < text.length && /[-+0-9.eE]/.test(text[at])) { if (at - start > 24) return bad(); at++ }
+    const token = text.slice(start, at)
+    if (!/^(?:0|-?[1-9][0-9]*)$/.test(token)) return bad()
+    const number = Number(token)
+    if (Number.isSafeInteger(number)) return number
+    const integer = BigInt(token)
+    if (integer < 0n || integer > 18446744073709551615n) return bad()
+    return integer
+  }
+  const result = value(0)
+  space()
+  if (at !== text.length) return bad()
+  return result
+}
+function namedRetentionAnchor(repo, platform = process.platform) {
+  if (platform !== "win32" || !/^[A-Za-z]:\\/.test(repo) || repo.includes("~") ||
+      path.win32.normalize(repo) !== repo || repo.split("\\").slice(1).some((p) => !p || /[. ]$/.test(p)))
+    throw Error("unqualified-host-anchor")
+  return path.win32.parse(repo).root
+}
+function namedRetentionJob(repo, meta) {
+  if (meta.GITHUB_EVENT_NAME !== "workflow_dispatch" || meta.GITHUB_WORKFLOW !== "desk MCP tests on Windows" ||
+      meta.RUNNER_ENVIRONMENT !== "github-hosted" || meta.RUNNER_OS !== "Windows" ||
+      typeof meta.GITHUB_WORKSPACE !== "string" || !meta.GITHUB_WORKSPACE ||
+      path.win32.resolve(meta.GITHUB_WORKSPACE) !== repo ||
+      !/^[0-9a-f]{40}$/.test(meta.GITHUB_SHA ?? "") || !/^[0-9]{1,24}$/.test(meta.GITHUB_RUN_ID ?? ""))
+    throw Error("unqualified-hosted-job-context")
+  // These are consistency observations; the explicit dispatch approval supplies the trust contract.
+  return { dispatchCommit: meta.GITHUB_SHA, dispatchRun: meta.GITHUB_RUN_ID }
+}
+function namedRetentionGuard(base, limits = {}, io = fs) {
+  const anchor = path.parse(base).root, ids = new Map()
+  let entries = 0
+  const identity = (filename) => {
+    const st = io.statSync(filename, { bigint: true })
+    if (typeof st.dev !== "bigint" || typeof st.ino !== "bigint" || st.ino === 0n) throw Error("identity-unavailable")
+    return st
+  }
+  const same = (a, b) => a.dev === b.dev && a.ino === b.ino
+  const check = (filename) => {
+    const st = identity(filename), previous = ids.get(filename)
+    if (previous && !same(previous, st)) throw Error("identity-drift")
+    if (!st.isDirectory()) throw Error("non-directory")
+    ids.set(filename, st)
+    return st
+  }
+  const scan = (parent, consume) => {
+    const before = check(parent)
+    let dir
+    try {
+      dir = io.opendirSync(parent, { bufferSize: 1, recursive: false })
+      if (!same(before, check(parent))) throw Error("identity-drift")
+      for (;;) {
+        const entry = dir.readSync()
+        if (!entry) break
+        if (++entries > (limits.entries ?? 8192)) throw Error("entry-bound")
+        consume(entry)
+      }
+    } finally { if (dir) dir.closeSync() }
+    if (!same(before, check(parent))) throw Error("identity-drift")
+  }
+  const components = (filename) => {
+    const full = path.resolve(filename), relative = path.relative(base, full)
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) throw Error("escaping-path")
+    const parts = full.slice(anchor.length).split(path.sep).filter(Boolean)
+    if (parts.length > (limits.depth ?? 64) || parts.some((x) =>
+      x === "." || x === ".." || /[~:*?"<>|]/.test(x) || /[. ]$/.test(x))) throw Error("unqualified-path")
+    return { full, parts }
+  }
+  const type = (entry, wanted) => {
+    if (entry.isSymbolicLink() || (wanted === "directory" ? !entry.isDirectory() : !entry.isFile())) throw Error("nonregular-or-reparse")
+  }
+  const walk = (filename, wanted) => {
+    const { full, parts } = components(filename)
+    let current = anchor
+    check(current) // The approved volume root is a trust assumption, not a reparse query.
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i], next = path.join(current, part), kind = i === parts.length - 1 ? wanted : "directory"
+      if (kind === "directory" && ids.has(next)) { check(next); current = next; continue }
+      let match
+      scan(current, (entry) => {
+        if (entry.name.toLowerCase() === part.toLowerCase() && entry.name !== part) throw Error("ambiguous-spelling")
+        if (entry.name === part) { type(entry, kind); if (match) throw Error("ambiguous-spelling"); match = entry }
+      })
+      if (!match) throw Error("unavailable-path") // Missing long name is NOT lookup absence.
+      if (kind === "directory") check(next)
+      current = next
+    }
+    if (full === anchor && wanted !== "directory") throw Error("nonregular-or-reparse")
+    return full
+  }
+  return { walk, scan, type, check, identity, same, entries: () => entries }
+}
+function projectNamedRole(kind, value, config) {
+  const fail = () => { throw Error("schema-refused") }
+  const literal = (...allowed) => (v) => allowed.includes(v) ? v : fail()
+  const num = (v) => Number.isSafeInteger(v) && v >= 0 ? v : fail()
+  const uint32 = (v) => num(v) <= 4294967295 ? v : fail()
+  const code = (v) => v === null || (Number.isSafeInteger(v) && v >= -2147483648 && v <= 4294967295) ? v : fail()
+  const bool = (v) => typeof v === "boolean" ? v : fail()
+  const hash = (v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v) ? v : fail()
+  const nullable = (f) => (v) => v === null ? null : f(v)
+  const arr = (f, max = 256) => (v) => Array.isArray(v) && v.length <= max ? v.map(f) : fail()
+  const obj = (spec, required = Object.keys(spec)) => (v) => {
+    if (!v || typeof v !== "object" || Array.isArray(v) || Object.keys(v).some((k) => !Object.hasOwn(spec, k)) ||
+        required.some((k) => !Object.hasOwn(v, k))) return fail()
+    const out = {}
+    for (const key of Object.keys(v)) out[key] = spec[key](v[key])
+    return out
+  }
+  const enums = (regex) => literal(...Array.from(namedChannelNativeBody.matchAll(regex), (m) => m[1]))
+  const protocol = literal("desk.owned-git-channel-probe/1")
+  const signal = nullable(literal("SIGTERM", "SIGKILL", "SIGINT", "SIGABRT", "SIGBREAK"))
+  const errorCode = nullable(literal("ENOENT", "EACCES", "EPERM", "EINVAL", "EPIPE", "EBADF", "ECANCELED",
+    "ECONNRESET", "ETIMEDOUT", "ENOTDIR", "ENOMEM", "EBUSY", "ENOSPC", "EMFILE", "ENFILE", "UNKNOWN",
+    "STDIN_UNAVAILABLE", "ERR_STREAM_DESTROYED", "ERR_STREAM_PREMATURE_CLOSE"))
+  const runtimeShape = obj({ version: (v) => config.nodes?.some((n) => n.version === v) ? v : fail(),
+    execPath: (v) => typeof v === "string" && config.nodes?.some((n) => n.path.toLowerCase() === v.toLowerCase()) ? v : fail() })
+  const runtime = (v) => {
+    const out = runtimeShape(v)
+    if (!config.nodes.some((n) => n.version === out.version && n.path.toLowerCase() === out.execPath.toLowerCase())) return fail()
+    return out
+  }
+  const fields = (names, f) => Object.fromEntries(names.split(" ").map((n) => [n, f]))
+  const kernel = obj({ protocol, purpose: literal("probe"), generation: hash, preparationDigest: hash,
+    payloadDigest: nullable(hash), ...fields("sealed exactJobZero rootRetired startIssued controlComplete failure privateRootProtected", bool),
+    commandState: literal("not_started", "unknown", "reported"),
+    ...fields("parentMaxQueued parentPendingReads parentPendingWrites rootMaxQueued rootPendingReads rootPendingWrites parentPartialReads rootBytesAtEOF", uint32) })
+  const apis = new Set(Array.from(namedChannelNativeBody.matchAll(/nc_trace\(s, "([^"]+)"/g), (m) => m[1]))
+  for (const m of namedChannelNativeBody.matchAll(/NC_(?:FILE_SD|ACL)\([^\n]+, "([^"]+)"\)/g)) apis.add(m[1])
+  const resources = new Set(("admin-membership-SID borrowed-owner-stderr borrowed-owner-stdin borrowed-owner-stdout " +
+    "configured-payload data-duplicate-after-create kernel-receipt-file local-server model-query-wrong-type-event " +
+    "owner-close-file parent-control parent-fd3 parent-read-event parent-write-event connect-event " +
+    "peer-data-after-create peer-data-duplicate peer-stdin-NUL private-evidence-root private-file-DACL private-file-SID " +
+    "reserved-broader-receipt reserved-payload retained-job root-allowlist root-channel root-process " +
+    "root-stderr-data-duplicate root-stdin-NUL root-stdin-data-duplicate root-stdout-data-duplicate root-thread " +
+    "root-read-event root-write-event server-DACL supervisor-TokenUser supervisor-standard-token token-user " +
+    "wrong-peer-process wrong-peer-thread").split(" "))
+  const api = obj({ api: (v) => apis.has(v) ? v : fail(), resource: (v) => resources.has(v) ? v : fail(),
+    ok: bool, error: uint32,
+    value: (v) => typeof v === "bigint" && v >= 0n && v <= 18446744073709551615n ? { unsigned64: v.toString() } : num(v) })
+  const close = obj({ kind: literal("owner-close-diagnostic"), protocol, generation: hash, preparationDigest: hash,
+    ...fields("ownedCreated ownedClosed", num),
+    ...fields("ownedHandlesClosed crtControlClosed kernelCertificateIssued modelStranded", bool), apis: arr(api, 512) })
+  const result = obj({ command: obj({ state: literal("exited", "spawn_error"), code, signal, spawnError: errorCode }),
+    input: obj({ state: literal("none", "complete", "failed"), length: num, written: num, error: errorCode }), runtime })
+  const ackShape = obj({ version: runtimeVersion, execPath: runtimePath, bootstrapNodeOptions: literal(null), bootstrapNodePath: literal(null) })
+  const ack = (v) => { const out = ackShape(v); runtime({ version: out.version, execPath: out.execPath }); return out }
+  function runtimeVersion(v) { return runtime({ version: v, execPath: config.nodes?.find((n) => n.version === v)?.path }).version }
+  function runtimePath(v) { return runtime({ version: config.nodes?.find((n) => n.path.toLowerCase() === v?.toLowerCase())?.version, execPath: v }).execPath }
+  const detail = (schema) => (v) => {
+    if (typeof v !== "string" || v.length > 16380 || !/^[A-Za-z0-9+/]*={0,2}$/.test(v)) return fail()
+    const b = Buffer.from(v, "base64")
+    if (b.toString("base64") !== v) return fail()
+    return schema(parseNamedJSON(new TextDecoder("utf-8", { fatal: true }).decode(b)))
+  }
+  const nativeReason = literal("", "diagnostic-server-loss",
+    ...Array.from(namedChannelNativeBody.matchAll(/nc_fail\(s, "([^"]+)"/g), (m) => m[1]))
+  const stages = {
+    "private-root-protected": fields("privateRootProtected payloadPlaceholderProtected", bool),
+    created: { pid: num, administrator: bool, elevated: bool }, "assigned-suspended": { active: num },
+    "modeled-assignment-refusal": { privateCertificate: bool }, "modeled-resume-refusal": {},
+    ready: { detail: detail(ack) }, configured: fields("payloadProtected payloadLockedDuringRootRead", bool),
+    "root-result-observed": { detail: detail(result) },
+    "root-control-complete": { detail: detail(result), controlEOF: bool, pids: arr(num) },
+    "sealed-zero": { certificate: kernel, reason: nativeReason },
+    "server-closed-owner-live": { nativeOwnerPid: num, ...fields("ownerAlive rootAlive controlComplete", bool) },
+    "pressure-frame": { padding: (v) => typeof v === "string" && /^x{0,8000}$/.test(v) ?
+      { bytes: v.length, sha256: createHash("sha256").update(v).digest("hex") } : fail() },
+  }
+  const event = (v) => {
+    if (!v || !Object.hasOwn(stages, v.stage)) return fail()
+    return obj({ protocol, generation: hash, preparationDigest: hash, payloadDigest: nullable(hash), role: literal("owner"),
+      stage: literal(v.stage), ownedCreated: num, ownedClosed: num, apis: arr(api, 512), ...stages[v.stage] })(v)
+  }
+  const journal = (v) => {
+    if (!v || Object.keys(v).length !== 1) return fail()
+    return obj({ event, dataEOF: bool, stderrEOF: bool, ownerClose: obj({ code, signal }) }, [])(v)
+  }
+  const outbound = obj({ frames: num, bytes: num, ...fields("busy finishing ended", bool) })
+  const actual = obj({ ...fields("ownerExited ownerClosed stdoutEOF stderrEOF controlEOF stdoutClosed stderrClosed controlClosed transportFailure", bool),
+    code, signal }, [])
+  const cleanupLabel = literal("cancel", "resume-data", "resume-control", "snapshot", "generation-settlement",
+    "auxiliary-close", "release-diagnostics", "persistence")
+  const generation = obj({ generation: hash, deadline: num, status: literal("SETTLED", "HOLD"),
+    retirement: literal("proved", "unknown"), actual, expectedMissing: bool, expectedTransportLoss: bool,
+    proof: obj({ retirement: literal("proved"), certificate: kernel }),
+    reason: literal("owner-data-control-incomplete", "receipt-unavailable-or-invalid", "owner-data-control-not-clean") },
+  ["generation", "deadline", "status", "retirement", "actual", "expectedMissing", "expectedTransportLoss"])
+  const queue = obj({ frames: num, bytes: num, ...fields("busy finishing ended", bool), writableLength: num })
+  const declared = (name) => JSON.parse(namedChannelDriverSource.match(new RegExp("const " + name + " = (\\[.*?\\]);", "s"))[1])
+  const modes = literal(...declared("original"), ...declared("authentication"), ...declared("rootFraming"), ...declared("supplemental24"))
+  const version = literal(...(config.nodes ?? []).map((n) => n.version))
+  const caseFact = obj({ mode: modes, parent: version, root: version,
+    status: literal(...Array.from(namedChannelDriverSource.matchAll(/record\.status = "([^"]+)"/g), (m) => m[1]), "ATTEMPTED"),
+    proof: kernel, otherProof: kernel, ownerClose: close, result, rootQueue: queue,
+    originalConnections: num, replacementConnections: num, replacementNameReused: bool,
+    boundary: literal("server endpoint closed; native owner and retained root observed live, NOT process death",
+      "literal native owner process termination; no private certificate"),
+    cleanupFailures: arr(cleanupLabel, 32), generations: arr(generation, 2),
+    diagnostics: obj({ ...fields("stdoutBytes stderrBytes stderrTailBytes parserHighWater", num),
+      ...fields("stdoutEOF stderrEOF controlEOF failure", bool), outbound }) }, ["mode", "parent", "root", "status"])
+  const report = obj({ status: literal("RUNNING", "STOP", "CORPUS_OBSERVED_NOT_ADJUDICATED"), cases: arr(caseFact, 77),
+    stranded: arr(num), nativeQualified: literal(false), driver: runtime, originalHistorical27Qualified: literal(false),
+    failure: literal("bounded candidate failure; inspect typed receipts") },
+  ["status", "cases", "stranded", "nativeQualified", "driver", "originalHistorical27Qualified"])
+  const schemas = { kernel, close, result, journal, queue, report,
+    interpreters: arr(obj({ version: runtimeVersion, path: runtimePath, sha256: hash }), 3),
+    producer: obj({ pid: nullable(num), exitCode: code, signal,
+      stdoutBytes: num, stderrBytes: num,
+      ...fields("fullClose stdoutEOF stderrEOF stdoutClosed stderrClosed error timedOut", bool) }, ["fullClose"]),
+    candidate: obj({ testSha256: hash, workflowSha256: hash, dispatchCommit: nullable((v) => /^[0-9a-f]{40}$/.test(v) ? v : fail()),
+      dispatchRun: nullable((v) => typeof v === "string" && /^[0-9]{1,24}$/.test(v) ? v : fail()),
+      scope: literal("controller-approved exact-candidate hosted synthetic workflow; not environment-authenticated root attributes"),
+      invocation: obj({ executableSha256: hash, configSha256: hash, assets: arr(obj({
+        name: literal("probe-owner.exe", "probe-shim.cjs", "probe.test.cjs", "channel-workload.cjs", "observation preload.cjs"),
+        sha256: hash }), 5) }) }, []),
+    broader: obj({ stage: literal("broader-test-owner"), sealed: bool, exactJobZero: bool, retiredPids: arr(num),
+      activeBefore: uint32, workerCode: uint32 }) }
+  if (!Object.hasOwn(schemas, kind)) return fail()
+  return schemas[kind](value)
+}
+function namedRetentionRoles() {
+  const read = (n) => JSON.parse(namedChannelDriverSource.match(new RegExp("const " + n + " = (\\[.*?\\]);", "s"))[1])
+  const roles = []
+  const add = (name, kind, required = true) => roles.push({ name, kind, required })
+  const lease = (tag, mode) => {
+    const killed = ["helper-loss", "owner-loss-before-start", "owner-loss-name-reuse"].includes(mode)
+    add(tag + ".receipt.json", "kernel", !killed && mode !== "model-assignment")
+    add(tag + ".receipt.json.owner-close.json", "close", !killed)
+    add(tag + ".jsonl", "journal")
+    for (const suffix of ["", ".channel-open", ".channel-closed", ".command", ".write-entry", ".write-complete", ".survivors", ".preload-downstream", ".root-queue"])
+      add(tag + suffix, suffix === ".root-queue" ? "queue" : "marker", false)
+    if (mode === "wrong-same-job-peer")
+      for (const suffix of ["", ".channel-open", ".channel-closed"]) add(tag + ".peer" + suffix, "marker", false)
+  }
+  for (let i = 0; i < 3; i++)
+    for (const mode of [...read("original"), ...read("authentication"), ...read("rootFraming"), ...(i === 2 ? read("supplemental24") : [])]) {
+      lease(i + "-" + mode, mode)
+      if (mode === "ready-peer-failure") lease(i + "-" + mode + ".other", "first-instance-collision")
+    }
+  lease("cross-parent20-root24", "immediate-seal")
+  for (const suffix of ["", ".0", ".1", ".2"]) add("channel-worker-report.json" + suffix, "report")
+  return roles
+}
+function makeNamedRetention(repo, options) {
+  const guard = namedRetentionGuard(repo, options?.limits, options?.io ?? fs)
+  guard.walk(repo, "directory")
+  const root = path.join(repo, "owned-git-probe-output")
+  fs.mkdirSync(root) // Atomic nonrecursive creation refuses Windows aliases/existing state.
+  guard.walk(root, "directory")
+  for (const folder of ["source", "artifacts", "neutral"]) fs.mkdirSync(path.join(root, folder))
+  fs.mkdirSync(path.join(root, "artifacts", "owned-git"))
+  fs.mkdirSync(path.join(root, "artifacts", "owned-git", "win32-x64"))
+  return { root, privateRoot: path.join(root, "evidence"), exportRoot: path.join(root, "safe-evidence"),
+    guard, nodes: options.nodes, roles: options.roles ?? namedRetentionRoles(),
+    fileBytes: Math.min(options.fileBytes ?? 33554432, 33554432), sourceBytes: 0, privateSourceBytes: 0, outputBytes: 0,
+    sourceFiles: 0, outputFiles: 0, outputCharged: 0, producer: undefined, candidate: options.candidate ?? {},
+    namespace: "exclusive-host-parent-and-only-known-creations" }
+}
+const namedClosedProducers = new WeakMap()
+function observeNamedProducer(ctx, child, deadline) {
+  const facts = { pid: child.pid ?? null, exitCode: null, signal: null, fullClose: false,
+    stdoutEOF: false, stderrEOF: false, stdoutClosed: false, stderrClosed: false, stdoutBytes: 0, stderrBytes: 0,
+    error: false, timedOut: false }
+  ctx.producer = facts
+  return new Promise((resolve) => {
+    let active = true, timer, outputRefused = false
+    const finish = () => { if (!active) return; active = false; clearTimeout(timer); resolve(facts) }
+    const onError = (error) => {
+      if (!active) return
+      facts.error = true
+      if (!ctx.nativeErrorPresent) { ctx.nativeError = error; ctx.nativeErrorPresent = true }
+    }
+    const joined = () => {
+      if (!active || !facts.fullClose || (child.stdout && !facts.stdoutClosed) || (child.stderr && !facts.stderrClosed)) return
+      if (Date.now() >= deadline) facts.timedOut = true
+      if (!facts.timedOut && Number.isInteger(child.pid) && child.pid > 0 && child.pid === facts.pid &&
+          Number.isInteger(facts.exitCode) && facts.signal === null &&
+          facts.stdoutEOF && facts.stderrEOF && facts.stdoutClosed && facts.stderrClosed)
+        namedClosedProducers.set(facts, ctx)
+      finish()
+    }
+    child.on("error", onError)
+    for (const [stream, prefix] of [[child.stdout, "stdout"], [child.stderr, "stderr"]]) {
+      if (!stream) { facts.error = true; continue }
+      stream.on("data", (chunk) => {
+        if (!active) return
+        facts[prefix + "Bytes"] += chunk.length
+        if (!outputRefused && facts.stdoutBytes + facts.stderrBytes > 1048576) {
+          outputRefused = true; onError(Error("supervisor-output-bound"))
+          try { child.kill() } catch {}
+        }
+      }) // No opaque buffering/journaling; one MiB combined output is a conservative refusal bound.
+      stream.on("end", () => { if (active) facts[prefix + "EOF"] = true })
+      stream.on("close", () => { if (active) { facts[prefix + "Closed"] = true; joined() } })
+      stream.on("error", onError)
+    }
+    child.once("close", (code, signal) => {
+      if (!active) return
+      if (Date.now() >= deadline) facts.timedOut = true
+      Object.assign(facts, { exitCode: code, signal, fullClose: true })
+      joined()
+    })
+    timer = setTimeout(() => {
+      facts.timedOut = true
+      try { child.kill() } catch {}
+      finish()
+    }, Math.max(0, deadline - Date.now()))
+  })
+}
+function * namedJSONChunks(value) {
+  if (value === null || typeof value !== "object") { yield JSON.stringify(value); return }
+  if (Array.isArray(value)) {
+    yield "["
+    for (let i = 0; i < value.length; i++) { if (i) yield ","; yield * namedJSONChunks(value[i]) }
+    yield "]"
+  } else {
+    yield "{"
+    let first = true
+    for (const [key, item] of Object.entries(value)) {
+      if (item === undefined) continue
+      if (!first) yield ","
+      first = false; yield JSON.stringify(key); yield ":"; yield * namedJSONChunks(item)
+    }
+    yield "}"
+  }
+}
+function writeNamedProjection(ctx, name, value, manifest = false) {
+  let bytes = 0
+  for (const chunk of namedJSONChunks(value)) {
+    bytes += Buffer.byteLength(chunk)
+    if (bytes > (manifest ? 2097152 : ctx.fileBytes) ||
+        ctx.outputCharged + bytes > (manifest ? 67108864 : 65011712)) throw Error("output-bound")
+  }
+  if (++ctx.outputFiles > 1024) throw Error("output-file-bound")
+  ctx.outputCharged += bytes
+  ctx.guard.check(ctx.exportRoot)
+  const filename = path.join(ctx.exportRoot, name), fd = fs.openSync(filename, "wx")
+  const hash = createHash("sha256")
+  try {
+    for (const chunk of namedJSONChunks(value)) {
+      const data = Buffer.from(chunk)
+      let at = 0
+      while (at < data.length) {
+        const n = fs.writeSync(fd, data, at)
+        if (!n) throw Error("output-write")
+        at += n; ctx.outputBytes += n
+      }
+      hash.update(data)
+    }
+    fs.fsyncSync(fd)
+  } finally { fs.closeSync(fd) }
+  return { name, bytes, sha256: hash.digest("hex") }
+}
+function hashNamedPublic(ctx, filename) {
+  ctx.guard.walk(filename, "file")
+  if (++ctx.sourceFiles > 1024) throw Error("source-file-bound")
+  const before = fs.statSync(filename, { bigint: true })
+  if (!before.isFile() || before.size < 0n || before.size > BigInt(ctx.fileBytes) ||
+      before.size > BigInt(67108864 - ctx.sourceBytes)) throw Error("source-bound")
+  const fd = fs.openSync(filename, "r")
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true })
+    if (!ctx.guard.same(before, opened) || before.size !== opened.size || !opened.isFile()) throw Error("source-identity")
+    const buffer = Buffer.alloc(Math.min(Number(opened.size), 65536)), hash = createHash("sha256")
+    let used = 0
+    while (used < Number(opened.size)) {
+      const n = fs.readSync(fd, buffer, 0, Math.min(buffer.length, Number(opened.size) - used), null)
+      if (!n) throw Error("source-short-read")
+      used += n; ctx.sourceBytes += n; hash.update(buffer.subarray(0, n))
+    }
+    const after = fs.fstatSync(fd, { bigint: true })
+    if (!ctx.guard.same(opened, after) || opened.size !== after.size ||
+        opened.mtimeNs !== after.mtimeNs || opened.ctimeNs !== after.ctimeNs) throw Error("source-identity")
+    return hash.digest("hex")
+  } finally { fs.closeSync(fd) }
+}
+function readNamedSource(ctx, name, classified = false) {
+  if (!classified) ctx.guard.walk(path.join(ctx.privateRoot, name), "file")
+  ctx.guard.check(ctx.privateRoot)
+  if (++ctx.sourceFiles > 1024) throw Error("source-file-bound")
+  const filename = path.join(ctx.privateRoot, name), before = fs.statSync(filename, { bigint: true })
+  if (!before.isFile() || before.size < 0n || before.size > BigInt(ctx.fileBytes) ||
+      before.size > BigInt(67108864 - ctx.sourceBytes)) throw Error("source-bound")
+  const fd = fs.openSync(filename, "r")
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true })
+    if (!ctx.guard.same(before, opened) || before.size !== opened.size || !opened.isFile()) throw Error("source-identity")
+    const bytes = Buffer.alloc(Number(opened.size))
+    let used = 0
+    while (used < bytes.length) {
+      const n = fs.readSync(fd, bytes, used, bytes.length - used, null)
+      if (!n) throw Error("source-short-read")
+      used += n; ctx.sourceBytes += n; ctx.privateSourceBytes += n
+    }
+    const after = fs.fstatSync(fd, { bigint: true })
+    if (!ctx.guard.same(opened, after) || opened.size !== after.size || opened.mtimeNs !== after.mtimeNs ||
+        opened.ctimeNs !== after.ctimeNs) throw Error("source-identity")
+    return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") }
+  } finally { fs.closeSync(fd) }
+}
+function projectNamedMarker(role, text, ctx) {
+  if (role.name.endsWith(".preload-downstream")) {
+    const value = parseNamedJSON(text)
+    if (!value || Object.keys(value).sort().join() !== ["nodePath", "options", "pid", "role", "version"].sort().join() ||
+        value.role !== "downstream" || !Number.isSafeInteger(value.pid) || value.pid <= 0 ||
+        !ctx.nodes.some((n) => n.version === value.version) ||
+        value.nodePath !== ctx.publicRoot || value.options !== ctx.preloadOptions) throw Error("preload-schema")
+    return { role: value.role, version: value.version, pid: value.pid, nodePathMatched: true,
+      optionsMatched: true, redacted: ["nodePath", "options"] }
+  }
+  if (role.name.endsWith(".survivors")) {
+    if (!/^(?:[1-9][0-9]{0,9}\n){1,256}$/.test(text)) throw Error("marker-schema")
+    return { pids: text.trim().split("\n").map(Number) }
+  }
+  if (role.name.endsWith(".channel-open")) {
+    if (!/^(?:open\n){1,64}$/.test(text)) throw Error("marker-schema")
+    return { connections: text.length / 5 }
+  }
+  const allowed = role.name.endsWith(".channel-closed") ? ["closed without reconnect"] :
+    role.name.endsWith(".command") ? ["real downstream hook", "real pressured Git alias"] :
+      role.name.endsWith(".write-entry") ? ["actual data write entered"] :
+        role.name.endsWith(".write-complete") ? ["actual data write callback"] : ["first instruction"]
+  if (!allowed.includes(text)) throw Error("marker-schema")
+  return { marker: text }
+}
+async function exportNamedChannelEvidence(ctx) {
+  const manifest = { schema: "desk.named-channel-safe-projection/1", status: "incomplete",
+    native: projectNamedRole("producer", ctx.producer ?? { fullClose: false }, ctx),
+    outerReadback: "UNMEASURED", candidate: projectNamedRole("candidate", ctx.candidate, ctx),
+    anchor: path.parse(ctx.root).root,
+    anchorAssumption: "approved ordinary unredirected local-volume root; cooperative no-mutator synthetic job",
+    namespace: ctx.namespace, corpusEligibility: "unknown", withheldRoles: ctx.roles.length,
+    files: [], gaps: [], absences: [], excludedPayloads: 0, sourceBytes: 0, outputBytes: 0 }
+  fs.mkdirSync(ctx.exportRoot)
+  ctx.guard.walk(ctx.exportRoot, "directory")
+  const gap = (role, reason) => {
+    const item = { role, reason, sourceBytes: null, sourceSha256: null }
+    manifest.gaps.push(item); return item
+  }
+  const publish = () => {
+    manifest.sourceBytes = ctx.sourceBytes; manifest.privateSourceBytes = ctx.privateSourceBytes
+    manifest.sourceFiles = ctx.sourceFiles; manifest.outputBytes = ctx.outputBytes
+    manifest.inspectedEntries = ctx.guard.entries()
+    manifest.status = manifest.gaps.length ? "incomplete" : "complete"
+    const before = ctx.outputBytes
+    for (let i = 0; i < 4; i++) {
+      let bytes = 0
+      for (const chunk of namedJSONChunks(manifest)) {
+        bytes += Buffer.byteLength(chunk)
+        if (bytes > 2097152) throw Error("manifest-bound")
+      }
+      if (manifest.outputBytes === before + bytes) break
+      manifest.outputBytes = before + bytes
+    }
+    const receipt = writeNamedProjection(ctx, "manifest.json", manifest, true)
+    Object.defineProperty(manifest, "manifestFile", { value: receipt })
+    return manifest
+  }
+  if (!ctx.producer || namedClosedProducers.get(ctx.producer) !== ctx) {
+    gap("bootstrap", "producer-not-closed-bound"); return publish()
+  }
+  const emit = (role, original, facts) => {
+    const schema = "desk.named-channel-projection/" + role.kind + "/1"
+    const output = writeNamedProjection(ctx, String(manifest.files.length).padStart(4, "0") + ".json",
+      { schema, sourceSha256: original.sha256, facts })
+    manifest.files.push({ role: role.name, schema, sourceBytes: original.bytes.length,
+      sourceSha256: original.sha256, output, redactions: ["opaque-data-not-exported", "environment-not-exported"] })
+    ctx.projections ??= new Map()
+    ctx.projections.set(role.name, facts)
+  }
+  let bootstrap, settled = false
+  try {
+    const original = readNamedSource(ctx, "channel-broader-owner.json")
+    bootstrap = original
+    const broader = projectNamedRole("broader", parseNamedJSON(new TextDecoder("utf-8", { fatal: true }).decode(original.bytes)), ctx)
+    emit({ name: "channel-broader-owner.json", kind: "broader" }, original, broader)
+    settled = broader.sealed && broader.exactJobZero
+  } catch {
+    const item = gap("bootstrap", "missing-malformed-unbound-bound-or-io")
+    if (bootstrap) { item.sourceBytes = bootstrap.bytes.length; item.sourceSha256 = bootstrap.sha256 }
+    return publish()
+  }
+  if (!settled) { gap("bootstrap", "broader-retirement-unknown"); return publish() }
+  manifest.corpusEligibility = "bound-broader-zero"; manifest.withheldRoles = 0
+  const wanted = new Map(ctx.roles.map((r) => [r.name, r])), found = new Map()
+  try {
+    ctx.guard.scan(ctx.privateRoot, (entry) => {
+      if (entry.name === "channel-broader-owner.json") return
+      if (entry.name.endsWith(".payload.json")) { manifest.excludedPayloads++; return }
+      const role = wanted.get(entry.name)
+      if (!role) { gap("undeclared-" + manifest.gaps.length, "undeclared-source-role"); return }
+      try { ctx.guard.type(entry, "file"); found.set(entry.name, role) }
+      catch { gap(role.name, "nonregular-or-reparse") }
+    })
+  } catch { gap("corpus-metadata", "guard-or-entry-bound"); return publish() }
+  for (const role of ctx.roles) {
+    if (!found.has(role.name)) {
+      if (role.required) gap(role.name, "missing-required-role")
+      else manifest.absences.push({ role: role.name, disposition: role.kind === "kernel" || role.kind === "close" ?
+        "declared-negative-no-private-proof" : "optional-not-observed" })
+      continue
+    }
+    let original
+    try {
+      original = readNamedSource(ctx, role.name, true)
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(original.bytes)
+      let facts
+      if (role.kind === "marker") facts = projectNamedMarker(role, text, ctx)
+      else if (role.kind === "journal") {
+        const lines = text.split("\n")
+        if (lines.at(-1) === "") lines.pop()
+        if (!lines.length || lines.length > 256 || lines.some((l) => Buffer.byteLength(l) > 16390)) throw Error("journal-bound")
+        facts = lines.map((l) => projectNamedRole("journal", parseNamedJSON(l), ctx))
+      } else facts = projectNamedRole(role.kind, parseNamedJSON(text), ctx)
+      emit(role, original, facts)
+    } catch {
+      const item = { role: role.name, reason: "schema-identity-bound-or-read-refused" }
+      if (original) { item.sourceBytes = original.bytes.length; item.sourceSha256 = original.sha256 }
+      manifest.gaps.push(item)
+    }
+  }
+  return publish()
+}
+async function finishNamedRetention({ failed, primary, exportEvidence, persist, validate }) {
+  let exportResult, secondary = false
+  try { exportResult = await exportEvidence() } catch { secondary = true; exportResult = { status: "failed", outerReadback: "UNMEASURED" } }
+  if (!failed && exportResult.status === "complete" && validate) {
+    try { validate(exportResult) } catch (error) { failed = true; primary = error }
+  }
+  try { persist(exportResult, { failed }) } catch { secondary = true }
+  if (failed) throw primary
+  if (secondary || exportResult.status !== "complete") throw Error("safe evidence incomplete; native outcome preserved")
+  return exportResult
+}
+
 // Only the diagnostic host dispatch changes; historical material/modes stay byte-identical.
 const namedChannelCandidateSelected = true
 test("Windows constructed owned-Git channel candidate (separate admission required)", {
   skip: process.platform !== "win32", timeout: 180000,
-}, () => {
+}, async () => {
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..")
   const root = path.join(repo, "owned-git-probe-output")
   const sourceRoot = path.join(root, "source"), publicRoot = path.join(root, "artifacts", "owned-git", "win32-x64")
   const neutral = path.join(root, "neutral"), evidence = path.join(root, "evidence")
-  for (const folder of [sourceRoot, publicRoot, neutral]) fs.mkdirSync(folder, { recursive: true })
   const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
   const status = { status: "STAGING", experiment: "constructed-channel1",
     historical27Qualified: false, nativeQualified: false, originalSemanticCases: 27, supplementalCases: 50 }
-  const save = () => fs.writeFileSync(path.join(root, "report.json"), JSON.stringify(status, null, 2))
+  let ctx, failed = false, primary
   const exec = (command, args, label, options = {}) => {
     const value = spawnSync(command, args, { encoding: "utf8", cwd: neutral, timeout: 120000, ...options })
     // Only compiler/bootstrap telemetry goes here; per-lease private records stay in the protected root.
     fs.writeFileSync(path.join(sourceRoot, label + ".stdout"), value.stdout ?? "")
     fs.writeFileSync(path.join(sourceRoot, label + ".stderr"), value.stderr ?? "")
-    status[label] = { code: value.status, signal: value.signal, error: !!value.error }; save()
+    status[label] = { code: value.status, signal: value.signal, error: !!value.error }
     assert.equal(value.status, 0, label + " STOP; inspect bounded retained evidence")
   }
   try {
@@ -3794,13 +4839,26 @@ test("Windows constructed owned-Git channel candidate (separate admission requir
       nodes[i].sha256 = nodes[i].sha256.toLowerCase()
       assert.equal(nodes[i].sha256, required[i][1]); assert.equal(digest(nodes[i].path), required[i][1])
     }
+    const safeNodes = projectNamedRole("interpreters", nodes, { nodes })
+    assert.equal(process.version, nodes[2].version, "retention guard is source-qualified for exact host24")
+    assert.equal(process.execPath.toLowerCase(), nodes[2].path.toLowerCase())
+    namedRetentionAnchor(repo)
+    const job = namedRetentionJob(repo, process.env)
+    ctx = makeNamedRetention(repo, { nodes })
+    ctx.candidate = {
+      testSha256: hashNamedPublic(ctx, fileURLToPath(import.meta.url)),
+      workflowSha256: hashNamedPublic(ctx, path.join(repo, ".github", "workflows", "desk-windows-suite.yml")),
+      ...job,
+      scope: "controller-approved exact-candidate hosted synthetic workflow; not environment-authenticated root attributes",
+    }
+    ctx.publicRoot = publicRoot
     for (const [name, text] of Object.entries(channelProbeMaterial)) fs.writeFileSync(path.join(sourceRoot, name), text)
-    save()
     exec("pwsh", ["-NoProfile", "-NonInteractive", "-File", path.join(sourceRoot, "build.ps1"), "-Root", sourceRoot], "build")
     assert.doesNotMatch(fs.readFileSync(path.join(sourceRoot, "toolchain.txt"), "utf8"), /(?:VCRUNTIME|MSVCP|ucrtbase)\d*\.dll/i)
     const names = ["probe-owner.exe", "probe-shim.cjs", "probe.test.cjs", "channel-workload.cjs"]
     for (const name of names) fs.copyFileSync(path.join(sourceRoot, name), path.join(publicRoot, name))
     const preload = path.join(publicRoot, "observation preload.cjs")
+    ctx.preloadOptions = observationOptions(preload)
     fs.copyFileSync(path.join(sourceRoot, "preload.cjs"), preload); names.push(path.basename(preload))
     const manifest = names.map((name) => ({ path: path.join(publicRoot, name), sha256: digest(path.join(publicRoot, name)) }))
     fs.writeFileSync(path.join(publicRoot, "sha256-manifest.json"), JSON.stringify(manifest, null, 2))
@@ -3809,24 +4867,50 @@ test("Windows constructed owned-Git channel candidate (separate admission requir
       workload: path.join(publicRoot, "channel-workload.cjs"), preload, report: path.join(evidence, "channel-worker-report.json") }
     const filename = path.join(publicRoot, "channel-config.json")
     fs.writeFileSync(filename, JSON.stringify(config, null, 2))
-    status.nodes = nodes; status.manifest = manifest; save()
+    status.nodes = safeNodes; status.manifest = manifest
     exec("git", ["init", "--quiet", neutral], "synthetic-git-init")
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       /^(SystemRoot|WINDIR|SystemDrive|COMSPEC|PATH|TEMP|TMP|PATHEXT|LANG|LC_ALL)$/i.test(key)))
     const receipt = path.join(evidence, "channel-broader-owner.json")
-    exec(config.owner, ["--protected-supervise", nodes[2].path, path.join(publicRoot, "probe.test.cjs"), filename, receipt],
-      "broader-supervisor", { env: { ...env, DESK_CHANNEL_EVIDENCE_ROOT: evidence } })
-    const worker = JSON.parse(fs.readFileSync(config.report, "utf8"))
-    const broader = JSON.parse(fs.readFileSync(receipt, "utf8"))
-    assert.equal(worker.status, "CORPUS_OBSERVED_NOT_ADJUDICATED")
-    assert.equal(worker.cases.length, 77)
-    assert.equal(broader.sealed, true); assert.equal(broader.exactJobZero, true)
-    assert.deepEqual([...broader.retiredPids].sort((a, b) => a - b), [...worker.stranded].sort((a, b) => a - b))
-    status.status = "CORPUS_OBSERVED_NOT_ADJUDICATED"; status.broader = broader; save()
-  } catch {
-    status.status = "STOP"; status.failure = "candidate incomplete; inspect retained typed evidence"; save()
-    throw Error("constructed-channel candidate STOP")
+    ctx.guard.scan(root, (entry) => {
+      if (!["source", "artifacts", "neutral"].includes(entry.name) || !entry.isDirectory() ||
+          entry.isSymbolicLink()) throw Error("prelaunch namespace is not fresh host-only construction")
+    })
+    ctx.candidate.invocation = { executableSha256: manifest.find((item) => item.path === config.owner).sha256,
+      configSha256: hashNamedPublic(ctx, filename),
+      assets: manifest.map((item) => ({ name: path.basename(item.path), sha256: item.sha256 })) }
+    const supervisorDeadline = Date.now() + 120000
+    const child = spawn(config.owner, ["--protected-supervise", nodes[2].path,
+      path.join(publicRoot, "probe.test.cjs"), filename, receipt], {
+      cwd: neutral, env: { ...env, DESK_CHANNEL_EVIDENCE_ROOT: evidence }, stdio: ["ignore", "pipe", "pipe"] })
+    const producer = await observeNamedProducer(ctx, child, supervisorDeadline)
+    if (ctx.nativeErrorPresent) throw ctx.nativeError
+    assert.equal(producer.fullClose, true)
+    assert.equal(producer.timedOut, false); assert.equal(producer.error, false)
+    assert.equal(producer.exitCode, 0, "native/test failed; settled safe evidence still exported")
+  } catch (error) {
+    failed = true; primary = error
   }
+  await finishNamedRetention({ failed, primary,
+    exportEvidence: () => ctx ? exportNamedChannelEvidence(ctx) : { status: "failed", outerReadback: "UNMEASURED" },
+    validate() {
+      const worker = ctx.projections.get("channel-worker-report.json")
+      const broader = ctx.projections.get("channel-broader-owner.json")
+      assert.equal(worker.status, "CORPUS_OBSERVED_NOT_ADJUDICATED")
+      assert.equal(worker.cases.length, 77)
+      assert.equal(broader.sealed, true); assert.equal(broader.exactJobZero, true)
+      assert.deepEqual([...broader.retiredPids].sort((a, b) => a - b), [...worker.stranded].sort((a, b) => a - b))
+    },
+    persist(exportResult, disposition) {
+      status.status = disposition.failed || exportResult.status !== "complete" ? "STOP" : "CORPUS_OBSERVED_NOT_ADJUDICATED"
+      status.native = { ...(ctx?.producer ?? { fullClose: false }), testFailed: disposition.failed }
+      status.evidenceExport = { status: exportResult.status, files: exportResult.files?.length ?? 0,
+        gaps: exportResult.gaps?.length ?? null, manifestSha256: exportResult.manifestFile?.sha256 ?? null }
+      status.outerReadback = "UNMEASURED"; status.evidencePASS = false
+      if (!ctx) throw Error("fresh public status namespace unavailable")
+      const fd = fs.openSync(path.join(root, "report.json"), "wx")
+      try { fs.writeFileSync(fd, JSON.stringify(status, null, 2)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    } })
 })
 
 test("binding source guard (portable checks, not Windows kernel proof)", () => {
