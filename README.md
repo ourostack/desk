@@ -10,7 +10,7 @@ Desk gives long-running engineering agents durable work state and authority. Tra
 
 **To set up, give your agent the link to [SETUP.md](SETUP.md) and say "set this up".**
 
-This repository is the home of **[Agentic Engineering V2](AGENTIC-ENGINEERING-V2.md)**, an opt-in alpha. Its `main` branch is the release channel.
+This repository is the home of **[Agentic Engineering V2](plugins/desk/docs/agentic-engineering-v2-rfc.md)**. It is opt-in: nothing changes for a host until its operator sets Desk up. Its `main` branch is the release channel, and release versions record technical qualification, not the product's positioning.
 
 ## Plugins
 
