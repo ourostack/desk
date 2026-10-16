@@ -194,7 +194,9 @@ function unsafeEnvironment(env) {
 // replacing executable bytes remain outside this boundary; this is per-operation path binding, not binary attestation.
 async function profileGit(ctx) {
   const windows = ctx.platform === "win32"
-  const pathKey = Object.keys(ctx.env).find((name) => windows ? name.toUpperCase() === "PATH" : name === "PATH")
+  const envKeys = Object.keys(ctx.env)
+  if (windows) envKeys.sort()
+  const pathKey = envKeys.find((name) => windows ? name.toUpperCase() === "PATH" : name === "PATH")
   const search = ctx.env[pathKey]
   if (typeof search !== "string" || search === "") return null
   for (const dir of search.split(windows ? ";" : path.delimiter)) {

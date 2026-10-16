@@ -846,13 +846,65 @@ test("restrictive_profile_missing_or_non_executable_PATH_refuses_before_git", as
   await fs.mkdir(noExec)
   await fs.mkdir(path.join(directory, "git"), { recursive: true })
   await fs.writeFile(path.join(noExec, "git"), "not executable", { mode: 0o600 })
+  const env = { ...a.env, ...restrictiveProfile }
+  for (const name of Object.keys(env).filter((name) => name.toUpperCase() === "PATH")) delete env[name]
   let spawns = 0
   for (const PATH of [undefined, "", noExec, directory, path.join(w.base, "missing")]) {
-    assert.deepEqual(await publish(a, { expectedBasis, env: { ...a.env, ...restrictiveProfile, PATH }, git: {
+    assert.deepEqual(await publish(a, { expectedBasis, env: { ...env, PATH }, git: {
       spawn: () => { spawns += 1; throw new Error("not resolved") },
     } }), { state: "policy_refused", resources: [] })
   }
   assert.equal(spawns, 0)
+})
+
+test("restrictive_profile_windows_path_aliases_follow_node_order_without_mutation", async () => {
+  const w = await world()
+  const a = w.clone("windows-path-aliases")
+  const expectedBasis = await basisFor(a)
+  const bin = path.join(w.base, "selected-bin")
+  const missing = path.join(w.base, "missing-bin")
+  await fs.mkdir(bin)
+  const executable = path.join(bin, "git.exe")
+  await fs.writeFile(executable, "fixture; the existing spawn seam supplies the process", { mode: 0o755 })
+  const baseEnv = { ...a.env, ...restrictiveProfile }
+  for (const name of Object.keys(baseEnv).filter((name) => name.toUpperCase() === "PATH")) delete baseEnv[name]
+
+  for (const upper of [
+    { name: "undefined", value: undefined, valid: false },
+    { name: "empty", value: "", valid: false },
+    { name: "missing", value: missing, valid: false },
+    { name: "valid", value: bin, valid: true },
+  ]) {
+    for (const mixedFirst of [true, false]) {
+      const label = `${upper.name} uppercase PATH; ${mixedFirst ? "Path" : "PATH"} inserted first`
+      const mixed = upper.valid ? missing : bin
+      const env = { ...baseEnv, ...(mixedFirst ? { Path: mixed, PATH: upper.value } : { PATH: upper.value, Path: mixed }) }
+      const before = { ...env }
+      const seen = []
+      const result = await publish(a, { expectedBasis, env, git: { platform: "win32", spawn: (command, args, options) => {
+        seen.push({ command, args: [...args], env: { ...options.env }, cwd: options.cwd })
+        if (!upper.valid) throw new Error("an invalid selected PATH must not reach the version query")
+        if (args.includes("--version")) return spawn(process.execPath, ["-e", "process.stdout.write('git version 2.36.0.windows.1\\n')"], options)
+        return spawn(process.execPath, ["-e", "process.exit(1)"], options)
+      } } })
+      assert.deepEqual(env, before, label)
+      assert.deepEqual(result, { state: upper.valid ? "not_git" : "policy_refused", resources: [] }, label)
+      if (!upper.valid) {
+        assert.deepEqual(seen.map(({ command, args }) => ({ command, args })), [], label)
+        continue
+      }
+      assert.deepEqual(seen.map(({ command, args }) => ({ command, args })), [
+        { command: realpathSync(executable), args: ["--version"] },
+        { command: realpathSync(executable), args: ["-C", a.deskRoot, "rev-parse", "--show-toplevel"] },
+      ], label)
+      const writerEnv = { ...before, GIT_TERMINAL_PROMPT: "0" }
+      const queryEnv = { ...writerEnv }
+      for (const name of Object.keys(restrictiveProfile).filter((name) => name !== "GIT_OPTIONAL_LOCKS")) delete queryEnv[name]
+      assert.deepEqual(seen[0].env, queryEnv, label)
+      assert.deepEqual(seen[1].env, writerEnv, label)
+      assert.equal(seen[0].cwd, path.parse(a.deskRoot).root, label)
+    }
+  }
 })
 
 test("restrictive_profile_windows_resolution_uses_case_insensitive_PATH_and_exe", async () => {
