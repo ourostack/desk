@@ -43,6 +43,14 @@ const scopes = hookConfig ? hookConfig.split("\\n").map((line) => {
 }) : [];
 row.hooksPath = scopes.filter((entry) => entry.scope !== "command").at(-1)?.value ?? "";
 row.effectiveHooksPath = scopes.at(-1)?.value ?? "";
+if (process.env.DESK_HOOK_PROFILE_PROBE === "1") {
+  row.profile = {
+    count: process.env.GIT_CONFIG_COUNT,
+    optionalLocks: process.env.GIT_OPTIONAL_LOCKS,
+    slots: Array.from({length:Number(process.env.GIT_CONFIG_COUNT ?? 0)}, (_, i) => [process.env["GIT_CONFIG_KEY_" + i], process.env["GIT_CONFIG_VALUE_" + i]]),
+    effective: ["safe.bareRepository", "credential.interactive", "core.fsmonitor"].map((key) => cp.spawnSync("git", ["config", "--get", key], {encoding:"utf8"}).stdout.trim()),
+  };
+}
 if (row.hook.includes("commit-msg") && row.args.length) row.message = fs.readFileSync(row.args[0], "utf8");
 fs.appendFileSync(process.env.DESK_HOOK_LOG, JSON.stringify(row) + "\\n");
 `

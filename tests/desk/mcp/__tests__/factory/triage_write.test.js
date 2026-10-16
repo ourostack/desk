@@ -214,6 +214,52 @@ function headSnapshot(root) {
   return { status: result.status, signal: result.signal, error: result.error ? processError(result.error) : null, stdout: result.stdout, stderr: result.stderr }
 }
 
+test("restrictive Git profile survives private routing and real nested hooks", async () => {
+  const w = await world()
+  for (const privateMode of [false, true]) {
+    const desk = w.clone(`profile-routing-${privateMode}`)
+    const log = path.join(w.base, `profile-hooks-${privateMode}.jsonl`)
+    await fs.writeFile(path.join(desk.deskRoot, ".git/hooks/pre-commit"), hookArgvScript({ nestedMutation: true }), { mode: 0o755 })
+    await fs.writeFile(path.join(desk.deskRoot, ".git/hooks/post-index-change"), hookArgvScript(), { mode: 0o755 })
+    desk.env = {
+      ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: privateMode ? "1" : "0",
+      DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath,
+      DESK_HOOK_PROFILE_PROBE: "1", GIT_OPTIONAL_LOCKS: "0",
+      GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "false",
+      GIT_CONFIG_KEY_1: "safe.bareRepository", GIT_CONFIG_VALUE_1: "explicit",
+      GIT_CONFIG_KEY_2: "credential.interactive", GIT_CONFIG_VALUE_2: "never",
+    }
+    const originalEnv = { ...desk.env }
+    const trace = []
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      if (privateMode) assertPrivateArgv(desk.deskRoot, [command, ...args])
+      return tracedSpawn(trace, command, args, options)
+    } } })
+    assert.equal(result.state, "acknowledged", JSON.stringify({ privateMode, result, trace }))
+    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    assert.ok(rows.some((row) => row.hook.includes("pre-commit")))
+    assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), "real nested index hook executed")
+    for (const row of rows) {
+      assert.equal(row.profile.count, privateMode ? "4" : "3")
+      assert.equal(row.profile.optionalLocks, "0")
+      assert.deepEqual(row.profile.slots.slice(0, 3), [
+        ["core.fsmonitor", "false"], ["safe.bareRepository", "explicit"], ["credential.interactive", "never"],
+      ])
+      assert.deepEqual(row.profile.effective, ["explicit", "never", "false"])
+      if (privateMode) {
+        assert.deepEqual(row.profile.slots[3], ["core.hooksPath", PRIVATE_HOOKS])
+        assertPrivateArgv(desk.deskRoot, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()])
+      }
+    }
+    const version = trace.find((row) => row.args.length === 1 && row.args[0] === "--version")
+    assert.ok(version, "selected Git was version-qualified")
+    assert.equal(version.cwd, path.parse(desk.deskRoot).root)
+    assert.ok(trace.every((row) => row.command === version.command), "one selected Git for every writer command")
+    assert.deepEqual(desk.env, originalEnv, "caller profile was not mutated")
+    assert.ok(remoteJson(w.origin, paths.annotation))
+  }
+})
+
 test("private commit carries the physical common directory across lexical junction traversal", async (t) => {
   for (const root of [String.raw`C:\deskstd-tmp\fixture`, "C:/deskstd-tmp/fixture"]) {
     for (const operand of [String.raw`C:\deskstd-tmp\fixture\.git`, "C:/deskstd-tmp/fixture/.git", String.raw`--git-dir=C:\deskstd-tmp/fixture\.git`]) {
