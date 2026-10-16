@@ -7,7 +7,7 @@ let kernel;
 if (process.platform === "linux") kernel = fs.readFileSync("/proc/" + pid + "/cmdline", "utf8").split("\\0").filter(Boolean);
 else if (process.platform === "win32") kernel = [cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_Process -Filter 'ProcessId = " + pid + "').CommandLine"], {encoding:"utf8"}).trim()];
 else kernel = [cp.execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], {encoding:"utf8"}).trim()];
-const row = {hook:process.argv[1], args:process.argv.slice(2), kernel, cwd:process.cwd(), gitDir:process.env.GIT_DIR, toolCommit:process.env.DESK_TOOL_COMMIT ?? null};
+const row = {hook:process.argv[1], args:process.argv.slice(2), kernel, cwd:process.cwd(), gitDir:process.env.GIT_DIR, commonDir:process.env.GIT_COMMON_DIR, toolCommit:process.env.DESK_TOOL_COMMIT ?? null};
 row.nestedMutation = process.env.DESK_HOOK_NESTED_MUTATION === "1";
 row.nestedCommit = process.env.DESK_HOOK_NESTED_COMMIT === "1";
 row.ancestors = [];

@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { promises as fs, readFileSync } from "node:fs"
+import { promises as fs, readFileSync, lstatSync } from "node:fs"
 import * as path from "node:path"
 import { randomBytes } from "node:crypto"
 import { fileURLToPath } from "node:url"
@@ -31,6 +31,99 @@ const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue",
 const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
+
+test("private commit carries the physical common directory across lexical junction traversal", async () => {
+  const w = await world()
+  const desk = w.clone("junction-common")
+  const root = desk.deskRoot
+  const log = path.join(w.base, "junction-hook.jsonl")
+  await fs.writeFile(path.join(root, ".git/hooks/pre-commit"), hookArgvScript(), { mode: 0o755 })
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath }
+  const before = git(w.origin, ["rev-parse", "main"])
+  let candidate, administrative, commonBytes
+  const trace = []
+  const result = await publish(desk, { git: {
+    async onStep(name) {
+      if (name !== "before_commit") return
+      const [token] = await fs.readdir(path.join(root, ".git/desk-triage"))
+      candidate = path.join(root, ".git/desk-triage", token, "wt")
+      const bytes = await fs.readFile(path.join(candidate, ".git"), "utf8")
+      administrative = path.resolve(candidate, bytes.slice(8).trim())
+      commonBytes = await fs.readFile(path.join(administrative, "commondir"), "utf8")
+      assert.equal(commonBytes.trim(), "../..")
+      assert.equal(path.resolve(administrative, commonBytes.trim()), path.join(root, ".git"))
+      assert.notEqual(path.resolve(candidate, ".git", commonBytes.trim()), path.join(root, ".git"))
+    },
+    spawn(command, args, options) {
+      // Git for Windows resolves ".." lexically across a junction. Model only
+      // that provider boundary; the failed/successful Git and hooks remain real.
+      const linked = options.cwd === candidate && lstatSync(path.join(candidate, ".git")).isSymbolicLink()
+      const env = linked && !options.env.GIT_COMMON_DIR
+        ? { ...options.env, GIT_COMMON_DIR: path.resolve(candidate, ".git", commonBytes.trim()) }
+        : options.env
+      assert.ok(!args.some((arg) => arg.includes(root)), "private paths never enter Git argv")
+      const child = spawn(command, args, { ...options, env })
+      let stdout = "", stderr = ""
+      child.stdout.on("data", (chunk) => { stdout += chunk })
+      child.stderr.on("data", (chunk) => { stderr += chunk })
+      child.once("close", (status) => trace.push({ args, status, stdout, stderr, commonDir: env.GIT_COMMON_DIR, gitDir: env.GIT_DIR }))
+      return child
+    },
+  } })
+  assert.equal(result.state, "acknowledged", JSON.stringify({ result, trace: trace.slice(-16) }))
+  assert.ok(trace.some((row) => row.args[0] === "commit" && row.status === 0), "actual successful commit")
+  const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+  assert.ok(rows.some((row) => row.hook.includes("pre-commit")), "original hook executed")
+  for (const row of rows) {
+    assert.equal(path.resolve(row.top), candidate, "nested Git discovers the same candidate")
+    assert.equal(row.commonDir, path.join(root, ".git"), "original hooks inherit physical common-directory routing")
+    assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.replaceAll("\\", "/").includes(slash(root))), JSON.stringify(row))
+  }
+  assert.notEqual(git(w.origin, ["rev-parse", "main"]), before)
+  assert.ok(remoteJson(w.origin, paths.annotation))
+  assert.equal(git(root, ["worktree", "list", "--porcelain"]).split("worktree ").length - 1, 1)
+  assert.equal(await fs.lstat(candidate).catch((error) => error.code), "ENOENT")
+  assert.equal(desk.env.GIT_COMMON_DIR, undefined, "transport never mutates the caller environment")
+})
+
+test("private commit refuses damaged or foreign common-directory metadata before its gitfile swap", async () => {
+  for (const mode of ["missing", "foreign"]) {
+    const w = await world()
+    const desk = w.clone("damaged-common")
+    const root = desk.deskRoot
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const before = git(w.origin, ["rev-parse", "main"])
+    let dot, dotBytes, common, bytes, retained
+    const result = await publish(desk, { git: { async onStep(name) {
+      if (name !== "before_commit") return
+      const [token] = await fs.readdir(path.join(root, ".git/desk-triage"))
+      dot = path.join(root, ".git/desk-triage", token, "wt/.git")
+      dotBytes = await fs.readFile(dot, "utf8")
+      common = path.join(path.resolve(path.dirname(dot), dotBytes.slice(8).trim()), "commondir")
+      bytes = await fs.readFile(common, "utf8")
+      if (mode === "missing") {
+        retained = path.join(w.base, "retained-commondir")
+        await fs.rename(common, retained)
+      } else {
+        await fs.writeFile(common, `${w.base}\n`)
+      }
+    } } })
+    assert.equal(result.state, "write_failed", mode)
+    assert.equal(git(w.origin, ["rev-parse", "main"]), before)
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    assert.equal(await fs.readFile(dot, "utf8"), dotBytes, "failed admission never replaces the gitfile")
+    assert.equal(await fs.lstat(path.join(path.dirname(path.dirname(dot)), "gitfile")).catch((error) => error.code), "ENOENT")
+    if (mode === "missing") {
+      assert.equal(await fs.readFile(retained, "utf8"), bytes)
+      await fs.rename(retained, common)
+    } else {
+      assert.equal(await fs.readFile(common, "utf8"), `${w.base}\n`, "foreign metadata is preserved")
+      await fs.writeFile(common, bytes)
+    }
+    assert.equal((await publish(desk)).state, "acknowledged", "exact fixture repair permits recovery")
+    assert.equal(await fs.lstat(path.dirname(dot)).catch((error) => error.code), "ENOENT")
+  }
+})
 
 test("private hook context failures and disabled policy never publish a candidate", async () => {
   for (const mode of ["config-failed", "location-failed", "dispatcher-parent", "dispatcher-child", "disabled"]) {
@@ -478,7 +571,17 @@ test("private triage still obeys an executable rejecting hook and never acknowle
   await fs.writeFile(path.join(root, ".git/hooks/pre-commit"), hookArgvScript(), { mode: 0o755 })
   installCardGuard(root)
   desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_EXIT: "23" }
-  assert.equal((await publish(desk)).state, "policy_refused")
+  const trace = []
+  const result = await publish(desk, { git: { spawn(command, args, options) {
+    const started = performance.now()
+    const child = spawn(command, args, options)
+    let stdout = "", stderr = ""
+    child.stdout.on("data", (chunk) => { stdout += chunk })
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.once("close", (status) => trace.push({ args, status, stdout, stderr, elapsedMs: performance.now() - started, commonDir: options.env.GIT_COMMON_DIR, gitDir: options.env.GIT_DIR }))
+    return child
+  } } })
+  assert.equal(result.state, "policy_refused", JSON.stringify({ result, trace }))
   const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
   assert.ok(rows.some((row) => row.hook.includes("pre-commit")))
   assert.equal(remoteText(world_.origin, paths.annotation).status, 128)

@@ -307,7 +307,7 @@ function worktreeArgument(ctx, record) {
 // A directory link instead lets discovery retain ".git" as its message-operand prefix,
 // including for nested commits after a hook changes cwd. Only our candidate metadata changes.
 async function privateCommit(ctx, record) {
-  const commit = () => runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...ctx.childEnv, [TOOL_COMMIT_ENV]: "1" })
+  const commit = (env = ctx.childEnv) => runGit(ctx, record.path, ["commit", "-q", "-m", COMMIT_MESSAGE], { ...env, [TOOL_COMMIT_ENV]: "1" })
   if (ctx.env.DESK_ISOLATED_HOSTED !== "1") return commit()
   const dot = path.join(record.path, ".git")
   if (!(await fs.lstat(dot)).isFile()) throw new Error("private Git metadata unavailable")
@@ -315,13 +315,17 @@ async function privateCommit(ctx, record) {
   if (!bytes.startsWith("gitdir: ")) throw new Error("private Git metadata unavailable")
   const target = realpathSync(path.resolve(record.path, bytes.slice(8).trim()))
   isolatedDeskRoot(target, ctx.env)
+  // Windows normalizes ".git/../.." before following the junction. Resolve
+  // commondir from the physical admin directory, and retain it for nested hooks.
+  const common = realpathSync(path.resolve(target, (await fs.readFile(path.join(target, "commondir"), "utf8")).trim()))
+  isolatedDeskRoot(common, ctx.env)
   const backup = path.join(path.dirname(record.path), "gitfile")
   const saved = await fs.lstat(backup).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
   if (saved !== null) throw new Error("private Git metadata already retained")
   await fs.rename(dot, backup)
   try {
     await fs.symlink(ctx.platform === "win32" ? target : path.relative(record.path, target), dot, ctx.platform === "win32" ? "junction" : "dir")
-    return await commit()
+    return await commit({ ...ctx.childEnv, GIT_COMMON_DIR: common })
   } finally {
     if (!(await restorePrivateGitFile(ctx, record))) throw new Error("private Git metadata retained")
   }
