@@ -72,7 +72,8 @@ obligations, **not** permission to adopt or close a foreign resource.
 ## Lifetime and relay
 
 Creation reserves the handle before allocating an inactive blank tab in an
-existing normal window. The maintained group is named/read back before its
+existing non-incognito normal window; an incognito-only browser is refused.
+The maintained group is named/read back before its
 first-tab/initialized handshake; no physical window/tab selection is performed.
 New relay-created tabs are also inactive and in that window. Only current
 explicit admissions and inactive same-window ungrouped supported owned-opener

@@ -344,7 +344,7 @@ export function createBrowserExtension(api, options = {}) {
     try {
       await track(b, async () => {
         const windows = await api.windows.getAll({ windowTypes: ["normal"] })
-        const window = windows.find(window => window.type === "normal" && integer(window.id))
+        const window = windows.find(window => window.type === "normal" && window.incognito !== true && integer(window.id))
         if (!window) throw fail("native_normal_window_unavailable")
         b.windowId = window.id
         const tab = await createTab(b, "about:blank")

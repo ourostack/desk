@@ -714,3 +714,16 @@ test("transfer during label update cannot acknowledge a current binding", async 
   assert.equal(label.error?.code, "native_context_ownership_changed")
   assert.equal(f.tabs.has(10), true)
 })
+
+test("signed-in creation never falls back to an incognito normal window", async () => {
+  const f = await kernel()
+  f.api.windows.getAll = async () => [{ id: 9, type: "normal", incognito: true }, { id: 7, type: "normal", incognito: false }]
+  const response = await f.engine.dispatch(create())
+  assert.ok(response.result)
+  assert.equal(f.effects.find(effect => effect[0] === "create")[1].windowId, 7)
+  const onlyPrivate = await kernel()
+  onlyPrivate.api.windows.getAll = async () => [{ id: 9, type: "normal", incognito: true }]
+  const refused = await onlyPrivate.engine.dispatch(create())
+  assert.equal(refused.error?.code, "native_normal_window_unavailable")
+  assert.deepEqual(onlyPrivate.effects, [])
+})
