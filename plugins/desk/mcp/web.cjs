@@ -736,11 +736,12 @@ function catalog(file) {
   return { tools: placeholderTools(), version: "unknown" };
 }
 
-function start(o, io) {
+// Runtime selection and the staged installer are shared with the explicit private CLI.
+// This layer deliberately never reads a browser declaration or acquires a profile.
+function browserRuntimeTools(o, io) {
   var env = either(o.env, process.env);
   var platform = either(o.platform, process.platform);
   var fileExists = either(o.exists, exists);
-  var args = either(o.args, process.argv.slice(2));
   var homeDir = o.homeDir !== undefined ? o.homeDir : either(either(env.HOME, env.USERPROFILE), os.homedir());
   var current = either(o.current, { path: process.execPath, version: process.version, abi: process.versions.modules });
   var clock = either(o.clock, Date.now);
@@ -756,19 +757,52 @@ function start(o, io) {
     now: o.now
   });
   if (selection.node === null) {
-    return fail(io, "node_missing",
-      "Desk needs Node.js " + selection.range + " to start the browser; this one is " + current.version + ", so the browser is unavailable until a compatible Node is installed",
-      reconnectFix("Install Node " + selection.range));
+    throw Object.assign(new Error("Desk needs Node.js " + selection.range + " to start the browser; this one is " + current.version + ", so the browser is unavailable until a compatible Node is installed"),
+      { code: "node_missing", fix: reconnectFix("Install Node " + selection.range) });
   }
   var node = selection.node.path;
   var cli = npmCli(node, platform, fileExists);
   if (cli === null) {
-    return fail(io, "npm_missing",
-      "Desk found Node " + selection.node.version + " at " + node + " but it has no npm beside it, so the browser is unavailable",
-      reconnectFix("Reinstall that Node with its bundled npm"));
+    throw Object.assign(new Error("Desk found Node " + selection.node.version + " at " + node + " but it has no npm beside it, so the browser is unavailable"),
+      { code: "npm_missing", fix: reconnectFix("Reinstall that Node with its bundled npm") });
   }
   var root = stateDir(env, homeDir);
   mkdirp(root);
+  var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
+  return { env: env, platform: platform, fileExists: fileExists, homeDir: homeDir, clock: clock, selection: selection, node: node, cli: cli, root: root, tools: tools };
+}
+
+function prepareBrowserRuntime(o) {
+  o = o || {};
+  return Promise.resolve().then(function () {
+    var runtime = browserRuntimeTools(o, { stderr: either(o.stderr, process.stderr) });
+    return ensureInstalled(runtime.tools, runtime.root, runtime.clock() + either(o.firstInstallMs, FIRST_INSTALL_MS), false).then(function (got) {
+      if (!got.installed) throw Object.assign(new Error("Desk could not prepare a verified browser install: " + scrub(got.error)), { code: got.code || "install_failed" });
+      if (!got.fresh) either(o.startRefresh, startRefresh)({ node: runtime.node, npmCli: runtime.cli, env: runtime.env });
+      return { nodePath: runtime.node, installed: got.installed, stateRoot: runtime.root };
+    });
+  });
+}
+
+function start(o, io) {
+  var runtime;
+  try {
+    runtime = browserRuntimeTools(o, io);
+  } catch (error) {
+    if (error.fix) return fail(io, error.code, error.message, error.fix);
+    throw error;
+  }
+  var env = runtime.env;
+  var platform = runtime.platform;
+  var fileExists = runtime.fileExists;
+  var homeDir = runtime.homeDir;
+  var clock = runtime.clock;
+  var selection = runtime.selection;
+  var node = runtime.node;
+  var cli = runtime.cli;
+  var root = runtime.root;
+  var tools = runtime.tools;
+  var args = either(o.args, process.argv.slice(2));
   // A plugin's desk.browser setting switches the browser to the operator's real profile (web-real-profile.cjs); a caller that passes its own connection option keeps it.
   var declaration = hasOption(args, CONNECT) ? { state: "none" } : realProfile.readDeclaration({ env: env, homeDir: homeDir, pluginDirs: o.pluginDirs });
   if (declaration.state === "invalid") {
@@ -780,7 +814,6 @@ function start(o, io) {
       "A declared browser profile conflicts with caller-supplied browser, executable, profile or user-data options, so the browser is unavailable",
       reconnectFix("Remove those options, or the desk.browser declaration"));
   }
-  var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
   function spawnFailure(error) {
     return failure(io, "node_spawn_failed",
       "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",
@@ -920,6 +953,7 @@ module.exports = {
   npmCli: npmCli,
   npmError: npmError,
   readInstalled: readInstalled,
+  prepareBrowserRuntime: prepareBrowserRuntime,
   refresh: refresh,
   run: run,
   serveDegraded: serveDegraded,

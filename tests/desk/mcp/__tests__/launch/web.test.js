@@ -21,6 +21,37 @@ const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecy
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
 
+test("private preparation reuses the verified generation without profile acquisition", posixOnly, async () => {
+  assert.equal(typeof browser.prepareBrowserRuntime, "function")
+  const m = await machine("private-prepare-", { startRefresh: () => {} })
+  preinstall(m.state)
+  const result = await browser.prepareBrowserRuntime({ ...m.options,
+    env: { ...m.options.env, PLAYWRIGHT_MCP_EXTENSION_TOKEN: "not-for-private" },
+    pluginDirs: ["/must-not-read-profile"],
+    requireModule: () => { throw new Error("profile acquisition forbidden") },
+  })
+  assert.equal(result.nodePath, m.install.node)
+  assert.equal(result.stateRoot, m.state)
+  assert.equal(result.installed.version, "0.0.81")
+  assert.deepEqual(m.calls(), [])
+})
+
+test("private preparation shares one cold install across concurrent clients", posixOnly, async () => {
+  assert.equal(typeof browser.prepareBrowserRuntime, "function")
+  const m = await machine("private-prepare-cold-", { startRefresh: () => {} })
+  const results = await Promise.all([browser.prepareBrowserRuntime(m.options), browser.prepareBrowserRuntime(m.options)])
+  assert.equal(results[0].installed.dir, results[1].installed.dir)
+  assert.equal(m.calls().filter(c => c.args[0] === "install").length, 1)
+})
+
+test("private preparation rejects unsupported generations and missing Node/npm", posixOnly, async () => {
+  assert.equal(typeof browser.prepareBrowserRuntime, "function")
+  const m = await machine("private-prepare-invalid-", { env: { FAKE_NPM_MODE: "badlifecycle" } })
+  await assert.rejects(browser.prepareBrowserRuntime(m.options), /patch|verified/i)
+  await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, exists: () => false }), /npm/i)
+  await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, current: { path: "/missing", version: "v1.0.0", abi: "1" } }), /Node/i)
+})
+
 // ---- fixtures ----
 
 function fakeChild() {
