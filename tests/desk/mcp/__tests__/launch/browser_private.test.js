@@ -5,6 +5,8 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 import { removeTree } from "../_remove_tree.js"
@@ -13,6 +15,7 @@ const require = createRequire(import.meta.url)
 const entry = path.join(mcpRoot, "browser-private.cjs")
 const A = "private-11111111-1111-4111-8111-111111111111"
 const B = "private-22222222-2222-4222-8222-222222222222"
+const exec = promisify(execFile)
 function controller() {
   assert.equal(fs.existsSync(entry), true, "private browser controller must exist")
   return require(entry)
@@ -37,12 +40,17 @@ exports.Registry = { load: async () => ({ entry: (c,n) => {
 `)
   put(path.join(modules, "session.js"), `
 const fs=require("fs"),path=require("path");
+const transport=require("./fixtureTransport");
 exports.Session=class {
   constructor(e) { this.e=e; this.config=e.config; }
   isCompatible() { return this.config.version==="1"; }
-  async canConnect() { if(this.config.probeError) throw Error("probe failed"); return this.config.running; }
+  async canConnect() {
+    try { return transport.connect(this.e.file); }
+    catch(error) { fs.appendFileSync(this.e.file+".unlinks",error.code+"\\n"); return false; }
+  }
   async stop() {
-    if(!await this.canConnect()) return;
+    if(!await this.canConnect()) return {wasOpen:false};
+    if(!await this.canConnect()) return {wasOpen:true};
     if(this.config.stopError) throw Error("unconfirmed stop");
     if(this.config.stillRunning) return;
     this.config.running=false;
@@ -52,6 +60,73 @@ exports.Session=class {
   async deleteSessionConfig() { if(!this.config.cleanupError) fs.unlinkSync(this.e.file); }
 };
 `)
+  put(path.join(modules, "fixtureTransport.js"), `
+const fs=require("fs");
+exports.connect=file=>{
+  const config=JSON.parse(fs.readFileSync(file));
+  const countFile=file+".connections";
+  const count=fs.existsSync(countFile)?Number(fs.readFileSync(countFile)):0;
+  fs.writeFileSync(countFile,String(count+1));
+  const code=config.connectionErrors?.[count] || (config.probeError?"EMFILE":null);
+  if(code) throw Object.assign(Error("fixture connect "+code),{code});
+  return config.running;
+};
+`)
+  const preload = path.join(root, "transport-preload.cjs")
+  put(preload, `
+const fs=require("fs"),path=require("path"),{EventEmitter}=require("events");
+const transport=require(${JSON.stringify(path.join(modules, "fixtureTransport.js"))});
+require("net").createConnection=(socketPath,connected)=>{
+  const socket=new EventEmitter();
+  socket.destroy=()=>{socket.destroyed=true;queueMicrotask(()=>socket.emit("close"));};
+  socket.write=(text,callback)=>{
+    const message=JSON.parse(text);
+    const dir=path.join(process.env.HOME,"registry");
+    const file=fs.readdirSync(dir).filter(n=>n.endsWith(".session")).map(n=>path.join(dir,n)).find(f=>JSON.parse(fs.readFileSync(f)).socketPath===socketPath);
+    const config=JSON.parse(fs.readFileSync(file));
+    callback();
+    if(config.noReply) return;
+    if(config.closeWithoutAck) { socket.destroy();return; }
+    if(config.stopError) { queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:message.id,error:"unconfirmed stop"})+"\\n")));return; }
+    if(message.method==="stop") {
+      if(!config.stillRunning) {
+        config.running=false;
+        fs.writeFileSync(file,JSON.stringify(config));
+        if(!config.stale) fs.unlinkSync(file);
+      }
+      if(config.leaveSocket) {fs.mkdirSync(path.dirname(socketPath),{recursive:true});fs.writeFileSync(socketPath,"stale socket");}
+      queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:message.id,result:"ok"})+"\\n")));
+    } else {
+      const args=message.params.args._;
+      if(args.includes("transport-error")) {queueMicrotask(()=>socket.emit("error",Object.assign(Error("https://user:password@example.test/?token=abc"),{code:"ECONNRESET"})));return;}
+      const result=args.includes("json-error")?{isError:true,text:"upstream command failed"}:{text:JSON.stringify({args:["--session="+config.name,"--json",...args],home:process.env.HOME,cwd:process.cwd(),pid:process.pid,inherited:[]})};
+      queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:message.id,result})+"\\n")));
+    }
+  };
+  queueMicrotask(()=>{
+    try {
+      const dir=path.join(process.env.HOME,"registry");
+      const file=fs.readdirSync(dir).filter(n=>n.endsWith(".session")).map(n=>path.join(dir,n)).find(f=>JSON.parse(fs.readFileSync(f)).socketPath===socketPath);
+      if(!file || !transport.connect(file)) throw Object.assign(Error("fixture absent"),{code:"ENOENT"});
+      connected();
+    } catch(error) { socket.emit("error",error);socket.destroy(); }
+  });
+  return socket;
+};
+`)
+  put(path.join(modules, "..", "utils", "socketConnection.js"), `
+exports.SocketConnection=class {
+  constructor(socket) {
+    this.socket=socket;
+    socket.on("data",data=>this.onmessage?.(JSON.parse(String(data))));
+    socket.on("close",()=>this.onclose?.());
+  }
+  send(message) { return new Promise((resolve,reject)=>this.socket.write(JSON.stringify(message)+"\\n",error=>error?reject(error):resolve())); }
+  close() {this.socket.destroy();}
+};
+`)
+  put(path.join(modules, "minimist.js"), `exports.minimist=args=>({_:args});`)
+  put(path.join(modules, "help.json"), JSON.stringify({ booleanOptions: [], commands: {} }))
   put(path.join(modules, "program.js"), `
 const fs=require("fs"),path=require("path"),r=require("./registry");
 exports.program=async () => {
@@ -81,11 +156,25 @@ exports.program=async () => {
     prepareBrowserRuntime: async () => ({ nodePath: process.execPath, stateRoot, installed: { dir: path.join(root, "generation") } }),
     // Keep short namespaces inside the exact-owned fixture for non-native tests.
     socketRoot: path.join(root, "sockets"),
+    execute: async (node, args, opts) => {
+      const result = await exec(node, ["--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
+        .catch(error => {
+          const payload = JSON.parse(error.stdout)
+          throw Object.assign(Error(payload.message), { code: payload.code })
+        })
+      const payload = JSON.parse(result.stdout)
+      if (payload.isError) throw Object.assign(Error(payload.message), { code: payload.code })
+      return payload
+    },
   }
   fs.mkdirSync(options.socketRoot)
   const invoke = (args, extra = {}) => controller().run(args, { ...options, ...extra })
   const metadata = id => path.join(stateRoot, "private", id, "home", "registry", id + ".session")
-  const change = (id, fields) => { const file = metadata(id); put(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file)), ...fields })) }
+  const change = (id, fields) => {
+    const file = metadata(id)
+    put(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file)), ...fields }))
+    put(file + ".connections", "0")
+  }
   return { root, stateRoot, options, invoke, metadata, change, modules }
 }
 
@@ -169,6 +258,57 @@ test("discard closes only A and verifies normal-stop metadata absence", async ()
   assert.equal(fs.existsSync(f.metadata(A)), false)
   assert.equal((await f.invoke(["keep", B])).payload.state, "running")
   assert.equal((await f.invoke(["discard", A])).payload.state, "absent")
+})
+for (const operation of ["keep", "resume", "run", "discard"]) {
+  for (const code of ["EMFILE", "EACCES", "ECONNRESET"]) {
+    test(operation + " preserves lifecycle metadata and socket on " + code, async () => {
+      const f = await fixture()
+      assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+      f.change(A, { connectionErrors: [code] })
+      const args = operation === "run" ? ["run", A, "--", "snapshot"] : [operation, A]
+      const result = await f.invoke(args)
+      assert.equal(result.exitCode, 1)
+      assert.equal(fs.existsSync(f.metadata(A)), true)
+      assert.equal(fs.existsSync(f.metadata(A) + ".unlinks"), false)
+    })
+  }
+}
+test("discard does not convert a later connection error into confirmed shutdown", async () => {
+  const f = await fixture()
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  f.change(A, { connectionErrors: [null, "EMFILE"] })
+  const result = await f.invoke(["discard", A])
+  // A single connected stop is safe; a second failed connection is not shutdown proof.
+  if (result.exitCode === 0) assert.equal(Number(fs.readFileSync(f.metadata(A) + ".connections")), 1)
+  else assert.equal(fs.existsSync(f.metadata(A)), true)
+  assert.equal(fs.existsSync(f.metadata(A) + ".unlinks"), false)
+})
+test("discard requires a stop acknowledgement and retains the record on early close", async () => {
+  const f = await fixture()
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  f.change(A, { closeWithoutAck: true })
+  const result = await f.invoke(["discard", A])
+  assert.equal(result.exitCode, 1)
+  assert.equal(fs.existsSync(f.metadata(A)), true)
+})
+test("discard retains stale metadata when post-ACK absence cannot be determined", async () => {
+  const f = await fixture()
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  f.change(A, { stale: true, connectionErrors: [null, "EACCES"] })
+  const result = await f.invoke(["discard", A])
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "EACCES")
+  assert.equal(fs.existsSync(f.metadata(A)), true)
+  assert.equal(fs.existsSync(f.metadata(A) + ".unlinks"), false)
+})
+test("run uses its live connection rather than racing a second destructive connection", async () => {
+  const f = await fixture()
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  f.change(A, { connectionErrors: [null, "EMFILE"] })
+  const result = await f.invoke(["run", A, "--", "snapshot"])
+  assert.equal(result.exitCode, 0)
+  assert.equal(Number(fs.readFileSync(f.metadata(A) + ".connections")), 1)
+  assert.equal(fs.existsSync(f.metadata(A) + ".unlinks"), false)
 })
 test("confirmed stop deletes exact stale metadata but never sweeps ud-* or output", async () => {
   const f = await fixture()
