@@ -5,6 +5,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { assertChildKernelBoundary } from "./isolation.js";
 import { ensureClone, runGit } from "./clone.js";
 import { serveTokens } from "./token-socket.js";
+import { pipeServiceOutput, relayServiceOutput, sendServiceControl } from "./service-output.js";
 
 assertChildKernelBoundary({ status: readFileSync("/proc/self/status", "utf8"), uid: process.getuid(), gid: process.getgid() });
 const job = JSON.parse(process.env.DESK_RUNTIME_JOB);
@@ -97,7 +98,17 @@ function superviseOperation(child, guardian, service = false) {
     }
     check();
   };
+  let outputFailed = false;
+  const failService = () => {
+    if (outputFailed) return;
+    outputFailed = true;
+    sendServiceControl(process, { retired: false, quiescent: false }, () => {});
+    sendServiceControl(process, { serviceFailure: true }, () => {});
+    sendServiceControl(child, { serviceSignal: "SIGKILL" }, () => {});
+  };
+  if (service) relayServiceOutput(child, process, failService);
   child.on("message", message => {
+    if (service && message?.serviceFailure === true) { failService(); return; }
     if (service && message?.serviceClosed === true) {
       if (process.connected) process.send(message);
       completed = true;
@@ -110,7 +121,6 @@ function superviseOperation(child, guardian, service = false) {
       return;
     }
     if (service && (typeof message?.serviceStdout === "string" || typeof message?.serviceStderr === "string")) {
-      if (process.connected) process.send(message);
       return;
     }
     if (!message.operationFinished) return;
@@ -124,6 +134,8 @@ function superviseOperation(child, guardian, service = false) {
   child.once("close", () => { workerClosed = true; retire(); });
   process.on("message", message => {
     if (["SIGTERM", "SIGKILL"].includes(message.signal)) { cancel(); retire(); }
+    else if (service && message.serviceAbort === true) failService();
+    else if (service && message.serviceOutputAck) return;
     else if (service && child.connected) child.send(message, () => {});
   });
   process.once("disconnect", () => { cancel(); retire(); });
@@ -183,23 +195,28 @@ if (process.env.DESK_RUNTIME_WORKER !== "1") {
         child.stdin.on("error", error => {
           if (!["EPIPE", "ERR_STREAM_DESTROYED"].includes(error.code)) throw error;
         });
-        child.stdout.on("data", chunk => {
-          if (process.connected) process.send({ serviceStdout: chunk.toString("base64") });
-        });
-        child.stderr.on("data", chunk => {
-          if (process.connected) process.send({ serviceStderr: chunk.toString("base64") });
-        });
+        let outputFailed = false;
+        const failOutput = () => {
+          if (outputFailed) return;
+          outputFailed = true;
+          sendServiceControl(process, { serviceFailure: true }, () => {});
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        };
+        const output = pipeServiceOutput(child, process, failOutput);
+        // The failure callback has already reported preservation. Retain the
+        // worker for real retirement rather than creating an unhandled reject.
+        output.catch(() => {});
         let ended = false;
         child.on("message", message => {
           if (process.connected) process.send({ serviceMessage: message });
         });
-        child.once("error", () => {
-          if (process.connected) process.send({ serviceClosed: true, code: 1, signal: null });
-        });
-        child.once("close", (code, signal) => {
+        child.once("error", failOutput);
+        child.once("close", async (code, signal) => {
           ended = true;
           finalCode = 0;
-          if (process.connected) process.send({ serviceClosed: true, code, signal });
+          await output.then(() => {
+            if (!outputFailed) sendServiceControl(process, { serviceClosed: true, code, signal }, failOutput);
+          }, () => {});
         });
         process.on("message", message => {
           if (ended) return;

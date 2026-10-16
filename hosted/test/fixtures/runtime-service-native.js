@@ -75,6 +75,7 @@ export async function runServiceCases({ config, store, binding, root, originSubj
     "/app/hosted/src/account-runtime.js",
     "/app/hosted/src/realm-helper.js",
     "/app/hosted/src/service-lifetime.js",
+    "/app/hosted/src/service-output.js",
   ];
   console.log(JSON.stringify({ serviceNativeProvenance: nativePaths.map(path => ({ path, sha256: createHash("sha256").update(readFileSync(path)).digest("hex") })) }));
   const accounts = ["service-a", "service-b"];

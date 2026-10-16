@@ -232,11 +232,12 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
         const done = completion(guardian, null, true);
         const entry = { guardian, done };
         children.add(entry);
-        done.then(() => children.delete(entry), error => {
+        const preserve = error => {
           stopped = true;
           preservationFailures.set(accountId, { error, child: guardian });
-        });
-        return serviceHandle(guardian);
+        };
+        done.then(() => children.delete(entry), preserve);
+        return serviceHandle(guardian, preserve);
       },
       git,
       push() {
@@ -250,6 +251,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
         if (closePromise) return closePromise;
         stopped = true;
         closePromise = (async () => {
+          if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
           await Promise.all([...children].map(async ({ guardian, done }) => {
             const retirement = completion(guardian, 10_000, true);
             guardian.kill("SIGTERM");

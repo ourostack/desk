@@ -135,6 +135,19 @@ The service-close boundary retains its existing ten-second deadline. Failed,
 missing or malformed retirement proof is sticky preservation, even if the MCP
 protocol already ended or descendants eventually finish later.
 
+Service output uses end-to-end credit: at most one 16 KiB frame per stdout/
+stderr stream is outstanding across the two IPC hops. The worker reads again
+only after the gateway's bounded stream accepts/drains that frame. The helper
+validates frame size/order and credit; it never pauses the shared IPC channel,
+so termination and retirement control remain deliverable under output pressure.
+Normal protocol close waits for both output streams to drain and finish.
+Malformed/excess output, pipe failure or unproved guardian disconnect instead
+ends the protocol with an explicit preservation error, without fabricating a
+guardian exit. The runtime retains the real guardian and sticky recovery state;
+relay shutdown can reach that rejection rather than wait indefinitely. Forced
+session cancellation can also terminate pressured protocol output with this
+explicit preservation outcome. Kernel retirement is still proved separately.
+
 Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
 a fresh worker session. A worker's result or exit is not retirement proof:
 completion requires the worker and all its descendants, including reparented

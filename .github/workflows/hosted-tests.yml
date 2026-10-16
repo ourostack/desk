@@ -148,7 +148,7 @@ jobs:
           cp hosted/test/fixtures/runtime-native.Dockerfile native-runtime-evidence/fixture-context/Dockerfile
           cp hosted/test/fixtures/runtime-{native,child,timeout-native,service-native}.js native-runtime-evidence/fixture-context/
           sha256sum hosted/Dockerfile .dockerignore hosted/package-lock.json plugins/desk/mcp/package-lock.json \
-            hosted/src/account-runtime.js hosted/src/realm-helper.js hosted/src/service-lifetime.js \
+            hosted/src/account-runtime.js hosted/src/realm-helper.js hosted/src/service-lifetime.js hosted/src/service-output.js \
             plugins/desk/mcp/index.js plugins/desk/mcp/src/readiness/identity.js \
             native-runtime-evidence/fixture-context/* > native-runtime-evidence/source.sha256
 
