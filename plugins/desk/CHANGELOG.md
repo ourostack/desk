@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.329 — 2026-10-16
+
+Declared real-profile browser sessions re-read the selected profile's persisted extension credential immediately before every new connection relay, including the first acquisition and acquisitions after close. A missing or unreadable credential fails before launching instead of reusing the child's stale startup credential. Rotated credentials join the same in-memory output redaction set.
+
+Patch revision 2 stages and verifies the reader with its own integrity hash, upgrades existing generations offline, and leaves running generations unchanged. Direct extension callers without a Desk profile binding keep their existing behavior. This does not provision the extension, rotate its credential, resolve stale on-disk state, or change foreground and agent-ownership behavior.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.328 — 2026-10-15
 
 The browser no longer starts a new connection when asked to close after acquisition failed. Desk applies a small, audited Playwright lifecycle patch to staged installs, validates a versioned receipt against the installed bundle, and migrates existing compatible package trees offline without changing files used by running clients.
