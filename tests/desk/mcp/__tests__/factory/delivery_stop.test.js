@@ -545,3 +545,29 @@ test("existing hook command relays one decision while retaining the accounting m
   assert.equal(markers.length, 1)
   assert.ok(!JSON.stringify(markers).includes(PACKET[0]))
 }))
+
+for (const host of ["copilot", "claude"]) for (const fault of ["delayed", "rejected"]) {
+  test(`${host}: a ${fault} full CLI import cannot lose the bounded decision or accounting marker`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host)
+    const expected = await check(f)
+    assert.equal(expected.status, "correction")
+    const loader = new URL("./_factory_cli_fault.mjs", import.meta.url).href
+    const registration = `import { register } from "node:module"; register(${JSON.stringify(loader)}, { data: { fault: ${JSON.stringify(fault)} } });`
+    const preload = `data:text/javascript,${encodeURIComponent(registration)}`
+    const env = { ...ctx.env, NODE_OPTIONS: `${ctx.env.NODE_OPTIONS ?? ""} --import=${preload}`.trim() }
+    const r = spawnSync(process.execPath, [SCRIPT, host], { env, input: JSON.stringify(f.payload), encoding: "utf8", timeout: 6000 })
+    assert.equal(r.error, undefined)
+    assert.equal(r.signal, null)
+    assert.equal(r.status, 0)
+    assert.deepEqual(JSON.parse(r.stdout), expected.output)
+    assert.doesNotMatch(r.stderr, /hook_worker_unavailable|guard_unavailable/u)
+    for (const line of PACKET) assert.ok(expected.output.reason.includes(line))
+    const { listMarkers } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+    const markers = await listMarkers(ctx.env)
+    assert.equal(markers.length, 1)
+    assert.equal(markers[0].session_id, ID)
+    assert.equal(markers[0].host, host === "claude" ? "claude-code" : "copilot-cli")
+    assert.equal(markers[0].desk_root, ctx.desk)
+    assert.ok(!JSON.stringify(markers).includes(PACKET[0]))
+  }))
+}

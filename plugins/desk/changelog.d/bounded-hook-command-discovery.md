@@ -1,0 +1,1 @@
+Stop hooks discover factory commands without loading the full factory CLI and its execution dependencies. Accounting markers and delivery corrections no longer wait on that unrelated cold-start graph; the existing hook deadlines, supported commands and detached job launches are unchanged.
