@@ -148,6 +148,17 @@ relay shutdown can reach that rejection rather than wait indefinitely. Forced
 session cancellation can also terminate pressured protocol output with this
 explicit preservation outcome. Kernel retirement is still proved separately.
 
+The realm retains each service's outstanding protocol outcome even after its
+guardian has positively retired. Both outcomes must settle within the existing
+service-close budget before final push can begin; credited but unread output
+cannot leave a live failure window inside finalization. Successful protocol
+termination is not substituted for kernel proof: before broker close or cached
+success, every service handle has reached its observed terminal outcome, so
+later teardown cannot introduce a new protocol preservation failure. Sticky
+failure is checked across each async
+finalization boundary and before returning cached close or authorizing purge;
+a fulfilled close promise alone is never purge authority after a failure.
+
 Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
 a fresh worker session. A worker's result or exit is not retirement proof:
 completion requires the worker and all its descendants, including reparented

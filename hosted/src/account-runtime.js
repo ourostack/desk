@@ -93,6 +93,95 @@ export function completion(child, timeoutMs = 60_000, requireRetirement = false)
   });
 }
 
+// The prepared realm's preservation boundary owns both protocol termination
+// and real guardian retirement; neither outcome substitutes for the other.
+export function createRealmLifecycle({ services, operations, failure, preserve, stop, push, closeBroker, purgeRoot }) {
+  let closePromise;
+  const healthy = () => {
+    const error = failure();
+    if (error) throw error;
+  };
+  const retire = ({ guardian, handle, done, protocol }) => new Promise((resolve, reject) => {
+    let retired = false;
+    let timedOut = false;
+    let grace;
+    const clear = () => { clearTimeout(timer); clearTimeout(grace); };
+    const failed = error => { clear(); preserve(error, guardian); reject(error); };
+    const timeoutFailure = () => Object.assign(new Error(retired
+      ? "Owning-UID desk operation timed out."
+      : "Owning-UID desk operation could not establish quiescence; preservation is required."), {
+      code: retired ? "DESK_OPERATION_TIMEOUT" : "DESK_OPERATION_UNQUIESCENT",
+      quiescent: retired,
+    });
+    // One service-close budget covers both outcomes, followed by the existing
+    // retirement acknowledgement grace rather than a separate protocol timer.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      guardian.kill("SIGKILL");
+      handle.kill("SIGKILL");
+      grace = setTimeout(() => failed(timeoutFailure()), 5_000);
+    }, 10_000);
+    Promise.all([done.then(() => { retired = true; }), protocol]).then(() => {
+      try {
+        healthy();
+        if (timedOut) throw timeoutFailure();
+        clear();
+        resolve();
+      } catch (error) { failed(error); }
+    }, failed);
+    guardian.kill("SIGTERM");
+  });
+  const value = Object.freeze({
+    service(guardian) {
+      healthy();
+      if (closePromise) throw new Error("Hosted desk runtime is closed.");
+      const done = completion(guardian, null, true);
+      const failed = error => preserve(error, guardian);
+      const handle = serviceHandle(guardian, failed);
+      const protocol = new Promise(resolve => {
+        const settled = () => {
+          handle.removeListener("close", settled);
+          handle.removeListener("error", settled);
+          resolve();
+        };
+        handle.once("close", settled);
+        handle.once("error", settled);
+      });
+      const entry = { guardian, handle, done, protocol };
+      services.add(entry);
+      // A protocol error has already called preserve when required. Its
+      // terminal event is distinct from the independently observed guardian.
+      Promise.all([done, protocol]).then(() => services.delete(entry), failed);
+      return handle;
+    },
+    close() {
+      try { healthy(); } catch (error) { return Promise.reject(error); }
+      if (closePromise) return closePromise;
+      stop();
+      closePromise = (async () => {
+        healthy();
+        await Promise.all([...services].map(retire));
+        healthy();
+        await Promise.all([...operations]);
+        healthy();
+        await push();
+        healthy();
+        await closeBroker();
+        healthy();
+      })();
+      return closePromise;
+    },
+    async purge() {
+      healthy();
+      await value.close();
+      healthy();
+      await purgeRoot();
+      healthy();
+    },
+  });
+  return value;
+}
+
 export function assertAccountRuntimeBoundary(config, baseEnv = process.env) {
   if (process.platform !== "linux") throw new Error("Hosted desk multi-user mode requires Linux.");
   if (!config.identity) throw new Error("Hosted desk multi-user mode requires Ouro account identity.");
@@ -153,7 +242,6 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     const operations = new Set();
     let stopped = false;
     let broker;
-    let closePromise;
     const run = (job, timeoutMs) => {
       const child = launch(realm, env, job);
       child.stderr.pipe(process.stderr, { end: false });
@@ -218,6 +306,16 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
         });
       }
     };
+    const lifecycle = createRealmLifecycle({
+      services: children, operations,
+      failure: () => preservationFailures.get(accountId)?.error,
+      preserve(error, child) {
+        stopped = true;
+        preservationFailures.set(accountId, { error, child });
+      },
+      stop: () => { stopped = true; },
+      push, closeBroker, purgeRoot: () => run({ action: "purge" }),
+    });
     const value = Object.freeze({
       realm, env,
       launch(args) {
@@ -229,15 +327,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
           throw new Error("Hosted desk launch arguments must contain public context only.");
         }
         const guardian = launch(realm, env, { action: "launch", args });
-        const done = completion(guardian, null, true);
-        const entry = { guardian, done };
-        children.add(entry);
-        const preserve = error => {
-          stopped = true;
-          preservationFailures.set(accountId, { error, child: guardian });
-        };
-        done.then(() => children.delete(entry), preserve);
-        return serviceHandle(guardian, preserve);
+        return lifecycle.service(guardian);
       },
       git,
       push() {
@@ -247,32 +337,8 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
         done.then(() => operations.delete(done), () => operations.delete(done));
         return done;
       },
-      close() {
-        if (closePromise) return closePromise;
-        stopped = true;
-        closePromise = (async () => {
-          if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
-          await Promise.all([...children].map(async ({ guardian, done }) => {
-            const retirement = completion(guardian, 10_000, true);
-            guardian.kill("SIGTERM");
-            try {
-              await Promise.all([done, retirement]);
-            } catch (error) {
-              preservationFailures.set(accountId, { error, child: guardian });
-              throw error;
-            }
-          }));
-          await Promise.all([...operations]);
-          if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
-          await push();
-          await closeBroker();
-        })();
-        return closePromise;
-      },
-      async purge() {
-        await value.close();
-        await run({ action: "purge" });
-      },
+      close: lifecycle.close,
+      purge: lifecycle.purge,
     });
     return value;
   }
