@@ -108,6 +108,60 @@ const ownerSource = String.raw`
 
 /* Task 1 disposable probe: private job authority never travels over stdout. */
 static HANDLE control = INVALID_HANDLE_VALUE;
+typedef BOOL (WINAPI *COMPARE_OBJECT_HANDLES_FN)(HANDLE, HANDLE);
+static COMPARE_OBJECT_HANDLES_FN comparison_api = NULL;
+static int binding_stop(const char *stage, DWORD error) {
+  fprintf(stderr, "BINDING STOP api=CompareObjectHandles stage=%s error=%lu\n", stage, error);
+  return 0;
+}
+static int initialize_comparison_api(void) {
+  wchar_t expected[32768], actual[32768], export_path[32768];
+  HMODULE module = NULL, export_module = NULL;
+  FARPROC address; LPCWSTR export_address = NULL; uintptr_t address_bits = 0;
+  UINT length; DWORD found_length, error; BOOL found;
+  length = GetSystemDirectoryW(expected, 32768);
+  if (!length || length >= 32768) return binding_stop("system-directory", GetLastError());
+  if (wcscat_s(expected, 32768, L"\\KernelBase.dll") != 0) return binding_stop("system-path-bound", ERROR_INSUFFICIENT_BUFFER);
+  SetLastError(0);
+  found = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, expected, &module);
+  error = GetLastError();
+  fprintf(stderr, "BINDING module expected=%ls loadedOnly=true pinned=%s found=%s error=%lu\n",
+    expected, found ? "true" : "false", found ? "true" : "false", error);
+  if (!found) return binding_stop("loaded-system-module", error);
+  SetLastError(0);
+  found_length = GetModuleFileNameW(module, actual, 32768);
+  if (!found_length || found_length >= 32768) return binding_stop("module-path", GetLastError());
+  fprintf(stderr, "BINDING module actual=%ls handle=%llu\n", actual, (unsigned long long)(uintptr_t)module);
+  if (_wcsicmp(expected, actual) != 0) return binding_stop("module-provenance", ERROR_BAD_PATHNAME);
+  SetLastError(0);
+  address = GetProcAddress(module, "CompareObjectHandles"); error = GetLastError();
+  _Static_assert(sizeof(address_bits) == sizeof(address), "Windows x64 export address width");
+  memcpy(&address_bits, &address, sizeof(address_bits));
+  fprintf(stderr, "BINDING export name=CompareObjectHandles resolved=%s address=0x%llx error=%lu\n",
+    address ? "true" : "false", (unsigned long long)address_bits, error);
+  if (!address) return binding_stop("export", error);
+  _Static_assert(sizeof(export_address) == sizeof(address), "Windows module-address ABI width");
+  memcpy(&export_address, &address, sizeof(export_address));
+  SetLastError(0);
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+      export_address, &export_module)) return binding_stop("export-module-pin", GetLastError());
+  found_length = GetModuleFileNameW(export_module, export_path, 32768);
+  if (!found_length || found_length >= 32768) return binding_stop("export-module-path", GetLastError());
+  fprintf(stderr, "BINDING export actualModule=%ls handle=%llu pinned=true\n", export_path, (unsigned long long)(uintptr_t)export_module);
+  if (_wcsicmp(expected, export_path) != 0) return binding_stop("export-provenance", ERROR_BAD_PATHNAME);
+  _Static_assert(sizeof(comparison_api) == sizeof(address), "Windows same-API function-pointer ABI width");
+  memcpy(&comparison_api, &address, sizeof(comparison_api));
+  if (!comparison_api) return binding_stop("typed-pointer", ERROR_PROC_NOT_FOUND);
+  fprintf(stderr, "BINDING READY api=CompareObjectHandles abi=BOOL-WINAPI-HANDLE-HANDLE provenance=system-module-and-export lifetime=process-pinned\n");
+  return 1;
+}
+static BOOL checked_compare_objects(HANDLE left, HANDLE right) {
+  if (!comparison_api) {
+    (void)binding_stop("uninitialized-call", ERROR_PROC_NOT_FOUND);
+    ExitProcess(96);
+  }
+  return comparison_api(left, right);
+}
 static int wire(HANDLE h, const char *text) {
   DWORD done = 0, size = (DWORD)strlen(text);
   if (size > 16380) return 0;
@@ -260,7 +314,7 @@ static int audit(DWORD pid, HANDLE job, HANDLE *sensitive, DWORD count) {
     HANDLE candidate = NULL; BOOL same = FALSE; DWORD error;
     SetLastError(0);
     if (DuplicateHandle(process, sensitive[i], GetCurrentProcess(), &candidate, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-      same = CompareObjectHandles(sensitive[i], candidate); CloseHandle(candidate);
+      same = checked_compare_objects(sensitive[i], candidate); CloseHandle(candidate);
     }
     error = GetLastError();
     emit("{\"role\":\"owner\",\"stage\":\"peer-handle\",\"index\":%lu,\"sameObject\":%s,\"error\":%lu}", i, same ? "true" : "false", error);
@@ -311,6 +365,7 @@ int wmain(int argc, wchar_t **argv) {
   LPWCH environment = NULL; wchar_t line[32768]; char text[16381]; DWORD flags = 0, error = 0;
   BOOL ok = FALSE; int rc = 1, assigned = 0, sealed = 0, drained = 0, stranded = 0;
   const char *stage = "initial"; PUMP transfer;
+  if (!initialize_comparison_api()) return 96;
   ZeroMemory(&pi, sizeof(pi)); ZeroMemory(&transfer, sizeof(transfer));
   if (argc > 1 && wcscmp(argv[1], L"--supervise") == 0) return supervise(argc, argv);
   if (argc != 7) return 90;
@@ -326,7 +381,7 @@ int wmain(int argc, wchar_t **argv) {
   REQUIRE(CreatePipe(&inputR, &inputW, &sa, 0), "stdin-pipe");
   REQUIRE(SetHandleInformation(inputW, HANDLE_FLAG_INHERIT, 0), "stdin-write-private");
   REQUIRE(CreatePipe(&resultR, &resultW, &sa, 0), "result-pipe");
-  REQUIRE(!CompareObjectHandles(control, resultR) && !CompareObjectHandles(control, resultW), "distinct-control-result-objects");
+  REQUIRE(!checked_compare_objects(control, resultR) && !checked_compare_objects(control, resultW), "distinct-control-result-objects");
   REQUIRE(SetHandleInformation(resultR, HANDLE_FLAG_INHERIT, 0), "result-read-private");
   handles[0] = inputR; handles[1] = inherited(GetStdHandle(STD_OUTPUT_HANDLE));
   handles[2] = inherited(GetStdHandle(STD_ERROR_HANDLE)); handles[3] = resultW;
@@ -687,6 +742,25 @@ export const probeMaterial = {
   "build.ps1": buildSource,
   "preload.cjs": preloadSource,
 }
+
+test("binding source guard (portable checks, not Windows kernel proof)", () => {
+  assert.match(ownerSource, /typedef BOOL \(WINAPI \*COMPARE_OBJECT_HANDLES_FN\)\(HANDLE, HANDLE\)/)
+  assert.match(ownerSource, /GetSystemDirectoryW\(expected,/)
+  assert.match(ownerSource, /GetModuleHandleExW\(GET_MODULE_HANDLE_EX_FLAG_PIN, expected,/)
+  assert.match(ownerSource, /GetModuleFileNameW\(module, actual,/)
+  assert.match(ownerSource, /_wcsicmp\(expected, actual\) != 0/)
+  assert.match(ownerSource, /GetProcAddress\(module, "CompareObjectHandles"\)/)
+  assert.match(ownerSource, /if \(!address\) return binding_stop\("export", error\)/)
+  assert.match(ownerSource, /GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS \| GET_MODULE_HANDLE_EX_FLAG_PIN/)
+  assert.match(ownerSource, /if \(!comparison_api\)[\s\S]*?ExitProcess\(96\)/)
+  assert.doesNotMatch(ownerSource, /\bCompareObjectHandles\s*\(/)
+  assert.doesNotMatch(ownerSource, /\bLoadLibrary(?:Ex)?[AW]?\s*\(/)
+  assert.equal((ownerSource.match(/checked_compare_objects\(/g) ?? []).length, 4)
+  const main = ownerSource.slice(ownerSource.indexOf("int wmain("))
+  assert.ok(main.indexOf("if (!initialize_comparison_api()) return 96;") >= 0)
+  assert.ok(main.indexOf("if (!initialize_comparison_api()) return 96;") < main.indexOf('L"--supervise"'))
+  assert.ok(main.indexOf("if (!initialize_comparison_api()) return 96;") < main.indexOf("_get_osfhandle(3)"))
+})
 
 test("Windows installed-layout owned-Git feasibility (STOP on any unqualified boundary)", {
   skip: process.platform !== "win32",
