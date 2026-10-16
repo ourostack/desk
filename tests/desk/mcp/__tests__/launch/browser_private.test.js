@@ -5,8 +5,9 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
 import { createRequire } from "node:module"
-import { execFile } from "node:child_process"
+import childProcess, { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import net from "node:net"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 import { removeTree } from "../_remove_tree.js"
@@ -75,6 +76,13 @@ exports.connect=file=>{
   const preload = path.join(root, "transport-preload.cjs")
   put(preload, `
 const fs=require("fs"),path=require("path"),{EventEmitter}=require("events");
+const controlFile=${JSON.stringify(path.join(root, "runtime-controls.json"))};
+const controls=fs.existsSync(controlFile)?JSON.parse(fs.readFileSync(controlFile)):{};
+if(controls.platform) Object.defineProperty(process,"platform",{value:controls.platform});
+if(controls.fastTimers) {
+  const timeout=setTimeout;
+  global.setTimeout=(fn,ms,...args)=>timeout(fn,[10000,90000].includes(ms)?10:ms,...args);
+}
 const transport=require(${JSON.stringify(path.join(modules, "fixtureTransport.js"))});
 require("net").createConnection=(socketPath,connected)=>{
   const socket=new EventEmitter();
@@ -95,15 +103,16 @@ require("net").createConnection=(socketPath,connected)=>{
         if(!config.stale) fs.unlinkSync(file);
       }
       if(config.leaveSocket) {fs.mkdirSync(path.dirname(socketPath),{recursive:true});fs.writeFileSync(socketPath,"stale socket");}
-      queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:message.id,result:"ok"})+"\\n")));
+      queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:config.responseId??message.id,result:config.stopAck??"ok"})+"\\n")));
     } else {
       const args=message.params.args._;
       if(args.includes("transport-error")) {queueMicrotask(()=>socket.emit("error",Object.assign(Error("https://user:password@example.test/?token=abc"),{code:"ECONNRESET"})));return;}
-      const result=args.includes("json-error")?{isError:true,text:"upstream command failed"}:{text:JSON.stringify({args:["--session="+config.name,"--json",...args],home:process.env.HOME,cwd:process.cwd(),pid:process.pid,inherited:[]})};
-      queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:message.id,result})+"\\n")));
+      const result=config.runResponse || (args.includes("json-error")?{isError:true,text:"upstream command failed"}:{text:JSON.stringify({args:["--session="+config.name,"--json",...args],raw:message.params.raw,home:process.env.HOME,cwd:process.cwd(),pid:process.pid,inherited:[]})});
+      queueMicrotask(()=>socket.emit("data",Buffer.from(JSON.stringify({id:config.responseId??message.id,result})+"\\n")));
     }
   };
   queueMicrotask(()=>{
+    if(controls.connectHang) return;
     try {
       const dir=path.join(process.env.HOME,"registry");
       const file=fs.readdirSync(dir).filter(n=>n.endsWith(".session")).map(n=>path.join(dir,n)).find(f=>JSON.parse(fs.readFileSync(f)).socketPath===socketPath);
@@ -178,8 +187,220 @@ exports.program=async () => {
     put(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file)), ...fields }))
     put(file + ".connections", "0")
   }
-  return { root, stateRoot, options, invoke, metadata, change, modules }
+  const control = fields => put(path.join(root, "runtime-controls.json"), JSON.stringify(fields))
+  return { root, stateRoot, options, invoke, metadata, change, modules, preload, control }
 }
+
+function defaultExecutor(f, body) {
+  const node = path.join(f.root, "runner-node")
+  put(node, "#!/usr/bin/env node\n" + (body || `
+const cp=require("child_process");
+const result=cp.spawnSync(process.execPath,["--require",${JSON.stringify(f.preload)},...process.argv.slice(2)],{stdio:"inherit"});
+process.exitCode=result.status===null?1:result.status;
+`))
+  fs.chmodSync(node, 0o700)
+  return {
+    execute: undefined,
+    prepareBrowserRuntime: async () => ({ ...await f.options.prepareBrowserRuntime(), nodePath: node }),
+  }
+}
+
+test("default executor runs the selected compatible child and confirms its result", { skip: process.platform === "win32" ? "Unix executable shim" : false }, async () => {
+  const f = await fixture()
+  const result = await f.invoke(["create"], { contextId: () => A, ...defaultExecutor(f) })
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.payload.state, "running")
+  assert.equal((await f.invoke(["discard", A], defaultExecutor(f))).payload.state, "discarded")
+})
+
+test("an unconfirmed default runner result is an explicit failure, never success-shaped output", { skip: process.platform === "win32" ? "Unix executable shim" : false }, async () => {
+  const f = await fixture()
+  const result = await f.invoke(["create"], {
+    contextId: () => A, ...defaultExecutor(f, "process.stdout.write('{}');"),
+  })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "runner_failed")
+})
+
+test("a verified context lost during runtime preparation never claims successful absence", async () => {
+  const f = await fixture()
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  const directory = path.join(f.stateRoot, "private", A)
+  const result = await f.invoke(["discard", A], {
+    prepareBrowserRuntime: async () => {
+      fs.renameSync(directory, path.join(f.root, "retained-context"))
+      return f.options.prepareBrowserRuntime()
+    },
+  })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "context_absent")
+  assert.equal(fs.existsSync(path.join(f.root, "retained-context", ".desk-private-owner")), true)
+})
+
+for (const value of [null, true, [], {}, { state: "unknown" }, { state: "absent" }, { state: "discarded" }]) {
+  test("default executor rejects an invalid creation envelope " + JSON.stringify(value), { skip: process.platform === "win32" ? "Unix executable shim" : false }, async () => {
+    const f = await fixture()
+    const result = await f.invoke(["create"], {
+      contextId: () => A, ...defaultExecutor(f, "process.stdout.write(" + JSON.stringify(JSON.stringify(value)) + ");"),
+    })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "runner_failed")
+  })
+}
+for (const [body, diagnostic] of [
+  ["process.stderr.write('owned stderr failure');", "owned stderr failure"],
+  ["process.stdout.write('not JSON');", "not JSON"],
+  ["", "empty output"],
+  ["process.exitCode=7;", "7"],
+  ["process.kill(process.pid,'SIGTERM');", "SIGTERM"],
+]) {
+  test("default executor preserves unconfirmed child diagnostics " + diagnostic, { skip: process.platform === "win32" ? "Unix executable shim" : false }, async () => {
+    const f = await fixture()
+    const result = await f.invoke(["create"], { contextId: () => A, ...defaultExecutor(f, body || "process.exitCode=0;") })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "runner_failed")
+    // nyc's shutdown hook can turn the signal into a clean, empty exit.
+    const expected = diagnostic === "SIGTERM" ? /SIGTERM|empty output/ : new RegExp(diagnostic)
+    assert.match(result.payload.message, expected)
+  })
+}
+test("default executor preserves an OS-reported termination signal", async t => {
+  const f = await fixture()
+  t.mock.method(childProcess, "execFile", (_node, _args, _options, callback) => {
+    callback({ code: null, signal: "SIGTERM" }, "", "")
+  })
+  const result = await f.invoke(["create"], { contextId: () => A, execute: undefined })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "runner_failed")
+  assert.match(result.payload.message, /SIGTERM/)
+})
+for (const [payload, stderr, expected] of [
+  [{ isError: true, code: "owned_error", message: "owned message" }, "", "owned message"],
+  [{ isError: true, error: "owned error" }, "", "owned error"],
+  [{ state: "running" }, "owned stderr", "owned stderr"],
+  [{ state: "running" }, "", "Upstream command failed"],
+]) {
+  test("default executor rejects confirmed child failure " + expected, { skip: process.platform === "win32" ? "Unix executable shim" : false }, async () => {
+    const f = await fixture()
+    const body = "process.stdout.write(" + JSON.stringify(JSON.stringify(payload)) + ");process.stderr.write(" + JSON.stringify(stderr) + ");process.exitCode=1;"
+    const result = await f.invoke(["create"], { contextId: () => A, ...defaultExecutor(f, body) })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.message, expected)
+    assert.equal(result.payload.code, payload.code || "upstream_failed")
+  })
+}
+test("default executor reports a missing selected executable without losing the resource handle", async () => {
+  const f = await fixture()
+  const result = await f.invoke(["create"], {
+    contextId: () => A, execute: undefined,
+    prepareBrowserRuntime: async () => ({ ...await f.options.prepareBrowserRuntime(), nodePath: path.join(f.root, "missing-node") }),
+  })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "runner_failed")
+  assert.match(result.payload.message, /ENOENT/)
+  assert.equal(result.payload.contextId, A)
+})
+test("injected executor still has to confirm the requested lifecycle state", async () => {
+  const f = await fixture()
+  for (const result of [null, "running", { isError: true, state: "running" }]) {
+    const response = await f.invoke(["create"], { execute: async () => result })
+    assert.equal(response.exitCode, 1)
+    assert.equal(response.payload.code, "runner_failed")
+  }
+})
+test("argument and generated-ID failures happen before runtime preparation", async () => {
+  for (const args of [null, undefined, {}, [1], ["keep"], ["keep", A, "extra"], ["run", A, "--", "type", "\0"]]) {
+    const result = await controller().run(args)
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "invalid_arguments")
+  }
+  for (const id of ["invalid", null]) {
+    const result = await controller().run(["create"], { contextId: () => id })
+    assert.equal(result.payload.code, "invalid_arguments")
+  }
+})
+test("runtime preparation errors keep ordinary and non-Error diagnostics visible", async () => {
+  const f = await fixture()
+  for (const error of [new Error("owned failure"), "owned string failure"]) {
+    const result = await f.invoke(["create"], { prepareBrowserRuntime: async () => { throw error } })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "private_browser_failed")
+    assert.match(result.payload.message, /owned/)
+  }
+})
+test("private parent creation errors are surfaced rather than treated as existing state", async () => {
+  const f = await fixture()
+  const file = path.join(f.root, "not-a-directory")
+  put(file, "owned fixture")
+  const result = await f.invoke(["create"], { prepareBrowserRuntime: async () => ({ ...await f.options.prepareBrowserRuntime(), stateRoot: file }) })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "ENOTDIR")
+})
+test("non-ENOENT context inspection errors cannot masquerade as absence", async t => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  const original = fs.lstatSync
+  const context = path.join(f.stateRoot, "private", A)
+  t.mock.method(fs, "lstatSync", (file, ...args) => {
+    if (file === context) throw Object.assign(Error("owned inspection denied"), { code: "EACCES" })
+    return original(file, ...args)
+  })
+  assert.equal((await f.invoke(["discard", A])).payload.code, "EACCES")
+})
+test("private control tolerates missing HOME and uses the shared default preparation", async t => {
+  const f = await fixture()
+  const web = require(path.join(mcpRoot, "web.cjs"))
+  t.mock.method(web, "prepareBrowserRuntime", f.options.prepareBrowserRuntime)
+  const made = await controller().run(["create"], {
+    env: { ...f.options.env, HOME: undefined, USERPROFILE: f.root },
+    execute: f.options.execute, socketRoot: f.options.socketRoot, browserExists: () => false,
+  })
+  assert.equal(made.exitCode, 0)
+  for (const home of [{ HOME: undefined, USERPROFILE: f.root }, { HOME: undefined, USERPROFILE: undefined }]) {
+    const kept = await f.invoke(["keep", made.payload.contextId], {
+      env: { ...f.options.env, ...home }, prepareBrowserRuntime: undefined,
+    })
+    assert.equal(kept.exitCode, 0)
+  }
+})
+test("default browser existence checks remain private and cover native Windows namespaces", async t => {
+  const f = await fixture()
+  const web = require(path.join(mcpRoot, "web.cjs"))
+  t.mock.method(web, "prepareBrowserRuntime", f.options.prepareBrowserRuntime)
+  const made = await controller().run(["create"])
+  if (made.payload.resources?.socketDirectory && process.platform !== "win32") {
+    console.log("RESOURCE native short namespace " + made.payload.resources.socketDirectory)
+    t.after(() => removeTree(made.payload.resources.socketDirectory))
+  }
+  assert.equal(made.exitCode, 1)
+  assert.equal(made.payload.code, "ENOENT")
+  const original = fs.statSync
+  t.mock.method(fs, "statSync", (file, ...args) => {
+    if (/chrome|msedge|Microsoft Edge|Google Chrome/i.test(file)) throw Object.assign(Error("owned browser path absent"), { code: "ENOENT" })
+    return original(file, ...args)
+  })
+  assert.equal((await f.invoke(["create"], { browserExists: undefined })).exitCode, 0)
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  const uid = Object.getOwnPropertyDescriptor(process, "getuid")
+  try {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" })
+    Object.defineProperty(process, "getuid", { configurable: true, value: undefined })
+    const result = await f.invoke(["create"], { socketRoot: undefined, execute: async () => ({ state: "running" }) })
+    assert.equal(result.exitCode, 0)
+    assert.ok(result.payload.resources.socketDirectory.startsWith(result.payload.resources.contextDirectory))
+    assert.match(result.payload.resources.socketDirectory, /dp-win-/)
+  } finally {
+    Object.defineProperty(process, "platform", platform)
+    if (uid) Object.defineProperty(process, "getuid", uid)
+    else Reflect.deleteProperty(process, "getuid")
+  }
+})
+test("private creation uses an installed Edge channel when that is the existing selection", async () => {
+  const f = await fixture()
+  const result = await f.invoke(["create"], { browserExists: file => /Microsoft Edge|msedge/i.test(file) })
+  assert.equal(result.exitCode, 0)
+  assert.ok(result.payload.result.args.includes("msedge"))
+})
 
 test("two fresh private creations isolate HOME/cwd/config/session and disable idle timeout", async () => {
   const f = await fixture()
@@ -531,4 +752,163 @@ test("existing user-only Chrome executable selection is carried through owned co
   const config = JSON.parse(fs.readFileSync(path.join(f.stateRoot, "private", A, "config", "browser.json")))
   assert.equal(config.browser.launchOptions.executablePath, executable)
   assert.ok(!result.payload.result.args.includes("--executable-path"))
+})
+
+for (const [file, source] of [
+  ["registry.js", "exports.createClientInfo=undefined;"],
+  ["registry.js", "exports.Registry=undefined;"],
+  ["registry.js", "exports.Registry.load=undefined;"],
+  ["session.js", "exports.Session=undefined;"],
+  ["program.js", "exports.program=undefined;"],
+  ["../utils/socketConnection.js", "exports.SocketConnection=undefined;"],
+]) {
+  test("runtime rejects unsupported CLI exports " + file + " " + source, async () => {
+    const f = await fixture()
+    fs.appendFileSync(path.join(f.modules, file), "\n" + source)
+    const result = await f.invoke(["create"], { contextId: () => A })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "unsupported_cli")
+  })
+}
+test("runtime creation refuses an existing session and never restarts it", async () => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  const result = await f.invoke(["keep", A], {
+    execute: (node, args, opts) => {
+      const request = { ...JSON.parse(args[1]), operation: "create" }
+      return f.options.execute(node, [args[0], JSON.stringify(request)], opts)
+    },
+  })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "context_exists")
+  assert.equal(fs.existsSync(f.metadata(A)), true)
+})
+test("runtime startup handles absent optional browser arguments without inheriting a session", async () => {
+  const f = await fixture()
+  const result = await f.invoke(["create"], {
+    contextId: () => A,
+    execute: (node, args, opts) => {
+      const request = { ...JSON.parse(args[1]), browserArgs: undefined }
+      return f.options.execute(node, [args[0], JSON.stringify(request)], opts)
+    },
+  })
+  assert.equal(result.exitCode, 0)
+  assert.ok(result.payload.result.args.includes("--session=" + A))
+})
+test("runtime validates exact registry paths even without the optional registry enumeration export", async () => {
+  const f = await fixture()
+  fs.appendFileSync(path.join(f.modules, "registry.js"), "\nexports.baseDaemonDir=undefined;")
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  assert.equal((await f.invoke(["keep", A])).exitCode, 0)
+})
+for (const source of [
+  "exports.program=async()=>{console.log('owned startup error');process.exitCode=1;};",
+  "exports.program=async()=>{console.log(JSON.stringify({isError:true,error:'owned JSON error'}));};",
+  "exports.program=async()=>{console.log(JSON.stringify({isError:true}));};",
+]) {
+  test("runtime preserves explicit upstream startup failure " + source, async () => {
+    const f = await fixture()
+    put(path.join(f.modules, "program.js"), source)
+    const result = await f.invoke(["create"], { contextId: () => A })
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "upstream_failed")
+  })
+}
+test("runtime never claims running when startup produced no session metadata", async () => {
+  const f = await fixture()
+  put(path.join(f.modules, "program.js"), "exports.program=async()=>{console.log('null')};")
+  const result = await f.invoke(["create"], { contextId: () => A })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "context_absent")
+})
+for (const operation of ["connection", "reply"]) {
+  test("runtime " + operation + " timeout is an explicit retained cleanup obligation", async () => {
+    const f = await fixture()
+    await f.invoke(["create"], { contextId: () => A })
+    f.control({ fastTimers: true, connectHang: operation === "connection" })
+    if (operation === "reply") f.change(A, { noReply: true })
+    const result = await f.invoke([operation === "reply" ? "discard" : "keep", A])
+    assert.equal(result.exitCode, 1)
+    assert.equal(result.payload.code, "session_unreachable")
+    assert.equal(fs.existsSync(f.metadata(A)), true)
+  })
+}
+test("runtime rejects a mismatched RPC response rather than accepting another command's result", async () => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  f.change(A, { responseId: 2, stale: true })
+  const result = await f.invoke(["discard", A])
+  assert.equal(result.exitCode, 1)
+  assert.match(result.payload.message, /Unexpected/)
+  assert.equal(fs.existsSync(f.metadata(A)), true)
+})
+test("runtime requires the affirmative stop acknowledgement before stale metadata deletion", async () => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  f.change(A, { stopAck: "not stopped", stale: true })
+  const result = await f.invoke(["discard", A])
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "cleanup_unconfirmed")
+  assert.equal(fs.existsSync(f.metadata(A)), true)
+})
+test("runtime preserves ordinary text results and explicit tool errors", async () => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  f.change(A, { runResponse: { text: "owned text result" } })
+  assert.equal((await f.invoke(["run", A, "--", "snapshot"])).payload.result, "owned text result")
+  f.change(A, { runResponse: { isError: true, text: "" } })
+  const error = await f.invoke(["run", A, "--", "snapshot"])
+  assert.equal(error.exitCode, 1)
+  assert.equal(error.payload.code, "upstream_failed")
+  assert.equal(error.payload.message, "Upstream command failed")
+})
+test("runtime uses maintained raw-command metadata and closes a failed parser connection", async () => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  put(path.join(f.modules, "help.json"), JSON.stringify({ booleanOptions: [], commands: { snapshot: { raw: true } } }))
+  const result = await f.invoke(["run", A, "--", "snapshot"])
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.payload.result.raw, true)
+  put(path.join(f.modules, "minimist.js"), "exports.minimist=()=>{throw Error('owned parser error')};")
+  const failed = await f.invoke(["run", A, "--", "snapshot"])
+  assert.equal(failed.exitCode, 1)
+  assert.match(failed.payload.message, /owned parser/)
+  assert.equal(fs.existsSync(f.metadata(A)), true)
+})
+test("runtime validates a real owned Unix socket without unlinking it", { skip: process.platform === "win32" }, async t => {
+  const f = await fixture()
+  const made = await f.invoke(["create"], { contextId: () => A, socketRoot: undefined })
+  assert.equal(made.exitCode, 0)
+  const directory = made.payload.resources.socketDirectory
+  console.log("RESOURCE native short namespace " + directory)
+  const socket = path.join(directory, "owned.sock")
+  const server = net.createServer()
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve) })
+  t.after(async () => {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await removeTree(directory)
+  })
+  f.change(A, { socketPath: socket })
+  assert.equal((await f.invoke(["keep", A], { socketRoot: undefined })).exitCode, 0)
+  assert.equal(fs.lstatSync(socket).isSocket(), true)
+})
+test("runtime rejects a non-socket resource even when its owned filename ends in sock", { skip: process.platform === "win32" }, async () => {
+  const f = await fixture()
+  await f.invoke(["create"], { contextId: () => A })
+  const config = JSON.parse(fs.readFileSync(f.metadata(A)))
+  put(config.socketPath, "owned non-socket")
+  assert.equal((await f.invoke(["keep", A])).payload.code, "unsafe_registry")
+})
+test("runtime validates native Windows pipe identity without relying on Unix unlink", async () => {
+  const f = await fixture()
+  f.control({ platform: "win32" })
+  assert.equal((await f.invoke(["create"], { contextId: () => A })).exitCode, 0)
+  const valid = JSON.parse(fs.readFileSync(f.metadata(A))).socketPath
+  assert.equal((await f.invoke(["keep", A])).exitCode, 0)
+  for (const socketPath of [null, "foreign", "\\\\.\\pipe\\pw-foreign"]) {
+    f.change(A, { socketPath })
+    assert.equal((await f.invoke(["keep", A])).payload.code, "unsafe_registry")
+  }
+  f.change(A, { socketPath: valid })
+  assert.equal((await f.invoke(["discard", A])).payload.state, "discarded")
 })

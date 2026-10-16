@@ -98,6 +98,10 @@ function execute(node, args, options) {
         reject(Object.assign(new Error("Private browser runner did not return a confirmed result: " + (stderr || stdout || (error && (error.code || error.signal)) || "empty output") + "; any owned context remains a cleanup obligation"), { code: "runner_failed" }));
         return;
       }
+      if (!payload || typeof payload !== "object") {
+        reject(Object.assign(new Error("Private browser runner returned an invalid result; cleanup remains unconfirmed"), { code: "runner_failed" }));
+        return;
+      }
       if (error || payload.isError) reject(Object.assign(new Error(payload.message || payload.error || stderr || "Upstream command failed"), { code: payload.code || "upstream_failed" }));
       else resolve(payload);
     });
@@ -149,8 +153,7 @@ function run(argv, options) {
     var creating = argv[0] === "create";
     resources = { contextDirectory: root, disposition: "owner-private directories retained; exports are never erased" };
     if (!creating && (!fs.existsSync(parent) || !fs.existsSync(root))) {
-      if (argv[0] === "discard") return { state: "absent" };
-      failure("context_absent", "Private context is absent; it was not recreated");
+      failure("context_absent", "Private context disappeared while preparing the runtime; cleanup remains unconfirmed");
     }
     ownedDir(parent, creating);
     if (creating) fs.mkdirSync(root, { mode: 448 });
@@ -183,7 +186,13 @@ function run(argv, options) {
       // The CLI accepts channels; executable selection uses its native config.
       request.browserArgs = (choice.indexOf("--browser") === -1 ? [] : ["--browser", choice[choice.indexOf("--browser") + 1]]).concat(["--config=" + configFile]);
     }
-    return (o.execute || execute)(runtime.nodePath, [path.join(__dirname, "private-browser-runtime.cjs"), JSON.stringify(request)], { cwd: root, env: env });
+    return Promise.resolve((o.execute || execute)(runtime.nodePath, [path.join(__dirname, "private-browser-runtime.cjs"), JSON.stringify(request)], { cwd: root, env: env })).then(function (result) {
+      if (!result || typeof result !== "object" || result.isError ||
+          (argv[0] === "discard" ? ["discarded", "absent"].indexOf(result.state) === -1 : result.state !== "running")) {
+        failure("runner_failed", "Private browser runner did not confirm " + argv[0] + "; cleanup remains unconfirmed");
+      }
+      return result;
+    });
   }).then(function (result) {
     return { exitCode: 0, payload: scrub({ contextId: id, mode: "private", state: result.state, result: result.result, resources: resources }, source) };
   }, function (error) {

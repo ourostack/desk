@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
+import fs from "node:fs"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
@@ -50,6 +51,18 @@ test("private preparation rejects unsupported generations and missing Node/npm",
   await assert.rejects(browser.prepareBrowserRuntime(m.options), /patch|verified/i)
   await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, exists: () => false }), /npm/i)
   await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, current: { path: "/missing", version: "v1.0.0", abi: "1" } }), /Node/i)
+})
+
+test("private preparation defaults options and fails before installation when npm is absent", async t => {
+  t.mock.method(fs, "statSync", () => ({ isFile: () => false }))
+  await assert.rejects(browser.prepareBrowserRuntime(), error => ["node_missing", "npm_missing"].includes(error.code))
+})
+
+test("private preparation preserves a code for lock contention without an installed generation", posixOnly, async () => {
+  const m = await machine("private-prepare-busy-", { firstInstallMs: 0, startRefresh: () => {} })
+  touch(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid, at: Date.now() }))
+  await assert.rejects(browser.prepareBrowserRuntime(m.options), error => error.code === "install_failed" && /still installing/.test(error.message))
+  assert.deepEqual(m.calls(), [])
 })
 
 // ---- fixtures ----
