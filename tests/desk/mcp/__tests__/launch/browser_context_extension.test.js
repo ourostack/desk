@@ -952,3 +952,112 @@ test("K002 completed revocation between ownership await and attach invocation pr
   assert.ok(attaching.error)
   assert.equal(f.effects.some(effect => effect[0] === "attach"), false)
 })
+
+test("K002stop completed replacement after stop cannot be detached by a late successful attach", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let finish
+  f.api.debugger.attach = async target => {
+    f.debuggerBindings.set(target.tabId, { owner: "old-extension", generation: 100 })
+    await new Promise(resolve => { finish = resolve })
+  }
+  f.sockets[0].input({ id: "held-attach", method: "chrome.debugger.attach", params: [{ tabId: 10 }, "1.3"] })
+  await eventually(() => finish)
+  f.engine.stop()
+  f.api.debugger.onDetach.emit({ tabId: 10 }, "replaced_with_devtools")
+  f.debuggerBindings.set(10, { owner: "replacement", generation: 101 })
+  finish()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(f.debuggerBindings.get(10), { owner: "replacement", generation: 101 })
+  assert.equal(f.effects.some(effect => effect[0] === "detach"), false)
+  assert.equal(f.api.debugger.onDetach.size, 0, "retire the custody observer after effect settlement")
+  const stopped = await f.engine.dispatch(request("context.status", A))
+  assert.equal(stopped.error.code, "native_extension_stopped")
+  assert.ok(stopped.error.resources, "stopped status must retain a cleanup projection, not imply no obligations")
+  assert.equal(stopped.error.resources.pendingEffects, 0)
+  assert.equal(stopped.error.resources.debuggerObservationActive, false)
+  assert.equal(stopped.error.resources.debuggerCustody[0].state, "unknown")
+  assert.equal(stopped.error.resources.debuggerCustody[0].reason, "native_debugger_generation_unconfirmed")
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_extension_stopped")
+  assert.equal(f.effects.some(effect => effect[0] === "reload"), false)
+})
+
+test("K002stop retains observer for known own compensation and retires it after settlement", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let finish, detachDone
+  f.hooks.detach = () => new Promise(resolve => { detachDone = resolve })
+  f.api.debugger.attach = async target => {
+    f.debuggerBindings.set(target.tabId, { owner: "old-extension", generation: 100 })
+    await new Promise(resolve => { finish = resolve })
+  }
+  f.sockets[0].input({ id: "known-held-attach", method: "chrome.debugger.attach", params: [{ tabId: 10 }, "1.3"] })
+  await eventually(() => finish)
+  f.engine.stop()
+  try {
+    assert.equal(f.api.debugger.onDetach.size, 1, "only custody-critical observation survives stop")
+    assert.equal(f.api.tabs.onCreated.size, 0, "ordinary resource listeners retire immediately")
+    const pending = await f.engine.dispatch(request("context.status", A))
+    assert.ok(pending.error.resources, "stopped status must expose pending cleanup without authorizing commands")
+    assert.ok(pending.error.resources.pendingEffects > 0)
+    assert.equal(pending.error.resources.debuggerObservationActive, true)
+    finish()
+    await eventually(() => detachDone)
+    assert.equal(f.api.debugger.onDetach.size, 1, "detach response must also settle before observer retirement")
+    const detaching = await f.engine.dispatch(request("context.status", A))
+    assert.equal(detaching.error.resources.debuggerCustody[0].state, "detaching")
+  } finally {
+    finish()
+    await new Promise(resolve => setImmediate(resolve))
+    detachDone?.()
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.equal(f.debuggerBindings.has(10), false)
+  assert.deepEqual(f.effects.filter(effect => effect[0] === "detach").map(effect => effect[1].tabId), [10])
+  assert.equal(f.api.debugger.onDetach.size, 0)
+  const settled = await f.engine.dispatch(request("context.status", A))
+  assert.equal(settled.error.resources.pendingEffects, 0)
+  assert.deepEqual(settled.error.resources.debuggerCustody, [])
+})
+
+test("K002stop rejected attach retains unknown custody without claiming quiescence", async () => {
+  for (const replacement of [false, true]) {
+    const f = await kernel()
+    assert.ok((await f.engine.dispatch(create())).result)
+    let rejectAttach
+    f.api.debugger.attach = async target => {
+      f.debuggerBindings.set(target.tabId, { owner: "old-extension", generation: 100 })
+      await new Promise((resolve, reject) => { rejectAttach = reject })
+    }
+    f.sockets[0].input({ id: "rejected-held-attach", method: "chrome.debugger.attach", params: [{ tabId: 10 }, "1.3"] })
+    await eventually(() => rejectAttach)
+    f.engine.stop()
+    if (replacement) {
+      f.api.debugger.onDetach.emit({ tabId: 10 }, "replaced_with_devtools")
+      f.debuggerBindings.set(10, { owner: "replacement", generation: 101 })
+    }
+    rejectAttach(new Error("attach disposition unconfirmed"))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(f.effects.some(effect => effect[0] === "detach"), false)
+    assert.equal(f.debuggerBindings.get(10).generation, replacement ? 101 : 100)
+    const stopped = await f.engine.dispatch(request("context.status", A))
+    assert.equal(stopped.error.code, "native_extension_stopped")
+    assert.ok(stopped.error.resources, "a rejected late attach must remain a visible cleanup obligation")
+    assert.equal(stopped.error.resources.pendingEffects, 0)
+    assert.equal(stopped.error.resources.debuggerCustody[0].state, "unknown")
+    assert.equal(stopped.error.resources.debuggerCustody[0].reason,
+      replacement ? "native_debugger_generation_unconfirmed" : "native_debugger_attach_unconfirmed")
+    assert.equal(stopped.error.resources.debuggerObservationActive, false)
+    assert.equal(f.api.debugger.onDetach.size, 0)
+    assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_extension_stopped")
+  }
+})
+
+test("K002stop without pending effects retires its observer immediately and remains terminal", async () => {
+  const f = await kernel()
+  f.engine.stop()
+  assert.equal(f.api.debugger.onDetach.size, 0)
+  f.engine.stop()
+  assert.equal(f.api.debugger.onDetach.size, 0)
+  await assert.rejects(f.engine.start(), /native_extension_stopped/)
+})

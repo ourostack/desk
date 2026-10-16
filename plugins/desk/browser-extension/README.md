@@ -117,8 +117,16 @@ resolve a pending `Runtime.evaluate({awaitPromise:true})`.
 
 Disconnect detaches transport and retains all pages/groups. Resume never creates
 anything: disconnected/unavailable bindings return an error. Status reports
-their exact retained projection. `stop()` removes this instance's event
+their exact retained projection. `stop()` immediately removes ordinary event
 listeners and closes relays, not tabs or groups; use a new factory after stop.
+The custody-critical debugger-detach observer remains until already-issued
+effects (including compensation) settle, then retires without a timer. Retiring
+observation also invalidates any remaining unknown generation evidence; an
+old map entry alone never authorizes later compensation. A stopped
+`context.status` request is still a `native_extension_stopped` error, but carries
+the retained cleanup projection in `error.resources`, including
+`debuggerObservationActive`. It does not authorize commands, restart, discard
+or reload, and unknown custody is not erased to claim quiescence.
 
 `context.discard` is separate from socket close. It preflights current members,
 revalidates immediately before each exact Chrome remove call, confirms absence,

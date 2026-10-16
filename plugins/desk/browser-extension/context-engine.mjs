@@ -52,10 +52,14 @@ export function createBrowserExtension(api, options = {}) {
   let port, starting, tokenDocument, update, stopped = false
   let generation = 0
   let totalEffects = 0
+  let removeDebuggerObserver
+  let observerRetirementRequested = false
 
   function listen(target, fn) {
     target.addListener(fn)
-    listeners.push(() => target.removeListener(fn))
+    const remove = () => target.removeListener(fn)
+    listeners.push(remove)
+    return remove
   }
   function publish(message) {
     if (!port) return false
@@ -72,6 +76,7 @@ export function createBrowserExtension(api, options = {}) {
       unconfirmedCreates: b.unconfirmedCreates,
       uncertainTabs: [...b.uncertainTabs.values()],
       groupingObligations: [...b.groupingObligations.values()],
+      debuggerObservationActive: Boolean(removeDebuggerObserver),
       debuggerCustody: [...debuggerCustody.values()].filter(c => c.binding === b).map(c => ({
         tabId: c.tabId, windowId: c.record.windowId, generation: c.generation,
         state: c.state, revoked: c.revoked, ...(c.reason ? { reason: c.reason } : {}),
@@ -87,8 +92,19 @@ export function createBrowserExtension(api, options = {}) {
     return (async () => {
       try { return await operation() }
       catch (error) { throw isInternal(error) ? error : fail("native_browser_operation_failed") }
-      finally { --b.pending; --totalEffects }
+      finally { --b.pending; --totalEffects; retireStoppedDebuggerObserver() }
     })()
+  }
+  function retireStoppedDebuggerObserver() {
+    if (!observerRetirementRequested || totalEffects !== 0 || !removeDebuggerObserver) return
+    removeDebuggerObserver()
+    removeDebuggerObserver = undefined
+    // Retiring observation also retires generation evidence. Unknown custody
+    // remains visible, never a map-only permission for later compensation.
+    for (const custody of debuggerCustody.values()) {
+      custody.externalBoundary = true
+      unknownDebuggerCustody(custody, custody.reason ?? "native_debugger_observation_retired")
+    }
   }
   function forgetDebuggerCustody(c) {
     if (debuggerCustody.get(c.tabId) !== c) return
@@ -356,7 +372,7 @@ export function createBrowserExtension(api, options = {}) {
     if (method === "Target.attachedToTarget" && typeof params?.sessionId === "string") record.sessions.add(params.sessionId)
     if (method === "Target.detachedFromTarget") record.sessions.delete(params?.sessionId)
   })
-  listen(api.debugger.onDetach, source => {
+  removeDebuggerObserver = listen(api.debugger.onDetach, source => {
     const custody = debuggerCustody.get(source.tabId)
     if (custody?.pendingAttach) {
       custody.externalBoundary = true
@@ -495,7 +511,8 @@ export function createBrowserExtension(api, options = {}) {
   }
   async function invoke(request) {
     const { method, contextId, params = {} } = request
-    if (stopped) throw fail("native_extension_stopped")
+    if (stopped) throw fail("native_extension_stopped",
+      method === "context.status" && bindings.has(contextId) ? projection(bindings.get(contextId)) : undefined)
     if (method === "profile.read") {
       const token = await profileToken()
       if (params.profileToken !== undefined && params.profileToken !== token) throw fail("native_profile_mismatch")
@@ -597,7 +614,13 @@ export function createBrowserExtension(api, options = {}) {
       b.connection?.close("native_extension_stopped")
       for (const id of b.tabs.keys()) revoke(b, id)
     }
-    for (const remove of listeners.splice(0)) remove()
+    for (const remove of listeners.splice(0)) {
+      if (remove !== removeDebuggerObserver) remove()
+    }
+    // Ordinary listeners/command authority retire now; generation observation
+    // outlives stop only while already-issued effects can still compensate.
+    observerRetirementRequested = true
+    retireStoppedDebuggerObserver()
   }
   return Object.freeze({ dispatch, start, stop })
 }
