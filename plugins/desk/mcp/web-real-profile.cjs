@@ -2,8 +2,8 @@
 //
 // - The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }` in a plugin's `plugin.json`. It is found the way the factory store declaration is found (`src/factory/plugin-sources.cjs` lists the installed plugin folders). When several plugins declare one, the last folder listed wins, so the overlay loaded after Desk decides.
 // - The profile is the one in the browser's own `Local State` profile list whose `user_name` (the signed-in account's address) ends in `@<profileAccountDomain>`.
-// - The Playwright Extension keeps a connection token in the profile's local storage. The launcher reads it from a temporary copy of that folder (never from the live one, which the running browser locks), hands it to Playwright MCP in its environment and deletes the copy at once, so the extension connects without asking. The token is never printed or stored, and web-real-tabs.cjs replaces it in everything Playwright MCP writes to the host. Only the browser launch carries it in a command line, as stock Playwright MCP does, and an already running browser hands that launch off and exits at once.
-// - The extension gives each connection its own tab group; web-real-tabs.cjs closes the connection's tabs when the session ends.
+// - The launcher reads the extension token from a temporary copy of the selected profile's local storage. The staged acquisition patch re-reads that same profile before every new relay; web-real-tabs.cjs and the staged reader share in-memory output redaction. Stock Playwright still carries the token on its browser-launch command line.
+// - The extension gives each connection its own tab group. Automatic tab cleanup is deferred; explicit close remains stock Playwright behavior.
 //
 // Like web.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins (plugin-sources.cjs is loaded only when this mode is on).
 
@@ -12,9 +12,11 @@
 var fs = require("fs");
 var os = require("os");
 var path = require("path");
+var credential = require("./web-extension-credential.cjs");
+var readExtensionToken = credential.readExtensionToken;
 
 // The Playwright Extension's id in the Chrome Web Store (the same extension installs in Edge).
-var EXTENSION_ID = "mmlmfjhmonkocbjadbfplnigmagldckm";
+var EXTENSION_ID = credential.EXTENSION_ID;
 var INSTALL_URL = "https://chromewebstore.google.com/detail/playwright-extension/" + EXTENSION_ID;
 var CHANNELS = { msedge: "Microsoft Edge", chrome: "Google Chrome" };
 var MANIFESTS = ["plugin.json", path.join(".claude-plugin", "plugin.json"), path.join(".codex-plugin", "plugin.json")];
@@ -140,94 +142,6 @@ function findProfileDir(localStatePath, domain) {
   return matches.indexOf(profile.last_used) === -1 ? matches[0] : profile.last_used;
 }
 
-// ---- the token ----
-
-// The token as the extension stored it: a one-byte encoding marker (0 for UTF-16, anything else for Latin-1) and then the text.
-function decodeToken(value) {
-  return value.slice(1).toString(value[0] === 0 ? "utf16le" : "latin1");
-}
-
-function scan(iterator, want) {
-  return iterator.next().then(function (entry) {
-    if (!entry) return null;
-    return entry[0].equals(want) ? decodeToken(entry[1]) : scan(iterator, want);
-  });
-}
-
-// The token from Chromium's newer local storage, one SQLite file named `LocalStorage` (Chrome 153 and later use it; Edge 155 still uses LevelDB), read from a copy with Node's built-in SQLite. Null when this Node has no built-in SQLite or the file has no token. `deps.sqlite` is for tests.
-function readSqliteToken(file, extensionId, tokenKey, deps) {
-  var sqlite;
-  try {
-    sqlite = deps.sqlite === undefined ? require("node:sqlite") : deps.sqlite;
-  } catch (error) {
-    return null;
-  }
-  if (!sqlite) return null;
-  var copy = fs.mkdtempSync(path.join(deps.tmpdir, "desk-web-ls-"));
-  try {
-    ["", "-wal"].forEach(function (suffix) {
-      if (fs.existsSync(file + suffix)) fs.copyFileSync(file + suffix, path.join(copy, "LocalStorage" + suffix));
-    });
-    var db = new sqlite.DatabaseSync(path.join(copy, "LocalStorage"));
-    try {
-      var row = db.prepare("SELECT e.value AS value, e.value_compression_type AS compression FROM map_entries e JOIN maps m ON m.row_id = e.map_id WHERE m.storage_key = ? AND e.key = ?")
-        .get(Buffer.from("chrome-extension://" + extensionId + "/", "latin1"), Buffer.concat([Buffer.from([1]), Buffer.from(tokenKey, "latin1")]));
-      return row && row.compression === 0 ? decodeToken(Buffer.from(row.value)) : null;
-    } finally {
-      db.close();
-    }
-  } finally {
-    fs.rmSync(copy, { recursive: true, force: true });
-  }
-}
-
-// The profile's persisted extension token, or null when this reader finds none; this is not an extension-installation check. Reads a copy of `Local Storage/leveldb` made without its LOCK file and removes the copy before it answers, whatever happens, then Chromium's newer SQLite `LocalStorage` when LevelDB has no token. `deps.level` is the `classic-level` module.
-function readExtensionToken(profileDir, deps) {
-  var extensionId = deps.extensionId === undefined ? EXTENSION_ID : deps.extensionId;
-  var tokenKey = deps.tokenKey === undefined ? "auth-token" : deps.tokenKey;
-  if (typeof extensionId !== "string" || !/^[a-p]{32}$/.test(extensionId) ||
-      typeof tokenKey !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(tokenKey)) {
-    return Promise.reject(new Error("browser_token_identity_invalid"));
-  }
-  var source = path.join(profileDir, "Local Storage", "leveldb");
-  var sqliteFile = path.join(profileDir, "LocalStorage");
-  function fromSqlite(token) {
-    return token || !fs.existsSync(sqliteFile) ? token : readSqliteToken(sqliteFile, extensionId, tokenKey, deps);
-  }
-  if (!fs.existsSync(source)) return Promise.resolve(null).then(fromSqlite);
-  var copy = fs.mkdtempSync(path.join(deps.tmpdir, "desk-web-ls-"));
-  function remove() {
-    fs.rmSync(copy, { recursive: true, force: true });
-  }
-  var db = null;
-  var iterator = null;
-  var shut = Promise.resolve();
-  return Promise.resolve().then(function () {
-    fs.readdirSync(source).forEach(function (name) {
-      if (name !== "LOCK") fs.copyFileSync(path.join(source, name), path.join(copy, name));
-    });
-    db = new deps.level.ClassicLevel(copy, { keyEncoding: "buffer", valueEncoding: "buffer", createIfMissing: false });
-    iterator = db.iterator();
-    return scan(iterator, Buffer.from("_chrome-extension://" + extensionId + "\u0000\u0001" + tokenKey, "latin1"));
-  }).then(function (token) {
-    return shutdown().then(function () {
-      return fromSqlite(token);
-    });
-  }, function (error) {
-    return shutdown().then(function () {
-      throw error;
-    });
-  });
-  function shutdown() {
-    shut = Promise.resolve().then(function () {
-      return iterator === null ? null : iterator.close();
-    }).then(function () {
-      return db === null ? null : db.close();
-    }).then(remove, remove);
-    return shut;
-  }
-}
-
 // ---- connecting ----
 
 // What to start Playwright MCP with for a declaration: { args, env } or { payload } (a degraded answer that says what is missing). The user-data folder is passed explicitly, so Playwright opens the connect page in the same browser data the profile was found in.
@@ -277,6 +191,7 @@ function connect(o) {
     if (token === null || token === "") return missing();
     var env = {};
     env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token;
+    env[credential.BINDING_KEY] = path.resolve(path.dirname(statePath), profile);
     return { args: ["--extension", "--browser", declaration.channel, "--user-data-dir", path.dirname(statePath), "--profile-dir-name", profile], env: env, profile: profile, app: app };
   }, function (error) {
     return { payload: o.unavailable("browser_token_unreadable",
