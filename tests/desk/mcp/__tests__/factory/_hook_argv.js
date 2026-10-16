@@ -31,7 +31,10 @@ if (process.platform === "darwin") {
     at = Number(parent[1]);
   }
 }
-row.top = cp.execFileSync("git", ["rev-parse", "--show-toplevel"], {encoding:"utf8"}).trim();
+row.topRaw = cp.execFileSync("git", ["rev-parse", "--show-toplevel"], {encoding:"utf8"});
+row.top = row.topRaw.trim();
+row.topReal = fs.realpathSync.native(row.top);
+row.cwdReal = fs.realpathSync.native(row.cwd);
 // Observe both the unchanged configured policy and the effective private routing overlay.
 const hookConfig = cp.spawnSync("git", ["config", "--show-scope", "--get-all", "core.hooksPath"], {encoding:"utf8"}).stdout.trim();
 const scopes = hookConfig ? hookConfig.split("\\n").map((line) => {
@@ -43,8 +46,19 @@ row.effectiveHooksPath = scopes.at(-1)?.value ?? "";
 if (row.hook.includes("commit-msg") && row.args.length) row.message = fs.readFileSync(row.args[0], "utf8");
 fs.appendFileSync(process.env.DESK_HOOK_LOG, JSON.stringify(row) + "\\n");
 `
-  const readFromProject = subdirectory ? 'expected=$(pwd -P)\ncd project || exit 41\ntop=$(git rev-parse --show-toplevel) || exit $?\n[ "$top" = "$expected" ] || exit 42\nif [ -n "$DESK_HOOK_SUBDIRECTORY_LOG" ]; then printf "%s\\n" "$(pwd -P)" "$top" >> "$DESK_HOOK_SUBDIRECTORY_LOG" || exit $?; fi\ncd .. || exit 41\n' : ""
+  const discovery = `
+const fs = require("node:fs"), cp = require("node:child_process"), path = require("node:path");
+const cwd = process.cwd();
+const topRaw = cp.execFileSync("git", ["rev-parse", "--show-toplevel"], {encoding:"utf8"});
+const row = {shellPwdRaw:fs.readFileSync(0, "utf8"), cwd, topRaw, top:topRaw.trim(),
+  cwdReal:fs.realpathSync.native(cwd), topReal:fs.realpathSync.native(topRaw.trim()),
+  parentReal:fs.realpathSync.native(path.dirname(cwd))};
+if (process.env.DESK_HOOK_SUBDIRECTORY_LOG) fs.appendFileSync(process.env.DESK_HOOK_SUBDIRECTORY_LOG, JSON.stringify(row) + "\\n");
+if (path.basename(cwd) !== "project" || row.topReal !== row.parentReal) process.exit(42);
+`
+  const verifyProject = `pwd -P | "$DESK_HOOK_NODE" -e '${discovery.replace(/'/gu, "'\\''")}' || exit $?\n`
+  const readFromProject = subdirectory ? `cd project || exit 41\n${verifyProject}cd .. || exit 41\n` : ""
   const mutation = nestedMutation ? `${subdirectory ? "cd project || exit 41\n" : ""}DESK_HOOK_NESTED_MUTATION=1 git update-index --refresh --force-write-index || exit $?\n` : ""
-  const commit = nestedCommit ? '[ "$DESK_HOOK_NESTED_COMMIT" = "1" ] && exit 0\nexpected=$(pwd -P)\ncd project || exit 41\ntop=$(git rev-parse --show-toplevel) || exit $?\n[ "$top" = "$expected" ] || exit 42\nif [ -n "$DESK_HOOK_SUBDIRECTORY_LOG" ]; then printf "%s\\n" "$(pwd -P)" "$top" >> "$DESK_HOOK_SUBDIRECTORY_LOG" || exit $?; fi\nDESK_HOOK_NESTED_COMMIT=1 git commit --allow-empty -qm "nested message witness" || exit $?\n' : ""
+  const commit = nestedCommit ? `[ "$DESK_HOOK_NESTED_COMMIT" = "1" ] && exit 0\ncd project || exit 41\n${verifyProject}DESK_HOOK_NESTED_COMMIT=1 git commit --allow-empty -qm "nested message witness" || exit $?\n` : ""
   return `#!/bin/sh\n${readFromProject}"$DESK_HOOK_NODE" -e '${probe.replace(/'/gu, "'\\''")}' -- "$0" "$@"\ncode=$?\n[ "$code" -eq 0 ] || exit "$code"\n${mutation}${commit}case "$0" in *pre-commit*) exit "\${DESK_HOOK_EXIT:-0}";; esac\nexit 0\n`
 }

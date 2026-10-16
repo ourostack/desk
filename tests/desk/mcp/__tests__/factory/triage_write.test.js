@@ -32,7 +32,142 @@ const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
 const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
 
-test("private commit carries the physical common directory across lexical junction traversal", async () => {
+function assertPrivateArgv(root, args, message = "private paths never enter process argv") {
+  const normalizedRoot = root.replaceAll("\\", "/")
+  assert.ok(!args.some((arg) => arg.replaceAll("\\", "/").includes(normalizedRoot)), message)
+}
+
+function tracedSpawn(trace, command, args, options) {
+  const startedMs = performance.now()
+  const row = {
+    command, args, cwd: options.cwd ?? null, pid: null, startedMs, elapsedMs: null,
+    status: null, signal: null, error: null, exit: null, close: null, stdout: "", stderr: "",
+    commonDir: options.env?.GIT_COMMON_DIR, gitDir: options.env?.GIT_DIR, killRequests: [],
+  }
+  trace.push(row)
+  let child
+  try {
+    child = spawn(command, args, options)
+  } catch (error) {
+    row.error = processError(error)
+    row.elapsedMs = performance.now() - startedMs
+    throw error
+  }
+  row.pid = child.pid ?? null
+  row.spawnReturnedMs = performance.now() - startedMs
+  child.once("spawn", () => { row.spawnEventMs = performance.now() - startedMs })
+  child.stdout?.on("data", (chunk) => { row.stdout += chunk })
+  child.stderr?.on("data", (chunk) => { row.stderr += chunk })
+  child.on("error", (error) => { row.error = processError(error) })
+  child.once("exit", (code, signal) => { row.exit = { code, signal, elapsedMs: performance.now() - startedMs } })
+  child.once("close", (code, signal) => {
+    row.status = code
+    row.signal = signal
+    row.elapsedMs = performance.now() - startedMs
+    row.close = { code, signal, elapsedMs: row.elapsedMs }
+  })
+  return child
+}
+
+function processError(error) {
+  return { name: error.name, code: error.code ?? null, errno: error.errno ?? null, syscall: error.syscall ?? null, message: error.message, stack: error.stack }
+}
+
+function observeKillRequests(t, trace) {
+  const kill = process.kill.bind(process)
+  t.mock.method(process, "kill", (pid, signal) => {
+    const row = trace.findLast((entry) => entry.pid === Math.abs(pid))
+    const request = row ? { pid, signal, elapsedMs: performance.now() - row.startedMs, stage: row.close ? "after-close" : row.exit ? "after-exit-before-close" : "before-exit", error: null } : null
+    if (request) row.killRequests.push(request)
+    try {
+      return kill(pid, signal)
+    } catch (error) {
+      if (request) request.error = processError(error)
+      throw error
+    }
+  })
+}
+
+function observeFilesystemErrors(t, errors) {
+  for (const method of ["access", "chmod", "lstat", "mkdir", "open", "readFile", "readdir", "realpath", "rename", "stat", "symlink", "unlink", "writeFile"]) {
+    const original = fs[method].bind(fs)
+    t.mock.method(fs, method, async (...args) => {
+      const startedMs = performance.now()
+      try {
+        return await original(...args)
+      } catch (error) {
+        errors.push({ method, path: String(args[0]), elapsedMs: performance.now() - startedMs, error: processError(error) })
+        throw error
+      }
+    })
+  }
+}
+
+function diagnostic(t, label, details) {
+  if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") t.diagnostic(JSON.stringify({ label, ...details }))
+}
+
+async function replaceExistingMetadata(file, bytes) {
+  const handle = await fs.open(file, "r+")
+  try {
+    await handle.truncate(0)
+    await handle.writeFile(bytes, "utf8")
+  } finally {
+    await handle.close()
+  }
+}
+
+function withinRoot(root, observed, paths = path) {
+  const relative = paths.relative(root, observed)
+  return relative === "" || (!paths.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${paths.sep}`))
+}
+
+function withShellPwdProvider(script) {
+  if (process.platform === "win32") return script
+  return script.replace("#!/bin/sh\n", "#!/bin/sh\npwd() { printf '%s\\n' '/c/deskstd-tmp/shell-spelling-witness'; }\n")
+}
+
+async function hookReceipt(file) {
+  try {
+    return { text: await fs.readFile(file, "utf8"), error: null }
+  } catch (error) {
+    return { text: null, error: processError(error) }
+  }
+}
+
+function assertSubdirectoryReceipt(receipt, worktree) {
+  const rows = receipt.text.trim().split("\n").map(JSON.parse)
+  assert.equal(rows.length, 1, JSON.stringify(rows))
+  const row = rows[0]
+  assert.equal(path.relative(path.join(worktree, "project"), row.cwdReal), "", JSON.stringify(row))
+  assert.equal(path.relative(worktree, row.topReal), "", JSON.stringify(row))
+  assert.equal(row.topReal, row.parentReal, JSON.stringify(row))
+  assert.ok(row.shellPwdRaw.length > 0, JSON.stringify(row))
+  if (process.platform !== "win32") assert.equal(row.shellPwdRaw, "/c/deskstd-tmp/shell-spelling-witness\n")
+}
+
+test("private commit carries the physical common directory across lexical junction traversal", async (t) => {
+  for (const root of [String.raw`C:\deskstd-tmp\fixture`, "C:/deskstd-tmp/fixture"]) {
+    for (const operand of [String.raw`C:\deskstd-tmp\fixture\.git`, "C:/deskstd-tmp/fixture/.git", String.raw`--git-dir=C:\deskstd-tmp/fixture\.git`]) {
+      assert.throws(() => assertPrivateArgv(root, ["rev-parse", operand]), assert.AssertionError, `${root}: ${operand}`)
+    }
+    assert.doesNotThrow(() => assertPrivateArgv(root, ["commit", "-m", "public message", "../worktrees/wt", "C:/public-hooks/dispatch.cjs"]))
+  }
+  const observed = []
+  const exited = tracedSpawn(observed, process.execPath, ["-e", "process.stdout.write('trace-out'); process.stderr.write('trace-err'); process.exit(17)"], { stdio: ["ignore", "pipe", "pipe"] })
+  await new Promise((resolve) => exited.once("close", resolve))
+  assert.equal(observed[0].status, 17)
+  assert.equal(observed[0].signal, null)
+  assert.equal(observed[0].stdout, "trace-out")
+  assert.equal(observed[0].stderr, "trace-err")
+  assert.equal(observed[0].error, null)
+  assert.equal(observed[0].exit.code, 17)
+  assert.ok(observed[0].elapsedMs >= 0)
+  const missing = tracedSpawn(observed, path.join(path.dirname(process.execPath), "desk-triage-observation-missing-executable"), [], { stdio: ["ignore", "pipe", "pipe"] })
+  await new Promise((resolve) => missing.once("close", resolve))
+  assert.equal(observed[1].error.code, "ENOENT")
+  assert.equal(observed[1].signal, null)
+  assert.ok(observed[1].elapsedMs >= 0)
   const w = await world()
   const desk = w.clone("junction-common")
   const root = desk.deskRoot
@@ -42,6 +177,7 @@ test("private commit carries the physical common directory across lexical juncti
   const before = git(w.origin, ["rev-parse", "main"])
   let candidate, administrative, commonBytes
   const trace = []
+  if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") observeKillRequests(t, trace)
   const result = await publish(desk, { git: {
     async onStep(name) {
       if (name !== "before_commit") return
@@ -61,23 +197,19 @@ test("private commit carries the physical common directory across lexical juncti
       const env = linked && !options.env.GIT_COMMON_DIR
         ? { ...options.env, GIT_COMMON_DIR: path.resolve(candidate, ".git", commonBytes.trim()) }
         : options.env
-      assert.ok(!args.some((arg) => arg.includes(root)), "private paths never enter Git argv")
-      const child = spawn(command, args, { ...options, env })
-      let stdout = "", stderr = ""
-      child.stdout.on("data", (chunk) => { stdout += chunk })
-      child.stderr.on("data", (chunk) => { stderr += chunk })
-      child.once("close", (status) => trace.push({ args, status, stdout, stderr, commonDir: env.GIT_COMMON_DIR, gitDir: env.GIT_DIR }))
-      return child
+      assertPrivateArgv(root, args)
+      return tracedSpawn(trace, command, args, { ...options, env })
     },
   } })
-  assert.equal(result.state, "acknowledged", JSON.stringify({ result, trace: trace.slice(-16) }))
+  diagnostic(t, "common-directory", { result, trace, observerProof: observed })
+  assert.equal(result.state, "acknowledged", JSON.stringify({ result, trace }))
   assert.ok(trace.some((row) => row.args[0] === "commit" && row.status === 0), "actual successful commit")
   const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
   assert.ok(rows.some((row) => row.hook.includes("pre-commit")), "original hook executed")
   for (const row of rows) {
     assert.equal(path.resolve(row.top), candidate, "nested Git discovers the same candidate")
     assert.equal(row.commonDir, path.join(root, ".git"), "original hooks inherit physical common-directory routing")
-    assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.replaceAll("\\", "/").includes(slash(root))), JSON.stringify(row))
+    assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
   }
   assert.notEqual(git(w.origin, ["rev-parse", "main"]), before)
   assert.ok(remoteJson(w.origin, paths.annotation))
@@ -156,16 +288,19 @@ test("private hook preparation respects expiry both between metadata reads and b
     const realNow = Date.now.bind(Date)
     let virtualNow = realNow(), expired = false
     const calls = []
+    const trace = []
     t.mock.method(Date, "now", () => virtualNow)
+    if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") observeKillRequests(t, trace)
     try {
       const result = await publish(desk, { git: { spawn(command, args, options) {
         calls.push(args)
-        const child = spawn(command, args, options)
+        const child = tracedSpawn(trace, command, args, options)
         if (!expired && (after === "config" ? args[0] === "config" : args[0] === "rev-parse" && args[1] === "--git-path")) {
           child.once("close", () => { virtualNow += 10_001; expired = true })
         }
         return child
       } } })
+      diagnostic(t, `expiry-${after}-initial`, { result, trace, expired })
       assert.equal(expired, true)
       assert.equal(result.state, "unsynchronized")
       assert.ok(!calls.some((args) => args[0] === "fetch"), "expired preparation never starts the requested Git operation")
@@ -174,7 +309,19 @@ test("private hook preparation respects expiry both between metadata reads and b
     } finally {
       t.mock.restoreAll()
     }
-    assert.equal((await publish(desk)).state, "acknowledged", "expiry left no candidate or persistent routing mutation")
+    const followOnTrace = [], filesystemErrors = []
+    let followOn
+    if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") {
+      observeKillRequests(t, followOnTrace)
+      observeFilesystemErrors(t, filesystemErrors)
+    }
+    try {
+      followOn = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(followOnTrace, command, args, options) } })
+    } finally {
+      t.mock.restoreAll()
+    }
+    diagnostic(t, `expiry-${after}-follow-on`, { result: followOn, trace: followOnTrace, filesystemErrors })
+    assert.equal(followOn.state, "acknowledged", `expiry left no candidate or persistent routing mutation: ${JSON.stringify({ after, result: followOn, trace: followOnTrace, filesystemErrors })}`)
   }
 })
 
@@ -183,8 +330,8 @@ test("private commit metadata damage and syscall denial hold without overwriting
     const w = await world()
     const desk = w.clone("private-metadata")
     desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
-    let dot, backup, bytes, moved
-    const realLstat = fs.lstat.bind(fs), realSymlink = fs.symlink.bind(fs)
+    let dot, backup, bytes, moved, mutationError = null, installedBytes = null, nativeAttributes = null
+    const realLstat = fs.lstat.bind(fs), realSymlink = fs.symlink.bind(fs), realWriteFile = fs.writeFile.bind(fs)
     let denied = 0
     let result
     try {
@@ -199,7 +346,25 @@ test("private commit metadata damage and syscall denial hold without overwriting
           await fs.rename(dot, moved)
           await fs.mkdir(dot)
         } else if (mode === "invalid-gitfile") {
-          await fs.writeFile(dot, "foreign metadata\n")
+          if (process.platform === "win32") {
+            const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-Item -Force -LiteralPath $env:DESK_METADATA_PROBE).Attributes.ToString()"], {
+              env: { ...desk.env, DESK_METADATA_PROBE: dot }, encoding: "utf8", windowsHide: true, timeout: 10_000,
+            })
+            nativeAttributes = { status: observed.status, signal: observed.signal, error: observed.error ? processError(observed.error) : null, stdout: observed.stdout, stderr: observed.stderr }
+          }
+          t.mock.method(fs, "writeFile", async (file, data, options) => {
+            const flag = typeof options === "object" ? options?.flag ?? "w" : "w"
+            if (file === dot && flag === "w") throw Object.assign(new Error("Windows hidden-file w open refused"), { code: "EPERM" })
+            return realWriteFile(file, data, options)
+          })
+          try {
+            await replaceExistingMetadata(dot, "foreign metadata\n")
+            installedBytes = await fs.readFile(dot, "utf8")
+            assert.equal(installedBytes, "foreign metadata\n", "the metadata fault was actually installed before production resumed")
+          } catch (error) {
+            mutationError = processError(error)
+            throw error
+          }
         } else if (mode === "backup-present") {
           await fs.writeFile(backup, "retained foreign backup\n")
         } else if (mode === "backup-stat-denied") {
@@ -217,6 +382,9 @@ test("private commit metadata damage and syscall denial hold without overwriting
     } finally {
       t.mock.restoreAll()
     }
+    const metadataEvidence = { mode, result, mutationError, installedBytes, nativeAttributes, dot, backup }
+    diagnostic(t, `metadata-${mode}`, metadataEvidence)
+    assert.equal(mutationError, null, JSON.stringify(metadataEvidence))
     assert.equal(result.state, "write_failed", mode)
     assert.equal(remoteText(w.origin, paths.annotation).status, 128)
     assert.equal(result.resources.find((resource) => resource.kind === "worktree").disposition, "active")
@@ -226,8 +394,10 @@ test("private commit metadata damage and syscall denial hold without overwriting
       await fs.rename(dot, path.join(w.base, "retained-foreign-directory"))
       await fs.rename(moved, dot)
     } else if (mode === "invalid-gitfile") {
-      assert.equal(await fs.readFile(dot, "utf8"), "foreign metadata\n")
-      await fs.writeFile(dot, bytes)
+      assert.equal(installedBytes, "foreign metadata\n")
+      assert.equal(await fs.readFile(dot, "utf8"), "foreign metadata\n", JSON.stringify(metadataEvidence))
+      assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT", "production never swapped the invalid gitfile")
+      await replaceExistingMetadata(dot, bytes)
     } else if (mode === "backup-present") {
       assert.equal(await fs.readFile(backup, "utf8"), "retained foreign backup\n")
       assert.equal((await publish(desk)).alarm, RESOURCE_ALARM)
@@ -362,7 +532,7 @@ test("a self-referential Git metadata report is refused by real Git without publ
   assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
 })
 
-test("private triage keeps guarded nested commit message operands private before honest parent refusal", async () => {
+test("private triage keeps guarded nested commit message operands private before honest parent refusal", async (t) => {
   for (const configured of [null, "nested message hooks", "relative hooks"]) {
     const w = await world()
     const desk = w.clone("nested-message-hook")
@@ -373,7 +543,8 @@ test("private triage keeps guarded nested commit message operands private before
     await fs.mkdir(hooks, { recursive: true })
     const originals = new Map()
     for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
-      const body = hookArgvScript({ nestedCommit: name === "post-commit" })
+      const script = hookArgvScript({ nestedCommit: name === "post-commit" })
+      const body = name === "post-commit" ? withShellPwdProvider(script) : script
       originals.set(name, body)
       if (configured !== null) await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
     }
@@ -387,10 +558,18 @@ test("private triage keeps guarded nested commit message operands private before
     const log = path.join(w.base, "nested-message-argv.jsonl")
     const subdirectoryLog = path.join(w.base, "nested-message-discovery.txt")
     desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog }
-    const result = await publish(desk)
-    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    const trace = []
+    const result = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(trace, command, args, options) } })
+    const hooksReceipt = await hookReceipt(log), discoveryReceipt = await hookReceipt(subdirectoryLog)
+    const evidence = { configured, result, trace, hooksReceipt, discoveryReceipt }
+    diagnostic(t, "nested-message-context", evidence)
+    assert.equal(result.state, "policy_unknown", JSON.stringify(evidence))
+    assert.equal(typeof hooksReceipt.text, "string", JSON.stringify(evidence))
+    assert.equal(typeof discoveryReceipt.text, "string", JSON.stringify(evidence))
+    const rows = hooksReceipt.text.trim().split("\n").map(JSON.parse)
     const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
-    assert.deepEqual((await fs.readFile(subdirectoryLog, "utf8")).trim().split("\n"), [path.join(worktree, "project"), worktree])
+    assert.equal(path.relative(result.resources.find((resource) => resource.kind === "worktree").path, worktree), "")
+    assertSubdirectoryReceipt(discoveryReceipt, worktree)
     for (const name of ["prepare-commit-msg", "commit-msg", "post-commit"]) {
       assert.ok(rows.some((row) => row.hook.includes(name) && row.nestedCommit), `guarded nested original ${name} executed`)
     }
@@ -401,8 +580,8 @@ test("private triage keeps guarded nested commit message operands private before
       }
     }
     for (const row of rows) {
-      assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
-      assert.equal(row.top, worktree)
+      assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+      assert.equal(path.relative(worktree, row.topReal), "", JSON.stringify(row))
       assert.equal(row.hooksPath, configured === null ? "" : hooksPath)
       assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS)
       if (row.hook.includes("commit-msg")) assert.ok(row.message.includes(row.nestedCommit ? "nested message witness" : "Record factory triage annotation"))
@@ -447,7 +626,7 @@ test("private triage recovers its interrupted gitfile swap but retains foreign r
   }
 })
 
-test("private triage keeps same-worktree subdirectory Git, nested hooks and message argv valid together", async () => {
+test("private triage keeps same-worktree subdirectory Git, nested hooks and message argv valid together", async (t) => {
   const w = await world()
   const desk = w.clone("subdirectory-hook")
   const root = desk.deskRoot
@@ -459,7 +638,8 @@ test("private triage keeps same-worktree subdirectory Git, nested hooks and mess
   const hooks = path.join(root, ".git/hooks")
   const originals = new Map()
   for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-index-change"]) {
-    const body = hookArgvScript({ nestedMutation: name === "pre-commit", subdirectory: name === "pre-commit" })
+    const script = hookArgvScript({ nestedMutation: name === "pre-commit", subdirectory: name === "pre-commit" })
+    const body = name === "pre-commit" ? withShellPwdProvider(script) : script
     originals.set(name === "pre-commit" ? "pre-commit.desk-chained" : name, body)
     await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
   }
@@ -467,15 +647,22 @@ test("private triage keeps same-worktree subdirectory Git, nested hooks and mess
   const log = path.join(w.base, "subdirectory-hook-argv.jsonl")
   const subdirectoryLog = path.join(w.base, "subdirectory-git.txt")
   desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog }
-  const result = await publish(desk)
-  assert.equal(result.state, "acknowledged", JSON.stringify(result))
-  const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+  const trace = []
+  const result = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(trace, command, args, options) } })
+  const hooksReceipt = await hookReceipt(log), discoveryReceipt = await hookReceipt(subdirectoryLog)
+  const evidence = { result, trace, hooksReceipt, discoveryReceipt }
+  diagnostic(t, "subdirectory-context", evidence)
+  assert.equal(result.state, "acknowledged", JSON.stringify(evidence))
+  assert.equal(typeof hooksReceipt.text, "string", JSON.stringify(evidence))
+  assert.equal(typeof discoveryReceipt.text, "string", JSON.stringify(evidence))
+  const rows = hooksReceipt.text.trim().split("\n").map(JSON.parse)
   const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
-  assert.deepEqual((await fs.readFile(subdirectoryLog, "utf8")).trim().split("\n"), [path.join(worktree, "project"), worktree], "actual subdirectory cwd and real Git top-level result")
+  assert.equal(path.relative(result.resources.find((resource) => resource.kind === "worktree").path, worktree), "")
+  assertSubdirectoryReceipt(discoveryReceipt, worktree)
   assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), "subdirectory mutation triggered the original nested hook")
   for (const row of rows) {
-    assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
-    assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`))
+    assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+    assert.ok(withinRoot(root, row.topReal), JSON.stringify(row))
     assert.equal(row.hooksPath, "")
     assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS)
     if (row.hook.includes("commit-msg")) assert.ok(row.message.includes("Record factory triage annotation"))
@@ -484,6 +671,11 @@ test("private triage keeps same-worktree subdirectory Git, nested hooks and mess
 })
 
 test("private triage preserves routing for a nested hook-triggering Git mutation", async () => {
+  const windowsRoot = String.raw`C:\deskstd-tmp\fixture`
+  assert.equal(withinRoot(windowsRoot, "C:/deskstd-tmp/fixture/.git/work", path.win32), true)
+  for (const outside of ["C:/deskstd-tmp/fixture-other", "C:/deskstd-tmp", "D:/deskstd-tmp/fixture", "C:/deskstd-tmp/fixture/../outside"]) {
+    assert.equal(withinRoot(windowsRoot, outside, path.win32), false, outside)
+  }
   for (const configured of [null, "nested policy hooks"]) {
     const w = await world()
     const desk = w.clone("nested-hook")
@@ -503,8 +695,8 @@ test("private triage preserves routing for a nested hook-triggering Git mutation
     assert.ok(rows.some((row) => row.hook.includes("pre-commit")), "original pre-commit ran")
     assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), `original nested post-index-change ran: ${JSON.stringify(rows)}`)
     for (const row of rows) {
-      assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
-      assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`), "nested Git retains its linked worktree context")
+      assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+      assert.ok(withinRoot(root, row.topReal), `nested Git retains its linked worktree context: ${JSON.stringify(row)}`)
       assert.equal(row.hooksPath, configured === null ? "" : hooks)
       assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS, "nested Git retains public routing over the original policy")
       if (row.toolCommit === "1") assert.equal(row.gitDir, undefined, "original hooks use same-worktree discovery, not a cwd-bound Git directory")
@@ -550,8 +742,8 @@ test("private triage executable hook descendants keep policy, execution and mess
       assert.ok(rows.some((row) => row.hook.includes(name)), `hook did not execute: ${name}`)
     }
     for (const row of rows) {
-      assert.ok(![row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()].some((arg) => arg.includes(root)), JSON.stringify(row))
-      assert.ok(row.top === root || row.top.startsWith(`${root}${path.sep}`), "original hooks must retain their Git context")
+      assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+      assert.ok(withinRoot(root, row.topReal), `original hooks must retain their Git context: ${JSON.stringify(row)}`)
       assert.equal(row.hooksPath, configured === null ? "" : hooksPath, "the original hook must observe the original hook policy")
       assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS, "original hooks retain the effective private routing overlay")
       if (row.toolCommit === "1") assert.equal(row.gitDir, undefined, "original hooks have no cwd-bound Git directory")
