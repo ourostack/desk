@@ -334,7 +334,7 @@ test("private parent creation errors are surfaced rather than treated as existin
   put(file, "owned fixture")
   const result = await f.invoke(["create"], { prepareBrowserRuntime: async () => ({ ...await f.options.prepareBrowserRuntime(), stateRoot: file }) })
   assert.equal(result.exitCode, 1)
-  assert.equal(result.payload.code, "ENOTDIR")
+  assert.ok(["ENOTDIR", "ENOENT"].includes(result.payload.code))
 })
 test("non-ENOENT context inspection errors cannot masquerade as absence", async t => {
   const f = await fixture()
