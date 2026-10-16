@@ -850,6 +850,81 @@ test("channel portable retention actual child close nested inside final stdio cl
     assert.equal(facts.stderrClosed, true); assert.equal(facts.fullClose, true)
     assert.equal((await exportNamedChannelEvidence(ctx)).status, "complete")
 })
+test("channel portable retention fully joined signal failure exports settled diagnostics without losing primary MODEL", async () => {
+    const { EventEmitter } = await import("node:events")
+    for (const undefinedPrimary of [false, true]) {
+      const { repo, nodes } = retentionFixture("signal-settled")
+      const ctx = makeNamedRetention(repo, { nodes, roles: [{ name: "case.receipt.json", kind: "kernel", required: true }] })
+      fs.mkdirSync(ctx.privateRoot)
+      fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), JSON.stringify({
+        stage: "broader-test-owner", sealed: true, exactJobZero: true, retiredPids: [], activeBefore: 0, workerCode: 1 }))
+      fs.writeFileSync(path.join(ctx.privateRoot, "case.receipt.json"), JSON.stringify(retentionKernel()))
+      const child = Object.assign(new EventEmitter(), { pid: 888, stdout: new EventEmitter(),
+        stderr: new EventEmitter(), kill: () => true })
+      const pending = observeNamedProducer(ctx, child, Date.now() + 1000)
+      child.stdout.emit("end"); child.stdout.emit("close"); child.stderr.emit("end"); child.stderr.emit("close")
+      child.emit("close", null, "SIGTERM")
+      const facts = await pending
+      let primary, failed = false
+      try { assert.equal(facts.exitCode, 0) } catch (error) { failed = true; primary = undefinedPrimary ? undefined : error }
+      let saved, disposition, caught = false
+      try {
+        await finishNamedRetention({ failed, primary, exportEvidence: () => exportNamedChannelEvidence(ctx),
+          persist(value, outcome) { saved = value; disposition = outcome } })
+      } catch (error) { caught = true; assert.equal(error, primary) }
+      assert.equal(caught, true); assert.equal(disposition.failed, true)
+      assert.equal(saved.status, "complete"); assert.equal(saved.files.length, 2)
+      assert.equal(saved.native.exitCode, null); assert.equal(saved.native.signal, "SIGTERM")
+      assert.equal(saved.native.fullClose, true); assert.equal(saved.native.timedOut, false)
+      assert.equal(ctx.projections.get("case.receipt.json").failure, true)
+      assert.equal(saved.outerReadback, "UNMEASURED")
+    }
+})
+test("channel portable retention joined signal failure missing malformed or nozero bootstrap withholds other bytes MODEL", async () => {
+    const { EventEmitter } = await import("node:events")
+    const nozero = JSON.stringify({ stage: "broader-test-owner", sealed: true, exactJobZero: false,
+      retiredPids: [], activeBefore: 1, workerCode: 1 })
+    for (const body of [null, "{", nozero]) {
+      const { repo, nodes } = retentionFixture("signal-bootstrap")
+      const ctx = makeNamedRetention(repo, { nodes, roles: [{ name: "case.receipt.json", kind: "kernel", required: true }] })
+      fs.mkdirSync(ctx.privateRoot)
+      if (body !== null) fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), body)
+      fs.writeFileSync(path.join(ctx.privateRoot, "case.receipt.json"), JSON.stringify(retentionKernel()))
+      const child = Object.assign(new EventEmitter(), { pid: 889, stdout: new EventEmitter(),
+        stderr: new EventEmitter(), kill: () => true })
+      const pending = observeNamedProducer(ctx, child, Date.now() + 1000)
+      child.stdout.emit("end"); child.stdout.emit("close"); child.stderr.emit("end"); child.stderr.emit("close")
+      child.emit("close", null, "SIGTERM"); await pending
+      const out = await exportNamedChannelEvidence(ctx)
+      assert.equal(out.status, "incomplete"); assert.equal(out.native.signal, "SIGTERM")
+      assert.equal(out.native.exitCode, null)
+      assert.equal(out.privateSourceBytes, body === null ? 0 : Buffer.byteLength(body))
+      assert.equal(out.files.some((item) => item.role === "case.receipt.json"), false)
+      assert.equal(ctx.projections?.has("case.receipt.json") ?? false, false)
+    }
+})
+test("channel portable retention signal disposition cannot bypass deadline PID or actual close EOF joins MODEL", async () => {
+    const { EventEmitter } = await import("node:events")
+    for (const fault of ["expired", "pid-drift", "missing-EOF", "missing-pipe-close", "missing-child-close", "missing-pipe"]) {
+      const { repo, nodes } = retentionFixture("signal-refusal")
+      const ctx = makeNamedRetention(repo, { nodes, roles: [] })
+      fs.mkdirSync(ctx.privateRoot)
+      fs.writeFileSync(path.join(ctx.privateRoot, "channel-broader-owner.json"), JSON.stringify({
+        stage: "broader-test-owner", sealed: true, exactJobZero: true, retiredPids: [], activeBefore: 0, workerCode: 1 }))
+      const child = Object.assign(new EventEmitter(), { pid: 890,
+        stdout: fault === "missing-pipe" ? null : new EventEmitter(), stderr: new EventEmitter(), kill: () => true })
+      const pending = observeNamedProducer(ctx, child, Date.now() + (fault === "expired" ? -1 : 20))
+      if (fault === "pid-drift") child.pid = 891
+      if (fault !== "missing-EOF") child.stdout?.emit("end")
+      if (fault !== "missing-pipe-close") child.stdout?.emit("close")
+      child.stderr.emit("end"); child.stderr.emit("close")
+      if (fault !== "missing-child-close") child.emit("close", null, "SIGTERM")
+      await pending
+      const out = await exportNamedChannelEvidence(ctx)
+      assert.equal(out.status, "incomplete", fault); assert.equal(out.privateSourceBytes, 0, fault)
+      assert.equal(out.files.length, 0, fault)
+    }
+})
 
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
@@ -4544,8 +4619,8 @@ function observeNamedProducer(ctx, child, deadline) {
     const joined = () => {
       if (!active || !facts.fullClose || (child.stdout && !facts.stdoutClosed) || (child.stderr && !facts.stderrClosed)) return
       if (Date.now() >= deadline) facts.timedOut = true
+      // Closure permits one bootstrap read; exit disposition remains the native/test outcome.
       if (!facts.timedOut && Number.isInteger(child.pid) && child.pid > 0 && child.pid === facts.pid &&
-          Number.isInteger(facts.exitCode) && facts.signal === null &&
           facts.stdoutEOF && facts.stderrEOF && facts.stdoutClosed && facts.stderrClosed)
         namedClosedProducers.set(facts, ctx)
       finish()
