@@ -20,6 +20,13 @@ const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecy
 const TOKEN = "tok-9f3a-never-print-me"
 const posixOnly = { skip: process.platform === "win32" ? "the fixture Node is a POSIX link" : false }
 
+test("unbound launches clear an inherited private profile binding", posixOnly, async () => {
+  const machine = await realMachine({ declare: null })
+  machine.launchOptions.env.DESK_BROWSER_PROFILE_DIR = path.join(machine.root, "foreign")
+  const result = await direct(machine)
+  assert.equal(result[0].options.env.DESK_BROWSER_PROFILE_DIR, undefined)
+})
+
 test("profile token reads reject missing or malformed extension identities before touching the profile", async () => {
   for (const options of [
     { extensionId: "foreign" }, { extensionId: 42 }, { tokenKey: "" }, { tokenKey: "0invalid" }, { tokenKey: 42 },
@@ -403,7 +410,7 @@ for (const initial of [null, ""]) {
     await tickStorage(t, 1000)
     assert.equal(settled, true, "the next storage poll must return the persisted token")
     const answer = await connecting
-    assert.deepEqual(answer.env, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN })
+    assert.deepEqual(answer.env, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN, DESK_BROWSER_PROFILE_DIR: path.resolve(base, "Default") })
     assert.equal(answer.profile, "Default")
     assert.ok(seen.iteratorClosed && seen.dbClosed)
     assert.deepEqual(readdirSync(path.join(root, "tmp")), [])
@@ -503,7 +510,7 @@ test("connecting passes the user-data folder and profile in the arguments and th
     requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]),
   }))
   assert.deepEqual(answer.args, ["--extension", "--browser", "chrome", "--user-data-dir", base, "--profile-dir-name", "Default"])
-  assert.deepEqual(answer.env, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN })
+  assert.deepEqual(answer.env, { PLAYWRIGHT_MCP_EXTENSION_TOKEN: TOKEN, DESK_BROWSER_PROFILE_DIR: path.resolve(base, "Default") })
   assert.equal(answer.profile, "Default")
   assert.equal(answer.app, "Google Chrome")
   assert.doesNotMatch(answer.args.join(" "), new RegExp(TOKEN, "u"))
@@ -812,7 +819,7 @@ test("a legacy real-profile generation migrates safely before acquiring its miss
   assert.equal(textOf(await host.call(2)), "ran browser_navigate")
   await host.close()
   const installed = browser.readInstalled(machine.state)
-  assert.equal(installed.patchRevision, 1)
+  assert.equal(installed.patchRevision, 2)
   assert.equal(installed.reader, true)
   assert.equal(installed.ws, true)
   assert.equal(calls.length, 1)
