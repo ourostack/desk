@@ -32,6 +32,30 @@ const decoder = (role) => {
   } }
 }
 
+export function classifyObservation(expected, returned, error) {
+  if (expected === "SAME" && returned === true) return "SAME"
+  if (expected === "DIFFERENT" && returned === false && error === 1656) return "DIFFERENT"
+  return "UNKNOWN"
+}
+export function observationOptions(filename, resolve = path.resolve) {
+  if (filename.includes('"')) throw new Error("literal quote refused")
+  return '--require "' + resolve(filename).replaceAll("\\", "/") + '"'
+}
+test("calibration portable classifier never treats unknown as absence", () => {
+  assert.equal(classifyObservation("SAME", true, 50), "SAME")
+  assert.equal(classifyObservation("DIFFERENT", false, 1656), "DIFFERENT")
+  for (const [expected, returned, error] of [
+    ["SAME", false, 50], ["DIFFERENT", false, 50], ["DIFFERENT", false, 0],
+    ["SAME", false, 1656], ["DIFFERENT", true, 0], ["MODEL", false, 6],
+  ]) assert.equal(classifyObservation(expected, returned, error), "UNKNOWN")
+})
+test("calibration portable preload options pin exact quoted forward-slash bytes", () => {
+  const options = observationOptions('D:\\Probe Public\\observation preload.cjs', path.win32.resolve)
+  assert.equal(options, '--require "D:/Probe Public/observation preload.cjs"')
+  assert.equal(Buffer.from(options).toString("hex"), "2d2d726571756972652022443a2f50726f6265205075626c69632f6f62736572766174696f6e207072656c6f61642e636a7322")
+  assert.throws(() => observationOptions('D:\\Bad"Path\\observation preload.cjs', path.win32.resolve), /quote/)
+})
+
 test("fragmented control frames reconstruct without consuming the next frame", () => {
   const bytes = Buffer.concat([frame({ role: "owner" }), frame({ role: "shim" })])
   const parse = decoder()
@@ -358,6 +382,309 @@ done:
   for (i = 0; i < 3; i++) if (handles[i]) CloseHandle(handles[i]);
   return drained ? rc : 94;
 }
+
+/* Separate pairwise calibration/positive-observation paths; never call audit(). */
+typedef struct { HANDLE handle; char name[80]; } CAL_OWNED;
+typedef struct {
+  FILE *log; CAL_OWNED owned[64]; DWORD count, closed, sequence, compared, models;
+  int failed, log_failed, wire_failed, sealed, drained;
+} CAL_STATE;
+static void cal_record(CAL_STATE *s, const char *text) {
+  if (fprintf(s->log, "%s\n", text) < 0 || fflush(s->log) != 0) s->log_failed = 1;
+  if (!wire(control, text)) s->wire_failed = 1;
+}
+static void cal_api(CAL_STATE *s, const char *api, const char *name, BOOL ok, DWORD error, HANDLE handle, unsigned long long value) {
+  char text[1024];
+  snprintf(text, sizeof(text), "{\"role\":\"owner\",\"stage\":\"cal-api\",\"seq\":%lu,\"api\":\"%s\",\"resource\":\"%s\",\"ok\":%s,\"error\":%lu,\"handle\":%llu,\"value\":%llu,\"successErrorIsStale\":true}",
+    ++s->sequence, api, name, ok ? "true" : "false", error, (unsigned long long)(uintptr_t)handle, value);
+  cal_record(s, text);
+}
+static int cal_adopt(CAL_STATE *s, HANDLE h, const char *name) {
+  DWORD index = s->count++;
+  if (index >= 64) { fprintf(stderr, "STOP calibration owned registry bound\n"); ExitProcess(97); }
+  s->owned[index].handle = h;
+  snprintf(s->owned[index].name, sizeof(s->owned[index].name), "%s", name);
+  return (int)index;
+}
+static int cal_close_index(CAL_STATE *s, DWORD index) {
+  BOOL ok; DWORD error;
+  SetLastError(0); ok = CloseHandle(s->owned[index].handle); error = GetLastError();
+  cal_api(s, "CloseHandle", s->owned[index].name, ok, error, s->owned[index].handle, 0);
+  if (!ok) { s->failed = 1; return 0; }
+  s->owned[index].handle = NULL; s->closed++; return 1;
+}
+static int cal_close_handle(CAL_STATE *s, HANDLE h) {
+  DWORD i;
+  for (i = 0; i < s->count; i++) if (s->owned[i].handle == h) return cal_close_index(s, i);
+  fprintf(stderr, "STOP attempted close of unowned calibration handle\n"); s->failed = 1; return 0;
+}
+static int cal_flags(CAL_STATE *s, HANDLE h, const char *name, int clear) {
+  DWORD before = 0, after = 0, error; BOOL ok;
+  SetLastError(0); ok = GetHandleInformation(h, &before); error = GetLastError();
+  cal_api(s, "GetHandleInformation-before", name, ok, error, h, before); if (!ok) return 0;
+  if (!clear) return 1;
+  SetLastError(0); ok = SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0); error = GetLastError();
+  cal_api(s, "SetHandleInformation-clear", name, ok, error, h, 0); if (!ok) return 0;
+  SetLastError(0); ok = GetHandleInformation(h, &after); error = GetLastError();
+  cal_api(s, "GetHandleInformation-after-fresh", name, ok, error, h, after);
+  return ok && !(after & HANDLE_FLAG_INHERIT);
+}
+static int cal_dup(CAL_STATE *s, HANDLE source, HANDLE *target, const char *name, BOOL inherit) {
+  BOOL ok; DWORD error;
+  SetLastError(0); ok = DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), target, 0, inherit, DUPLICATE_SAME_ACCESS); error = GetLastError();
+  cal_api(s, "DuplicateHandle", name, ok, error, source, (unsigned long long)(uintptr_t)*target);
+  if (ok) cal_adopt(s, *target, name);
+  return ok;
+}
+static int cal_pipe(CAL_STATE *s, HANDLE *read_end, HANDLE *write_end, const char *name, BOOL inherit) {
+  SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, inherit}; BOOL ok; DWORD error; char label[80];
+  SetLastError(0); ok = CreatePipe(read_end, write_end, &sa, 0); error = GetLastError();
+  cal_api(s, "CreatePipe", name, ok, error, *read_end, (unsigned long long)(uintptr_t)*write_end);
+  if (!ok) return 0;
+  snprintf(label, sizeof(label), "%s-read", name); cal_adopt(s, *read_end, label);
+  snprintf(label, sizeof(label), "%s-write", name); cal_adopt(s, *write_end, label); return 1;
+}
+static int cal_job(CAL_STATE *s, HANDLE *job, const char *name) {
+  DWORD error; BOOL ok; JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  SetLastError(0); *job = CreateJobObjectW(NULL, NULL); error = GetLastError();
+  cal_api(s, "CreateJobObject-unnamed", name, *job != NULL, error, *job, 0);
+  if (!*job) return 0; cal_adopt(s, *job, name);
+  ZeroMemory(&limits, sizeof(limits)); limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  SetLastError(0); ok = SetInformationJobObject(*job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)); error = GetLastError();
+  cal_api(s, "SetInformationJobObject-kill-on-close", name, ok, error, *job, 0); return ok;
+}
+static int cal_token(CAL_STATE *s) {
+  HANDLE token = NULL; DWORD error, size; BOOL ok, admin = TRUE; int good = 0;
+  TOKEN_ELEVATION elevation; SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY; PSID sid = NULL;
+  SetLastError(0); ok = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token); error = GetLastError();
+  cal_api(s, "OpenProcessToken", "preflight-token", ok, error, token, 0); if (!ok) return 0;
+  cal_adopt(s, token, "preflight-token");
+  SetLastError(0); ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size); error = GetLastError();
+  cal_api(s, "GetTokenInformation", "preflight-token", ok, error, token, ok ? elevation.TokenIsElevated : 0);
+  if (ok && !elevation.TokenIsElevated) {
+    SetLastError(0); ok = AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0,0,0,0,0,0, &sid); error = GetLastError();
+    cal_api(s, "AllocateAndInitializeSid", "admin-sid", ok, error, NULL, 0);
+    if (ok) {
+      SetLastError(0); ok = CheckTokenMembership(NULL, sid, &admin); error = GetLastError();
+      cal_api(s, "CheckTokenMembership", "admin-sid", ok, error, NULL, admin); good = ok && !admin;
+    }
+  }
+  if (sid) {
+    PVOID result; SetLastError(0); result = FreeSid(sid); error = GetLastError();
+    cal_api(s, "FreeSid", "admin-sid", result == NULL, error, NULL, 0); if (result) good = 0;
+  }
+  return cal_close_handle(s, token) && good;
+}
+static int cal_launch(CAL_STATE *s, wchar_t *line, HANDLE *handles, PROCESS_INFORMATION *pi, LPWCH environment) {
+  STARTUPINFOEXW si; SIZE_T bytes = 0; unsigned char crt[4 + 4 + 4 * sizeof(intptr_t)];
+  int count = 4; DWORD i, error; BOOL ok; int result = 0;
+  ZeroMemory(&si, sizeof(si)); si.StartupInfo.cb = sizeof(si);
+  SetLastError(0); ok = InitializeProcThreadAttributeList(NULL, 1, 0, &bytes); error = GetLastError();
+  cal_api(s, "InitializeAttributeList-size", "root-startup", ok, error, NULL, (unsigned long long)bytes);
+  if (ok || error != ERROR_INSUFFICIENT_BUFFER || !bytes) return 0;
+  SetLastError(0); si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, bytes); error = GetLastError();
+  cal_api(s, "HeapAlloc-attribute-list", "root-startup", si.lpAttributeList != NULL, error, NULL, (unsigned long long)bytes);
+  if (!si.lpAttributeList) return 0;
+  SetLastError(0); ok = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytes); error = GetLastError();
+  cal_api(s, "InitializeAttributeList", "root-startup", ok, error, NULL, 0);
+  if (ok) {
+    SetLastError(0); ok = UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, 4 * sizeof(HANDLE), NULL, NULL); error = GetLastError();
+    cal_api(s, "UpdateAttributeList-handle-allowlist", "root-startup", ok, error, NULL, 4);
+    ZeroMemory(crt, sizeof(crt)); memcpy(crt, &count, 4);
+    for (i = 0; i < 4; i++) { intptr_t value = (intptr_t)handles[i]; crt[4 + i] = 1 | 8; memcpy(crt + 8 + i * sizeof(intptr_t), &value, sizeof(value)); }
+    si.StartupInfo.cbReserved2 = sizeof(crt); si.StartupInfo.lpReserved2 = crt;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES; si.StartupInfo.hStdInput = handles[0]; si.StartupInfo.hStdOutput = handles[1]; si.StartupInfo.hStdError = handles[2];
+    if (ok) {
+      SetLastError(0); ok = CreateProcessW(NULL, line, NULL, NULL, TRUE, CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, environment, NULL, &si.StartupInfo, pi); error = GetLastError();
+      cal_api(s, "CreateProcess-suspended", "root-process", ok, error, pi->hProcess, pi->dwProcessId);
+      cal_api(s, "CreateProcess-primary-thread-result", "root-thread", ok, error, pi->hThread, pi->dwThreadId);
+      if (ok) { cal_adopt(s, pi->hProcess, "root-process"); cal_adopt(s, pi->hThread, "root-thread"); result = 1; }
+    }
+    DeleteProcThreadAttributeList(si.lpAttributeList);
+  }
+  SetLastError(0); ok = HeapFree(GetProcessHeap(), 0, si.lpAttributeList); error = GetLastError();
+  cal_api(s, "HeapFree-attribute-list", "root-startup", ok, error, NULL, 0); return result && ok;
+}
+static const char *cal_classify(int expected, BOOL returned, DWORD error) {
+  if (expected == 1 && returned) return "SAME";
+  if (expected == 2 && !returned && error == ERROR_NOT_SAME_OBJECT) return "DIFFERENT";
+  return "UNKNOWN";
+}
+static int cal_compare(CAL_STATE *s, DWORD index, const char *name, HANDLE left, HANDLE right, int expected, int modeled) {
+  BOOL returned; DWORD error; const char *classification; char text[1024];
+  SetLastError(0); returned = checked_compare_objects(left, right); error = GetLastError();
+  classification = cal_classify(expected, returned, error);
+  if (modeled) s->models++; else s->compared++;
+  snprintf(text, sizeof(text), "{\"role\":\"owner\",\"stage\":\"cal-comparison\",\"api\":\"CompareObjectHandles\",\"index\":%lu,\"resource\":\"%s\",\"expected\":\"%s\",\"modeled\":%s,\"left\":%llu,\"right\":%llu,\"returned\":%s,\"error\":%lu,\"classification\":\"%s\"}",
+    index, name, expected == 1 ? "SAME" : expected == 2 ? "DIFFERENT" : "MODEL", modeled ? "true" : "false",
+    (unsigned long long)(uintptr_t)left, (unsigned long long)(uintptr_t)right, returned ? "true" : "false", error, classification);
+  cal_record(s, text);
+  if (modeled) return !returned && strcmp(classification, "UNKNOWN") == 0;
+  return strcmp(classification, expected == 1 ? "SAME" : "DIFFERENT") == 0;
+}
+static int cal_zero(CAL_STATE *s, HANDLE job, const char *name) {
+  ULONGLONG end = GetTickCount64() + 2000; JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info; BOOL ok; DWORD error;
+  do {
+    SetLastError(0); ok = QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL); error = GetLastError();
+    cal_api(s, "QueryJob-active", name, ok, error, job, ok ? info.ActiveProcesses : MAXDWORD);
+    if (!ok) return 0; if (!info.ActiveProcesses) return 1; Sleep(5);
+  } while (GetTickCount64() < end);
+  return 0;
+}
+static int cal_input(CAL_STATE *s, HANDLE from, HANDLE to) {
+  char bytes[6]; DWORD available = 0, count = 0, written = 0, error; BOOL ok; ULONGLONG end = GetTickCount64() + 2000;
+  while (count < 6 && GetTickCount64() < end) {
+    SetLastError(0); ok = PeekNamedPipe(from, NULL, 0, NULL, &available, NULL); error = GetLastError();
+    cal_api(s, "PeekNamedPipe-input", "owner-stdin-read", ok, error, from, available); if (!ok) return 0;
+    if (!available) { Sleep(2); continue; }
+    if (available > 6 - count) available = 6 - count;
+    SetLastError(0); ok = ReadFile(from, bytes + count, available, &written, NULL); error = GetLastError();
+    cal_api(s, "ReadFile-input", "owner-stdin-read", ok, error, from, written); if (!ok || !written) return 0; count += written;
+  }
+  if (count != 6 || memcmp(bytes, "hello\n", 6) != 0) return 0;
+  SetLastError(0); ok = WriteFile(to, bytes, 6, &written, NULL); error = GetLastError();
+  cal_api(s, "WriteFile-final-input", "shim-stdin-write", ok, error, to, written);
+  return ok && written == 6 && cal_close_handle(s, to);
+}
+static int run_calibration_path(int argc, wchar_t **argv, int calibrate) {
+  CAL_STATE s; HANDLE refs[13], same[13], different[13], inputR = NULL, inputW = NULL, resultR = NULL, resultW = NULL;
+  HANDLE job = NULL, otherJob = NULL, handles[4]; PROCESS_INFORMATION pi; LPWCH environment = NULL;
+  wchar_t line[32768], logfile[32768]; char text[16381]; DWORD i, error = 0, value; BOOL ok, member = FALSE;
+  int rc = 1, assigned = 0, usable = 0, log_closed = 0, receipt_ok = 0, cleanup_ok = 1; const char *stage = "initial";
+  static const char *names[13] = {"control-duplex","owner-stdin-read","owner-stdout-write","owner-stderr-write","shim-stdin-read","shim-stdin-write","shim-result-read","shim-result-write","shim-stdout-write-duplicate","shim-stderr-write-duplicate","owned-job","root-process","root-thread"};
+  static const int write_side[10] = {0,0,1,1,0,1,0,1,1,1};
+  ZeroMemory(&s, sizeof(s)); ZeroMemory(refs, sizeof(refs)); ZeroMemory(same, sizeof(same)); ZeroMemory(different, sizeof(different)); ZeroMemory(&pi, sizeof(pi));
+  if (argc != 6) return 98;
+  if (swprintf_s(logfile, 32768, L"%s.api.jsonl", argv[5]) < 0 || _wfopen_s(&s.log, logfile, L"wb") != 0) { fprintf(stderr, "STOP calibration API log open\n"); return 98; }
+  control = (HANDLE)_get_osfhandle(3); refs[0] = control;
+#define CAL_REQUIRE(condition, label) do { stage = label; if (!(condition)) { s.failed = 1; fprintf(stderr, "STOP %s\n", stage); goto cal_done; } } while (0)
+  CAL_REQUIRE(cal_flags(&s, control, names[0], 1), "control-fresh-cleared-flags");
+  CAL_REQUIRE(cal_token(&s), "standard-user-token");
+  CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"diagnostic-hello\",\"mode\":\"%s\",\"ownerPid\":%lu,\"administrator\":false,\"elevated\":false}", calibrate ? "calibration" : "preload-observation", GetCurrentProcessId()), "diagnostic-hello");
+  CAL_REQUIRE(command("prepare"), "diagnostic-prepare");
+  for (i = 1; i < 4; i++) {
+    SetLastError(0); refs[i] = GetStdHandle(i == 1 ? STD_INPUT_HANDLE : i == 2 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE); error = GetLastError();
+    cal_api(&s, "GetStdHandle-borrowed", names[i], refs[i] != NULL && refs[i] != INVALID_HANDLE_VALUE, error, refs[i], 0);
+    CAL_REQUIRE(refs[i] != NULL && refs[i] != INVALID_HANDLE_VALUE, "borrowed-stdio");
+  }
+  CAL_REQUIRE(cal_job(&s, &job, names[10]), "retained-private-job"); refs[10] = job;
+  CAL_REQUIRE(cal_pipe(&s, &inputR, &inputW, "shim-stdin", TRUE), "actual-shim-stdin"); refs[4] = inputR; refs[5] = inputW;
+  CAL_REQUIRE(cal_flags(&s, inputW, names[5], 1), "stdin-write-fresh-cleared-flags");
+  CAL_REQUIRE(cal_pipe(&s, &resultR, &resultW, "shim-result", TRUE), "actual-shim-result"); refs[6] = resultR; refs[7] = resultW;
+  CAL_REQUIRE(cal_flags(&s, resultR, names[6], 1), "result-read-fresh-cleared-flags");
+  CAL_REQUIRE(cal_dup(&s, refs[2], &refs[8], names[8], TRUE), "actual-shim-stdout");
+  CAL_REQUIRE(cal_dup(&s, refs[3], &refs[9], names[9], TRUE), "actual-shim-stderr");
+  environment = cleanenv(); CAL_REQUIRE(environment, "clean-authority-environment");
+  handles[0] = inputR; handles[1] = refs[8]; handles[2] = refs[9]; handles[3] = resultW;
+  CAL_REQUIRE(swprintf_s(line, 32768, L"\"%s\" \"%s\" %s diagnostic \"%s\"", argv[2], argv[3], calibrate ? L"calibration-root" : L"observation-shim", argv[4]) >= 0, "diagnostic-command");
+  CAL_REQUIRE(cal_launch(&s, line, handles, &pi, environment), "diagnostic-create-suspended");
+  refs[11] = pi.hProcess; refs[12] = pi.hThread;
+  CAL_REQUIRE(cal_flags(&s, resultW, names[7], 1), "result-write-fresh-cleared-flags");
+  SetLastError(0); ok = AssignProcessToJobObject(job, pi.hProcess); error = GetLastError();
+  cal_api(&s, "AssignProcessToJobObject", names[11], ok, error, pi.hProcess, pi.dwProcessId);
+  CAL_REQUIRE(ok, "diagnostic-assign"); assigned = 1;
+  SetLastError(0); ok = IsProcessInJob(pi.hProcess, job, &member); error = GetLastError();
+  cal_api(&s, "IsProcessInJob", names[11], ok, error, pi.hProcess, member);
+  CAL_REQUIRE(ok && member, "diagnostic-membership");
+  for (i = 0; i < 13; i++) {
+    CAL_REQUIRE(cal_flags(&s, refs[i], names[i], 0), "live-resource-flags");
+    if (i < 10) {
+      SetLastError(0); value = GetFileType(refs[i]); error = GetLastError();
+      cal_api(&s, "GetFileType", names[i], value == FILE_TYPE_PIPE, error, refs[i], value);
+      CAL_REQUIRE(value == FILE_TYPE_PIPE, "actual-required-pipe-endpoint");
+    }
+    CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"cal-resource\",\"index\":%lu,\"name\":\"%s\",\"handle\":%llu,\"owned\":%s,\"rootPid\":%lu,\"rootThreadId\":%lu}", i, names[i], (unsigned long long)(uintptr_t)refs[i], i < 4 ? "false" : "true", pi.dwProcessId, pi.dwThreadId), "resource-inventory");
+  }
+  CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"diagnostic-assigned-suspended\",\"pid\":%lu,\"resourceCount\":13}", pi.dwProcessId), "assigned-suspended-receipt");
+  if (calibrate) {
+    HANDLE invalid = NULL;
+    SetLastError(0); ok = DuplicateHandle(GetCurrentProcess(), NULL, GetCurrentProcess(), &invalid, 0, FALSE, DUPLICATE_SAME_ACCESS); error = GetLastError();
+    cal_api(&s, "DuplicateHandle-MODEL-invalid", "MODEL-invalid-duplicate", ok, error, NULL, 0);
+    if (ok) cal_adopt(&s, invalid, "unexpected-model-duplicate");
+    CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"cal-model\",\"api\":\"DuplicateHandle\",\"modeled\":true,\"name\":\"invalid-duplicate\",\"returned\":%s,\"error\":%lu,\"classification\":\"UNKNOWN\"}", ok ? "true" : "false", error), "model-duplicate-record");
+    s.models++; CAL_REQUIRE(!ok, "model-invalid-duplicate-must-be-unknown");
+    CAL_REQUIRE(cal_compare(&s, 0, "MODEL-invalid-compare", NULL, NULL, 0, 1), "model-invalid-comparison-must-be-unknown");
+    CAL_REQUIRE(cal_job(&s, &otherJob, "different-empty-job"), "different-job"); different[10] = otherJob;
+    CAL_REQUIRE(cal_dup(&s, GetCurrentProcess(), &different[11], "different-real-self-process", FALSE), "different-self-process");
+    CAL_REQUIRE(cal_dup(&s, GetCurrentThread(), &different[12], "different-real-self-thread", FALSE), "different-self-thread");
+    for (i = 0; i < 10; i++) {
+      HANDLE read_end = NULL, write_end = NULL; char label[80];
+      snprintf(label, sizeof(label), "different-pipe-%lu", i);
+      CAL_REQUIRE(cal_pipe(&s, &read_end, &write_end, label, FALSE), "constructed-different-pipe");
+      different[i] = write_side[i] ? write_end : read_end;
+    }
+    for (i = 0; i < 13; i++) {
+      char label[80]; snprintf(label, sizeof(label), "same-duplicate-%lu", i);
+      CAL_REQUIRE(cal_dup(&s, refs[i], &same[i], label, FALSE), "known-same-duplicate");
+    }
+    SetLastError(0); value = WaitForSingleObject(pi.hProcess, 0); error = GetLastError();
+    cal_api(&s, "Wait-root-still-live-suspended", names[11], value == WAIT_TIMEOUT, error, pi.hProcess, value);
+    CAL_REQUIRE(value == WAIT_TIMEOUT, "calibration-root-not-live");
+    SetLastError(0); value = GetFileAttributesW(argv[4]); error = GetLastError();
+    cal_api(&s, "GetFileAttributes-no-first-marker", "suspended-root-marker", value == INVALID_FILE_ATTRIBUTES && error == ERROR_FILE_NOT_FOUND, error, NULL, value);
+    CAL_REQUIRE(value == INVALID_FILE_ATTRIBUTES && error == ERROR_FILE_NOT_FOUND, "suspended-calibration-root-executed");
+    for (i = 0; i < 13; i++) {
+      CAL_REQUIRE(cal_compare(&s, i, names[i], refs[i], same[i], 1, 0), "required-class-SAME-UNKNOWN");
+      CAL_REQUIRE(cal_compare(&s, i, names[i], refs[i], different[i], 2, 0), "required-class-DIFFERENT-UNKNOWN");
+    }
+    usable = 1;
+  } else {
+    CAL_REQUIRE(command("resume"), "observation-resume-authorized");
+    SetLastError(0); value = ResumeThread(pi.hThread); error = GetLastError();
+    cal_api(&s, "ResumeThread", names[12], value != MAXDWORD, error, pi.hThread, value); CAL_REQUIRE(value == 1, "observation-resume");
+    CAL_REQUIRE(receive(resultR, text) == 1 && strstr(text, "\"role\":\"shim\"") && strstr(text, "\"stage\":\"observation-ready\""), "observation-ready-role");
+    CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"observation-ready\",\"shim\":%s}", text), "observation-ready-forward");
+    CAL_REQUIRE(command("start"), "observation-explicit-start");
+    SetLastError(0); ok = WriteFile(inputW, "START\n", 6, &value, NULL); error = GetLastError();
+    cal_api(&s, "WriteFile-start", names[5], ok, error, inputW, value); CAL_REQUIRE(ok && value == 6, "observation-start-delivery");
+    CAL_REQUIRE(receive(resultR, text) == 1 && strstr(text, "\"role\":\"shim\"") && strstr(text, "\"stage\":\"observation-command-started\""), "observation-command-role");
+    CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"observation-command-started\",\"shim\":%s}", text), "observation-command-forward");
+    CAL_REQUIRE(cal_input(&s, refs[1], inputW), "observation-final-input");
+    CAL_REQUIRE(receive(resultR, text) == 1 && strstr(text, "\"role\":\"shim\"") && strstr(text, "\"stage\":\"observation-result\""), "observation-result-role");
+    CAL_REQUIRE(emit("{\"role\":\"owner\",\"stage\":\"observation-result\",\"shim\":%s}", text), "observation-result-forward");
+    CAL_REQUIRE(members(job), "observation-job-members");
+    CAL_REQUIRE(command("cancel"), "observation-retirement-authorized"); usable = 1;
+  }
+cal_done:
+  if (pi.hProcess && !assigned) {
+    SetLastError(0); ok = TerminateProcess(pi.hProcess, 74); error = GetLastError();
+    cal_api(&s, "TerminateProcess-unassigned-root", "root-process", ok, error, pi.hProcess, 0); if (!ok) { s.failed = 1; cleanup_ok = 0; }
+    SetLastError(0); value = WaitForSingleObject(pi.hProcess, 2000); error = GetLastError();
+    cal_api(&s, "Wait-unassigned-root", "root-process", value == WAIT_OBJECT_0, error, pi.hProcess, value); if (value != WAIT_OBJECT_0) { s.failed = 1; cleanup_ok = 0; }
+  }
+  if (job) {
+    SetLastError(0); ok = TerminateJobObject(job, 75); error = GetLastError();
+    cal_api(&s, "TerminateJobObject", "owned-job", ok, error, job, 0);
+    s.sealed = ok; s.drained = ok && cal_zero(&s, job, "owned-job"); if (!s.drained) { s.failed = 1; cleanup_ok = 0; }
+  }
+  if (otherJob) {
+    SetLastError(0); ok = TerminateJobObject(otherJob, 76); error = GetLastError();
+    cal_api(&s, "TerminateJobObject", "different-empty-job", ok, error, otherJob, 0);
+    if (!ok || !cal_zero(&s, otherJob, "different-empty-job")) { s.failed = 1; cleanup_ok = 0; }
+  }
+  for (i = s.count; i > 0; i--) if (s.owned[i - 1].handle) (void)cal_close_index(&s, i - 1);
+  if (environment) {
+    SetLastError(0); ok = HeapFree(GetProcessHeap(), 0, environment); error = GetLastError();
+    cal_api(&s, "HeapFree-clean-environment", "root-environment", ok, error, NULL, 0); if (!ok) { s.failed = 1; cleanup_ok = 0; }
+  }
+  log_closed = fclose(s.log) == 0;
+  if (!log_closed || s.log_failed || s.wire_failed || s.closed != s.count) s.failed = 1;
+  {
+    FILE *f = NULL;
+    if (_wfopen_s(&f, argv[5], L"wb") == 0 && f) {
+      int printed = fprintf(f, "{\"mode\":\"%s\",\"stage\":\"%s\",\"usable\":%s,\"sealed\":%s,\"exactJobZero\":%s,\"ownedCreated\":%lu,\"ownedClosed\":%lu,\"compared\":%lu,\"models\":%lu,\"apiLogClosed\":%s,\"cleanupComplete\":%s}\n",
+        calibrate ? "calibration" : "preload-observation", stage, usable ? "true" : "false", s.sealed ? "true" : "false", s.drained ? "true" : "false", s.count, s.closed, s.compared, s.models, log_closed ? "true" : "false", cleanup_ok && s.drained && s.closed == s.count && log_closed && !s.log_failed ? "true" : "false");
+      int closed = fclose(f); receipt_ok = printed > 0 && closed == 0;
+    }
+  }
+  rc = usable && !s.failed && receipt_ok ? 0 : 1;
+  if (!emit("{\"role\":\"owner\",\"stage\":\"%s\",\"usable\":%s,\"sealed\":%s,\"exactJobZero\":%s,\"ownedCreated\":%lu,\"ownedClosed\":%lu,\"compared\":%lu,\"models\":%lu,\"receiptWritten\":%s}",
+      rc == 0 ? (calibrate ? "calibration-complete" : "observation-retired") : "diagnostic-stop",
+      usable ? "true" : "false", s.sealed ? "true" : "false", s.drained ? "true" : "false", s.count, s.closed, s.compared, s.models, receipt_ok ? "true" : "false")) rc = 1;
+  return rc;
+}
+static int native_calibration(int argc, wchar_t **argv) { return run_calibration_path(argc, argv, 1); }
+static int native_preload_observation(int argc, wchar_t **argv) { return run_calibration_path(argc, argv, 0); }
 int wmain(int argc, wchar_t **argv) {
   HANDLE job = NULL, inputR = NULL, inputW = NULL, resultR = NULL, resultW = NULL, thread = NULL;
   HANDLE handles[4] = {NULL,NULL,NULL,NULL}, sensitive[7];
@@ -368,6 +695,8 @@ int wmain(int argc, wchar_t **argv) {
   if (!initialize_comparison_api()) return 96;
   ZeroMemory(&pi, sizeof(pi)); ZeroMemory(&transfer, sizeof(transfer));
   if (argc > 1 && wcscmp(argv[1], L"--supervise") == 0) return supervise(argc, argv);
+  if (argc > 1 && wcscmp(argv[1], L"--calibrate") == 0) return native_calibration(argc, argv);
+  if (argc > 1 && wcscmp(argv[1], L"--preload-observation") == 0) return native_preload_observation(argc, argv);
   if (argc != 7) return 90;
   control = (HANDLE)_get_osfhandle(3);
 #define REQUIRE(condition, label) do { stage = label; if (!(condition)) { error = GetLastError(); fprintf(stderr, "STOP %s win32=%lu crt-fd3=%llu\n", stage, error, (unsigned long long)(uintptr_t)control); goto done; } } while (0)
@@ -480,7 +809,53 @@ const send = (value) => {
   const head = Buffer.alloc(4); head.writeUInt32LE(body.length);
   fs.writeSync(3, Buffer.concat([head, body]));
 };
-if (role === "survivor") {
+if (role === "calibration-root") {
+  fs.writeFileSync(marker, "UNEXPECTED calibration root execution");
+  throw Error("calibration root must remain suspended");
+} else if (role === "observation-hook") {
+  const git = spawn("git", ["hash-object", "--stdin"], { stdio: ["pipe", "inherit", "inherit"] });
+  process.stdin.pipe(git.stdin);
+  git.on("exit", (code) => { process.exitCode = code === null ? 1 : code; });
+} else if (role === "observation-shim") {
+  fs.writeFileSync(marker, "observation first instruction");
+  send({ stage: "observation-ready", node: process.version, execPath: process.execPath,
+    bootstrapNodeOptions: process.env.NODE_OPTIONS ?? null, bootstrapNodePath: process.env.NODE_PATH ?? null });
+  let pending = Buffer.alloc(0);
+  process.stdin.on("data", function startInput(chunk) {
+    pending = Buffer.concat([pending, chunk]); const end = pending.indexOf(10);
+    if (end < 0) return;
+    if (pending.subarray(0, end).toString() !== "START") throw Error("observation explicit start");
+    process.stdin.pause(); process.stdin.removeListener("data", startInput);
+    fs.writeFileSync(marker + ".command", "observation explicit start");
+    const survivor = spawn(process.execPath, [__filename, "survivor", "nested", marker], { detached: true, stdio: "ignore" });
+    fs.appendFileSync(marker + ".survivors", survivor.pid + "\n"); survivor.unref();
+    const waiting = Date.now();
+    const launchObservation = () => {
+      if (fs.readFileSync(marker + ".survivors", "utf8").trim().split("\n").length !== 2) {
+        if (Date.now() - waiting >= 2000) throw Error("observation nested ready deadline");
+        setTimeout(launchObservation, 5); return;
+      }
+      const env = { ...process.env, NODE_OPTIONS: process.env.OWNED_PROBE_PRELOAD,
+        NODE_PATH: process.env.OWNED_PROBE_NODE_PATH, OWNED_PROBE_ROLE: "downstream" };
+      const alias = '!"' + process.execPath.replaceAll("\\", "/") + '" "' + __filename.replaceAll("\\", "/") + '" observation-hook';
+      const git = spawn("git", ["-c", "alias.probe=" + alias, "probe"], { env, stdio: ["pipe", "pipe", "pipe"] });
+      let data = "", error = "", inputComplete = false;
+      git.stdout.on("data", (chunk) => { data += chunk; process.stdout.write(chunk); });
+      git.stderr.on("data", (chunk) => { error += chunk; process.stderr.write(chunk); });
+      git.on("error", (error) => { throw error; });
+      send({ stage: "observation-command-started", pid: git.pid });
+      git.stdin.write(pending.subarray(end + 1)); pending = null;
+      process.stdin.on("data", (chunk) => git.stdin.write(chunk));
+      process.stdin.on("end", () => git.stdin.end(() => { inputComplete = true; }));
+      process.stdin.resume();
+      git.on("close", (code, signal) => {
+        send({ stage: "observation-result", code, signal, inputComplete, data, error });
+        process.stdout.write("OBSERVATION_AFTER_RESULT\n"); setInterval(() => {}, 1000);
+      });
+    };
+    launchObservation();
+  });
+} else if (role === "survivor") {
   if (mode === "nested") {
     const leaf = spawn(process.execPath, [__filename, "survivor", "leaf", marker], { detached: true, stdio: "ignore" });
     fs.appendFileSync(marker + ".survivors", leaf.pid + "\n"); leaf.unref();
@@ -709,7 +1084,183 @@ async function one(identity, mode) {
     if (record.failure) { s.child.stdin.end(); s.child.stdio[3].destroy(); }
   }
 }
+function classifyObservation(expected, returned, error) {
+  if (expected === "SAME" && returned === true) return "SAME";
+  if (expected === "DIFFERENT" && returned === false && error === 1656) return "DIFFERENT";
+  return "UNKNOWN";
+}
+function observationOptions(filename, resolve = path.resolve) {
+  if (filename.includes('"')) throw new Error("literal quote refused");
+  return '--require "' + resolve(filename).replaceAll("\\", "/") + '"';
+}
+function diagnosticSession(identity, nativeMode, marker, receipt, options) {
+  const child = spawn(config.owner, [nativeMode, identity.path, config.shim, marker, receipt], {
+    cwd: config.neutral, stdio: ["pipe", "pipe", "pipe", "pipe"],
+    env: { ...process.env, NODE_OPTIONS: options, NODE_PATH: config.publicRoot,
+      OWNED_PROBE_PRELOAD: options, OWNED_PROBE_NODE_PATH: config.publicRoot,
+      OWNED_PROBE_ROLE: "shim", OWNED_PROBE_MARKER: marker },
+  });
+  let bytes = Buffer.alloc(0), stdout = "", stderr = "", failure, closed = false, eof = false;
+  const events = [], queue = [];
+  const append = (value) => fs.appendFileSync(marker + ".jsonl", JSON.stringify({ time: Date.now(), ...value }) + "\n");
+  const complete = new Promise((resolve) => child.on("close", (code, signal) => { closed = true; append({ closed: true, code, signal }); resolve({ code, signal }); }));
+  child.on("error", (error) => { failure = error; append({ error: error.stack }); });
+  child.stdin.on("error", (error) => append({ inputError: error.message }));
+  child.stdio[3].on("error", (error) => append({ controlError: error.message }));
+  child.stdout.on("data", (chunk) => { stdout += chunk; append({ stdout: chunk.toString() }); });
+  child.stdout.on("end", () => { eof = true; append({ stdoutEOF: true }); });
+  child.stderr.on("data", (chunk) => { stderr += chunk; append({ stderr: chunk.toString() }); });
+  child.stdio[3].on("data", (chunk) => {
+    try {
+      append({ controlBytes: chunk.toString("hex") }); bytes = Buffer.concat([bytes, chunk]);
+      while (bytes.length >= 4) {
+        const n = bytes.readUInt32LE(); assert.ok(n <= 16380);
+        if (bytes.length < n + 4) break;
+        const event = JSON.parse(bytes.subarray(4, n + 4).toString("utf8"));
+        assert.equal(event.role, "owner"); events.push(event); queue.push(event); append({ control: event });
+        bytes = bytes.subarray(n + 4);
+      }
+    } catch (error) { failure = error; append({ parserFailure: error.stack }); }
+  });
+  return { child, events, complete, stdout: () => stdout, stderr: () => stderr, eof: () => eof,
+    send(cmd) { append({ sent: cmd }); child.stdio[3].write(encode({ cmd })); },
+    async take(stages) {
+      const names = [].concat(stages), end = Date.now() + 2000;
+      while (Date.now() < end) {
+        if (failure) throw failure;
+        const i = queue.findIndex((e) => names.includes(e.stage));
+        if (i >= 0) return queue.splice(i, 1)[0];
+        if (closed) throw Error("diagnostic owner closed awaiting " + names + ": " + stderr);
+        await delay(5);
+      }
+      throw Error("2000ms diagnostic deadline " + names + ": " + stderr);
+    }
+  };
+}
+function verifyDiagnosticRetirement(record, receipt, expectedOwned) {
+  assert.equal(receipt.sealed, true); assert.equal(receipt.exactJobZero, true);
+  assert.equal(receipt.cleanupComplete, true); assert.equal(receipt.apiLogClosed, true);
+  assert.equal(receipt.ownedCreated, expectedOwned); assert.equal(receipt.ownedClosed, expectedOwned);
+  const api = fs.readFileSync(record.receipt + ".api.jsonl", "utf8").trim().split("\n").map(JSON.parse);
+  record.apiCount = api.length;
+  const closes = api.filter((e) => e.api === "CloseHandle");
+  assert.equal(closes.length, expectedOwned); assert.ok(closes.every((e) => e.ok));
+  const clearNames = ["control-duplex", "shim-stdin-write", "shim-result-read", "shim-result-write"];
+  for (const name of clearNames) {
+    const after = api.find((e) => e.api === "GetHandleInformation-after-fresh" && e.resource === name);
+    assert.ok(after && after.ok); assert.equal(after.value & 1, 0);
+  }
+  assert.equal(record.events.some((e) => e.stage === "peer-handle" || e.stage === "git-audit"), false);
+  record.retirement = receipt;
+}
+async function knownOwnerCalibration(identity, options) {
+  const marker = path.join(config.evidence, "known-owner-calibration");
+  const receipt = marker + ".receipt.json";
+  const record = { name: "known-owner-calibration", identity, marker, receipt, status: "RUNNING" };
+  report.calibration.push(record); save();
+  const s = diagnosticSession(identity, "--calibrate", marker, receipt, options);
+  try {
+    const hello = await s.take("diagnostic-hello");
+    assert.equal(hello.mode, "calibration"); assert.equal(hello.administrator, false); assert.equal(hello.elevated, false);
+    record.ownerPid = hello.ownerPid; s.send("prepare");
+    const terminal = await s.take(["calibration-complete", "diagnostic-stop"]);
+    s.child.stdin.end();
+    record.exit = await s.complete; record.events = s.events;
+    const retirement = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    verifyDiagnosticRetirement(record, retirement, 46);
+    const resources = s.events.filter((e) => e.stage === "cal-resource");
+    assert.deepEqual(resources.map((e) => e.name), config.calibrationResources);
+    assert.equal(fs.existsSync(marker), false, "suspended calibration root ran");
+    assert.equal(s.events.some((e) => e.api === "ResumeThread"), false);
+    record.comparisons = s.events.filter((e) => e.stage === "cal-comparison" && !e.modeled);
+    record.models = s.events.filter((e) => e.stage === "cal-model" || (e.stage === "cal-comparison" && e.modeled));
+    report.models = record.models; assert.equal(record.models.length, 2);
+    assert.ok(record.models.every((e) => e.classification === "UNKNOWN" && e.returned === false));
+    for (const e of record.comparisons) assert.equal(e.classification, classifyObservation(e.expected, e.returned, e.error));
+    const unknown = record.comparisons.find((e) => e.classification === "UNKNOWN");
+    if (unknown) {
+      record.firstUnknown = unknown;
+      throw Error("required calibration UNKNOWN: " + unknown.resource + " expected=" + unknown.expected + " error=" + unknown.error);
+    }
+    assert.equal(terminal.stage, "calibration-complete"); assert.equal(record.exit.code, 0);
+    assert.equal(record.comparisons.length, 26);
+    assert.equal(record.comparisons.filter((e) => e.classification === "SAME").length, 13);
+    assert.equal(record.comparisons.filter((e) => e.classification === "DIFFERENT").length, 13);
+    assert.equal(retirement.models, 2); record.status = "USABLE_FOR_PAIRWISE_CALIBRATION_ONLY";
+  } catch (error) { record.status = "STOP"; record.failure = error.stack; throw error; }
+  finally {
+    record.events = s.events; record.stdout = s.stdout(); record.stderr = s.stderr(); save();
+    if (record.status === "STOP") { s.child.stdin.end(); s.child.stdio[3].destroy(); }
+  }
+}
+async function positivePreloadObservation(identity, options) {
+  const marker = path.join(config.evidence, identity.version + "-preload-observation"), receipt = marker + ".receipt.json";
+  const record = { name: "positive-preload-observation", identity, marker, receipt, status: "RUNNING" };
+  report.preloadObservations.push(record); save();
+  const s = diagnosticSession(identity, "--preload-observation", marker, receipt, options);
+  try {
+    const hello = await s.take("diagnostic-hello"); assert.equal(hello.mode, "preload-observation");
+    assert.equal(hello.administrator, false); assert.equal(hello.elevated, false);
+    record.ownerPid = hello.ownerPid; s.send("prepare");
+    const assigned = await s.take("diagnostic-assigned-suspended");
+    record.rootPid = assigned.pid; assert.equal(fs.existsSync(marker), false); s.send("resume");
+    const ready = await s.take("observation-ready");
+    assert.equal(ready.shim.role, "shim"); assert.equal(ready.shim.node, identity.version);
+    assert.equal(path.resolve(ready.shim.execPath).toLowerCase(), path.resolve(identity.path).toLowerCase());
+    assert.equal(ready.shim.bootstrapNodeOptions, null); assert.equal(ready.shim.bootstrapNodePath, null);
+    await delay(100); assert.equal(fs.existsSync(marker + ".command"), false);
+    assert.equal(fs.existsSync(marker + ".preload-shim"), false); s.send("start");
+    const command = await s.take("observation-command-started"); record.gitPid = command.shim.pid;
+    await new Promise((resolve) => s.child.stdin.end("hello\n", resolve)); record.parentFinalInputWriteComplete = true;
+    const result = await s.take("observation-result");
+    assert.equal(result.shim.code, 0); assert.equal(result.shim.signal, null); assert.equal(result.shim.inputComplete, true);
+    assert.equal(result.shim.data.trim(), "ce013625030ba8dba906f756967f9e9ca394464a");
+    assert.equal(s.eof(), false); record.resultBeforeDataEOF = true; record.result = result;
+    const preload = JSON.parse(fs.readFileSync(marker + ".preload-downstream", "utf8"));
+    assert.equal(preload.role, "downstream"); assert.equal(preload.options, options);
+    assert.equal(preload.version, identity.version); assert.equal(preload.nodePath, config.publicRoot);
+    assert.ok(Number.isInteger(preload.pid) && preload.pid > 0); record.downstream = preload;
+    assert.equal(fs.existsSync(marker + ".preload-shim"), false);
+    const members = await s.take("job-members");
+    const survivors = fs.readFileSync(marker + ".survivors", "utf8").trim().split("\n").map(Number);
+    assert.equal(survivors.length, 2); assert.ok(survivors.every((pid) => members.pids.includes(pid)));
+    assert.ok(members.pids.includes(record.rootPid)); record.survivors = survivors;
+    s.send("cancel"); const retired = await s.take(["observation-retired", "diagnostic-stop"]);
+    assert.equal(retired.stage, "observation-retired");
+    record.exit = await s.complete; assert.equal(record.exit.code, 0);
+    record.events = s.events;
+    verifyDiagnosticRetirement(record, JSON.parse(fs.readFileSync(receipt, "utf8")), 10);
+    assert.equal(record.events.some((e) => e.stage === "cal-comparison"), false);
+    record.status = "POSITIVE_PRELOAD_OBSERVED_ONLY";
+  } catch (error) { record.status = "STOP"; record.failure = error.stack; throw error; }
+  finally {
+    record.events = s.events; record.stdout = s.stdout(); record.stderr = s.stderr(); save();
+    if (record.status === "STOP") { s.child.stdin.end(); s.child.stdio[3].destroy(); }
+  }
+}
+async function calibrationExperiment() {
+  report.experiment = "known-owner-calibration-only"; report.originalMatrixExecuted = 0;
+  report.calibration = []; report.preloadObservations = []; report.models = [];
+  report.exclusionQualified = false; report.PR1 = "OPEN"; report.PR2 = "OPEN"; save();
+  assert.equal(process.cwd(), config.neutral);
+  for (const entry of config.manifest) assert.equal(createHash("sha256").update(fs.readFileSync(entry.path)).digest("hex"), entry.sha256);
+  for (const identity of config.nodes) {
+    const value = require("node:child_process").spawnSync(identity.path, ["--version"], { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } });
+    assert.equal(value.status, 0); assert.equal(value.stdout.trim(), identity.version);
+    assert.equal(createHash("sha256").update(fs.readFileSync(identity.path)).digest("hex"), identity.sha256);
+  }
+  assert.ok(path.basename(config.preload).includes(" "));
+  const options = observationOptions(config.preload);
+  report.preloadRepresentation = { filename: config.preload, options, utf8Hex: Buffer.from(options).toString("hex"),
+    sourceSha256: createHash("sha256").update(fs.readFileSync(config.preload)).digest("hex") }; save();
+  await knownOwnerCalibration(config.nodes[2], options);
+  for (const identity of config.nodes) await positivePreloadObservation(identity, options);
+  assert.equal(report.cases.length, 0); assert.equal(report.originalMatrixExecuted, 0);
+  assert.equal(Object.keys(require.cache).some((name) => /sqlite/i.test(name)), false);
+  report.status = "CALIBRATION_COMPLETE — NATIVE_FEASIBILITY_NOT_QUALIFIED"; save();
+}
 (async () => {
+  if (config.experiment === "known-owner-calibration-only") { await calibrationExperiment(); return; }
   assert.notEqual(process.cwd(), config.sourceRoot);
   assert.equal(process.cwd(), config.neutral);
   for (const entry of config.manifest) {
@@ -732,7 +1283,8 @@ async function one(identity, mode) {
 const preloadSource = String.raw`
 const fs = require("node:fs");
 fs.writeFileSync(process.env.OWNED_PROBE_MARKER + ".preload-" + process.env.OWNED_PROBE_ROLE,
-  JSON.stringify({ role: process.env.OWNED_PROBE_ROLE, nodePath: process.env.NODE_PATH, version: process.version }));
+  JSON.stringify({ role: process.env.OWNED_PROBE_ROLE, nodePath: process.env.NODE_PATH, version: process.version,
+    pid: process.pid, options: process.env.NODE_OPTIONS }));
 `
 
 export const probeMaterial = {
@@ -755,14 +1307,93 @@ test("binding source guard (portable checks, not Windows kernel proof)", () => {
   assert.match(ownerSource, /if \(!comparison_api\)[\s\S]*?ExitProcess\(96\)/)
   assert.doesNotMatch(ownerSource, /\bCompareObjectHandles\s*\(/)
   assert.doesNotMatch(ownerSource, /\bLoadLibrary(?:Ex)?[AW]?\s*\(/)
-  assert.equal((ownerSource.match(/checked_compare_objects\(/g) ?? []).length, 4)
+  assert.equal((ownerSource.match(/checked_compare_objects\(/g) ?? []).length, 5)
   const main = ownerSource.slice(ownerSource.indexOf("int wmain("))
   assert.ok(main.indexOf("if (!initialize_comparison_api()) return 96;") >= 0)
   assert.ok(main.indexOf("if (!initialize_comparison_api()) return 96;") < main.indexOf('L"--supervise"'))
   assert.ok(main.indexOf("if (!initialize_comparison_api()) return 96;") < main.indexOf("_get_osfhandle(3)"))
 })
 
-test("Windows installed-layout owned-Git feasibility (STOP on any unqualified boundary)", {
+const diagnosticExperiment = "known-owner-calibration-only"
+const calibrationResources = [
+  "control-duplex", "owner-stdin-read", "owner-stdout-write", "owner-stderr-write",
+  "shim-stdin-read", "shim-stdin-write", "shim-result-read", "shim-result-write",
+  "shim-stdout-write-duplicate", "shim-stderr-write-duplicate", "owned-job", "root-process", "root-thread",
+]
+test("calibration portable mode separation preserves original matrix and binding", () => {
+  const calibrationC = ownerSource.slice(ownerSource.indexOf("typedef struct { HANDLE handle;"), ownerSource.indexOf("int wmain("))
+  assert.doesNotMatch(calibrationC, /\baudit\s*\(/)
+  assert.doesNotMatch(calibrationC, /git-audit|peer-handle|OpenProcess\(|Pss|NtQuery/)
+  assert.match(calibrationC, /GetHandleInformation-after-fresh/)
+  assert.match(calibrationC, /SetLastError\(0\); returned = checked_compare_objects\(left, right\); error = GetLastError\(\)/)
+  assert.match(calibrationC, /expected == 2 && !returned && error == ERROR_NOT_SAME_OBJECT/)
+  assert.match(driverSource, /if \(config\.experiment === "known-owner-calibration-only"\) \{ await calibrationExperiment\(\); return; \}/)
+  assert.equal(diagnosticExperiment, "known-owner-calibration-only")
+  assert.equal(calibrationResources.length, 13)
+})
+
+test("Windows known-owner calibration only (not native feasibility qualification)", {
+  skip: process.platform !== "win32", timeout: 180000,
+}, () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..")
+  const root = path.join(repo, "owned-git-probe-output")
+  const sourceRoot = path.join(root, "source"), publicRoot = path.join(root, "artifacts", "owned-git", "win32-x64")
+  const neutral = path.join(root, "neutral"), evidence = path.join(root, "evidence")
+  for (const folder of [sourceRoot, publicRoot, neutral, evidence]) fs.mkdirSync(folder, { recursive: true })
+  const supervisorReceipt = path.join(evidence, "calibration-broader-owner.json")
+  const status = { status: "STAGING", experiment: diagnosticExperiment, originalMatrixExecuted: 0,
+    root, sourceRoot, publicRoot, neutral, plannedResources: calibrationResources,
+    planned: { calibrationRuns: 1, resources: 13, comparisons: 26, models: 2, preloadObservations: 3, calibrationOwnedCloses: 46, observationOwnedCloses: 10 },
+    wire: { header: 4, body: 16380, total: 16384 }, exclusionQualified: false, PR1: "OPEN", PR2: "OPEN" }
+  const write = () => fs.writeFileSync(path.join(root, "report.json"), JSON.stringify(status, null, 2))
+  const exec = (command, args, label, options = {}) => {
+    const value = spawnSync(command, args, { encoding: "utf8", cwd: neutral, timeout: 120000, ...options })
+    fs.writeFileSync(path.join(evidence, label + ".stdout"), value.stdout ?? "")
+    fs.writeFileSync(path.join(evidence, label + ".stderr"), value.stderr ?? "")
+    status[label] = { command, args, code: value.status, signal: value.signal, error: value.error?.message }; write()
+    assert.equal(value.status, 0, label + " failed; full retained evidence: " + value.stderr)
+    return value
+  }
+  try {
+    for (const [name, text] of Object.entries(probeMaterial)) fs.writeFileSync(path.join(sourceRoot, name), text)
+    write()
+    exec("pwsh", ["-NoProfile", "-NonInteractive", "-File", path.join(sourceRoot, "build.ps1"), "-Root", sourceRoot], "build")
+    assert.doesNotMatch(fs.readFileSync(path.join(sourceRoot, "toolchain.txt"), "utf8"), /(?:VCRUNTIME|MSVCP|ucrtbase)\d*\.dll/i)
+    const names = ["probe-owner.exe", "probe-shim.cjs", "probe.test.cjs", "preload.cjs"]
+    for (const name of names) fs.copyFileSync(path.join(sourceRoot, name), path.join(publicRoot, name))
+    const preload = path.join(publicRoot, "observation preload.cjs")
+    fs.copyFileSync(path.join(sourceRoot, "preload.cjs"), preload); names.push("observation preload.cjs")
+    const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+    const manifest = names.map((name) => ({ path: path.join(publicRoot, name), sha256: digest(path.join(publicRoot, name)) }))
+    fs.writeFileSync(path.join(publicRoot, "sha256-manifest.json"), JSON.stringify(manifest, null, 2))
+    const nodes = JSON.parse(fs.readFileSync(path.join(repo, "owned-git-probe-interpreters.json"), "utf8"))
+    assert.equal(nodes.length, 3); assert.equal(nodes[0].version, "v20.0.0")
+    assert.match(nodes[1].version, /^v22\.\d+\.\d+$/); assert.equal(nodes[2].version, "v24.18.0")
+    for (const node of nodes) { node.sha256 = node.sha256.toLowerCase(); assert.equal(digest(node.path), node.sha256) }
+    const config = { experiment: diagnosticExperiment, publicRoot, sourceRoot, neutral, evidence, nodes, manifest,
+      owner: path.join(publicRoot, "probe-owner.exe"), shim: path.join(publicRoot, "probe-shim.cjs"), preload,
+      calibrationResources, report: path.join(evidence, "calibration-worker-report.json") }
+    const configPath = path.join(publicRoot, "calibration-config.json")
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+    status.manifest = manifest; status.nodes = nodes
+    status.sources = Object.keys(probeMaterial).map((name) => ({ name, sha256: digest(path.join(sourceRoot, name)) })); write()
+    exec("git", ["init", "--quiet", neutral], "synthetic-git-init")
+    const env = { ...process.env }; for (const key of Object.keys(env)) if (key.startsWith("NODE_")) delete env[key]
+    exec(config.owner, ["--supervise", nodes[2].path, path.join(publicRoot, "probe.test.cjs"), configPath, supervisorReceipt], "supervisor", { env })
+    const worker = JSON.parse(fs.readFileSync(config.report, "utf8"))
+    const broader = JSON.parse(fs.readFileSync(supervisorReceipt, "utf8")); status.broader = broader
+    assert.equal(broader.sealed, true); assert.equal(broader.exactJobZero, true); assert.deepEqual(broader.retiredPids, [])
+    assert.equal(worker.originalMatrixExecuted, 0); assert.equal(worker.cases.length, 0)
+    assert.equal(worker.calibration.length, 1); assert.equal(worker.preloadObservations.length, 3)
+    assert.equal(worker.status, "CALIBRATION_COMPLETE — NATIVE_FEASIBILITY_NOT_QUALIFIED")
+    status.status = worker.status; write()
+  } catch (error) {
+    if (fs.existsSync(supervisorReceipt)) status.broader = JSON.parse(fs.readFileSync(supervisorReceipt, "utf8"))
+    status.status = "STOP"; status.failure = error.stack; write(); throw error
+  }
+})
+
+if (diagnosticExperiment !== "known-owner-calibration-only") test("Windows installed-layout owned-Git feasibility (STOP on any unqualified boundary)", {
   skip: process.platform !== "win32",
   timeout: 180000,
 }, () => {
