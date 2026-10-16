@@ -359,6 +359,28 @@ test("channel portable unwind MODEL preserves a thrown undefined primary failure
   const result = await scope.finish({ failed: true, error: undefined, persist() { throw Error("secondary") } })
   assert.equal(result.failed, true); assert.equal(result.error, undefined)
 })
+test("channel portable unwind MODEL expired scope still invokes owned auxiliary close once", async () => {
+  for (const primary of [Error("original expired failure"), undefined]) {
+    const log = [], deadline = Date.now() - 1, scope = channelPortable().leaseScope(deadline)
+    scope.acquire(channelLeaseModel(log, "ready", { deadline, expectedMissing: true }), () => {})
+    let rejectClose, calls = 0, saves = 0
+    const acquired = { close() {
+      calls++; log.push("close-auxiliary")
+      return new Promise((_, reject) => { rejectClose = reject })
+    } }
+    const result = await scope.finish({ failed: true, error: primary,
+      auxiliary: () => acquired.close(), persist() { saves++ } })
+    assert.equal(calls, 1)
+    assert.deepEqual(log, ["cancel-ready", "data-ready", "control-ready", "close-auxiliary"])
+    assert.equal(result.failed, true); assert.equal(result.error, primary)
+    assert.equal(result.generations[0].status, "HOLD")
+    assert.ok(result.failures.includes("auxiliary-close"))
+    const failures = [...result.failures]
+    rejectClose(Error("late close rejection"))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(calls, 1); assert.equal(saves, 1); assert.deepEqual(result.failures, failures)
+  }
+})
 
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
@@ -578,7 +600,14 @@ function channelCore({ timingSafeEqual }) {
           return { generation: entry.generation, deadline, status, retirement, actual, proof, reason,
             expectedMissing: !!entry.expectedMissing, expectedTransportLoss: !!entry.expectedTransportLoss }
         })
-        const auxiliaryClose = auxiliary ? bounded(contextDeadline, auxiliary).catch(() => failures.push("auxiliary-close")) : undefined
+        let auxiliaryClose
+        if (auxiliary) {
+          try {
+            const completion = Promise.resolve(auxiliary())
+            completion.catch(() => {}) // Observe late rejection without extending ownership/report authority.
+            auxiliaryClose = bounded(contextDeadline, () => completion).catch(() => failures.push("auxiliary-close"))
+          } catch { failures.push("auxiliary-close") }
+        }
         const result = { generations: await Promise.all(generations), failures, error }
         await auxiliaryClose
         for (const entry of leases) attempt("release-diagnostics", () => entry.release?.(entry))
@@ -3715,8 +3744,8 @@ export const channelProbeMaterial = {
 function assertChannelCandidateSources(material = channelProbeMaterial) {
   const expected = {
     "probe-owner.c": "595d7ec2c32f587cc852e8d6363729fc02453a90cca82f42dd7136bba5a1606c",
-    "probe-shim.cjs": "5cf1401904ff1b85ea45942c734c8f12831139f7173bea578705f44394b44607",
-    "probe.test.cjs": "46ce317d453acef2ad19c6ad1882abf492af6e6d8d6806d0cd78d799acf8b82d",
+    "probe-shim.cjs": "d17202fb5731e368d58a32ad40e78c38cafa4135bc5594ad35595ea79f1c433b",
+    "probe.test.cjs": "a836b2bfdaa40c6a5341b78582ed36acabe31e092f00911c029abc133099ef6e",
     "channel-workload.cjs": "1c199c86a26d922c24b08c8ecfcb2b6985ac8c1cc200f0c5fad8961400bcf68a",
     "build.ps1": "92b6e73068ae95d9b74163793c1afc628c729c4e1ebf9244013dc8eb075db751",
     "preload.cjs": "ee455a699ce6c23f1dd7a7e84ef7c365894b8dfa9c60c43dd87b4cce73960457",
