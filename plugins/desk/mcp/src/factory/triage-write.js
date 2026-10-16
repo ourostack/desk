@@ -26,7 +26,7 @@
 //     reported (a file a hook left is never deleted), and block new resources with a stable alarm until they are recovered.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
-import { promises as fs, realpathSync } from "node:fs"
+import { constants, promises as fs, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { createHash, randomBytes } from "node:crypto"
 import { acquireSyncLock } from "../runtime/sync-worker.js"
@@ -49,13 +49,19 @@ const BLOB = /^[0-9a-f]{40}$/u
 const OWNED_REF = /^desk-triage\/[0-9a-f]{32}$/u
 const NAMING = { label: "desk_factory", subject: "factory state" }
 const COMMIT_MESSAGE = "Record factory triage annotation"
-// Git variables a caller may pass on. Any other GIT_* (GIT_DIR, GIT_INDEX_FILE, GIT_CONFIG_PARAMETERS, ...) redirects Git or
-// injects configuration, so the writer refuses rather than run the policy somewhere it cannot see.
+// Existing caller-owned Git settings. Beyond these, only the exact restrictive command profile below is admitted.
+// Other GIT_* (GIT_DIR, GIT_INDEX_FILE, GIT_CONFIG_PARAMETERS, ...) can redirect Git or inject arbitrary configuration.
 const ALLOWED_GIT_ENV = new Set([
   "GIT_TERMINAL_PROMPT", "GIT_SSH_COMMAND", "GIT_SSH", "GIT_SSH_VARIANT", "GIT_ASKPASS", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL",
   "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE",
   // An editor or pager is never invoked by these non-interactive calls (the commit message is given), and neither moves Git.
   "GIT_EDITOR", "GIT_PAGER",
+])
+const RESTRICTIVE_CONFIG = new Map([
+  ["safe.bareRepository", "explicit"], ["credential.interactive", "never"], ["core.fsmonitor", "false"],
+])
+const PROFILE_SLOTS = new Set([
+  "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2",
 ])
 const OPERATIONS = {
   review: { state: "reviewed", reason: "review_accepted" },
@@ -88,12 +94,15 @@ function killProcessTree(pid, platform) {
 
 // One bounded Git call in its own process group. A time-out kills the whole group, so a hook that hangs, or a process it left
 // behind, does not outlive the call. Resolves `{status, stdout, stderr, timedOut}`; a spawn failure is status null.
-function runGit(ctx, cwd, args, env = ctx.childEnv) {
+function runGit(ctx, cwd, args, env = ctx.childEnv, outputLimit = Infinity) {
   return new Promise((resolve) => {
     const posix = ctx.platform !== "win32"
     let child
     try {
-      child = ctx.spawn("git", ["-C", cwd, ...args], { env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true })
+      child = ctx.spawn(ctx.executable ?? "git", cwd === null ? args : ["-C", cwd, ...args], {
+        env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true,
+        ...(cwd === null ? { cwd: path.parse(ctx.deskRoot).root } : {}),
+      })
     } catch {
       resolve({ status: null, stdout: Buffer.alloc(0), stderr: "", timedOut: false })
       return
@@ -101,9 +110,20 @@ function runGit(ctx, cwd, args, env = ctx.childEnv) {
     const out = []
     let stderr = ""
     let timedOut = false
-    child.stdout.on("data", (chunk) => out.push(chunk))
+    let outputBytes = 0
+    let overflowed = false
+    const withinLimit = (chunk) => {
+      outputBytes += Buffer.byteLength(chunk)
+      if (outputBytes <= outputLimit) return true
+      overflowed = true
+      killProcessTree(child.pid, ctx.platform)
+      return false
+    }
+    child.stdout.on("data", (chunk) => {
+      if (withinLimit(chunk)) out.push(chunk)
+    })
     child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-65536)
+      if (withinLimit(chunk)) stderr = `${stderr}${chunk}`.slice(-65536)
     })
     const timer = setTimeout(() => {
       timedOut = true
@@ -116,7 +136,7 @@ function runGit(ctx, cwd, args, env = ctx.childEnv) {
       clearTimeout(timer)
       // Anything a hook left running in the call's own group is ours to end too.
       if (posix && child.pid !== undefined) killProcessTree(child.pid, ctx.platform)
-      resolve({ status: timedOut ? null : status, stdout: Buffer.concat(out), stderr, timedOut })
+      resolve({ status: timedOut || overflowed ? null : status, stdout: Buffer.concat(out), stderr, timedOut })
     }
     child.on("error", () => settle(null))
     child.on("close", (code) => settle(code))
@@ -151,7 +171,60 @@ export async function writeProtectedTriageFile(env, segments, bytes, { deskRoot 
 
 function unsafeEnvironment(env) {
   if (typeof env.DESK_CARD_GUARD_RUNNING === "string") return true
-  return Object.keys(env).some((name) => name.toUpperCase().startsWith("GIT_") && !ALLOWED_GIT_ENV.has(name))
+  let profile = false
+  for (const name of Object.keys(env)) {
+    if (!name.toUpperCase().startsWith("GIT_") || ALLOWED_GIT_ENV.has(name)) continue
+    if (name === "GIT_OPTIONAL_LOCKS") {
+      if (env[name] !== "0") return true
+    } else if (PROFILE_SLOTS.has(name)) profile = true
+    else return true
+  }
+  if (!profile) return false
+  if (env.GIT_CONFIG_COUNT !== "3" || ![...PROFILE_SLOTS].every((name) => Object.hasOwn(env, name))) return true
+  const keys = new Set()
+  for (let slot = 0; slot < 3; slot += 1) {
+    const key = env[`GIT_CONFIG_KEY_${slot}`]
+    if (!RESTRICTIVE_CONFIG.has(key) || RESTRICTIVE_CONFIG.get(key) !== env[`GIT_CONFIG_VALUE_${slot}`] || keys.has(key)) return true
+    keys.add(key)
+  }
+  return false
+}
+
+// Resolve the caller's normal PATH once, only for the new admission. As with the existing launcher, trusted host actors
+// replacing executable bytes remain outside this boundary; this is per-operation path binding, not binary attestation.
+async function profileGit(ctx) {
+  const windows = ctx.platform === "win32"
+  const envKeys = Object.keys(ctx.env)
+  if (windows) envKeys.sort()
+  const pathKey = envKeys.find((name) => windows ? name.toUpperCase() === "PATH" : name === "PATH")
+  const search = ctx.env[pathKey]
+  if (typeof search !== "string" || search === "") return null
+  for (const dir of search.split(windows ? ";" : path.delimiter)) {
+    const candidate = path.resolve(dir, windows ? "git.exe" : "git")
+    try {
+      await fs.access(candidate, constants.X_OK)
+      if ((await fs.stat(candidate)).isFile()) return await fs.realpath(candidate)
+    } catch {
+      // The next PATH entry may contain Git.
+    }
+  }
+  return null
+}
+
+async function supportedProfileGit(ctx) {
+  ctx.executable = await profileGit(ctx)
+  if (ctx.executable === null) return false
+  // Old Git treats fsmonitor=false as a hook path. Only this non-repository --version diagnostic omits the validated slots;
+  // every real operation, hook and cleanup keeps the original command scope. Auth, HOME, PATH and prompt guards stay intact.
+  const queryEnv = Object.fromEntries(Object.entries(ctx.childEnv).filter(([name]) => !PROFILE_SLOTS.has(name)))
+  const result = await runGit(ctx, null, ["--version"], queryEnv, 1024)
+  if (result.status !== 0 || result.stderr !== "") return false
+  // Explicit supported vendor grammars: Apple Git-N[.N...] and Git for Windows' .windows.N; no arbitrary suffix or prerelease.
+  const banner = result.stdout.toString("utf8")
+  const version = /^git version (0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?: \(Apple Git-[1-9][0-9]*(?:\.[0-9]+)*\)|\.windows\.[1-9][0-9]*)?\r?\n?$/u.exec(banner)
+  if (version === null || version[0] !== banner) return false
+  const [major, minor, patch] = version.slice(1, 4).map(Number)
+  return [major, minor, patch].every(Number.isSafeInteger) && major === 2 && minor >= 36
 }
 
 // The authority a basis grants must follow from its own rulings: existing scope needs a ruling, an approved plan a plan or spec
@@ -380,7 +453,7 @@ async function basisHolds(ctx, main, input, now) {
   if (basis.claim.state === "live" && !(Date.parse(basis.claim.expires_at) > now.getTime())) return false
   // Every evidence revision, resolved live now, not taken from the basis: a public issue edited since the review changes it. The
   // resolver gets the card as published, so the local card must be the expected blob, as `readTriageBasis` read it.
-  const read = await readCanonicalCard({ deskRoot: ctx.deskRoot, personPrefix: input.personPrefix, key: input.key, env: ctx.env })
+  const read = await readCanonicalCard({ deskRoot: ctx.deskRoot, personPrefix: input.personPrefix, key: input.key, env: ctx.env, gitExecutable: ctx.executable })
   if (read === null || read.revision !== basis.canonical_revision) return false
   for (const item of basis.evidence) {
     const found = await Promise.resolve().then(() => input.resolve(item.pointer, read.card)).catch(() => null)
@@ -515,7 +588,7 @@ export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, sto
   }
   if (operation === "review" && !expectedBasis.authority.codes.includes(review.authority_code)) return hold("policy_refused")
   const ctx = {
-    env,
+    env: { ...env },
     deskRoot,
     spawn: git.spawn ?? spawnDefault,
     timeoutMs: git.timeoutMs ?? GIT_TIMEOUT_MS,
@@ -525,6 +598,7 @@ export async function publishOwnedTriage({ env, deskRoot, personPrefix, key, sto
     phase: "preparing",
   }
   ctx.protectOptions = { deskRoot, platform: ctx.platform, runner: git.aclRunner }
+  if (Object.hasOwn(env, "GIT_CONFIG_COUNT") && !(await supportedProfileGit(ctx))) return hold("policy_refused")
   const top = await runGit(ctx, deskRoot, ["rev-parse", "--show-toplevel"])
   // Native resolution, as the card guard does, so a Windows short (8.3) spelling of the same folder still matches.
   if (top.status !== 0 || realpathSync.native(text(top)) !== realpathSync.native(deskRoot)) return hold("not_git")
