@@ -67,3 +67,26 @@ function addServerListener(server, event, listener) {
     listener();
   };
 }
+
+// Unmodified packages/playwright-core/src/tools/mcp/extensionContextFactory.ts,
+// from the same bundle. External browser effects are supplied by the harness.
+async function createExtensionBrowser(channel, executablePath, customUserDataDir, profileDirName, clientName) {
+  customUserDataDir ??= process.env.PWTEST_EXTENSION_USER_DATA_DIR;
+  const userDataDir = customUserDataDir ?? (executablePath ? void 0 : defaultUserDataDirForChannel(channel));
+  const profileDirectory = profileDirName ?? (userDataDir ? await findPlaywrightExtensionProfile(userDataDir) : void 0);
+  if (userDataDir && !executablePath && (!profileDirectory || !await isExtensionInstalledInProfile(import_path60.default.join(userDataDir, profileDirectory))))
+    throw new Error(`Playwright Extension not found in "${profileDirectory ? import_path60.default.join(userDataDir, profileDirectory) : userDataDir}". Install it from ${playwrightExtensionInstallUrl}, or set the PLAYWRIGHT_MCP_EXECUTABLE_PATH environment variable to use a browser at a custom location.`);
+  const relay = new CDPRelayServer(channel, executablePath, customUserDataDir, profileDirectory);
+  await relay.start();
+  debugLogger3(`CDP relay server started, extension endpoint: ${relay.extensionEndpoint()}.`);
+  try {
+    await relay.establishExtensionConnection(clientName);
+    const browser = await playwright.chromium.connectOverCDP(relay.cdpEndpoint(), { isLocal: true, timeout: 0, noDefaults: true });
+    browser.on("disconnected", () => relay.stop());
+    return browser;
+  } catch (error) {
+    relay.stop();
+    throw error;
+  }
+}
+var import_path60, debug16, debugLogger3;

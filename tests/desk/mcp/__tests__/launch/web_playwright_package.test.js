@@ -10,7 +10,7 @@ import { mcpRoot } from "./_mcp_handshake.js"
 import { openSession } from "./_mcp_session.js"
 
 const require = createRequire(import.meta.url)
-const { patchSource } = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
+const { apply } = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const source = process.env.DESK_PLAYWRIGHT_TEST_MODULES
 const enabled = source && process.platform !== "win32"
 
@@ -25,8 +25,7 @@ test("actual installed MCP preserves failed-acquisition close safety", {
     const modules = path.join(dir, "node_modules")
     mkdirSync(dir, { recursive: true })
     cpSync(source, modules, { recursive: true, verbatimSymlinks: true })
-    const bundle = path.join(modules, "playwright-core", "lib", "coreBundle.js")
-    if (patched) writeFileSync(bundle, patchSource(readFileSync(bundle, "utf8")))
+    if (patched) apply({ dir, version: "fixture", core: null })
     const log = path.join(dir, "attempts.jsonl")
     const executable = path.join(dir, "owned-browser")
     writeFileSync(executable, `#!${process.execPath}\nrequire("fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ attempt: true }) + "\\n"); process.exit(1);\n`)
@@ -72,6 +71,86 @@ test("actual installed MCP preserves failed-acquisition close safety", {
   console.log(JSON.stringify({ actualPackageDifferential: observations, actualBrowserProcesses: 0 }))
 })
 
+test("actual extension relay re-reads the selected profile before first acquisition and after close", {
+  skip: enabled ? false : "requires explicit owned DESK_PLAYWRIGHT_TEST_MODULES and a POSIX executable fixture",
+  timeout: 30000,
+}, async () => {
+  const root = await mkTempRoot("playwright-credential-package-")
+  const observations = []
+  for (const patched of [false, true]) {
+    const dir = path.join(root, patched ? "patched" : "stock")
+    const modules = path.join(dir, "node_modules")
+    mkdirSync(dir)
+    cpSync(source, modules, { recursive: true, verbatimSymlinks: true })
+    const bundleFile = path.join(modules, "playwright-core", "lib", "coreBundle.js")
+    const original = readFileSync(bundleFile, "utf8")
+    apply({ dir, version: "fixture", core: null })
+    if (!patched) writeFileSync(bundleFile, original)
+    const profile = path.join(dir, "Profile 4")
+    const storage = path.join(profile, "Local Storage", "leveldb")
+    mkdirSync(storage, { recursive: true })
+    const { ClassicLevel } = require(path.join(modules, "classic-level"))
+    const key = Buffer.from("_chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm\u0000\u0001auth-token", "latin1")
+    async function persist(value) {
+      const db = new ClassicLevel(storage, { keyEncoding: "buffer", valueEncoding: "buffer" })
+      try {
+        if (value === null) await db.del(key)
+        else await db.put(key, Buffer.concat([Buffer.from([1]), Buffer.from(value)]))
+      } finally {
+        await db.close()
+      }
+    }
+    await persist("fixture-rotated-before-first")
+    const log = path.join(dir, "attempts.jsonl")
+    const executable = path.join(dir, "owned-browser")
+    writeFileSync(executable, `#!${process.execPath}
+      const fs = require("fs");
+      const file = ${JSON.stringify(log)};
+      const count = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\\n").length : 0;
+      const expected = count === 0 ? "fixture-rotated-before-first" : "fixture-rotated-after-close";
+      const page = new URL(process.argv[process.argv.length - 1]);
+      fs.appendFileSync(file, JSON.stringify({ credentialCurrent: page.searchParams.get("token") === expected }) + "\\n");
+    `)
+    chmodSync(executable, 0o700)
+    const session = await openSession({
+      command: process.execPath,
+      args: [path.join(mcpRoot, "web-real-tabs.cjs"), path.join(modules, "@playwright", "mcp", "cli.js"),
+        "--extension", "--browser", "msedge", "--executable-path", executable, "--user-data-dir", dir, "--profile-dir-name", "Profile 4"],
+      cwd: dir,
+      env: {
+        PATH: path.dirname(process.execPath), HOME: dir, USERPROFILE: dir, TMPDIR: dir,
+        DESK_BROWSER_PROFILE_DIR: profile, PLAYWRIGHT_MCP_EXTENSION_TOKEN: "fixture-stale-startup",
+        PWTEST_EXTENSION_CONNECT_TIMEOUT: "1000",
+      },
+    })
+    const attempts = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)) : []
+    try {
+      const navigate = () => session.request("tools/call", { name: "browser_navigate", arguments: { url: "http://127.0.0.1:1/owned-unused" } })
+      assert.equal((await navigate()).result?.isError, true)
+      assert.deepEqual(attempts(), [{ credentialCurrent: patched }])
+      if (patched) {
+        const close = await session.request("tools/call", { name: "browser_close", arguments: {} })
+        assert.notEqual(close.result?.isError, true)
+        await persist("fixture-rotated-after-close")
+        assert.equal((await navigate()).result?.isError, true)
+        assert.deepEqual(attempts(), [{ credentialCurrent: true }, { credentialCurrent: true }])
+        await persist(null)
+        const absent = await navigate()
+        assert.equal(absent.result?.isError, true)
+        assert.match(absent.result.content[0].text, /browser_token_unavailable/)
+        assert.equal(attempts().length, 2, "an absent credential must not launch with the stale startup token")
+        for (const token of ["fixture-stale-startup", "fixture-rotated-before-first", "fixture-rotated-after-close"]) {
+          assert.equal(session.stderr().includes(token), false, "diagnostics must not expose fixture credentials")
+        }
+      }
+      observations.push({ patched, attempts: attempts(), actualBrowserProcesses: 0 })
+    } finally {
+      await session.close()
+    }
+  }
+  console.log(JSON.stringify({ actualCredentialDifferential: observations }))
+})
+
 test("latest-channel production install and warm launch preserve failed-close safety", {
   skip: process.env.DESK_BROWSER_INSTALL_SMOKE === "1" && process.platform !== "win32" ? false : "explicit networked POSIX installation smoke test",
   timeout: 420000,
@@ -110,7 +189,7 @@ test("latest-channel production install and warm launch preserve failed-close sa
       assert.notEqual(close.result?.isError, true)
       const pointer = JSON.parse(readFileSync(path.join(state, "current.json"), "utf8"))
       const receipt = JSON.parse(readFileSync(path.join(state, pointer.dir, "playwright-patch.json"), "utf8"))
-      assert.equal(receipt.revision, 1)
+      assert.equal(receipt.revision, 2)
       if (mode === "fresh") generation = pointer.dir
       else assert.equal(pointer.dir, generation, "warm launch reuses the verified generation")
       t.diagnostic(JSON.stringify({ mode, mcp: receipt.mcpVersion, core: receipt.coreVersion, patchRevision: receipt.revision, afterNavigation, afterClose: count(), actualBrowserProcesses: 0 }))

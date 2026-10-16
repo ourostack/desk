@@ -94,6 +94,10 @@ jobs:
         env:
           DESK_BROWSER_INSTALL_SMOKE: "1"
         run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web_playwright_package.test.js
+      - name: Verify credential rotation against the actual extension relay
+        run: |
+          npm install --prefix "$RUNNER_TEMP/desk-browser-credential" --no-audit --no-fund @playwright/mcp@latest classic-level@1.4.1
+          DESK_PLAYWRIGHT_TEST_MODULES="$RUNNER_TEMP/desk-browser-credential/node_modules" node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web_playwright_package.test.js
 
   # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
   # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the

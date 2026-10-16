@@ -4,13 +4,19 @@ var crypto = require("crypto");
 var fs = require("fs");
 var path = require("path");
 
-var REVISION = 1;
+var REVISION = 2;
+var CREDENTIAL_FILE = "desk-extension-credential.cjs";
 // Audited createServer from playwright-core 1.64.0-alpha-1790635538000.
 // Match the lifecycle, not a package version: newer packages may retain this implementation.
 var ORIGINAL_SHA256 = "0a0d6cd9bfae79dbda66509b6d01fad89fdc37629cc729e26db7b97d80b8fc4b";
 var START = "function createServer(name, version3, factory, transportInitialized, runHeartbeat) {";
 var END = "\nfunction addServerListener(";
 var ANCHOR = "    try {\n";
+var ACQUISITION_START = "async function createExtensionBrowser(channel, executablePath, customUserDataDir, profileDirName, clientName) {";
+var ACQUISITION_END = "\nvar import_path60, debug16, debugLogger3;";
+var ACQUISITION_SHA256 = "e014782f47d440a616b852b8a5838d4d49a2d2c458a5eba2b3ecd70ae5fe91ca";
+var ACQUISITION_ANCHOR = "  const relay = new CDPRelayServer(";
+var INITIALIZE_CREDENTIAL = '  await require("./' + CREDENTIAL_FILE + '").initialize(customUserDataDir, profileDirectory);\n';
 var IDLE_CLOSE = [
   '      if (!backendPromise && request2.params.name === "browser_close") {',
   '        const closeTool = factory.toolSchemas.find((tool) => tool.name === "browser_close");',
@@ -38,7 +44,7 @@ function unsupported() {
   return error;
 }
 
-function patchSource(source) {
+function patchLifecycle(source) {
   var start = source.indexOf(START);
   var end = source.indexOf(END, start);
   if (start < 0 || end < 0 || source.indexOf(START, start + START.length) !== -1) throw unsupported();
@@ -53,6 +59,18 @@ function patchSource(source) {
   if (alreadyPatched) return source;
   var patched = original.replace(ANCHOR, ANCHOR + IDLE_CLOSE);
   return source.slice(0, start) + patched + source.slice(end);
+}
+
+function patchSource(source) {
+  var patched = patchLifecycle(source);
+  var start = patched.indexOf(ACQUISITION_START);
+  var end = patched.indexOf(ACQUISITION_END, start);
+  if (start < 0 || end < 0 || patched.indexOf(ACQUISITION_START, start + ACQUISITION_START.length) !== -1) throw unsupported();
+  var acquisition = patched.slice(start, end);
+  var original = acquisition.replace(INITIALIZE_CREDENTIAL, "");
+  if (hash(original) !== ACQUISITION_SHA256) throw unsupported();
+  var replacement = original.replace(ACQUISITION_ANCHOR, INITIALIZE_CREDENTIAL + ACQUISITION_ANCHOR);
+  return patched.slice(0, start) + replacement + patched.slice(end);
 }
 
 function bundleFile(dir) {
@@ -73,24 +91,29 @@ function apply(installed) {
     throw error;
   }
   var patched = patchSource(source);
+  var credential = fs.readFileSync(path.join(__dirname, "web-extension-credential.cjs"));
+  fs.writeFileSync(path.join(path.dirname(file), CREDENTIAL_FILE), credential);
   fs.writeFileSync(file, patched);
   fs.writeFileSync(path.join(installed.dir, "playwright-patch.json"), JSON.stringify({
-    revision: REVISION, mcpVersion: installed.version, coreVersion: installed.core, bundleSha256: hash(patched)
+    revision: REVISION, mcpVersion: installed.version, coreVersion: installed.core, bundleSha256: hash(patched), credentialSha256: hash(credential)
   }) + "\n");
 }
 
 function readRevision(installed) {
   var receipt;
   var source;
+  var credential;
   try {
     receipt = JSON.parse(fs.readFileSync(path.join(installed.dir, "playwright-patch.json"), "utf8"));
     if (!receipt || receipt.revision !== REVISION || receipt.mcpVersion !== installed.version || receipt.coreVersion !== installed.core) return 0;
     source = fs.readFileSync(bundleFile(installed.dir), "utf8");
+    credential = fs.readFileSync(path.join(path.dirname(bundleFile(installed.dir)), CREDENTIAL_FILE));
   } catch (error) {
     if (error.code === "ENOENT" || error instanceof SyntaxError) return 0;
     throw error;
   }
-  return hash(source) === receipt.bundleSha256 ? REVISION : 0;
+  return hash(source) === receipt.bundleSha256 && hash(credential) === receipt.credentialSha256 &&
+    hash(credential) === hash(fs.readFileSync(path.join(__dirname, "web-extension-credential.cjs"))) ? REVISION : 0;
 }
 
 // Do not follow package symlinks into profiles, credentials or another generation.

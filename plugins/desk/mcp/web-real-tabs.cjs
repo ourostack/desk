@@ -10,6 +10,7 @@
 var childProcess = require("child_process");
 var crypto = require("crypto");
 var path = require("path");
+var credential = require("./web-extension-credential.cjs");
 
 var CONNECT_PAGE = "chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/connect.html";
 // How long the watchdog waits for the extension to connect, and for the extension to confirm the tabs are closed.
@@ -28,30 +29,17 @@ function replaceAll(text, from, to) {
   return text.split(from).join(to);
 }
 
-// Replace the token, as it is and in its URL-encoded and JSON-escaped forms, in everything a stream is given.
-function redact(stream, token) {
-  var forms = [token, encodeURIComponent(token), JSON.stringify(token).slice(1, -1)];
-  var write = stream.write;
-  stream.write = function (chunk) {
-    var args = Array.prototype.slice.call(arguments);
-    if (typeof chunk === "string" || Buffer.isBuffer(chunk)) {
-      args[0] = forms.reduce(function (text, form) {
-        return replaceAll(text, form, "<token>");
-      }, String(chunk));
-    }
-    return write.apply(stream, args);
-  };
-}
-
 // Start Playwright MCP with output redaction only. `o` replaces the process and loader for tests.
 function run(argv, o) {
   var proc = either(o.process, process);
   var cli = path.resolve(argv[0]);
   var token = proc.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
-  if (token) {
-    redact(proc.stdout, token);
-    redact(proc.stderr, token);
+  var redactor = credential;
+  if (proc.env[credential.BINDING_KEY] !== undefined) {
+    var core = require.resolve("playwright-core/package.json", { paths: [path.dirname(cli)] });
+    redactor = require(path.join(path.dirname(core), "lib", "desk-extension-credential.cjs"));
   }
+  if (token || proc.env[credential.BINDING_KEY] !== undefined) redactor.protect(proc, token);
   proc.argv = [proc.argv[0], cli].concat(argv.slice(1));
   either(o.load, require)(cli);
 }

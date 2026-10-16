@@ -7,7 +7,7 @@
 // - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
 // - Desk's default browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
 // - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
-// - A plugin's `desk.browser` declaration switches the browser to the operator's real, signed-in profile: stock Playwright MCP in extension mode, through the stock Playwright Extension, which gives each session its own tab group (web-real-profile.cjs finds the profile and the extension's token). web-real-tabs.cjs closes the session's tabs when it ends, however it ends. Other authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
+// - A plugin's `desk.browser` declaration selects the signed-in profile and extension credential. The staged acquisition patch refreshes that credential before each new relay; web-real-tabs.cjs provides output redaction, not automatic tab cleanup. Other authenticated or persistent browser contexts use the claims-based browser context broker (desk:cdp-headed-browser).
 // - This file backs the `desk-web` MCP server Desk declares beside `desk` (its tools read `mcp__plugin_desk_desk-web__browser_navigate` and so on). Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every tool is listed as unavailable and every call answers with a `status`, a `code` and a `fix`, the same shape `desk`'s own bootstrap serves when it cannot start. The one difference: `desk` keeps `desk_status`/`desk_doctor` answering without `isError` so a resuming agent can still ask "what's wrong"; the browser has no diagnostic tool of its own, so every call here answers with `isError: true` and the fix is in the payload itself.
 //
 // Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
@@ -21,6 +21,7 @@ var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
 var proxy = require("./web-proxy.cjs");
 var realProfile = require("./web-real-profile.cjs");
+var credential = require("./web-extension-credential.cjs");
 var playwrightPatch = require("./web-playwright-patch.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
@@ -808,6 +809,7 @@ function start(o, io) {
     // A copy installed just now is already the channel's current release.
     if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
     var launchEnv = withNodeFirst(env, node, platform);
+    delete launchEnv[credential.BINDING_KEY];
     if (!real) return { launch: { node: node, indexFile: installed.cli, args: launchArgs(args, platform, env, fileExists, root), env: launchEnv } };
     var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
     return realProfile.connect({
@@ -821,7 +823,7 @@ function start(o, io) {
       Object.keys(connection.env).forEach(function (key) {
         launchEnv[key] = connection.env[key];
       });
-      // web-real-tabs.cjs starts Playwright MCP itself, in its own process, so the session's tabs can be closed however it ends.
+      // The runner and staged initializer share this generation's in-memory credential redactor.
       return { launch: { node: node, indexFile: REAL_TABS, args: [installed.cli].concat(launchArgs(connection.args.concat(args), platform, env, fileExists, root)), env: launchEnv } };
     });
   }

@@ -33,11 +33,11 @@ const HASH_TIMEOUT_MS = 2000
 // (line-ending conversion with core.autocrlf, .gitattributes), so a CRLF working copy of an LF blob still names that blob. Git
 // runs with the caller's environment (its Git settings, not this process's), asynchronously and bounded. Outside Git, if Git
 // cannot run, or past the bound, the plain blob id of the bytes: a revision that then differs only holds a write as stale.
-function deskBlobSha(deskRoot, relative, bytes, env) {
+function deskBlobSha(deskRoot, relative, bytes, env, executable = "git") {
   return new Promise((resolve) => {
     const plain = () => resolve(gitBlobSha(bytes))
     const invocation = deskGitInvocation({ root: deskRoot, args: ["hash-object", `--path=${relative}`, "--stdin"], env })
-    const child = execFile("git", invocation.args, { ...invocation.options, env: { ...env, GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, encoding: "utf8" }, (error, stdout) => {
+    const child = execFile(executable, invocation.args, { ...invocation.options, env: { ...env, GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, encoding: "utf8" }, (error, stdout) => {
       clearTimeout(timer)
       const blob = error ? "" : stdout.trim()
       if (BLOB.test(blob)) resolve(blob)
@@ -247,13 +247,14 @@ export async function checkTriageBasis({ deskRoot, personPrefix, basis, now, rea
  * `readCanonicalCard({deskRoot,personPrefix,key,env,readCards}) -> {card,revision}|null`: the parsed card and the blob id of its
  * exact bytes, read the same way `readTriageBasis` reads them (the bytes must not change around the canonical reader). Null when
  * the card is absent, unreadable or changing. The writer uses it to hand the evidence resolver the card at publication.
+ * `gitExecutable` lets that writer bind the filtered blob read to the same Git it verified for this operation.
  */
-export async function readCanonicalCard({ deskRoot, personPrefix, key, env = process.env, readCards = readCardsDefault }) {
+export async function readCanonicalCard({ deskRoot, personPrefix, key, env = process.env, readCards = readCardsDefault, gitExecutable }) {
   const canonical = canonicalCardPath(deskRoot, personPrefix, key)
   const before = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
   const listing = await readCards({ deskRoot, personPrefix, limit: MAX_CARD_FILES })
   const after = await readRegular(deskRoot, canonical, MAX_CARD_BYTES)
   const card = listing.cards.find((candidate) => candidate.key === key)
   if (card === undefined || before.bytes === undefined || after.bytes === undefined || !before.bytes.equals(after.bytes)) return null
-  return { card, revision: await deskBlobSha(deskRoot, canonical, after.bytes, env) }
+  return { card, revision: await deskBlobSha(deskRoot, canonical, after.bytes, env, gitExecutable) }
 }
