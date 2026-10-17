@@ -397,9 +397,19 @@ test("default browser existence checks remain private and cover native Windows n
 })
 test("private creation uses an installed Edge channel when that is the existing selection", async () => {
   const f = await fixture()
-  const result = await f.invoke(["create"], { browserExists: file => /Microsoft Edge|msedge/i.test(file) })
+  let executable
+  const result = await f.invoke(["create"], {
+    env: { ...f.options.env, PROGRAMFILES: "C:\\Program Files" },
+    browserExists: file => {
+      const found = /Microsoft Edge|msedge/i.test(file)
+      if (found) executable = file
+      return found
+    },
+  })
   assert.equal(result.exitCode, 0)
   assert.ok(result.payload.result.args.includes("msedge"))
+  const config = JSON.parse(fs.readFileSync(result.payload.resources.configFile))
+  assert.equal(config.browser.launchOptions.executablePath, executable)
 })
 
 test("two fresh private creations isolate HOME/cwd/config/session and disable idle timeout", async () => {

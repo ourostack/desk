@@ -22,6 +22,15 @@ const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecy
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
 
+for (const channel of ["chrome", "msedge"]) {
+  test("browser selection retains the discovered Windows " + channel + " executable before environment isolation", () => {
+    const env = { LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local" }
+    const candidate = browser.browserPaths(channel, "win32", env)[0]
+    const selected = browser.browserSelection([], "win32", env, file => file === candidate)
+    assert.deepEqual(selected, { args: channel === "chrome" ? [] : ["--browser", "msedge"], executablePath: candidate })
+  })
+}
+
 test("private preparation reuses the verified generation without profile acquisition", posixOnly, async () => {
   assert.equal(typeof browser.prepareBrowserRuntime, "function")
   const m = await machine("private-prepare-", { startRefresh: () => {} })

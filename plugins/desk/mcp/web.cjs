@@ -158,15 +158,22 @@ function firstExisting(files, fileExists) {
   return null;
 }
 
-// The browser options to add: none when the caller chose a browser or Chrome is where Playwright looks; Chrome's path when it is only in ~/Applications; Edge when only Edge is installed; none otherwise.
+function browserSelection(args, platform, env, fileExists) {
+  if (hasOption(args, BROWSER_CHOICE)) return { args: [], executablePath: null };
+  var chrome = firstExisting(browserPaths("chrome", platform, env), fileExists);
+  if (chrome) return { args: [], executablePath: chrome };
+  chrome = firstExisting(userBrowserPaths("chrome", platform, env), fileExists);
+  if (chrome) return { args: ["--executable-path", chrome], executablePath: chrome };
+  var edge = firstExisting(browserPaths("msedge", platform, env), fileExists);
+  if (edge) return { args: ["--browser", "msedge"], executablePath: edge };
+  edge = firstExisting(userBrowserPaths("msedge", platform, env), fileExists);
+  return edge ? { args: ["--browser", "msedge", "--executable-path", edge], executablePath: edge } : { args: [], executablePath: null };
+}
+
+// Keep legacy MCP arguments unchanged; isolated clients also need the selected
+// binary because their private environment no longer contains discovery paths.
 function browserArgs(args, platform, env, fileExists) {
-  if (hasOption(args, BROWSER_CHOICE)) return [];
-  if (firstExisting(browserPaths("chrome", platform, env), fileExists)) return [];
-  var chrome = firstExisting(userBrowserPaths("chrome", platform, env), fileExists);
-  if (chrome) return ["--executable-path", chrome];
-  if (firstExisting(browserPaths("msedge", platform, env), fileExists)) return ["--browser", "msedge"];
-  var edge = firstExisting(userBrowserPaths("msedge", platform, env), fileExists);
-  return edge ? ["--browser", "msedge", "--executable-path", edge] : [];
+  return browserSelection(args, platform, env, fileExists).args;
 }
 
 // Everything passed to Playwright MCP: Desk's defaults (unless the caller connects to a running browser), the output folder in Desk's state folder (unless the caller chose one), then the caller's own options.
@@ -948,6 +955,7 @@ module.exports = {
   PACKAGE: PACKAGE,
   REFRESH_FLAG: REFRESH_FLAG,
   browserArgs: browserArgs,
+  browserSelection: browserSelection,
   browserPaths: browserPaths,
   launchArgs: launchArgs,
   npmCli: npmCli,

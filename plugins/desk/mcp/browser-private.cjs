@@ -165,10 +165,10 @@ function run(argv, options) {
     resources.configFile = configFile;
     var choice = [];
     if (creating) {
-      choice = web.browserArgs([], process.platform, source, o.browserExists || function (file) { try { return fs.statSync(file).isFile(); } catch (e) { return false; } });
+      var selected = web.browserSelection([], process.platform, source, o.browserExists || function (file) { try { return fs.statSync(file).isFile(); } catch (e) { return false; } });
+      choice = selected.args;
       var config = { browser: { isolated: true, launchOptions: { headless: true } } };
-      var executableIndex = choice.indexOf("--executable-path");
-      if (executableIndex !== -1) config.browser.launchOptions.executablePath = choice[executableIndex + 1];
+      if (selected.executablePath) config.browser.launchOptions.executablePath = selected.executablePath;
       fs.writeFileSync(configFile, JSON.stringify(config), { flag: "wx", mode: 384 });
     }
     checkOwned(configFile, false);

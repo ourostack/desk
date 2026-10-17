@@ -99,6 +99,41 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/desk-browser-credential" --no-audit --no-fund @playwright/mcp@latest classic-level@1.4.1
           DESK_PLAYWRIGHT_TEST_MODULES="$RUNNER_TEMP/desk-browser-credential/node_modules" node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/web_playwright_package.test.js
 
+  private-browser-lifecycle:
+    name: Actual private browser (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: "22"
+          - os: windows-latest
+            node: "24"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Verify actual cold private creation and retained page lifecycle
+        env:
+          DESK_PRIVATE_BROWSER_SMOKE: "1"
+          DESK_PRIVATE_BROWSER_EVIDENCE: ${{ runner.temp }}/desk-private-browser-proof
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test ./tests/desk/mcp/__tests__/launch/browser_private_package.test.js
+      - name: Retain the actual browser proof
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-browser-${{ matrix.os }}
+          path: ${{ runner.temp }}/desk-private-browser-proof
+          if-no-files-found: error
+          retention-days: 1
+
   # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
   # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the
   # coverage gate once, over the combined result.
@@ -684,6 +719,7 @@ jobs:
     name: CI gate
     needs:
       - browser-lifecycle-install
+      - private-browser-lifecycle
       - desk-mcp-coverage-shards
       - offline-eval-tests
       - release-dry-run
