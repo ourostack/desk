@@ -9,11 +9,9 @@ import childProcess from 'node:child_process';
 import { createHash, randomUUID, createPublicKey } from 'node:crypto';
 import { isBuiltin, createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { withBrokerLock } from './src/util/broker-lock.mjs';
 import { assertOutsideGitWorkspace, ensureOwnerOnlyDirectory, protectLeafFile } from './src/factory/os-protect.js';
 import { protectWindowsPaths } from './src/factory/windows-acl.js';
 import { windowsPowerShellPath } from './src/readiness/process-start.js';
-import { readNativeProcess } from './src/browser/native-host.mjs';
 
 const require = createRequire(import.meta.url);
 const ownMcp = fileURLToPath(new URL('./', import.meta.url));
@@ -28,7 +26,11 @@ const CAPSULE_FILES = [
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
   'src/factory/os-protect.js', 'src/factory/windows-acl.js', 'src/factory/plugin-sources.cjs', 'src/readiness/process-start.js',
-];
+].map(name => `mcp/${name}`).concat([
+  'browser-context-broker/src/primitives/broker-error.mjs',
+  'browser-context-broker/src/primitives/private-state.mjs',
+  'browser-context-broker/src/primitives/broker-lock.mjs',
+]);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -82,7 +84,7 @@ export async function verifyNativeDistribution(pluginRoot = ownPlugin) {
     if (plugin.name !== 'desk' || typeof plugin.version !== 'string' || pkg.name !== '@ourostack/desk-mcp' || pkg.type !== 'module') throw Error();
     const native = require('./web-native-artifacts.cjs').artifactFamily('browser-messaging', GO_SOURCES);
     native.verifyAssets(mcpRoot);
-    const sources = new Map(CAPSULE_FILES.map(name => [name, sourceBytes(mcpRoot, name)]));
+    const sources = new Map(CAPSULE_FILES.map(name => [name, sourceBytes(pluginRoot, name)]));
     for (const [name, bytes] of sources) {
       if (!/\.(?:mjs|cjs|js)$/u.test(name)) continue;
       for (const [, specifier] of bytes.toString('utf8').matchAll(/\b(?:from\s*|import\s*(?:\(\s*)?|require\s*\(\s*)['"]([^'"]+)['"]/gu)) {
@@ -110,7 +112,7 @@ export async function verifyNativeDistribution(pluginRoot = ownPlugin) {
     const extensionId = hash(key).slice(0, 32).replace(/[0-9a-f]/gu, digit => String.fromCharCode(97 + Number.parseInt(digit, 16)));
     const artifactManifest = sourceBytes(mcpRoot, 'artifacts/browser-messaging/manifest.json');
     const distributionDigest = inventoryDigest(new Map([
-      ...[...sources].map(([name, bytes]) => [`mcp/${name}`, bytes]),
+      ...sources,
       ...[...extension].map(([name, bytes]) => [`extension/${name}`, bytes]), ['artifact-manifest.json', artifactManifest],
     ]));
     return { mcpRoot, sources, extension, artifactManifest, extensionId, extensionSourceDigest, distributionDigest, native };
@@ -262,7 +264,7 @@ function publicationFence({ runtimeDirectory, files, executable, assetBytes, ext
   };
 }
 
-async function normalInputs(options, distribution) {
+async function normalInputs(options, distribution, readNativeProcess) {
   if (!object(options) || Object.keys(options).some(key => !['env', 'homeDir', 'browserProcessId'].includes(key)) ||
       !Number.isSafeInteger(options.browserProcessId) || options.browserProcessId <= 0) throw failure('NATIVE_INSTALL_OPTIONS_INVALID');
   // This is the native account's home, not a later owner-isolated CLI HOME.
@@ -308,7 +310,9 @@ async function normalInputs(options, distribution) {
 export async function installNativeMessaging(options) {
   try {
     const distribution = await verifyNativeDistribution();
-    const input = await normalInputs(options, distribution);
+    const { withBrokerLock } = await import('./src/util/broker-lock.mjs');
+    const { readNativeProcess } = await import('./src/browser/native-host.mjs');
+    const input = await normalInputs(options, distribution, readNativeProcess);
     const root = path.join(input.browserStateRoot, 'native-owned');
     await assertOutsideGitWorkspace(root, naming);
     await privateDirectory(root);
@@ -359,7 +363,7 @@ export async function installNativeMessaging(options) {
         registered = await registry(registration, 'read');
         if (registered && registered !== registration.file) throw failure('NATIVE_REGISTRATION_CONFLICT');
       }
-      const files = new Map([...distribution.sources].map(([name, bytes]) => [`mcp/${name}`, bytes]));
+      const files = new Map(distribution.sources);
       files.set('native-host.json', Buffer.from(JSON.stringify(nativeConfig)));
       files.set('mcp/provider-config.json', Buffer.from(JSON.stringify(providerConfig)));
       files.set('artifact-manifest.json', distribution.artifactManifest);

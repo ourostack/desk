@@ -305,7 +305,9 @@ function initialize(userDataDir, profileDirectory, o) {
 var NATIVE_FILES = Object.freeze([
   "package.json", "web-native-messaging.cjs", "web-extension-credential.cjs", "web-browser-discovery.cjs",
   "src/browser/native-host.mjs", "src/util/broker-error.mjs", "src/util/private-state.mjs",
-  "src/factory/os-protect.js", "src/factory/windows-acl.js", "src/readiness/process-start.js"
+  "src/factory/os-protect.js", "src/factory/windows-acl.js", "src/readiness/process-start.js",
+  "../browser-context-broker/src/primitives/broker-error.mjs",
+  "../browser-context-broker/src/primitives/private-state.mjs"
 ]);
 var nativeBindings = new WeakMap();
 function digest(bytes) { return require("crypto").createHash("sha256").update(bytes).digest("hex"); }
@@ -335,13 +337,18 @@ function publicCode(root, relative) {
 }
 function nativeInventory(root) {
   if (JSON.parse(publicCode(root, "package.json")).type !== "module") throw nativeError("NATIVE_CODE_UNAVAILABLE");
+  var targets = NATIVE_FILES.map(function (file) { return path.posix.normalize("mcp/" + file); });
   return NATIVE_FILES.map(function (file) {
-    var bytes = publicCode(root, file), source = bytes.toString("utf8"), match;
+    // Only these fixed sibling entries cross the MCP root; publicCode still
+    // refuses traversal in every relative path it reads.
+    var bytes = file.indexOf("../browser-context-broker/") === 0
+      ? publicCode(path.dirname(root), file.slice(3)) : publicCode(root, file);
+    var source = bytes.toString("utf8"), match;
     var literals = /\b(?:from|import)\s*["']([^"']+)["']|\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
     while (file !== "package.json" && (match = literals.exec(source))) {
       var target = match[1] || match[2], moduleApi = require("module");
       if (target[0] === ".") {
-        if (NATIVE_FILES.indexOf(path.posix.normalize(path.posix.join(path.posix.dirname(file), target))) === -1)
+        if (targets.indexOf(path.posix.normalize(path.posix.join("mcp", path.posix.dirname(file), target))) === -1)
           throw nativeError("NATIVE_CODE_UNAVAILABLE");
       } else if (!(moduleApi.isBuiltin ? moduleApi.isBuiltin(target) :
         (moduleApi.builtinModules || []).indexOf(target.replace(/^node:/, "")) !== -1))

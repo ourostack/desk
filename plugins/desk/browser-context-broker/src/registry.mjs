@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { BrokerError } from './claims.mjs';
-import { ensureStateDirectory } from '../../mcp/src/util/private-state.mjs';
+import { ensureStateDirectory } from './primitives/private-state.mjs';
 export { ensureStateDirectory };
 
 const EMPTY_REGISTRY = Object.freeze({

@@ -571,9 +571,11 @@ test('replacing the protected generation receipt during actual C attestation can
 });
 
 for (const mutation of ['helper', 'receipt', 'root', 'capture', 'native-home', 'module-list', 'package-type',
-  'module-link', 'module-bytes', 'extra-record', 'ancestry', 'source', 'channel', 'ready']) {
+  'module-link', 'module-bytes', 'shared-bytes', 'shared-link', 'shared-missing', 'shared-import',
+  'extra-record', 'ancestry', 'source', 'channel', 'ready']) {
   test(`actual E/C refuses ${mutation} drift with no native allocation or stock fallback`, { timeout: 15000 }, async t => {
-    const f = await integrated(t, { sourceClone: ['package-type', 'module-link', 'module-bytes'].includes(mutation) });
+    const f = await integrated(t, { sourceClone: ['package-type', 'module-link', 'module-bytes',
+      'shared-bytes', 'shared-link', 'shared-missing', 'shared-import'].includes(mutation) });
     const receipt = path.join(f.generation, 'playwright-patch.json');
     if (mutation === 'helper') fs.appendFileSync(path.join(f.lib, 'desk-native-relay.cjs'), '\n// changed\n');
     if (['receipt', 'root', 'capture', 'native-home', 'module-list'].includes(mutation)) {
@@ -591,6 +593,13 @@ for (const mutation of ['helper', 'receipt', 'root', 'capture', 'native-home', '
       data.type = 'commonjs'; fs.writeFileSync(file, JSON.stringify(data));
     }
     if (mutation === 'module-bytes') fs.appendFileSync(path.join(f.codeRoot, 'src/util/broker-error.mjs'), '\n// source drift\n');
+    const shared = path.join(f.codeRoot, '../browser-context-broker/src/primitives/broker-error.mjs');
+    if (mutation === 'shared-bytes') fs.appendFileSync(shared, '\n// canonical shared source drift\n');
+    if (mutation === 'shared-import') fs.appendFileSync(shared, '\nimport "../../../../outside-closure.mjs";\n');
+    if (mutation === 'shared-missing' || mutation === 'shared-link') {
+      fs.renameSync(shared, `${shared}.owned-original`);
+      if (mutation === 'shared-link') fs.symlinkSync(`${shared}.owned-original`, shared);
+    }
     if (mutation === 'module-link') {
       const file = path.join(f.codeRoot, 'src/util'), outside = path.join(f.root, 'owned-outside-module');
       fs.renameSync(file, outside);

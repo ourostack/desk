@@ -5,9 +5,11 @@ import path from 'node:path';
 import { mkTempRoot } from '../_temp_roots.js';
 import { createHash } from 'node:crypto';
 import { ensureStateDirectory as brokerEnsureStateDirectory } from '../../../../../plugins/desk/browser-context-broker/src/registry.mjs';
+import { ownIdentityReader as mirroredOwnIdentityReader } from '../../../../../plugins/desk/mcp/src/util/broker-lock.mjs';
 
 const broker = new URL('../../../../../plugins/desk/browser-context-broker/src/', import.meta.url);
 const util = new URL('../../../../../plugins/desk/mcp/src/util/', import.meta.url);
+const primitives = new URL('primitives/', broker);
 const roots = [];
 async function ownedRoot(t, prefix) {
   const root = await mkTempRoot(prefix);
@@ -50,6 +52,7 @@ test('compatibility facades preserve constructor and function identity', async t
   assert.equal(brokerEnsureStateDirectory, state.ensureStateDirectory);
   assert.equal(lock.withBrokerLock, primitive.withBrokerLock);
   assert.equal(lock.ownIdentityReader, primitive.ownIdentityReader);
+  assert.equal(lock.ownIdentityReader, mirroredOwnIdentityReader);
   const e = new error.BrokerError('TEST', 'bounded');
   assert.ok(e instanceof claims.BrokerError);
   assert.deepEqual(e.details, {});
@@ -69,12 +72,15 @@ test('extraction keeps the exact lock algorithm and private-state behavior', asy
   // with ONLY claims->broker-error, registry->private-state and factory/
   // windows-acl + readiness/process-start relative import paths rebased.
   const digest = text => createHash('sha256').update(text).digest('hex');
-  assert.equal(digest(await readFile(new URL('broker-lock.mjs', util), 'utf8')),
+  const lock = (await readFile(new URL('broker-lock.mjs', primitives), 'utf8'))
+    .replaceAll('../../../mcp/src/', '../');
+  assert.equal(digest(lock),
     '3bab075b6c490aa2f8d128010fff5f9af5a82fc8f96aa47cbea08a63f57c6970');
   // registry.mjs blob db720012039c1d9ba49f881cf4b7f7f24a4c1206:
   // slice from "export async function ensureStateDirectory" to the following
   // "\nfunction validateRegistry", trimmed, windows-acl import rebased; 807 bytes.
-  const state = await readFile(new URL('private-state.mjs', util), 'utf8');
+  const state = (await readFile(new URL('private-state.mjs', primitives), 'utf8'))
+    .replaceAll('../../../mcp/src/', '../');
   const currentHelper = state.slice(state.indexOf('export async function ensureStateDirectory')).trim();
   assert.equal(digest(currentHelper),
     '987c9088bbfc7a03fde027c727c5ce87dc10c83e6e38e437a387da092615a496');
@@ -121,7 +127,7 @@ test('BigInt inode and device replacement refuse reclaim; Windows ACL created fl
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-const base = ${JSON.stringify(util.href)};
+const base = ${JSON.stringify(primitives.href)};
 const texts = Object.fromEntries(await Promise.all(['broker-lock.mjs','broker-error.mjs','private-state.mjs'].map(async name =>
   [name, await fs.readFile(new URL(name, base), 'utf8')])));
 async function fixture(mode) {

@@ -1,8 +1,1 @@
-export class BrokerError extends Error {
-  constructor(code, message, details = {}) {
-    super(message);
-    this.name = 'BrokerError';
-    this.code = code;
-    this.details = details;
-  }
-}
+export { BrokerError } from '../../../browser-context-broker/src/primitives/broker-error.mjs';

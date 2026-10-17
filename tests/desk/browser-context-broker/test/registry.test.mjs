@@ -38,7 +38,7 @@ test.after(async () => {
 
 test('GivenNativeWindowsLock_WhenUsingDefaultReader_PortableStartEvidenceIsUsed', async () => {
   const directory = await stateDir();
-  const lockFile = new URL('../../../../plugins/desk/mcp/src/util/broker-lock.mjs', import.meta.url).pathname;
+  const lockFile = new URL('../../../../plugins/desk/browser-context-broker/src/primitives/broker-lock.mjs', import.meta.url).pathname;
   const script = `
     import vm from 'node:vm';
     import fs from 'node:fs/promises';
@@ -74,7 +74,7 @@ test('GivenNativeWindowsLock_WhenUsingDefaultReader_PortableStartEvidenceIsUsed'
 test('GivenWindowsState_WhenPosixBitsAreNotPrivate_NativeAclVerificationIsRequired', async () => {
   const directory = await stateDir();
   await chmod(directory, 0o755);
-  const source = new URL('../../../../plugins/desk/mcp/src/util/private-state.mjs', import.meta.url).pathname;
+  const source = new URL('../../../../plugins/desk/browser-context-broker/src/primitives/private-state.mjs', import.meta.url).pathname;
   const script = `
     import vm from 'node:vm';
     import fs from 'node:fs/promises';
@@ -118,10 +118,9 @@ test('GivenStandalonePosixBroker_WhenStateModuleLoads_WindowsRuntimeIsNotAnEager
   const source = new URL('../../../../plugins/desk/browser-context-broker/src/', import.meta.url).pathname;
   await mkdir(path.join(directory, 'src'), { mode: 0o700 });
   for (const file of ['registry.mjs', 'claims.mjs']) await cp(path.join(source, file), path.join(directory, 'src', file));
-  const util = new URL('../../../../plugins/desk/mcp/src/util/', import.meta.url).pathname;
-  await mkdir(path.join(directory, '../mcp/src/util'), { recursive: true, mode: 0o700 });
+  await mkdir(path.join(directory, 'src/primitives'), { mode: 0o700 });
   for (const file of ['broker-error.mjs', 'private-state.mjs'])
-    await cp(path.join(util, file), path.join(directory, '../mcp/src/util', file));
+    await cp(path.join(source, 'primitives', file), path.join(directory, 'src/primitives', file));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e',
     `import { ensureStateDirectory } from ${JSON.stringify('file://' + path.join(directory, 'src/registry.mjs'))}; await ensureStateDirectory(${JSON.stringify(path.join(directory, 'state'))});`,
   ], { encoding: 'utf8', timeout: 15000 });

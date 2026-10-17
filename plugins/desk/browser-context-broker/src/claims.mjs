@@ -1,4 +1,4 @@
-import { BrokerError } from '../../mcp/src/util/broker-error.mjs';
+import { BrokerError } from './primitives/broker-error.mjs';
 export { BrokerError };
 
 const SET_CLAIMS = new Set(['posture', 'capabilities']);

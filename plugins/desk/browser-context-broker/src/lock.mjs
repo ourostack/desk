@@ -1,1 +1,1 @@
-export { withBrokerLock, ownIdentityReader } from '../../mcp/src/util/broker-lock.mjs';
+export { withBrokerLock, ownIdentityReader } from './primitives/broker-lock.mjs';
