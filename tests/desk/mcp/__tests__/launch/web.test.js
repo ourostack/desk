@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn, spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
+import fs from "node:fs"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
@@ -20,6 +21,58 @@ const browser = require(browserPath)
 const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
+
+for (const channel of ["chrome", "msedge"]) {
+  test("browser selection retains the discovered Windows " + channel + " executable before environment isolation", () => {
+    const env = { LOCALAPPDATA: "C:\\Users\\fixture\\AppData\\Local" }
+    const candidate = browser.browserPaths(channel, "win32", env)[0]
+    const selected = browser.browserSelection([], "win32", env, file => file === candidate)
+    assert.deepEqual(selected, { args: channel === "chrome" ? [] : ["--browser", "msedge"], executablePath: candidate })
+  })
+}
+
+test("private preparation reuses the verified generation without profile acquisition", posixOnly, async () => {
+  assert.equal(typeof browser.prepareBrowserRuntime, "function")
+  const m = await machine("private-prepare-", { startRefresh: () => {} })
+  preinstall(m.state)
+  const result = await browser.prepareBrowserRuntime({ ...m.options,
+    env: { ...m.options.env, PLAYWRIGHT_MCP_EXTENSION_TOKEN: "not-for-private" },
+    pluginDirs: ["/must-not-read-profile"],
+    requireModule: () => { throw new Error("profile acquisition forbidden") },
+  })
+  assert.equal(result.nodePath, m.install.node)
+  assert.equal(result.stateRoot, m.state)
+  assert.equal(result.installed.version, "0.0.81")
+  assert.deepEqual(m.calls(), [])
+})
+
+test("private preparation shares one cold install across concurrent clients", posixOnly, async () => {
+  assert.equal(typeof browser.prepareBrowserRuntime, "function")
+  const m = await machine("private-prepare-cold-", { startRefresh: () => {} })
+  const results = await Promise.all([browser.prepareBrowserRuntime(m.options), browser.prepareBrowserRuntime(m.options)])
+  assert.equal(results[0].installed.dir, results[1].installed.dir)
+  assert.equal(m.calls().filter(c => c.args[0] === "install").length, 1)
+})
+
+test("private preparation rejects unsupported generations and missing Node/npm", posixOnly, async () => {
+  assert.equal(typeof browser.prepareBrowserRuntime, "function")
+  const m = await machine("private-prepare-invalid-", { env: { FAKE_NPM_MODE: "badlifecycle" } })
+  await assert.rejects(browser.prepareBrowserRuntime(m.options), /patch|verified/i)
+  await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, exists: () => false }), /npm/i)
+  await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, current: { path: "/missing", version: "v1.0.0", abi: "1" } }), /Node/i)
+})
+
+test("private preparation defaults options and fails before installation when npm is absent", async t => {
+  t.mock.method(fs, "statSync", () => ({ isFile: () => false }))
+  await assert.rejects(browser.prepareBrowserRuntime(), error => ["node_missing", "npm_missing"].includes(error.code))
+})
+
+test("private preparation preserves a code for lock contention without an installed generation", posixOnly, async () => {
+  const m = await machine("private-prepare-busy-", { firstInstallMs: 0, startRefresh: () => {} })
+  touch(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid, at: Date.now() }))
+  await assert.rejects(browser.prepareBrowserRuntime(m.options), error => error.code === "install_failed" && /still installing/.test(error.message))
+  assert.deepEqual(m.calls(), [])
+})
 
 // ---- fixtures ----
 

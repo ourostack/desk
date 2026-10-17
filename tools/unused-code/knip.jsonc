@@ -85,6 +85,9 @@
         "web-proxy.cjs",
         // web.cjs starts Playwright MCP through this runner by path, not a static import.
         "web-real-tabs.cjs",
+        // The private shell entry and its fresh compatible child are started by path.
+        "browser-private.cjs",
+        "private-browser-runtime.cjs",
         "scripts/*.{js,mjs}",
         // Codex is a supported host and the adapter is its activation surface: the host manifests and tests drive it, and the files below are the parts of it that nothing in this package imports by a static path.
         "src/activation/adapters/codex.js",
