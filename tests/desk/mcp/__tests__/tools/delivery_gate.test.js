@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs"
 import { promises as fs } from "node:fs"
 import { checkDelivery, findPullRequests, prDelivery, makeRunGh, POLICY_PATH } from "../../../../../plugins/desk/mcp/src/tools/delivery-gate.js"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { mkTempDeskRoot, readCurrentTask as readFront } from "./_helpers.js"
 
 const PR = { kind: "pr", ref: "https://github.com/ourostack/desk/pull/200" }
 const LABEL_RULE = { paths: ["plugins/desk/**"], delivered_at: { kind: "github_label", name: "released" } }

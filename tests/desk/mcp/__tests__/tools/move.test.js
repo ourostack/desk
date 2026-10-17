@@ -1973,6 +1973,7 @@ test("task_move and track_rename keep signoff, flow and returns exactly as writt
   await mkTrack(root, "main-track", { rows: ["old-name"] })
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "Unique title for the record test" } })
   await task_update({ deskRoot: root, input: { track: "main-track", slug: "old-name", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", unarchive: true }, schedulePush: () => {} })
   const file = path.join(root, "main-track", "old-name", "task.md")
   const card = await readFront(file)
   card.data.returns = ["processing, 2026-10-05T10:00:00Z, agent_error"]

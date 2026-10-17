@@ -16,7 +16,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
-import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
+import { mkTempDeskRoot, readCurrentTask as readFront, exists } from "./_helpers.js"
 
 const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
 
@@ -557,7 +557,7 @@ test("archive does not invent a pending packet for an accepted delivery or evide
     await task_create({ deskRoot: root, input: { track: "t", slug, title: slug, status: slug === "no-proof" ? "done" : "drafting" } })
     if (slug === "accepted") {
       await task_update({ deskRoot: root, input: { track: "t", slug, status: "done", evidence: DONE_EVIDENCE } })
-      const file = path.join(root, "t", slug, "task.md")
+      const file = path.join(root, "t", "_archive", slug, "task.md")
       const card = await readFront(file)
       card.data.signoff.state = "accepted"
       await writeMarkdown(file, card.data, card.content)
@@ -652,6 +652,7 @@ test("task_archive refuses to cancel a hand-damaged card whose record cannot mov
   await task_create({ deskRoot: root, input: { track: "t", slug: "damaged", title: "Damaged" } })
   const file = path.join(root, "t", "damaged", "task.md")
   await task_update({ deskRoot: root, input: { track: "t", slug: "damaged", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
+  await task_move({ deskRoot: root, input: { track: "t", slug: "damaged", unarchive: true } })
   // A hand edit past the card guard: the status is no longer one of the statuses, and the record says the task reached done.
   await fs.writeFile(file, (await fs.readFile(file, "utf8")).replace(/^status: done$/mu, "status: weird"))
   await assert.rejects(

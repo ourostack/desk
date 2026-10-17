@@ -72,6 +72,9 @@ import { createWorkspaceWatcher } from "./readiness/workspace-watcher.js"
 import { readinessContracts } from "./readiness/contracts.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
 import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
+import { TOOL_ANNOTATIONS } from "./runtime/hosted.js"
+import { withDeskMutation, DeskMutationCleanupError } from "./util/desk-mutation.js"
+import { TerminalArchiveError } from "./tools/task-terminal-archive.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex, readinessContracts }
@@ -284,19 +287,22 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   try {
     const readiness = statusContext.admission ? statusContext.admission.controller ?? null : undefined
-    const result = await impl({
+    const invoke = () => impl({
       deskRoot, input: input ?? {}, person, statusContext, readiness,
       queryRouter: routerFor(readiness), signal,
     })
+    const readOnly = TOOL_ANNOTATIONS[name].readOnlyHint || (name === "desk_doctor" && input?.repair === undefined)
+    const result = readOnly ? await invoke() : await withDeskMutation(deskRoot, invoke)
     // desk_skill answers with the skill's own text: its result is already an MCP answer.
     if (name === "desk_skill" && Array.isArray(result?.content)) return result
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
   } catch (err) {
-    if (err instanceof CanonicalWriteRecordingError) {
+    if (err instanceof CanonicalWriteRecordingError || err instanceof TerminalArchiveError || err instanceof DeskMutationCleanupError) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ ...err.toJSON(), tool: name }) }],
+        content: [{ type: "text", text: JSON.stringify({ ...err.toJSON(), tool: name,
+          ...(err.mutation_claim_cleanup_error ? { mutation_claim_cleanup_error: err.mutation_claim_cleanup_error } : {}) }) }],
         isError: true,
       }
     }
@@ -308,6 +314,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
             status: "error",
             tool: name,
             message: err?.message ?? String(err),
+            ...(err.mutation_claim_cleanup_error ? { mutation_claim_cleanup_error: err.mutation_claim_cleanup_error } : {}),
           }),
         },
       ],

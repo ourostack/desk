@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { deriveSteps } from "../../../../../plugins/desk/mcp/src/desk/step-delivery.js"
 import { readSteps } from "../../../../../plugins/desk/mcp/src/desk/steps.js"
-import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { mkTempDeskRoot, readCurrentTask as readFront } from "./_helpers.js"
 
 const REPOS = [{ name: "widgets" }]
 const POLICY = { schema_version: 1, rules: [{ paths: ["src/**"], delivered_at: { kind: "github_label", name: "released" } }] }
@@ -163,7 +163,7 @@ test("when every step is delivered or dropped the card closes on its steps, with
   assert.equal(front.status, "done")
   assert.equal(front.evidence.kind, "steps")
   assert.equal(front.evidence.ref, "all 2 steps settled: 1 delivered, 1 dropped")
-  assert.deepEqual(await rows(file), { a: "delivered", b: "dropped" })
+  assert.deepEqual(await rows(path.join(root, result.path)), { a: "delivered", b: "dropped" })
   assert.deepEqual(result.steps_refreshed, ["a: in review -> delivered"])
 })
 

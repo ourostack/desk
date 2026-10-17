@@ -28,6 +28,17 @@ export async function readFront(filePath) {
   return matter(raw)
 }
 
+// Tests of lifecycle/evidence read the logical task after a terminal update.
+// Placement tests use readFront/exists directly and assert the returned path.
+export async function readCurrentTask(filePath) {
+  try { return await readFront(filePath) } catch (error) {
+    if (error.code !== "ENOENT" || path.basename(filePath) !== "task.md" ||
+        path.basename(path.dirname(path.dirname(filePath))) === "_archive") throw error
+    const folder = path.dirname(filePath)
+    return readFront(path.join(path.dirname(folder), "_archive", path.basename(folder), "task.md"))
+  }
+}
+
 export async function exists(p) {
   try {
     await fs.access(p)

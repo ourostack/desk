@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { assertCodeRepoEvidence, recordedRepos } from "../../../../../plugins/desk/mcp/src/tools/done-evidence.js"
 import { mkTempRoot } from "../_temp_roots.js"
-import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { mkTempDeskRoot, readCurrentTask as readFront } from "./_helpers.js"
 
 function git(dir, ...args) {
   const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })

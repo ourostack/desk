@@ -65,5 +65,5 @@ test("no factory state is created by completion; unavailable factory state never
   await assert.rejects(fs.stat(env.XDG_STATE_HOME), { code: "ENOENT" })
   await fs.mkdir(env.XDG_STATE_HOME, { recursive: true })
   await fs.writeFile(path.join(env.XDG_STATE_HOME, "ouroboros-skills"), "unsafe")
-  assert.equal((await task_update(options)).status, "updated")
+  assert.equal((await task_update({ ...options, input: { track: "track", slug: "finished-work", status: "done" } })).status, "updated")
 }))

@@ -59,6 +59,7 @@ import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 import { createGitReader } from "./git-read-worker.js"
+import { withDeskMutation } from "../util/desk-mutation.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -526,27 +527,34 @@ export async function runPushWorker({
   try {
     if (!canPush(root, spawnGit)) return { result: "skipped" }
     await clock.sleep(debounceMs)
-    let pushed = false
-    for (;;) {
-      const counts = aheadBehindCounts({ root, spawnGit })
-      if (counts === null || counts.ahead <= 0) {
-        const patch = { blocked: false, reason: null, paths: [] }
-        if (pushed) {
-          patch.last_push_at = new Date().toISOString()
-          patch.last_pull = null
+    return await withDeskMutation(root, async (assertHeld) => {
+      let pushed = false
+      for (;;) {
+        await assertHeld()
+        const counts = aheadBehindCounts({ root, spawnGit })
+        if (counts === null || counts.ahead <= 0) {
+          const patch = { blocked: false, reason: null, paths: [] }
+          if (pushed) {
+            patch.last_push_at = new Date().toISOString()
+            patch.last_pull = null
+          }
+          updateSyncStatus(root, env, patch)
+          return { result: "ok" }
         }
-        updateSyncStatus(root, env, patch)
-        return { result: "ok" }
+        const attempt = pushWithRetry(root, spawnGit)
+        if (attempt.result === "ok") {
+          pushed = true
+          continue
+        }
+        updateSyncStatus(root, env, { blocked: true, reason: attempt.reason, paths: attempt.paths, at: new Date().toISOString() })
+        fileProblem({ root, env, reason: attempt.reason, host: hostFromEnv(env) })
+        return { result: "blocked", reason: attempt.reason }
       }
-      const attempt = pushWithRetry(root, spawnGit)
-      if (attempt.result === "ok") {
-        pushed = true
-        continue
-      }
-      updateSyncStatus(root, env, { blocked: true, reason: attempt.reason, paths: attempt.paths, at: new Date().toISOString() })
-      fileProblem({ root, env, reason: attempt.reason, host: hostFromEnv(env) })
-      return { result: "blocked", reason: attempt.reason }
-    }
+    })
+  } catch (error) {
+    if (error.code !== "desk_mutation_busy") throw error
+    updateSyncStatus(root, env, { blocked: true, reason: "canonical_mutation_busy", paths: [] })
+    return { result: "busy", reason: "canonical_mutation_busy" }
   } finally {
     lock.release()
   }

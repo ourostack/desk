@@ -21,6 +21,7 @@ import {
   patchMarkdownFrontmatter,
   pathExists,
   writeFileAtomic,
+  serializeMarkdown,
 } from "../util/fm.js"
 import { readRecord, toFrontmatter, move, needsReturnReason, parseReturn, RETURN_REASONS, STATUSES } from "../factory/outcome.js"
 import { deskRelativePath, isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
@@ -39,15 +40,16 @@ import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState } from "./track-row.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
-import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
-import { focusNote } from "./task-focus.js"
+import { focusNote, findCard } from "./task-focus.js"
 import { applyStep, readSteps, readyOf, setDerived } from "../desk/steps.js"
 import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
 import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
+import { withDeskMutation } from "../util/desk-mutation.js"
+import { prepareTerminalArchive, finishTerminalArchive, relocateTaskDirectory } from "./task-terminal-archive.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -210,10 +212,12 @@ async function taskJob({ deskRoot, person, track, slug }) {
 
 async function requestTaskFinalize({ deskRoot, env, identity }) {
   try {
-    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
+    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return { status: "not_in_use" }
     await requestFinalize(env, { job: identity.job, deskRoot: identity.root })
-  } catch {
+    return { status: "requested" }
+  } catch (error) {
     console.error("desk_factory: finalize_request_deferred")
+    return { status: "deferred", reason: error.message }
   }
 }
 
@@ -237,10 +241,12 @@ const requestTaskReturnSync = async ({ deskRoot, person, track, slug, env, final
 // `evaluate --pending` (`evaluatePending` in factory/evaluate-run.js).
 async function requestTaskEvaluation({ deskRoot, env, identity }) {
   try {
-    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
+    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return { status: "not_in_use" }
     await requestEvaluation(env, { job: identity.job, deskRoot: identity.root })
-  } catch {
+    return { status: "requested" }
+  } catch (error) {
     console.error("desk_factory: evaluation_request_deferred")
+    return { status: "deferred", reason: error.message }
   }
 }
 
@@ -253,10 +259,11 @@ async function requestTaskEvaluation({ deskRoot, env, identity }) {
 // resolved once here (it never differs between the two calls) and handed to
 // both; if resolving it throws, both calls still degrade the same way each
 // would have on its own, so both deferred messages are logged below.
-async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status }) {
-  const identity = await taskJobOrNull({ deskRoot, person, track, slug })
-  await requestTaskFinalize({ deskRoot, env, identity })
-  if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity })
+async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status, identity: givenIdentity }) {
+  const identity = givenIdentity === undefined ? await taskJobOrNull({ deskRoot, person, track, slug }) : givenIdentity
+  const finalize = await requestTaskFinalize({ deskRoot, env, identity })
+  const evaluate = TERMINAL_STATUSES.has(status) ? await requestTaskEvaluation({ deskRoot, env, identity }) : undefined
+  return { finalize, evaluate }
 }
 
 // The task's factory report answer, `{ link }` or `{ link: null, reason? }` (`local-status.js` `factoryReportLink`): asked on the
@@ -681,7 +688,10 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_create(options) {
+  return withDeskMutation(options.deskRoot, () => createTask(options))
+}
+async function createTask({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -904,7 +914,14 @@ function refuseBodyOnlyKeys(frontmatter) {
   }
 }
 
-export async function task_update({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
+function archivedUpdateRefusal(deskRoot, file) {
+  return new Error(`task_update: ${relPath(deskRoot, file)} is archived; payload was not reapplied (non-reapplication). Only a same-terminal status-only retry or the existing resource disposition is allowed. To reopen, use task_move with unarchive: true, then task_update with return_reason. Nothing was changed.`)
+}
+
+export async function task_update(options) {
+  return withDeskMutation(options.deskRoot, () => updateTask(options))
+}
+async function updateTask({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, finalize = requestTaskFinalize, fetchFn }) {
   const values = input ?? {}
   // A field this tool does not read would otherwise be dropped in silence, and the agent would believe the card changed.
   const unknown = Object.keys(values).filter((key) => !TASK_UPDATE_FIELDS.includes(key))
@@ -974,10 +991,22 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (!(await pathExists(filePath)) && resource !== undefined) {
     const archived = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug, "task.md"] })
     if (await pathExists(archived)) {
+      if (Object.keys(values).some((key) => !["track", "slug", "resource"].includes(key))) throw archivedUpdateRefusal(deskRoot, archived)
       return recordArchivedDisposition({ deskRoot, file: archived, track, slug, values, resource, readiness, env, spawnGit, helpers: { relPath, stagingAllowed, stageAndCommitCard, schedulePush, recordCanonicalChanges } })
     }
   }
   if (!(await pathExists(filePath))) {
+    const found = await findCard({ deskRoot, person, track, slug })
+    if (found?.archived) {
+      const archived = await readMarkdown(found.file)
+      const statusOnly = Object.keys(values).every((key) => ["track", "slug", "status", "frontmatter"].includes(key)) &&
+        (givenFrontmatter == null || Object.keys(givenFrontmatter).every((key) => key === "status"))
+      if (statusOnly && TERMINAL_STATUSES.has(frontmatter?.status) && frontmatter.status === archived.data.status) {
+        return { status: "updated", path: relPath(deskRoot, found.file), archive_phase: "already_archived_read_only",
+          ...pendingDeliveryAnswer(archived.data, slug) }
+      }
+      throw archivedUpdateRefusal(deskRoot, found.file)
+    }
     throw new Error(
       `task_update: task does not exist at ${relPath(deskRoot, filePath)}`,
     )
@@ -990,6 +1019,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const refresh = await refreshSteps(step === undefined ? seen.content : applyStep(seen.content, step, "task_update", seenRepos, stepVerdict({ ...seen.data, ...(frontmatter ?? {}) }.repos, { spawnGit, homeDir: env.HOME, deskRoot })).body, { deskRoot, person, env, fetchFn, mode: frontmatter?.status === "done" ? "close" : "ordinary" })
   // The delivery of a pull request given as done evidence is checked in this same phase, so nothing slow happens after the card is read again.
   const delivery = frontmatter?.status === "done" && seen.data.status !== "done" && evidence?.kind === "pr" && typeof evidence.ref === "string" && !readSteps(seen.content).found ? await checkDelivery({ toolName: "task_update", evidence, env, fetchFn }) : null
+  const sourceBytes = Buffer.from(await fs.readFile(filePath, "utf8"))
   const existing = await readMarkdown(filePath)
   assertLocalOnlyUnchanged(frontmatter?.repos, existing.data.repos)
   const merged = { ...existing.data, ...(frontmatter ?? {}) }
@@ -1101,27 +1131,65 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const conflicted = onGit && hasUnmergedPath(path.dirname(filePath), [path.basename(filePath)], spawnGit)
   const stage = onGit && !conflicted
   const heldChanges = stage && hasUnstagedWork(path.dirname(filePath), [path.basename(filePath)], spawnGit)
-  // A card written for a step goes through a temporary file and a rename, so a reader never sees it half written.
-  await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
-  // The per-machine index of cards with open resource rows follows each resource write; a state folder that cannot be written never fails the card write.
-  if (resource !== undefined) {
+  let archiveOutcome = null
+  let commit
+  let deskCommit = null
+  const automaticArchive = frontmatter?.status !== undefined && TERMINAL_STATUSES.has(merged.status)
+  if (automaticArchive) {
+    const srcDir = await resolveWriteTarget({ deskRoot, person, segments: [track, slug] })
+    const archiveDir = await resolveWriteTarget({ deskRoot, person, segments: [track, "_archive", slug] })
+    const trackFile = await resolveWriteTarget({ deskRoot, person, segments: [track, "track.md"] })
+    let nextTrack = null
     try {
-      recordCleanupCard(deskRoot, relPath(deskRoot, path.dirname(filePath)), openResources(newBody).length > 0, env)
-    } catch {
-      // The reminder still comes from the card itself while it is unfinished.
+      const before = await fs.readFile(trackFile)
+      const after = setTaskState(before.toString("utf8"), slug, String(merged.status))
+      if (after !== null && after !== before.toString("utf8")) {
+        const stat = await fs.lstat(trackFile, { bigint: true })
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("task_update: automatic archive requires a regular track card; nothing was written")
+        if (onGit) {
+          const stagedTrack = spawnGit("git", ["-C", path.dirname(trackFile), "diff", "--cached", "--name-only", "--", "track.md"], { encoding: "utf8", timeout: 10_000 })
+          if (hasUnmergedPath(path.dirname(trackFile), ["track.md"], spawnGit) ||
+              hasUnstagedWork(path.dirname(trackFile), ["track.md"], spawnGit) ||
+              stagedTrack.status !== 0 || stagedTrack.stdout.trim() !== "") throw new Error("task_update: track has uncommitted changes/conflicts; nothing was written")
+        }
+        nextTrack = { before, after, identity: `${stat.dev}:${stat.ino}`, mode: stat.mode & 0o111n ? "100755" : "100644" }
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
     }
+    const plan = await prepareTerminalArchive({
+      root: deskRoot, srcDir, filePath, archiveDir, sourceBytes, spawnGit, trackFile, nextTrack,
+      validateSource: () => assertArchiveSourceIsRelocationSafe({ srcDir, srcFile: filePath, archiveDir }),
+    })
+    const identity = await taskJobOrNull({ deskRoot, person, track, slug })
+    archiveOutcome = await finishTerminalArchive({
+      plan, bytes: serializeMarkdown(merged, newBody), body: newBody, readiness, env, schedulePush,
+      terminalSync: () => requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status, identity }),
+    })
+    filePath = archiveOutcome.filePath
+    deskCommit = archiveOutcome.deskCommit
+    if (delivered === null) delivered = pendingDeliveryAnswer(merged, slug)
+  } else {
+    // Preserve the ordinary nonterminal write/commit contract.
+    await writeMarkdown(filePath, merged, newBody, { atomic: step !== undefined || stepsNow !== null || resource !== undefined })
+    if (resource !== undefined) {
+      try {
+        recordCleanupCard(deskRoot, relPath(deskRoot, path.dirname(filePath)), openResources(newBody).length > 0, env)
+      } catch {
+        // The reminder still comes from the card itself while it is unfinished.
+      }
+    }
+    const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
+    commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON } : undefined
+    // HEAD precedes the scheduled push, which may rebase the local commit.
+    deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
+    if (stage && !commit) schedulePush({ root: deskRoot })
+    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+    if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
+    else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
   }
-  // A status change also moves the task's row in the track card's Tasks table (`track-row.js`), committed with the card.
-  const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
-  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : conflicted ? { status: "failed", reason: CONFLICTED_CARD_REASON } : undefined
-  // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
-  const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
-  if (stage && !commit) schedulePush({ root: deskRoot })
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-  if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
-  // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
-  else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
+  if (archiveOutcome) result.archive_phase = archiveOutcome.archive_phase
   if (commit) result.commit = commit
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
@@ -1289,7 +1357,10 @@ function withArchiveFocus(statusContext, target, result) {
  *
  * Returns: { status: "archived" | "already_archived", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn }) {
+export async function task_archive(options) {
+  return withDeskMutation(options.deskRoot, () => archiveTask(options))
+}
+async function archiveTask({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1397,7 +1468,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   })
 
   // Move the dir. fs.rename is atomic on the same filesystem.
-  await withCreatedDirs(path.dirname(archiveDir), () => fs.rename(srcDir, archiveDir))
+  await relocateTaskDirectory({ srcDir, archiveDir })
   // A directory move invalidates both subtrees, including companion documents.
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
     { path: relPath(deskRoot, srcDir), operation: "delete" },

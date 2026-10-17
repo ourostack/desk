@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { promises as fs, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { taskSignoff, TASK_SIGNOFF_FIELDS } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { REFUSAL_REASONS, RETURN_REASONS, parseReturn } from "../../../../../plugins/desk/mcp/src/factory/outcome.js"
@@ -15,7 +16,7 @@ import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-sch
 import { TOOL_IMPLS, callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 import { deferredToolsHint } from "../../../../../plugins/desk/mcp/src/util/deferred-tools.js"
 import { toolKind } from "../../../../../plugins/desk/mcp/src/factory/tool-kinds.js"
-import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { mkTempDeskRoot, readCurrentTask as readFront } from "./_helpers.js"
 import { osEnv } from "../_os_env.js"
 
 const SENTINEL = "SENTINEL-card-body-text"
@@ -62,6 +63,9 @@ async function delivered(root, slug, { track = "t", archive = false } = {}) {
   settle(root)
   await task_create({ deskRoot: root, input: { track, slug, title: `Title ${slug} ${SENTINEL}`, status: "processing", body: `${SENTINEL}\n` } })
   await task_update({ deskRoot: root, input: { track, slug, frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, finalize: async () => {} })
+  // These tests cover both supported signoff placements. Terminal updates
+  // archive automatically; explicitly restore the active-placement fixture.
+  if (!archive) await task_move({ deskRoot: root, input: { track, slug, unarchive: true } })
   settle(root)
   if (archive) await task_archive({ deskRoot: root, input: { track, slug } })
   settle(root)
@@ -357,7 +361,7 @@ test("on a crew desk the refusal names the track's paths from the desk root", as
   git(root, "commit", "-q", "-m", "archive: track t")
   await assert.rejects(sign(root, "crew-task", { outcome: "refused", reason: "defect", return_reason: "agent_error" }, { person: "ari" }), /From the desk root, bring the track back with `git mv desks\/ari\/_archive\/t desks\/ari\/t`, commit that/u)
   const accepted = await sign(root, "crew-task", { outcome: "accepted" }, { person: "ari" })
-  assert.equal(accepted.path, "desks/ari/_archive/t/crew-task/task.md")
+  assert.equal(accepted.path, "desks/ari/_archive/t/_archive/crew-task/task.md")
 })
 
 test("a live card wins over one left in an archived track of the same name", async () => {

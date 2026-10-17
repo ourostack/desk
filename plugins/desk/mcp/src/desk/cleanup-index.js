@@ -34,18 +34,21 @@ const stillOpen = (deskRoot, rel) => cardFiles(deskRoot, rel).some((file) => exi
 
 /** Record that the card at `rel` was just written: it goes first when it has an open row, and only a card with no open row left, or gone, is dropped: a card with an open row is never dropped. */
 export function recordCleanupCard(deskRoot, folder, hasOpen, env) {
-  // An archived card is listed by its live folder name, as the lookup in `cardFiles` expects.
-  // `folder` is spelled with `/` on every platform (relPath), so `rel` keeps that spelling: a `\` spelling of the same card would be listed twice on Windows.
-  const rel = path.posix.basename(path.posix.dirname(folder)) === "_archive" ? path.posix.join(path.posix.dirname(path.posix.dirname(folder)), path.posix.basename(folder)) : folder
+  // New writes keep the actual placement. Older live-path aliases still read
+  // through cardFiles, and are replaced, not duplicated, when the card moves.
+  const rel = folder
+  const liveAlias = (value) => path.posix.basename(path.posix.dirname(value)) === "_archive"
+    ? path.posix.join(path.posix.dirname(path.posix.dirname(value)), path.posix.basename(value)) : value
   const file = cleanupIndexPath(deskRoot, env)
   assertNotRealStateUnderTest(path.dirname(path.dirname(file)))
+  if (!hasOpen && !existsSync(file)) return
   let before = []
   try {
     before = JSON.parse(readFileSync(file, "utf8")).cards.filter(safe)
   } catch {
     // No index yet, or one that cannot be read: start again from this card.
   }
-  const cards = [...(hasOpen ? [rel] : []), ...before.filter((card) => card !== rel && stillOpen(deskRoot, card))]
+  const cards = [...(hasOpen ? [rel] : []), ...before.filter((card) => liveAlias(card) !== liveAlias(rel) && stillOpen(deskRoot, card))]
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.${process.pid}.tmp`
   writeFileSync(temporary, `${JSON.stringify({ schema_version: 1, cards })}\n`, { mode: 0o600 })

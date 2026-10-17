@@ -17,6 +17,10 @@ when a task is done — merged or set aside — i slide it toward the back of th
 
 ## Archive a task
 
+An explicit terminal `task_update` already archives the task and returns its actual card path. Do not repeat the move or run Git for that successful tool call. Use `task_archive` for an explicit archive or to relocate a legacy active terminal card; it preserves an existing delivery and its unsigned packet. A status-only retry of an archived terminal update is read-only, not repair of a failed commit. Mixed archived updates are not replayed: inspect the returned/error path, and explicitly unarchive plus record a return reason before reopening work.
+
+The manual steps below describe relocation when no tool performed it; never apply them again to a task the tool already archived.
+
 1. move the entire task directory to the track's `_archive/`:
    ```bash
    mv $DESK/<track>/<task> $DESK/<track>/_archive/<task>

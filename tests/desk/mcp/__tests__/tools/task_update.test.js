@@ -10,7 +10,8 @@ import { spawnSync } from "node:child_process"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { factoryStateRoot } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
+import { mkTempDeskRoot, readCurrentTask as readFront } from "./_helpers.js"
 
 function initGit(root) {
   const run = (args) => {
@@ -886,7 +887,7 @@ test("the packet carries the card title and the evidence ref and nothing from th
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "packet-clean", frontmatter: { status: "done" }, evidence: PR_EVIDENCE, note: SENTINEL } })
   assert.ok(!JSON.stringify(result).includes(SENTINEL))
   assert.equal(result.signoff_packet[0], "Asked: Plain title")
-  const card = await fs.readFile(path.join(root, "t", "packet-clean", "task.md"), "utf8")
+  const card = await fs.readFile(path.join(root, result.path), "utf8")
   assert.ok(!/^(?:signoff|flow):[\s\S]*SENTINEL/mu.test(card.split("\n---")[0]), "nothing from the body is in the record")
 })
 
@@ -946,14 +947,15 @@ test("a status change that is not into done writes no signoff and no packet, and
   assert.deepEqual(data.flow, { ...before, reached: "processing", rev: before.rev + 1 })
 })
 
-test("re-saving an already done card delivers nothing again and keeps the record through a task_update rewrite", async () => {
+test("archived ordinary rewrites refuse; status-only retry preserves the delivery record", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "resave", title: "T" } })
   const file = path.join(root, "t", "resave", "task.md")
   await task_update({ deskRoot: root, input: { track: "t", slug: "resave", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
   const first = (await readFront(file)).data
-  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "resave", note: "later note", frontmatter: { category: "general" } } })
-  assert.equal(result.signoff, undefined)
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "resave", note: "later note", frontmatter: { category: "general" } } }), /not reapplied/)
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "resave", status: "done" } })
+  assert.equal(result.archive_phase, "already_archived_read_only")
   const { data } = await readFront(file)
   assert.deepEqual(data.signoff, first.signoff)
   assert.deepEqual(data.flow, first.flow)
@@ -1033,6 +1035,7 @@ test("reopening a done task needs a reason and removes its signoff", async () =>
   const file = path.join(root, "t", "reopen", "task.md")
   await task_update({ deskRoot: root, input: { track: "t", slug: "reopen", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
   assert.equal((await readFront(file)).data.signoff.state, "delivered_unsigned")
+  await task_move({ deskRoot: root, input: { track: "t", slug: "reopen", unarchive: true } })
   const before = await fs.readFile(file, "utf8")
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "reopen", frontmatter: { status: "processing" } }, finalize: async () => {} }), /moving this task from done back to processing is a return and needs a reason/)
   assert.equal(await fs.readFile(file, "utf8"), before)
@@ -1148,6 +1151,7 @@ test("done to cancelled is a return and asks the factory once, through the termi
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", title: "T" } })
   await task_update({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
+  await task_move({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", unarchive: true } })
   const spy = finalizeSpy()
   await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", frontmatter: { status: "cancelled" } }, finalize: spy.finalize }), /from done back to cancelled is a return and needs a reason/)
   const result = await task_update({ deskRoot: root, input: { track: "t", slug: "done-to-cancelled", frontmatter: { status: "cancelled" }, return_reason: "changed_ask" }, finalize: spy.finalize })
@@ -1199,9 +1203,8 @@ test("a commit that fails after a delivery leaves the status and the record writ
   initGit(root)
   await task_create({ deskRoot: root, input: { track: "t", slug: "commit-fails", title: "T" }, schedulePush: () => {} })
   const spawnGit = (cmd, args, opts) => (args.includes("commit") ? { status: 1, stdout: "", stderr: "commit boom" } : spawnSync(cmd, args, opts))
-  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "commit-fails", frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, spawnGit, schedulePush: () => {} })
-  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
-  assert.equal(result.signoff, "delivered_unsigned")
+  await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: "commit-fails", frontmatter: { status: "done" }, evidence: PR_EVIDENCE }, spawnGit, schedulePush: () => {} }),
+    (error) => error.phase === "relocated_uncommitted" && /commit boom/.test(error.message))
   const { data } = await readFront(path.join(root, "t", "commit-fails", "task.md"))
   assert.equal(data.status, "done")
   assert.equal(data.signoff.state, "delivered_unsigned")
@@ -1213,6 +1216,7 @@ test("every side state and back is refused without a reason after review, and on
   for (const side of ["collaborating", "blocked", "cancelled"]) {
     const file = await validatingCard(root, `side-${side}`)
     await task_update({ deskRoot: root, input: { track: "t", slug: `side-${side}`, frontmatter: { status: side } }, finalize: async () => {} })
+    if (side === "cancelled") await task_move({ deskRoot: root, input: { track: "t", slug: `side-${side}`, unarchive: true } })
     const before = await fs.readFile(file, "utf8")
     await assert.rejects(task_update({ deskRoot: root, input: { track: "t", slug: `side-${side}`, frontmatter: { status: "processing" } }, finalize: async () => {} }), /needs a reason/)
     assert.equal(await fs.readFile(file, "utf8"), before)
@@ -1280,13 +1284,14 @@ async function withUnresolvableJob(run) {
   }
 }
 
-test("a delivery whose job identity cannot be resolved still succeeds, and both requests log their own deferred message", async (t) => {
+test("a delivery whose job identity cannot be resolved retains delivery and reports the deferred sync phase", async (t) => {
   await withUnresolvableJob(async ({ root, env }) => {
     await task_create({ deskRoot: root, input: { track: "t", slug: "no-job", title: "Unique title no-job" } })
     const messages = []
     t.mock.method(console, "error", (message) => messages.push(message))
-    const result = await task_update({ deskRoot: root, env, input: { track: "t", slug: "no-job", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } })
-    assert.equal(result.status, "updated")
+    await assert.rejects(task_update({ deskRoot: root, env, input: { track: "t", slug: "no-job", frontmatter: { status: "done" }, evidence: PR_EVIDENCE } }),
+      (error) => error.path === "t/_archive/no-job/task.md" && /sync deferred/.test(error.message))
+    assert.equal((await readFront(path.join(root, "t", "_archive", "no-job", "task.md"))).data.status, "done")
     assert.deepEqual(messages, ["desk_factory: finalize_request_deferred", "desk_factory: evaluation_request_deferred"])
     assert.ok(!messages.join("\n").includes("SENTINEL"))
   })

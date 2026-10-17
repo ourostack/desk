@@ -12,7 +12,7 @@ import { task_create, task_update, task_archive } from "../../../../../plugins/d
 import { assertCodeRepoEvidence } from "../../../../../plugins/desk/mcp/src/tools/done-evidence.js"
 import { assertLocalOnlyUnchanged, isLocalOnlyClone, recordLocalOnlyOnCards, repoKey, withLocalOnlyRecorded } from "../../../../../plugins/desk/mcp/src/tools/local-only.js"
 import { mkTempRoot } from "../_temp_roots.js"
-import { mkTempDeskRoot, readFront } from "./_helpers.js"
+import { mkTempDeskRoot, readCurrentTask as readFront } from "./_helpers.js"
 
 function git(dir, ...args) {
   const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" })

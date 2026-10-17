@@ -32,6 +32,7 @@ import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
 import { resolveTaskHandle, resolveTrackHandle } from "../desk/handles.js"
+import { withDeskMutation } from "../util/desk-mutation.js"
 import {
   validateName,
   validateTrackName,
@@ -415,7 +416,10 @@ function trueOrAbsent(tool, field, value) {
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function task_move({ deskRoot, input, person = null, readiness, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function task_move(options) {
+  return withDeskMutation(options.deskRoot, () => moveTask(options))
+}
+async function moveTask({ deskRoot, input, person = null, readiness, statusContext = {}, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = taskMoveSource(deskRoot, person, values)
   rejectTraversalShapedInput("task_move", "track", track)
@@ -670,7 +674,10 @@ export async function task_move({ deskRoot, input, person = null, readiness, sta
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function track_rename({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
+export async function track_rename(options) {
+  return withDeskMutation(options.deskRoot, () => renameTrack(options))
+}
+async function renameTrack({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (!Object.hasOwn(values, "to")) {
     throw new Error("track_rename: `to` is required, with `track` or `handle`")

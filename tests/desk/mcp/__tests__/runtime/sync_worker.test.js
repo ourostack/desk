@@ -91,7 +91,11 @@ async function mkOriginWithClone() {
 }
 
 function originCommitCount(origin) {
-  return git(origin, ["log", "--oneline", "main"]).trim().split("\n").filter(Boolean).length
+  // Select the exact owned bare fixture explicitly; do not weaken the
+  // inherited safe.bareRepository policy to read it through an implicit cwd.
+  const result = spawnSync("git", ["--git-dir", origin, "log", "--oneline", "main"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim().split("\n").filter(Boolean).length
 }
 
 function writeLockFile(root, env, record) {

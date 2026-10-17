@@ -18,6 +18,8 @@ import { factoryStateRoot, listFinalizeRequests, readMachineSecret, setConsent }
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { jobReportUrl } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
+import { readCurrentTask } from "../tools/_helpers.js"
+import { task_move } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 
 const OTHER = "example-org/team-factory"
 const REMOTE = "https://github.com/example-user/example-desk.git"
@@ -39,7 +41,7 @@ async function hostEnv(base, env) {
 }
 
 async function card(desk, relative) {
-  return matter(await fs.readFile(path.join(desk, relative), "utf8")).data
+  return (await readCurrentTask(path.join(desk, relative))).data
 }
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "pipe" })
@@ -156,7 +158,7 @@ test("unreadable factory state never fails done and writes no link", () => scrat
   await fs.mkdir(env.XDG_STATE_HOME, { recursive: true })
   await fs.writeFile(path.join(env.XDG_STATE_HOME, "ouroboros-skills"), "unsafe")
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  assert.equal((await done(desk, env)).status, "updated")
+  await assert.rejects(done(desk, env), (error) => error.path === "track/_archive/finished-work/task.md")
   assert.equal(Object.hasOwn(await card(desk, "track/finished-work/task.md"), "factory_report"), false)
 }))
 
@@ -164,9 +166,8 @@ test("a task whose job has no identity gets no link and records why, and done st
   const env = await hostEnv(base, scratchEnv)
   await contribute(env)
   await task_create({ deskRoot: desk, input: { track: "_scratch", slug: "finished-work", title: "fixture" } })
-  const result = await task_update({ deskRoot: desk, env, input: { track: "_scratch", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
-  assert.equal(result.status, "updated")
-  assert.equal(result.factory_report_unavailable, "job_identity_unavailable")
+  await assert.rejects(task_update({ deskRoot: desk, env, input: { track: "_scratch", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } }),
+    (error) => error.path === "_scratch/_archive/finished-work/task.md")
   const data = await card(desk, "_scratch/finished-work/task.md")
   assert.equal(Object.hasOwn(data, "factory_report"), false)
   assert.equal(data.factory_report_unavailable, "job_identity_unavailable")
@@ -182,7 +183,7 @@ test("a desk not known private gets no link, never any job ID, and its card and 
   const data = await card(desk, "track/finished-work/task.md")
   assert.equal(Object.hasOwn(data, "factory_report"), false)
   assert.equal(data.factory_report_unavailable, "desk_not_private")
-  assert.doesNotMatch(await fs.readFile(path.join(desk, "track/finished-work/task.md"), "utf8"), /[0-9a-f]{32}/u, "the card names no job ID at all")
+  assert.doesNotMatch(await fs.readFile(path.join(desk, result.path), "utf8"), /[0-9a-f]{32}/u, "the card names no job ID at all")
   // task_archive's own bump to done records the reason the same way.
   await task_create({ deskRoot: desk, input: { track: "track", slug: "archived-work", title: "fixture", status: "processing" } })
   const archived = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "archived-work", evidence: DONE_EVIDENCE } })
@@ -200,12 +201,12 @@ test("a missing link is filled on a later update once it can be named, and the r
   assert.equal((await card(desk, file)).factory_report_unavailable, "visibility_not_known")
 
   await visibility(env, "public")
-  const still = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", body_append: "A later note." } })
+  const still = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
   assert.equal(still.factory_report_unavailable, "desk_not_private", "the reason follows the newest answer")
   assert.equal((await card(desk, file)).factory_report_unavailable, "desk_not_private")
 
   await visibility(env, "private")
-  const filled = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", body_append: "Another note." } })
+  const filled = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
   assert.equal(filled.factory_report, expectedLink(), "the result says the link was filled in")
   assert.equal(Object.hasOwn(filled, "factory_report_unavailable"), false)
   const data = await card(desk, file)
@@ -214,7 +215,7 @@ test("a missing link is filled on a later update once it can be named, and the r
 
   // Once linked, a later edit asks nothing again.
   await visibility(env, "public")
-  const later = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", body_append: "A third note." } })
+  const later = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
   assert.equal(Object.hasOwn(later, "factory_report"), false)
   assert.equal((await card(desk, file)).factory_report, expectedLink())
 }))
@@ -275,6 +276,7 @@ test("archiving a returned delivery as cancelled still reports an existing facto
   await githubDesk(base, desk, env, null)
   await task_create({ deskRoot: desk, input: { track: "track", slug, title: "fixture", status: "processing" } })
   await done(desk, env, slug)
+  await task_move({ deskRoot: desk, input: { track: "track", slug, unarchive: true } })
   await task_update({ deskRoot: desk, env, input: { track: "track", slug, status: "processing", return_reason: "agent_error" } })
   await visibility(env, "private")
   const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug, outcome: "cancelled" } })

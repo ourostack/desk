@@ -115,7 +115,8 @@ for (const alias of ["none", "state", "desk", "equal"]) {
     await assert.rejects(fs.stat(path.join(root, "markers")), { code: "ENOENT" })
     await assert.rejects(fs.stat(path.join(root, "deriving")), { code: "ENOENT" })
     await assert.rejects(fs.stat(path.join(root, "finalize")), { code: "ENOENT" })
-    // Simulate a legacy root already present; lifecycle success must survive its refusal.
+    // Simulate a legacy root already present; canonical delivery survives,
+    // while the API truthfully reports the deferred terminal-sync obligation.
     await fs.mkdir(root, { recursive: true })
     await task_create({ deskRoot: desk, input: { track: "track", slug: "completed-work", title: "fixture" } })
     const messages = []
@@ -123,7 +124,9 @@ for (const alias of ["none", "state", "desk", "equal"]) {
     // task_update's evidence gate (the invented-completion finding) only fires on
     // the transition into `done`; this fixture carries it so the call still
     // exercises the legacy-root-survival path it's actually testing.
-    assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "completed-work", frontmatter: { status: "done" }, evidence: { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" } } })).status, "updated")
+    await assert.rejects(task_update({ deskRoot: desk, env, input: { track: "track", slug: "completed-work", frontmatter: { status: "done" }, evidence: { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" } } }),
+      (error) => error.path === "track/_archive/completed-work/task.md" && /sync deferred/.test(error.message))
+    assert.match(await fs.readFile(path.join(desk, "track/_archive/completed-work/task.md"), "utf8"), /^status: done$/mu)
     assert.deepEqual(messages, ["desk_factory: finalize_request_deferred", "desk_factory: evaluation_request_deferred"])
     await assert.rejects(fs.stat(path.join(root, "finalize")), { code: "ENOENT" })
   }))

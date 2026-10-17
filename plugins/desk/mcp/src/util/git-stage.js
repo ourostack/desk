@@ -129,16 +129,24 @@ export function indexEntries(root, relPaths, spawnGit) {
 export function commitIndexPaths(root, relPaths, entries, message, spawnGit, stateBranch) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
+  // ls-files returns paths relative to -C root, but --index-info consumes
+  // repository-root paths even when invoked below that root.
+  const prefixRead = run(spawnGit, root, ["rev-parse", "--show-prefix"])
+  if (prefixRead.status !== 0) return { ok: false, stderr: prefixRead.stderr }
+  const prefix = prefixRead.stdout.replace(/\r?\n$/u, "")
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-tidy-index-"))
   try {
     const env = { ...process.env, [TOOL_COMMIT_ENV]: "1", GIT_INDEX_FILE: path.join(dir, "index") }
-    const hasHead = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"]).status === 0
+    const headRead = run(spawnGit, root, ["rev-parse", "--verify", "-q", "HEAD"])
+    const hasHead = headRead.status === 0
+    const hashLength = entries[0]?.sha.length ?? headRead.stdout?.trim().length
+    const zero = "0".repeat(hashLength === 64 ? 64 : 40)
     const seed = run(spawnGit, root, hasHead ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], { env })
     if (seed.status !== 0) return { ok: false, stderr: seed.stderr }
     const held = new Set(entries.map((entry) => entry.path))
     const lines = [
-      ...entries.map((entry) => `${entry.mode} ${entry.sha}\t${entry.path}\0`),
-      ...relPaths.filter((p) => !held.has(p)).map((p) => `0 ${"0".repeat(40)}\t${p}\0`),
+      ...entries.map((entry) => `${entry.mode} ${entry.sha}\t${prefix}${entry.path}\0`),
+      ...relPaths.filter((p) => !held.has(p)).map((p) => `0 ${zero}\t${prefix}${p}\0`),
     ]
     const update = run(spawnGit, root, ["update-index", "-z", "--index-info"], { env, input: lines.join("") })
     if (update.status !== 0) return { ok: false, stderr: update.stderr }

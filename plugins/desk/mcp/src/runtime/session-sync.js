@@ -34,6 +34,7 @@ import { formatDeskProblem } from "./index-drift.js"
 import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, recordPullOutcome } from "./sync-worker.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
+import { withDeskMutation } from "../util/desk-mutation.js"
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_QUARANTINE_SUFFIX = 1000
@@ -318,44 +319,47 @@ async function runSync({
 
   if (remaining() <= 0) return deadlineExceeded([])
 
-  const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout())
-  const first = pull(root, spawnGit, budgetedTimeout())
-  if (first.status === 0) {
-    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst)
-    if (!conflicted) return { state: "synced" }
-    abortRebase(root, spawnGit, budgetedTimeout())
-    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict", conflicted: paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+  try {
+    return await withDeskMutation(root, async (assertHeld) => {
+      await assertHeld()
+      const stashBeforeFirst = stashCount(root, spawnGit, budgetedTimeout())
+      const first = pull(root, spawnGit, budgetedTimeout())
+      if (first.status === 0) {
+        const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst)
+        if (!conflicted) return { state: "synced" }
+        abortRebase(root, spawnGit, budgetedTimeout())
+        return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict", conflicted: paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+      }
+      // Read conflicts before abort clears a genuine mid-rebase conflict.
+      const firstConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
+      abortRebase(root, spawnGit, budgetedTimeout())
+      if (remaining() <= 0) return deadlineExceeded(firstConflicted)
+
+      const firstCause = classifyPullFailure({ stderr: first.stderr, conflicted: firstConflicted, timedOut: first.error?.code === "ETIMEDOUT" || first.signal === "SIGTERM" })
+      const stray = firstCause === "unreachable" || firstCause === "auth_failed" ? [] : untrackedPaths(root, spawnGit, budgetedTimeout())
+      if (stray.length === 0) {
+        return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+      }
+      const quarantinedPaths = await quarantine(root, stray)
+      if (remaining() <= 0) return deadlineExceeded(firstConflicted, quarantinedPaths)
+      await assertHeld()
+      const stashBeforeSecond = stashCount(root, spawnGit, budgetedTimeout())
+      const second = pull(root, spawnGit, budgetedTimeout())
+      if (second.status === 0) {
+        const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond)
+        if (!conflicted) return { state: "quarantined", quarantinedPaths }
+        abortRebase(root, spawnGit, budgetedTimeout())
+        return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict_after_quarantine", conflicted: paths, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+      }
+      const secondConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
+      abortRebase(root, spawnGit, budgetedTimeout())
+      return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: secondConflicted, quarantinedPaths, failed: second, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
+    })
+  } catch (error) {
+    if (error.code !== "desk_mutation_busy") throw error
+    return { state: "unresolved", reason: "canonical_mutation_busy", conflicted: [],
+      diagnostic: "Desk sync deferred: a canonical writer owns the exact mutation claim. Retry sync after that operation finishes." }
   }
-  // Captured before the abort below, which is what actually clears a genuine
-  // mid-rebase conflict: reading it after cleanup would always see nothing.
-  const firstConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
-  abortRebase(root, spawnGit, budgetedTimeout())
-
-  if (remaining() <= 0) return deadlineExceeded(firstConflicted)
-
-  // A remote that cannot be reached, or that refuses our credentials, is not a dirty index: moving
-  // stray files aside and pulling again would change nothing and only disturb the desk.
-  const firstCause = classifyPullFailure({ stderr: first.stderr, conflicted: firstConflicted, timedOut: first.error?.code === "ETIMEDOUT" || first.signal === "SIGTERM" })
-  const stray = firstCause === "unreachable" || firstCause === "auth_failed" ? [] : untrackedPaths(root, spawnGit, budgetedTimeout())
-  if (stray.length === 0) {
-    return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
-  }
-
-  const quarantinedPaths = await quarantine(root, stray)
-  if (remaining() <= 0) return deadlineExceeded(firstConflicted, quarantinedPaths)
-
-  const stashBeforeSecond = stashCount(root, spawnGit, budgetedTimeout())
-  const second = pull(root, spawnGit, budgetedTimeout())
-  if (second.status === 0) {
-    const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond)
-    if (!conflicted) return { state: "quarantined", quarantinedPaths }
-    abortRebase(root, spawnGit, budgetedTimeout())
-    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict_after_quarantine", conflicted: paths, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
-  }
-
-  const secondConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
-  abortRebase(root, spawnGit, budgetedTimeout())
-  return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: secondConflicted, quarantinedPaths, failed: second, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
 }
 
 // ---------------------------------------------------------------------------

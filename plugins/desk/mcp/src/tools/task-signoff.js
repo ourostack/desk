@@ -18,6 +18,7 @@ import { recordCanonicalChanges } from "../readiness/journal.js"
 import { findCard } from "./task-focus.js"
 import { refreshSignoffStatus } from "../desk/unsigned-deliveries.js"
 import { task_move } from "./move.js"
+import { withDeskMutation } from "../util/desk-mutation.js"
 import { DESK_COMMIT_NOTE, DESK_COMMIT_HASH_NOTE, relPath, stagingAllowed, stageAndCommitCard, headSha, updateTrackRow, taskJobOrNull, requestTaskFinalize } from "./task.js"
 
 export const TASK_SIGNOFF_FIELDS = ["track", "slug", "outcome", "reason", "return_reason"]
@@ -65,7 +66,10 @@ function sentence({ slug, outcome, reason, changed }) {
  * Returns: { status: "signed" | "unchanged", path, signoff, say, report_as?, report_note?, commit?, desk_commit?, desk_pushed?, desk_note? }.
  * `say` is the sentence the agent includes in its reply. Every refusal of the call writes nothing.
  */
-export async function taskSignoff({
+export async function taskSignoff(options) {
+  return withDeskMutation(options.deskRoot, () => signoffTask(options))
+}
+async function signoffTask({
   deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync,
   schedulePush = schedulePushDefault, now = Date.now, finalize = requestTaskFinalize, refreshSignoff = refreshSignoffStatus,
 }) {
