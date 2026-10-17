@@ -2,16 +2,16 @@
 // normal sync. Person prefixes deliberately do not partition this claim:
 // both people can touch the same track/index. No stale-owner takeover.
 import { AsyncLocalStorage } from "node:async_hooks"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { readOwnProcessStart } from "../readiness/process-start.js"
+import { readOwnProcessStart, readProcessStart } from "../readiness/process-start.js"
 
 const context = new AsyncLocalStorage()
 
 export class DeskMutationCleanupError extends Error {
   constructor(cause, result) {
-    super(`Desk mutation claim cleanup failed; claim retained for owner reconciliation: ${cause.message}`, { cause })
+    super(`Desk mutation claim cleanup failed; claim retained (no automatic recovery): ${cause.message}`, { cause })
     this.result = result
   }
   toJSON() {
@@ -26,7 +26,7 @@ export async function assertDeskMutationHeld() {
   await held.assertHeld()
 }
 
-export async function withDeskMutation(deskRoot, action) {
+async function mutationLocation(deskRoot) {
   const root = await fs.realpath(deskRoot)
   let directory = root
   // A bound person/subdirectory still shares the worktree's index and HEAD.
@@ -49,6 +49,36 @@ export async function withDeskMutation(deskRoot, action) {
     if (ancestor === path.dirname(ancestor)) break
   }
   const file = path.join(directory, ".desk-mutation.lock")
+  return { root, file }
+}
+
+// Read-only diagnosis, NOT permission to remove a claim. Even positive owner
+// termination cannot prove closure of orphaned Git/hook children.
+export async function inspectDeskMutation(deskRoot) {
+  const { file } = await mutationLocation(deskRoot)
+  try {
+    const before = await fs.lstat(file, { bigint: true })
+    if (!before.isFile() || before.nlink !== 1n || before.size > 16_384n) return { state: "unknown", file }
+    const text = await fs.readFile(file, "utf8")
+    const after = await fs.lstat(file, { bigint: true })
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
+        before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) return { state: "unknown", file }
+    const record = JSON.parse(text)
+    if (!Number.isSafeInteger(record.pid) || record.pid <= 0 || typeof record.start !== "string" || !record.start ||
+        typeof record.token !== "string" || !record.token) return { state: "unknown", file }
+    const witness = { file, file_id: `${before.dev}:${before.ino}`, sha256: createHash("sha256").update(text).digest("hex") }
+    try { process.kill(record.pid, 0) } catch (error) {
+      return { ...witness, state: error.code === "ESRCH" ? "ended_children_unqualified" : "unknown" }
+    }
+    const start = record.pid === process.pid ? await readOwnProcessStart() : await readProcessStart(record.pid)
+    return { ...witness, state: !start ? "unknown" : start === record.start ? "live" : "pid_reused" }
+  } catch (error) {
+    return { state: error.code === "ENOENT" ? "absent" : "unknown", file }
+  }
+}
+
+export async function withDeskMutation(deskRoot, action) {
+  const { root, file } = await mutationLocation(deskRoot)
   const inherited = context.getStore()
   if (inherited?.file === file && inherited.active) {
     await inherited.assertHeld()
@@ -62,8 +92,10 @@ export async function withDeskMutation(deskRoot, action) {
     handle = await fs.open(file, "wx", 0o600)
   } catch (error) {
     if (error.code !== "EEXIST") throw error
-    const busy = new Error("Desk mutation busy: an exact owner claim exists; no mutation was made. Unknown or stale claims require owner reconciliation.")
+    const owner = await inspectDeskMutation(deskRoot)
+    const busy = new Error(`Desk mutation busy: an exact owner claim exists (${owner.state}); no mutation was made. No PID/age-based recovery is supported: owner termination does not prove child/Git closure.`)
     busy.code = "desk_mutation_busy"
+    busy.owner_state = owner.state
     throw busy
   }
   const identity = await handle.stat({ bigint: true })

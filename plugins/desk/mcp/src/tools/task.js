@@ -1158,7 +1158,7 @@ async function updateTask({ deskRoot, input, person = null, readiness, statusCon
       if (error.code !== "ENOENT") throw error
     }
     const plan = await prepareTerminalArchive({
-      root: deskRoot, srcDir, filePath, archiveDir, sourceBytes, spawnGit, trackFile, nextTrack,
+      root: deskRoot, boundary: personPrefix(deskRoot, person), srcDir, filePath, archiveDir, sourceBytes, spawnGit, trackFile, nextTrack,
       validateSource: () => assertArchiveSourceIsRelocationSafe({ srcDir, srcFile: filePath, archiveDir }),
     })
     const identity = await taskJobOrNull({ deskRoot, person, track, slug })
@@ -1468,7 +1468,7 @@ async function archiveTask({ deskRoot, input, person = null, readiness, statusCo
   })
 
   // Move the dir. fs.rename is atomic on the same filesystem.
-  await relocateTaskDirectory({ srcDir, archiveDir })
+  await relocateTaskDirectory({ srcDir, archiveDir, boundary: personPrefix(deskRoot, person) })
   // A directory move invalidates both subtrees, including companion documents.
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
     { path: relPath(deskRoot, srcDir), operation: "delete" },

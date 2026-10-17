@@ -502,61 +502,81 @@ const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve,
  * contention), skip entirely when there is no remote or no upstream (never
  * an error — controller ruling 2), otherwise debounce, then push (with the
  * one retry) in a loop that keeps re-checking what is ahead until nothing
- * is, so the lock holder never releases while a commit is left unpushed.
- * Never throws — including when the lock is refused under a node:test run
+ * is. Live canonical contention is retried for a bounded interval; a timeout
+ * or unqualified owner retains `pending_push` in the existing sync status.
+ * Unexpected I/O/ownership failures reject rather than acknowledge a push.
+ * A lock refused under a node:test run returns
  * (`result: "test_isolation_refused"`, logged to `stderr` rather than left
  * silent), which `runSyncPushCli`/`sync-push.js` still resolve to exit code
- * 0 for, the same as `"busy"` or `"skipped"`. `clock`, `spawnGit`,
+ * 0 for, the same as `"busy"`, `"pending"` or `"skipped"`. `clock`, `spawnGit`,
  * `fileProblem` and `stderr` are test seams.
  */
 export async function runPushWorker({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
-  stderr = process.stderr,
+  stderr = process.stderr, mutationWaitMs = 30_000,
 }) {
-  const lock = await acquireSyncLock({ root, env })
-  if (lock?.refused) {
-    // Not silent, even though the CLI's own stdio is ignored (`defaultSpawnWorker`): the reason still lands
-    // wherever this process's stderr goes, for anyone inspecting it directly (a test, a manual `node sync-push.js`
-    // run). A session launched under any `node --test` inherits NODE_TEST_CONTEXT, so this is the ordinary
-    // shape of "this desk root is a node:test child process", not a defect -- treated as "could not run this
-    // cycle", never a crash (Review Focus, `sync_worker.test.js`).
-    stderr.write(`Desk sync worker: refused the real state folder under what looks like a node:test run (${DESK_TEST_REAL_STATE}); not pushing this cycle.\n`)
-    return { result: "test_isolation_refused" }
-  }
-  if (lock === null) return { result: "busy" }
-  try {
-    if (!canPush(root, spawnGit)) return { result: "skipped" }
-    await clock.sleep(debounceMs)
-    return await withDeskMutation(root, async (assertHeld) => {
-      let pushed = false
-      for (;;) {
-        await assertHeld()
-        const counts = aheadBehindCounts({ root, spawnGit })
-        if (counts === null || counts.ahead <= 0) {
-          const patch = { blocked: false, reason: null, paths: [] }
-          if (pushed) {
-            patch.last_push_at = new Date().toISOString()
-            patch.last_pull = null
-          }
-          updateSyncStatus(root, env, patch)
-          return { result: "ok" }
-        }
-        const attempt = pushWithRetry(root, spawnGit)
-        if (attempt.result === "ok") {
-          pushed = true
-          continue
-        }
-        updateSyncStatus(root, env, { blocked: true, reason: attempt.reason, paths: attempt.paths, at: new Date().toISOString() })
-        fileProblem({ root, env, reason: attempt.reason, host: hostFromEnv(env) })
-        return { result: "blocked", reason: attempt.reason }
+  const deadline = performance.now() + Math.max(0, mutationWaitMs)
+  const pushCurrent = async (assertHeld) => {
+    let pushed = false
+    for (;;) {
+      await assertHeld()
+      const counts = aheadBehindCounts({ root, spawnGit })
+      if (counts === null) {
+        updateSyncStatus(root, env, { blocked: true, reason: "push_counts_unavailable", paths: [], pending_push: true })
+        return { result: "pending", reason: "push_counts_unavailable" }
       }
-    })
-  } catch (error) {
-    if (error.code !== "desk_mutation_busy") throw error
-    updateSyncStatus(root, env, { blocked: true, reason: "canonical_mutation_busy", paths: [] })
-    return { result: "busy", reason: "canonical_mutation_busy" }
-  } finally {
-    lock.release()
+      if (counts.ahead <= 0) {
+        const patch = { blocked: false, reason: null, paths: [], pending_push: false }
+        if (pushed) {
+          patch.last_push_at = new Date().toISOString()
+          patch.last_pull = null
+        }
+        updateSyncStatus(root, env, patch)
+        return { result: "ok" }
+      }
+      const attempt = pushWithRetry(root, spawnGit)
+      if (attempt.result === "ok") {
+        pushed = true
+        continue
+      }
+      updateSyncStatus(root, env, { blocked: true, reason: attempt.reason, paths: attempt.paths, pending_push: true, at: new Date().toISOString() })
+      fileProblem({ root, env, reason: attempt.reason, host: hostFromEnv(env) })
+      return { result: "blocked", reason: attempt.reason }
+    }
+  }
+  for (;;) {
+    const lock = await acquireSyncLock({ root, env })
+    if (lock?.refused) {
+      stderr.write(`Desk sync worker: refused the real state folder under what looks like a node:test run (${DESK_TEST_REAL_STATE}); not pushing this cycle.\n`)
+      return { result: "test_isolation_refused" }
+    }
+    if (lock === null) return { result: "busy" }
+    let outcome
+    try {
+      if (!canPush(root, spawnGit)) return { result: "skipped" }
+      await clock.sleep(debounceMs)
+      for (;;) {
+        try {
+          outcome = await withDeskMutation(root, pushCurrent)
+          break
+        } catch (error) {
+          if (error.code !== "desk_mutation_busy") throw error
+          const qualified = error.owner_state === "live" || error.owner_state === "absent"
+          const reason = qualified ? "canonical_mutation_busy" : "mutation_owner_unqualified"
+          updateSyncStatus(root, env, { blocked: true, reason, paths: [], pending_push: true })
+          const remaining = deadline - performance.now()
+          if (!qualified || remaining <= 0) return { result: "pending", reason }
+          await clock.sleep(Math.min(100, remaining))
+        }
+      }
+    } finally {
+      lock.release()
+    }
+    // A canonical writer can commit after the final claim release but before
+    // sync-lock release. Its schedule records pending BEFORE launching another
+    // worker, so coalescing cannot erase that last handoff.
+    if (outcome.result !== "ok" || !readSyncStatus({ root, env })?.pending_push) return outcome
+    debounceMs = 0
   }
 }
 
@@ -593,10 +613,18 @@ export function defaultSpawnWorker({ root, env, debounceMs, spawnImpl = spawn })
  * Focus, pinned by `sync_worker.test.js`). `spawnWorker` is a test seam.
  */
 export function schedulePush({ root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnWorker = defaultSpawnWorker }) {
+  let pendingRecorded = false
+  let pendingError
+  try {
+    pendingRecorded = updateSyncStatus(root, env, { pending_push: true }) !== null
+  } catch (error) {
+    pendingError = error.message
+  }
   try {
     spawnWorker({ root, env, debounceMs })
-  } catch {
-    // Scheduling a push must never surface as a failure of the write tool that asked for one.
+    return { scheduled: true, pending_recorded: pendingRecorded, ...(pendingError ? { pending_error: pendingError } : {}) }
+  } catch (error) {
+    return { scheduled: false, pending_recorded: pendingRecorded, error: error.message, ...(pendingError ? { pending_error: pendingError } : {}) }
   }
 }
 

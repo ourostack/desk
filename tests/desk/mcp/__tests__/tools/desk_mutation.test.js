@@ -89,9 +89,10 @@ test("normal sync cannot push or rebase while a canonical writer owns the claim"
   try {
     const result = await runPushWorker({
       root, env: { ...process.env, XDG_STATE_HOME: path.join(root, "owned-state") },
-      spawnGit, clock: { sleep: async () => {} }, debounceMs: 0,
+      spawnGit, clock: { sleep: async () => {} }, debounceMs: 0, mutationWaitMs: 0,
     })
-    assert.equal(result.result, "busy")
+    assert.equal(result.result, "pending")
+    assert.equal(result.reason, "canonical_mutation_busy")
     assert.equal(calls.includes("push"), false)
     assert.equal(calls.includes("pull"), false)
     const startup = await syncWorkspace({
