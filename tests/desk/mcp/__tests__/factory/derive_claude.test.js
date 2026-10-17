@@ -365,6 +365,25 @@ test("an untimed stopped-child resume cannot stretch the old turn overnight or r
   assert.deepEqual(validateLocalFacts(facts).errors, [])
 })
 
+for (const knownStart of [false, true]) {
+  test(`untimed child boundaries ${knownStart ? "retain only the known prompt instant when the reply is undated" : "never invent an initial execution start"}`, async () => {
+    const prompt = { type: "user", message: { content: SENTINEL } }
+    const resume = { ...prompt, isMeta: true, origin: { kind: "coordinator" } }
+    const child = [
+      ...(knownStart ? [{ ...prompt, timestamp: "2026-09-25T08:00:01.000Z" },
+        { type: "assistant", message: { id: "undated", model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } }] : []),
+      resume,
+      { type: "assistant", timestamp: "2026-09-26T08:00:02.000Z", message: { id: "next-day", model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } },
+    ]
+    const { facts } = await deriveLines([{ ...prompt, version: "2.1.285", timestamp: "2026-09-25T08:00:00.000Z" }], "complete", { "agent-undated-boundaries": child })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), knownStart ? [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:01.000Z" },
+    ] : [])
+    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "source_unreadable"))
+    assert.deepEqual(validateLocalFacts(facts).errors, [])
+  })
+}
+
 test("isMeta, isCompactSummary, promptSource:system/origin:task-notification, and a non-human origin.kind are all excluded from turns", async () => {
   const { facts } = await deriveFull()
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn" && iv.agent === 0)
