@@ -227,14 +227,14 @@ test("actual transformed backend retains primary C errors before text conversion
   assert.equal(JSON.stringify(result).includes("relatedErrors"), false, "the marker never becomes a public result field");
 });
 
-    function transformedBackend(f, failure) {
+    function transformedBackend(f, failure, options = {}) {
       const core = fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8");
       const begin = core.indexOf("var init_browserBackend = __esm({");
       const source = core.slice(begin, core.indexOf("\n// packages/playwright-core/src/tools/backend/common.ts", begin));
       class Context {
-        constructor() {}
+        constructor() { this.pending = [...(options.pendingErrors || [])]; }
         setRunningTool() {}
-        drainPendingUnhandledRejections() { return []; }
+        drainPendingUnhandledRejections() { return this.pending.splice(0); }
         async dispose() {}
       }
       class Response {
@@ -253,7 +253,7 @@ test("actual transformed backend retains primary C errors before text conversion
     }
 
     function transformedDaemon(f, options = {}) {
-      const { Backend, tools } = transformedBackend(f, options.toolError);
+      const { Backend, tools } = transformedBackend(f, options.toolError, options);
       const source = fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8");
       const daemonStart = source.indexOf("async function startCliDaemonServer(");
       const daemon = source.slice(daemonStart, source.indexOf("\nasync function saveSessionFile(", daemonStart));
@@ -267,7 +267,11 @@ test("actual transformed backend retains primary C errors before text conversion
       const start = vm.runInNewContext(daemon + "\n" + metadata + "\nstartCliDaemonServer", {
         require: name => { assert.equal(name, "./desk-native-error-transport.cjs"); return f.codec; },
         process: f.proc, AbortController, Date,
-        BrowserBackend: class extends Backend { async initialize(info) {
+        BrowserBackend: class extends Backend {
+          constructor(config, ...args) {
+            super(options.independentBackendConfig ? JSON.parse(JSON.stringify(config)) : config, ...args);
+          }
+          async initialize(info) {
           if (options.initializeError) throw options.initializeError;
           return super.initialize(info);
         } },
@@ -336,6 +340,7 @@ test("actual transformed backend retains primary C errors before text conversion
       const decorate = vm.runInNewContext(source + "\ndecorateProgram3", {
         require: name => name === "./desk-native-error-transport.cjs" ? f.codec : require(name),
         process: f.proc, numberParser: Number, setupExitWatchdog() {}, createClientInfo: () => f.clientInfo,
+        deskNativeConfigPresent: maintainedConfigInterface(f).tools.deskNativeConfigPresent,
         resolveCLIConfigForCLI: async () => { if (phase === "config") throw failure; return f.resolved; },
         guessClientName: () => "owned E4 fixture",
         createBrowserWithInfo: async () => {
@@ -372,7 +377,10 @@ test("actual transformed backend retains primary C errors before text conversion
         const region = sessionSource.slice(begin, sessionSource.indexOf("\n  async _stopDaemon()", begin));
         const Session = vm.runInNewContext("class Session {\n" + region + "\n}; Session", {
           process: Object.assign(signals, { execPath: process.execPath, cwd: () => f.root }),
-          require: name => { assert.equal(name, "../../desk-native-error-transport.cjs"); return f.codec; },
+          require: name => {
+            if (name === "../../coreBundle.js") return maintainedConfigInterface(f);
+            assert.equal(name, "../../desk-native-error-transport.cjs"); return f.codec;
+          },
           import_fs: { default: fs }, import_path: { default: path },
           import_package: { libPath: () => path.join(f.lib, "entry/cliDaemon.js") },
           import_registry: { resolveSessionName: value => value },
@@ -495,6 +503,7 @@ test("actual external Session never exposes JSON parser excerpts from a malforme
   const method = source.slice(begin, source.indexOf("\n  async _stopDaemon()", begin));
   let spawns = 0;
   const Session = vm.runInNewContext("class Session {\n" + method + "\n}; Session", {
+    require: name => { assert.equal(name, "../../coreBundle.js"); return maintainedConfigInterface(f); },
     import_fs: { default: fs }, import_child_process: { spawn() { spawns++; throw Error("must not spawn"); } },
   });
   await assert.rejects(Session.startDaemon(f.clientInfo, { config: f.configFile, session: A, browser: "msedge" }), error => {
@@ -1057,7 +1066,10 @@ for (const ready of [false, true]) {
     f.proc.stdout.write = (bytes, callback) => { queueMicrotask(() => child.stdout.emit("data", Buffer.from(bytes))); callback?.(); return true; };
     const Session = vm.runInNewContext("class Session {\n" + method + "\n}; Session", {
       process: Object.assign(signals, { execPath: process.execPath, cwd: () => f.root }),
-      require: name => { assert.equal(name, "../../desk-native-error-transport.cjs"); return f.codec; },
+      require: name => {
+        if (name === "../../coreBundle.js") return maintainedConfigInterface(f);
+        assert.equal(name, "../../desk-native-error-transport.cjs"); return f.codec;
+      },
       import_fs: { default: fs }, import_path: { default: path },
       import_package: { libPath: () => path.join(f.lib, "entry/cliDaemon.js") },
       import_registry: { resolveSessionName: value => value },
@@ -1160,3 +1172,465 @@ test("launch writer validates descriptors before inspecting a caller's discrimin
   assert.equal(gets, 0);
   assert.equal(f.output.length, 0);
 });
+
+test("independently verified equivalent scopes retain source-owned primary and related projections", async t => {
+  const f = await stagedTransport(t), other = f.codec.forDaemon(JSON.parse(JSON.stringify(f.resolved)), A);
+  assert.notEqual(other, f.scope);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.codec.sessionStamp(other))), JSON.parse(JSON.stringify(f.stamp)));
+  const result = {}, primary = await originalCError();
+  f.codec.markResult(result, primary, f.scope);
+  f.codec.markResult(result, { code: "NATIVE_REQUEST_TIMEOUT", resources: { pendingNativeOperation: true } }, f.scope);
+  const original = f.codec.takeResult(result, f.scope);
+  const retained = f.codec.takeResult(result, other);
+  assert.ok(retained, "an independently verified equivalent scope must not flatten the marked result");
+  assert.deepEqual(JSON.parse(JSON.stringify(retained)), JSON.parse(JSON.stringify(original)));
+  const reprojected = f.codec.project(original, other, { stage: "command", requestId: 37 });
+  assert.equal(reprojected.code, "native_discard_incomplete");
+  assert.deepEqual(JSON.parse(JSON.stringify(reprojected.resources)), resources);
+  assert.equal(reprojected.relatedErrors.length, 1);
+  f.codec.markResult(result, primary, other);
+  assert.equal(f.codec.takeResult(result, other).relatedErrors.length, 2);
+});
+
+test("actual daemon serializer retains backend errors across independently resolved equivalent configs", async t => {
+  const f = await stagedTransport(t), daemon = transformedDaemon(f, {
+    toolError: await originalCError(), independentBackendConfig: true,
+  });
+  t.after(() => daemon.close());
+  await daemon.start(A, daemon.browserContext, {}, f.resolved, f.clientInfo, {}, {});
+  const reply = await daemon.request({ id: 37, method: "run", params: { args: {} } });
+  assert.equal("result" in reply, false, "equivalent backend/daemon scopes must use the error arm");
+  const error = f.codec.decodeError(reply.error, { ...f.stamp, stage: "command", requestId: 37 });
+  assert.equal(error.code, "native_discard_incomplete");
+  assert.deepEqual(JSON.parse(JSON.stringify(error.resources)), resources);
+});
+
+test("launch emitter rejects its individually refused protected write even when an earlier write later drains", async t => {
+  let done; const bytes = [];
+  const sink = new Writable({ highWaterMark: 1, write(value, _encoding, callback) {
+    bytes.push(Buffer.from(value)); done = callback;
+  } });
+  const f = await stagedTransport(t, { sink });
+  f.template("desk-extension-credential.cjs").protect(f.proc);
+  assert.equal(sink.write("earlier diagnostic\n"), false);
+  const writing = f.codec.writeLaunch(f.scope, { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null });
+  const observed = writing.then(() => null, error => error);
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    done();
+    const error = await observed;
+    assert.equal(error?.code, "NATIVE_ERROR_TRANSPORT_UNCONFIRMED",
+      "flushing the earlier diagnostic cannot prove acceptance of the refused frame");
+    assert.equal(Buffer.concat(bytes).toString(), "earlier diagnostic\n");
+  } finally { sink.destroy(); }
+});
+
+function maintainedConfigInterface(f, boundary = f.observedFs) {
+  const core = fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8");
+  const region = (start, end) => core.slice(core.indexOf(start), core.indexOf(end, core.indexOf(start)));
+  const loader = region("async function loadConfig(configFile) {", "\nfunction resolveConfigPaths(");
+  const ini = region("function configFromIniFile(filePath) {", "\n// packages/playwright-core/src/tools/mcp/config.ts");
+  const exports = region("var tools_exports = {};", "\nvar init_tools2 = __esm({");
+  return vm.runInNewContext(ini + "\n" + loader + "\n" + exports +
+    "\ninit_configIni(); ({ tools: tools_exports, loadConfig })", {
+      import_fs65: { default: boundary },
+      require: name => name === "fs" ? boundary :
+        require(path.resolve(process.env.DESK_TEST_MAINTAINED_CLI_DIR, "../../utilsBundle.js")),
+      __esm: object => () => Object.values(object)[0](),
+      __toESM: value => ({ default: value }),
+      __export: (target, entries) => {
+        for (const [key, get] of Object.entries(entries))
+          Object.defineProperty(target, key, { get, enumerable: true });
+      },
+    });
+}
+
+function externalSessionBoundary(t, f, options = {}) {
+  const source = options.original ? f.input.sessionSource :
+    fs.readFileSync(path.join(f.lib, "tools/cli-client/session.js"), "utf8");
+  const begin = source.indexOf("  static async startDaemon(");
+  const method = source.slice(begin, source.indexOf("\n  async _stopDaemon()", begin));
+  const signals = new EventEmitter(), descriptors = new Set(), loads = [], children = [];
+  const boundary = Object.create(f.observedFs);
+  boundary.openSync = () => { descriptors.add(91); return 91; }; // original stock log only; native opens through the real credential helper
+  let spawns = 0;
+  const Session = vm.runInNewContext("class Session {\n" + method + "\n}; Session", {
+    process: Object.assign(signals, { execPath: process.execPath, cwd: () => f.root }),
+    import_fs: { default: boundary }, import_path: { default: path },
+    import_package: { libPath: () => path.join(f.lib, "entry/cliDaemon.js") },
+    import_registry: { resolveSessionName: value => value },
+    require: name => {
+      loads.push(name);
+      if (name === "../../coreBundle.js") return maintainedConfigInterface(f, boundary);
+      assert.equal(name, "../../desk-native-error-transport.cjs");
+      return f.codec;
+    },
+    import_child_process: { spawn() {
+      spawns++;
+      const child = new EventEmitter(); child.pid = 125; child.stdout = new EventEmitter();
+      child.stdout.destroy = () => {}; child.unref = () => {};
+      children.push(child);
+      queueMicrotask(() => child.stdout.emit("data", Buffer.from("Daemon listening on owned-stock-socket\n")));
+      return child;
+    } },
+  });
+  const close = () => {
+    for (const child of children) { child.stdout.removeAllListeners(); child.removeAllListeners(); }
+    signals.removeAllListeners(); descriptors.clear();
+  };
+  t.after(close);
+  return { Session, loads, close, get spawns() { return spawns; } };
+}
+
+for (const [name, extension, text] of [
+  ["INI", ".ini", "browser.browserName=chromium\n# deskNativeContext is only a comment\n"],
+  ["non-JSON INI fallback", ".json", "browser.browserName=chromium\nnote=deskNativeContext\n"],
+  ["BOM JSON", ".json", '\ufeff{"browser":{"browserName":"chromium"},"note":"deskNativeContext"}'],
+  ["plain JSON", ".json", '{"browser":{"browserName":"chromium"},"note":"deskNativeContext"}'],
+]) {
+  test(`stock ${name} uses actual maintained config semantics and original readiness without native imports`, async t => {
+    const f = await stagedTransport(t), file = path.join(f.root, "public-config" + extension);
+    f.put(file, text); fs.chmodSync(file, 0o644);
+    for (const original of [true, false]) {
+      const boundary = externalSessionBoundary(t, f, { original });
+      const result = await boundary.Session.startDaemon(f.clientInfo, { config: file, session: A });
+      assert.equal(result.pid, 125); assert.equal(boundary.spawns, 1);
+      assert.equal(boundary.loads.some(value => /native-error|credential|messaging/.test(value)), false);
+      boundary.close();
+    }
+  });
+}
+
+test("native-known second config read parse failure is coded and private in actual Session/codec/credential", async t => {
+  const f = await stagedTransport(t), valid = fs.readFileSync(f.configFile, "utf8");
+  const read = f.observedFs.readFileSync;
+  let reads = 0;
+  const value = (file, ...args) => file === f.configFile ?
+    (++reads === 1 ? valid : '{"owned-private-input-secret":invalid') : read.call(f.observedFs, file, ...args);
+  t.mock.method(f.observedFs, "readFileSync", value);
+  Object.defineProperty(f.observedFs, "promises", { value: { ...fs.promises, readFile: async (...args) => value(...args) } });
+  const boundary = externalSessionBoundary(t, f);
+  await assert.rejects(boundary.Session.startDaemon(f.clientInfo, { config: f.configFile, session: A, browser: "msedge" }), error => {
+    assert.equal(error.code, "NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    assert.equal(error.resources.contextId, A);
+    assert.equal(error.resources.disposition, "unknown");
+    assert.equal(String(error).includes("owned-private-input-secret"), false);
+    assert.equal(error.sourceGeneration, undefined);
+    return true;
+  });
+
+  assert.equal(reads, 2); assert.equal(boundary.spawns, 0);
+});
+
+test("actual startup does not attempt a second terminal record after ambiguous ready delivery", async t => {
+    let done, clock = 0, counter = 0;
+    const timers = new Map();
+    const sink = new Writable({ highWaterMark: 1, write(_value, _encoding, callback) { done = callback; } });
+    const f = await stagedTransport(t, { sink, now: () => clock,
+      setTimeout(callback, delay) { const id = ++counter; timers.set(id, { callback, due: clock + delay }); return id; },
+      clearTimeout(id) { timers.delete(id); } });
+    const helper = f.template("desk-extension-credential.cjs"); helper.protect(f.proc);
+    let attempts = 0; const write = sink.write;
+    sink.write = function (...args) { attempts++; return write.apply(this, args); };
+    const daemon = transformedDaemon(f); t.after(() => daemon.close());
+    const program = transformedProgram(f, daemon, undefined, "ready");
+    const action = program.action(A, { config: f.configFile, browser: "msedge" });
+    while (!done) await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    clock = 5000;
+    for (const [id, timer] of [...timers]) if (timer.due <= clock) { timers.delete(id); timer.callback(); }
+    await action;
+    done(); await new Promise(resolve => setImmediate(resolve));
+    sink.destroy();
+    // stderr shares the protected sink in this fixture; the fixed unconfirmed
+    // diagnostic is permitted, a second reserved terminal frame is not.
+    assert.equal(attempts, 2, "one frame attempt and one fixed stderr diagnostic only");
+    assert.equal(program.exit, 1); assert.equal(timers.size, 0);
+});
+
+for (const value of ["false", "null", "23", "wrong-type"]) {
+  test(`actual maintained INI own native property ${value} never falls back to stock`, async t => {
+    const f = await stagedTransport(t), file = path.join(f.root, "native.ini");
+    f.put(file, "browser.browserName=chromium\ndeskNativeContext=" + value + "\n");
+    const boundary = externalSessionBoundary(t, f);
+    await assert.rejects(boundary.Session.startDaemon(f.clientInfo, { config: file, session: A }), {
+      code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED",
+    });
+    assert.equal(boundary.spawns, 0);
+    assert.equal(boundary.loads.includes("../../desk-native-error-transport.cjs"), true);
+  });
+}
+
+for (const second of ["read-error", "absent", "missing-source"]) {
+  test(`native-known ${second} on the second read never becomes stock or leaks private source`, async t => {
+    const f = await stagedTransport(t), valid = fs.readFileSync(f.configFile, "utf8");
+    const read = f.observedFs.readFileSync; let reads = 0;
+    const value = (file, ...args) => {
+      if (file !== f.configFile) return read.call(f.observedFs, file, ...args);
+      reads++;
+      if (reads === 1) return valid;
+      if (second === "read-error") throw Object.assign(new Error("owned-private-read-path"), { code: "EACCES" });
+      if (second === "missing-source") {
+        const receipt = path.join(f.root, "generation/playwright-patch.json");
+        if (fs.existsSync(receipt)) fs.renameSync(receipt, receipt + ".held");
+        return valid;
+      }
+      return "{}";
+    };
+    t.mock.method(f.observedFs, "readFileSync", value);
+    Object.defineProperty(f.observedFs, "promises", { value: { ...fs.promises, readFile: async (...args) => value(...args) } });
+    const boundary = externalSessionBoundary(t, f);
+    await assert.rejects(boundary.Session.startDaemon(f.clientInfo, { config: f.configFile, session: A }), error => {
+      assert.equal(error.code, "NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      assert.deepEqual(JSON.parse(JSON.stringify(error.resources)), { disposition: "unknown", contextId: A });
+      assert.equal(error.sourceGeneration, undefined);
+      assert.equal(String(error).includes("owned-private"), false);
+      return true;
+    });
+    assert.equal(boundary.spawns, 0); assert.equal(reads, 2);
+  });
+}
+
+test("direct native file binding normalizes initial parse failure without inventing an unbound generation", async t => {
+  const f = await stagedTransport(t);
+  fs.writeFileSync(f.configFile, '{"owned-private-input-secret":invalid');
+  assert.throws(() => f.codec.forLaunch({ config: f.configFile, session: "not-a-uuid" }, f.clientInfo), error => {
+    assert.equal(error.code, "NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    assert.deepEqual(JSON.parse(JSON.stringify(error.resources)), { disposition: "unknown" });
+    assert.equal(String(error).includes("owned-private-input-secret"), false);
+    assert.equal(error.sourceGeneration, undefined);
+    return true;
+  });
+});
+
+for (const mode of ["missing", "drain-before-acceptance", "acceptance-before-drain-deadline", "duplicate"]) {
+  test(`individual protected frame callback ${mode} stays bounded and distinct from delivery`, async t => {
+    let done, clock = 0, counter = 0; const timers = new Map(), bytes = [], callbacks = [];
+    const sink = new Writable({ highWaterMark: 1, write(value, _encoding, callback) {
+      bytes.push(Buffer.from(value)); done = callback;
+    } });
+    const f = await stagedTransport(t, { sink, now: () => clock,
+      setTimeout(callback, delay) { const id = ++counter; timers.set(id, { callback, due: clock + delay }); return id; },
+      clearTimeout(id) { timers.delete(id); } });
+    f.proc.nextTick = callback => { callbacks.push(callback); };
+    const writing = f.codec.writeLaunch(f.scope, { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null });
+    const observed = writing.then(() => null, error => error);
+    const expire = at => {
+      clock = at;
+      for (const [id, timer] of [...timers]) if (timer.due <= clock) { timers.delete(id); timer.callback(); }
+    };
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(callbacks.length, 1);
+    if (mode === "drain-before-acceptance" || mode === "duplicate") {
+      done(); await new Promise(resolve => setImmediate(resolve));
+      callbacks[0](); if (mode === "duplicate") callbacks[0]();
+      assert.equal(await observed, null);
+    } else {
+      if (mode === "acceptance-before-drain-deadline") { clock = 4000; callbacks[0](); }
+      expire(5000);
+      assert.equal((await observed)?.code, "NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      done(); callbacks[0](); callbacks[0]();
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(timers.size, 0);
+    assert.equal(bytes.length, 1);
+    const wire = Buffer.concat(bytes).toString();
+    assert.equal(wire.startsWith("DESK_NATIVE_CLI_V1 "), true); assert.equal(wire.endsWith("\n"), true);
+    assert.deepEqual(JSON.parse(wire.slice("DESK_NATIVE_CLI_V1 ".length)), {
+      version: 1, kind: "ready", contextId: A, sourceGeneration: f.stamp.sourceGeneration,
+      stage: "launch.ready", requestId: null,
+    });
+    sink.destroy();
+  });
+}
+
+for (const moment of ["validation", "after-delivery"]) {
+  test(`whole launch-write deadline covers synchronous ${moment} delays as well as callback waits`, async t => {
+    let clock = 0, calls = 0;
+    const f = await stagedTransport(t, { now() {
+      calls++;
+      if (moment === "validation" && calls === 2) clock = 5000;
+      return clock;
+    } });
+    if (moment === "after-delivery") {
+      const write = f.proc.stdout.write;
+      f.proc.stdout.write = function (...args) { const result = write.apply(this, args); clock = 5000; return result; };
+    }
+    await assert.rejects(f.codec.writeLaunch(f.scope, { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null }),
+      { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED" });
+    assert.equal(f.output.length, moment === "validation" ? 0 : 1);
+  });
+}
+
+function reviewedPriorE4(f) {
+  const sha = text => require("node:crypto").createHash("sha256").update(text).digest("hex");
+  let core = fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8");
+  core = core.replace('try { deskNativePresent = await deskNativeConfigPresent(options.config); }',
+    'try { const config = JSON.parse(require("fs").readFileSync(options.config, "utf8")); deskNativePresent = !!config && Object.prototype.hasOwnProperty.call(config, "deskNativeContext"); }')
+    .replace('let deskScope, deskEmissionStarted = false, deskStage = "launch.config";', 'let deskScope, deskStage = "launch.config";')
+    .replace("        deskEmissionStarted = true;\n", "")
+    .replace("if (!deskScope || deskEmissionStarted)", "if (!deskScope)");
+  const presenceStart = core.indexOf("\nasync function deskNativeConfigPresent(");
+  core = core.slice(0, presenceStart) + core.slice(core.indexOf("\nfunction resolveConfigPaths(", presenceStart));
+  core = core.replace("  deskNativeConfigPresent: () => deskNativeConfigPresent,\n", "");
+  const program = core.slice(core.indexOf("function decorateProgram3(program4) {"), core.indexOf("\nfunction defaultConfigFile("));
+  assert.equal(sha(program), "b390a51a049b14a1c05bc4b89092db0491cbe8a6870a0615937daabcb0d32cc7",
+    "fixed independent reviewed-93db complete-region pin, not a generated expected value");
+  let session = fs.readFileSync(path.join(f.lib, "tools/cli-client/session.js"), "utf8");
+  session = session.replace('try { deskNativePresent = await require("../../coreBundle.js").tools.deskNativeConfigPresent(cliArgs.config); }',
+    'try { const config = JSON.parse(import_fs.default.readFileSync(cliArgs.config, "utf8")); deskNativePresent = !!config && Object.prototype.hasOwnProperty.call(config, "deskNativeContext"); }')
+    .replace("      let deskCodec, reader, child, deskFailure;",
+      '      const deskCodec = require("../../desk-native-error-transport.cjs");\n      const reader = deskCodec.forLaunch(cliArgs, clientInfo);\n      let child, deskFailure;')
+    .replace('        deskCodec = require("../../desk-native-error-transport.cjs");\n        reader = deskCodec.forLaunch(cliArgs, clientInfo);\n', "")
+    .replace('      } catch (error) {\n        if (!reader) error = Object.assign(new Error("NATIVE_ERROR_TRANSPORT_UNCONFIRMED"), { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED", resources: { disposition: "unknown", ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(cliArgs.session) ? { contextId: cliArgs.session } : {}) } });\n        deskFailure = error; throw error;\n      } finally {',
+      "      } catch (error) { deskFailure = error; throw error; } finally {")
+    .replace("const cleanupError = reader?.dispose();", "const cleanupError = reader.dispose();");
+  const begin = session.indexOf("  static async startDaemon(");
+  assert.equal(sha(session.slice(begin, session.indexOf("\n  async _stopDaemon()", begin))),
+    "56c9113590f7148f411740f2c0fb157a809eb978a8604c3857a4f12623f4dff6");
+  return { core, session };
+}
+
+test("only the complete reviewed prior E4 pair migrates to fresh fixed guards, not mixed or tampered forms", async t => {
+  const f = await stagedTransport(t), prior = reviewedPriorE4(f);
+  const patch = require(path.join(mcpRoot, "web-playwright-patch.cjs"));
+  const coreFile = path.join(f.lib, "coreBundle.js"), sessionFile = path.join(f.lib, "tools/cli-client/session.js");
+  const currentCore = fs.readFileSync(coreFile, "utf8"), currentSession = fs.readFileSync(sessionFile, "utf8");
+  assert.equal(patch.patchSource(prior.core), currentCore);
+  assert.equal(patch.patchSessionSource(prior.session), currentSession);
+  for (const [core, session] of [[prior.core, currentSession], [currentCore, prior.session],
+    [prior.core.replace("async function loadConfig(configFile)", "async function loadConfig(tampered)"), prior.session],
+    [prior.core.replace("raw.charCodeAt(0) === 65279", "raw.charCodeAt(0) === 0"), prior.session],
+    [prior.core.replace("function coerceIniValue(value2)", "function coerceIniValue(tampered)"), prior.session],
+    [prior.core.replace("  start: () => start\n});", "  start: () => wrong\n});"), prior.session],
+    [prior.core.replace("\n// packages/playwright-core/src/tools/backend/common.ts",
+      "\n// owned unexpected backend change\n// packages/playwright-core/src/tools/backend/common.ts"), prior.session],
+    [prior.core, prior.session.replace("return { pid: child.pid", "return { pid: 0")]]) {
+    fs.writeFileSync(coreFile, core); fs.writeFileSync(sessionFile, session);
+    assert.throws(() => patch.apply({ dir: path.join(f.root, "generation"), version: "owned-E4", core: null }),
+      { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" });
+    assert.equal(fs.readFileSync(coreFile, "utf8"), core);
+    assert.equal(fs.readFileSync(sessionFile, "utf8"), session);
+  }
+  fs.writeFileSync(coreFile, prior.core); fs.writeFileSync(sessionFile, prior.session);
+  patch.apply({ dir: path.join(f.root, "generation"), version: "owned-E4", core: null });
+  assert.equal(patch.readRevision({ dir: path.join(f.root, "generation"), version: "owned-E4", core: null }), 4);
+  assert.equal(fs.readFileSync(coreFile, "utf8"), currentCore);
+  assert.equal(fs.readFileSync(sessionFile, "utf8"), currentSession);
+});
+
+test("independent backend/daemon configs preserve related original C errors through the actual socket serializer", async t => {
+  const f = await stagedTransport(t), secondary = { contextId: A, disposition: "unknown", pendingNativeOperation: true };
+  const daemon = transformedDaemon(f, { independentBackendConfig: true, toolError: await originalCError(),
+    pendingErrors: [await originalCError(secondary)] });
+  t.after(() => daemon.close());
+  await daemon.start(A, daemon.browserContext, {}, f.resolved, f.clientInfo, {}, {});
+  const reply = await daemon.request({ id: 37, method: "run", params: { args: {} } });
+  const error = f.codec.decodeError(reply.error, { ...f.stamp, stage: "command", requestId: 37 });
+  assert.equal(error.code, "native_discard_incomplete");
+  assert.deepEqual(JSON.parse(JSON.stringify(error.resources)), resources);
+  assert.deepEqual(JSON.parse(JSON.stringify(error.relatedErrors)), [{
+    code: "native_discard_incomplete", message: "native_discard_incomplete", resources: secondary,
+  }]);
+});
+
+test("actual private config inode replacement during reader construction refuses and closes its original descriptor", async t => {
+  const f = await stagedTransport(t), bytes = fs.readFileSync(f.configFile);
+  const originalOpen = fs.openSync, originalClose = fs.closeSync;
+  let opened, closed = 0;
+  t.mock.method(fs, "openSync", function (file, ...args) {
+    const fd = originalOpen.call(this, file, ...args);
+    if (file === f.configFile && args.length === 1 && args[0] === "r" && opened === undefined) {
+      opened = fd;
+      fs.renameSync(file, file + ".held");
+      f.put(file, bytes.toString());
+    }
+    return fd;
+  });
+  t.mock.method(fs, "closeSync", function (fd) {
+    if (fd === opened) closed++;
+    return originalClose.call(this, fd);
+  });
+  const boundary = externalSessionBoundary(t, f);
+  await assert.rejects(boundary.Session.startDaemon(f.clientInfo, { config: f.configFile, session: A, browser: "msedge" }),
+    error => { assert.equal(error.code, "NATIVE_PRIVATE_STATE_CHANGED"); return true; });
+  assert.equal(boundary.spawns, 0); assert.equal(closed, 1);
+  assert.throws(() => fs.fstatSync(opened), { code: "EBADF" });
+  assert.deepEqual(fs.readFileSync(f.configFile), bytes);
+  assert.deepEqual(fs.readFileSync(f.configFile + ".held"), bytes);
+});
+
+test("actual protected Writable synchronous failure cannot become accepted delivery or a raw exception", async t => {
+  const sink = new Writable({ write() { throw Error("owned-private-sink-secret"); } });
+  const f = await stagedTransport(t, { sink });
+  try {
+    await assert.rejects(f.codec.writeLaunch(f.scope,
+      { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null }), error => {
+        assert.equal(error.code, "NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+        assert.equal(String(error).includes("owned-private-sink-secret"), false);
+        return true;
+      });
+  } finally { sink.destroy(); }
+});
+
+for (const crossing of ["context", "generation", "private-owner"]) {
+  test(`source-owned retained projections refuse crossed verified ${crossing} rather than retagging original resources`, async t => {
+    const f = await stagedTransport(t), result = {};
+    f.codec.markResult(result, await originalCError(), f.scope);
+    f.codec.markResult(result, { code: "NATIVE_REQUEST_TIMEOUT", resources: { pendingNativeOperation: true } }, f.scope);
+    const snapshot = f.codec.takeResult(result, f.scope);
+    let config = JSON.parse(JSON.stringify(f.resolved));
+    if (crossing === "generation") {
+      require(path.join(mcpRoot, "web-playwright-patch.cjs")).apply({
+        dir: path.join(f.root, "generation"), version: "owned-E4-next", core: null,
+      });
+    } else {
+      config.configFile = path.join(f.root, "other-owner/config/browser.json");
+      if (crossing === "context") config.deskNativeContext.contextId = "22222222-2222-4222-8222-222222222222";
+      const { configFile, ...fileConfig } = config;
+      f.put(configFile, fileConfig);
+      if (process.platform === "win32") {
+        const helper = require(path.join(mcpRoot, "web-extension-credential.cjs"));
+        helper.privateGeneration(path.dirname(path.dirname(configFile))); helper.privateGeneration(path.dirname(configFile), configFile);
+      }
+    }
+    const crossed = f.codec.forDaemon(config, config.deskNativeContext.contextId);
+    assert.equal(f.codec.takeResult(result, crossed), undefined);
+    assert.throws(() => f.codec.project(snapshot, crossed, { stage: "command", requestId: 37 }),
+      { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED" });
+  });
+}
+
+for (const [name, extension, text] of [
+  ["INI", ".ini", "browser.browserName=chromium\n# deskNativeContext is data, not presence\n"],
+  ["BOM JSON", ".json", '\ufeff{"browser":{"browserName":"chromium"},"note":"deskNativeContext"}'],
+  ["JSON", ".json", '{"browser":{"browserName":"chromium"}}'],
+]) {
+  test(`actual child stock ${name} action remains native-free and publishes maintained readiness`, async t => {
+    const f = await stagedTransport(t), file = path.join(f.root, "stock" + extension);
+    f.put(file, text); fs.chmodSync(file, 0o644);
+    const configInterface = maintainedConfigInterface(f), daemon = transformedDaemon(f), messages = [], loads = [];
+    t.after(() => daemon.close());
+    const core = fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8");
+    const start = core.indexOf("function decorateProgram3(program4) {");
+    const source = core.slice(start, core.indexOf("\nfunction defaultConfigFile(", start));
+    let action;
+    const program = { argument() { return this; }, option() { return this; }, action(callback) { action = callback; return this; } };
+    const decorate = vm.runInNewContext(source + "\ndecorateProgram3", {
+      require: name => { loads.push(name); throw Error("stock native import refused"); },
+      process: f.proc, numberParser: Number, setupExitWatchdog() {}, createClientInfo: () => f.clientInfo,
+      deskNativeConfigPresent: configInterface.tools.deskNativeConfigPresent,
+      resolveCLIConfigForCLI: async (_dir, _session, options) => configInterface.loadConfig(options.config),
+      guessClientName: () => "owned stock fixture",
+      createBrowserWithInfo: async () => ({ browser: { contexts: () => [daemon.browserContext] }, browserInfo: { browserName: "chromium" } }),
+      startCliDaemonServer: daemon.start,
+      console: { log: value => messages.push(value) },
+      gracefullyProcessExitDoNotHang: () => assert.fail("supported stock config must not fail"),
+    });
+    decorate(program); await action(A, { config: file });
+    assert.deepEqual(loads, []); assert.equal(messages.length, 1);
+    assert.match(messages[0], /^Daemon listening on /);
+    assert.equal(daemon.published.deskNativeErrorTransport, undefined);
+    assert.equal(f.output.length, 0);
+  });
+}

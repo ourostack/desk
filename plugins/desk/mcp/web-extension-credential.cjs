@@ -454,7 +454,10 @@ function verifyGeneration(installed, expectedRoot) {
     ["var init_browserBackend = __esm({", "\n// packages/playwright-core/src/tools/backend/common.ts", "024e7dcae1350fc0c5afa4f71f1e9405081c0fcf8c5e63d980319ed6e3287c34"],
     ["async function startCliDaemonServer(", "\nasync function saveSessionFile(", "b4b6608dc24505cc41c1ede77e96ae00426cd5ed52dc85652f0b933a399b4543"],
     ["function decorateProgram3(program4) {", "\nfunction defaultConfigFile(", "becf9648f7de7d20e50d02350c886bffa538e8d66c7dc809874f5db0a497f638"],
-    ["function createSessionConfig(", "\nvar import_fs67, import_net10, import_path63;", "b46fb243926574fbeacb1832adc19a7910413b62d5bcda4e61e655f6c6932985"]
+    ["function createSessionConfig(", "\nvar import_fs67, import_net10, import_path63;", "b46fb243926574fbeacb1832adc19a7910413b62d5bcda4e61e655f6c6932985"],
+    ["async function loadConfig(configFile) {", "\nfunction resolveConfigPaths(", "adbf471d2fc29dcf8a83f03dc08aed0058361bbe5f72dc45610248afd36ad789"],
+    ["var tools_exports = {};", "\nvar init_tools2 = __esm({", "bbbe1a73e260c1bd94c759018d09cbf8823684f4718c3e34ec3f0445d0c0c202"],
+    ["function configFromIniFile(filePath) {", "\n// packages/playwright-core/src/tools/mcp/config.ts", "4deca6f390b3931fee8cc57ed3076ed384a0f4f1e33a3077c6b749d50d0d41fa"]
   ];
   function errorProof(text, specification) {
     var start = text.indexOf(specification[0]), end = text.indexOf(specification[1], start);
@@ -688,7 +691,14 @@ function protectNativeErrorLog(fd, directory, file) {
 }
 function nativeErrorTransportBinding(input) {
   var file = input.kind === "file" ? input.configFile : input.config.configFile;
-  var config = input.kind === "file" ? JSON.parse(fs.readFileSync(file, "utf8")) : input.config;
+  var config;
+  try { config = input.kind === "file" ? JSON.parse(fs.readFileSync(file, "utf8")) : input.config; }
+  catch (_) {
+    var failure = nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    failure.resources = { disposition: "unknown" };
+    if (TRANSPORT_UUID.test(input.sessionName)) failure.resources.contextId = input.sessionName;
+    throw failure;
+  }
   if (!config || !Object.prototype.hasOwnProperty.call(config, "deskNativeContext")) return null;
   var verified;
   try { verified = verifyGeneration({ dir: path.resolve(__dirname, "../../..") }); }
@@ -735,6 +745,7 @@ function nativeErrorTransportBinding(input) {
     validateNativeBinding(record, route);
   }
   return Object.freeze({ contextId: contextId, sourceGeneration: sourceGeneration,
+    identity: invalid ? null : digest(JSON.stringify([verified.stateIdentity, file, configIdentity, configDigest])),
     project: function (error) { return transportProject(client, error); },
     assert: assertBinding,
     validateLaunch: function (args) {

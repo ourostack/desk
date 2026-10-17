@@ -203,21 +203,36 @@ var ERROR_REGIONS = [
   ["function decorateProgram3(program4) {", "\nfunction defaultConfigFile(",
     "becf9648f7de7d20e50d02350c886bffa538e8d66c7dc809874f5db0a497f638"],
   ["function createSessionConfig(", "\nvar import_fs67, import_net10, import_path63;",
-    "b46fb243926574fbeacb1832adc19a7910413b62d5bcda4e61e655f6c6932985"]
+    "b46fb243926574fbeacb1832adc19a7910413b62d5bcda4e61e655f6c6932985"],
+  ["async function loadConfig(configFile) {", "\nfunction resolveConfigPaths(",
+    "adbf471d2fc29dcf8a83f03dc08aed0058361bbe5f72dc45610248afd36ad789"],
+  ["var tools_exports = {};", "\nvar init_tools2 = __esm({",
+    "bbbe1a73e260c1bd94c759018d09cbf8823684f4718c3e34ec3f0445d0c0c202"],
+  ["function configFromIniFile(filePath) {", "\n// packages/playwright-core/src/tools/mcp/config.ts",
+    "4deca6f390b3931fee8cc57ed3076ed384a0f4f1e33a3077c6b749d50d0d41fa"]
 ];
 var SESSION_REGION = ["  static async startDaemon(", "\n  async _stopDaemon()",
   "1086c0f0f2fedc452761a5870bbf93512f58a743152ffe6bbf3222d12e71331c"];
+// Complete reviewed 93db E4 forms only. The stock loader/export/INI regions
+// must still be original; a mixed generation is never a migration candidate.
+var PRIOR_ERROR_HASHES = [
+  "f93bbd8d2bf1a7c8ebcc45c0e5272915b9de042dcb6d89870bc8f8d1d3143811",
+  "2f3198f235da855324741e43230c79d1ab4f08603d8289eaa8aca7b8236c96ef",
+  "b390a51a049b14a1c05bc4b89092db0491cbe8a6870a0615937daabcb0d32cc7",
+  "eece69e7dde3362ddb1a27ef30ef0b43e47bef02902e8114acda199f16417f2a"
+];
+var PRIOR_SESSION_HASH = "56c9113590f7148f411740f2c0fb157a809eb978a8604c3857a4f12623f4dff6";
 var NATIVE_DETECTION = [
   "    let deskNativePresent = false;",
   "    if (options.config) {",
-  '      try { const config = JSON.parse(require("fs").readFileSync(options.config, "utf8")); deskNativePresent = !!config && Object.prototype.hasOwnProperty.call(config, "deskNativeContext"); }',
+  '      try { deskNativePresent = await deskNativeConfigPresent(options.config); }',
   '      catch (_) { process.stderr.write("NATIVE_ERROR_TRANSPORT_UNCONFIRMED\\n"); gracefullyProcessExitDoNotHang(1); return; }',
   "    }"
 ].join("\n") + "\n";
 var NATIVE_ACTION = [
   "    if (deskNativePresent) {",
   '      const deskCodec = require("./desk-native-error-transport.cjs");',
-  '      let deskScope, deskStage = "launch.config";',
+  '      let deskScope, deskEmissionStarted = false, deskStage = "launch.config";',
   "      try {",
   "        const launch = deskCodec.forLaunch({ config: options.config, session: sessionName, browser: options.browser }, clientInfo);",
   "        deskScope = launch.scope;",
@@ -232,10 +247,11 @@ var NATIVE_ACTION = [
   "        const persistent = options.persistent || options.profile || nativeConfig.browser.userDataDir ? true : void 0;",
   '        deskStage = "launch.backend";',
   "        await startCliDaemonServer(sessionName, browserContext, browserInfo2, nativeConfig, clientInfo, { cwd: process.cwd(), clientName: guessClientName() }, { persistent, exitOnClose: true, ownership, idleTimer, deskNativeStage: (stage) => { deskStage = stage; } });",
+  '        deskEmissionStarted = true;',
   '        await deskCodec.writeLaunch(deskScope, { version: 1, kind: "ready", contextId: deskScope.contextId, sourceGeneration: deskScope.sourceGeneration, stage: "launch.ready", requestId: null });',
   "      } catch (error) {",
   "        try {",
-  '          if (!deskScope) throw new Error("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");',
+  '          if (!deskScope || deskEmissionStarted) throw new Error("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");',
   "          await deskCodec.writeLaunch(deskScope, deskCodec.project(error, deskScope, { stage: deskStage, requestId: null }));",
   '        } catch (_) { process.stderr.write("NATIVE_ERROR_TRANSPORT_UNCONFIRMED\\n"); }',
   "        gracefullyProcessExitDoNotHang(1);",
@@ -277,7 +293,14 @@ function errorEdits(index) {
   ];
   if (index === 2) return [["    const mcpConfig = await resolveCLIConfigForCLI(clientInfo.daemonProfilesDir, sessionName, options);",
     NATIVE_DETECTION + NATIVE_ACTION + "    const mcpConfig = await resolveCLIConfigForCLI(clientInfo.daemonProfilesDir, sessionName, options);"]];
-  return [["    name: sessionName,", '    name: sessionName,\n    ...(options.deskNativeErrorScope ? { deskNativeErrorTransport: require("./desk-native-error-transport.cjs").sessionStamp(options.deskNativeErrorScope) } : {}),']];
+  if (index === 3) return [["    name: sessionName,", '    name: sessionName,\n    ...(options.deskNativeErrorScope ? { deskNativeErrorTransport: require("./desk-native-error-transport.cjs").sessionStamp(options.deskNativeErrorScope) } : {}),']];
+  if (index === 4) return [["    return configFromIniFile(configFile);\n  }\n}",
+    '    return configFromIniFile(configFile);\n  }\n}\nasync function deskNativeConfigPresent(configFile) {\n' +
+    '  const config = await loadConfig(configFile);\n' +
+    '  return !!config && Object.prototype.hasOwnProperty.call(config, "deskNativeContext");\n}']];
+  if (index === 5) return [["  BrowserBackend: () => BrowserBackend,",
+    "  deskNativeConfigPresent: () => deskNativeConfigPresent,\n  BrowserBackend: () => BrowserBackend,"]];
+  return [];
 }
 function patchExact(source, specification, edits) {
   var area = region(source, specification[0], specification[1]);
@@ -290,8 +313,31 @@ function patchExact(source, specification, edits) {
   });
   return source.slice(0, area.start) + normalized + source.slice(area.end);
 }
+function normalizePriorErrorSource(source) {
+  if (hash(region(source, ERROR_REGIONS[2][0], ERROR_REGIONS[2][1]).text) !== PRIOR_ERROR_HASHES[2]) return source;
+  ERROR_REGIONS.slice(4).forEach(function (specification) {
+    if (hash(region(source, specification[0], specification[1]).text) !== specification[2]) throw unsupported();
+  });
+  var replacements = ERROR_REGIONS.slice(0, 4).map(function (specification, index) {
+    var area = region(source, specification[0], specification[1]);
+    if (hash(area.text) !== PRIOR_ERROR_HASHES[index]) throw unsupported();
+    var text;
+    if (index === 2) {
+      // This whole prior region was pinned above, not an arbitrary desk block.
+      var begin = area.text.indexOf("    let deskNativePresent = false;\n");
+      var end = area.text.indexOf("    const mcpConfig = await resolveCLIConfigForCLI(", begin);
+      text = area.text.slice(0, begin) + area.text.slice(end);
+    } else text = normalizeEdits(area.text, errorEdits(index)).text;
+    return { area: area, text: text };
+  });
+  replacements.sort(function (a, b) { return b.area.start - a.area.start; }).forEach(function (entry) {
+    source = source.slice(0, entry.area.start) + entry.text + source.slice(entry.area.end);
+  });
+  return source;
+}
 function patchSource(source) {
-  var errorStates = ERROR_REGIONS.map(function (specification, index) {
+  source = normalizePriorErrorSource(source);
+  var errorStates = ERROR_REGIONS.slice(0, 6).map(function (specification, index) {
     return normalizeEdits(region(source, specification[0], specification[1]).text, errorEdits(index)).native;
   });
   if (errorStates.some(Boolean) && (!errorStates.every(Boolean) || count(source, NATIVE_PREFIX) !== 1))
@@ -307,6 +353,11 @@ function patchSessionSource(source) {
   // Argument construction is retained verbatim from the hash-qualified method.
   var original = area.text, insertedStart = "    // Desk native error transport revision 4.\n";
   var insertedEnd = "    // End Desk native error transport revision 4.\n";
+  if (hash(original) === PRIOR_SESSION_HASH) {
+    var priorEnd = original.indexOf(insertedEnd) + insertedEnd.length;
+    var priorStock = original.slice(0, start.length) + original.slice(priorEnd);
+    return patchSessionSource(source.slice(0, area.start) + priorStock + source.slice(area.end));
+  }
   if (count(original, insertedStart) || count(original, insertedEnd)) {
     var begin = original.indexOf(insertedStart), finish = original.indexOf(insertedEnd, begin);
     if (count(original, insertedStart) !== 1 || count(original, insertedEnd) !== 1 || begin !== start.length || finish < begin) throw unsupported();
@@ -321,16 +372,16 @@ function patchSessionSource(source) {
   var block = insertedStart + [
     "    let deskNativePresent = false;",
     "    if (cliArgs.config) {",
-    '      try { const config = JSON.parse(import_fs.default.readFileSync(cliArgs.config, "utf8")); deskNativePresent = !!config && Object.prototype.hasOwnProperty.call(config, "deskNativeContext"); }',
+    '      try { deskNativePresent = await require("../../coreBundle.js").tools.deskNativeConfigPresent(cliArgs.config); }',
     '      catch (_) { throw Object.assign(new Error("NATIVE_ERROR_TRANSPORT_UNCONFIRMED"), { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED", resources: { disposition: "unknown" } }); }',
     "    }",
     "    if (deskNativePresent) {",
-    '      const deskCodec = require("../../desk-native-error-transport.cjs");',
-    "      const reader = deskCodec.forLaunch(cliArgs, clientInfo);",
-    "      let child, deskFailure;",
+    "      let deskCodec, reader, child, deskFailure;",
     "      const onData = (bytes) => reader.push(bytes);",
     "      const onEnd = () => reader.end();",
     "      try {",
+    '        deskCodec = require("../../desk-native-error-transport.cjs");',
+    "        reader = deskCodec.forLaunch(cliArgs, clientInfo);",
     "        reader.validate();",
     "        const err = reader.openErrorLog();",
     '        const cliPath = (0, import_package.libPath)("entry", "cliDaemon.js");',
@@ -343,8 +394,11 @@ function patchSessionSource(source) {
     '        process.on("SIGINT", onEnd); process.on("SIGTERM", onEnd);',
     "        await reader.wait();",
     "        return { pid: child.pid, sessionName, endpoint: cliArgs.endpoint };",
-    "      } catch (error) { deskFailure = error; throw error; } finally {",
-    "        const cleanupError = reader.dispose();",
+    "      } catch (error) {",
+    '        if (!reader) error = Object.assign(new Error("NATIVE_ERROR_TRANSPORT_UNCONFIRMED"), { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED", resources: { disposition: "unknown", ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(cliArgs.session) ? { contextId: cliArgs.session } : {}) } });',
+    "        deskFailure = error; throw error;",
+    "      } finally {",
+    "        const cleanupError = reader?.dispose();",
     '        process.off("SIGINT", onEnd); process.off("SIGTERM", onEnd);',
     "        if (child) {",
     '          child.stdout.off("data", onData); child.stdout.off("end", onEnd); child.stdout.off("error", onEnd);',
@@ -386,8 +440,12 @@ function apply(installed) {
     patchedSession = patchSessionSource(originalSession);
   }
   catch (error) { if (error.code === "ENOENT") throw unsupported(); throw error; }
-  var coreNative = region(source, ERROR_REGIONS[2][0], ERROR_REGIONS[2][1]).text.indexOf(NATIVE_ACTION) !== -1;
-  if (coreNative !== (patchedSession === originalSession)) throw unsupported();
+  var programSource = region(source, ERROR_REGIONS[2][0], ERROR_REGIONS[2][1]).text;
+  var coreState = hash(programSource) === PRIOR_ERROR_HASHES[2] ? "prior" :
+    programSource.indexOf(NATIVE_ACTION) !== -1 ? "current" : "stock";
+  var sessionState = hash(region(originalSession, SESSION_REGION[0], SESSION_REGION[1]).text) === PRIOR_SESSION_HASH ?
+    "prior" : patchedSession === originalSession ? "current" : "stock";
+  if (coreState !== sessionState) throw unsupported();
   var helper = require("./web-extension-credential.cjs"), root = fs.realpathSync(__dirname);
   var modules = helper.nativeInventory(root);
   var credential = helper.publicCode(root, "web-extension-credential.cjs");

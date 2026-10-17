@@ -49,9 +49,18 @@ function stamp(scope) {
   return { version: 1, contextId: scope.contextId, sourceGeneration: scope.sourceGeneration };
 }
 function sessionStamp(scope) { return stamp(scope); }
+function equivalentScope(left, right) {
+  if (left === right) return true;
+  var a = bindingFor(left), b = bindingFor(right);
+  return !!a.identity && a.identity === b.identity &&
+    left.contextId === right.contextId && left.sourceGeneration === right.sourceGeneration;
+}
 function projected(error, scope) {
   var binding = bindingFor(scope), previous = projections.get(error);
-  if (previous && previous.scope === scope) return previous.value;
+  if (previous) {
+    if (!equivalentScope(previous.scope, scope)) throw unknown(scope);
+    return previous.value;
+  }
   var value;
   try { value = binding.project(error); }
   catch (_) { value = { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED",
@@ -82,7 +91,7 @@ function markResult(result, error, scope) {
   bindingFor(scope);
   if (!result || typeof result !== "object") throw unknown(scope);
   var value = projected(error, scope), existing = results.get(result);
-  if (existing && existing.scope !== scope) throw unknown(scope);
+  if (existing && !equivalentScope(existing.scope, scope)) throw unknown(scope);
   if (!existing) {
     existing = { scope: scope, value: Object.assign({}, value) };
     results.set(result, existing);
@@ -97,7 +106,7 @@ function markResult(result, error, scope) {
 function takeResult(result, scope) {
   bindingFor(scope);
   var saved = results.get(result);
-  if (!saved || saved.scope !== scope || !Object.prototype.hasOwnProperty.call(result, marker)) return undefined;
+  if (!saved || !equivalentScope(saved.scope, scope) || !Object.prototype.hasOwnProperty.call(result, marker)) return undefined;
   var value = credential().nativeErrorTransportBinding.json(saved.value);
   function freeze(item) {
     if (item && typeof item === "object") {
@@ -166,6 +175,7 @@ function decodeError(value, expected) {
 }
 async function writeLaunch(scope, value) {
   bindingFor(scope);
+  var deadline = now() + 5000, timer, retired = false;
   try {
     var envelope = checked(value, { contextId: scope.contextId, sourceGeneration: scope.sourceGeneration }, true);
     if (envelope.kind === "ready") stamp(scope);
@@ -174,11 +184,23 @@ async function writeLaunch(scope, value) {
     if (bytes.length > MAX_FRAME) throw unknown(scope);
     var helper = credential();
     helper.protect(process);
-    process.stdout.write(bytes);
-    // E3 acceptance callbacks are not delivery. This awaits real pending
-    // writes/drain with its fixed five-second fail-closed contract.
-    await helper.flushProtection(process);
+    if (now() >= deadline) throw unknown(scope);
+    await new Promise(function (resolve, reject) {
+      timer = setTimeout(function () { reject(unknown(scope)); }, Math.max(0, deadline - now()));
+      var called = false;
+      process.stdout.write(bytes, function (error) {
+        if (called || retired) return;
+        called = true;
+        if (error) { reject(error); return; }
+        // This callback proves only this frame's acceptance, not delivery.
+        // A false return may be accepted backpressure; the callback and E3's
+        // actual pending-write/drain proof are independently required.
+        helper.flushProtection(process).then(resolve, reject);
+      });
+    });
+    if (now() >= deadline) throw unknown(scope);
   } catch (_) { throw unknown(scope); }
+  finally { retired = true; clearTimeout(timer); }
 }
 function forLaunch(cliArgs, clientInfo) {
   if (!cliArgs.config) return null;
