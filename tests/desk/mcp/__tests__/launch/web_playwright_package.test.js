@@ -174,9 +174,11 @@ test("latest-channel production install and warm launch preserve failed-close sa
   for (const mode of ["fresh", "warm"]) {
     warmStarted = Date.now()
     const before = count()
+    const runtime = await require(path.join(mcpRoot, "web.cjs")).prepareBrowserRuntime({ env, firstInstallMs: 150000 })
     const session = await openSession({
-      command: process.execPath,
-      args: [path.join(mcpRoot, "web.cjs"), "--executable-path", executable],
+      command: runtime.nodePath,
+      args: [path.join(runtime.installed.dir, "node_modules", "@playwright", "mcp", "cli.js"),
+        "--headless", "--isolated", "--executable-path", executable],
       env, cwd: home, timeoutMs: 150000,
     })
     try {

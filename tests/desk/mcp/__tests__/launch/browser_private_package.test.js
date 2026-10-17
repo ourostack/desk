@@ -79,8 +79,9 @@ test("actual installed private CLI retains isolated live pages and disposes only
     const errors = []
     for (const id of contexts) {
       const result = await controller.run(["discard", id], options)
-      receipt.operations.push({ operation: "cleanup", state: result.payload.state, exitCode: result.exitCode })
-      if (result.exitCode !== 0) errors.push("Private context cleanup was not confirmed")
+      receipt.operations.push({ operation: "cleanup", state: result.payload.state, exitCode: result.exitCode,
+        code: result.payload.code, message: result.payload.message })
+      if (result.exitCode !== 0) errors.push("Private context cleanup was not confirmed: " + result.payload.code + ": " + result.payload.message)
     }
     if (server) await new Promise(resolve => server.close(resolve))
     for (const daemon of daemons) {
@@ -111,7 +112,8 @@ test("actual installed private CLI retains isolated live pages and disposes only
       if (result.exitCode !== 0) unconfirmedCreate = true
     }
     if (result.payload.resources?.socketDirectory) namespaces.add(result.payload.resources.socketDirectory)
-    receipt.operations.push({ operation: args[0], command: args[0] === "run" ? args[3] : undefined, exitCode: result.exitCode, state: result.payload.state })
+    receipt.operations.push({ operation: args[0], command: args[0] === "run" ? args[3] : undefined, exitCode: result.exitCode,
+      state: result.payload.state, code: result.payload.code, message: result.payload.message })
     assert.equal(result.exitCode, 0, result.payload.message)
     if (args[0] === "create") {
       const pid = result.payload.result?.pid

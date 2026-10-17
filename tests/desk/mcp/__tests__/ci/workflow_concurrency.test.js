@@ -20,6 +20,23 @@ test("integration gates install the broker's committed dependencies before testi
   }
 })
 
+test("every release and suite entry installs the locked maintained browser test input", () => {
+  const install = "npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright"
+  for (const [workflow, names] of [
+    ["desk-mcp-tests.yml", ["desk-mcp-coverage-shards", "release-dry-run"]],
+    ["desk-windows-suite.yml", ["windows-suite"]],
+    ["desk-release.yml", ["build"]],
+  ]) {
+    const { jobs } = read(workflow)
+    for (const name of names) {
+      const steps = jobs[name].steps
+      const setup = steps.findIndex(step => step.run === install)
+      const consumer = steps.findIndex(step => /(?:test:coverage|build-and-check-release|Run the suite)/u.test([step.name, step.run].join("\n")))
+      assert.ok(setup >= 0 && setup < consumer, `${workflow}/${name} must install the locked public input before its test consumer`)
+    }
+  }
+})
+
 for (const name of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
   test(`${name} cancels superseded pull-request runs and lets main and dispatched runs finish`, () => {
     const { concurrency } = read(name)

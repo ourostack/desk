@@ -284,6 +284,9 @@ jobs:
           npm ci
           npm ci --prefix ../browser-context-broker
 
+      - name: Install locked maintained browser test input
+        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
+
       - name: Build and check the release without keeping it
         run: scripts/build-and-check-release.sh --dry-run
 
