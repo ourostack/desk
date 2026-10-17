@@ -306,6 +306,65 @@ test("child execution inputs exclude system injections, compactions, tool result
   assert.deepEqual(facts.intervals.filter((iv) => iv.agent === 1), [])
 })
 
+for (const kind of ["coordinator", "task-notification"]) {
+  test(`a ${kind} input during a streamed child response preserves continuous execution`, async () => {
+    const prompt = (timestamp, extra = {}) => ({ type: "user", timestamp, message: { content: SENTINEL }, ...extra })
+    const reply = (timestamp, stop_reason) => ({ type: "assistant", timestamp, message: { id: "same-stream", model: "claude-sonnet-5", stop_reason, content: [{ type: "text", text: SENTINEL }] } })
+    const { facts } = await deriveLines([
+      { ...prompt("2026-09-25T08:00:00.000Z"), version: "2.1.285" },
+      reply("2026-09-25T08:02:00.000Z", "end_turn"),
+    ], "complete", { "agent-streamed": [
+      prompt("2026-09-25T08:00:01.000Z"),
+      reply("2026-09-25T08:00:02.000Z", null),
+      prompt("2026-09-25T08:00:51.000Z", { isMeta: true, origin: { kind } }),
+      reply("2026-09-25T08:01:41.000Z", "end_turn"),
+    ] })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:01:41.000Z" },
+    ])
+  })
+}
+
+for (const mixed of [false, true]) {
+  test(`a notification during a pending child tool preserves execution${mixed ? " with the result on the notification line" : ""}`, async () => {
+    const prompt = { type: "user", timestamp: "2026-09-25T08:00:00.000Z", version: "2.1.285", message: { content: SENTINEL } }
+    const result = { type: "tool_result", tool_use_id: "running", content: SENTINEL }
+    const notification = { type: "user", timestamp: mixed ? "2026-09-25T08:01:31.000Z" : "2026-09-25T08:00:51.000Z", isMeta: true, origin: { kind: "task-notification" }, message: { content: [{ type: "text", text: SENTINEL }, ...(mixed ? [result] : [])] } }
+    const child = [
+      { ...prompt, timestamp: "2026-09-25T08:00:01.000Z" },
+      { type: "assistant", timestamp: "2026-09-25T08:00:02.000Z", message: { id: "tool", model: "claude-sonnet-5", stop_reason: "tool_use", content: [{ type: "tool_use", id: "running", name: "Bash", input: { command: "true" } }] } },
+      notification,
+      ...(!mixed ? [{ type: "user", timestamp: "2026-09-25T08:01:31.000Z", message: { content: [result] } }] : []),
+      { type: "assistant", timestamp: "2026-09-25T08:01:41.000Z", message: { id: "done", model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } },
+    ]
+    const { facts } = await deriveLines([prompt], "complete", { "agent-running": child })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:01:41.000Z" },
+    ])
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "tool" && iv.agent === 1).map(({ start, end }) => [start, end]), [
+      ["2026-09-25T08:00:02.000Z", "2026-09-25T08:01:31.000Z"],
+    ])
+  })
+}
+
+test("an untimed stopped-child resume cannot stretch the old turn overnight or read as complete coverage", async () => {
+  const prompt = (timestamp, extra = {}) => ({ type: "user", timestamp, message: { content: SENTINEL }, ...extra })
+  const reply = (timestamp) => ({ type: "assistant", timestamp, message: { id: timestamp, model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } })
+  const { facts } = await deriveLines([
+    { ...prompt("2026-09-25T08:00:00.000Z"), version: "2.1.285" },
+  ], "complete", { "agent-undated": [
+    prompt("2026-09-25T08:00:01.000Z"),
+    reply("2026-09-25T08:00:02.000Z"),
+    prompt(undefined, { isMeta: true, origin: { kind: "coordinator" } }),
+    reply("2026-09-26T08:00:02.000Z"),
+  ] })
+  assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+    { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:02.000Z" },
+  ])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "source_unreadable"))
+  assert.deepEqual(validateLocalFacts(facts).errors, [])
+})
+
 test("isMeta, isCompactSummary, promptSource:system/origin:task-notification, and a non-human origin.kind are all excluded from turns", async () => {
   const { facts } = await deriveFull()
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn" && iv.agent === 0)
