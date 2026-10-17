@@ -237,12 +237,11 @@ function attestNativeContext(record, selection, dependencies) {
       return new Function("url", "return import(url)")(require("url").pathToFileURL(path.join(__dirname, "src/browser/native-host.mjs")).href)
         .then(function (host) { return host.readNativeAncestry(ready.chain[0].pid); });
     }
-    function corroborate(refresh) {
+    function corroborate() {
       var ready, candidateIdentity;
       try {
         ready = readReady();
         candidateIdentity = fileIdentity(record.nativeReadyFile);
-        if (identity && !refresh && fileIdentity(record.nativeReadyFile) !== identity) throw failure("NATIVE_READY_CHANGED");
         if (binding && (!sameProcess(ready.browser, binding.browser) || ready.profileRoot !== binding.profileRoot ||
             ready.sourceDigest !== binding.sourceDigest)) throw failure("NATIVE_SELECTION_MISMATCH");
       } catch (error) { return Promise.reject(error); }
@@ -266,10 +265,10 @@ function attestNativeContext(record, selection, dependencies) {
         return providerRequest(binding.endpoint, operation, payload);
       }).catch(function (error) { throw failure(safeCode(error.code, "NATIVE_ATTESTATION_UNAVAILABLE"), safeResources(error.resources)); });
     }
-    return corroborate(false).then(function () {
+    return corroborate().then(function () {
       return Object.freeze({
         contextId: record.contextId,
-        refresh: function () { return corroborate(true).then(function () { return { available: true, contextId: record.contextId }; })
+        refresh: function () { return corroborate().then(function () { return { available: true, contextId: record.contextId }; })
           .catch(function (error) { throw failure(safeCode(error.code, "NATIVE_ATTESTATION_UNAVAILABLE"), safeResources(error.resources)); }); },
         request: function (method, params) {
           if (!/^context\.(create|resume|status|label|discard)$/.test(method || "")) return Promise.reject(failure("NATIVE_REQUEST_INVALID"));

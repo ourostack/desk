@@ -63,6 +63,8 @@ test("actual installed private CLI retains isolated live pages and disposes only
     firstInstallMs: 120000,
     startRefresh: () => {},
   }
+  const cacheKeys = Object.keys(options.env).filter(key => key.toLowerCase() === "npm_config_cache")
+  for (const key of cacheKeys.length ? cacheKeys : ["npm_config_cache"]) options.env[key] = path.join(root, "npm-cache")
   const contexts = []
   const namespaces = new Set()
   const daemons = []

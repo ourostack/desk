@@ -1464,7 +1464,8 @@ for (const moment of ["validation", "after-delivery"]) {
 
 function reviewedPriorE4(f) {
   const sha = text => require("node:crypto").createHash("sha256").update(text).digest("hex");
-  let core = fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8");
+  let core = require("./fixtures/playwright-native-error-transport.cjs").priorStopSource(
+    fs.readFileSync(path.join(f.lib, "coreBundle.js"), "utf8"));
   core = core.replace('try { deskNativePresent = await deskNativeConfigPresent(options.config); }',
     'try { const config = JSON.parse(require("fs").readFileSync(options.config, "utf8")); deskNativePresent = !!config && Object.prototype.hasOwnProperty.call(config, "deskNativeContext"); }')
     .replace('let deskScope, deskEmissionStarted = false, deskStage = "launch.config";', 'let deskScope, deskStage = "launch.config";')

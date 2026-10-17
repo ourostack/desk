@@ -449,7 +449,8 @@ function verifyGeneration(installed, expectedRoot) {
     ["function createServer(name, version3, factory, transportInitialized, runHeartbeat) {", "\nfunction addServerListener(", "0a0d6cd9bfae79dbda66509b6d01fad89fdc37629cc729e26db7b97d80b8fc4b"],
     ["async function createExtensionBrowser(", "\nvar import_path60, debug16, debugLogger3;", "e014782f47d440a616b852b8a5838d4d49a2d2c458a5eba2b3ecd70ae5fe91ca"],
     ["async function createBrowser(config,", "\nasync function connectToBrowserEndpoint(", "b4976bd9fda5aa82d853428acf2ff586fa16dae44b605649bd2652dd89759d0e"],
-    ["    CDPRelayServer = class {", "\n    ExtensionConnection = class {", "0c01234faaad68848d096c87c384a4a9318bdab8a5aef964824498b7e64751e5"]
+    ["    CDPRelayServer = class {", "\n    ExtensionConnection = class {", "0c01234faaad68848d096c87c384a4a9318bdab8a5aef964824498b7e64751e5"],
+    ["async function monitorSocketPath(", "\nasync function startCliDaemonServer(", "4825ab691d6a37ee02320a678aa16dd443eca90bffbca6184ecb2b98f4664507"]
   ].map(function (region) {
     var start = source.indexOf(region[0]), end = source.indexOf(region[1], start);
     if (start < 0 || end < 0 || source.indexOf(region[0], start + region[0].length) !== -1)

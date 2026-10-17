@@ -532,6 +532,13 @@ test("npm failures are reduced to their code and first message line", () => {
   assert.equal(browser.npmError({ stderr: "npm error code EAI_AGAIN\n", code: 1 }, "npm view"), "EAI_AGAIN")
   assert.equal(browser.npmError({ stderr: "", code: 7 }, "npm install"), "npm install exited with code 7")
   assert.equal(browser.npmError({ stderr: "spawn EMFILE", code: null }, "npm install"), "spawn EMFILE")
+  for (const key of ["sig", "SIG", "signature", "X-Amz-Signature", "X-Goog-Signature"]) {
+    const url = `https://packages.invalid/owned.tgz?scope=fixture&${key}=owned-not-a-real-signature&expiry=fixture`
+    assert.equal(browser.npmError({ stderr: `npm error code FETCH_ERROR\nnpm error request to ${url} failed\n`, code: 1 }, "npm install"),
+      "FETCH_ERROR: request to <redacted-url> failed")
+  }
+  assert.equal(browser.npmError({ stderr: "npm error request to https://packages.invalid/owned.tgz?format=public failed\n", code: 1 }, "npm install"),
+    "request to https://packages.invalid/owned.tgz?format=public failed")
 })
 
 test("the chosen Node's folder goes first on PATH, keeping the variable's own spelling", () => {

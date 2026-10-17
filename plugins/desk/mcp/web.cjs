@@ -274,8 +274,8 @@ function npmError(result, what) {
     if (!body || /^(syscall|errno) |^at |complete log of this run|^\d+$/.test(body)) return;
     detail = either(detail, body);
   });
-  if (detail === null) return code === null ? what + " exited with code " + result.code : code;
-  return code === null ? detail : code + ": " + detail;
+  if (detail === null) return redactSignedUrls(code === null ? what + " exited with code " + result.code : code);
+  return redactSignedUrls(code === null ? detail : code + ": " + detail);
 }
 
 function lastLine(text) {
@@ -473,8 +473,13 @@ function wait(ms) {
 }
 
 // npm's error text with any credential removed: the user and password of a registry address, and an auth token setting.
+function redactSignedUrls(text) {
+  return String(text).replace(/https?:\/\/[^\s"'<>]+/gi, function (url) {
+    return /[?&](?:sig|signature|x-amz-signature|x-goog-signature)=/i.test(url) ? "<redacted-url>" : url;
+  });
+}
 function scrub(text) {
-  return String(text)
+  return redactSignedUrls(text)
     .replace(/\/\/\S*@/g, "//<redacted>@")
     .replace(/\b(Bearer|Basic)\s+\S+/gi, "$1 <redacted>")
     .replace(/\bnpm_[A-Za-z0-9]{20,}/g, "<redacted>")

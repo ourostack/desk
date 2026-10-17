@@ -17,6 +17,7 @@ const regions = [
   ["configLoader", "async function loadConfig(configFile) {", "\nfunction resolveConfigPaths(", "adbf471d2fc29dcf8a83f03dc08aed0058361bbe5f72dc45610248afd36ad789"],
   ["configIni", "function configFromIniFile(filePath) {", "\n// packages/playwright-core/src/tools/mcp/config.ts", "4deca6f390b3931fee8cc57ed3076ed384a0f4f1e33a3077c6b749d50d0d41fa"],
   ["toolsExports", "var tools_exports = {};", "\nvar init_tools2 = __esm({", "bbbe1a73e260c1bd94c759018d09cbf8823684f4718c3e34ec3f0445d0c0c202"],
+  ["monitor", "async function monitorSocketPath(", "\nasync function startCliDaemonServer(", "4825ab691d6a37ee02320a678aa16dd443eca90bffbca6184ecb2b98f4664507"],
 ];
 function cliDirectory(env = process.env) {
   const supplied = env.DESK_TEST_MAINTAINED_CLI_DIR;
@@ -52,7 +53,7 @@ function read(env = process.env) {
   // independently at their actual resource boundaries.
   out.core = "\nfunction auditedNativeErrorFixtureDeclarations() {\n" +
     out.backend + regions[0][2] + "\n" +
-    out.daemon + regions[1][2] + ") {}\n" +
+    out.monitor + "\n" + out.daemon + regions[1][2] + ") {}\n" +
     out.program + regions[2][2] + ") {}\n" +
     out.metadata + regions[3][2] + "\n" +
     out.configLoader + "\nfunction resolveConfigPaths() {}\n" +
@@ -60,4 +61,22 @@ function read(env = process.env) {
     out.toolsExports + "\nvar init_tools2 = __esm({});\n}\n";
   return out;
 }
-module.exports = { read, regions, cliDirectory };
+function priorStopSource(source) {
+  source = source.replace("async function monitorSocketPath(socketPath, deskStopping) {", "async function monitorSocketPath(socketPath) {")
+    .replace("    if (deskStopping?.()) return;\n", "")
+    .replace("  let deskStopInProgress = false;\n", "")
+    .replace("          deskStopInProgress = !!options?.exitOnClose;\n", "")
+    .replace("    if (options?.exitOnClose && !deskStopInProgress)\n", "    if (options?.exitOnClose)\n")
+    .replace("  await monitorSocketPath(socketPath, () => deskStopInProgress);", "  await monitorSocketPath(socketPath);");
+  for (const [begin, end, pinned] of [
+    ["async function monitorSocketPath(", "\nasync function startCliDaemonServer(", "4825ab691d6a37ee02320a678aa16dd443eca90bffbca6184ecb2b98f4664507"],
+    ["async function startCliDaemonServer(", "\nasync function saveSessionFile(", "2f3198f235da855324741e43230c79d1ab4f08603d8289eaa8aca7b8236c96ef"],
+  ]) {
+    const start = source.indexOf(begin), finish = source.indexOf(end, start);
+    assert.ok(start >= 0 && finish > start && source.indexOf(begin, start + begin.length) === -1);
+    assert.equal(crypto.createHash("sha256").update(source.slice(start, finish)).digest("hex"),
+      pinned, "independent complete pre-stop generation");
+  }
+  return source;
+}
+module.exports = { read, regions, cliDirectory, priorStopSource };

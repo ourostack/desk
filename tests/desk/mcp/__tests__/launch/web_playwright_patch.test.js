@@ -16,6 +16,7 @@ const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs",
 const { apply, copyPackages, patchSource, readRevision } = require(patchPath)
 
 function priorProfileSource(source) {
+  source = require("./fixtures/playwright-native-error-transport.cjs").priorStopSource(source)
   return source.replace(
     "options: { ...resolveExtensionOptions(cliOptions),\n          ...(cliOptions.profileDirName !== undefined ? { profileDirName: cliOptions.profileDirName } : {}) }",
     "options: resolveExtensionOptions(cliOptions)")

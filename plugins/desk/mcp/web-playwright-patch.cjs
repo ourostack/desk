@@ -234,6 +234,22 @@ var PRIOR_ERROR_HASHES = [
   "eece69e7dde3362ddb1a27ef30ef0b43e47bef02902e8114acda199f16417f2a"
 ];
 var PRIOR_SESSION_HASH = "56c9113590f7148f411740f2c0fb157a809eb978a8604c3857a4f12623f4dff6";
+var MONITOR_REGION = ["async function monitorSocketPath(", "\nasync function startCliDaemonServer(",
+  "4825ab691d6a37ee02320a678aa16dd443eca90bffbca6184ecb2b98f4664507"];
+var MONITOR_STOP_EDITS = [
+  ["async function monitorSocketPath(socketPath) {", "async function monitorSocketPath(socketPath, deskStopping) {"],
+  ["    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);",
+    "    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);\n    if (deskStopping?.()) return;"]
+];
+var DAEMON_STOP_EDITS = [
+  ["  const server = import_net10.default.createServer((socket) => {",
+    "  let deskStopInProgress = false;\n  const server = import_net10.default.createServer((socket) => {"],
+  ['        if (method === "stop") {',
+    '        if (method === "stop") {\n          deskStopInProgress = !!options?.exitOnClose;'],
+  ["    if (options?.exitOnClose)\n      gracefullyProcessExitDoNotHang(0);",
+    "    if (options?.exitOnClose && !deskStopInProgress)\n      gracefullyProcessExitDoNotHang(0);"],
+  ["  await monitorSocketPath(socketPath);", "  await monitorSocketPath(socketPath, () => deskStopInProgress);"]
+];
 var NATIVE_DETECTION = [
   "    let deskNativePresent = false;",
   "    if (options.config) {",
@@ -347,8 +363,20 @@ function normalizePriorErrorSource(source) {
   });
   return source;
 }
+function normalizeDaemonStop(source) {
+  var monitor = region(source, MONITOR_REGION[0], MONITOR_REGION[1]);
+  var daemon = region(source, ERROR_REGIONS[1][0], ERROR_REGIONS[1][1]);
+  var monitorState = normalizeEdits(monitor.text, MONITOR_STOP_EDITS);
+  var daemonState = normalizeEdits(daemon.text, DAEMON_STOP_EDITS);
+  if (monitorState.native !== daemonState.native || hash(monitorState.text) !== MONITOR_REGION[2] ||
+      (daemonState.native && hash(daemonState.text) !== PRIOR_ERROR_HASHES[1])) throw unsupported();
+  if (!daemonState.native) return { source: source, native: false };
+  return { source: source.slice(0, monitor.start) + monitorState.text +
+    source.slice(monitor.end, daemon.start) + daemonState.text + source.slice(daemon.end), native: true };
+}
 function patchSource(source) {
-  source = normalizePriorErrorSource(source);
+  var original = source, stop = normalizeDaemonStop(source);
+  source = normalizePriorErrorSource(stop.source);
   var errorStates = ERROR_REGIONS.slice(0, 6).map(function (specification, index) {
     return normalizeEdits(region(source, specification[0], specification[1]).text, errorEdits(index)).native;
   });
@@ -356,6 +384,9 @@ function patchSource(source) {
     throw unsupported();
   source = patchLegacySource(source);
   ERROR_REGIONS.forEach(function (specification, index) { source = patchExact(source, specification, errorEdits(index)); });
+  source = patchExact(source, MONITOR_REGION, MONITOR_STOP_EDITS);
+  source = patchExact(source, [ERROR_REGIONS[1][0], ERROR_REGIONS[1][1], PRIOR_ERROR_HASHES[1]], DAEMON_STOP_EDITS);
+  if (stop.native && source !== original) throw unsupported();
   return source;
 }
 function sessionFile(dir) { return path.join(dir, "node_modules/playwright-core/lib/tools/cli-client/session.js"); }
@@ -502,7 +533,7 @@ function readRevision(installed) {
 }
 function guardedRegionProofs(source) {
   return [[START, END, ORIGINAL_SHA256], ["async function createExtensionBrowser(", ACQUISITION_END, ACQUISITION_SHA256],
-    [BROWSER_START, BROWSER_END, BROWSER_SHA256], [RELAY_START, RELAY_END, RELAY_SHA256]].map(function (entry) {
+    [BROWSER_START, BROWSER_END, BROWSER_SHA256], [RELAY_START, RELAY_END, RELAY_SHA256], MONITOR_REGION].map(function (entry) {
     return { original: entry[2], patched: hash(region(source, entry[0], entry[1]).text) };
   });
 }
