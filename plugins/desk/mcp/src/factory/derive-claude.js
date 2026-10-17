@@ -248,6 +248,15 @@ function isHumanPromptLine(line) {
   return hasTextOrImage && !isAllToolResult
 }
 
+// Child resumes are marked meta and are not human attention. Their native
+// coordinator/completion inputs still delimit execution, unlike injections.
+function isChildResumeLine(line) {
+  if (line.isCompactSummary || line.promptSource === "system") return false
+  if (line.origin?.kind !== "coordinator" && line.origin?.kind !== "task-notification") return false
+  const { hasTextOrImage, isAllToolResult } = classifyUserContent(line.message?.content)
+  return hasTextOrImage && !isAllToolResult
+}
+
 // A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
 function isHumanTurnLine(line) {
   if (line.isSidechain === true || line.isMeta === true) return false
@@ -593,7 +602,7 @@ function createAgentProcessor({ agentIndex }) {
       if (humanTurns !== null && isHumanTurnLine(line)) humanTurnUndated = true
       return
     }
-    if (isHumanPromptLine(line)) {
+    if (isHumanPromptLine(line) || (agentIndex !== 0 && isChildResumeLine(line))) {
       const marker = isInterruptMarker(line.message?.content)
       if (currentPromptStart !== null) {
         const end = lastActivityTs ?? currentPromptStart
