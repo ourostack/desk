@@ -15,7 +15,18 @@ const errorFixture = require("./fixtures/playwright-native-error-transport.cjs")
 const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const { apply, copyPackages, patchSource, readRevision } = require(patchPath)
 
+function priorProfileSource(source) {
+  return source.replace(
+    "options: { ...resolveExtensionOptions(cliOptions),\n          ...(cliOptions.profileDirName !== undefined ? { profileDirName: cliOptions.profileDirName } : {}) }",
+    "options: resolveExtensionOptions(cliOptions)")
+    .replace("deskNativeBinding ? deskNativeBinding.selection.profileDirName : profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);",
+      "profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);")
+}
+
 function frozenE3(source) {
+  // Invert only the bounded profile-route amendment before checking the
+  // independently retained whole E3 region pins; never update historic pins.
+  source = priorProfileSource(source)
   // Reconstitute only the four new complete original regions. The old four
   // must independently match the reviewed a3aa37f9 output pins below; runtime
   // tests never read unpublished Git objects or trust a derived golden.
@@ -36,6 +47,34 @@ function frozenE3(source) {
   }
   return source
 }
+
+test("profile-route amendment upgrades the exact prior browser but refuses partial seams and stale qualification", async () => {
+  const current = patchSource(stock), prior = priorProfileSource(current)
+  const start = prior.indexOf("async function createBrowser(config,")
+  const end = prior.indexOf("\nasync function connectToBrowserEndpoint(", start)
+  assert.equal(require("node:crypto").createHash("sha256").update(prior.slice(start, end)).digest("hex"),
+    "a8790e635889a3ecdf436fdfee46cd12f12d2aac7a6c2256dd53a0a7f27ceff8",
+    "complete independently retained prior browser pin")
+  assert.equal(patchSource(prior), current)
+  for (const partial of [
+    current.replace("options: { ...resolveExtensionOptions(cliOptions),\n          ...(cliOptions.profileDirName !== undefined ? { profileDirName: cliOptions.profileDirName } : {}) }",
+      "options: resolveExtensionOptions(cliOptions)"),
+    current.replace("deskNativeBinding ? deskNativeBinding.selection.profileDirName : profileDirName, clientInfo.clientName,",
+      "profileDirName, clientInfo.clientName,"),
+    prior.replace('let ownership = "own";', 'let ownership = "tampered";'),
+  ]) assert.throws(() => patchSource(partial), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  const root = await mkTempRoot("profile-route-old-stage-"), lib = path.join(root, "node_modules/playwright-core/lib")
+  mkdirSync(path.join(lib, "tools/cli-client"), { recursive: true })
+  writeFileSync(path.join(lib, "coreBundle.js"), stock)
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
+  const installed = { dir: root, version: "owned-profile-route", core: null }
+  apply(installed)
+  writeFileSync(path.join(lib, "coreBundle.js"), prior)
+  assert.equal(readRevision(installed), 0, "an incompatible old stage is not current qualification")
+  apply(installed)
+  assert.equal(readRevision(installed), 4)
+  assert.equal(readFileSync(path.join(lib, "coreBundle.js"), "utf8"), current)
+})
 
 function priorE3(source) {
   // Mechanical inverse of only this fix, recording the exact complete

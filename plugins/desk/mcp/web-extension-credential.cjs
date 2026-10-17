@@ -532,8 +532,9 @@ function validateNativeBinding(record, route) {
   var checked = client.readPrivateJson(path.join(generation, "playwright-patch.json"));
   if (JSON.stringify(checked) !== JSON.stringify(verified.receipt)) throw nativeError("NATIVE_CODE_CHANGED");
   client.validateNativeRecord(record); // sole nine-field record validator
+  var profileDirName = options.profileDirName === undefined ? record.profileDirName : options.profileDirName;
   if (options.channel !== record.channel || browser.userDataDir !== record.userDataDir ||
-      options.profileDirName !== record.profileDirName) throw nativeError("NATIVE_SELECTION_MISMATCH");
+      profileDirName !== record.profileDirName) throw nativeError("NATIVE_SELECTION_MISMATCH");
   var capture = checkCapture(verified.runtime.discoveryInputs), home;
   try { home = os.userInfo().homedir; } catch (error) { throw nativeError("NATIVE_DISCOVERY_INPUTS_UNAVAILABLE"); }
   if (capture.platform !== process.platform || capture.nativeHome !== home)

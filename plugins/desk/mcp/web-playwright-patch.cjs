@@ -23,12 +23,17 @@ var BROWSER_SHA256 = "b4976bd9fda5aa82d853428acf2ff586fa16dae44b605649bd2652dd89
 var RELAY_START = "    CDPRelayServer = class {";
 var RELAY_END = "\n    ExtensionConnection = class {";
 var RELAY_SHA256 = "0c01234faaad68848d096c87c384a4a9318bdab8a5aef964824498b7e64751e5";
-var BROWSER_PREFLIGHT = [
+var LEGACY_BROWSER_PREFLIGHT = [
   '  const deskNativeBinding = Object.prototype.hasOwnProperty.call(config, "deskNativeContext")',
   '    ? require("./desk-extension-credential.cjs").validateNativeBinding(config.deskNativeContext, {',
   '        extension: config.extension, browser: config.browser, options: resolveExtensionOptions(cliOptions)',
   '      }) : undefined;',
 ].join("\n") + "\n";
+var BROWSER_PREFLIGHT = LEGACY_BROWSER_PREFLIGHT.replace(
+  "options: resolveExtensionOptions(cliOptions)",
+  "options: { ...resolveExtensionOptions(cliOptions),\n" +
+  "          ...(cliOptions.profileDirName !== undefined ? { profileDirName: cliOptions.profileDirName } : {}) }");
+var NATIVE_PROFILE_ARGUMENT = "deskNativeBinding ? deskNativeBinding.selection.profileDirName : profileDirName";
 // Exact complete E3 prefix at 76396fb8; only this known prior candidate and the
 // fixed prefix normalize. Never strip arbitrary native blocks.
 var LEGACY_NATIVE_PREFIX = [
@@ -158,7 +163,7 @@ function patchLegacySource(source) {
   if (hash(originalAcquisition) !== ACQUISITION_SHA256) throw unsupported();
   var browserEdits = [
     ["  if (config.browser.remoteEndpoint)", BROWSER_PREFLIGHT + "  if (config.browser.remoteEndpoint)"],
-    ["profileDirName, clientInfo.clientName);", "profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);"],
+    ["profileDirName, clientInfo.clientName);", NATIVE_PROFILE_ARGUMENT + ", clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);"],
     ["    throw error;\n  }\n}", "    throw deskNativeBinding ? deskNativeBinding.failure(error) : error;\n  }\n}"]
   ];
   var browserAwaitEdits = [
@@ -170,6 +175,13 @@ function patchLegacySource(source) {
       '    await (deskNativeBinding ? deskNativeBinding.waitFor(closeOperation, "browser.close") : closeOperation).catch(() => {\n    });']
   ];
   var originalAwait = normalizeEdits(browser.text, browserAwaitEdits);
+  // Only the complete reviewed previous browser form normalizes. Neither a
+  // partial profile amendment nor arbitrary preflight text is stripped.
+  if (hash(originalAwait.text) === "130aa9a9f7f885821e6bfddb2668548aa0db6d134b38f626922744ec47fbad5f") {
+    originalAwait.text = originalAwait.text.replace(LEGACY_BROWSER_PREFLIGHT, BROWSER_PREFLIGHT)
+      .replace("profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);",
+        NATIVE_PROFILE_ARGUMENT + ", clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);");
+  }
   var originalBrowser = normalizeEdits(originalAwait.text, browserEdits);
   var originalRelay = normalizeEdits(relay.text, RELAY_EDITS);
   if (hash(originalBrowser.text) !== BROWSER_SHA256 || hash(originalRelay.text) !== RELAY_SHA256) throw unsupported();
