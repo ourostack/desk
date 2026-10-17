@@ -977,6 +977,241 @@ test("channel portable shim setup refuses existing foreign fixture parent withou
   assert.equal(fs.existsSync(path.join(repo, "owned-git-probe-output")), false)
 })
 
+// Portable E1 MODELS execute only the actual byte writer, final decision and controller oracle.
+function e1ShimFinalModel(mode) {
+  const writes = [], callbacks = [], failures = []
+  let ended = false
+  const out = channelPortable().writer({
+    write(bytes, callback) { writes.push(Buffer.from(bytes)); callbacks.push(callback) },
+    end(callback) { ended = true; callback?.() },
+  }, (reason) => failures.push(reason))
+  const binding = { ...portableBinding, payloadDigest: "6".repeat(64) }
+  const value = { input: Buffer.from("hello\n"), keepalive: false }
+  const start = namedChannelShimSource.indexOf("  function final() {")
+  const end = namedChannelShimSource.indexOf("  let child;", start)
+  new Function("out", "send", "value", "diagnosticMode", "process", `
+    let failed = false, resultSent = false, childClosed = true, inputClosed = true,
+      finished = true, inputError = null, inputFinal, spawnError = null, keepalive;
+    const bytes = 6, outcome = { code: 0, signal: null };
+    ${namedChannelShimSource.slice(start, end)}
+    final();
+  `)(out, (type, extra) => out.send({ ...binding, type, ...extra }), value, mode,
+    { version: "v24.18.0", execPath: "C:\\hostedtoolcache\\windows\\node\\24.18.0\\x64\\node.exe" })
+  return { out, writes, callbacks, failures, ended: () => ended }
+}
+test("channel portable E1 actual writer offers fixed oversized body and preserves every old fault MODEL", () => {
+  const expected = { "partial-header": "0800", "partial-body": "080000007b",
+    "trailing-byte": "ff", malformed: "010000007b", oversized: "fd3f0000" }
+  for (const [kind, hex] of Object.entries(expected)) {
+    let offered
+    const out = channelPortable().writer({ write(bytes) { offered = Buffer.from(bytes) } })
+    out.fault(kind); assert.equal(offered.toString("hex"), hex)
+  }
+  let offered
+  const out = channelPortable().writer({ write(bytes) { offered = Buffer.from(bytes) } })
+  out.fault("oversized-body")
+  assert.equal(offered.length, 16385); assert.equal(offered.readUInt32LE(), 16381)
+  assert.deepEqual(offered.subarray(4), Buffer.alloc(16381, 0x78))
+  assert.equal(channelPortable().encode("x".repeat(16378)).length, 16384)
+  assert.throws(() => channelPortable().encode("x".repeat(16379)), /frame bound/)
+})
+test("channel portable E1 actual small RESULT and invalid buffer fit but 32769 refuses MODEL", () => {
+  const model = e1ShimFinalModel("root-oversized-body-after-result")
+  assert.equal(model.out.diagnostic().frames, 2)
+  const resultBytes = model.writes[0].length
+  assert.ok(resultBytes + 16385 <= 32768)
+  assert.equal(model.out.diagnostic().bytes, resultBytes + 16385)
+  const result = JSON.parse(model.writes[0].subarray(4).toString())
+  assert.equal(result.type, "RESULT")
+  const detail = JSON.parse(Buffer.from(result.detail, "base64").toString())
+  assert.deepEqual(detail.input, { state: "complete", length: 6, written: 6, error: null })
+  assert.equal(detail.command.code, 0)
+  assert.equal(model.writes.length, 1); assert.equal(model.ended(), false)
+  model.callbacks.shift()()
+  assert.equal(model.writes[1].length, 16385); assert.equal(model.writes[1].readUInt32LE(), 16381)
+  model.callbacks.shift()()
+  assert.equal(model.ended(), true); assert.equal(model.out.diagnostic().bytes, 0)
+  for (const mode of ["normal"]) {
+    const normal = e1ShimFinalModel(mode)
+    assert.equal(normal.out.diagnostic().frames, 1)
+    normal.callbacks.shift()()
+    assert.equal(normal.writes.length, 1); assert.equal(normal.ended(), true)
+  }
+  for (const [mode, hex] of [
+    ["root-malformed-after-result", "010000007b"], ["root-trailing-byte-after-result", "ff"],
+    ["root-partial-header-after-result", "0800"], ["root-partial-body-after-result", "080000007b"],
+  ]) {
+    const old = e1ShimFinalModel(mode)
+    old.callbacks.shift()(); assert.equal(old.writes[1].toString("hex"), hex)
+    old.callbacks.shift()(); assert.equal(old.ended(), true)
+  }
+  const callbacks = [], out = channelPortable().writer({ write(_bytes, callback) { callbacks.push(callback) } })
+  out.send("x".repeat(16378))
+  assert.throws(() => out.fault("oversized-body"), /outbound queue byte bound/)
+  assert.equal(out.diagnostic().bytes, 16384); assert.equal(out.diagnostic().frames, 1)
+  callbacks.shift()(); assert.equal(out.diagnostic().bytes, 0)
+})
+test("channel portable E1 delayed and error callbacks retain ownership and zero queued buffers MODEL", () => {
+  for (const errorAt of [0, 1]) {
+    const refs = [], callbacks = [], failures = [], allocated = []
+    const buffers = Object.create(Buffer)
+    buffers.alloc = (...args) => { const bytes = Buffer.alloc(...args); allocated.push(bytes); return bytes }
+    const core = new Function("Buffer", "return (" + channelCore.toString() + ")")(buffers)(
+      { timingSafeEqual: portableTimingSafeEqual })
+    const out = core.writer({ write(bytes, callback) { refs.push(bytes); callbacks.push(callback) } },
+      (reason) => failures.push(reason))
+    out.send({ type: "RESULT" }); out.fault("oversized-body"); out.finish()
+    assert.equal(out.diagnostic().frames, 2)
+    assert.equal(refs.length, 1); assert.ok(refs[0].some((byte) => byte !== 0))
+    if (errorAt === 1) {
+      callbacks.shift()()
+      assert.ok(refs[0].every((byte) => byte === 0))
+      assert.equal(refs[1].readUInt32LE(), 16381)
+      assert.equal(out.diagnostic().frames, 1); assert.equal(out.diagnostic().bytes, 16385)
+    }
+    callbacks.shift()(Error("modeled transport refusal"))
+    assert.deepEqual(failures, ["write"])
+    for (const bytes of refs) assert.ok(bytes.every((byte) => byte === 0))
+    const invalid = allocated.find((bytes) => bytes.length === 16385)
+    assert.ok(invalid); assert.ok(invalid.every((byte) => byte === 0))
+    assert.deepEqual(out.diagnostic(), { frames: 0, bytes: 0, busy: false, finishing: true, ended: true })
+    assert.throws(() => out.send({ type: "LATE" }), /closed/)
+  }
+})
+async function e1ControllerModel(patch = {}) {
+  const identity = { version: "v24.18.0", path: "C:\\node24.exe" }, digest = "6".repeat(64)
+  const base = { ...portableBinding }, mode = "root-oversized-body-after-result"
+  const proof = { ...retentionKernel(), ...base, purpose: "probe", payloadDigest: digest,
+    sealed: true, exactJobZero: true, rootRetired: true, privateRootProtected: true,
+    startIssued: true, controlComplete: false, failure: true, commandState: "reported", ...patch.proof }
+  const close = { kind: "owner-close-diagnostic", protocol: base.protocol, generation: base.generation,
+    preparationDigest: base.preparationDigest, ownedCreated: 17, ownedClosed: 17, ownedHandlesClosed: true,
+    crtControlClosed: true, kernelCertificateIssued: true, modelStranded: false, ...patch.close }
+  const terminal = { ...base, payloadDigest: digest, role: "owner", stage: "sealed-zero",
+    certificate: proof, reason: "frame-body-bound", ...patch.terminal }
+  const actual = { ownerExited: true, ownerClosed: true, stdoutEOF: true, stderrEOF: true, controlEOF: true,
+    stdoutClosed: true, stderrClosed: true, controlClosed: true, transportFailure: false,
+    code: 1, signal: null, ...patch.actual }
+  const report = { cases: [], stranded: [] }, sends = []
+  let ready = false, started = false
+  const result = { command: { state: "exited", code: 0, signal: null, spawnError: null },
+    input: { state: "complete", length: 6, written: 6, error: null },
+    runtime: { version: identity.version, execPath: identity.path }, ...patch.result }
+  const io = {
+    existsSync(filename) {
+      if (filename.endsWith(".command")) return started
+      if (filename.endsWith(".preload-shim")) return false
+      return ready
+    },
+    statSync() { return { size: 1024 } },
+    readFileSync(filename) {
+      if (filename.endsWith(".owner-close.json")) return JSON.stringify(close)
+      if (filename.endsWith(".preload-downstream")) return JSON.stringify({ role: "downstream", nodePath: "MODEL-PUBLIC" })
+      if (patch.missingCertificate) throw Error("modeled missing certificate")
+      return JSON.stringify(proof)
+    },
+  }
+  const source = namedChannelDriverSource
+  const declarations = source.slice(source.indexOf("const original ="), source.indexOf("const report ="))
+  const collect = source.slice(source.indexOf("function collectLeaseReceipt("), source.indexOf("function session("))
+  const validators = source.slice(source.indexOf("function validateOwnerClose("), source.indexOf("async function one("))
+  const one = source.slice(source.indexOf("async function one("), source.indexOf("async function main("))
+  const run = new Function("assert", "fs", "path", "core", "config", "process", "report", "session", "payload",
+    "sha", "save", "delay", `${declarations}\n${collect}\n${validators}\n${one}\nreturn { one, collectLeaseReceipt };`)(
+    assert, io, path, channelPortable(), { evidence: "MODEL-EVIDENCE", publicRoot: "MODEL-PUBLIC" },
+    { version: identity.version }, report,
+    (_identity, _mode, _tag, scope, deadline) => scope.acquire({
+      generation: base.generation, deadline, create: () => ({}), watch() {}, cancel() {}, resumeData() {}, resumeControl() {},
+      join: async () => actual, snapshot: () => actual,
+      collect: () => run.collectLeaseReceipt("MODEL-RECEIPT", base, digest, true, mode),
+    }, () => ({
+      base, receipt: "MODEL-RECEIPT", mode, configuredPayload: true,
+      events: [...(patch.missingTerminal ? [] : [terminal]), ...(patch.controlComplete ? [{ stage: "root-control-complete" }] : [])],
+      closed: Promise.resolve({ code: 1, signal: null }),
+      send(type) { if (type === "SEAL") channelPortable().resultBoundary().seal(); sends.push(type); if (type === "START") started = true },
+      writePayload() {}, setDigest() {},
+      async take(stage) {
+        if (stage === "created") return { pid: 101, administrator: false, elevated: false }
+        if (stage === "assigned-suspended") return {}
+        if (stage === "ready") {
+          ready = true
+          return { detail: Buffer.from(JSON.stringify({ version: identity.version, execPath: identity.path,
+            bootstrapNodeOptions: null, bootstrapNodePath: null })).toString("base64") }
+        }
+        if (stage === "configured") return { payloadProtected: true, payloadLockedDuringRootRead: true }
+        if (stage === "root-result-observed") return { detail: Buffer.from(JSON.stringify(result)).toString("base64") }
+        throw Error("unmodeled controller stage " + stage)
+      },
+      stdout: () => "ce013625030ba8dba906f756967f9e9ca394464a", eof: () => actual.stdoutEOF,
+      stderrEOF: () => actual.stderrEOF, controlEOF: () => actual.controlEOF, failed: () => actual.transportFailure,
+      finalDiagnostics: () => ({}),
+    })),
+    () => ({ input: "aGVsbG8K" }), () => digest, () => {}, async () => {})
+  await run.one(identity, mode, "2-" + mode)
+  return { record: report.cases[0], sends }
+}
+test("channel portable E1 actual controller requires native reason and genuine result then complete retirement MODEL", async () => {
+  const { record, sends } = await e1ControllerModel()
+  assert.equal(record.status, "ROOT_CONTROL_REFUSAL_WITH_REAL_RETIREMENT_EXPECTED")
+  assert.equal(record.proof.commandState, "reported"); assert.equal(record.proof.failure, true)
+  assert.equal(record.generations[0].status, "SETTLED")
+  assert.deepEqual(record.cleanupFailures, []); assert.ok(sends.includes("START"))
+  assert.equal(sends.includes("SEAL"), false)
+})
+test("channel portable E1 actual controller rejects wrong reason proof control completion and dirty joins MODEL", async () => {
+  for (const patch of [
+    { terminal: { reason: "malformed-envelope" } }, { missingTerminal: true },
+    { terminal: { generation: "9".repeat(64) } }, { terminal: { preparationDigest: "9".repeat(64) } },
+    { terminal: { payloadDigest: "9".repeat(64) } }, { controlComplete: true },
+    { proof: { controlComplete: true } }, { proof: { startIssued: false } },
+    { proof: { failure: false } }, { proof: { commandState: "unknown" } },
+    { proof: { exactJobZero: false } }, { proof: { rootRetired: false } },
+    { proof: { generation: "9".repeat(64) } }, { missingCertificate: true },
+    { close: { ownedClosed: 16 } }, { close: { crtControlClosed: false } },
+    { actual: { ownerClosed: false } }, { actual: { stdoutClosed: undefined } },
+    { actual: { stderrClosed: false } }, { actual: { controlClosed: false } },
+    { actual: { controlEOF: false } }, { actual: { transportFailure: true } },
+    { result: { input: { state: "failed", length: 6, written: 5, error: "EPIPE" } } },
+  ]) await assert.rejects(e1ControllerModel(patch), JSON.stringify(patch))
+})
+test("channel portable E1 actual projector full 78 case aggregate is bounded and recursively strict MODEL", () => {
+  const versions = ["v20.0.0", "v22.23.3", "v24.18.0"]
+  const nodes = versions.map((version, i) => ({ version, path: "C:\\node" + i + ".exe" }))
+  const read = (name) => JSON.parse(namedChannelDriverSource.match(new RegExp("const " + name + " = (\\[.*?\\]);", "s"))[1])
+  const supplemental = [...read("supplemental24").filter((mode) => mode !== "root-oversized-body-after-result"),
+    "root-oversized-body-after-result"]
+  const cases = []
+  for (let i = 0; i < 3; i++)
+    for (const mode of [...read("original"), ...read("authentication"), ...read("rootFraming"), ...(i === 2 ? supplemental : [])])
+      cases.push({ mode, parent: versions[i], root: versions[i], status: "ATTEMPTED" })
+  cases.push({ mode: "immediate-seal", parent: versions[0], root: versions[2], status: "ATTEMPTED" })
+  assert.equal(cases.length, 78)
+  cases[77].proof = retentionKernel()
+  const report = { status: "RUNNING", cases, stranded: [], nativeQualified: false,
+    driver: { version: nodes[2].version, execPath: nodes[2].path }, originalHistorical27Qualified: false }
+  assert.equal(projectNamedRole("report", report, { nodes }).cases.length, 78)
+  const oldProjector = new Function("namedChannelDriverSource", "namedChannelNativeBody", "parseNamedJSON", "createHash",
+    "return (" + projectNamedRole.toString().replace("arr(caseFact, 78)", "arr(caseFact, 77)") + ")")(
+    namedChannelDriverSource, namedChannelNativeBody, parseNamedJSON, createHash)
+  assert.throws(() => oldProjector("report", report, { nodes }), /schema-refused/)
+  assert.throws(() => projectNamedRole("report", { ...report, cases: [...cases, cases[0]] }, { nodes }), /schema-refused/)
+  for (const proof of [{ ...retentionKernel(), unknown: true }, { ...retentionKernel(), exactJobZero: "true" }])
+    assert.throws(() => projectNamedRole("report", { ...report, cases: [{ ...cases[0], proof }] }, { nodes }), /schema-refused/)
+  const result = { command: { state: "exited", code: 0, signal: null, spawnError: null },
+    input: { state: "complete", length: 6, written: 6, error: null },
+    runtime: { version: nodes[2].version, execPath: nodes[2].path } }
+  for (const bad of [{ ...result, input: { ...result.input, raw: "forbidden" } },
+    { ...result, runtime: { ...result.runtime, version: nodes[0].version } }])
+    assert.throws(() => projectNamedRole("report", { ...report, cases: [{ ...cases[0], result: bad }] }, { nodes }), /schema-refused/)
+  for (let i = 0; i < 3; i++) {
+    const worker = { ...report, cases: cases.filter((c) => c.parent === versions[i]) }
+    assert.deepEqual(projectNamedRole("report", worker, { nodes }), oldProjector("report", worker, { nodes }))
+  }
+  const roles = namedRetentionRoles()
+  assert.equal(roles.length, 955); assert.equal(roles.filter((r) => r.required).length, 228)
+  assert.equal(roles.filter((r) => r.name.startsWith("2-root-oversized-body-after-result")).length, 12)
+})
+
 function channelCore({ timingSafeEqual }) {
   const protocol = "desk.owned-git-channel-probe/1"
   const hex = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
@@ -1051,6 +1286,10 @@ function channelCore({ timingSafeEqual }) {
       send(value) { available(); enqueue(encode(value)) },
       fault(kind) {
         available()
+        if (kind === "oversized-body") {
+          const buffer = Buffer.alloc(16385, 0x78); buffer.writeUInt32LE(16381)
+          enqueue(buffer); return
+        }
         const hex = { "partial-header": "0800", "partial-body": "080000007b",
           "trailing-byte": "ff", malformed: "010000007b", oversized: "fd3f0000" }[kind]
         if (!hex) throw Error("unknown diagnostic wire fault")
@@ -2574,7 +2813,8 @@ function execute() {
     send("RESULT", { detail: encoded });
     if (diagnosticMode === "root-extra-result-after-result") send("RESULT", { detail: encoded });
     const fault = { "root-malformed-after-result": "malformed", "root-trailing-byte-after-result": "trailing-byte",
-      "root-partial-header-after-result": "partial-header", "root-partial-body-after-result": "partial-body" }[diagnosticMode];
+      "root-partial-header-after-result": "partial-header", "root-partial-body-after-result": "partial-body",
+      "root-oversized-body-after-result": "oversized-body" }[diagnosticMode];
     if (fault) out.fault(fault);
     out.finish(); // Only named negative fixtures append faults; normal RESULT remains final.
     if (value.keepalive === true && !keepalive) keepalive = setInterval(() => {}, 1000);
@@ -3795,7 +4035,8 @@ const rootFraming = ["root-malformed-after-result", "root-trailing-byte-after-re
 const supplemental24 = ["first-instance-collision", "wrong-same-job-peer", "configured-cancel",
   "immediate-seal", "failed-git", "parent-control-pressure", "server-read-only", "server-write-only",
   "owner-loss-before-start", "pending-connect-cancel", "root-write-pressure", "full-data-pressure",
-  "parent-overlapped-fragment", "ready-peer-failure", "server-loss-name-reuse", "owner-loss-name-reuse"];
+  "parent-overlapped-fragment", "ready-peer-failure", "server-loss-name-reuse", "owner-loss-name-reuse",
+  "root-oversized-body-after-result"];
 const report = { status: "RUNNING", cases: [], stranded: [], nativeQualified: false,
   driver: { version: process.version, execPath: process.execPath }, originalHistorical27Qualified: false };
 const reportPath = index === null ? config.report : config.report + "." + index;
@@ -4186,7 +4427,7 @@ async function one(identity, mode, tag) {
             else {
               if (mode === "full-data-pressure") s.pauseData();
               started = true; s.send("START");
-              if (rootFraming.includes(mode)) {
+              if (rootFraming.includes(mode) || mode === "root-oversized-body-after-result") {
                 if (mode !== "root-eof-before-result") {
                   const observed = await s.take("root-result-observed");
                   const result = JSON.parse(Buffer.from(observed.detail, "base64").toString("utf8"));
@@ -4199,6 +4440,15 @@ async function one(identity, mode, tag) {
                 }
                 const closed = await s.closed; assert.equal(closed.code, 1);
                 record.proof = validateCertificate(s, digest, true, true);
+                if (mode === "root-oversized-body-after-result") {
+                  const terminal = s.events.find((e) => e.stage === "sealed-zero");
+                  assert.ok(terminal); assert.equal(terminal.reason, "frame-body-bound");
+                  assert.equal(terminal.protocol, s.base.protocol); assert.equal(terminal.role, "owner");
+                  assert.equal(terminal.generation, s.base.generation);
+                  assert.equal(terminal.preparationDigest, s.base.preparationDigest);
+                  assert.equal(terminal.payloadDigest, digest);
+                  assert.deepEqual(terminal.certificate, record.proof);
+                }
                 assert.equal(record.proof.controlComplete, false);
                 assert.ok(!s.events.some((e) => e.stage === "root-control-complete"));
                 assert.throws(() => s.send("SEAL"), /EOF/);
@@ -4350,8 +4600,8 @@ export const channelProbeMaterial = {
 function assertChannelCandidateSources(material = channelProbeMaterial) {
   const expected = {
     "probe-owner.c": "595d7ec2c32f587cc852e8d6363729fc02453a90cca82f42dd7136bba5a1606c",
-    "probe-shim.cjs": "d17202fb5731e368d58a32ad40e78c38cafa4135bc5594ad35595ea79f1c433b",
-    "probe.test.cjs": "a836b2bfdaa40c6a5341b78582ed36acabe31e092f00911c029abc133099ef6e",
+    "probe-shim.cjs": "e54f4c44a9f781fbe7eecee71f17e4f102bae4a024568d702e4947328d48ed0b",
+    "probe.test.cjs": "f8f8971612c05ebd8fefe13609318fed80d98aa35de16c7b240335747e05ed1e",
     "channel-workload.cjs": "1c199c86a26d922c24b08c8ecfcb2b6985ac8c1cc200f0c5fad8961400bcf68a",
     "build.ps1": "92b6e73068ae95d9b74163793c1afc628c729c4e1ebf9244013dc8eb075db751",
     "preload.cjs": "ee455a699ce6c23f1dd7a7e84ef7c365894b8dfa9c60c43dd87b4cce73960457",
@@ -4606,7 +4856,7 @@ function projectNamedRole(kind, value, config) {
     cleanupFailures: arr(cleanupLabel, 32), generations: arr(generation, 2),
     diagnostics: obj({ ...fields("stdoutBytes stderrBytes stderrTailBytes parserHighWater", num),
       ...fields("stdoutEOF stderrEOF controlEOF failure", bool), outbound }) }, ["mode", "parent", "root", "status"])
-  const report = obj({ status: literal("RUNNING", "STOP", "CORPUS_OBSERVED_NOT_ADJUDICATED"), cases: arr(caseFact, 77),
+  const report = obj({ status: literal("RUNNING", "STOP", "CORPUS_OBSERVED_NOT_ADJUDICATED"), cases: arr(caseFact, 78),
     stranded: arr(num), nativeQualified: literal(false), driver: runtime, originalHistorical27Qualified: literal(false),
     failure: literal("bounded candidate failure; inspect typed receipts") },
   ["status", "cases", "stranded", "nativeQualified", "driver", "originalHistorical27Qualified"])
@@ -4952,7 +5202,7 @@ test("Windows constructed owned-Git channel candidate (separate admission requir
   const neutral = path.join(root, "neutral"), evidence = path.join(root, "evidence")
   const digest = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex")
   const status = { status: "STAGING", experiment: "constructed-channel1",
-    historical27Qualified: false, nativeQualified: false, originalSemanticCases: 27, supplementalCases: 50 }
+    historical27Qualified: false, nativeQualified: false, originalSemanticCases: 27, supplementalCases: 51 }
   let ctx, failed = false, primary
   const exec = (command, args, label, options = {}) => {
     const value = spawnSync(command, args, { encoding: "utf8", cwd: neutral, timeout: 120000, ...options })
@@ -5034,7 +5284,7 @@ test("Windows constructed owned-Git channel candidate (separate admission requir
       const worker = ctx.projections.get("channel-worker-report.json")
       const broader = ctx.projections.get("channel-broader-owner.json")
       assert.equal(worker.status, "CORPUS_OBSERVED_NOT_ADJUDICATED")
-      assert.equal(worker.cases.length, 77)
+      assert.equal(worker.cases.length, 78)
       assert.equal(broader.sealed, true); assert.equal(broader.exactJobZero, true)
       assert.deepEqual([...broader.retiredPids].sort((a, b) => a - b), [...worker.stranded].sort((a, b) => a - b))
     },
