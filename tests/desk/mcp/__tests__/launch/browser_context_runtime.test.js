@@ -269,6 +269,8 @@ test("actual maintained daemon options can reach native acquisition using the st
         init_fileUtils(){},init_inprocess(){},
       })
     let launchError,launchAction,launchSuccess=false
+    const launchTrace=[],launchStarted=Date.now()
+    const recordLaunch=(phase,details={})=>launchTrace.push({phase,ms:Date.now()-launchStarted,...details})
     const launchCalls=[]
     const acquisition=vm.runInNewContext(
       exactRegion(core,"async function createBrowserWithInfo(","\nasync function connectToBrowserEndpoint(")+
@@ -276,16 +278,26 @@ test("actual maintained daemon options can reach native acquisition using the st
         require:name=>{assert.equal(name,"./desk-extension-credential.cjs");return template("desk-extension-credential.cjs")},
         resolveExtensionOptions:configApi.resolveExtensionOptions,
         createExtensionBrowser:async(...args)=>{launchCalls.push(args);if(launchSuccess){
-          const browser=await createNative(...args);ownerBrowsers.set(args[5].contextId,browser);return browser
+          recordLaunch("native-acquisition-start")
+          const browser=await createNative(...args);recordLaunch("native-acquisition-complete")
+          ownerBrowsers.set(args[5].contextId,browser);return browser
         }
           throw launchError || Object.assign(Error("owned unavailable resource"),{code:"NATIVE_REQUEST_TIMEOUT"})},
       })
     function virtualSpawn(_node,args) {
+      recordLaunch("session-spawn")
       const child=new EventEmitter()
       child.stdout=new EventEmitter();child.stdout.destroy=()=>{};child.unref=()=>{};child.pid=810017
       const program=utils.program.createCommand()
       const previous=proc.stdout.write
-      proc.stdout.write=(bytes,callback)=>{queueMicrotask(()=>child.stdout.emit("data",Buffer.from(bytes)));callback?.();return true}
+      proc.stdout.write=(bytes,callback)=>{
+        recordLaunch("stdout-write",{bytes:Buffer.byteLength(bytes),pidField:/"pid"\s*:/.test(String(bytes))})
+        queueMicrotask(()=>{
+          recordLaunch("stdout-delivery",{listeners:child.stdout.listenerCount("data")})
+          child.stdout.emit("data",Buffer.from(bytes))
+        })
+        callback?.();return true
+      }
       const decorate=vm.runInNewContext(
         exactRegion(core,"function decorateProgram3(program4) {","\nfunction defaultConfigFile(")+"\ndecorateProgram3",{
           require:name=>{assert.equal(name,"./desk-native-error-transport.cjs");return codec},
@@ -294,12 +306,16 @@ test("actual maintained daemon options can reach native acquisition using the st
           deskNativeConfigPresent:configApi.deskNativeConfigPresent,
           resolveCLIConfigForCLI:configApi.resolveCLIConfigForCLI,
           createBrowserWithInfo:acquisition,startCliDaemonServer:(...args)=>{
+            recordLaunch("daemon-start")
             const state=socketStates.get(inventory.layout(args[0]).socketPath)
             return (state.daemon||=createDaemon(state))(...args)
           },gracefullyProcessExitDoNotHang(){},
         })
       decorate(program)
-      queueMicrotask(()=>{launchAction=program.parseAsync(args.slice(1),{from:"user"}).finally(()=>{proc.stdout.write=previous})})
+      queueMicrotask(()=>{launchAction=program.parseAsync(args.slice(1),{from:"user"}).finally(()=>{
+        recordLaunch("program-settled")
+        proc.stdout.write=previous
+      })})
       return child
     }
     t.after(async()=>{await launchAction})
@@ -360,11 +376,13 @@ test("actual maintained daemon options can reach native acquisition using the st
     Object.defineProperty(actorFs,"promises",{value:actorPromises})
     actorPromises.writeFile=async(file,data,...args)=>{
       if(file===state.sessionFile&&!fs.existsSync(file)) {
+        recordLaunch("metadata-writer-start")
         const imports=[]
         for(let i=0;i<process.execArgv.length;i++)if(process.execArgv[i]==="--import"&&process.execArgv[i+1]?.startsWith("data:"))
           imports.push("--import",process.execArgv[++i])
         await promisify(execFile)(process.execPath,[...imports,writer,JSON.stringify({metadata:JSON.parse(data)})],{
           cwd:state.directory,env:common.environment(normalEnv,state.directory,state.socketDirectory,process.execPath)})
+        recordLaunch("metadata-writer-complete")
         return
       }
       return fs.promises.writeFile(file,data,...args)
@@ -383,7 +401,7 @@ test("actual maintained daemon options can reach native acquisition using the st
         import_fs67:{default:actorFs},import_path63:{default:path},
         import_net10:{default:{createServer:callback=>{
           const server=new EventEmitter()
-          server.listen=(_file,cb)=>{state.accept=callback;cb()}
+          server.listen=(_file,cb)=>{recordLaunch("daemon-listen");state.accept=callback;cb()}
           return server
         }}},
         SocketConnection:actualSocket.SocketConnection,decorateServer(){},monitorSocketPath:async()=>{},
@@ -425,8 +443,14 @@ test("actual maintained daemon options can reach native acquisition using the st
     function pair() {
       const server=new EventEmitter(),client={readyState:1}
       server.readyState=1
-      server.send=bytes=>queueMicrotask(()=>client.onmessage?.({data:bytes}))
-      client.send=bytes=>queueMicrotask(()=>server.emit("message",Buffer.from(bytes)))
+      server.send=bytes=>queueMicrotask(()=>{
+        if(!client.onmessage)recordLaunch("client-message-before-listener")
+        client.onmessage?.({data:bytes})
+      })
+      client.send=bytes=>queueMicrotask(()=>{
+        if(!server.listenerCount("message"))recordLaunch("server-message-before-listener")
+        server.emit("message",Buffer.from(bytes))
+      })
       function close(){
         if(client.readyState===3)return
         client.readyState=server.readyState=3
@@ -566,7 +590,7 @@ test("actual maintained daemon options can reach native acquisition using the st
       code=instrumenter.instrumentSync(code,canonical,{registerMap(){}})
       const existing=global.__coverage__?.[canonical],generated=instrumenter.lastFileCoverage()
       if(existing)for(const key of ["statementMap","fnMap","branchMap"])
-        assert.deepEqual(generated[key],existing[key],"unaltered canonical Istanbul positions")
+        assert.deepEqual(plain(generated[key]),plain(existing[key]),"unaltered canonical Istanbul positions")
     }
     const request={mode:"signed-in",operation:"keep",contextId:id,root:l.root,stateRoot,socketDir:l.socketDir,socketRoot:options.socketRoot,
       installed,selection,cliDir:actualCli,args:[]}
@@ -619,7 +643,10 @@ test("actual maintained daemon options can reach native acquisition using the st
           workerInstance(module,execution,module)
         })
       },
-      run:extra=>worker.exports.main(operation(extra)),
+      run:extra=>worker.exports.main(operation(extra)).catch(error=>{
+        if(launchCalls.length)t.diagnostic("owned launch phases "+JSON.stringify(launchTrace))
+        throw error
+      }),
       setError:value=>{error=value},setLaunchError:value=>{launchError=value},setLaunchSuccess:()=>{launchSuccess=true},
       setRelated:value=>{related=value},setWire:value=>{wire=value},setActive:value=>{active=value},
       setNativeFailure:value=>{nativeFailure=value},setAck:value=>{acknowledged=value},
