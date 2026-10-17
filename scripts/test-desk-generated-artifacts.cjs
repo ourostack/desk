@@ -906,6 +906,25 @@ async function verifyGeneratedArtifacts(options = {}) {
     pluginRoot,
   });
   const errors = [];
+  try {
+    const native = require(path.join(mcpRoot, "web-native-artifacts.cjs")).artifactFamily(
+      "browser-messaging", ["go.mod", "main.go", "private_unix.go", "private_windows.go"],
+    );
+    native.verifyAssets(mcpRoot);
+    const nativeFiles = [
+      "native/browser-messaging/go.mod", "native/browser-messaging/main.go",
+      "native/browser-messaging/private_unix.go", "native/browser-messaging/private_windows.go",
+      "web-native-artifacts.cjs", "scripts/build-browser-messaging-assets.cjs",
+      "artifacts/browser-messaging/manifest.json",
+      ...native.TARGETS.map((target) => `artifacts/browser-messaging/${target}/desk-browser-messaging${target.startsWith("win32-") ? ".exe" : ""}`),
+    ];
+    for (const file of nativeFiles) {
+      if (!gitTracksFile({ repoRoot, repoPath: relativeToRepo(repoRoot, path.join(mcpRoot, file)), spawn }))
+        errors.push(`browser-messaging distribution must track ${file}`);
+    }
+  } catch {
+    errors.push("browser-messaging native source/asset integrity verification failed");
+  }
   const verifications = expectations.map((expectation) => verifyPublishedRuntimeDependencyPack({
     expectation,
     existsSync: exists,

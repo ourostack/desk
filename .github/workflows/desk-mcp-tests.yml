@@ -653,6 +653,50 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  desk-native-messaging:
+    name: Native messaging source and capsule (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: "22"
+          - os: macos-latest
+            node: "22"
+          - os: windows-latest
+            node: "24"
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up selected Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Set up pinned native compiler
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          check-latest: false
+          cache: false
+      - name: Test unchanged native Go source on this actual OS
+        working-directory: plugins/desk/mcp/native/browser-messaging
+        run: go test ./...
+      - name: Reproduce all eight tracked public assets
+        shell: bash
+        run: |
+          node plugins/desk/mcp/scripts/build-browser-messaging-assets.cjs
+          node plugins/desk/mcp/scripts/build-browser-messaging-assets.cjs --verify
+          git diff --exit-code -- plugins/desk/mcp/artifacts/browser-messaging
+      - name: Exercise protected capsule configs and real Go-to-Node entry on this OS
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern="^native:" ./tests/desk/mcp/__tests__/launch/native_messaging_install.test.js
+
   desk-native-windows:
     name: desk on native Windows
     runs-on: windows-latest
@@ -729,6 +773,7 @@ jobs:
       - desk-mcp-tests
       - desk-runtime-packs
       - desk-native-windows
+      - desk-native-messaging
       - unused-code
     if: ${{ always() }}
     runs-on: ubuntu-latest

@@ -410,7 +410,7 @@ function scriptExists(scriptPath) {
 }
 
 function packageScriptTargetPath(command) {
-  const match = command.match(/^node\s+scripts\/(.+\.js)$/u)
+  const match = command.match(/^node\s+scripts\/(.+\.(?:js|cjs))(?:\s+--verify)?$/u)
   assert.ok(match, `package script command must run a local JS script: ${command}`)
   return path.join(mcpRoot, "scripts", match[1])
 }
@@ -447,6 +447,17 @@ test("Desk MCP package exposes every freshness artifact script CI needs", () => 
       true,
       `${scriptName} target script must exist`,
     )
+  }
+})
+
+test("normal native messaging scripts use the one real family builder and its compile-free verify mode", () => {
+  const packageJson = loadJson("plugins", "desk", "mcp", "package.json")
+  for (const [name, command] of Object.entries({
+    "browser:messaging-assets:build": "node scripts/build-browser-messaging-assets.cjs",
+    "browser:messaging-assets:verify": "node scripts/build-browser-messaging-assets.cjs --verify",
+  })) {
+    assert.equal(packageJson.scripts[name], command)
+    assert.equal(existsSync(packageScriptTargetPath(command)), true)
   }
 })
 
