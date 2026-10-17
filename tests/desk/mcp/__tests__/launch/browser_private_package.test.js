@@ -12,6 +12,41 @@ import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/
 const require = createRequire(import.meta.url)
 const controller = require(path.join(mcpRoot, "browser-private.cjs"))
 
+function daemonExitConfirmed(daemon, observed, probe = pid => process.kill(pid, 0)) {
+  if (typeof observed === "string" && observed.length > 0) return observed !== daemon.started
+  try { probe(daemon.pid) }
+  catch (error) {
+    if (error.code === "ESRCH") return true
+  }
+  return false
+}
+
+test("failed daemon inspection does not establish exit while the PID still exists", () => {
+  assert.equal(daemonExitConfirmed({ pid: 123, started: "recorded-generation" }, null, () => {}), false)
+  assert.equal(daemonExitConfirmed({ pid: process.pid, started: "recorded-generation" }, null), false)
+})
+
+for (const [observed, error, expected] of [
+  ["recorded-generation", "must-not-probe", false],
+  ["different-generation", "must-not-probe", true],
+  [null, "ESRCH", true],
+  [null, "EPERM", false],
+  [null, "EACCES", false],
+  [null, "ETIMEDOUT", false],
+  ["", null, false],
+]) {
+  test("daemon exit custody distinguishes " + String(observed) + " / " + String(error), () => {
+    let calls = 0
+    const probe = () => {
+      calls++
+      if (error === "must-not-probe") throw new Error("generation observation must not inspect a replacement PID")
+      if (error) throw Object.assign(new Error("owned fixture probe"), { code: error })
+    }
+    assert.equal(daemonExitConfirmed({ pid: 123, started: "recorded-generation" }, observed, probe), expected)
+    assert.equal(calls, error === "must-not-probe" ? 0 : 1)
+  })
+}
+
 test("actual installed private CLI retains isolated live pages and disposes only its own browser", {
   skip: process.env.DESK_PRIVATE_BROWSER_SMOKE !== "1",
   timeout: 240000,
@@ -50,8 +85,8 @@ test("actual installed private CLI retains isolated live pages and disposes only
     if (server) await new Promise(resolve => server.close(resolve))
     for (const daemon of daemons) {
       const deadline = Date.now() + 15000
-      while (await readProcessStart(daemon.pid) === daemon.started && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
-      if (await readProcessStart(daemon.pid) === daemon.started) errors.push("Recorded private daemon generation remains")
+      while (!daemonExitConfirmed(daemon, await readProcessStart(daemon.pid)) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
+      if (!daemonExitConfirmed(daemon, await readProcessStart(daemon.pid))) errors.push("Recorded private daemon generation exit remains unconfirmed")
     }
     if (unconfirmedCreate) errors.push("A failed creation retains an unresolved startup obligation")
     receipt.assertionsComplete = completed
