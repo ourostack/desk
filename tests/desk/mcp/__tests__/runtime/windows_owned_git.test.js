@@ -40,7 +40,7 @@ function authenticate(c) {
   assert.equal(state.accept(frame("owner", "AUTH", { clientNonce: nonce, capability: Q })), "send_ack")
   return state
 }
-function componentSession() {
+function componentSession(onFrame = () => {}) {
   const c = core(), d = driver(), stream = new EventEmitter(), frames = [], errors = [], writes = []
   const currentBinding = { ...binding }, deadline = c.captureDeadline(1000)
   const observations = d.createObservations(currentBinding, 0)
@@ -50,6 +50,7 @@ function componentSession() {
     onFrame(value) {
       if (["RESULT", "CONTROL_COMPLETE", "TERMINAL"].includes(value.type)) observations.owner(value)
       frames.push(value)
+      onFrame(value, wire)
     }, onError: (error) => errors.push(error.message) })
   const receive = (value) => stream.emit("data", c.encodeFrame(value))
   const clock = { clock: deadline.clock, deadlineNs: deadline.expiresNs.toString() }
@@ -57,7 +58,7 @@ function componentSession() {
     qpcTicks: "10000000", qpcFrequency: "10000000", nowNs: "1000000000" }))
   const acceptClock = () => wire.send(frame("parent", "CLOCK_ACCEPT", clock))
   const ready = () => receive(frame("owner", "READY", { payloadPath: "/payload" }))
-  return { wire, receive, frames, errors, writes, observations, clockReady, acceptClock, ready,
+  return { wire, receive, stream, frames, errors, writes, observations, clockReady, acceptClock, ready,
     configure() {
       clockReady(); acceptClock(); ready()
       wire.send(frame("parent", "CONFIG", { path: "/payload" }, Q))
@@ -460,6 +461,76 @@ test("portable raw component driver uses product wire without adapter", async ()
   assert.deepEqual(dropped.errors, ["component_protocol"])
   assert.deepEqual(dropped.observations.snapshot().result, result())
   assert.equal(dropped.observations.snapshot().certificate, null)
+  const encodedConfigured = core().encodeFrame(frame("owner", "CONFIGURED", {}, Q))
+  const noStartCertificate = certificate({ payloadDigest: Q })
+  const failedTerminal = frame("owner", "TERMINAL", { certificate: noStartCertificate,
+    resultB64: null, failureCode: "io" }, Q)
+  const encodedTerminal = core().encodeFrame(failedTerminal)
+  function chunksFor(values) {
+    const bytes = Buffer.concat(values)
+    const split = values[0].length
+    const cuts = [1, 3, 4, split - 1, split + 1, split + 3, bytes.length - 1]
+    const fragmented = []
+    let start = 0
+    for (const end of cuts) { if (end > start && end < bytes.length) { fragmented.push(bytes.subarray(start, end)); start = end } }
+    fragmented.push(bytes.subarray(start))
+    return [values, [bytes], fragmented]
+  }
+  for (const action of ["START", "CANCEL"]) for (const chunks of chunksFor([encodedConfigured, encodedTerminal])) {
+    const raced = componentSession((value, activeWire) => {
+      if (value.type === "CONFIGURED") activeWire.send(frame("parent", action, {}, Q))
+    })
+    raced.clockReady(); raced.acceptClock(); raced.ready()
+    raced.wire.send(frame("parent", "CONFIG", { path: "/payload" }, Q))
+    for (const chunk of chunks) raced.stream.emit("data", chunk)
+    assert.deepEqual(raced.errors, [])
+    assert.deepEqual(raced.frames.map((value) => value.type), ["CLOCK_READY", "READY", "CONFIGURED", "TERMINAL"])
+    assert.deepEqual(raced.observations.snapshot().certificate, noStartCertificate)
+    assert.equal(raced.observations.snapshot().result, null)
+    assert.equal(raced.frames.at(-1).failureCode, "io")
+    assert.equal(raced.frames.at(-1).resultB64, null)
+    assert.deepEqual(raced.writes.map((bytes) => JSON.parse(bytes.subarray(4)).type), ["CLOCK_ACCEPT", "CONFIG", action])
+  }
+  const readyBytes = core().encodeFrame(frame("owner", "READY", { payloadPath: "/payload" }))
+  const unconfiguredTerminal = frame("owner", "TERMINAL", { certificate: certificate(),
+    resultB64: null, failureCode: "io" })
+  for (const chunks of chunksFor([readyBytes, core().encodeFrame(unconfiguredTerminal)])) {
+    const raced = componentSession((value, activeWire) => {
+      if (value.type === "READY") activeWire.send(frame("parent", "CONFIG", { path: "/payload" }, Q))
+    })
+    raced.clockReady(); raced.acceptClock()
+    for (const chunk of chunks) raced.stream.emit("data", chunk)
+    assert.deepEqual(raced.errors, [])
+    assert.deepEqual(raced.observations.snapshot().certificate, certificate())
+    assert.equal(raced.frames.at(-1).failureCode, "io")
+    assert.deepEqual(raced.writes.map((bytes) => JSON.parse(bytes.subarray(4)).type), ["CLOCK_ACCEPT", "CONFIG"])
+  }
+  const resultBytes = core().encodeFrame(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))
+  const reportedCertificate = certificate({ payloadDigest: Q, startIssued: true,
+    commandState: "reported", resultB64: b64(result()) })
+  const completionBytes = core().encodeFrame(frame("owner", "CONTROL_COMPLETE", {}, Q))
+  const reportedTerminal = frame("owner", "TERMINAL", { certificate: reportedCertificate,
+    resultB64: b64(result()), failureCode: "io" }, Q)
+  for (const chunks of chunksFor([resultBytes, completionBytes, core().encodeFrame(reportedTerminal)])) {
+    const raced = componentSession((value, activeWire) => {
+      if (value.type === "CONTROL_COMPLETE") activeWire.send(frame("parent", "SEAL", {}, Q))
+    })
+    raced.configure(); raced.wire.send(frame("parent", "START", {}, Q))
+    for (const chunk of chunks) raced.stream.emit("data", chunk)
+    assert.deepEqual(raced.errors, [])
+    assert.deepEqual(raced.observations.snapshot().certificate, reportedCertificate)
+    assert.deepEqual(raced.observations.snapshot().result, result())
+    assert.equal(raced.frames.at(-1).failureCode, "io")
+    assert.deepEqual(raced.writes.map((bytes) => JSON.parse(bytes.subarray(4)).type), ["CLOCK_ACCEPT", "CONFIG", "START", "SEAL"])
+  }
+  for (const chunks of chunksFor([resultBytes, core().encodeFrame(lostResult)])) {
+    const raced = componentSession()
+    raced.configure(); raced.wire.send(frame("parent", "START", {}, Q))
+    for (const chunk of chunks) raced.stream.emit("data", chunk)
+    assert.deepEqual(raced.errors, ["component_protocol"])
+    assert.deepEqual(raced.observations.snapshot().result, result())
+    assert.equal(raced.observations.snapshot().certificate, null)
+  }
   const capture = d.createDataObservations({ outputLimit: 3 })
   capture.chunk("stdout", Buffer.from("é")); capture.chunk("stderr", Buffer.from("ab"))
   assert.equal(capture.snapshot().bytes, 4)

@@ -97,10 +97,15 @@ function createWire({ stream, binding, deadline, onFrame = () => {}, onError = (
   stream.on("data", (bytes) => {
     if (failed || closed) return
     try {
-      for (const value of decoder.push(bytes)) {
-        if (value.type === "CONFIGURED") binding.payloadDigest = value.payloadDigest
-        else if (value.type === "TERMINAL") stopped = true
-        onFrame(value)
+      if (!Buffer.isBuffer(bytes)) fail()
+      // Deliver each completed frame before parsing later authority. Byte views
+      // use the existing decoder without adding a second frame-length parser.
+      for (let at = 0; at < bytes.length && !failed; at++) {
+        for (const value of decoder.push(bytes.subarray(at, at + 1))) {
+          if (value.type === "CONFIGURED") binding.payloadDigest = value.payloadDigest
+          else if (value.type === "TERMINAL") stopped = true
+          onFrame(value)
+        }
       }
     } catch { reject() }
   })
