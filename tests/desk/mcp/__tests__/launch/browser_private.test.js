@@ -12,6 +12,7 @@ import net from "node:net"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 import { removeTree } from "../_remove_tree.js"
+import { windowsPowerShellPath } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 
 const require = createRequire(import.meta.url)
 const entry = path.join(mcpRoot, "browser-private.cjs")
@@ -428,6 +429,37 @@ test("private creation uses an installed Edge channel when that is the existing 
   assert.ok(result.payload.result.args.includes("msedge"))
   const config = JSON.parse(fs.readFileSync(result.payload.resources.configFile))
   assert.equal(config.browser.launchOptions.executablePath, executable)
+})
+
+test("Windows shell folders resolve inside the isolated private environment", { skip: process.platform !== "win32" }, async () => {
+  const f = await fixture()
+  const script = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class DeskPrivateShellFolder {
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+  public static extern int SHGetFolderPath(IntPtr hwnd, int csidl, IntPtr token, int flags, StringBuilder path);
+}
+'@
+$results = foreach ($id in @(28,26)) {
+  $buffer = New-Object System.Text.StringBuilder 260
+  $code = [DeskPrivateShellFolder]::SHGetFolderPath([IntPtr]::Zero, $id, [IntPtr]::Zero, 0, $buffer)
+  @{ id = $id; code = $code; path = $buffer.ToString() }
+}
+ConvertTo-Json -InputObject @($results) -Compress
+`
+  const result = await f.invoke(["create"], { env: { ...process.env, ...f.options.env }, execute: async (_node, _args, options) => {
+    const { stdout } = await exec(windowsPowerShellPath(options.env), ["-NoProfile", "-NonInteractive", "-Command", script], {
+      cwd: options.cwd, env: options.env, windowsHide: true, timeout: 15000,
+    })
+    const folders = JSON.parse(stdout)
+    assert.deepEqual(folders.map(folder => folder.code), [0, 0], stdout)
+    assert.deepEqual(folders.map(folder => path.normalize(folder.path)), [options.env.LOCALAPPDATA, options.env.APPDATA].map(directory => path.normalize(directory)))
+    return { state: "running" }
+  } })
+  assert.equal(result.exitCode, 0, result.payload.message)
 })
 
 test("two fresh private creations isolate HOME/cwd/config/session and disable idle timeout", async () => {
