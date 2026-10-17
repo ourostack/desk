@@ -82,14 +82,16 @@ function send(socket, SocketConnection, method, params, native) {
 function parsePage(request) {
   common.validatePageArgs(request.args,request.mode);
   var help = require(path.join(request.cliDir,"help.json"));
+  if (request.mode === "signed-in" && (!help || !Array.isArray(help.booleanOptions) ||
+      !help.commands || typeof help.commands !== "object"))
+    fail("unsupported_cli","Unknown maintained page parser schema");
   var minimist = require(path.join(request.cliDir,"minimist.js")).minimist;
   var args = minimist(request.args,{boolean:help.booleanOptions.concat(["all","g","help","json","raw","version"]),string:["_"]});
   var command = help.commands[args._[0]];
   if (request.mode === "signed-in") {
     if (!command || !command.flags || !Array.isArray(command.args)) fail("unsupported_cli","Unknown maintained command schema");
     Object.keys(args).forEach(function(key) {
-      if (key !== "_" && !Object.prototype.hasOwnProperty.call(command.flags,key) &&
-          !(args[key] === false && Object.prototype.hasOwnProperty.call(command.flags,"no-"+key)))
+      if (key !== "_" && !Object.prototype.hasOwnProperty.call(command.flags,key))
         fail("invalid_arguments","Unknown maintained command option");
     });
     if (!command.variadicArg && args._.length-1 > command.args.length) fail("invalid_arguments","Too many page arguments");
@@ -102,6 +104,8 @@ function runPage(request, socket, SocketConnection, native) {
   var params;
   try { params = parsePage(request); } catch (error) { socket.destroy(); throw error; }
   return send(socket,SocketConnection,"run",params,native).then(function(response) {
+    if (request.mode === "signed-in" && (!response || typeof response.text !== "string"))
+      fail("runner_failed","Maintained page result is unconfirmed; the context remains retained");
     if (!response || response.isError) fail("upstream_failed",response && response.text || "Upstream command failed");
     var result;
     try { result = JSON.parse(response.text); } catch (_) { result = response.text; }
@@ -163,10 +167,10 @@ function privateMain(request, registryModule, Session, program, SocketConnection
 }
 async function signedMain(request, registryModule, Session, SocketConnection, info) {
   var clientModule = require("./web-native-messaging.cjs");
-  if (require("./web-playwright-patch.cjs").readRevision(request.installed) !== 4) fail("unsupported_cli","Native generation is not qualified");
   var codec = require(path.join(request.installed.dir,"node_modules","playwright-core","lib","desk-native-error-transport.cjs"));
   var inventoryModule = await import(require("url").pathToFileURL(path.join(__dirname,"src/browser/native-owner-inventory.mjs")).href);
-  var inventory = inventoryModule.createNativeOwnerInventory({browserStateRoot:request.stateRoot,cliDir:request.cliDir,binding:request.selection});
+  var inventory = inventoryModule.createNativeOwnerInventory({browserStateRoot:request.stateRoot,cliDir:request.cliDir,
+    binding:request.selection,socketRoot:request.socketRoot});
   var descriptor = inventory.descriptor(request.contextId), entry,stamp;
   if (descriptor.directory !== request.root || descriptor.socketDirectory !== request.socketDir) fail("NATIVE_OWNER_INVALID","Owner layout mismatch");
   async function load() {
@@ -194,6 +198,7 @@ async function signedMain(request, registryModule, Session, SocketConnection, in
   }
   var before = await load();
   if (request.operation !== "discard") {
+    if (before.cli !== "active") fail("context_absent","Native CLI is absent; its retained context was not recreated");
     await client.request("context.resume",{});
     var socket = await connect(entry.config.socketPath);
     if (request.operation === "run") return runPage(request,socket,SocketConnection,{codec:codec,contextId:request.contextId,stamp:stamp});
@@ -203,6 +208,7 @@ async function signedMain(request, registryModule, Session, SocketConnection, in
   var nativeResult = await client.request("context.discard",{});
   if (!nativeResult || nativeResult.contextId !== request.contextId || nativeResult.discarded !== true)
     fail("cleanup_unconfirmed","Native discard was not confirmed");
+  try {
   var after = await load();
   if (after.fingerprint !== before.fingerprint) fail("cleanup_unconfirmed","Native metadata changed during discard");
   if (after.cli === "active") {
@@ -218,12 +224,19 @@ async function signedMain(request, registryModule, Session, SocketConnection, in
   }
   throw Object.assign(new Error("Native disposition acknowledged but CLI absence is unconfirmed"),
     {code:"cleanup_unconfirmed",resources:{native:nativeResult,cli:{disposition:"unknown"}}});
+  } catch (error) {
+    error.contextResources = Object.assign({},error.contextResources,
+      {nativeDisposition:nativeResult,cliDisposition:"unknown"});
+    throw error;
+  }
 }
 function main(request) {
   return Promise.resolve().then(function() {
     if (!request || ["private","signed-in"].indexOf(request.mode) === -1) fail("invalid_arguments","Expected an explicit context mode");
     if (common.modeOf(request.contextId) !== request.mode) fail("invalid_arguments","Handle namespace mismatch");
     if (request.mode === "signed-in" && process.platform !== "win32") process.umask(63);
+    if (request.mode === "signed-in" && require("./web-playwright-patch.cjs").readRevision(request.installed) !== 4)
+      fail("unsupported_cli","Native generation is not qualified");
     var registry = require(path.join(request.cliDir,"registry.js"));
     var Session = require(path.join(request.cliDir,"session.js")).Session;
     var program = require(path.join(request.cliDir,"program.js")).program;

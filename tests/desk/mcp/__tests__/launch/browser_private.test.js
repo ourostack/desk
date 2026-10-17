@@ -19,6 +19,15 @@ const entry = path.join(mcpRoot, "browser-private.cjs")
 const A = "private-11111111-1111-4111-8111-111111111111"
 const B = "private-22222222-2222-4222-8222-222222222222"
 const exec = promisify(execFile)
+// Data-URL registrations observe/instrument the owned process boundary without
+// replaying the isolation preload, which would overwrite its private HOME.
+function resourceImports() {
+  const imports=[]
+  for(let i=0;i<process.execArgv.length;i++)
+    if(process.execArgv[i]==="--import"&&process.execArgv[i+1]?.startsWith("data:"))
+      imports.push("--import",process.execArgv[++i])
+  return imports
+}
 function controller() {
   assert.equal(fs.existsSync(entry), true, "private browser controller must exist")
   return require(entry)
@@ -171,7 +180,7 @@ exports.program=async () => {
     execute: async (node, args, opts) => {
       // Coverage may inject its own preload after this product boundary.
       assert.equal(opts.env.NODE_OPTIONS, undefined, "private runner must not inherit caller preloads")
-      const result = await exec(node, ["--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
+      const result = await exec(node, [...resourceImports(),"--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
         .catch(error => {
           const payload = JSON.parse(error.stdout)
           throw Object.assign(Error(payload.message), { code: payload.code })
@@ -197,7 +206,7 @@ function defaultExecutor(f, body) {
   const node = path.join(f.root, "runner-node")
   put(node, "#!/usr/bin/env node\n" + (body || `
 const cp=require("child_process");
-const result=cp.spawnSync(process.execPath,["--require",${JSON.stringify(f.preload)},...process.argv.slice(2)],{stdio:"inherit"});
+const result=cp.spawnSync(process.execPath,[...${JSON.stringify(resourceImports())},"--require",${JSON.stringify(f.preload)},...process.argv.slice(2)],{stdio:"inherit"});
 process.exitCode=result.status===null?1:result.status;
 `))
   fs.chmodSync(node, 0o700)
@@ -316,10 +325,40 @@ test("argument and generated-ID failures happen before runtime preparation", asy
     assert.equal(result.exitCode, 1)
     assert.equal(result.payload.code, "invalid_arguments")
   }
-  for (const id of ["invalid", null]) {
+  for (const id of ["invalid", null,"11111111-1111-4111-8111-111111111111"]) {
     const result = await controller().run(["create"], { contextId: () => id })
     assert.equal(result.payload.code, "invalid_arguments")
   }
+})
+test("explicit controller CLI and typed private mode preserve the complete legacy lifecycle and optional label",async()=>{
+  const f=await fixture(),facade=require(path.join(mcpRoot,"browser-context.cjs"))
+  const created=await facade.run(["create","--mode","private"],f.options)
+  assert.equal(created.exitCode,0)
+  const id=created.payload.contextId
+  assert.match(id,/^private-/)
+  assert.equal((await facade.run(["keep",id],f.options)).exitCode,0)
+  assert.equal((await facade.run(["run",id,"--","snapshot"],f.options)).exitCode,0)
+  assert.equal((await facade.context({action:"discard",contextId:id},f.options)).exitCode,0)
+  const labeled=await facade.context({action:"create",mode:"private",label:"Private control"},f.options)
+  assert.equal(labeled.exitCode,0)
+  assert.equal((await facade.command({contextId:labeled.payload.contextId,args:["snapshot"]},f.options)).exitCode,0)
+  assert.equal((await facade.context({action:"discard",contextId:labeled.payload.contextId},f.options)).exitCode,0)
+})
+test("private facade preserves additive structured error resources without replacing legacy ownership resources",async()=>{
+  const f=await fixture()
+  const resources={disposition:"unknown",remainingTabIds:[7]}
+  const response=await f.invoke(["create"],{execute:async()=>{throw Object.assign(Error("Owned typed error"),{code:"owned_error",resources})}})
+  assert.equal(response.payload.code,"owned_error")
+  assert.deepEqual(response.payload.resources.operation,resources)
+  assert.ok(response.payload.resources.contextDirectory.startsWith(f.root))
+})
+test("private shell entry keeps the sole run export and emits its actual validation result",async t=>{
+  const root=await mkTempRoot("desk-private-shell-")
+  const result=await exec(process.execPath,[...resourceImports(),entry,"keep"],{
+    cwd:root,env:{...process.env,HOME:root,DESK_BROWSER_STATE_DIR:root},
+  }).catch(error=>error)
+  assert.equal(result.code,1)
+  assert.equal(JSON.parse(result.stdout).code,"invalid_arguments")
 })
 test("runtime preparation errors keep ordinary and non-Error diagnostics visible", async () => {
   const f = await fixture()

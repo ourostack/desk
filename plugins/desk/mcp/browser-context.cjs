@@ -40,7 +40,8 @@ function validate(input, command) {
 function moduleImport(file) {
   return new Function("url","return import(url)")(require("url").pathToFileURL(file).href);
 }
-async function nativeSelection(runtime, source, input) {
+function nativeSelection(runtime, source, input) {
+  return Promise.resolve().then(function() {
   var profile = require("./web-real-profile.cjs"), discovery = require("./web-browser-discovery.cjs");
   var home = os.userInfo().homedir;
   var declaration = profile.readDeclaration({env:source,homeDir:home});
@@ -53,56 +54,74 @@ async function nativeSelection(runtime, source, input) {
   var userDataDir = fs.realpathSync(profile.userDataDir(declaration.channel,process.platform,source,home));
   var profileDirName = profile.findProfileDir(path.join(userDataDir,"Local State"),declaration.domain);
   if (!profileDirName) common.fail("browser_profile_unavailable","Declared existing profile is unavailable");
-  var distribution = await moduleImport(path.join(__dirname,"native-messaging-install.mjs"));
-  var verified = await distribution.verifyNativeDistribution(path.dirname(__dirname));
+  return moduleImport(path.join(__dirname,"native-messaging-install.mjs")).then(function(distribution) {
+    return distribution.verifyNativeDistribution(path.dirname(__dirname));
+  }).then(function(verified) {
   var nativeReadyFile = path.join(runtime.stateRoot,"native-owned","state","native-provider-"+
     crypto.createHash("sha256").update(executable+"\0"+path.join(userDataDir,profileDirName)).digest("hex")+".json");
   var client = require("./web-native-messaging.cjs");
   var selection = {channel:declaration.channel,userDataDir:userDataDir,profileDirName:profileDirName,
     nativeReadyFile:nativeReadyFile,extensionId:verified.extensionId,sourceDigest:verified.extensionSourceDigest,browserExecutable:executable};
-  var ready = client.readPrivateJson(nativeReadyFile);
+  var ready;
+  try { ready = client.readPrivateJson(nativeReadyFile); }
+  catch (error) {
+    if (error.code === "ENOENT") common.fail("NATIVE_READY_UNAVAILABLE","Existing native browser readiness is unavailable; no context was allocated");
+    throw error;
+  }
   if (ready.profileRoot !== path.join(userDataDir,profileDirName) || ready.extensionId !== selection.extensionId ||
       ready.sourceDigest !== selection.sourceDigest || !ready.browser || ready.browser.executable !== executable)
     common.fail("NATIVE_READY_INVALID","Existing native readiness does not match the selected profile/source");
   if (input.action === "create") label(input.label);
   return selection;
+  });
+  });
 }
-async function protectSigned(l, stateRoot, creating) {
+function protectSigned(l, stateRoot, creating) {
   var client = require("./web-native-messaging.cjs");
-  var protection = await moduleImport(path.join(__dirname,"src/factory/os-protect.js"));
+  return moduleImport(path.join(__dirname,"src/factory/os-protect.js")).then(function(protection) {
   var directories = [stateRoot,l.parent,l.root].concat([".playwright","home","config","cache","data","state","runtime","local","roaming"].map(function(dir) { return path.join(l.root,dir); }));
   if (process.platform === "win32") directories = directories.concat(["AppData","AppData/Local","AppData/Roaming"].map(function(dir) {
     return path.join(l.root,"home",dir);
   }));
   var naming = {label:"desk_browser_context",subject:"browser context"};
-  for (var i = 0; i < directories.length; i += 1) {
-    var dir = directories[i];
+  return directories.reduce(function(pending, dir) {
+    return pending.then(function() {
+    var ensure = Promise.resolve();
     if (creating) {
       if (dir === l.root) fs.mkdirSync(dir,{mode:448});
-      else await protection.ensureOwnerOnlyDirectory(dir,process.platform,naming);
+      else ensure = protection.ensureOwnerOnlyDirectory(dir,process.platform,naming);
     }
+    return ensure.then(function() {
     if (process.platform === "win32" && creating) {
-      var acl = await moduleImport(path.join(__dirname,"src/factory/windows-acl.js"));
-      await acl.protectWindowsPaths([{path:dir,kind:"directory",created:true}],{label:naming.label});
+      return moduleImport(path.join(__dirname,"src/factory/windows-acl.js")).then(function(acl) {
+        return acl.protectWindowsPaths([{path:dir,kind:"directory",created:true}],{label:naming.label});
+      });
     }
-    client.privatePath(dir,true);
-  }
+    }).then(function() { client.privatePath(dir,true); });
+    });
+  },Promise.resolve());
+  });
 }
-async function signed(input, options, isCommand) {
-  var source = options.env || process.env, id = input.contextId, contextResources;
-  try {
+function signed(input, options, isCommand) {
+  var source = options.env || process.env, id = input.contextId, contextResources, runtime, selection, l, native, acl;
+  var creating = input.action === "create";
+  return Promise.resolve().then(function() {
     // This facade must execute in the normal parent, before environment().
-    var runtime = await (options.prepareBrowserRuntime || web.prepareBrowserRuntime)(options);
+    return (options.prepareBrowserRuntime || web.prepareBrowserRuntime)(options);
+  }).then(function(prepared) {
+    runtime = prepared;
     if (require("./web-playwright-patch.cjs").readRevision(runtime.installed) !== 4)
       common.fail("unsupported_cli","A complete verified native browser generation is required");
-    var selection = await nativeSelection(runtime,source,input);
-    var creating = input.action === "create";
+    return nativeSelection(runtime,source,input);
+  }).then(function(selected) {
+    selection = selected;
     if (creating) id = common.generateId("signed-in");
-    var l = common.layout(fs.realpathSync(runtime.stateRoot),id,"signed-in",options.socketRoot);
+    l = common.layout(fs.realpathSync(runtime.stateRoot),id,"signed-in",options.socketRoot);
     contextResources = {contextDirectory:l.root,configFile:l.configFile,socketDirectory:l.socketDir,
       disposition:"owner state and exports retained"};
-    await protectSigned(l,runtime.stateRoot,creating);
-    var native = require("./web-native-messaging.cjs");
+    return protectSigned(l,runtime.stateRoot,creating);
+  }).then(function() {
+    native = require("./web-native-messaging.cjs");
     if (creating) {
       common.marker(l.root,l.owner,true,l.markerName);
       var record = {version:1,contextId:id,label:input.label,channel:selection.channel,userDataDir:selection.userDataDir,
@@ -113,14 +132,18 @@ async function signed(input, options, isCommand) {
     } else common.marker(l.root,l.owner,false,l.markerName);
     if (creating) fs.mkdirSync(l.socketDir,{mode:448});
     if (process.platform === "win32" && creating) {
-      var acl = await moduleImport(path.join(__dirname,"src/factory/windows-acl.js"));
-      await acl.protectWindowsPaths([{path:l.socketDir,kind:"directory",created:true},{path:path.join(l.root,l.markerName),kind:"file",created:true},
-        {path:l.configFile,kind:"file",created:true}],{label:"desk_browser_context"});
+      return moduleImport(path.join(__dirname,"src/factory/windows-acl.js")).then(function(protection) {
+        acl = protection;
+        return acl.protectWindowsPaths([{path:l.socketDir,kind:"directory",created:true},{path:path.join(l.root,l.markerName),kind:"file",created:true},
+          {path:l.configFile,kind:"file",created:true}],{label:"desk_browser_context"});
+      });
     }
+  }).then(function() {
     common.marker(l.socketDir,l.owner,creating,l.markerName);
     if (process.platform === "win32" && creating) {
-      await acl.protectWindowsPaths([{path:path.join(l.socketDir,l.markerName),kind:"file",created:true}],{label:"desk_browser_context"});
+      return acl.protectWindowsPaths([{path:path.join(l.socketDir,l.markerName),kind:"file",created:true}],{label:"desk_browser_context"});
     }
+  }).then(function() {
     native.privatePath(l.socketDir,true);
     var current = native.readPrivateJson(l.configFile);
     native.validateNativeRecord(current.deskNativeContext);
@@ -128,19 +151,23 @@ async function signed(input, options, isCommand) {
       return current.deskNativeContext[key] !== selection[key];
     })) common.fail("NATIVE_OWNER_BINDING_MISMATCH","Immutable owner binding differs from selected native profile");
     var request = {mode:"signed-in",operation:isCommand ? "run" : input.action,contextId:id,
-      stateRoot:runtime.stateRoot,root:l.root,socketDir:l.socketDir,installed:runtime.installed,selection:selection,
+      stateRoot:runtime.stateRoot,root:l.root,socketDir:l.socketDir,socketRoot:path.dirname(l.socketDir),
+      installed:runtime.installed,selection:selection,
       cliDir:path.join(runtime.installed.dir,"node_modules","playwright-core","lib","tools","cli-client"),args:input.args || []};
-    var result = await (options.execute || common.execute)(runtime.nodePath,
+    return (options.execute || common.execute)(runtime.nodePath,
       [path.join(__dirname,"browser-context-runtime.cjs"),JSON.stringify(request)],
       {cwd:l.root,env:common.environment(source,l.root,l.socketDir,runtime.nodePath),mode:"signed-in"});
+  }).then(function(result) {
     if (!result || result.isError || (input.action === "discard" ? result.state !== "discarded" : result.state !== "running"))
       common.fail("runner_failed","Native worker did not confirm the requested operation");
     return {exitCode:0,payload:common.scrub({contextId:id,mode:"signed-in",state:result.state,result:result.result,contextResources:contextResources},source)};
-  } catch (error) {
+  }).catch(function(error) {
     var payload = common.errorPayload(error);
-    payload.contextId = id; payload.mode = "signed-in"; payload.contextResources = contextResources;
+    payload.contextId = id; payload.mode = "signed-in";
+    if (contextResources || payload.contextResources)
+      payload.contextResources = Object.assign({},contextResources,payload.contextResources);
     return {exitCode:1,payload:common.scrub(payload,source)};
-  }
+  });
 }
 function invoke(input, options, isCommand) {
   var o = options || {};
@@ -178,6 +205,23 @@ function run(argv, options) {
   } catch (error) { return Promise.resolve({exitCode:1,payload:common.errorPayload(error)}); }
 }
 module.exports = {run:run,context:context,command:command};
-if (require.main === module) run(process.argv.slice(2)).then(function(result) {
-  process.stdout.write(JSON.stringify(result.payload)+"\n"); process.exitCode = result.exitCode;
-});
+if (require.main === module) {
+  var bootstrap = require("./bootstrap.cjs");
+  var choice = bootstrap.selectNode({mcpRoot:__dirname,env:process.env,homeDir:os.homedir(),
+    platform:process.platform,arch:process.arch,systemPrefix:process.env.DESK_NODE_SYSTEM_PREFIX || "",
+    current:{path:process.execPath,version:process.version,abi:process.versions.modules}});
+  if (!choice.node) {
+    process.stdout.write(JSON.stringify({isError:true,code:"node_missing",message:"A compatible browser controller runtime is unavailable"})+"\n");
+    process.exitCode = 1;
+  } else if (!choice.node.current) {
+    bootstrap.reexec({node:choice.node.path,indexFile:__filename,args:process.argv.slice(2),env:process.env,
+      spawn:require("child_process").spawn,signals:process,stderr:process.stderr,kill:process.kill,
+      exit:function(code) { process.exitCode = code; },
+      onSpawnError:function() {
+        process.stdout.write(JSON.stringify({isError:true,code:"node_spawn_failed",message:"The compatible browser controller could not start; no context was allocated"})+"\n");
+        process.exitCode = 1;
+      }});
+  } else run(process.argv.slice(2)).then(function(result) {
+    process.stdout.write(JSON.stringify(result.payload)+"\n"); process.exitCode = result.exitCode;
+  });
+}

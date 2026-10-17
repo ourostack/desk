@@ -10,16 +10,18 @@ function run(options) {
   var o = options || {}, env = o.env || process.env;
   var io = {stdin:o.stdin || process.stdin,stdout:o.stdout || process.stdout,stderr:o.stderr || process.stderr};
   return Promise.resolve().then(function() {
-    var choice = bootstrap.selectNode({mcpRoot:__dirname,env:env,homeDir:os.homedir(),
-      platform:process.platform,arch:process.arch,
-      current:{path:process.execPath,version:process.version,abi:process.versions.modules}});
-    if (!choice.node) throw Object.assign(new Error("A compatible Node runtime is unavailable"),{code:"node_missing"});
+    var current = o.current || {path:process.execPath,version:process.version,abi:process.versions.modules};
+    var choice = bootstrap.selectNode({mcpRoot:__dirname,env:env,homeDir:o.homeDir || env.HOME || env.USERPROFILE || os.homedir(),
+      platform:o.platform || process.platform,arch:o.arch || process.arch,current:current,
+      systemPrefix:o.systemPrefix === undefined ? env.DESK_NODE_SYSTEM_PREFIX || "" : o.systemPrefix,
+      probe:o.probe,now:o.now});
+    if (!choice.node) throw Object.assign(new Error("Desk needs Node.js "+choice.range+" to start the browser; this one is "+current.version),
+      {code:"node_missing",fix:"Install Node "+choice.range+", then reconnect the desk-web MCP server"});
     if (!choice.node.current) {
-      return new Promise(function(resolve,reject) {
-        var child = childProcess.spawn(choice.node.path,[__filename],{env:env,stdio:["pipe","pipe","pipe"],windowsHide:true});
-        io.stdin.pipe(child.stdin); child.stdout.pipe(io.stdout); child.stderr.pipe(io.stderr);
-        child.on("error",reject); child.on("close",resolve);
-      });
+      return bootstrap.reexec({node:choice.node.path,indexFile:__filename,args:[],env:env,
+        spawn:o.spawn || childProcess.spawn,signals:o.signals || process,stderr:io.stderr,
+        exit:o.exit || function(code) { process.exitCode = code; },kill:o.kill || process.kill,
+        onSpawnError:function(error) { return Promise.reject(Object.assign(new Error("Could not start the compatible browser frontend: "+error.message),{code:"node_spawn_failed"})); }});
     }
     return load(path.join(__dirname,"src/runtime/bootstrap.js")).then(function(runtime) {
       var prepared = runtime.prepareRuntime({mcpRoot:__dirname,env:env,
@@ -30,10 +32,12 @@ function run(options) {
         controller:require("./browser-context.cjs"),stdin:io.stdin,stdout:io.stdout});
     });
   }).catch(function(error) {
-    io.stderr.write("[desk-web] "+(error.code || "browser_frontend_unavailable")+"; serving explicit-context degraded tools\n");
+    var code = error && error.code || "browser_frontend_unavailable";
+    var message = error && error.message || String(error);
+    io.stderr.write("[web] "+message+"; serving degraded:"+code+"\n");
     return require("./web.cjs").serveDegraded({stdin:io.stdin,stdout:io.stdout,payload:{
-      status:"degraded",code:error.code || "browser_frontend_unavailable",
-      summary:"The explicit browser frontend is unavailable",fix:"Preserve existing contexts and repair the declared runtime before reconnecting"
+      status:"degraded",state:"degraded:"+code,code:code,
+      summary:message,fix:error && error.fix || "Preserve existing contexts and repair the declared runtime before reconnecting"
     }});
   });
 }

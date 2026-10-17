@@ -101,7 +101,7 @@ function scrub(value, source) {
 }
 function errorPayload(error) {
   var value = {isError:true,code:error.code || "upstream_failed",message:error.message || String(error)};
-  ["resources","nativeTransport","relatedErrors"].forEach(function(key) { if (error[key] !== undefined) value[key] = error[key]; });
+  ["resources","nativeTransport","relatedErrors","contextResources"].forEach(function(key) { if (error[key] !== undefined) value[key] = error[key]; });
   return value;
 }
 function execute(node, args, options) {
@@ -110,11 +110,17 @@ function execute(node, args, options) {
       var payload;
       try { payload = JSON.parse(stdout); } catch (_) {
         var diagnostic = options.mode === "private" ? ": "+(stderr || stdout || (error && (error.code || error.signal)) || "empty output") : "";
-        reject(Object.assign(new Error("Browser runner did not return confirmed JSON"+diagnostic+"; owned effects remain unknown"),{code:"runner_failed"}));
+        reject(Object.assign(new Error("Browser runner did not return confirmed JSON"+diagnostic+"; owned effects remain unknown"),
+          {code:"runner_failed",resources:options.mode === "signed-in" ? {disposition:"unknown"} : undefined}));
         return;
       }
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        reject(Object.assign(new Error("Browser runner returned an invalid result; cleanup remains unconfirmed"),{code:"runner_failed"})); return;
+        reject(Object.assign(new Error("Browser runner returned an invalid result; cleanup remains unconfirmed"),
+          {code:"runner_failed",resources:options.mode === "signed-in" ? {disposition:"unknown"} : undefined})); return;
+      }
+      if (error && !payload.isError && options.mode === "signed-in") {
+        reject(Object.assign(new Error("Browser runner did not complete; owned effects remain unknown"),
+          {code:"runner_failed",resources:{disposition:"unknown"}})); return;
       }
       if (error || payload.isError) {
         payload.message = payload.message || payload.error || (options.mode === "private" && stderr) || "Upstream command failed";

@@ -6,7 +6,8 @@ import {createRequire} from "node:module"
 import {pathToFileURL} from "node:url"
 import vm from "node:vm"
 import {PassThrough} from "node:stream"
-import {mcpRoot} from "./_mcp_handshake.js"
+import {mcpRoot,makeIsolatedHome,isolatedEnv} from "./_mcp_handshake.js"
+import {openSession} from "./_mcp_session.js"
 import {mkTempRoot} from "../_temp_roots.js"
 import {removeTree} from "../_remove_tree.js"
 const require = createRequire(import.meta.url)
@@ -69,8 +70,37 @@ test("old-Node missing-root inline launcher preserves the exact two healthy sche
     },
     process:{env:{},cwd:()=>"/missing",stdin,stdout:{write:v=>{stdout+=v}},stderr:{write(){}}},
   })
+
   stdin.write(JSON.stringify({jsonrpc:"2.0",id:1,method:"tools/list"})+"\n")
   const response = JSON.parse(stdout)
   assert.deepEqual(response.result.tools,JSON.parse(fs.readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
   stdin.destroy()
+})
+
+test("normal prepared browser-only SDK over owned stdio lists two tools without browser preparation",async t=>{
+    const home=await makeIsolatedHome("desk-F-sdk-stdio-")
+    const env=isolatedEnv(home)
+    const guard=path.join(home.root,"no-native-startup.cjs")
+    fs.writeFileSync(guard,`const Module=require("module"),path=require("path"),load=Module._load;
+Module._load=function(name,...args){if(["web-native-messaging.cjs","web-real-profile.cjs"].includes(path.basename(name)))throw Error("Browser handshake must not request a native/profile client");return load.call(this,name,...args)};`)
+    const marker=path.join(home.root,"relative-node-probe.json")
+    if(process.platform!=="win32"){
+      const candidate=path.join(home.root,"undefined/usr/local/bin/node")
+      fs.mkdirSync(path.dirname(candidate),{recursive:true})
+      fs.writeFileSync(candidate,"#!"+process.execPath+"\n"+
+        `const cp=require("child_process"),fs=require("fs");fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid,start:cp.execFileSync("/bin/ps",["-p",String(process.pid),"-o","lstart="],{encoding:"utf8"}).trim()}));process.stdout.write("v22.9.0 127");`)
+      fs.chmodSync(candidate,0o700)
+    }
+    const session=await openSession({command:process.execPath,args:["--require",guard,path.join(mcpRoot,"browser-context-mcp.cjs")],
+      cwd:home.root,env,timeoutMs:15000})
+    t.after(()=>session.close())
+    if(fs.existsSync(marker))t.diagnostic("E4_FIX_CHILD "+fs.readFileSync(marker,"utf8"))
+    assert.equal(fs.existsSync(marker),false,"normal runtime selection never probes an undefined-relative workspace executable")
+    assert.deepEqual(session.tools.result.tools,JSON.parse(fs.readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
+    const invalid=await session.call("browser_context",{action:"create"})
+    assert.equal(invalid.isError,true)
+    assert.equal(invalid.payload.code,"invalid_arguments")
+    assert.equal(fs.existsSync(path.join(home.home,".local/state/ouroboros-skills/desk/browser")),false)
+    assert.ok(fs.readdirSync(home.runtimeCache).length,"normal SDK runtime was prepared rather than bypassed")
+
 })
