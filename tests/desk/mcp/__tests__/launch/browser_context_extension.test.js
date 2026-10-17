@@ -38,6 +38,7 @@ function fixture() {
   const effects = []
   const messages = []
   const hooks = {}
+  const nativeCalls = [], nativePorts = []
   const debuggerBindings = new Map()
   let debuggerGeneration = 0
   const api = {
@@ -116,7 +117,10 @@ function fixture() {
       async sendMessage() { return { token: PROFILE } },
       connectNative(host) {
         assert.equal(host, "com.ourostack.desk.browser")
+        nativeCalls.push(host)
+        hooks.nativeConnect?.()
         const port = { onMessage: event(), onDisconnect: event(), postMessage: m => messages.push(m), disconnect() {} }
+        nativePorts.push(port)
         api.port = port
         return port
       },
@@ -138,7 +142,32 @@ function fixture() {
       return eventually(() => this.sent.find(m => m.id === id))
     }
   }
-  return { api, tabs, groups, sockets, effects, hooks, messages, Socket, debuggerBindings }
+  return { api, tabs, groups, sockets, effects, hooks, messages, Socket, debuggerBindings, nativeCalls, nativePorts }
+}
+
+const flush = () => new Promise(resolve => setImmediate(resolve))
+function retryClock() {
+  let now = 0, id = 0
+  const tasks = new Map()
+  return {
+    setTimeout(fn, ms) { const key = ++id; tasks.set(key, { fn, at: now + ms }); return key },
+    clearTimeout(key) { tasks.delete(key) },
+    get pending() { return tasks.size },
+    async advance(ms) {
+      const end = now + ms
+      for (let count = 0; ; ++count) {
+        const next = [...tasks].sort((a, b) => a[1].at - b[1].at)[0]
+        if (!next || next[1].at > end) break
+        assert.ok(count < 50, "retry scheduling must be bounded")
+        now = next[1].at
+        tasks.delete(next[0])
+        next[1].fn()
+        await flush()
+      }
+      now = end
+      await flush()
+    },
+  }
 }
 
 async function eventually(read) {
@@ -330,7 +359,8 @@ test("manual grouping never adopts foreign tabs and movement revokes current own
   await f.api.tabs.group({ tabIds: [10] })
   assert.ok((await f.sockets[0].command("chrome.tabs.remove", [10])).error)
   const discard = await f.engine.dispatch(request("context.discard", A))
-  assert.equal(discard.error?.code, "native_context_ownership_changed")
+  assert.deepEqual(discard.result?.releasedRevokedTabs, [{ tabId: 10, windowId: 7 }])
+  assert.deepEqual(discard.result?.closedTabIds, [11])
   assert.equal(f.tabs.has(10), true)
   assert.equal(f.tabs.has(1), true)
 })
@@ -357,7 +387,7 @@ test("explicit discard confirms only exact current owned tabs and preserves peer
   assert.ok((await f.engine.dispatch(create())).result)
   assert.ok((await f.engine.dispatch(create(B))).result)
   const receipt = await f.engine.dispatch(request("context.discard", A))
-  assert.deepEqual(receipt.result, { contextId: A, discarded: true, closedTabIds: [10], absentTabIds: [10] })
+  assert.deepEqual(receipt.result, { contextId: A, discarded: true, closedTabIds: [10], absentTabIds: [10], releasedRevokedTabs: [] })
   assert.equal(f.tabs.has(10), false)
   assert.equal(f.tabs.has(11), true)
   assert.equal(f.tabs.has(1), true)
@@ -1060,4 +1090,365 @@ test("K002stop without pending effects retires its observer immediately and rema
   f.engine.stop()
   assert.equal(f.api.debugger.onDetach.size, 0)
   await assert.rejects(f.engine.start(), /native_extension_stopped/)
+})
+
+// Amendment A: exercise the actual old/new automatic entry, not a mocked
+// lifecycle controller. Moving timer time never opens a native host/browser.
+test("producer A automatic native reconnect preserves the existing tab group and relay through two losses", async () => {
+  const f = fixture(), clock = retryClock()
+  const saved = { chrome: globalThis.chrome, WebSocket: globalThis.WebSocket, setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout, error: console.error }
+  let background
+  try {
+    globalThis.chrome = f.api
+    globalThis.WebSocket = f.Socket
+    globalThis.setTimeout = (...args) => clock.setTimeout(...args)
+    globalThis.clearTimeout = key => clock.clearTimeout(key)
+    console.error = () => {}
+    background = await import(new URL(`./background.mjs?retry-fixture=${crypto.randomUUID()}`, extensionUrl))
+    await flush()
+    await clock.advance(0)
+    assert.equal(f.nativePorts.length, 1)
+    const digest = (await import(new URL("./source-digest.mjs", extensionUrl))).SOURCE_DIGEST
+    const req = create()
+    req.params.sourceDigest = digest
+    const made = await background.extension.dispatch(req)
+    assert.ok(made.result)
+    for (const expected of [2, 3]) {
+      f.api.port.onDisconnect.emit()
+      await clock.advance(0)
+      assert.equal(f.nativePorts.length, expected, "native loss must trigger an automatic retry burst")
+      const status = await background.extension.dispatch({ ...request("context.status", A), params: { profileToken: PROFILE, sourceDigest: digest } })
+      assert.equal(status.result.groupId, made.result.groupId)
+      assert.deepEqual(status.result.tabs, [{ tabId: 10, windowId: 7 }])
+      assert.equal(f.sockets.length, 1)
+      assert.equal(f.tabs.size, 2)
+    }
+    assert.equal(clock.pending, 0)
+  } finally {
+    background?.extension.stop()
+    globalThis.chrome = saved.chrome
+    globalThis.WebSocket = saved.WebSocket
+    globalThis.setTimeout = saved.setTimeout
+    globalThis.clearTimeout = saved.clearTimeout
+    console.error = saved.error
+  }
+})
+
+test("producer A known manual transfer is released not absent and discard closes only remaining current tabs", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  assert.ok((await f.sockets[0].command("chrome.tabs.create", [{ url: "about:blank" }])).result)
+  const peer = await f.engine.dispatch(create(B))
+  assert.ok(peer.result)
+  await f.api.tabs.group({ groupId: peer.result.groupId, tabIds: [10] })
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.releasedRevokedTabs, [{ tabId: 10, windowId: 7 }])
+  assert.deepEqual(status.result.unknownRevokedTabs, [])
+  assert.ok((await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])).error)
+  const discarded = await f.engine.dispatch(request("context.discard", A))
+  assert.deepEqual(discarded.result, {
+    contextId: A, discarded: true, closedTabIds: [11], absentTabIds: [11],
+    releasedRevokedTabs: [{ tabId: 10, windowId: 7 }],
+  })
+  assert.equal(f.tabs.has(10), true)
+  assert.equal(f.tabs.has(12), true)
+  assert.equal(f.tabs.has(1), true)
+  assert.ok((await f.engine.dispatch(request("context.resume", B))).result)
+  assert.ok((await f.engine.dispatch(request("context.discard", B))).result)
+  assert.ok((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).result)
+  assert.equal(f.tabs.has(10), true, "local quiescence is not physical absence of released peer tabs")
+})
+
+async function backgroundKernel(f = fixture()) {
+  const clock = retryClock(), statuses = []
+  const module = await import(new URL("./background.mjs", extensionUrl))
+  assert.equal(typeof module.createBackground, "function", "background lifecycle must expose its injected resource seam")
+  const engine = module.createBackground(f.api, {
+    sourceDigest: SOURCE, WebSocket: f.Socket, timers: clock, onStatus: code => statuses.push(code),
+  })
+  return { ...f, clock, statuses, engine }
+}
+
+test("producer A retry exhaustion is bounded per burst and overlapping wake events coalesce", async () => {
+  const f = fixture()
+  f.hooks.nativeConnect = () => { throw new Error("synthetic native failure") }
+  const b = await backgroundKernel(f)
+  try {
+    b.api.runtime.onInstalled.emit()
+    b.api.runtime.onStartup.emit()
+    await b.clock.advance(100000)
+    assert.equal(b.nativeCalls.length, 3)
+    assert.equal(b.statuses.filter(code => code === "native_host_unavailable").length, 1)
+    assert.equal(b.clock.pending, 0)
+    await b.clock.advance(100000)
+    assert.equal(b.nativeCalls.length, 3, "exhaustion must not install an indefinite watchdog")
+    b.api.runtime.onStartup.emit()
+    b.api.runtime.onStartup.emit()
+    b.api.runtime.onInstalled.emit()
+    await b.clock.advance(100000)
+    assert.equal(b.nativeCalls.length, 6, "a later ordinary event may start one new bounded burst")
+    assert.equal(b.statuses.filter(code => code === "native_host_unavailable").length, 2)
+    assert.equal(b.tabs.size, 1)
+    assert.equal(b.sockets.length, 0)
+  } finally { b.engine.stop() }
+  b.api.runtime.onStartup.emit()
+  await b.clock.advance(100000)
+  assert.equal(b.nativeCalls.length, 6)
+  assert.equal(b.clock.pending, 0)
+})
+
+test("producer A retry deadline remains single-flight across exhaustion and a later event", async () => {
+  const f = fixture()
+  let finish, reads = 0
+  f.api.runtime.sendMessage = () => {
+    ++reads
+    return new Promise(resolve => { finish = () => resolve({ token: PROFILE }) })
+  }
+  const b = await backgroundKernel(f)
+  try {
+    await b.clock.advance(0)
+    assert.equal(reads, 1)
+    b.api.runtime.onStartup.emit()
+    b.api.runtime.onInstalled.emit()
+    await b.clock.advance(5000)
+    assert.equal(b.statuses.filter(code => code === "native_host_unavailable").length, 1)
+    assert.equal(reads, 1)
+    b.api.runtime.onStartup.emit()
+    await b.clock.advance(0)
+    assert.equal(reads, 1, "a new burst must not overlap an unresolved earlier start")
+    finish()
+    await flush()
+    assert.equal(b.nativeCalls.length, 1)
+    assert.equal(b.clock.pending, 0)
+    assert.equal(b.tabs.size, 1)
+  } finally { b.engine.stop(); finish?.(); await flush() }
+})
+
+test("producer A terminal stop cancels a queued retry and a held native start", async () => {
+  for (const held of [false, true]) {
+    const f = fixture()
+    let finish
+    if (held) f.api.runtime.sendMessage = () => new Promise(resolve => { finish = () => resolve({ token: PROFILE }) })
+    else f.hooks.nativeConnect = () => { throw new Error("synthetic failure") }
+    const b = await backgroundKernel(f)
+    await b.clock.advance(0)
+    b.engine.stop()
+    finish?.()
+    await flush()
+    const calls = b.nativeCalls.length
+    b.api.runtime.onStartup.emit()
+    b.api.runtime.onInstalled.emit()
+    await b.clock.advance(100000)
+    assert.equal(b.nativeCalls.length, calls)
+    assert.equal(b.clock.pending, 0)
+    assert.equal(b.api.runtime.onStartup.size, 0)
+    await assert.rejects(b.engine.start(), /native_extension_stopped/)
+  }
+})
+
+test("producer A failed ready publication retries without treating a stale native port as connected", async () => {
+  const f = fixture(), connect = f.api.runtime.connectNative
+  f.api.runtime.connectNative = host => {
+    const port = connect(host)
+    if (f.nativeCalls.length === 1) port.postMessage = () => { throw new Error(endpoint) }
+    return port
+  }
+  const b = await backgroundKernel(f)
+  try {
+    await b.clock.advance(2000)
+    assert.equal(b.nativeCalls.length, 2)
+    assert.equal(b.messages.filter(message => message.event === "ready").length, 1)
+    assert.equal(b.clock.pending, 0)
+    b.nativePorts[0].onDisconnect.emit()
+    await b.clock.advance(100000)
+    assert.equal(b.nativeCalls.length, 2)
+    assert.equal(JSON.stringify(b.statuses).includes(endpoint), false)
+  } finally { b.engine.stop() }
+})
+
+test("producer A relay loss is retained unavailable and never invokes native retry or page replacement", async () => {
+  const b = await backgroundKernel()
+  try {
+    await b.clock.advance(0)
+    const made = await b.engine.dispatch(create())
+    assert.ok(made.result)
+    b.sockets[0].close()
+    await b.clock.advance(100000)
+    assert.equal(b.nativeCalls.length, 1)
+    assert.equal((await b.engine.dispatch(request("context.status", A))).result.state, "disconnected")
+    assert.ok((await b.engine.dispatch(request("context.resume", A))).error)
+    assert.equal(b.tabs.get(10).groupId, made.result.groupId)
+    assert.equal(b.tabs.size, 2)
+    assert.equal(b.sockets.length, 1)
+  } finally { b.engine.stop() }
+})
+
+test("producer A pending exact detach stays unknown and retains transport until affirmative release", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  let finish
+  f.hooks.detach = () => new Promise(resolve => { finish = resolve })
+  await f.api.tabs.group({ tabIds: [10] })
+  await eventually(() => finish)
+  try {
+    const status = await f.engine.dispatch(request("context.status", A))
+    assert.deepEqual(status.result.releasedRevokedTabs, [])
+    assert.deepEqual(status.result.unknownRevokedTabs, [{ tabId: 10, windowId: 7 }])
+    assert.equal(f.sockets[0].readyState, 1, "own transport must not retire before detach settles")
+    assert.ok((await f.engine.dispatch(request("context.discard", A))).error)
+  } finally { finish(); await flush() }
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.releasedRevokedTabs, [{ tabId: 10, windowId: 7 }])
+  assert.deepEqual(status.result.debuggerCustody, [])
+  const receipt = await f.engine.dispatch(request("context.discard", A))
+  assert.deepEqual(receipt.result, {
+    contextId: A, discarded: true, closedTabIds: [], absentTabIds: [],
+    releasedRevokedTabs: [{ tabId: 10, windowId: 7 }],
+  })
+  assert.equal(f.tabs.has(10), true)
+  assert.ok((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).result)
+})
+
+test("producer A unknown grouping and debugger generations never receive release amnesty", async () => {
+  for (const failure of ["group", "attach", "detach", "generation"]) {
+    const f = await kernel()
+    if (failure === "group") f.hooks.group = () => { throw new Error("unknown grouping effect") }
+    const made = await f.engine.dispatch(create())
+    if (failure === "group") assert.ok(made.error)
+    else {
+      assert.ok(made.result)
+      if (failure === "attach") f.hooks.attach = () => { throw new Error("unknown attach effect") }
+      await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+      if (failure === "detach") f.hooks.detach = () => { throw new Error("unknown detach effect") }
+      if (failure === "generation") {
+        // Existing reviewed pending-generation fixture covers replacement101;
+        // stop additionally must not turn its retained task tabs into released peers.
+        f.engine.stop()
+        const stopped = await f.engine.dispatch(request("context.status", A))
+        assert.deepEqual(stopped.error.resources.releasedRevokedTabs, [])
+        continue
+      }
+    }
+    f.hooks.group = undefined
+    await f.api.tabs.group({ tabIds: [10] })
+    await flush()
+    const status = await f.engine.dispatch(request("context.status", A))
+    assert.deepEqual(status.result.releasedRevokedTabs, [])
+    assert.deepEqual(status.result.unknownRevokedTabs, [{ tabId: 10, windowId: 7 }])
+    assert.equal(f.sockets[0].readyState, 1, "unknown custody must not trigger automatic relay retirement")
+    assert.ok((await f.engine.dispatch(request("context.discard", A))).error)
+    assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+    assert.equal(f.tabs.has(10), true)
+  }
+})
+
+test("producer A unknown command or close effects block release and empty-map update", async () => {
+  for (const operation of ["command", "close"]) {
+    const f = await kernel()
+    assert.ok((await f.engine.dispatch(create())).result)
+    if (operation === "command") {
+      await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+      const child = await f.sockets[0].command("chrome.tabs.create", [{ url: "about:blank" }])
+      await f.sockets[0].command("chrome.debugger.attach", [{ tabId: child.result.id }, "1.3"])
+      f.hooks.command = async () => {
+        await f.api.tabs.group({ tabIds: [10] })
+        throw new Error("command outcome unknown")
+      }
+      assert.ok((await f.sockets[0].command("chrome.debugger.sendCommand", [{ tabId: 10 }, "Runtime.evaluate", {}])).error)
+    } else {
+      const remove = f.api.tabs.remove
+      f.api.tabs.remove = async id => { await remove(id); throw new Error("close response lost") }
+      assert.ok((await f.engine.dispatch(request("context.discard", A))).error)
+    }
+    const status = await f.engine.dispatch(request("context.status", A))
+    assert.equal(status.result.pendingEffects, 0)
+    assert.deepEqual(status.result.releasedRevokedTabs, [])
+    assert.equal(status.result.effectObligations?.[0]?.state, "unknown")
+    assert.ok((await f.engine.dispatch(request("context.discard", A))).error)
+    assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+  }
+})
+
+test("producer A local update accepts an affirmatively released revocation without inferring peer absence", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  await f.api.tabs.group({ tabIds: [10] })
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.releasedRevokedTabs, [{ tabId: 10, windowId: 7 }])
+  assert.deepEqual(status.result.tabs, [])
+  const update = await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))
+  assert.deepEqual(update.result, { reload: true })
+  assert.equal(f.tabs.has(10), true)
+  assert.equal(f.effects.some(effect => effect[0] === "remove"), false)
+  const receipt = await f.engine.dispatch(request("context.discard", A))
+  assert.deepEqual(receipt.result.releasedRevokedTabs, [{ tabId: 10, windowId: 7 }])
+  assert.deepEqual(receipt.result.absentTabIds, [])
+})
+
+test("producer A an unknown create prevents release after all current tabs and pending counts disappear", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  let failCreate
+  f.hooks.create = () => new Promise((resolve, reject) => { failCreate = () => reject(new Error("unknown create")) })
+  const creating = f.sockets[0].command("chrome.tabs.create", [{ url: "about:blank" }])
+  await eventually(() => failCreate)
+  await f.api.tabs.group({ tabIds: [10] })
+  failCreate()
+  assert.ok((await creating).error)
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.tabs, [])
+  assert.equal(status.result.pendingEffects, 0)
+  assert.equal(status.result.unconfirmedCreates, 1)
+  assert.deepEqual(status.result.releasedRevokedTabs, [])
+  assert.deepEqual(status.result.unknownRevokedTabs, [{ tabId: 10, windowId: 7 }])
+  assert.ok((await f.engine.dispatch(request("context.discard", A))).error)
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+})
+
+test("producer A unsettled opener admission is a named obligation even after all known tabs disappear", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  const get = f.api.tabs.get
+  f.api.tabs.get = async id => { if (id === 10) throw new Error("opener readback unknown"); return get(id) }
+  const child = await f.api.tabs.create({ openerTabId: 10, windowId: 7, active: false, url: "https://task.invalid/child" })
+  await flush()
+  await f.api.tabs.remove(10)
+  await f.api.tabs.remove(child.id)
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.deepEqual(status.result.tabs, [])
+  assert.equal(status.result.pendingEffects, 0)
+  assert.deepEqual(status.result.admittingTabIds, [11])
+  assert.equal((await f.engine.dispatch(request("context.discard", A))).error?.code, "native_cleanup_unconfirmed")
+})
+
+test("producer A asynchronously failed native ports consume one bounded budget rather than restarting forever", async () => {
+  const b = await backgroundKernel()
+  try {
+    await b.clock.advance(0)
+    for (let failed = 0; failed < 3; ++failed) {
+      b.api.port.onMessage.emit({ event: "diagnostic", code: "synthetic-provider-refusal" })
+      await flush()
+      b.api.runtime.lastError = { message: endpoint } // Synthetic; must never be logged.
+      b.api.port.onDisconnect.emit()
+      delete b.api.runtime.lastError
+      await b.clock.advance(100000)
+    }
+    assert.equal(b.nativeCalls.length, 3, "a posted ready frame is not proof an asynchronously failing host started")
+    assert.equal(b.statuses.filter(code => code === "native_host_unavailable").length, 1)
+    assert.equal(b.clock.pending, 0)
+    assert.equal(JSON.stringify(b.statuses).includes(endpoint), false)
+    b.api.runtime.onStartup.emit()
+    await b.clock.advance(0)
+    assert.equal(b.nativeCalls.length, 4)
+    b.api.port.onMessage.emit(request("profile.read"))
+    await flush()
+    b.api.runtime.lastError = { message: "synthetic host exit after real native traffic" }
+    b.api.port.onDisconnect.emit()
+    delete b.api.runtime.lastError
+    await b.clock.advance(0)
+    assert.equal(b.nativeCalls.length, 5, "confirmed native traffic permits a fresh failure burst")
+  } finally { b.engine.stop() }
 })

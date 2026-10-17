@@ -1,6 +1,6 @@
 # Explicit native browser context kernel
 
-Assignment-1 component only. This is **not an installer, native provider,
+Kernel plus the assignment-2/A producer amendment only. This is **not an installer, native provider,
 signed-in acquisition/controller, MCP adapter, or a promotion readiness claim**.
 Nothing in this directory installs itself into a browser or changes permissions.
 The enrolled extension public key/ID and profile-token storage key are retained.
@@ -22,9 +22,31 @@ extension.stop()              // terminal disposal of this factory instance
 stock extension object or browser window is constructed. `start()` is
 idempotent while connected/starting. Native disconnect invalidates an update
 capability but does not destroy contexts. A provider reconnection can call
-`start()` again before terminal `stop()`; automatic native-host retry is not
-implemented here. Worker restart constructs a new factory with no bindings,
+`start()` again before terminal `stop()`. Worker restart constructs a new factory with no bindings,
 and unknown resume/status/discard fails rather than scanning groups.
+
+The production entry's `createBackground(api, resourceOptions?)` adds native-port
+retry around that same factory; directly importing the kernel does not add
+retry. Evaluation, install/startup events, or current native-port loss begin one
+coalesced single-flight burst: at most three attempts, at delays 0, 250 and
+1000 ms, with a 5000 ms active-burst deadline. These are tested local constants, not
+operator settings. Success/terminal stop cancels timers; exhaustion emits fixed
+`native_host_unavailable` and waits for another ordinary event. A hung start is
+not overlapped, even across a later burst. A late successful start may complete;
+the deadline ends retry scheduling, not an unabortable Chrome API operation.
+Asynchronously failed native ports continue the same capped attempt budget;
+merely queueing ready or receiving refusal diagnostics does not replenish it.
+A later ordinary wake/clean loss, or a successful native request/reply before a
+later failure, permits a new budget. Timer injection is a resource-test seam,
+not new runtime configuration.
+No alarm/permission, indefinite watchdog or universal suspended-worker wake is
+implied. Native-port loss retains the same relay/page/group. Relay WebSocket
+loss is different: retained disconnected/unavailable state, no reattachment or
+replacement blank page. Fixed lifecycle status codes also include
+`native_transport_connected`, `native_transport_disconnected` and
+`native_extension_stopped`, plus `native_transport_failed` and
+`native_transport_confirmed` (successful current-port request/reply, not
+ancestry/all-owner proof). No raw native exceptions/capabilities are emitted.
 
 Requests are trusted native-provider messages, not authority from an MCP
 connection, process ID, label or title. All have a bounded string `id`, a method,
@@ -47,13 +69,18 @@ not serialized. `leaseId` is accepted as a bounded legacy **routing tag only**.
 - **Label:** `params.label`, same bounds; confirms the exact current group.
 - **Reload prepare:** both exact profile/source and a provider-issued
   64-lowercase-hex `params.updateToken`. Every current owner must be free of
-  live tabs, revoked/uncertain obligations, and pending effects/requests. A
+  live tabs, unknown revoked/uncertain obligations, and pending effects/requests.
+  Affirmatively released peer resources do not count as current-owned tabs or
+  unknown effects, even though the peer tabs may remain physically present. A
   prepared update blocks creation. Commit must match the prepared token.
   `dispatch(commit)` returns `{committing:true}`; only the native-port handler,
   after posting that affirmative receipt, invokes `chrome.runtime.reload()`.
   The **provider must issue this capability only after its independent
   all-owner quiescence check**, including owners it retained across a worker
   restart. An empty restarted in-memory map is not proof of that quiescence.
+  Native-port loss invalidates the local capability, not the provider's
+  responsibility for an already-prepared update transaction; reconnect/reset
+  is not a cancellation receipt.
 
 Native ready is retained:
 `{event:"ready",protocolVersion:1,extensionId,sourceDigest,profileToken,browserVersion,userAgent}`.
@@ -70,6 +97,12 @@ All context responses use `contextId`, `state`, `label`, `groupId`, exact
 obligations, **not** permission to adopt or close a foreign resource.
 Projections also expose `groupingObligations` and `debuggerCustody` (below);
 zero `pendingEffects` alone is never evidence of quiescence.
+`releasedRevokedTabs` and `unknownRevokedTabs` explicitly partition the retained
+revocation records, both as `[{tabId,windowId}]`. The original `revokedTabIds`
+and `revokedTabs` include both, and confer no authority. `effectObligations`
+contains bounded `{tabId,windowId,state:"unknown",reason}` records for unknown
+command/close outcomes; `admittingTabIds` retains unsettled opener admissions.
+These obligations survive zero current tabs and zero pending effects.
 
 ## Lifetime and relay
 
@@ -90,6 +123,8 @@ membership-readback failure retains
 `unknown` is non-discardable even if a later query succeeds. Presentation moves
 still revoke the old binding; neither a query nor a matching title can clear
 unknown custody or authorize closing a manually moved tab.
+Group-style/readback failures additionally retain
+`{groupId,windowId,state:"unknown",reason}` obligations.
 
 Debugger custody is independent of command ownership:
 `debuggerCustody:[{tabId,windowId,generation,state,revoked,reason?}]`.
@@ -106,6 +141,16 @@ have no automatic title/query/event-based recovery or handoff in this kernel.
 These are in-memory current-worker fences, not Chrome atomic generation-aware
 APIs or a restart-recovery database.
 
+Revocation is **released** only after affirmative settlement: no pending or
+unknown creation/grouping/effects/admissions, no unknown generation and no
+debugger custody on that revoked identity. A no-attachment presentation move or
+a settled exact detach may qualify. Command authority never returns. Own logical
+relay retirement waits for that disposition; unknown startup/grouping custody
+is retained rather than declared cleaned by closing its transport. Terminal
+stop still closes relays immediately while preserving its reviewed critical
+generation observer until issued effects settle; stop's retained task tabs are
+not reclassified as released manual peers.
+
 The exact maintained Chrome-API wire protocol remains unchanged:
 `chrome.debugger.attach/detach/sendCommand`, `chrome.tabs.create/remove`, the
 corresponding tab/debugger events, then `extension.initialized`.
@@ -115,7 +160,7 @@ tab. Browser/global, foreign-target and physical activation methods fail.
 failures remain errors. Independent in-flight messages allow a later command to
 resolve a pending `Runtime.evaluate({awaitPromise:true})`.
 
-Disconnect detaches transport and retains all pages/groups. Resume never creates
+Relay disconnect detaches transport and retains all pages/groups. Resume never creates
 anything: disconnected/unavailable bindings return an error. Status reports
 their exact retained projection. `stop()` immediately removes ordinary event
 listeners and closes relays, not tabs or groups; use a new factory after stop.
@@ -130,13 +175,18 @@ or reload, and unknown custody is not erased to claim quiescence.
 
 `context.discard` is separate from socket close. It preflights current members,
 revalidates immediately before each exact Chrome remove call, confirms absence,
-and returns `{contextId,discarded:true,closedTabIds,absentTabIds}` only on
+and returns `{contextId,discarded:true,closedTabIds,absentTabIds,releasedRevokedTabs}` only on
 affirmative completion. Peers/manual members survive. Partial remove or
 transport/readback failure returns a non-success cleanup obligation; revoked or
 unknown-created resources are not silently closed. Chrome has **no atomic
 conditional remove**: a transfer during the remove API call may already have
 closed the tab; the result is explicitly ownership-changed, never atomic success.
 The native controller must separately confirm its maintained CLI session stopped.
+Only remaining current-owned tabs are closed. Released records are retired
+without touching their transferred/manual tabs; they are never added to
+`closedTabIds` or `absentTabIds`. **Released is not absent.** Unknown records and
+uncertain operation outcomes block discard/update and receive no query/title/
+time-based amnesty or automatic reconciliation.
 
 ## Artifact verification and boundaries
 
