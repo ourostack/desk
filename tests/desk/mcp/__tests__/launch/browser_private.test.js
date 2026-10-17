@@ -433,6 +433,7 @@ test("private creation uses an installed Edge channel when that is the existing 
 
 test("Windows shell folders resolve inside the isolated private environment", { skip: process.platform !== "win32" }, async () => {
   const f = await fixture()
+  const helper = path.join(f.root, "shell-folders.exe")
   const script = `
 Add-Type -TypeDefinition @'
 using System;
@@ -441,20 +442,29 @@ using System.Runtime.InteropServices;
 public class DeskPrivateShellFolder {
   [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
   public static extern int SHGetFolderPath(IntPtr hwnd, int csidl, IntPtr token, int flags, StringBuilder path);
+  public static void Main() {
+    foreach (int id in new int[] { 28, 26 }) {
+      var buffer = new StringBuilder(260);
+      int code = SHGetFolderPath(IntPtr.Zero, id, IntPtr.Zero, 0, buffer);
+      var unverified = new StringBuilder(260);
+      int unverifiedCode = SHGetFolderPath(IntPtr.Zero, id | 0x4000, IntPtr.Zero, 0, unverified);
+      Console.WriteLine(id + "\\t" + code + "\\t" + buffer + "\\t" + unverifiedCode + "\\t" + unverified);
+    }
+  }
 }
-'@
-$results = foreach ($id in @(28,26)) {
-  $buffer = New-Object System.Text.StringBuilder 260
-  $code = [DeskPrivateShellFolder]::SHGetFolderPath([IntPtr]::Zero, $id, [IntPtr]::Zero, 0, $buffer)
-  @{ id = $id; code = $code; path = $buffer.ToString() }
-}
-ConvertTo-Json -InputObject @($results) -Compress
+'@ -OutputAssembly '${helper.replaceAll("'", "''")}' -OutputType ConsoleApplication
 `
+  await exec(windowsPowerShellPath(), ["-NoProfile", "-NonInteractive", "-Command", script], {
+    cwd: f.root, env: process.env, windowsHide: true, timeout: 30000,
+  })
   const result = await f.invoke(["create"], { env: { ...process.env, ...f.options.env }, execute: async (_node, _args, options) => {
-    const { stdout } = await exec(windowsPowerShellPath(options.env), ["-NoProfile", "-NonInteractive", "-Command", script], {
+    const { stdout } = await exec(helper, [], {
       cwd: options.cwd, env: options.env, windowsHide: true, timeout: 15000,
     })
-    const folders = JSON.parse(stdout)
+    const folders = stdout.trim().split(/\r?\n/).map(line => {
+      const [id, code, folder] = line.split("\t")
+      return { id: Number(id), code: Number(code), path: folder }
+    })
     assert.deepEqual(folders.map(folder => folder.code), [0, 0], stdout)
     assert.deepEqual(folders.map(folder => path.normalize(folder.path)), [options.env.LOCALAPPDATA, options.env.APPDATA].map(directory => path.normalize(directory)))
     return { state: "running" }
