@@ -79,7 +79,7 @@ function transform(state, bytes) {
       return Buffer.concat(output);
     }
     if (match) {
-      output.push(data.subarray(start, pos), MASK);
+      output.push(data.subarray(start, pos), match.mask);
       pos += match.length;
       start = pos;
     } else pos++;
@@ -89,7 +89,7 @@ function transform(state, bytes) {
 }
 function decorate(stream) {
   if (stream[STREAM_KEY]) return stream[STREAM_KEY];
-  var state = { stream: stream, original: stream.write, forms: [], tail: Buffer.alloc(0),
+  var state = { stream: stream, original: stream.write, forms: [], textForms: [], tail: Buffer.alloc(0),
     quarantine: [], pending: 0, blocked: false, failure: false, waiters: [] };
   Object.defineProperty(stream, STREAM_KEY, { value: state });
   if (typeof stream.on === "function") {
@@ -108,6 +108,8 @@ function decorate(stream) {
       return false;
     }
     try {
+      if (encoding && !Buffer.isEncoding(encoding))
+        throw protectionError("TEXT_PROTECTION_ENCODING_UNSUPPORTED");
       var bytes = typeof chunk === "string" ? Buffer.from(chunk, encoding || "utf8") :
         Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
       var output = transform(state, bytes);
@@ -126,13 +128,22 @@ function protect(proc, token) {
     throw protectionError("TEXT_PROTECTION_FORM_TOO_LARGE");
   var forms = token ? [String(token), encodeURIComponent(token), encodeURI(token),
     JSON.stringify(token).slice(1, -1), JSON.stringify(token).slice(1, -1).replace(/\//g, "\\/")] : [];
-  forms = forms.filter(function (form, index) { return forms.indexOf(form) === index; }).map(function (form) {
-    var bytes = Buffer.from(form);
-    if (bytes.length > MAX_ENCODED_SECRET_FORM_BYTES) throw protectionError("TEXT_PROTECTION_FORM_TOO_LARGE");
-    return bytes;
+  var textForms = forms.filter(function (form, index) { return forms.indexOf(form) === index; });
+  forms = [];
+  textForms.forEach(function (form) {
+    // Canonical byte encodings cover every Buffer.isEncoding alias as well as
+    // legacy write(string, encoding, callback) and subsequent raw byte views.
+    ["utf8", "utf16le", "latin1", "ascii", "base64", "base64url", "hex"].forEach(function (encoding) {
+      var bytes = Buffer.from(form, encoding);
+      if (bytes.length > MAX_ENCODED_SECRET_FORM_BYTES) throw protectionError("TEXT_PROTECTION_FORM_TOO_LARGE");
+      if (!bytes.length) return;
+      bytes.mask = Buffer.from("<token>", encoding);
+      forms.push(bytes);
+    });
   });
   [proc.stdout, proc.stderr].forEach(function (stream) {
     var state = decorate(stream);
+    state.textForms = Array.from(new Set(state.textForms.concat(textForms)));
     forms.forEach(function (form) {
       if (!state.forms.some(function (existing) { return existing.equals(form); })) state.forms.push(form);
     });
@@ -141,8 +152,7 @@ function protect(proc, token) {
 }
 function redactProtected(proc, value) {
   var forms = [];
-  states(proc).forEach(function (state) { state.forms.forEach(function (form) {
-    var text = form.toString("utf8");
+  states(proc).forEach(function (state) { state.textForms.forEach(function (text) {
     if (forms.indexOf(text) === -1) forms.push(text);
   }); });
   forms.sort(function (a, b) { return b.length - a.length; });
@@ -178,7 +188,7 @@ async function flushProtection(proc) {
       var waiter = { resolve: resolve, reject: reject };
       waiter.timer = setTimeout(function () {
         var index = state.waiters.indexOf(waiter);
-        if (index !== -1) state.waiters.splice(index, 1);
+        state.waiters.splice(index, 1);
         reject(protectionError("TEXT_PROTECTION_FLUSH_UNCONFIRMED"));
       }, 5000);
       state.waiters.push(waiter);
@@ -525,7 +535,8 @@ function validateNativeBinding(record, route) {
   var binding = Object.freeze({ record: frozen, selection: Object.freeze(selection), client: client,
     origin: verified.runtime.mcpRoot, codeEpoch: codeEpoch, stateIdentity: verified.stateIdentity,
     retain: function (value) { acquisition = value; },
-    failure: function (error) { return acquisition ? acquisition.failure(error) :
+    waitFor: function (operation, stage) { return acquisition.waitFor(operation, stage); },
+    failure: function (error) { if (acquisition) acquisition.retire(); return acquisition ? acquisition.failure(error) :
       nativeError(client.safeCode(error && error.code, "NATIVE_ACQUISITION_UNAVAILABLE"),
         client.safeResources(error && error.resources)); }
   });

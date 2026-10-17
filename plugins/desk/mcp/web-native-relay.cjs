@@ -27,10 +27,24 @@ function initialize(record, selection, clock) {
       throw fail("NATIVE_SELECTION_MISMATCH");
     var deadline = clock.deadline, now = clock.now, retired = false, attempted = false;
     var dispatched = false, created = false, pending = false, nativeResult, paths, endpoints, client;
+    var ownRelay, relaySettled = false, relayStopped = false, pendingRelayOperation = false;
+    var pendingAcquisitionOperations = new Set();
+    function closeSettledRelay() {
+      if (ownRelay && relaySettled && !relayStopped) {
+        relayStopped = true;
+        ownRelay.stop();
+      }
+    }
+    function retire() { retired = true; closeSettledRelay(); }
     function failure(error) {
       var code = E_CODES.indexOf(error && error.code) !== -1 ? error.code :
         binding.client.safeCode(error && error.code, "NATIVE_ACQUISITION_UNAVAILABLE");
       var resources = binding.client.safeResources(error && error.resources);
+      if (pendingRelayOperation || pendingAcquisitionOperations.size)
+        resources = Object.assign({}, resources, { contextId: record.contextId,
+          pendingAcquisitionOperations: Array.from(pendingAcquisitionOperations) });
+      if (pendingRelayOperation)
+        resources = Object.assign({}, resources, { pendingRelayOperation: true, relayDisposition: "unknown" });
       if (dispatched) {
         resources = Object.assign({}, resources && typeof resources === "object" ? resources : {}, {
           contextId: record.contextId, method: "context.create",
@@ -56,7 +70,6 @@ function initialize(record, selection, clock) {
       catch (error) { retired = true; return Promise.reject(error); }
       return new Promise(function (resolve, reject) {
         timer = setTimeout(function () {
-          if (settled) return;
           settled = true; retired = true;
           reject(failure({ code: "NATIVE_HANDSHAKE_TIMEOUT" }));
         }, left);
@@ -73,6 +86,30 @@ function initialize(record, selection, clock) {
     function route() {
       return { extension: true, browserName: "chromium", userDataDir: record.userDataDir,
         channel: record.channel, profileDirName: record.profileDirName, executablePath: selection.browserExecutable };
+    }
+    function waitFor(operation, stage) {
+      pendingAcquisitionOperations.add(stage);
+      var tracked = Promise.resolve(operation).then(function (value) {
+        pendingAcquisitionOperations.delete(stage); return value;
+      }, function (error) { pendingAcquisitionOperations.delete(stage); throw error; });
+      return bounded(tracked);
+    }
+    function start(relay) {
+      remaining();
+      ownRelay = relay;
+      pendingRelayOperation = true;
+      // No cancellation claim: only settlement makes this exact relay closable.
+      var operation = relay.start();
+      var tracked = Promise.resolve(operation).then(function (value) {
+        pendingRelayOperation = false; relaySettled = true;
+        if (retired) closeSettledRelay();
+        return value;
+      }, function (error) {
+        pendingRelayOperation = false; relaySettled = true;
+        if (retired) closeSettledRelay();
+        throw error;
+      });
+      return bounded(tracked);
     }
     function protectPaths(cdp, extension) {
       var match = /^\/cdp\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.exec(cdp);
@@ -109,9 +146,9 @@ function initialize(record, selection, clock) {
         remaining();
         dispatched = true;
         pending = true;
-        var operation;
-        try { operation = client.request("context.create", { label: record.label, relayUrl: endpoint }); }
-        catch (error) { pending = false; throw failure(error); }
+        // Approved C request() always returns its invoke() Promise for this
+        // constant method/plain payload; failures settle through tracked below.
+        var operation = client.request("context.create", { label: record.label, relayUrl: endpoint });
         var tracked = Promise.resolve(operation).then(function (result) {
           pending = false;
           if (!retired && result && result.contextId === record.contextId && result.state === "ready" &&
@@ -127,7 +164,7 @@ function initialize(record, selection, clock) {
       }).catch(function (error) { throw failure(error); });
     }
     var acquisition = Object.freeze({ deadline: deadline, protectPaths: protectPaths, protectEndpoints: protectEndpoints,
-      connect: connect, failure: failure, retire: function () { retired = true; } });
+      connect: connect, failure: failure, retire: retire, start: start, waitFor: waitFor });
     remaining();
     credential.validateNativeBinding(record, route());
     remaining();

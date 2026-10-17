@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import fs, { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { spawnSync } from "node:child_process"
 import { Writable } from "node:stream"
@@ -10,10 +10,221 @@ import { mcpRoot } from "./_mcp_handshake.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const require = createRequire(import.meta.url)
+const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
 const patch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const sourceCredential = require(path.join(mcpRoot, "web-extension-credential.cjs"))
 const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
 const bindingKey = "DESK_BROWSER_PROFILE_DIR"
+
+function templateCredential(overrides = {}, directory = mcpRoot, proc = process, timers = {}) {
+  return loadTemplate(path.join(mcpRoot, "web-extension-credential.cjs"), {
+    require: name => Object.hasOwn(overrides, name) ? overrides[name] : require(name),
+    module: { exports: {} }, __dirname: directory, process: proc, Buffer,
+    setTimeout, clearTimeout, ...timers,
+  })
+}
+
+test("stream rejection and graceful drain expose actual errors without releasing quarantine or accepting invalid chunks", async () => {
+  const chunks = [], completions = []
+  const sink = new Writable({ write(bytes, _encoding, done) { chunks.push(Buffer.from(bytes)); completions.push(done) } })
+  const proc = { stdout: sink, stderr: sink }
+  sourceCredential.protect(proc, "secret-value")
+  assert.throws(() => sink.write({ unsupported: true }), { code: "ERR_INVALID_ARG_TYPE" })
+  sink.write("safe")
+  const waiting = sourceCredential.flushProtection(proc)
+  completions.shift()(new Error("owned sink failure"))
+  await assert.rejects(waiting, { code: "TEXT_PROTECTION_SINK_ERROR" })
+  await new Promise(resolve => sink.write("secret-value", error => { assert.equal(error.code, "TEXT_PROTECTION_SINK_ERROR"); resolve() }))
+  assert.equal(Buffer.concat(chunks).toString(), "safe")
+  const f = fixtureProcess()
+  sourceCredential.protect(f.proc, "secret-value")
+  f.proc.stdout.write("sec")
+  await sourceCredential.flushProtection(f.proc)
+  f.proc.stdout.write("unrelated")
+  await sourceCredential.flushProtection(f.proc)
+  assert.equal(f.output.stdout.join(""), "<token>unrelated")
+  const error = new Error("secret-value")
+  error.code = "OWNED"; error.resources = { contextId: "kept" }
+  assert.deepEqual(sourceCredential.redactProtected(proc, error), { code: "OWNED", message: "<token>", resources: { contextId: "kept" } })
+})
+
+test("actual reader handles SQLite fallback, absent/unavailable drivers, UTF16 and filtered LevelDB copies", async () => {
+  const root = await mkTempRoot("credential-reader-boundaries-"), profile = path.join(root, "profile")
+  mkdirSync(profile)
+  writeFileSync(path.join(profile, "LocalStorage"), "owned synthetic driver input")
+  let closed = 0, row = { value: Buffer.concat([Buffer.from([0]), Buffer.from("utf16-value", "utf16le")]), compression: 0 }
+  class DatabaseSync {
+    prepare(sql) {
+      assert.match(sql, /JOIN maps/)
+      return { get(storage, key) { assert.equal(storage.toString(), "chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/"); assert.equal(key.subarray(1).toString(), "auth-token"); return row } }
+    }
+    close() { closed++ }
+  }
+  const deps = { tmpdir: root, sqlite: { DatabaseSync } }
+  assert.equal(await sourceCredential.readExtensionToken(profile, deps), "utf16-value")
+  writeFileSync(path.join(profile, "LocalStorage-wal"), "owned synthetic WAL")
+  row = { value: Buffer.from([1, 65]), compression: 0 }
+  assert.equal(await sourceCredential.readExtensionToken(profile, deps), "A")
+  row = undefined
+  assert.equal(await sourceCredential.readExtensionToken(profile, deps), null)
+  row = { compression: 1 }
+  assert.equal(await sourceCredential.readExtensionToken(profile, deps), null)
+  assert.equal(closed, 4)
+  assert.equal(await sourceCredential.readExtensionToken(profile, { tmpdir: root, sqlite: null }), null)
+  const unavailable = templateCredential({ "node:sqlite": null })
+  assert.equal(await unavailable.readExtensionToken(profile, { tmpdir: root }), null)
+  const noDriver = templateCredential({}, mcpRoot)
+  // Actual Node SQLite import; empty synthetic DB is legitimate, no production
+  // profile is consulted. Missing schema throws after closing its owned copy.
+  fs.unlinkSync(path.join(profile, "LocalStorage-wal"))
+  fs.truncateSync(path.join(profile, "LocalStorage"), 0)
+  await assert.rejects(noDriver.readExtensionToken(profile, { tmpdir: root }))
+  const missingModule = loadTemplate(path.join(mcpRoot, "web-extension-credential.cjs"), {
+    module: { exports: {} }, __dirname: mcpRoot, process, Buffer, setTimeout, clearTimeout,
+    require(name) { if (name === "node:sqlite") throw Error("owned unavailable driver"); return require(name) },
+  })
+  assert.equal(await missingModule.readExtensionToken(profile, { tmpdir: root }), null)
+  for (const invalid of [{ extensionId: 1 }, { extensionId: "bad" }, { tokenKey: false }, { tokenKey: "bad key" }])
+    await assert.rejects(sourceCredential.readExtensionToken(profile, { ...deps, ...invalid }), /browser_token_identity_invalid/)
+  const levelPath = path.join(profile, "Local Storage/leveldb")
+  mkdirSync(levelPath, { recursive: true })
+  writeFileSync(path.join(levelPath, "LOCK"), "never copied")
+  writeFileSync(path.join(levelPath, "000001.log"), "owned storage observation")
+  let iterations = 0
+  class ClassicLevel {
+    constructor(copy) {
+      assert.equal(existsSync(path.join(copy, "LOCK")), false)
+      assert.equal(readFileSync(path.join(copy, "000001.log"), "utf8"), "owned storage observation")
+    }
+    iterator() {
+      return {
+        async next() {
+          return ++iterations === 1 ? [Buffer.from("unrelated"), Buffer.from([1, 88])] :
+            [Buffer.from("_chrome-extension://" + "a".repeat(32) + "\u0000\u0001custom-key", "latin1"), Buffer.concat([Buffer.from([0]), Buffer.from("selected", "utf16le")])]
+        }, async close() {},
+      }
+    }
+    async close() {}
+  }
+  assert.equal(await sourceCredential.readExtensionToken(profile, { tmpdir: root, level: { ClassicLevel }, extensionId: "a".repeat(32), tokenKey: "custom-key" }), "selected")
+  assert.equal(iterations, 2)
+  assert.deepEqual(fs.readdirSync(root), ["profile"], "all temporary storage copies closed/removed")
+})
+
+test("public code rejects noncanonical roots, invalid relative paths, size and identity races", async () => {
+  const root = await mkTempRoot("credential-public-fences-"), file = path.join(root, "module.cjs")
+  writeFileSync(file, "module.exports = 1")
+  for (const relative of ["", ".", "../module.cjs", "./module.cjs"])
+    assert.throws(() => sourceCredential.publicCode(root, relative), { code: "NATIVE_CODE_UNAVAILABLE" })
+  assert.throws(() => sourceCredential.publicCode(root + "/.", "module.cjs"), { code: "NATIVE_CODE_UNAVAILABLE" })
+  assert.throws(() => sourceCredential.publicCode(file, "module.cjs"), { code: "NATIVE_CODE_UNAVAILABLE" })
+  for (const mutation of ["size", "identity"]) {
+    let calls = 0
+    const observed = Object.create(fs)
+    observed.lstatSync = function (name, options) {
+      const stat = fs.lstatSync(name, options)
+      if (name === file && options?.bigint) {
+        calls++
+        if (mutation === "size") return { ...stat, size: 4194305n }
+        if (calls === 2) return { ...stat, ino: stat.ino + 1n }
+      }
+      return stat
+    }
+    const helper = templateCredential({ fs: observed })
+    assert.throws(() => helper.publicCode(root, "module.cjs"), { code: mutation === "size" ? "NATIVE_CODE_UNAVAILABLE" : "NATIVE_CODE_CHANGED" })
+  }
+})
+
+test("Windows private-generation and receipt verdicts use the genuine SID/DACL command boundary", async () => {
+  const { installed, lib } = await staged(), executions = []
+  const proc = { platform: "win32", env: { irrelevant: "x", SystemRoot: "C:\\Windows" }, stdout: { write() {} }, stderr: { write() {} } }
+  let verdict = "private"
+  const child = { execFileSync(file, args, options) {
+    assert.equal(file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    assert.ok(args.includes("-NonInteractive"))
+    assert.match(args.at(-1), /SecurityIdentifier|WindowsIdentity/)
+    executions.push(JSON.parse(options.input))
+    return args.at(-1).includes("SetAccessRuleProtection") ? "" : verdict
+  } }
+  const helper = templateCredential({ child_process: child }, lib, proc)
+  helper.privateGeneration(installed.dir)
+  helper.privateGeneration(installed.dir, path.join(installed.dir, "playwright-patch.json"))
+  assert.equal(helper.verifyGeneration(installed, mcpRoot).receipt.revision, 3)
+  verdict = "exposed"
+  assert.throws(() => helper.verifyGeneration(installed, mcpRoot), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  for (const env of [{}, { SYSTEMROOT: "relative" }]) {
+    const invalid = templateCredential({ child_process: child }, lib, { ...proc, env })
+    assert.throws(() => invalid.privateGeneration(installed.dir), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+    assert.throws(() => invalid.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  }
+  assert.deepEqual(executions[0], [installed.dir])
+  assert.equal(executions[1].length, 2)
+  assert.throws(() => helper.privateGeneration(path.join(lib, "coreBundle.js")), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  const wrongOwner = templateCredential({}, lib, { ...process, getuid: () => fs.lstatSync(installed.dir).uid + 1 })
+  assert.throws(() => wrongOwner.privateGeneration(installed.dir), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  assert.throws(() => wrongOwner.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  const macACL = templateCredential({ child_process: { execFileSync() { return " 0: user:other allow read" } } }, lib)
+  assert.throws(() => macACL.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+})
+
+test("normal code import closure retains builtin capability fallback and rejects external imports", async () => {
+  const api = require("node:module")
+  assert.equal(api.isBuiltin("node:sqlite"), true, "this admitted Node supports the optional stock reader builtin")
+  // Node omits prefix-only builtins from builtinModules; the boundary models a
+  // complete older enumeration API for the same real host capabilities.
+  assert.equal(templateCredential({ module: { builtinModules: [...api.builtinModules, "sqlite"] } }).nativeInventory(realpathSync(mcpRoot)).length, 10)
+  assert.throws(() => templateCredential({ module: {} }).nativeInventory(realpathSync(mcpRoot)), { code: "NATIVE_CODE_UNAVAILABLE" })
+  const root = await mkTempRoot("credential-external-import-")
+  for (const item of sourceCredential.nativeInventory(realpathSync(mcpRoot))) {
+    mkdirSync(path.dirname(path.join(root, item.path)), { recursive: true })
+    copyFileSync(path.join(mcpRoot, item.path), path.join(root, item.path))
+  }
+  fs.appendFileSync(path.join(root, "src/util/broker-error.mjs"), '\nimport "not-a-builtin";\n')
+  assert.throws(() => sourceCredential.nativeInventory(root), { code: "NATIVE_CODE_UNAVAILABLE" })
+})
+
+test("private receipt refuses schema/capture/proof changes and observed identity replacements", async () => {
+  const { installed, lib } = await staged(), receiptFile = path.join(installed.dir, "playwright-patch.json")
+  const coreFile = path.join(lib, "coreBundle.js"), receiptBytes = readFileSync(receiptFile), coreBytes = readFileSync(coreFile)
+  const sha = bytes => require("node:crypto").createHash("sha256").update(bytes).digest("hex")
+  for (const mutation of ["large", "null", "version", "core", "mcp", "capture-array", "capture-root", "capture-order", "proof",
+    "missing-region", "missing-end", "duplicate-region"]) {
+    const receipt = JSON.parse(receiptBytes)
+    let bytes = coreBytes
+    if (mutation === "version") receipt.revision = 2
+    if (mutation === "core") receipt.coreVersion = "wrong"
+    if (mutation === "mcp") receipt.mcpVersion = "wrong"
+    if (mutation === "capture-array") receipt.nativeRuntime.discoveryInputs.browserEnv = []
+    if (mutation === "capture-root") receipt.nativeRuntime.discoveryInputs.browserEnv = { INVALID: "x" }
+    if (mutation === "capture-order") receipt.nativeRuntime.discoveryInputs = Object.fromEntries(Object.entries(receipt.nativeRuntime.discoveryInputs).reverse())
+    if (mutation === "proof") receipt.guardedRegionProofs[0].patched = "0".repeat(64)
+    if (mutation === "missing-region") bytes = Buffer.from(coreBytes.toString().replace("async function createBrowser(config,", "async function notCreateBrowser(config,"))
+    if (mutation === "missing-end") bytes = Buffer.from(coreBytes.toString().replace("\nasync function connectToBrowserEndpoint(", "\nasync function notConnectToBrowserEndpoint("))
+    if (mutation === "duplicate-region") bytes = Buffer.concat([coreBytes, Buffer.from("\nasync function createBrowser(config,")])
+    receipt.bundleSha256 = sha(bytes)
+    writeFileSync(coreFile, bytes)
+    writeFileSync(receiptFile, mutation === "large" ? "x".repeat(65537) : mutation === "null" ? "null" : JSON.stringify(receipt))
+    assert.throws(() => sourceCredential.verifyGeneration(installed, mcpRoot),
+      { code: mutation.startsWith("capture") ? "NATIVE_DISCOVERY_INPUTS_UNAVAILABLE" : "NATIVE_CODE_UNAVAILABLE" }, mutation)
+    writeFileSync(coreFile, coreBytes); writeFileSync(receiptFile, receiptBytes)
+  }
+  for (const mutation of ["receipt-read", "receipt-final", "directory", "lib"]) {
+    let receiptObservations = 0, directoryObservations = 0
+    const observed = Object.create(fs)
+    observed.lstatSync = (file, options) => {
+      const stat = fs.lstatSync(file, options)
+      if (options?.bigint && file === receiptFile && ++receiptObservations === (mutation === "receipt-read" ? 2 : 3) && mutation.startsWith("receipt"))
+        return { ...stat, ino: stat.ino + 1n }
+      if (options?.bigint && file === installed.dir && ++directoryObservations === 2 && mutation === "directory")
+        return { ...stat, ino: stat.ino + 1n }
+      return stat
+    }
+    observed.realpathSync = file => file === lib && mutation === "lib" ? path.join(lib, "replacement") : fs.realpathSync(file)
+    assert.throws(() => templateCredential({ fs: observed }, lib).verifyGeneration(installed),
+      { code: mutation === "lib" ? "NATIVE_CODE_UNAVAILABLE" : "NATIVE_CODE_CHANGED" })
+  }
+  assert.equal(sourceCredential.verifyGeneration(installed, mcpRoot).receipt.revision, 3)
+})
 
 test("native binding uses a strict presence gate before loading a client/helper", () => {
   for (const record of [null, false, undefined, [], {}])
@@ -113,7 +324,7 @@ test("flush masks ambiguous prefix and quarantines its late continuation, includ
 test("same actual stream shared by staged/normal aliases gets one decorator and ordered callbacks", async () => {
   const { proc, output } = fixtureProcess()
   const stagedModule = { exports: {} }
-  runInNewContext(readFileSync(path.join(mcpRoot, "web-extension-credential.cjs"), "utf8"), {
+  loadTemplate(path.join(mcpRoot, "web-extension-credential.cjs"), {
     require, module: stagedModule, Buffer, process, __dirname: mcpRoot, setTimeout, clearTimeout,
   })
   sourceCredential.protect(proc, "alpha")
@@ -141,6 +352,86 @@ test("encoded strings and byte-array views never bypass the actual Writable prot
   sink.write(new Uint8Array(bytes.buffer, bytes.byteOffset + 2, bytes.length - 4))
   await sourceCredential.flushProtection(proc)
   assert.equal(Buffer.concat(output).toString(), "<token>".repeat(4))
+})
+
+test("legacy encoded writes and all UTF16 odd splits protect actual bytes without changing unrelated output", async () => {
+  const secret = "owned-π-credential", encodings = ["", null, undefined, false, 0, "utf8", "utf-8", "utf16le", "utf-16le", "ucs2", "ucs-2", "latin1", "binary", "ascii", "hex", "base64", "base64url"]
+  for (const encoding of encodings) {
+    const plain = [], control = new Writable({ write(data, _enc, done) { plain.push(Buffer.from(data)); done() } })
+    control.write(secret, encoding)
+    assert.deepEqual(Buffer.concat(plain), Buffer.from(secret, encoding), "genuine Node encoding/default control")
+    const bytes = Buffer.from(secret, encoding)
+    for (let split = 0; split < Math.max(1, bytes.length); split++) {
+      const output = [], calls = [], sink = new Writable({ write(data, _enc, done) { output.push(Buffer.from(data)); done() } })
+      const proc = { stdout: sink, stderr: sink }
+      sourceCredential.protect(proc, secret)
+      sink.write("before ", encoding, error => calls.push(error || 1))
+      if (split === 0) sink.write(secret, encoding, error => calls.push(error || 2))
+      else {
+        sink.write(bytes.subarray(0, split), error => calls.push(error || 2))
+        sink.write(new Uint8Array(bytes.buffer, bytes.byteOffset + split, bytes.length - split), error => calls.push(error || 3))
+      }
+      sink.write(" after", encoding, error => calls.push(error || 4))
+      await sourceCredential.flushProtection(proc)
+      await new Promise(resolve => setImmediate(resolve))
+      assert.deepEqual(Buffer.concat(output), Buffer.concat([
+        Buffer.from("before ", encoding), Buffer.from("<token>", encoding), Buffer.from(" after", encoding),
+      ]), `${encoding} split ${split}`)
+      assert.deepEqual(calls, split === 0 ? [1, 2, 4] : [1, 2, 3, 4])
+    }
+  }
+  for (const encoding of ["utf16le", "ucs2"]) {
+    const output = [], sink = new Writable({ write(bytes, _encoding, done) { output.push(Buffer.from(bytes)); done() } })
+    const proc = { stdout: sink, stderr: sink }
+    sourceCredential.protect(proc, secret)
+    for (const byte of Buffer.from(secret, encoding))
+      await new Promise(resolve => proc.stdout.write(Buffer.from([byte]), resolve))
+    await sourceCredential.flushProtection(proc)
+    assert.deepEqual(Buffer.concat(output), Buffer.from("<token>", encoding))
+  }
+})
+
+test("UTF16 URI/JSON forms survive every odd boundary and flush quarantines incomplete encoded continuations", async () => {
+  const secret = 'ws://127.0.0.1:9/extension/owned-π-"capability"'
+  for (const form of [secret, encodeURIComponent(secret), encodeURI(secret), JSON.stringify(secret).slice(1, -1),
+    JSON.stringify(secret).slice(1, -1).replaceAll("/", "\\/")]) {
+    const bytes = Buffer.from(form, "utf16le")
+    for (let split = 1; split < bytes.length; split += 2) {
+      const output = [], sink = new Writable({ highWaterMark: 1, write(data, _enc, done) { output.push(Buffer.from(data)); setImmediate(done) } })
+      const proc = { stdout: sink, stderr: sink }
+      sourceCredential.protect(proc, secret)
+      assert.equal(sink.write(bytes.subarray(0, split)), true, "held odd prefix creates no false backpressure")
+      await new Promise(resolve => sink.write(bytes.subarray(split), resolve))
+      await sourceCredential.flushProtection(proc)
+      assert.deepEqual(Buffer.concat(output), Buffer.from("<token>", "utf16le"))
+      assert.equal(sink.destroyed, false)
+    }
+  }
+  const output = [], sink = new Writable({ write(data, _enc, done) { output.push(Buffer.from(data)); done() } })
+  const proc = { stdout: sink, stderr: sink }, bytes = Buffer.from(secret, "ucs2")
+  sourceCredential.protect(proc, secret)
+  sink.write(bytes.subarray(0, 9))
+  await sourceCredential.flushProtection(proc, { final: false })
+  for (const byte of bytes.subarray(9)) await new Promise(resolve => sink.write(Buffer.from([byte]), resolve))
+  await sourceCredential.flushProtection(proc, { final: true })
+  sink.write(secret, "ucs-2")
+  await sourceCredential.flushProtection(proc)
+  assert.deepEqual(Buffer.concat(output), Buffer.concat([Buffer.from("<token>"), Buffer.from("<token>", "utf16le")]))
+})
+
+test("unsupported encoding refuses before output and encoded-form bounds include UTF16 and URI/JSON forms", async () => {
+  const { proc, output } = fixtureProcess()
+  sourceCredential.protect(proc, "owned-secret")
+  for (const input of ["owned-secret", Buffer.from("safe")]) {
+    let callback
+    assert.equal(proc.stdout.write(input, "not-an-encoding", error => { callback = error }), false)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(callback.code, "TEXT_PROTECTION_ENCODING_UNSUPPORTED")
+  }
+  assert.equal(output.stdout.join(""), "")
+  assert.throws(() => sourceCredential.protect(proc, "x".repeat(32769)), { code: "TEXT_PROTECTION_FORM_TOO_LARGE" })
+  assert.throws(() => sourceCredential.protect(proc, "/".repeat(11000)), { code: "TEXT_PROTECTION_FORM_TOO_LARGE" })
+  assert.throws(() => sourceCredential.protect(proc, '"'.repeat(17000)), { code: "TEXT_PROTECTION_FORM_TOO_LARGE" })
 })
 
 test("flush reports a throwing sink as bounded rejection, never a synchronous escape", async () => {
@@ -175,7 +466,7 @@ test("actual sink false/drain/error is separate from ordered acceptance callback
 test("5000ms flush deadline refuses unconfirmed delivery without closing sink or releasing raw tail", async () => {
   let deadline, milliseconds
   const module = { exports: {} }, output = [], completions = []
-  runInNewContext(readFileSync(path.join(mcpRoot, "web-extension-credential.cjs"), "utf8"), {
+  loadTemplate(path.join(mcpRoot, "web-extension-credential.cjs"), {
     require, module, Buffer, process, __dirname: mcpRoot,
     setTimeout(fn, ms) { deadline = fn; milliseconds = ms; return 1 },
     clearTimeout() {},
@@ -199,18 +490,19 @@ test("5000ms flush deadline refuses unconfirmed delivery without closing sink or
 })
 
 test("maximum-size retained prefix is bounded and final masking retains late-write protection", async () => {
-  const { proc, output } = fixtureProcess(), secret = "x".repeat(65535) + "!"
+  const output = [], sink = new Writable({ write(bytes, _encoding, done) { output.push(Buffer.from(bytes)); done() } })
+  const proc = { stdout: sink, stderr: sink }, secret = "x".repeat(32767) + "!", bytes = Buffer.from(secret, "utf16le")
   sourceCredential.protect(proc, secret)
   for (let index = 0; index < 65535; index += 257) {
-    proc.stdout.write(Buffer.from(secret.slice(index, Math.min(65535, index + 257))))
+    proc.stdout.write(bytes.subarray(index, Math.min(65535, index + 257)))
     assert.ok(proc.stdout.__desk_text_protection_v3__.tail.length <= 65535)
   }
   assert.equal(proc.stdout.__desk_text_protection_v3__.tail.length, 65535)
   await sourceCredential.flushProtection(proc, { final: true })
-  proc.stdout.write("!")
-  proc.stdout.write(secret)
+  proc.stdout.write(bytes.subarray(65535))
+  proc.stdout.write(bytes)
   await sourceCredential.flushProtection(proc)
-  assert.equal(output.stdout.join(""), "<token><token>")
+  assert.deepEqual(Buffer.concat(output), Buffer.concat([Buffer.from("<token>"), Buffer.from("<token>", "utf16le")]))
 })
 
 test("protection refuses overlong forms before output and sanitizes structured resource values", () => {

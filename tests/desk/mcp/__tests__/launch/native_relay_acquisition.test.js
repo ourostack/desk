@@ -20,6 +20,7 @@ import { mcpRoot } from './_mcp_handshake.js';
 import '../_isolated_env.mjs';
 
 const require = createRequire(import.meta.url);
+const { loadTemplate } = require('./fixtures/native-template-loader.cjs');
 const patch = require(path.join(mcpRoot, 'web-playwright-patch.cjs'));
 const fixture = readFileSync(new URL('./fixtures/playwright-server-lifecycle.cjs', import.meta.url), 'utf8');
 const actualCli = process.env.DESK_TEST_MAINTAINED_CLI_DIR;
@@ -127,7 +128,9 @@ async function integrated(t, options = {}) {
   const binaryWrite = nativeProc.stdout.write;
   const realFs = Object.create(fs), normalDiscovery = require(path.join(mcpRoot, 'web-browser-discovery.cjs'));
   const systemCandidates = normalDiscovery.browserPaths('msedge', process.platform, process.env);
-  realFs.existsSync = file => systemCandidates.includes(String(file)) ? process.platform === 'darwin' ? false : true : fs.existsSync(file);
+  const otherSystemCandidates = normalDiscovery.browserPaths('chrome', process.platform, process.env);
+  realFs.existsSync = file => otherSystemCandidates.includes(String(file)) ? false :
+    systemCandidates.includes(String(file)) ? process.platform === 'darwin' ? false : true : fs.existsSync(file);
   realFs.realpathSync = file => systemCandidates.includes(String(file)) && process.platform !== 'darwin' ? browserExecutable : fs.realpathSync(file);
   const vmRequire = name => {
     if (name === 'fs') return realFs;
@@ -164,7 +167,7 @@ async function integrated(t, options = {}) {
     },
   });
   const cClient = cModule.exports, credentialModule = { exports: {} };
-  runInNewContext(readFileSync(path.join(lib, 'desk-extension-credential.cjs'), 'utf8'), {
+  loadTemplate(path.join(lib, 'desk-extension-credential.cjs'), {
     module: credentialModule, require: vmRequire, __dirname: lib, process: coreProc, Buffer, setTimeout, clearTimeout,
   });
   const credential = credentialModule.exports;
@@ -179,11 +182,12 @@ async function integrated(t, options = {}) {
     for (const [id, timer] of [...timers]) if (timer.due <= now) { timers.delete(id); timer.callback(); }
   };
   const nativeModule = { exports: {} };
-  runInNewContext(readFileSync(path.join(lib, 'desk-native-relay.cjs'), 'utf8'), {
+  loadTemplate(path.join(lib, 'desk-native-relay.cjs'), {
     module: nativeModule, require: name => name === path.join(lib, 'desk-extension-credential.cjs') ? credential : require(name),
     __dirname: lib, process: coreProc, Buffer, setTimeout: setTimer, clearTimeout: clearTimer,
   });
   const holdInitialized = deferred(), holdAck = deferred();
+  const holdListen = deferred(), holdCDP = deferred(), holdBind = deferred(), holdClose = deferred(); let listenEntered = false, cdpEntered = false, bindEntered = false;
   let tabCounter = 10, groupCounter = 50, creates = 0;
   const tabs = new Map([[1, { id: 1, windowId: 7, groupId: -1, active: true, url: 'manual-peer' }]]);
   const groups = new Map(), debuggerAttached = new Set(), runtimes = new Map(), pairs = [];
@@ -236,6 +240,7 @@ async function integrated(t, options = {}) {
       timeline.push('native-create-completed');
       if (options.holdAck) await holdAck.promise;
       timeline.push('create-ack');
+      if (options.invalidCreateReply) reply.result.pendingEffects = 1;
     }
     transport.receive(reply);
   } });
@@ -245,7 +250,7 @@ async function integrated(t, options = {}) {
     chain, transport, inventory, processReader: reader, resolveSelection: async () => ({ ...selection, profileRoot: config.profileRoot }),
     readProfileToken: async () => { if (blockToken) { tokenBlocked = true; await tokenGate.promise; } return TOKEN; } });
   t.after(async () => {
-    tokenGate.resolve(); holdInitialized.resolve(); holdAck.resolve();
+    tokenGate.resolve(); holdInitialized.resolve(); holdAck.resolve(); holdListen.resolve(); holdCDP.resolve(); holdBind.resolve(); holdClose.resolve();
     for (const browser of cdpBrowsers) await browser.close();
     for (const pair of pairs) pair.client.close();
     if (foreignReady) await assert.rejects(provider.close(), { code: 'NATIVE_STATE_CHANGED' });
@@ -277,8 +282,8 @@ async function integrated(t, options = {}) {
       if (options.constructorFailure) throw Error(`owned constructor-private /extension/${nonce}`);
       relays.push(this); this.closed = false;
     }
-    async listen() { return this.host; }
-    async close() { this.closed = true; }
+    async listen() { listenEntered = true; if (options.holdListen) await holdListen.promise; this.bound = true; if (options.rejectListen) throw Error('owned listen failure'); return this.host; }
+    async close() { assert.equal(this.bound, true, 'unresolved listen is not claimed closed'); this.closed = true; this.closeCount = (this.closeCount || 0) + 1; }
   }
   const actualCore = readFileSync(path.resolve(actualCli, '../../coreBundle.js'), 'utf8');
   function exactClass(marker) {
@@ -318,11 +323,13 @@ async function integrated(t, options = {}) {
       pair.client.onmessage = ({ data }) => { const message = JSON.parse(data); if (message.id) { const w = waiting.get(message.id); waiting.delete(message.id); if (message.error) w.reject(Error(message.error.message)); else w.resolve(message.result); } else events.push(message); };
       relay.delegate.onConnection({}, new URL(endpoint), pair.server);
       const browser = new EventEmitter();
-      browser.bind = async () => { if (options.bindFailure && cdpBrowsers.length === 2) throw Error('owned binding failure ' + endpoint); return { endpoint: 'owned-cli-endpoint' }; };
-      browser.close = async () => { pair.client.close(); browser.emit('disconnected'); };
+      browser.bind = async () => { bindEntered = true; if (options.holdBind) await holdBind.promise; if (options.bindFailure && cdpBrowsers.length === 2) throw Error('owned binding failure ' + endpoint); return { endpoint: 'owned-cli-endpoint' }; };
+      browser.close = async () => { if (options.holdClose) await holdClose.promise; pair.client.close(); browser.emit('disconnected'); };
       browser.command = (method, params = {}, sessionId) => new Promise((resolve, reject) => { const next = ++id; waiting.set(next, { resolve, reject }); pair.client.send(JSON.stringify({ id: next, method, params, sessionId })); });
       browser.events = events;
       cdpBrowsers.push(browser);
+      cdpEntered = true;
+      if (options.holdCDP) await holdCDP.promise;
       return browser;
     } } },
   };
@@ -336,8 +343,14 @@ async function integrated(t, options = {}) {
   return { root, codeRoot, generation, lib, create, records, provider, tabs, timeline, holdInitialized, holdAck, advance, timers, output,
     credential, coreProc, relays, cdpBrowsers, creates: () => creates, binary, nativeProc, binaryWrite,
     pendingHttp, blockAttestation: () => { blockToken = true; }, tokenBlocked: () => tokenBlocked, tokenGate,
-    readyFile: config.nativeReadyFile, chain,
-    retainForeignReady: bytes => { foreignReady = Buffer.from(bytes); } };
+    readyFile: config.nativeReadyFile, chain, holdListen, listenEntered: () => listenEntered,
+    holdCDP, holdBind, holdClose, cdpEntered: () => cdpEntered, bindEntered: () => bindEntered,
+    retainForeignReady: bytes => { foreignReady = Buffer.from(bytes); },
+    nativeHelper: nativeModule.exports, observations: realFs,
+    binding: (route = { extension: true, browserName: 'chromium', userDataDir: config.userDataDir, channel: 'msedge', profileDirName: 'Default' }) =>
+      credential.validateNativeBinding(records.get(A), route),
+    clock: () => ({ deadline: now + 30000, now: () => now }),
+    elapseWithoutTimers: ms => { now += ms; } };
 }
 
 for (const order of ['initialized-first', 'create-first']) {
@@ -406,6 +419,72 @@ test('before-dispatch absolute deadline retires late C attestation without ever 
   f.tokenGate.resolve();
   await until(() => f.pendingHttp.size === 0);
   assert.equal(f.creates(), 0, 'late actual attestation cannot dispatch create');
+});
+
+test('absolute deadline returns while maintained listen is pending; late settlement closes only its own relay once', { timeout: 15000 }, async t => {
+  const f = await integrated(t, { holdListen: true });
+  let result
+  const pending = f.create().then(value => { result = { value } }, error => { result = { error } });
+  try {
+    await until(f.listenEntered)
+    f.advance(30001)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(result?.error?.code, 'NATIVE_HANDSHAKE_TIMEOUT')
+    assert.equal(result.error.resources.pendingRelayOperation, true)
+    assert.equal(result.error.resources.relayDisposition, 'unknown')
+    assert.equal(f.relays[0].closed, false, 'pending bind was not falsely stopped')
+    assert.equal(f.creates(), 0)
+    assert.equal(f.cdpBrowsers.length, 0)
+  } finally {
+    f.holdListen.resolve()
+    await pending
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.equal(f.relays[0].closed, true)
+  assert.equal(f.relays[0].closeCount, 1)
+  assert.equal(f.creates(), 0)
+  assert.equal(f.cdpBrowsers.length, 0)
+  assert.equal(f.timers.size, 0)
+});
+
+for (const phase of ['CDP', 'Bind']) test(`same absolute deadline covers held ${phase} without waiting for late settlement`, { timeout: 15000 }, async t => {
+  const f = await integrated(t, { [`hold${phase}`]: true });
+  let result
+  const pending = f.create().then(value => { result = { value } }, error => { result = { error } });
+  try {
+    await until(phase === 'CDP' ? f.cdpEntered : f.bindEntered)
+    f.advance(30001)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(result?.error?.code, 'NATIVE_HANDSHAKE_TIMEOUT')
+    assert.equal(result.error.resources.contextId, A)
+    assert.equal(result.error.resources.disposition, 'retained')
+    assert.equal(f.relays[0].closed, true)
+  } finally {
+    f[`hold${phase}`].resolve()
+    await pending
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.equal(f.creates(), 1)
+  assert.equal(f.relays[0].closeCount, 1)
+});
+
+test('expired outer bind cannot wait forever for connection close or claim its unresolved work stopped', { timeout: 15000 }, async t => {
+  const f = await integrated(t, { holdBind: true, holdClose: true });
+  let result;
+  const pending = f.create().then(value => { result = { value }; }, error => { result = { error }; });
+  try {
+    await until(f.bindEntered); f.advance(30001);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(result?.error?.code, 'NATIVE_HANDSHAKE_TIMEOUT');
+    assert.equal(result.error.resources.contextId, A);
+    assert.ok(result.error.resources.pendingAcquisitionOperations.includes('browser.close'));
+    assert.equal(f.relays[0].closed, true, 'only settled own relay stop requested');
+    assert.equal(f.tabs.size, 2, 'native allocation and manual peer retained');
+  } finally {
+    f.holdBind.resolve(); f.holdClose.resolve();
+    await pending; await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(f.timers.size, 0);
 });
 
 test('after-dispatch deadline retains named unknown effect and tracks actual C late settlement', { timeout: 15000 }, async t => {
@@ -549,6 +628,125 @@ test('native helper refuses unvalidated records rather than accepting a module l
   await assert.rejects(helper.initialize({ mcpRoot: '/untrusted', client: {} }, {}, {
     deadline: 30000, now: () => 0,
   }), { code: 'NATIVE_CONFIG_INVALID' });
+  await assert.rejects(helper.initialize({ contextId: A }, {}, { deadline: 30000, now: () => 0 }), { code: 'NATIVE_CODE_UNAVAILABLE' });
+});
+
+test('actual branded C acquisition rejects invalid internal selection, clock and endpoint shapes before create', { timeout: 15000 }, async t => {
+  const f = await integrated(t), binding = f.binding();
+  for (const [selection, clock] of [[null, f.clock()], [{}, f.clock()], [binding.selection, null],
+    [binding.selection, { now: 1, deadline: 30000 }], [binding.selection, { now: () => 0, deadline: NaN }]]) {
+    await assert.rejects(f.nativeHelper.initialize(binding.record, selection, clock), { code: 'NATIVE_SELECTION_MISMATCH' });
+  }
+  const a = await f.nativeHelper.initialize(binding.record, binding.selection, f.clock());
+  await assert.rejects(a.connect('ws://127.0.0.1:38123/extension/' + A), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  assert.throws(() => a.protectPaths('/bad', '/bad'), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  assert.throws(() => a.protectPaths('/cdp/' + A, '/extension/' + B), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  a.protectPaths('/cdp/' + A, '/extension/' + A);
+  assert.throws(() => a.protectPaths('/cdp/' + A, '/extension/' + A), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  for (const [cdp, extension] of [
+    ['not-a-url', 'bad'], ['http://127.0.0.1:38123/cdp/' + A, 'ws://127.0.0.1:38123/extension/' + A],
+    ['ws://localhost:38123/cdp/' + A, 'ws://localhost:38123/extension/' + A],
+    ['ws://127.0.0.1:38123/wrong/' + A, 'ws://127.0.0.1:38123/extension/' + A],
+  ]) assert.throws(() => a.protectEndpoints(cdp, extension), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  a.protectEndpoints('ws://127.0.0.1:38123/cdp/' + A, 'ws://127.0.0.1:38123/extension/' + A);
+  await assert.rejects(a.connect('ws://127.0.0.1:38123/extension/' + B), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  a.retire(); a.retire();
+  assert.equal(f.creates(), 0);
+});
+
+test('genuine C ready replacement after attestation rejects create, retaining the foreign reservation', { timeout: 15000 }, async t => {
+  const f = await integrated(t), binding = f.binding();
+  const a = await f.nativeHelper.initialize(binding.record, binding.selection, f.clock());
+  const nonce = NONCES[0]; // capability is independent of the retained context ID
+  a.protectPaths('/cdp/' + nonce, '/extension/' + nonce);
+  a.protectEndpoints('ws://127.0.0.1:38123/cdp/' + nonce, 'ws://127.0.0.1:38123/extension/' + nonce);
+  const bytes = readFileSync(f.readyFile);
+  fs.renameSync(f.readyFile, f.readyFile + '.owned-original');
+  fs.writeFileSync(f.readyFile, bytes, { mode: 0o600, flag: 'wx' }); f.retainForeignReady(bytes);
+  await assert.rejects(a.connect('ws://127.0.0.1:38123/extension/' + nonce), error => error.code === 'NATIVE_READY_CHANGED' &&
+    error.resources.contextId === A && error.resources.disposition === 'unknown');
+  await assert.rejects(a.connect('ws://127.0.0.1:38123/extension/' + nonce), { code: 'NATIVE_RELAY_ENDPOINT_INVALID' });
+  a.retire();
+  assert.equal(f.creates(), 0);
+});
+
+for (const late of [false, true]) test(`owned maintained listen rejection closes only after settlement (late=${late})`, { timeout: 15000 }, async t => {
+  const f = await integrated(t, { rejectListen: true, holdListen: late });
+  const pending = f.create().then(value => ({ value }), error => ({ error }));
+  if (late) { await until(f.listenEntered); f.advance(30001); }
+  const result = await pending;
+  assert.equal(result.error.code, late ? 'NATIVE_HANDSHAKE_TIMEOUT' : 'NATIVE_ACQUISITION_UNAVAILABLE');
+  f.holdListen.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.relays[0].closed, true);
+  assert.equal(f.relays[0].closeCount, 1);
+  assert.equal(f.creates(), 0);
+});
+
+test('affirmative but unsettled actual producer reply is not sufficient for CDP', { timeout: 15000 }, async t => {
+  const f = await integrated(t, { invalidCreateReply: true });
+  await assert.rejects(f.create(), error => error.code === 'NATIVE_PROVIDER_RESPONSE_INVALID' &&
+    error.resources.contextId === A && error.resources.disposition === 'unknown');
+  assert.equal(f.creates(), 1);
+  assert.equal(f.cdpBrowsers.length, 0);
+  assert.equal(f.tabs.size, 2);
+});
+
+test('elapsed monotonic deadline wins even when fulfilled C acknowledgement is processed before a delayed timer', { timeout: 15000 }, async t => {
+  const f = await integrated(t, { holdAck: true });
+  const pending = f.create().then(value => ({ value }), error => ({ error }));
+  await until(() => f.timeline.includes('native-create-completed'));
+  f.elapseWithoutTimers(30001); f.holdAck.resolve();
+  const result = await pending;
+  assert.equal(result.error.code, 'NATIVE_HANDSHAKE_TIMEOUT');
+  assert.equal(f.cdpBrowsers.length, 0);
+  assert.equal(f.creates(), 1);
+});
+
+test('native binding rejects malformed routes, absent browser/OS observations and mutation of cached assertions', { timeout: 15000 }, async t => {
+  const f = await integrated(t);
+  for (const route of [null, {}, { extension: true }, { extension: true, browserName: 'firefox' },
+    { extension: true, browserName: 'chromium', remoteEndpoint: 'owned' },
+    { extension: true, browserName: 'chromium', cdpEndpoint: 'owned' },
+    { extension: true, browserName: 'chromium', isolated: true }])
+    assert.throws(() => f.binding(route), { code: 'NATIVE_CONFIG_INVALID' });
+  assert.throws(() => f.credential.getNativeBinding({}), { code: 'NATIVE_CONFIG_INVALID' });
+  const binding = f.binding();
+  const before = binding.failure({ code: 'NATIVE_REQUEST_TIMEOUT', resources: { disposition: 'unknown', contextId: A } });
+  assert.equal(before.resources.contextId, A);
+  assert.equal(binding.failure().code, 'NATIVE_ACQUISITION_UNAVAILABLE');
+  const originalLabel = f.records.get(A).label;
+  f.records.get(A).label = 'changed assertion';
+  assert.throws(() => f.binding(), { code: 'NATIVE_SELECTION_MISMATCH' });
+  f.records.get(A).label = originalLabel;
+  const original = f.observations.realpathSync;
+  f.observations.realpathSync = file => file === binding.selection.browserExecutable ? path.join(f.root, 'replaced-browser') : original(file);
+  assert.throws(() => f.binding(), { code: 'NATIVE_SELECTION_MISMATCH' });
+  f.observations.realpathSync = original;
+  const other = path.join(f.root, 'wrong-browser'); fs.writeFileSync(other, 'owned wrong executable');
+  assert.throws(() => f.binding({ extension: true, browser: { browserName: 'chromium', userDataDir: binding.record.userDataDir },
+    options: { channel: 'msedge', profileDirName: 'Default', executablePath: other } }), { code: 'NATIVE_SELECTION_MISMATCH' });
+  f.observations.existsSync = () => false;
+  assert.throws(() => f.binding(), { code: 'NATIVE_BROWSER_UNAVAILABLE' });
+  t.mock.method(os, 'userInfo', () => { throw Error('owned OS lookup unavailable'); });
+  assert.throws(() => f.binding(), { code: 'NATIVE_DISCOVERY_INPUTS_UNAVAILABLE' });
+  assert.equal(f.creates(), 0);
+});
+
+test('genuine private reader sees a receipt changed immediately after source qualification', { timeout: 15000 }, async t => {
+  const f = await integrated(t), original = f.observations.realpathSync;
+  let changed = false;
+  f.observations.realpathSync = file => {
+    const result = original(file);
+    if (file === f.lib && !changed) {
+      changed = true;
+      const receipt = path.join(f.generation, 'playwright-patch.json'), data = JSON.parse(readFileSync(receipt));
+      data.mcpVersion = 'owned changed receipt'; fs.writeFileSync(receipt, JSON.stringify(data));
+    }
+    return result;
+  };
+  assert.throws(() => f.binding(), { code: 'NATIVE_CODE_CHANGED' });
+  assert.equal(changed, true);
+  assert.equal(f.creates(), 0);
 });
 
 function browserHarness() {

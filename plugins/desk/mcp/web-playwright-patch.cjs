@@ -29,7 +29,9 @@ var BROWSER_PREFLIGHT = [
   '        extension: config.extension, browser: config.browser, options: resolveExtensionOptions(cliOptions)',
   '      }) : undefined;',
 ].join("\n") + "\n";
-var NATIVE_PREFIX = [
+// Exact complete E3 prefix at 76396fb8; only this known prior candidate and the
+// fixed prefix normalize. Never strip arbitrary native blocks.
+var LEGACY_NATIVE_PREFIX = [
   'async function createExtensionBrowser(channel, executablePath, customUserDataDir, profileDirName, clientName, deskNativeContext) {',
   '  if (deskNativeContext !== undefined) {',
   '    const deadline = monotonicTime() + 30000;',
@@ -57,6 +59,13 @@ var NATIVE_PREFIX = [
   '    }',
   '  }',
 ].join("\n") + "\n";
+var NATIVE_PREFIX = LEGACY_NATIVE_PREFIX
+  .replace("await relay.start();", "await acquisition.start(relay);")
+  .replace("await relay.establishExtensionConnection(clientName);", 'await acquisition.waitFor(relay.establishExtensionConnection(clientName), "extension.handshake");')
+  .replace("await playwright.chromium.connectOverCDP(relay.cdpEndpoint(), { isLocal: true, timeout: remaining, noDefaults: true });",
+    'await acquisition.waitFor(playwright.chromium.connectOverCDP(relay.cdpEndpoint(), { isLocal: true, timeout: remaining, noDefaults: true }), "cdp.connect");')
+  .replace("acquisition.retire(); relay.stop();", "acquisition.retire();")
+  .replace("      relay?.stop();\n", "");
 var RELAY_EDITS = [
   ["constructor(browserChannel, executablePath, customUserDataDir, profileDirectory) {",
     "constructor(browserChannel, executablePath, customUserDataDir, profileDirectory, deskNativeAcquisition) {\n        this._nativeAcquisition = deskNativeAcquisition;"],
@@ -131,14 +140,20 @@ function normalizeEdits(text, edits) {
   return { text: text, native: !!applied };
 }
 function patchSource(source) {
+  // Validate/compute lifecycle first, but retain the original source for the
+  // mixed/partial-revision checks; publish no transformation until all qualify.
+  var lifecycle = patchLifecycle(source);
   var server = region(source, START, END);
   var acquisition = region(source, "async function createExtensionBrowser(", ACQUISITION_END);
   var browser = region(source, BROWSER_START, BROWSER_END);
   var relay = region(source, RELAY_START, RELAY_END);
-  var originalAcquisition = acquisition.text, nativeAcquisition = count(originalAcquisition, NATIVE_PREFIX) === 1;
+  var originalAcquisition = acquisition.text;
+  var nativeAcquisition = count(originalAcquisition, NATIVE_PREFIX) === 1;
+  var legacyAcquisition = count(originalAcquisition, LEGACY_NATIVE_PREFIX) === 1;
   if (count(originalAcquisition, INITIALIZE_CREDENTIAL) && count(server.text, IDLE_CLOSE) !== 1) throw unsupported();
-  if (nativeAcquisition && count(originalAcquisition, INITIALIZE_CREDENTIAL) !== 1) throw unsupported();
-  if (nativeAcquisition) originalAcquisition = originalAcquisition.replace(NATIVE_PREFIX, ACQUISITION_START + "\n");
+  if ((nativeAcquisition || legacyAcquisition) && count(originalAcquisition, INITIALIZE_CREDENTIAL) !== 1) throw unsupported();
+  if (nativeAcquisition || legacyAcquisition) originalAcquisition = originalAcquisition.replace(
+    nativeAcquisition ? NATIVE_PREFIX : LEGACY_NATIVE_PREFIX, ACQUISITION_START + "\n");
   originalAcquisition = originalAcquisition.replace(INITIALIZE_CREDENTIAL, "");
   if (hash(originalAcquisition) !== ACQUISITION_SHA256) throw unsupported();
   var browserEdits = [
@@ -146,23 +161,35 @@ function patchSource(source) {
     ["profileDirName, clientInfo.clientName);", "profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);"],
     ["    throw error;\n  }\n}", "    throw deskNativeBinding ? deskNativeBinding.failure(error) : error;\n  }\n}"]
   ];
-  var originalBrowser = normalizeEdits(browser.text, browserEdits);
+  var browserAwaitEdits = [
+    ['    const { endpoint } = await browser.bind(bindOptions.title, { workspaceDir: bindOptions.workspaceDir });',
+      '    const bindOperation = browser.bind(bindOptions.title, { workspaceDir: bindOptions.workspaceDir });\n' +
+      '    const { endpoint } = await (deskNativeBinding ? deskNativeBinding.waitFor(bindOperation, "browser.bind") : bindOperation);'],
+    ['    await browser.close().catch(() => {\n    });',
+      '    const closeOperation = browser.close();\n' +
+      '    await (deskNativeBinding ? deskNativeBinding.waitFor(closeOperation, "browser.close") : closeOperation).catch(() => {\n    });']
+  ];
+  var originalAwait = normalizeEdits(browser.text, browserAwaitEdits);
+  var originalBrowser = normalizeEdits(originalAwait.text, browserEdits);
   var originalRelay = normalizeEdits(relay.text, RELAY_EDITS);
   if (hash(originalBrowser.text) !== BROWSER_SHA256 || hash(originalRelay.text) !== RELAY_SHA256) throw unsupported();
-  if ((nativeAcquisition || originalBrowser.native || originalRelay.native) &&
-      !(nativeAcquisition && originalBrowser.native && originalRelay.native && count(server.text, IDLE_CLOSE) === 1)) throw unsupported();
+  if ((nativeAcquisition || legacyAcquisition || originalBrowser.native || originalRelay.native || originalAwait.native) &&
+      !((nativeAcquisition || legacyAcquisition) && originalBrowser.native && originalRelay.native &&
+        originalAwait.native === nativeAcquisition && count(server.text, IDLE_CLOSE) === 1)) throw unsupported();
   var replacements = [
+    { area: server, text: region(lifecycle, START, END).text },
     { area: acquisition, text: originalAcquisition.replace(ACQUISITION_ANCHOR, INITIALIZE_CREDENTIAL + ACQUISITION_ANCHOR)
       .replace(ACQUISITION_START + "\n", NATIVE_PREFIX) },
     { area: browser, text: originalBrowser.text },
     { area: relay, text: originalRelay.text }
   ];
-  browserEdits.forEach(function (edit) { replacements[1].text = replacements[1].text.replace(edit[0], edit[1]); });
-  RELAY_EDITS.forEach(function (edit) { replacements[2].text = replacements[2].text.replace(edit[0], edit[1]); });
+  browserEdits.forEach(function (edit) { replacements[2].text = replacements[2].text.replace(edit[0], edit[1]); });
+  browserAwaitEdits.forEach(function (edit) { replacements[2].text = replacements[2].text.replace(edit[0], edit[1]); });
+  RELAY_EDITS.forEach(function (edit) { replacements[3].text = replacements[3].text.replace(edit[0], edit[1]); });
   replacements.sort(function (a, b) { return b.area.start - a.area.start; }).forEach(function (replacement) {
     source = source.slice(0, replacement.area.start) + replacement.text + source.slice(replacement.area.end);
   });
-  return patchLifecycle(source);
+  return source;
 }
 
 function bundleFile(dir) {
@@ -204,9 +231,11 @@ function apply(installed) {
 
 function readRevision(installed) {
   try {
-    var verified = require("./web-extension-credential.cjs").verifyGeneration(installed, __dirname);
+    require("./web-extension-credential.cjs").verifyGeneration(installed, __dirname);
     var source = fs.readFileSync(bundleFile(installed.dir), "utf8");
-    if (patchSource(source) !== source || JSON.stringify(verified.receipt.guardedRegionProofs) !== JSON.stringify(guardedRegionProofs(source))) return 0;
+    // verifyGeneration already checks the complete receipt proof map. Exact
+    // current normalization additionally rules out the known previous E3 body.
+    if (patchSource(source) !== source) return 0;
     return REVISION;
   } catch (error) {
     if (error.code === "ENOENT" || error instanceof SyntaxError || /^NATIVE_/.test(error.code || "") ||

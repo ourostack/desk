@@ -9,9 +9,90 @@ import { mcpRoot } from "./_mcp_handshake.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const require = createRequire(import.meta.url)
+const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
 const patchPath = path.join(mcpRoot, "web-playwright-patch.cjs")
 const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
 const { apply, copyPackages, patchSource, readRevision } = require(patchPath)
+
+function priorE3(source) {
+  // Mechanical inverse of only this fix, recording the exact complete
+  // 76396fb8 candidate; not arbitrary block stripping or an alternate engine.
+  return source.replace("await acquisition.start(relay);", "await relay.start();")
+    .replace('await acquisition.waitFor(relay.establishExtensionConnection(clientName), "extension.handshake");', "await relay.establishExtensionConnection(clientName);")
+    .replace('await acquisition.waitFor(playwright.chromium.connectOverCDP(relay.cdpEndpoint(), { isLocal: true, timeout: remaining, noDefaults: true }), "cdp.connect");',
+      "await playwright.chromium.connectOverCDP(relay.cdpEndpoint(), { isLocal: true, timeout: remaining, noDefaults: true });")
+    .replace('browser.on("disconnected", () => { acquisition.retire(); });', 'browser.on("disconnected", () => { acquisition.retire(); relay.stop(); });')
+    .replace("      acquisition.retire();\n      throw acquisition.failure(error);", "      acquisition.retire();\n      relay?.stop();\n      throw acquisition.failure(error);")
+    .replace('    const bindOperation = browser.bind(bindOptions.title, { workspaceDir: bindOptions.workspaceDir });\n    const { endpoint } = await (deskNativeBinding ? deskNativeBinding.waitFor(bindOperation, "browser.bind") : bindOperation);',
+      "    const { endpoint } = await browser.bind(bindOptions.title, { workspaceDir: bindOptions.workspaceDir });")
+    .replace('    const closeOperation = browser.close();\n    await (deskNativeBinding ? deskNativeBinding.waitFor(closeOperation, "browser.close") : closeOperation).catch(() => {\n    });',
+      "    await browser.close().catch(() => {\n    });")
+}
+
+test("complete prior E3 upgrades exactly; partial native/await edits and duplicated legacy idle guards refuse", () => {
+  const current = patchSource(stock), prior = priorE3(current)
+  assert.notEqual(prior, current)
+  assert.equal(patchSource(prior), current)
+  assert.equal(patchSource(current), current)
+  for (const [before, after] of [
+    ['    const { endpoint } = await (deskNativeBinding ? deskNativeBinding.waitFor(bindOperation, "browser.bind") : bindOperation);', "    const { endpoint } = await bindOperation;"],
+    ['this._nativeAcquisition = deskNativeAcquisition;', ""],
+    ['    CDPRelayServer = class {', '    CDPRelayServer = class { /* drift */'],
+  ]) assert.throws(() => patchSource(current.replace(before, after)), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  const start = current.indexOf('      if (!backendPromise && request2.params.name === "browser_close") {')
+  const end = current.indexOf("      if (!backendPromise) {", start)
+  const idle = current.slice(start, end)
+  const onlyIdle = stock.replace("    try {\n", "    try {\n" + idle + idle)
+  assert.throws(() => patchSource(onlyIdle), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  const begin = "async function createBrowser(config,", finish = "\nasync function connectToBrowserEndpoint("
+  const currentStart = current.indexOf(begin), currentEnd = current.indexOf(finish, currentStart), stockStart = stock.indexOf(begin)
+  const mixed = current.slice(0, currentStart) + stock.slice(stockStart, stock.indexOf(finish, stockStart)) + current.slice(currentEnd)
+  assert.throws(() => patchSource(mixed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  assert.throws(() => patchSource(current.replace("async function createBrowser(config,", "async function createBrowser2(config,")), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+})
+
+test("stale fully-qualified prior E3 stays unqualified and a staged write race cannot publish qualification", async () => {
+  const root = await mkTempRoot("patch-prior-e3-"), lib = path.join(root, "node_modules/playwright-core/lib")
+  mkdirSync(lib, { recursive: true })
+  const core = path.join(lib, "coreBundle.js"), receipt = path.join(root, "playwright-patch.json"), installed = { dir: root, version: "owned", core: null }
+  writeFileSync(core, stock); apply(installed)
+  const stale = priorE3(readFileSync(core, "utf8")), data = JSON.parse(readFileSync(receipt))
+  const sha = value => require("node:crypto").createHash("sha256").update(value).digest("hex")
+  writeFileSync(core, stale); data.bundleSha256 = sha(stale)
+  const regions = [
+    ["function createServer(", "\nfunction addServerListener("],
+    ["async function createExtensionBrowser(", "\nvar import_path60, debug16, debugLogger3;"],
+    ["async function createBrowser(config,", "\nasync function connectToBrowserEndpoint("],
+    ["    CDPRelayServer = class {", "\n    ExtensionConnection = class {"],
+  ]
+  for (let i = 0; i < regions.length; i++) {
+    const [begin, end] = regions[i], start = stale.indexOf(begin)
+    data.guardedRegionProofs[i].patched = sha(stale.slice(start, stale.indexOf(end, start)))
+  }
+  writeFileSync(receipt, JSON.stringify(data))
+  assert.equal(readRevision(installed), 0)
+  writeFileSync(core, stock)
+  const observed = Object.create(require("node:fs"))
+  observed.writeFileSync = function (file, ...args) {
+    require("node:fs").writeFileSync(file, ...args)
+    if (file === receipt) require("node:fs").appendFileSync(core, "\n// owned staged replacement\n")
+  }
+  const module = { exports: {} }
+  loadTemplate(patchPath, { module, __dirname: mcpRoot, process,
+    require(name) { return name === "fs" ? observed : name === "./web-extension-credential.cjs" ? require(path.join(mcpRoot, name)) : require(name) },
+  })
+  assert.throws(() => module.exports.apply(installed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  const failure = new Error("owned ACL inspection process terminated without a code"), credentialModule = { exports: {} }
+  loadTemplate(path.join(mcpRoot, "web-extension-credential.cjs"), {
+    module: credentialModule, __dirname: lib, process, Buffer, setTimeout, clearTimeout,
+    require(name) { return name === "child_process" ? { execFileSync() { throw failure } } : require(name) },
+  })
+  const failedRead = { exports: {} }
+  loadTemplate(patchPath, { module: failedRead, __dirname: mcpRoot, process,
+    require(name) { return name === "./web-extension-credential.cjs" ? credentialModule.exports : require(name) },
+  })
+  assert.throws(() => failedRead.exports.readRevision(installed), error => error === failure)
+})
 
 test("revision three guards the complete browser routing and actual relay class regions", () => {
   for (const [before, after] of [
@@ -79,7 +160,7 @@ test("one-argument apply captures its normal parent, never the facade/npm-child 
   writeFileSync(path.join(lib, "coreBundle.js"), stock)
   const normal = { LocalAppData: "Z:\\Redirected\\Local", ProgramFiles: "Q:\\Programs",
     "ProgramFiles(x86)": "R:\\Programs32", HOME: "/not-native-home" }
-  runInNewContext(readFileSync(patchPath, "utf8"), {
+  loadTemplate(patchPath, {
     module, __dirname: mcpRoot, process: { platform: "win32", env: normal },
     require(name) {
       if (name === "./web-extension-credential.cjs") return require(path.join(mcpRoot, name))
@@ -318,12 +399,19 @@ test("invalid receipts are unqualified but filesystem failures are not silently 
   const installed = { dir: root, version: "fixture", core: null }
   const receipt = path.join(root, "playwright-patch.json")
   for (const contents of ["null", '{"revision":0}', "{broken"]) {
-    writeFileSync(receipt, contents)
+    writeFileSync(receipt, contents, { mode: 0o600 })
     assert.equal(readRevision(installed), 0)
   }
   const unreadable = path.join(root, "unreadable")
   mkdirSync(path.join(unreadable, "playwright-patch.json"), { recursive: true })
   assert.throws(() => readRevision({ ...installed, dir: unreadable }), { code: "EISDIR" })
+})
+
+test("copy refuses a package link to its parent rather than traversing another tree", async () => {
+  const root = await mkTempRoot("patch-outside-link-"), from = path.join(root, "from")
+  mkdirSync(from)
+  symlinkSync(root, path.join(from, "outside"), process.platform === "win32" ? "junction" : "dir")
+  await assert.rejects(copyPackages(from, path.join(root, "to")), /outside its installed package tree/)
 })
 
 test("absolute package symlinks are rebased onto the new generation", { skip: process.platform === "win32" ? "POSIX symbolic-link fixture" : false }, async () => {
