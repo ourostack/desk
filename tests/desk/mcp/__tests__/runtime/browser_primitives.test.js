@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile, readdir, mkdir, writeFile, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { mkTempRoot } from '../_temp_roots.js';
+import { createHash } from 'node:crypto';
+import { ensureStateDirectory as brokerEnsureStateDirectory } from '../../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 
 const broker = new URL('../../../../../plugins/desk/browser-context-broker/src/', import.meta.url);
 const util = new URL('../../../../../plugins/desk/mcp/src/util/', import.meta.url);
@@ -40,13 +42,12 @@ test('native primitive import graph excludes registry and claim operations', asy
 
 test('compatibility facades preserve constructor and function identity', async t => {
   const claims = await import(new URL('claims.mjs', broker));
-  const registry = await import(new URL('registry.mjs', broker));
   const lock = await import(new URL('lock.mjs', broker));
   const error = await import(new URL('broker-error.mjs', util));
   const state = await import(new URL('private-state.mjs', util));
   const primitive = await import(new URL('broker-lock.mjs', util));
   assert.equal(claims.BrokerError, error.BrokerError);
-  assert.equal(registry.ensureStateDirectory, state.ensureStateDirectory);
+  assert.equal(brokerEnsureStateDirectory, state.ensureStateDirectory);
   assert.equal(lock.withBrokerLock, primitive.withBrokerLock);
   assert.equal(lock.ownIdentityReader, primitive.ownIdentityReader);
   const e = new error.BrokerError('TEST', 'bounded');
@@ -60,27 +61,23 @@ test('compatibility facades preserve constructor and function identity', async t
 });
 
 test('extraction keeps the exact lock algorithm and private-state behavior', async () => {
-  // Mechanical normalization is checked against the admitted parent, not a
-  // second implementation that could drift with this change.
-  const { execFileSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const cwd = fileURLToPath(new URL('../../../../../', import.meta.url));
-  const before = execFileSync('git', ['show',
-    '8c2d0c0bead7ee3a65a56ce349b8afa20b3a912b:plugins/desk/browser-context-broker/src/lock.mjs'],
-  { cwd, encoding: 'utf8' });
-  const expected = before.replaceAll("'./claims.mjs'", "'./broker-error.mjs'")
-    .replaceAll("'./registry.mjs'", "'./private-state.mjs'")
-    .replaceAll("'../../mcp/src/factory/windows-acl.js'", "'../factory/windows-acl.js'")
-    .replaceAll("'../../mcp/src/readiness/process-start.js'", "'../readiness/process-start.js'");
-  assert.equal(await readFile(new URL('broker-lock.mjs', util), 'utf8'), expected);
-  const oldRegistry = execFileSync('git', ['show',
-    '8c2d0c0bead7ee3a65a56ce349b8afa20b3a912b:plugins/desk/browser-context-broker/src/registry.mjs'],
-  { cwd, encoding: 'utf8' });
-  const oldHelper = oldRegistry.slice(oldRegistry.indexOf('export async function ensureStateDirectory'),
-    oldRegistry.indexOf('\nfunction validateRegistry')).trim();
-  const currentHelper = (await readFile(new URL('private-state.mjs', util), 'utf8'))
-    .slice((await readFile(new URL('private-state.mjs', util), 'utf8')).indexOf('export async function ensureStateDirectory')).trim();
-  assert.equal(currentHelper, oldHelper.replace("'../../mcp/src/factory/windows-acl.js'", "'../factory/windows-acl.js'"));
+  // Immutable goldens computed from the originally verified pre-extraction
+  // 8c2d0c0bead7ee3a65a56ce349b8afa20b3a912b source, NOT this implementation.
+  // A fresh clone needs no unpublished historical Git object.
+  // plugins/desk/browser-context-broker/src/lock.mjs:
+  // blob 92abd3f0bfcf9e1599f2b9c33834a101b5009e0d; full file, 10308 bytes,
+  // with ONLY claims->broker-error, registry->private-state and factory/
+  // windows-acl + readiness/process-start relative import paths rebased.
+  const digest = text => createHash('sha256').update(text).digest('hex');
+  assert.equal(digest(await readFile(new URL('broker-lock.mjs', util), 'utf8')),
+    '3bab075b6c490aa2f8d128010fff5f9af5a82fc8f96aa47cbea08a63f57c6970');
+  // registry.mjs blob db720012039c1d9ba49f881cf4b7f7f24a4c1206:
+  // slice from "export async function ensureStateDirectory" to the following
+  // "\nfunction validateRegistry", trimmed, windows-acl import rebased; 807 bytes.
+  const state = await readFile(new URL('private-state.mjs', util), 'utf8');
+  const currentHelper = state.slice(state.indexOf('export async function ensureStateDirectory')).trim();
+  assert.equal(digest(currentHelper),
+    '987c9088bbfc7a03fde027c727c5ce87dc10c83e6e38e437a387da092615a496');
 });
 
 test('absent PID reclaim and callback failure retain exact owner-token release', async t => {

@@ -187,7 +187,15 @@ function providerRequest(endpoint, operation, payload, options) {
               if (!Buffer.from(bytes.toString("utf8")).equals(bytes)) throw Error();
               value = JSON.parse(bytes.toString("utf8"));
             } catch (error) { finish(failure("NATIVE_PROVIDER_RESPONSE_INVALID", unknown)); return; }
-            if (!object(value) || typeof value.ok !== "boolean") { finish(failure("NATIVE_PROVIDER_RESPONSE_INVALID")); return; }
+            if (!object(value) || typeof value.ok !== "boolean" ||
+                Object.keys(value).some(function (key) { return ["ok", "result", "error"].indexOf(key) === -1; }) ||
+                (value.ok
+                  ? incoming.statusCode !== 200 || !Object.prototype.hasOwnProperty.call(value, "result") ||
+                    Object.prototype.hasOwnProperty.call(value, "error")
+                  : Object.prototype.hasOwnProperty.call(value, "result") || !object(value.error) ||
+                    typeof value.error.code !== "string")) {
+              finish(failure("NATIVE_PROVIDER_RESPONSE_INVALID", unknown)); return;
+            }
             if (incoming.statusCode !== 200 || !value.ok) {
               var code = value.error && value.error.code;
               code = safeCode(code, "NATIVE_PROVIDER_REQUEST_FAILED");

@@ -94,7 +94,18 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
     binding: { channel: config.channel, userDataDir: config.userDataDir, profileDirName: config.profileDirName,
       nativeReadyFile: config.nativeReadyFile, extensionId: config.extensionId, sourceDigest: config.extensionSourceDigest },
   });
-  const contexts = new Map(), active = new Set();
+  const contexts = new Map(), contextEpochs = new Map(), active = new Set();
+  function advanceContext(contextId) {
+    const epoch = Symbol();
+    contextEpochs.set(contextId, epoch);
+    return epoch;
+  }
+  function assertContextEpochs(expected) {
+    const changed = [...contextEpochs].filter(([contextId, epoch]) => expected.get(contextId) !== epoch);
+    if (changed.length) throw fail('NATIVE_UPDATE_OWNERS_UNSETTLED', {
+      owners: changed.map(([contextId]) => ({ contextId, disposition: 'unknown', reason: 'NATIVE_EFFECT_UNSETTLED' })),
+    });
+  }
   // The existing hook protects diagnostics, NEVER native-framed stdout. Replacing
   // a legitimate token inside a frame would corrupt its length and protocol.
   const diagnostics = { stdout: { write: (...args) => process.stderr.write(...args) }, stderr: process.stderr };
@@ -108,6 +119,7 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
   };
   const event = message => {
     if (message?.event === 'context.unavailable' && UUID.test(message.contextId || '')) {
+      advanceContext(message.contextId);
       contexts.set(message.contextId, { disposition: 'unknown', generation });
       if (ticket?.prepared) phase = 'obligation';
     }
@@ -115,7 +127,7 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
   transport.on?.('close', lost);
   transport.on?.('event', event);
 
-  async function attest({ helloOnly = false } = {}) {
+  function assertReservation() {
     if (!connected || phase === 'closed') throw fail('NATIVE_TRANSPORT_DISCONNECTED', obligation());
     if (reservation) {
       try {
@@ -127,6 +139,15 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
         throw fail('NATIVE_READY_CHANGED', obligation());
       }
     }
+  }
+  // Synchronous final fence: no awaited corroboration may separate the exact
+  // protected reservation check from an authority-bearing native dispatch.
+  function requestNative(request) {
+    assertReservation();
+    return transport.request(request);
+  }
+  async function attest({ helloOnly = false } = {}) {
+    assertReservation();
     let current, selected, pin;
     try { current = await readNativeAncestry(chain[0].pid, { processReader }); }
     catch { throw fail('NATIVE_ANCESTRY_MISMATCH', obligation()); }
@@ -144,16 +165,22 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
     protectSecret(pin);
     assertNativeReady(ready, { ...config, expectedProfileToken: pin });
     const bindingDigest = hash({ chain, profileRoot: config.profileRoot, source: config.extensionSourceDigest, pin, generation });
+    assertReservation();
     if (helloOnly) return { pin, bindingDigest };
     let live;
-    try { live = await transport.request({ method: 'profile.read', params: { profileToken: pin, sourceDigest: config.extensionSourceDigest } }); }
-    catch (error) { throw fail(error.code === 'native_profile_mismatch' ? 'NATIVE_PROFILE_MISMATCH' : 'NATIVE_TRANSPORT_DISCONNECTED', error.resources || obligation()); }
+    try { live = await requestNative({ method: 'profile.read', params: { profileToken: pin, sourceDigest: config.extensionSourceDigest } }); }
+    catch (error) {
+      if (error.code === 'NATIVE_READY_CHANGED') throw error;
+      throw fail(error.code === 'native_profile_mismatch' ? 'NATIVE_PROFILE_MISMATCH' : 'NATIVE_TRANSPORT_DISCONNECTED', error.resources || obligation());
+    }
+    assertReservation();
     if (live?.sourceDigest !== config.extensionSourceDigest) throw fail('NATIVE_EXTENSION_SOURCE_MISMATCH', obligation());
     if (!connected || live?.profileToken !== pin || live.extensionId !== config.extensionId)
       throw fail('NATIVE_PROFILE_MISMATCH', obligation());
     return { pin, bindingDigest };
   }
   function publicAttestation() {
+    assertReservation();
     // Private HTTP corroboration result, not a browser command/public report.
     return { healthy: true, generation, profileRoot: config.profileRoot,
       extensionId: config.extensionId, sourceDigest: config.extensionSourceDigest, chain: structuredClone(chain) };
@@ -173,25 +200,36 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
     if (Object.hasOwn(payload.params, 'profileToken') || Object.hasOwn(payload.params, 'sourceDigest'))
       throw fail('NATIVE_REQUEST_INVALID');
     const mutating = ['context.create', 'context.label', 'context.discard'].includes(payload.method);
+    const epoch = mutating ? advanceContext(payload.contextId) : undefined;
     if (mutating) contexts.set(payload.contextId, { disposition: 'unknown', generation });
     try {
-      const result = await transport.request({ method: payload.method, contextId: payload.contextId,
+      const result = await requestNative({ method: payload.method, contextId: payload.contextId,
         params: { ...payload.params, profileToken: pin, sourceDigest: config.extensionSourceDigest } });
       if (!connected) throw fail('NATIVE_TRANSPORT_DISCONNECTED', { contextId: payload.contextId, disposition: 'unknown' });
+      assertReservation();
       if (result?.contextId !== payload.contextId ||
           (['context.create', 'context.resume', 'context.label'].includes(payload.method) && result.state !== 'ready') ||
           (payload.method === 'context.create' && (!Number.isSafeInteger(result.groupId) || result.groupId < 0 ||
             !Array.isArray(result.tabs) || !result.tabs.length)) ||
           (payload.method === 'context.discard' && !validReceipt(result, payload.contextId))) {
+        advanceContext(payload.contextId);
         contexts.set(payload.contextId, { disposition: 'unknown', generation });
         throw fail('NATIVE_CONTEXT_UNCONFIRMED', { contextId: payload.contextId, disposition: 'unknown',
           native: client.safeResources(result) });
       }
       if (payload.method === 'context.discard' && validReceipt(result, payload.contextId)) {
-        // Only an actual current transport response can enter this map.
+        // Receipt publication is fenced against later mutations/unavailable
+        // events, including ones admitted during this final attestation.
         await attest();
+        assertReservation();
+        if (contextEpochs.get(payload.contextId) !== epoch)
+          throw fail('NATIVE_CONTEXT_UNCONFIRMED', { contextId: payload.contextId, disposition: 'unknown' });
         contexts.set(payload.contextId, { disposition: 'discarded', generation, receipt: structuredClone(result) });
-      } else if (mutating) contexts.set(payload.contextId, { disposition: 'unsettled', generation, resources: structuredClone(result) });
+      } else if (mutating) {
+        if (contextEpochs.get(payload.contextId) !== epoch)
+          throw fail('NATIVE_CONTEXT_UNCONFIRMED', { contextId: payload.contextId, disposition: 'unknown' });
+        contexts.set(payload.contextId, { disposition: 'unsettled', generation, resources: structuredClone(result) });
+      }
       return result;
     } catch (error) {
       throw fail(client.safeCode(error.code, 'NATIVE_REQUEST_FAILED'),
@@ -208,7 +246,7 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
       let native;
       if (owner.contextId && owner.configured && state?.disposition !== 'discarded') {
         try {
-          native = await transport.request({ method: 'context.status', contextId: owner.contextId,
+          native = await requestNative({ method: 'context.status', contextId: owner.contextId,
             params: { profileToken: ready.profileToken, sourceDigest: config.extensionSourceDigest } });
         } catch (error) { native = error.resources || { disposition: 'unknown' }; }
       }
@@ -223,13 +261,16 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
         disposition: 'unknown', reason: o.reason || 'NATIVE_OWNER_UNSETTLED', ...(o.native ? { native: o.native } : {}) })),
     });
     if (typeof verifyContinuity !== 'function') throw fail('NATIVE_CONTINUITY_UNKNOWN');
+    const epochs = new Map(contextEpochs);
     // Trusted source-only seam for D's existing journal/baseline verifier.
     // Not configuration, an RPC option, a browser receipt, or fresh emptiness.
     const proof = await verifyContinuity({ generation, bindingDigest: attested.bindingDigest,
       snapshot: structuredClone(snapshot), nativeReceipts: structuredClone([...contexts]) });
+    assertReservation();
     if (!proof || proof.generation !== generation || proof.bindingDigest !== attested.bindingDigest ||
         proof.snapshotDigest !== snapshot.digest || typeof proof.baselineId !== 'string' || !UUID.test(proof.baselineId)) throw fail('NATIVE_CONTINUITY_UNKNOWN');
-    return { bindingDigest: attested.bindingDigest, snapshotDigest: snapshot.digest, baselineId: proof.baselineId };
+    assertContextEpochs(epochs);
+    return { bindingDigest: attested.bindingDigest, snapshotDigest: snapshot.digest, baselineId: proof.baselineId, epochs };
   }
   function checkTicket(payload) {
     if (!keys(payload, ['ticket']) || !ticket || typeof payload.ticket !== 'string' || !HEX.test(payload.ticket) ||
@@ -250,13 +291,15 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
       checkTicket(payload); // The snapshot itself may have outlasted the ticket.
       if ((operation === 'cancelUpdate' ? ['bindingDigest'] : ['bindingDigest', 'snapshotDigest', 'baselineId']).some(k => evidence[k] !== current[k]))
         throw fail('NATIVE_UPDATE_EVIDENCE_CHANGED', obligation());
+      assertReservation();
+      if (operation !== 'cancelUpdate') assertContextEpochs(evidence.epochs);
       if (operation === 'cancelUpdate') { ticket = undefined; phase = 'open'; return { cancelled: true }; }
     } catch (error) { if (phase === 'validating') phase = previous; throw error; }
     // Mark before native dispatch: a failed write/ack cannot cancel preparation.
     current.prepared = true;
     phase = operation === 'reload' ? 'prepared' : 'committing';
     try {
-      const result = await transport.request({ method: operation === 'reload' ? 'extension.reload' : 'extension.reload.commit',
+      const result = await requestNative({ method: operation === 'reload' ? 'extension.reload' : 'extension.reload.commit',
         params: { profileToken: ready.profileToken, sourceDigest: config.extensionSourceDigest, updateToken: current.token } });
       if ((operation === 'reload' ? result?.reload : result?.committing) !== true) throw Error();
       if (operation === 'commit') phase = 'obligation';
@@ -276,6 +319,8 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
         try {
           await Promise.allSettled([...active]);
           const evidence = await quiescence();
+          assertReservation();
+          assertContextEpochs(evidence.epochs);
           const token = randomBytes(32).toString('hex'); protectSecret(token);
           ticket = { token, expiresAt: Date.now() + updateTtlMs, ...evidence };
           phase = 'ticket';

@@ -15,6 +15,7 @@ import vm from 'node:vm';
 import { mkTempRoot } from '../_temp_roots.js';
 import { removeTree } from '../_remove_tree.js';
 import { BrokerError } from '../../../../../plugins/desk/mcp/src/util/broker-error.mjs';
+import { NativeCommandTransport } from '../../../../../plugins/desk/mcp/src/browser/native-transport.mjs';
 
 const require = createRequire(import.meta.url);
 const rootUrl = new URL('../../../../../plugins/desk/mcp/', import.meta.url);
@@ -32,6 +33,94 @@ const reader = async pid => structuredClone(chain.find(p => p.pid === pid));
 let runnerStart;
 const code = value => error => error.code === value;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+};
+const settled = promise => promise.then(value => ({ value }), error => ({ error }));
+const createParams = { label: 'owned current-A fixture', relayUrl: `ws://127.0.0.1:38123/extension/${A}` };
+
+// Same Chrome/WebSocket boundary as browser_context_extension.test.js. The
+// current A kernel AND its maintained relay are real; no browser/network runs.
+async function currentA(t) {
+  const event = () => {
+    const listeners = new Set();
+    return { addListener: fn => listeners.add(fn), removeListener: fn => listeners.delete(fn),
+      emit: (...args) => { for (const fn of [...listeners]) fn(...args); } };
+  };
+  let nextTab = 10, nextGroup = 50;
+  const tabs = new Map([[1, { id: 1, windowId: 7, groupId: -1, active: true }]]);
+  const groups = new Map(), sockets = [];
+  const api = {
+    tabs: {
+      onCreated: event(), onRemoved: event(), onUpdated: event(), onDetached: event(),
+      async get(id) { if (!tabs.has(id)) throw Error('No tab'); return { ...tabs.get(id) }; },
+      async query(query) { return [...tabs.values()].filter(tab => query.groupId === undefined || tab.groupId === query.groupId).map(tab => ({ ...tab })); },
+      async create(options) {
+        const tab = { id: nextTab++, windowId: 7, groupId: -1, active: false, ...options };
+        tabs.set(tab.id, tab); api.tabs.onCreated.emit({ ...tab }); return { ...tab };
+      },
+      async group({ groupId, tabIds }) {
+        const id = groupId ?? nextGroup++;
+        if (!groups.has(id)) groups.set(id, { id, windowId: 7, title: '', color: 'grey' });
+        for (const tabId of tabIds) {
+          Object.assign(tabs.get(tabId), { groupId: id });
+          api.tabs.onUpdated.emit(tabId, { groupId: id }, { ...tabs.get(tabId) });
+        }
+        return id;
+      },
+      async remove(id) {
+        if (!tabs.delete(id)) throw Error('No tab');
+        api.tabs.onRemoved.emit(id, { windowId: 7, isWindowClosing: false });
+      },
+      async update() { assert.fail('No physical activation'); },
+      async ungroup() { assert.fail('No generic ungroup'); },
+    },
+    tabGroups: {
+      async get(id) { if (!groups.has(id)) throw Error('No group'); return { ...groups.get(id) }; },
+      async update(id, style) { Object.assign(groups.get(id), style); return { ...groups.get(id) }; },
+      async query() { assert.fail('No global title scan'); },
+    },
+    windows: {
+      async getAll() { return [{ id: 7, type: 'normal' }]; },
+      async update() { assert.fail('No physical focus'); },
+      async create() { assert.fail('No new window'); },
+    },
+    debugger: {
+      onEvent: event(), onDetach: event(),
+      async attach() { assert.fail('No debugger attachment in these races'); },
+      async detach() { assert.fail('No debugger detachment in these races'); },
+      async sendCommand() { assert.fail('No CDP commands in these races'); },
+    },
+    action: { async setBadgeText() {}, async setTitle() {}, async setBadgeBackgroundColor() {} },
+    runtime: {
+      id: EXTENSION, getURL: name => `chrome-extension://${EXTENSION}/${name}`,
+      async getContexts() { return [{ documentUrl: api.runtime.getURL('token.html') }]; },
+      async sendMessage() { return { token: TOKEN }; },
+    },
+    offscreen: { async createDocument() { assert.fail('No real offscreen document'); } },
+  };
+  class Socket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() { sockets.push(this); queueMicrotask(() => this.onopen?.()); }
+    send() {}
+    close() { this.readyState = 3; this.onclose?.(); }
+  }
+  const { createBrowserExtension } = await import('../../../../../plugins/desk/browser-extension/context-engine.mjs');
+  const engine = createBrowserExtension(api, { WebSocket: Socket, sourceDigest: SOURCE });
+  t.after(async () => {
+    // Exact owned synthetic contexts only; never stop/inspect an operator tab.
+    for (const contextId of [A, B]) await engine.dispatch({ id: `cleanup-${contextId}`, method: 'context.discard',
+      contextId, params: { profileToken: TOKEN, sourceDigest: SOURCE } });
+    engine.stop();
+    assert.deepEqual([...tabs.keys()], [1], 'all allocated in-memory tabs closed, manual peer untouched');
+    assert.ok(sockets.every(socket => socket.readyState === 3), 'all in-memory relay sockets closed');
+    t.diagnostic(`current A fixture closed; allocated synthetic tabs=${nextTab - 10}; real browser/native processes=0`);
+  });
+  return { engine, tabs };
+}
 test.after(async () => {
   assert.equal(servers.size, 0, 'all exact owned servers closed');
   assert.equal(trackedServers.size, 0, 'all instrumented listeners closed');
@@ -111,10 +200,15 @@ async function fixture(t, options = {}) {
   }
   let pin = TOKEN, alive = true;
   const requests = [], contexts = new Map();
-  const transport = new EventEmitter();
-  transport.request = async message => {
+  let transport;
+  const request = async message => {
     requests.push(structuredClone(message));
     await options.onRequest?.(message);
+    if (options.kernel) {
+      const reply = await options.kernel.dispatch(message);
+      await options.afterNativeReply?.(message, reply);
+      return reply;
+    }
     if (options.overrideResponse) {
       const overridden = await options.overrideResponse(message);
       if (overridden !== undefined) return overridden;
@@ -135,15 +229,20 @@ async function fixture(t, options = {}) {
     if (!contexts.has(message.contextId)) throw new BrokerError('native_context_unavailable', 'native_context_unavailable');
     return structuredClone(contexts.get(message.contextId));
   };
-  transport.close = () => { alive = false; transport.emit('close'); };
+  if (options.kernel) transport = new NativeCommandTransport({ send: async message => transport.receive(await request(message)) });
+  else {
+    transport = new EventEmitter();
+    transport.request = request;
+    transport.close = () => { alive = false; transport.emit('close'); };
+  }
   const construction = {
     config, ready: { event: 'ready', protocolVersion: 1, extensionId: EXTENSION, sourceDigest: SOURCE, profileToken: TOKEN },
     chain, transport, inventory, processReader: options.processReader || reader,
-    resolveSelection: async () => selection, readProfileToken: async () => pin,
-    verifyContinuity: options.trustedBaseline ? async evidence => ({
+    resolveSelection: async () => selection, readProfileToken: async () => { await options.beforeTokenRead?.(); return pin; },
+    verifyContinuity: options.verifyContinuity || (options.trustedBaseline ? async evidence => ({
       generation: evidence.generation, bindingDigest: evidence.bindingDigest, snapshotDigest: evidence.snapshot.digest,
       baselineId: A,
-    }) : undefined,
+    }) : undefined),
     updateTtlMs: options.updateTtlMs || 1000,
     protectSecret() {},
   };
@@ -157,6 +256,167 @@ async function fixture(t, options = {}) {
   return { root, config, provider, owner, inventory, requests, contexts, selection, transport, options, construction,
     setPin(value) { pin = value; }, resetNative() { alive = true; },
     client: require(new URL('web-native-messaging.cjs', rootUrl).pathname) };
+}
+
+for (const intervening of ['recreate', 'unavailable']) {
+  // Break caught: an old discard receipt must not overwrite newer effects or
+  // a later unavailable event while its final attestation is suspended.
+  test(`C1 current A old discard cannot settle a newer ${intervening} epoch`, { skip: !actualCli, timeout: 10000 }, async t => {
+    const native = await currentA(t);
+    const entered = deferred(), release = deferred();
+    let hold = false;
+    const options = { kernel: native.engine, trustedBaseline: true,
+      beforeTokenRead: async () => {
+        if (!hold) return;
+        hold = false; entered.resolve(); await release.promise;
+      },
+      afterNativeReply: async message => { if (message.method === 'context.discard') hold = true; },
+    };
+    const f = await fixture(t, options);
+    await f.owner(A);
+    const created = await f.provider.invoke('dispatch', { contextId: A, method: 'context.create', params: createParams });
+    assert.equal(created.tabs[0].tabId, 10);
+    const discard = settled(f.provider.invoke('dispatch', { contextId: A, method: 'context.discard', params: {} }));
+    try {
+      await entered.promise;
+      assert.equal(native.tabs.has(10), false, 'actual A already closed the old tab');
+      if (intervening === 'recreate') {
+        const recreated = await f.provider.invoke('dispatch', { contextId: A, method: 'context.create', params: createParams });
+        assert.equal(recreated.tabs[0].tabId, 11);
+        assert.equal(native.tabs.has(11), true);
+      } else f.transport.receive({ event: 'context.unavailable', contextId: A });
+      release.resolve();
+      const completion = await discard;
+      const gate = await settled(f.provider.invoke('prepareUpdate'));
+      if (gate.value) await f.provider.invoke('cancelUpdate', { ticket: gate.value.ticket });
+      assert.equal(gate.error?.code, 'NATIVE_UPDATE_OWNERS_UNSETTLED',
+        'old receipt cannot grant quiescence over a newer context operation/event');
+      assert.equal(completion.error?.code, 'NATIVE_CONTEXT_UNCONFIRMED');
+      assert.equal(completion.error.resources.contextId, A);
+      assert.equal(completion.error.resources.disposition, 'unknown');
+      if (intervening === 'recreate') {
+        assert.equal(native.tabs.has(11), true, 'gating did not clean or replace the new live tab');
+        assert.ok(f.requests.some(message => message.method === 'context.status'), 'gate consults actual current A status');
+      }
+    } finally { release.resolve(); await discard; }
+  });
+}
+
+// The same C1 epoch fence must survive the gate's final awaited trusted proof:
+// a new unavailable obligation cannot be overwritten by an older empty snapshot.
+test('C1 current A unavailable during proof cannot publish stale quiescence', { skip: !actualCli, timeout: 10000 }, async t => {
+  const native = await currentA(t), entered = deferred(), release = deferred();
+  const f = await fixture(t, { kernel: native.engine,
+    verifyContinuity: async evidence => {
+      entered.resolve(); await release.promise;
+      return { generation: evidence.generation, bindingDigest: evidence.bindingDigest,
+        snapshotDigest: evidence.snapshot.digest, baselineId: A };
+    },
+  });
+  await f.owner(A);
+  await f.provider.invoke('dispatch', { contextId: A, method: 'context.create', params: createParams });
+  await f.provider.invoke('dispatch', { contextId: A, method: 'context.discard', params: {} });
+  const pending = settled(f.provider.invoke('prepareUpdate'));
+  try {
+    await entered.promise;
+    f.transport.receive({ event: 'context.unavailable', contextId: A });
+    release.resolve();
+    const gate = await pending;
+    if (gate.value) await f.provider.invoke('cancelUpdate', { ticket: gate.value.ticket });
+    assert.equal(gate.error?.code, 'NATIVE_UPDATE_OWNERS_UNSETTLED');
+    assert.equal(gate.error.resources.owners[0].contextId, A);
+  } finally { release.resolve(); await pending; }
+});
+
+for (const seam of ['token', 'profile-reply', 'prepareUpdate', 'reload', 'commit']) {
+  // Break caught: a reservation replaced during any awaited corroboration
+  // must invalidate the old provider before the next authority-bearing send
+  // or ticket publication; closing it must preserve the foreign replacement.
+  test(`C2 current A reservation replacement across ${seam} await refuses authority`, { skip: !actualCli, timeout: 10000 }, async t => {
+    const native = await currentA(t);
+    const entered = deferred(), release = deferred();
+    let holdToken = false, holdReply = false, holdProof = false;
+    const pause = async () => { entered.resolve(); await release.promise; };
+    const options = { kernel: native.engine, updateTtlMs: 10000, expectedCloseError: 'NATIVE_STATE_CHANGED',
+      beforeTokenRead: async () => { if (holdToken) { holdToken = false; await pause(); } },
+      afterNativeReply: async message => {
+        if (holdReply && message.method === 'profile.read') { holdReply = false; await pause(); }
+      },
+      verifyContinuity: async evidence => {
+        if (holdProof) { holdProof = false; await pause(); }
+        return { generation: evidence.generation, bindingDigest: evidence.bindingDigest,
+          snapshotDigest: evidence.snapshot.digest, baselineId: A };
+      },
+    };
+    const f = await fixture(t, options);
+    await f.owner(A);
+    let ticket;
+    if (!['token', 'profile-reply'].includes(seam)) {
+      await f.provider.invoke('dispatch', { contextId: A, method: 'context.create', params: createParams });
+      await f.provider.invoke('dispatch', { contextId: A, method: 'context.discard', params: {} });
+      if (seam !== 'prepareUpdate') ticket = (await f.provider.invoke('prepareUpdate')).ticket;
+      if (seam === 'commit') await f.provider.invoke('reload', { ticket });
+    }
+    holdToken = seam === 'token'; holdReply = seam === 'profile-reply';
+    holdProof = !['token', 'profile-reply'].includes(seam);
+    const operation = ['token', 'profile-reply'].includes(seam)
+      ? f.provider.invoke('dispatch', { contextId: A, method: 'context.create', params: createParams })
+      : f.provider.invoke(seam, ticket ? { ticket } : {});
+    const completion = settled(operation);
+    try {
+      await entered.promise;
+      const count = f.requests.length;
+      const replacement = { ...JSON.parse(await fs.readFile(f.config.nativeReadyFile, 'utf8')),
+        generation: '33333333-3333-4333-8333-333333333333' };
+      await fs.rename(f.config.nativeReadyFile, `${f.config.nativeReadyFile}.owned-old`);
+      await put(f.config.nativeReadyFile, replacement);
+      release.resolve();
+      const result = await completion;
+      assert.equal(result.error?.code, 'NATIVE_READY_CHANGED', 'old provider authority is invalid after an awaited replacement');
+      assert.equal(f.requests.length, count, 'no native request after the exact reservation changed');
+      assert.deepEqual([...native.tabs.keys()], [1], 'no late create or replacement allocation');
+      await assert.rejects(f.provider.close(), code('NATIVE_STATE_CHANGED'));
+      assert.deepEqual(JSON.parse(await fs.readFile(f.config.nativeReadyFile, 'utf8')), replacement,
+        'old close preserves foreign inode/content');
+      await assert.rejects(f.provider.invoke('attest'), code('NATIVE_TRANSPORT_DISCONNECTED'));
+    } finally { release.resolve(); await completion; }
+  });
+}
+
+for (const envelope of ['empty', 'missing-result', 'ambiguous', 'bad-error', 'bad-error-code', 'wrong-success-status']) {
+  // Break caught: schema-invalid HTTP completion after actual create must
+  // never become success or lose the named unknown-effect projection.
+  test(`C3 current A create retains resources for ${envelope} HTTP envelope`, { skip: !actualCli, timeout: 10000 }, async t => {
+    const native = await currentA(t);
+    const f = await fixture(t, { kernel: native.engine });
+    await f.owner(A);
+    const proxy = http.createServer(async (request, response) => {
+      const chunks = [];
+      for await (const bytes of request) chunks.push(bytes);
+      const message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const result = await f.provider.invoke(message.operation, message.payload);
+      const body = {
+        empty: {},
+        'missing-result': { ok: true },
+        ambiguous: { ok: true, result, error: { code: 'NATIVE_REQUEST_FAILED' } },
+        'bad-error': { ok: false, error: null },
+        'bad-error-code': { ok: false, error: { code: 42 } },
+        'wrong-success-status': { ok: true, result },
+      }[envelope];
+      response.writeHead(envelope === 'wrong-success-status' ? 409 : 200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(body));
+    });
+    await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    try {
+      const endpoint = `http://127.0.0.1:${proxy.address().port}/provider/${'d'.repeat(64)}`;
+      const completion = await settled(f.client.providerRequest(endpoint, 'dispatch',
+        { contextId: A, method: 'context.create', params: createParams }));
+      assert.equal(native.tabs.has(10), true, 'the current A create really took effect before the invalid response');
+      assert.equal(completion.error?.code, 'NATIVE_PROVIDER_RESPONSE_INVALID');
+      assert.deepEqual(completion.error.resources,
+        { disposition: 'unknown', operation: 'dispatch', contextId: A, method: 'context.create' });
+    } finally { await new Promise(resolve => proxy.close(resolve)); }
+  });
 }
 
 test('fresh provider cannot certify old retained effects from empty maps', {
