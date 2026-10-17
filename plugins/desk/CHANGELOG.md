@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.331 — 2026-10-17
+
+Desk adds an explicit [agent-owned private browser CLI](skills/cdp-headed-browser/SKILL.md#agent-owned-private-browser-contexts): create a fresh in-memory context, keep or resume its live page across shell clients, run page commands, and discard only that context. It shares the verified browser installer, isolates home/configuration/session and short socket paths, rejects session/profile/connection overrides, and reports failed startup or unconfirmed cleanup rather than silently recreating a browser. The existing signed-in `desk-web` route is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.330 — 2026-10-16
 
 Factory's guarded triage writer accepts the exact restrictive Git command profile used by Copilot: `safe.bareRepository=explicit`, `credential.interactive=never` and `core.fsmonitor=false`, with all three numbered slots required and optional locks allowed only as `GIT_OPTIONAL_LOCKS=0`. Unknown, partial or altered Git overrides still refuse before Git runs. A complete profile requires stable Git 2.36.0 or later in major version 2, checked by a bounded, non-repository version query of the same executable used throughout the operation, including canonical blob reads. On Windows, PATH aliases follow Node's lexicographic key selection regardless of insertion order, without rewriting the caller's environment. The original command-scoped controls remain intact for real operations and hooks; unsupported Git refuses without creating writer resources. Existing no-profile callers, hook policy, authority checks and remote acknowledgement requirements are unchanged.
