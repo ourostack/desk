@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTempRoot } from '../_temp_roots.js';
-import { readProcessStart, windowsPowerShellPath } from '../../../../../plugins/desk/mcp/src/readiness/process-start.js';
+import { processStartReaders, readProcessStart, windowsPowerShellPath } from '../../../../../plugins/desk/mcp/src/readiness/process-start.js';
 import * as installer from '../../../../../plugins/desk/mcp/native-messaging-install.mjs';
 import { installNativeMessaging, registrationLocation } from '../../../../../plugins/desk/mcp/native-messaging-install.mjs';
 import { createNativeFramer, readNativeProcess } from '../../../../../plugins/desk/mcp/src/browser/native-host.mjs';
@@ -22,6 +22,48 @@ const put = async (file, value) => {
   await fs.writeFile(file, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value), { mode: 0o600 });
 };
 
+for (const channel of ['chrome', 'msedge']) {
+  test(`native install admits normal per-user macOS ${channel} without a global-channel fallback`,
+    { skip: process.platform !== 'darwin' }, async t => {
+      const f = await fixture(t, { channel, location: 'user', isolatedHome: true });
+      const got = await installNativeMessaging(f.options);
+      const config = JSON.parse(await fs.readFile(path.join(got.runtimeDirectory, 'mcp/provider-config.json')));
+      assert.equal(config.channel, channel);
+      assert.equal(config.expectedBrowser.pid, process.pid);
+      assert.equal(config.browserExecutable, fsSync.realpathSync(process.execPath));
+      assert.equal(config.userDataDir, f.userDataDir);
+    });
+}
+
+test('native install refuses declared Chrome versus discovered Edge without global-channel/profile fallback', async t => {
+  const f = await fixture(t);
+  await put(path.join(f.root, 'plugins/overlay/plugin.json'), { name: 'overlay', version: '1.0.0',
+    desk: { browser: { channel: 'chrome', profileAccountDomain: 'fixture.invalid' } } });
+  const profile = require(fileURLToPath(new URL('web-real-profile.cjs', mcp)));
+  const chrome = profile.userDataDir('chrome', process.platform, f.env, f.homeDir);
+  await put(path.join(chrome, 'Local State'), await fs.readFile(path.join(f.userDataDir, 'Local State')));
+  await fs.mkdir(path.join(chrome, 'Default'), { mode: 0o700 });
+  await assert.rejects(installNativeMessaging(f.options), { code: 'NATIVE_ANCESTRY_MISMATCH' });
+});
+
+test('native install refuses a discovered canonical executable different from the observed PID', async t => {
+  const f = await fixture(t, { wrongExecutable: true });
+  await assert.rejects(installNativeMessaging(f.options), { code: 'NATIVE_ANCESTRY_MISMATCH' });
+});
+
+test('native install refuses PID generation reuse at actual final ancestry corroboration', async t => {
+  const f = await fixture(t), reader = processStartReaders[process.platform];
+  let reads = 0;
+  t.mock.method(processStartReaders, process.platform, async (pid, ...args) => {
+    const start = await reader(pid, ...args);
+    return pid === process.pid && ++reads > 2 ? `${start}:reused-generation` : start;
+  });
+  await assert.rejects(installNativeMessaging(f.options), { code: 'NATIVE_INSTALL_INPUT_CHANGED' });
+  assert.ok(reads >= 4, 'both actual process observations ran with internally consistent but different generations');
+  const registration = registrationLocation({ platform: process.platform, channel: 'msedge', userDataRoot: f.userDataDir });
+  await assert.rejects(fs.lstat(registration.file || path.join(f.env.DESK_BROWSER_STATE_DIR, 'native-owned/host-manifest.json')), { code: 'ENOENT' });
+});
+
 test('native installation is an implemented explicit API, not an updater/continuity stub', async () => {
   assert.equal(typeof installNativeMessaging, 'function', 'the admitted installer must exist');
   assert.equal(installer.updateNativeMessaging, undefined);
@@ -29,21 +71,28 @@ test('native installation is an implemented explicit API, not an updater/continu
   assert.equal(installer.createNativeUpdateVerifier, undefined);
 });
 
-async function fixture(t) {
+async function fixture(t, { channel = 'msedge', location = 'system', wrongExecutable = false, isolatedHome = false } = {}) {
+  const handles = new WeakMap(), open = fs.open;
+  t.mock.method(fs, 'open', async function (file, ...args) {
+    const handle = await open.call(this, file, ...args);
+    handles.set(handle, String(file));
+    return handle;
+  });
+  const writePath = file => typeof file === 'object' ? handles.get(file) : String(file);
   const root = await mkTempRoot('desk-native-D-install-');
   t.diagnostic(`D install exact root=${root}; pid=${process.pid}; start=${await readProcessStart(process.pid)}`);
   const homeDir = path.join(root, 'home');
-  const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir,
+  const env = { ...process.env, HOME: isolatedHome ? path.join(root, 'owner-isolated-cli-home') : homeDir, USERPROFILE: homeDir,
     XDG_CONFIG_HOME: path.join(homeDir, 'config'), XDG_STATE_HOME: path.join(homeDir, 'state'),
     LOCALAPPDATA: path.join(homeDir, 'AppData/Local'), DESK_BROWSER_STATE_DIR: path.join(root, 'browser'),
     DESK_PLUGIN_ROOT: path.join(root, 'plugins/desk') };
   await put(path.join(root, 'plugins/desk/plugin.json'), { name: 'desk', version: '1.0.0' });
   await put(path.join(root, 'plugins/overlay/plugin.json'), { name: 'overlay', version: '1.0.0',
-    desk: { browser: { channel: 'msedge', profileAccountDomain: 'fixture.invalid' } } });
+    desk: { browser: { channel, profileAccountDomain: 'fixture.invalid' } } });
   const profile = require(fileURLToPath(new URL('web-real-profile.cjs', mcp)));
   const web = require(fileURLToPath(new URL('web.cjs', mcp)));
   const patch = require(fileURLToPath(new URL('web-playwright-patch.cjs', mcp)));
-  const userDataDir = profile.userDataDir('msedge', process.platform, env, homeDir);
+  const userDataDir = profile.userDataDir(channel, process.platform, env, homeDir);
   await put(path.join(userDataDir, 'Local State'), { profile: { last_used: 'Default', info_cache: {
     Default: { user_name: 'owned@fixture.invalid' },
   } } });
@@ -66,9 +115,23 @@ async function fixture(t) {
   await put(path.join(installed, 'playwright-patch.json'), { revision: patch.REVISION, mcpVersion: '1.2.3',
     coreVersion: '1.2.4', bundleSha256: sha(bundle), credentialSha256: sha(credential) });
   await put(path.join(env.DESK_BROWSER_STATE_DIR, 'current.json'), { version: '1.2.3', dir: 'installs/owned-fixture', previous: null });
-  // The real source/receipt selectors run; only the browser executable discovery
-  // boundary is redirected to this exact owned test worker (never a browser).
-  t.mock.method(web, 'browserPaths', () => [fsSync.realpathSync(process.execPath)]);
+  // Actual normal discovery runs. Only candidate filesystem observations are
+  // redirected to this exact owned worker; no installed browser is observed.
+  const candidates = ['chrome', 'msedge'].flatMap(value => {
+    const app = value === 'chrome' ? 'Google Chrome' : 'Microsoft Edge';
+    return [...web.browserPaths(value, process.platform, env), path.join(homeDir, 'Applications', `${app}.app/Contents/MacOS/${app}`)];
+  });
+  const app = channel === 'chrome' ? 'Google Chrome' : 'Microsoft Edge';
+  const candidate = location === 'user' ? path.join(homeDir, 'Applications', `${app}.app/Contents/MacOS/${app}`)
+    : web.browserPaths(channel, process.platform, env)[0];
+  const exists = fsSync.existsSync, realpath = fs.realpath;
+  t.mock.method(fsSync, 'existsSync', function (file) {
+    return candidates.includes(String(file)) ? file === candidate : exists.call(this, file);
+  });
+  t.mock.method(fs, 'realpath', function (file, ...args) {
+    return file === candidate ? Promise.resolve(wrongExecutable ? path.join(root, 'wrong-executable') : fsSync.realpathSync(process.execPath))
+      : realpath.call(this, file, ...args);
+  });
   if (process.platform === 'win32') {
     const exec = childProcess.execFile;
     let registryValue;
@@ -80,7 +143,7 @@ async function fixture(t) {
       queueMicrotask(() => callback(null, registryValue || '', ''));
     });
   }
-  return { root, env, homeDir, installed, userDataDir,
+  return { root, env, homeDir, installed, userDataDir, writePath,
     options: { env, homeDir, browserProcessId: process.pid } };
 }
 
@@ -132,7 +195,7 @@ for (const conflict of ['journal', 'source', 'registration', 'runtime', 'capsule
     else {
       const write = fs.writeFile;
       t.mock.method(fs, 'writeFile', async function (file, ...args) {
-        if (String(file).endsWith('/mcp/native-host.mjs') || String(file).endsWith('\\mcp\\native-host.mjs')) {
+        if (f.writePath(file)?.endsWith('/mcp/native-host.mjs') || f.writePath(file)?.endsWith('\\mcp\\native-host.mjs')) {
           await write.call(this, file, 'owned partial staging write', { flag: 'wx', mode: 0o600 });
           throw Object.assign(Error('injected exact write failure'), { code: 'EIO' });
         }
@@ -238,7 +301,7 @@ for (const replacement of ['byte', 'directory']) {
     let replaced = false, foreign;
     t.mock.method(fs, 'writeFile', async function (file, ...args) {
       const result = await write.call(this, file, ...args);
-      if (!replaced && /(?:com\.ourostack\.desk\.browser|host-manifest)\.json\..*\.tmp$/u.test(String(file))) {
+      if (!replaced && /(?:com\.ourostack\.desk\.browser|host-manifest)\.json\..*\.tmp$/u.test(f.writePath(file))) {
         replaced = true;
         const [digest] = await fs.readdir(path.join(root, 'runtimes'));
         const capsule = path.join(root, 'runtimes', digest);
@@ -249,6 +312,7 @@ for (const replacement of ['byte', 'directory']) {
           await write(foreign, 'foreign retained replacement', { mode: 0o600, flag: 'wx' });
         } else await fs.appendFile(foreign, '\n// foreign retained replacement\n');
       }
+
       return result;
     });
     await assert.rejects(installNativeMessaging(f.options), { code: 'NATIVE_RUNTIME_INTEGRITY' });
@@ -256,5 +320,41 @@ for (const replacement of ['byte', 'directory']) {
     assert.match(await fs.readFile(foreign, 'utf8'), /foreign retained replacement/u);
     const location = registrationLocation({ platform: process.platform, channel: 'msedge', userDataRoot: f.userDataDir });
     await assert.rejects(fs.lstat(location.file || path.join(root, 'host-manifest.json')), { code: 'ENOENT' });
+  });
+}
+
+for (const window of ['verified-write', 'prelink']) {
+  test(`registration staging replacement at ${window} never publishes or deletes foreign bytes`, async t => {
+    const f = await fixture(t), lstat = fs.lstat, read = fsSync.readFileSync, readAsync = fs.readFile;
+    let stage, verifiedRead = false, replaced = false;
+    const foreign = Buffer.from('{"foreign":"retained staging replacement"}');
+    function replace() {
+      fsSync.renameSync(stage, `${stage}.owned-original`);
+      fsSync.writeFileSync(stage, foreign, { mode: 0o600, flag: 'wx' });
+      replaced = true;
+    }
+    t.mock.method(fs, 'lstat', async function (file, ...args) {
+      const info = await lstat.call(this, file, ...args);
+      if (/(?:com\.ourostack\.desk\.browser|host-manifest)\.json\..*\.tmp$/u.test(String(file))) {
+        stage = String(file);
+        if (verifiedRead && window === 'verified-write' && !replaced) replace();
+      }
+      return info;
+    });
+    t.mock.method(fs, 'readFile', async function (file, ...args) {
+      const bytes = await readAsync.call(this, file, ...args);
+      if (file === stage) verifiedRead = true;
+      return bytes;
+    });
+    t.mock.method(fsSync, 'readFileSync', function (file, ...args) {
+      const bytes = read.call(this, file, ...args);
+      if (window === 'prelink' && stage && !replaced && file === path.join(f.env.DESK_BROWSER_STATE_DIR, 'current.json')) replace();
+      return bytes;
+    });
+    await assert.rejects(installNativeMessaging(f.options), error => /^NATIVE_/u.test(error.code));
+    assert.equal(replaced, true, 'the intended post-verification publication window was crossed');
+    const location = registrationLocation({ platform: process.platform, channel: 'msedge', userDataRoot: f.userDataDir });
+    await assert.rejects(fs.lstat(location.file || path.join(f.env.DESK_BROWSER_STATE_DIR, 'native-owned/host-manifest.json')), { code: 'ENOENT' });
+    assert.deepEqual(await fs.readFile(stage), foreign, 'foreign staging name/bytes were not removed');
   });
 }

@@ -11,6 +11,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSy
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot, pluginRoot, toolPayload } from "./_mcp_handshake.js"
 import { openSession } from "./_mcp_session.js"
@@ -30,6 +31,40 @@ for (const channel of ["chrome", "msedge"]) {
     assert.deepEqual(selected, { args: channel === "chrome" ? [] : ["--browser", "msedge"], executablePath: candidate })
   })
 }
+
+for (const [channel, app] of [["chrome", "Google Chrome"], ["msedge", "Microsoft Edge"]]) {
+  test(`channel-specific ${channel} discovery uses trusted nativeHome rather than owner-isolated HOME`, () => {
+    const nativeHome = "/Users/native-browser-owner"
+    const isolatedHome = "/Users/isolated-cli-owner"
+    const native = `${nativeHome}/Applications/${app}.app/Contents/MacOS/${app}`
+    const isolated = `${isolatedHome}/Applications/${app}.app/Contents/MacOS/${app}`
+    const args = channel === "chrome" ? [] : ["--browser", "msedge"]
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", { HOME: isolatedHome },
+      file => file === native || file === isolated, { nativeHome }),
+      { args: [...args, "--executable-path", native], executablePath: native })
+  })
+
+  test(`channel-specific discovery keeps normal system/per-user macOS ${channel} order and never selects the other channel`, () => {
+    const env = { HOME: "/Users/owned-fixture" }
+    const system = `/Applications/${app}.app/Contents/MacOS/${app}`
+    const user = `/Users/owned-fixture/Applications/${app}.app/Contents/MacOS/${app}`
+    const args = channel === "chrome" ? [] : ["--browser", "msedge"]
+    assert.equal(typeof browser.channelBrowserSelection, "function")
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, () => true), { args, executablePath: system })
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, file => file === user),
+      { args: [...args, "--executable-path", user], executablePath: user })
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, file => ![system, user].includes(file)),
+      { args: [], executablePath: null })
+  })
+}
+
+test("the pure discovery module loads only itself and builtins, not the CLI/bootstrap closure", () => {
+  const modulePath = path.join(mcpRoot, "web-browser-discovery.cjs")
+  const code = `const assert=require("node:assert/strict");const before=new Set(Object.keys(require.cache));const helper=require(${JSON.stringify(modulePath)});assert.equal(typeof helper.channelBrowserSelection,"function");assert.deepEqual(Object.keys(require.cache).filter(p=>!before.has(p)),[${JSON.stringify(modulePath)}]);`
+  const got = spawnSync(process.execPath, ["--import", fileURLToPath(new URL("../_isolated_env.mjs", import.meta.url)), "-e", code],
+    { env: process.env, encoding: "utf8" })
+  assert.equal(got.status, 0, got.stderr)
+})
 
 test("private preparation reuses the verified generation without profile acquisition", posixOnly, async () => {
   assert.equal(typeof browser.prepareBrowserRuntime, "function")
@@ -1714,7 +1749,7 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  for (const file of ["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")

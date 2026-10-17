@@ -150,10 +150,11 @@ async function protectFile(file, executable = false) {
   if (process.platform === 'win32') await protectWindowsPaths([{ path: file, kind: 'file', created: true }], { label: naming.label });
   else if (executable) await fs.chmod(file, 0o700);
 }
-async function checkPrivate(file, expected, executable = false) {
+async function checkPrivate(file, expected, executable = false, identity) {
   await checkedPath(path.dirname(file));
   const before = await fs.lstat(file, { bigint: true });
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n ||
+      (identity && (before.dev !== identity.dev || before.ino !== identity.ino)) ||
       (process.platform !== 'win32' && (before.uid !== BigInt(process.getuid()) || Number(before.mode & 0o777n) !== (executable ? 0o700 : 0o600))))
     throw failure('NATIVE_RUNTIME_INTEGRITY');
   const bytes = await fs.readFile(file), after = await fs.lstat(file, { bigint: true });
@@ -163,22 +164,44 @@ async function checkPrivate(file, expected, executable = false) {
 }
 async function writeNew(file, bytes) {
   await privateDirectory(path.dirname(file));
-  await fs.writeFile(file, bytes, { mode: 0o600, flag: 'wx' });
+  const parent = sync.lstatSync(path.dirname(file), { bigint: true });
+  const handle = await fs.open(file, 'wx', 0o600);
+  let identity;
+  try {
+    identity = await handle.stat({ bigint: true }); // creation handle, never a later path observation
+    await fs.writeFile(handle, bytes);
+    await handle.sync();
+  } finally { await handle.close(); }
+  const current = sync.lstatSync(file, { bigint: true });
+  if (current.dev !== identity.dev || current.ino !== identity.ino) throw failure('NATIVE_RUNTIME_INTEGRITY');
   await protectFile(file);
-  const handle = await fs.open(file, 'r+');
-  try { await handle.sync(); } finally { await handle.close(); }
-  await checkPrivate(file, bytes);
+  await checkPrivate(file, bytes, false, identity);
+  return { identity, parent };
+}
+function assertRegistrationStage(file, bytes, owned, links = 1n) {
+  try {
+    const parent = sync.lstatSync(path.dirname(file), { bigint: true });
+    const current = sync.lstatSync(file, { bigint: true });
+    if (!parent.isDirectory() || parent.isSymbolicLink() ||
+        parent.dev !== owned.parent.dev || parent.ino !== owned.parent.ino ||
+        !current.isFile() || current.isSymbolicLink() || current.nlink !== links ||
+        current.dev !== owned.identity.dev || current.ino !== owned.identity.ino ||
+        (process.platform !== 'win32' && (parent.uid !== BigInt(process.getuid()) || (parent.mode & 0o077n) ||
+          current.uid !== BigInt(process.getuid()) || (current.mode & 0o777n) !== 0o600n)) ||
+        current.size !== BigInt(bytes.length) ||
+        !(links === 1n ? sourceBytes(path.dirname(file), path.basename(file)) : sync.readFileSync(file)).equals(bytes)) throw Error();
+    if (links === 1n) require('./web-native-messaging.cjs').readPrivateJson(file, { maxBytes: 16384 });
+  } catch { throw failure('NATIVE_RUNTIME_INTEGRITY'); }
 }
 async function publishRegistration(file, bytes, assertPublication) {
   if (await present(file)) { await checkPrivate(file, bytes); assertPublication(); return; }
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeNew(temporary, bytes);
-  const owned = await fs.lstat(temporary, { bigint: true });
+  const owned = await writeNew(temporary, bytes);
   // link is exclusive: unlike rename it cannot overwrite a racing replacement.
   assertPublication(); // synchronous final fence after every awaited staging step
+  assertRegistrationStage(temporary, bytes, owned); // no await before exclusive publication
   await fs.link(temporary, file);
-  const current = await fs.lstat(temporary, { bigint: true });
-  if (current.dev !== owned.dev || current.ino !== owned.ino) throw failure('NATIVE_REGISTRATION_UNCONFIRMED');
+  assertRegistrationStage(temporary, bytes, owned, 2n); // no await before exact-name release
   await fs.unlink(temporary); // exact owned staging inode only, never a foreign replacement
   await checkPrivate(file, bytes);
 }
@@ -242,8 +265,10 @@ function publicationFence({ runtimeDirectory, files, executable, assetBytes, ext
 async function normalInputs(options, distribution) {
   if (!object(options) || Object.keys(options).some(key => !['env', 'homeDir', 'browserProcessId'].includes(key)) ||
       !Number.isSafeInteger(options.browserProcessId) || options.browserProcessId <= 0) throw failure('NATIVE_INSTALL_OPTIONS_INVALID');
-  const env = options.env || process.env, homeDir = options.homeDir || os.homedir();
+  // This is the native account's home, not a later owner-isolated CLI HOME.
+  const env = options.env || process.env, homeDir = options.homeDir || os.userInfo().homedir;
   const web = require('./web.cjs'), profile = require('./web-real-profile.cjs'), bootstrap = require('./bootstrap.cjs');
+  const discovery = require('./web-browser-discovery.cjs');
   const browserStateRoot = path.resolve(web.stateDir(env, homeDir));
   const pointerBytes = sourceBytes(browserStateRoot, 'current.json'), pointer = JSON.parse(pointerBytes);
   if (typeof pointer.dir !== 'string' || !/^installs\/[A-Za-z0-9_-]+$/u.test(pointer.dir)) throw failure('NATIVE_RUNTIME_UNAVAILABLE');
@@ -269,7 +294,8 @@ async function normalInputs(options, distribution) {
   const profileDirName = profile.findProfileDir(path.join(userDataDir, 'Local State'), declaration.domain);
   if (!profileDirName || /^[.]{1,2}$/u.test(profileDirName) || /[\\/\u0000-\u001f\u007f]/u.test(profileDirName)) throw failure('NATIVE_SELECTION_MISMATCH');
   const expectedBrowser = await readNativeProcess(options.browserProcessId);
-  const executable = web.browserPaths(declaration.channel, process.platform, env).find(file => sync.existsSync(file));
+  const executable = discovery.channelBrowserSelection(declaration.channel, process.platform, env,
+    file => sync.existsSync(file), { nativeHome: homeDir }).executablePath;
   if (!executable || await fs.realpath(executable) !== expectedBrowser.executable) throw failure('NATIVE_ANCESTRY_MISMATCH');
   const { createNativeOwnerInventory } = await import('./src/browser/native-owner-inventory.mjs');
   createNativeOwnerInventory({ browserStateRoot, cliDir, binding: {} }); // actual maintained module/type boundary, no inventory or CLI probes

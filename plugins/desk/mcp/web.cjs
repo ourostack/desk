@@ -23,6 +23,7 @@ var proxy = require("./web-proxy.cjs");
 var realProfile = require("./web-real-profile.cjs");
 var credential = require("./web-extension-credential.cjs");
 var playwrightPatch = require("./web-playwright-patch.cjs");
+var browserDiscovery = require("./web-browser-discovery.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
@@ -122,52 +123,14 @@ function hasOption(args, names) {
 
 // ---- which browser ----
 
-// Where Playwright itself looks for the chrome and msedge channels, per platform.
-function browserPaths(browser, platform, env) {
-  if (platform === "win32") {
-    var roots = ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"].map(function (name) {
-      var key = Object.keys(env).filter(function (candidate) {
-        return candidate.toUpperCase() === name;
-      })[0];
-      return env[key];
-    }).filter(Boolean);
-    var tail = browser === "chrome" ? ["Google", "Chrome", "Application", "chrome.exe"] : ["Microsoft", "Edge", "Application", "msedge.exe"];
-    return roots.map(function (root) {
-      return path.win32.join.apply(path.win32, [root].concat(tail));
-    });
-  }
-  if (platform === "darwin") return ["/Applications/" + macBundle(browser)];
-  return browser === "chrome" ? ["/opt/google/chrome/chrome"] : ["/opt/microsoft/msedge/msedge"];
-}
-
-function macBundle(browser) {
-  var app = browser === "chrome" ? "Google Chrome" : "Microsoft Edge";
-  return app + ".app/Contents/MacOS/" + app;
-}
-
-// Per-user install locations Playwright does not look in; a browser found only there is passed by path.
-function userBrowserPaths(browser, platform, env) {
-  if (platform !== "darwin" || !env.HOME) return [];
-  return [path.posix.join(env.HOME, "Applications", macBundle(browser))];
-}
-
-function firstExisting(files, fileExists) {
-  for (var index = 0; index < files.length; index += 1) {
-    if (fileExists(files[index])) return files[index];
-  }
-  return null;
-}
+var browserPaths = browserDiscovery.browserPaths;
+var channelBrowserSelection = browserDiscovery.channelBrowserSelection;
+var firstExisting = browserDiscovery.firstExisting;
 
 function browserSelection(args, platform, env, fileExists) {
   if (hasOption(args, BROWSER_CHOICE)) return { args: [], executablePath: null };
-  var chrome = firstExisting(browserPaths("chrome", platform, env), fileExists);
-  if (chrome) return { args: [], executablePath: chrome };
-  chrome = firstExisting(userBrowserPaths("chrome", platform, env), fileExists);
-  if (chrome) return { args: ["--executable-path", chrome], executablePath: chrome };
-  var edge = firstExisting(browserPaths("msedge", platform, env), fileExists);
-  if (edge) return { args: ["--browser", "msedge"], executablePath: edge };
-  edge = firstExisting(userBrowserPaths("msedge", platform, env), fileExists);
-  return edge ? { args: ["--browser", "msedge", "--executable-path", edge], executablePath: edge } : { args: [], executablePath: null };
+  var chrome = channelBrowserSelection("chrome", platform, env, fileExists);
+  return chrome.executablePath ? chrome : channelBrowserSelection("msedge", platform, env, fileExists);
 }
 
 // Keep legacy MCP arguments unchanged; isolated clients also need the selected
@@ -851,7 +814,7 @@ function start(o, io) {
     var launchEnv = withNodeFirst(env, node, platform);
     delete launchEnv[credential.BINDING_KEY];
     if (!real) return { launch: { node: node, indexFile: installed.cli, args: launchArgs(args, platform, env, fileExists, root), env: launchEnv } };
-    var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
+    var executable = channelBrowserSelection(declaration.channel, platform, env, fileExists).executablePath;
     return realProfile.connect({
       declaration: declaration, installed: installed, executable: executable, platform: platform, env: env, homeDir: homeDir,
       unavailable: function (code, summary, fix) { return failure(io, code, summary, fix); },
@@ -956,6 +919,7 @@ module.exports = {
   REFRESH_FLAG: REFRESH_FLAG,
   browserArgs: browserArgs,
   browserSelection: browserSelection,
+  channelBrowserSelection: channelBrowserSelection,
   browserPaths: browserPaths,
   launchArgs: launchArgs,
   npmCli: npmCli,
