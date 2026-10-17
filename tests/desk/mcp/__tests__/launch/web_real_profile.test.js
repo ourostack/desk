@@ -16,7 +16,8 @@ const require = createRequire(import.meta.url)
 const browser = require(path.join(mcpRoot, "web.cjs"))
 const real = require(path.join(mcpRoot, "web-real-profile.cjs"))
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
-const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
+const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const TOKEN = "tok-9f3a-never-print-me"
 const posixOnly = { skip: process.platform === "win32" ? "the fixture Node is a POSIX link" : false }
 
@@ -573,6 +574,7 @@ async function realMachine(options = {}) {
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version: "0.0.83", bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), "")
   touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+  touch(path.join(modules, "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
   playwrightPatch.apply({ dir: path.join(state, id), version: "0.0.83", core: null })
   if (options.reader !== false) {
     touch(path.join(modules, "classic-level", "package.json"), JSON.stringify({ name: "classic-level" }))
@@ -786,6 +788,7 @@ function installNpm(calls, options = {}) {
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.84", bin: { "playwright-mcp": "cli.js" } }))
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "cli.js"), "")
       touch(path.join(prefix, "node_modules", "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+      touch(path.join(prefix, "node_modules", "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
       if (withReader) touch(path.join(prefix, "node_modules", "classic-level", "package.json"), "{}")
       if (argv.includes("ws@8.21.3")) touch(path.join(prefix, "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
       child.emit("close", 0)

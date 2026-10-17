@@ -16,6 +16,7 @@ import { createNativeFramer, readNativeProcess } from '../../../../../plugins/de
 
 const require = createRequire(import.meta.url);
 const mcp = new URL('../../../../../plugins/desk/mcp/', import.meta.url);
+const errorFixture = require('./fixtures/playwright-native-error-transport.cjs').read();
 const sha = value => createHash('sha256').update(value).digest('hex');
 const put = async (file, value) => {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -100,7 +101,7 @@ async function fixture(t, { channel = 'msedge', location = 'system', wrongExecut
   const installed = path.join(env.DESK_BROWSER_STATE_DIR, 'installs/owned-fixture');
   const modules = path.join(installed, 'node_modules');
   const credential = await fs.readFile(new URL('web-extension-credential.cjs', mcp));
-  const bundle = await fs.readFile(new URL('./fixtures/playwright-server-lifecycle.cjs', import.meta.url));
+  const bundle = await fs.readFile(new URL('./fixtures/playwright-server-lifecycle.cjs', import.meta.url), 'utf8') + errorFixture.core;
   await put(path.join(modules, '@playwright/mcp/package.json'), { version: '1.2.3', bin: 'cli.js' });
   await put(path.join(modules, '@playwright/mcp/cli.js'), '// never executed\n');
   await put(path.join(modules, 'playwright-core/package.json'), { version: '1.2.4' });
@@ -108,7 +109,8 @@ async function fixture(t, { channel = 'msedge', location = 'system', wrongExecut
   await put(path.join(modules, 'playwright-core/lib/desk-extension-credential.cjs'), credential);
   const cli = path.join(modules, 'playwright-core/lib/tools/cli-client');
   await put(path.join(cli, 'registry.js'), 'exports.Registry=class Registry { loadEntry() { throw Error("no inventory reads during install"); } };\n');
-  await put(path.join(cli, 'session.js'), 'exports.Session=class Session { isCompatible() { return true; } };\n');
+  await put(path.join(cli, 'session.js'), 'exports.Session=class Session { isCompatible() { return true; }\n' +
+    errorFixture.session + '\n  async _stopDaemon() {}\n};\n');
   await put(path.join(modules, 'playwright-core/lib/package.js'), 'exports.packageJSON={version:"1.2.4"};\n');
   await put(path.join(modules, 'classic-level/package.json'), { name: 'classic-level', main: 'index.js' });
   await put(path.join(modules, 'classic-level/index.js'), 'exports.ClassicLevel=class ClassicLevel { constructor() { throw Error("no credential DB read during install"); } };\n');

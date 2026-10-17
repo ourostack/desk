@@ -11,8 +11,31 @@ import { mkTempRoot } from "../_temp_roots.js"
 const require = createRequire(import.meta.url)
 const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
 const patchPath = path.join(mcpRoot, "web-playwright-patch.cjs")
-const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
+const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const { apply, copyPackages, patchSource, readRevision } = require(patchPath)
+
+function frozenE3(source) {
+  // Reconstitute only the four new complete original regions. The old four
+  // must independently match the reviewed a3aa37f9 output pins below; runtime
+  // tests never read unpublished Git objects or trust a derived golden.
+  for (const [key, begin, finish] of require("./fixtures/playwright-native-error-transport.cjs").regions) {
+    if (key === "session") continue
+    const start = source.indexOf(begin), end = source.indexOf(finish, start)
+    source = source.slice(0, start) + errorFixture[key] + source.slice(end)
+  }
+  const sha = value => require("node:crypto").createHash("sha256").update(value).digest("hex")
+  for (const [begin, finish, pinned] of [
+    ["function createServer(", "\nfunction addServerListener(", "81b5d8c5fdd077a4aa046a8994473ad13405ef8478096eaa972578c894d2cf03"],
+    ["async function createExtensionBrowser(", "\nvar import_path60, debug16, debugLogger3;", "61e576a635f9d6958d1e24b34aaa95909763b4fb021707ada983d8f81dcb6a4d"],
+    ["async function createBrowser(config,", "\nasync function connectToBrowserEndpoint(", "a8790e635889a3ecdf436fdfee46cd12f12d2aac7a6c2256dd53a0a7f27ceff8"],
+    ["    CDPRelayServer = class {", "\n    ExtensionConnection = class {", "eacd4d96f0bb6db0bdaf3d18c97377cbecf4edcd2182d2714bf7bb6f56090e66"],
+  ]) {
+    const start = source.indexOf(begin)
+    assert.equal(sha(source.slice(start, source.indexOf(finish, start))), pinned, "independent frozen E3 bytes")
+  }
+  return source
+}
 
 function priorE3(source) {
   // Mechanical inverse of only this fix, recording the exact complete
@@ -30,10 +53,12 @@ function priorE3(source) {
 }
 
 test("complete prior E3 upgrades exactly; partial native/await edits and duplicated legacy idle guards refuse", () => {
-  const current = patchSource(stock), prior = priorE3(current)
+  const current = patchSource(stock), handoff = frozenE3(current), prior = priorE3(handoff)
   assert.notEqual(prior, current)
   assert.equal(patchSource(prior), current)
+  assert.equal(patchSource(handoff), current)
   assert.equal(patchSource(current), current)
+  assert.throws(() => patchSource(priorE3(current)), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" }, "E4 transport with the obsolete E3 acquisition body is not a known full revision")
   for (const [before, after] of [
     ['    const { endpoint } = await (deskNativeBinding ? deskNativeBinding.waitFor(bindOperation, "browser.bind") : bindOperation);', "    const { endpoint } = await bindOperation;"],
     ['this._nativeAcquisition = deskNativeAcquisition;', ""],
@@ -55,8 +80,11 @@ test("stale fully-qualified prior E3 stays unqualified and a staged write race c
   const root = await mkTempRoot("patch-prior-e3-"), lib = path.join(root, "node_modules/playwright-core/lib")
   mkdirSync(lib, { recursive: true })
   const core = path.join(lib, "coreBundle.js"), receipt = path.join(root, "playwright-patch.json"), installed = { dir: root, version: "owned", core: null }
-  writeFileSync(core, stock); apply(installed)
-  const stale = priorE3(readFileSync(core, "utf8")), data = JSON.parse(readFileSync(receipt))
+  writeFileSync(core, stock);
+  mkdirSync(path.join(lib, "tools/cli-client"), { recursive: true })
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
+  apply(installed)
+  const stale = priorE3(frozenE3(readFileSync(core, "utf8"))), data = JSON.parse(readFileSync(receipt))
   const sha = value => require("node:crypto").createHash("sha256").update(value).digest("hex")
   writeFileSync(core, stale); data.bundleSha256 = sha(stale)
   const regions = [
@@ -106,7 +134,7 @@ test("revision three guards the complete browser routing and actual relay class 
   const start = stock.indexOf("async function createBrowser(config,")
   const end = stock.indexOf("\nasync function connectToBrowserEndpoint(", start)
   assert.throws(() => patchSource(stock + "\n" + stock.slice(start, end)), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
-  assert.equal(require(patchPath).REVISION, 3)
+  assert.equal(require(patchPath).REVISION, 4)
   for (const [begin, finish] of [
     ["function createServer(", "\nfunction addServerListener("],
     ["async function createBrowser(config,", "\nasync function connectToBrowserEndpoint("],
@@ -158,6 +186,8 @@ test("one-argument apply captures its normal parent, never the facade/npm-child 
   const lib = path.join(root, "node_modules/playwright-core/lib")
   mkdirSync(lib, { recursive: true })
   writeFileSync(path.join(lib, "coreBundle.js"), stock)
+  mkdirSync(path.join(lib, "tools/cli-client"), { recursive: true })
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
   const normal = { LocalAppData: "Z:\\Redirected\\Local", ProgramFiles: "Q:\\Programs",
     "ProgramFiles(x86)": "R:\\Programs32", HOME: "/not-native-home" }
   loadTemplate(patchPath, {
@@ -170,7 +200,7 @@ test("one-argument apply captures its normal parent, never the facade/npm-child 
   })
   const installed = { dir: root, version: "owned", core: null, env: { LOCALAPPDATA: "C:\\isolated" } }
   module.exports.apply(installed)
-  assert.equal(module.exports.readRevision(installed), 3)
+  assert.equal(module.exports.readRevision(installed), 4)
   const capture = JSON.parse(readFileSync(path.join(root, "playwright-patch.json"))).nativeRuntime.discoveryInputs
   assert.deepEqual(capture, { version: 1, platform: "win32", nativeHome: "C:\\Users\\native",
     browserEnv: { LOCALAPPDATA: "Z:\\Redirected\\Local", PROGRAMFILES: "Q:\\Programs", "PROGRAMFILES(X86)": "R:\\Programs32" } })
@@ -185,13 +215,15 @@ test("private receipt and generation exposures remain unqualified without chmod 
   const root = await mkTempRoot("playwright-private-receipt-")
   mkdirSync(path.join(root, "node_modules/playwright-core/lib"), { recursive: true })
   writeFileSync(path.join(root, "node_modules/playwright-core/lib/coreBundle.js"), stock)
+  mkdirSync(path.join(root, "node_modules/playwright-core/lib/tools/cli-client"), { recursive: true })
+  writeFileSync(path.join(root, "node_modules/playwright-core/lib/tools/cli-client/session.js"), errorFixture.sessionSource)
   const installed = { dir: root, version: "owned", core: null }
   apply(installed)
   const receipt = path.join(root, "playwright-patch.json")
   chmodSync(receipt, 0o644)
   assert.equal(readRevision(installed), 0)
   chmodSync(receipt, 0o600)
-  assert.equal(readRevision(installed), 3)
+  assert.equal(readRevision(installed), 4)
   chmodSync(root, 0o755)
   assert.equal(readRevision(installed), 0)
 })
@@ -465,3 +497,72 @@ test("non-file package entries are rejected before a target file can be created"
   await assert.rejects(copyPackages(source, path.join(root, "target")), /non-file entry/i)
   assert.equal(existsSync(path.join(root, "target", "entry")), false)
 })
+
+test("all added complete Core and external Session regions refuse drift and unknown marked blocks", () => {
+  const patch = require(patchPath)
+  for (const [key, begin] of require("./fixtures/playwright-native-error-transport.cjs").regions) {
+    if (key === "session") continue
+    assert.throws(() => patchSource(stock.replace(begin, begin + "/* owned drift */")),
+      { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  }
+  const original = errorFixture.sessionSource, patched = patch.patchSessionSource(original)
+  assert.equal(patch.patchSessionSource(patched), patched)
+  assert.throws(() => patch.patchSessionSource(original.replace("let signalled = false;", "let signalled = true;")),
+    { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  const start = "    // Desk native error transport revision 4.\n", end = "    // End Desk native error transport revision 4.\n"
+  for (const changed of [
+    patched.replace(start, start + start), patched.replace(end, ""),
+    patched.replace(start, "\n" + start), patched.replace("reader.validate();", "reader.wait();"),
+    patched.replace("let signalled = false;", "let signalled = true;"),
+  ]) assert.throws(() => patch.patchSessionSource(changed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+})
+
+test("missing external Session and real Session filesystem failures refuse before copying helper or receipt", async () => {
+  const root = await mkTempRoot("patch-session-input-"), lib = path.join(root, "node_modules/playwright-core/lib")
+  mkdirSync(lib, { recursive: true }); writeFileSync(path.join(lib, "coreBundle.js"), stock)
+  const installed = { dir: root, version: "owned", core: null }, session = path.join(lib, "tools/cli-client/session.js")
+  assert.throws(() => apply(installed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  mkdirSync(session, { recursive: true })
+  assert.throws(() => apply(installed), { code: "EISDIR" })
+  assert.equal(existsSync(path.join(lib, "desk-native-error-transport.cjs")), false)
+  assert.equal(existsSync(path.join(root, "playwright-patch.json")), false)
+})
+
+test("normal apply's final qualification failure cannot report a successful candidate", async t => {
+  const fs = require("node:fs"), root = await mkTempRoot("patch-e4-final-fence-")
+  const lib = path.join(root, "node_modules/playwright-core/lib"), receipt = path.join(root, "playwright-patch.json")
+  mkdirSync(path.join(lib, "tools/cli-client"), { recursive: true })
+  writeFileSync(path.join(lib, "coreBundle.js"), stock)
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
+  const write = fs.writeFileSync
+  t.mock.method(fs, "writeFileSync", function (file, value, ...args) {
+    if (file === receipt) { const data = JSON.parse(value); data.revision = 3; value = JSON.stringify(data) }
+    return write.call(this, file, value, ...args)
+  })
+  assert.throws(() => apply({ dir: root, version: "owned", core: null }), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  assert.equal(readRevision({ dir: root, version: "owned", core: null }), 0)
+})
+
+for (const lateSession of [false, true]) {
+  test(`readRevision refuses a known old ${lateSession ? "Session" : "Core"} observed after generation verification`, async () => {
+    const fs = require("node:fs"), root = await mkTempRoot("patch-e4-late-source-")
+    const lib = path.join(root, "node_modules/playwright-core/lib")
+    const core = path.join(lib, "coreBundle.js"), session = path.join(lib, "tools/cli-client/session.js")
+    mkdirSync(path.dirname(session), { recursive: true })
+    writeFileSync(core, stock); writeFileSync(session, errorFixture.sessionSource)
+    const installed = { dir: root, version: "owned", core: null }; apply(installed)
+    const historical = lateSession ? errorFixture.sessionSource : frozenE3(readFileSync(core, "utf8"))
+    const observed = Object.create(fs), target = lateSession ? session : core
+    let changed = false
+    observed.readFileSync = function (file, ...args) {
+      if (file === target && args[0] === "utf8" && !changed) { changed = true; writeFileSync(file, historical) }
+      return fs.readFileSync(file, ...args)
+    }
+    const module = { exports: {} }
+    loadTemplate(patchPath, { module, __dirname: mcpRoot, process,
+      require: name => name === "fs" ? observed : name === "./web-extension-credential.cjs" ?
+        require(path.join(mcpRoot, name)) : require(name) })
+    assert.equal(module.exports.readRevision(installed), 0)
+    assert.equal(changed, true)
+  })
+}

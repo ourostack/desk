@@ -22,7 +22,8 @@ import '../_isolated_env.mjs';
 const require = createRequire(import.meta.url);
 const { loadTemplate } = require('./fixtures/native-template-loader.cjs');
 const patch = require(path.join(mcpRoot, 'web-playwright-patch.cjs'));
-const fixture = readFileSync(new URL('./fixtures/playwright-server-lifecycle.cjs', import.meta.url), 'utf8');
+const errorFixture = require('./fixtures/playwright-native-error-transport.cjs').read();
+const fixture = readFileSync(new URL('./fixtures/playwright-server-lifecycle.cjs', import.meta.url), 'utf8') + errorFixture.core;
 const actualCli = process.env.DESK_TEST_MAINTAINED_CLI_DIR;
 const A = '12a12345-6789-4234-8123-123456789abc';
 const B = '23b12345-6789-4234-8123-123456789abc';
@@ -82,7 +83,7 @@ async function integrated(t, options = {}) {
   if (options.sourceClone) {
     codeRoot = path.join(root, 'normal-plugin/mcp');
     for (const name of [...require(path.join(mcpRoot, 'web-extension-credential.cjs')).nativeInventory(fs.realpathSync(mcpRoot)).map(entry => entry.path),
-      'web-playwright-patch.cjs', 'web-native-relay.cjs']) {
+      'web-playwright-patch.cjs', 'web-native-relay.cjs', 'web-native-error-transport.cjs']) {
       await fsp.mkdir(path.dirname(path.join(codeRoot, name)), { recursive: true, mode: 0o755 });
       await fsp.copyFile(path.join(mcpRoot, name), path.join(codeRoot, name));
     }
@@ -91,8 +92,9 @@ async function integrated(t, options = {}) {
   const osUserInfo = os.userInfo();
   t.mock.method(os, 'userInfo', () => ({ ...osUserInfo, homedir: home }));
   await put(path.join(lib, 'coreBundle.js'), fixture);
+  await put(path.join(lib, 'tools/cli-client/session.js'), errorFixture.sessionSource);
   stagingPatch.apply({ dir: generation, version: 'owned-E-fixture', core: null });
-  assert.equal(stagingPatch.readRevision({ dir: generation, version: 'owned-E-fixture', core: null }), 3);
+  assert.equal(stagingPatch.readRevision({ dir: generation, version: 'owned-E-fixture', core: null }), patch.REVISION);
   const app = path.join(home, 'Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge');
   const browserExecutable = process.platform === 'darwin' ? app : path.join(root, 'native-browser');
   await put(browserExecutable, 'owned file-observation fixture; never executed');

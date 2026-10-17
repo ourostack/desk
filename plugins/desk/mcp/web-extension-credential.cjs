@@ -414,8 +414,8 @@ function verifyGeneration(installed, expectedRoot) {
   if (["dev", "ino", "size", "ctimeNs", "mtimeNs"].some(function (key) { return before[key] !== after[key]; }))
     throw nativeError("NATIVE_CODE_CHANGED");
   if (!receipt || Object.keys(receipt).sort().join(",") !==
-      "bundleSha256,coreVersion,credentialSha256,guardedRegionProofs,mcpVersion,nativeHelperSha256,nativeRuntime,patchSourceSha256,revision" ||
-      receipt.revision !== 3 || (installed.version !== undefined && receipt.mcpVersion !== installed.version) ||
+      "bundleSha256,coreVersion,credentialSha256,errorCodecSha256,errorRegionProofs,guardedRegionProofs,mcpVersion,nativeHelperSha256,nativeRuntime,patchSourceSha256,revision,sessionSha256" ||
+      receipt.revision !== 4 || (installed.version !== undefined && receipt.mcpVersion !== installed.version) ||
       (installed.core !== undefined && receipt.coreVersion !== installed.core)) throw nativeError("NATIVE_CODE_UNAVAILABLE");
   var runtime = receipt.nativeRuntime;
   if (runtime && !Object.prototype.hasOwnProperty.call(runtime, "discoveryInputs"))
@@ -432,6 +432,9 @@ function verifyGeneration(installed, expectedRoot) {
       digest(publicCode(runtime.mcpRoot, "web-extension-credential.cjs")) !== receipt.credentialSha256 ||
       digest(publicCode(installed.dir, "node_modules/playwright-core/lib/desk-native-relay.cjs")) !== receipt.nativeHelperSha256 ||
       digest(publicCode(runtime.mcpRoot, "web-native-relay.cjs")) !== receipt.nativeHelperSha256 ||
+      digest(publicCode(installed.dir, "node_modules/playwright-core/lib/desk-native-error-transport.cjs")) !== receipt.errorCodecSha256 ||
+      digest(publicCode(runtime.mcpRoot, "web-native-error-transport.cjs")) !== receipt.errorCodecSha256 ||
+      digest(publicCode(installed.dir, "node_modules/playwright-core/lib/tools/cli-client/session.js")) !== receipt.sessionSha256 ||
       digest(publicCode(runtime.mcpRoot, "web-playwright-patch.cjs")) !== receipt.patchSourceSha256)
     throw nativeError("NATIVE_CODE_UNAVAILABLE");
   var source = publicCode(installed.dir, "node_modules/playwright-core/lib/coreBundle.js").toString("utf8");
@@ -447,6 +450,26 @@ function verifyGeneration(installed, expectedRoot) {
     return { original: region[2], patched: digest(source.slice(start, end)) };
   });
   if (JSON.stringify(proof) !== JSON.stringify(receipt.guardedRegionProofs)) throw nativeError("NATIVE_CODE_UNAVAILABLE");
+  var errorRegions = [
+    ["var init_browserBackend = __esm({", "\n// packages/playwright-core/src/tools/backend/common.ts", "024e7dcae1350fc0c5afa4f71f1e9405081c0fcf8c5e63d980319ed6e3287c34"],
+    ["async function startCliDaemonServer(", "\nasync function saveSessionFile(", "b4b6608dc24505cc41c1ede77e96ae00426cd5ed52dc85652f0b933a399b4543"],
+    ["function decorateProgram3(program4) {", "\nfunction defaultConfigFile(", "becf9648f7de7d20e50d02350c886bffa538e8d66c7dc809874f5db0a497f638"],
+    ["function createSessionConfig(", "\nvar import_fs67, import_net10, import_path63;", "b46fb243926574fbeacb1832adc19a7910413b62d5bcda4e61e655f6c6932985"]
+  ];
+  function errorProof(text, specification) {
+    var start = text.indexOf(specification[0]), end = text.indexOf(specification[1], start);
+    if (start < 0 || end < 0 || text.indexOf(specification[0], start + specification[0].length) !== -1)
+      throw nativeError("NATIVE_CODE_UNAVAILABLE");
+    return { original: specification[2], patched: digest(text.slice(start, end)) };
+  }
+  var sessionSource = publicCode(installed.dir, "node_modules/playwright-core/lib/tools/cli-client/session.js").toString("utf8");
+  var errorProofs = { core: errorRegions.map(function (entry) { return errorProof(source, entry); }),
+    session: errorProof(sessionSource, ["  static async startDaemon(", "\n  async _stopDaemon()", "1086c0f0f2fedc452761a5870bbf93512f58a743152ffe6bbf3222d12e71331c"]) };
+  if (JSON.stringify(errorProofs) !== JSON.stringify(receipt.errorRegionProofs))
+    throw nativeError("NATIVE_CODE_UNAVAILABLE");
+  var patch = require(path.join(runtime.mcpRoot, "web-playwright-patch.cjs"));
+  if (patch.patchSource(source) !== source || patch.patchSessionSource(sessionSource) !== sessionSource)
+    throw nativeError("NATIVE_CODE_UNAVAILABLE");
   assertPrivateState(installed.dir, true);
   assertPrivateState(receiptPath, false);
   var final = fs.lstatSync(receiptPath, { bigint: true });
@@ -549,8 +572,224 @@ function getNativeBinding(record) {
   if (!binding) throw nativeError("NATIVE_CONFIG_INVALID");
   return binding;
 }
+// Error transport is descriptive only. Reuse the C projector after validating
+// descriptors/budgets, then apply a fixed field vocabulary and registered-text
+// redaction. Never inspect Error.message/stack or execute a resource getter.
+var TRANSPORT_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+var TRANSPORT_CODES = [
+  "NATIVE_ERROR_TRANSPORT_UNCONFIRMED", "NATIVE_CONFIG_INVALID", "NATIVE_SELECTION_MISMATCH",
+  "NATIVE_CODE_UNAVAILABLE", "NATIVE_CODE_CHANGED", "NATIVE_DISCOVERY_INPUTS_UNAVAILABLE",
+  "NATIVE_BROWSER_UNAVAILABLE", "NATIVE_PRIVATE_PATH_INVALID", "NATIVE_HANDSHAKE_TIMEOUT",
+  "NATIVE_ACQUISITION_UNAVAILABLE"
+];
+var RESOURCE_FIELDS = ("contextId state disposition label groupId priorGroupId tabId windowId generation " +
+  "tabs revokedTabIds revokedTabs releasedRevokedTabs unknownRevokedTabs pendingEffects unconfirmedCreates " +
+  "uncertainTabs groupingObligations effectObligations admittingTabIds debuggerObservationActive debuggerCustody " +
+  "revoked reason closedTabIds absentTabIds remainingTabIds owners native method operation pendingNativeOperation " +
+  "pendingAcquisitionOperations pendingRelayOperation relayDisposition discarded count pending released closed " +
+  "absent retained unknown redactedFields").split(" ");
+var RESOURCE_WORDS = ("unknown pending ready creating unavailable disconnected discarded retained released closed absent " +
+  "unsettled attaching attached detaching dispatch prepareUpdate cancelUpdate commitUpdate " +
+  "context.create context.resume context.status context.label context.discard profile.read extension.reload extension.reload.commit " +
+  "extension.handshake cdp.connect browser.bind browser.close " +
+  "NATIVE_EFFECT_UNSETTLED NATIVE_OWNER_UNSETTLED native_group_readback_unconfirmed native_debugger_generation_unconfirmed " +
+  "native_debugger_observation_retired native_debugger_detach_unconfirmed native_debugger_attach_unconfirmed " +
+  "native_command_effect_unconfirmed native_close_ownership_unconfirmed").split(" ");
+function transportJson(value, maxDepth) {
+  var budget = 0, seen = new Set();
+  function visit(item, depth) {
+    if (depth > maxDepth) throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    if (item === null || typeof item === "boolean") { budget += item === true ? 4 : item === false ? 5 : 4; return item; }
+    if (typeof item === "number") {
+      if (!Number.isFinite(item)) throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      budget += Buffer.byteLength(JSON.stringify(item)); return item;
+    }
+    if (typeof item === "string") {
+      var size = Buffer.byteLength(JSON.stringify(item));
+      // C's string bound must never silently truncate an obligation.
+      if (item.length > 4096) throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      budget += size; return item;
+    }
+    if (!item || typeof item !== "object" || seen.has(item))
+      throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    var array = Array.isArray(item), proto = Object.getPrototypeOf(item);
+    if (!array && proto !== null && Object.getPrototypeOf(proto) !== null)
+      throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    if (array && (!proto || !Object.getOwnPropertyDescriptor(proto, "constructor") ||
+        Object.getOwnPropertyDescriptor(proto, "constructor").value.name !== "Array"))
+      throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    seen.add(item);
+    var result = array ? [] : {}, keys = Reflect.ownKeys(item), first = true;
+    budget += 2;
+    keys.forEach(function (key) {
+      if (array && key === "length") return;
+      var descriptor = Object.getOwnPropertyDescriptor(item, key);
+      if (typeof key !== "string" || !descriptor || !descriptor.enumerable ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+          (array && !/^(0|[1-9][0-9]*)$/.test(key)))
+        throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      budget += first ? 0 : 1; first = false;
+      if (!array) budget += Buffer.byteLength(JSON.stringify(key)) + 1;
+      var copied = visit(descriptor.value, depth + 1);
+      if (budget > 4194304) throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      Object.defineProperty(result, key, { value: copied, enumerable: true, writable: true, configurable: true });
+    });
+    if (array && result.length !== keys.length - 1) throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    seen.delete(item);
+    return result;
+  }
+  return visit(value, 0);
+}
+function transportProject(client, error) {
+  function field(name) {
+    if (!error || (typeof error !== "object" && typeof error !== "function")) return undefined;
+    var descriptor = Object.getOwnPropertyDescriptor(error, name);
+    if (!descriptor) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "value"))
+      throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+    return descriptor.value;
+  }
+  var candidate = field("code");
+  var code = client.safeCode(candidate, TRANSPORT_CODES.indexOf(candidate) !== -1 ?
+    candidate : "NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+  var input = field("resources");
+  var resources = input === undefined ? null : client.safeResources(transportJson(input, 16));
+  function privacy(item, key) {
+    if (typeof item === "string") {
+      var safe = redactProtected(process, item);
+      if (key === "contextId" && TRANSPORT_UUID.test(item) && safe === item) return item;
+      if ((["state", "disposition", "reason", "method", "operation", "pendingAcquisitionOperations", "relayDisposition"].indexOf(key) !== -1) &&
+          safe === item && (RESOURCE_WORDS.indexOf(item) !== -1 || client.safeCode(item, null))) return item;
+      return "<redacted>";
+    }
+    if (!item || typeof item !== "object") return item;
+    if (Array.isArray(item)) return item.map(function (entry) { return privacy(entry, key); });
+    var out = {}, hidden = [];
+    Object.keys(item).forEach(function (name) {
+      if (["closedTabIds", "absentTabIds", "remainingTabIds", "revokedTabIds", "admittingTabIds"].indexOf(name) !== -1 &&
+          (!Array.isArray(item[name]) || item[name].some(function (id) { return !Number.isSafeInteger(id) || id < 0; })))
+        throw nativeError("NATIVE_ERROR_TRANSPORT_UNCONFIRMED");
+      if (RESOURCE_FIELDS.indexOf(name) !== -1) out[name] = privacy(item[name], name);
+      else hidden.push(privacy(item[name], ""));
+    });
+    // Unknown field names themselves can contain credentials. Preserve their
+    // numeric/boolean/array topology under one fixed marker, never their keys.
+    if (hidden.length) out.redactedFields = (out.redactedFields || []).concat(hidden);
+    return out;
+  }
+  return { code: code, message: code, resources: privacy(resources, "") };
+}
+// Existing OS-private behavior factored at its actual descriptor/protection
+// boundary. The native acquisition still performs both pathname/FD identity
+// checks around this operation; no caller-selectable protection policy.
+function protectNativeErrorLog(fd, directory, file) {
+  if (process.platform === "win32") privateGeneration(directory, file);
+  else fs.fchmodSync(fd, 384);
+}
+function nativeErrorTransportBinding(input) {
+  var file = input.kind === "file" ? input.configFile : input.config.configFile;
+  var config = input.kind === "file" ? JSON.parse(fs.readFileSync(file, "utf8")) : input.config;
+  if (!config || !Object.prototype.hasOwnProperty.call(config, "deskNativeContext")) return null;
+  var verified;
+  try { verified = verifyGeneration({ dir: path.resolve(__dirname, "../../..") }); }
+  catch (error) { throw nativeError(["NATIVE_CODE_CHANGED", "NATIVE_DISCOVERY_INPUTS_UNAVAILABLE"].indexOf(error.code) !== -1 ?
+    error.code : "NATIVE_CODE_UNAVAILABLE"); }
+  var client = require(path.join(verified.runtime.mcpRoot, "web-native-messaging.cjs"));
+  var receiptFile = path.resolve(__dirname, "../../../playwright-patch.json");
+  var receiptBytes = fs.readFileSync(receiptFile);
+  if (JSON.stringify(JSON.parse(receiptBytes)) !== JSON.stringify(verified.receipt))
+    throw nativeError("NATIVE_CODE_CHANGED");
+  var sourceGeneration = digest(receiptBytes), configIdentity, configDigest, invalid, record, route;
+  try {
+    var privateConfig = client.readPrivateJson(file);
+    configIdentity = client.fileIdentity(file);
+    configDigest = digest(JSON.stringify(privateConfig));
+    var descriptor = Object.getOwnPropertyDescriptor(config, "deskNativeContext");
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value"))
+      throw nativeError("NATIVE_CONFIG_INVALID");
+    record = transportJson(descriptor.value, 16);
+    if (JSON.stringify(privateConfig.deskNativeContext) !== JSON.stringify(record))
+      throw nativeError("NATIVE_CONFIG_INVALID");
+    client.validateNativeRecord(record);
+    var browser = config.browser || {};
+    var options = browser.launchOptions || {};
+    var channel = input.kind === "file" ? input.channel : options.channel || "chrome";
+    route = { extension: config.extension, browser: Object.assign({}, browser, { browserName: browser.browserName || "chromium" }),
+      options: { channel: channel, profileDirName: record.profileDirName, executablePath: options.executablePath } };
+    validateNativeBinding(record, route);
+    if (input.sessionName !== record.contextId) throw nativeError("NATIVE_CONFIG_INVALID");
+  } catch (error) { invalid = nativeError(client.safeCode(error.code,
+    TRANSPORT_CODES.indexOf(error.code) !== -1 ? error.code : "NATIVE_CONFIG_INVALID")); }
+  var contextId = TRANSPORT_UUID.test(input.sessionName) ? input.sessionName :
+    record && TRANSPORT_UUID.test(record.contextId) ? record.contextId : "unbound";
+  function assertBinding() {
+    if (invalid) throw invalid;
+    var current = verifyGeneration({ dir: path.resolve(__dirname, "../../..") });
+    if (current.stateIdentity !== verified.stateIdentity || digest(fs.readFileSync(receiptFile)) !== sourceGeneration ||
+        client.fileIdentity(file) !== configIdentity || digest(JSON.stringify(client.readPrivateJson(file))) !== configDigest)
+      throw nativeError("NATIVE_CODE_CHANGED");
+    var descriptor = Object.getOwnPropertyDescriptor(config, "deskNativeContext");
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+        JSON.stringify(transportJson(descriptor.value, 16)) !== JSON.stringify(record))
+      throw nativeError("NATIVE_CONFIG_INVALID");
+    validateNativeBinding(record, route);
+  }
+  return Object.freeze({ contextId: contextId, sourceGeneration: sourceGeneration,
+    project: function (error) { return transportProject(client, error); },
+    assert: assertBinding,
+    validateLaunch: function (args) {
+      assertBinding();
+      if (args.cdp || args.endpoint) throw nativeError("NATIVE_CONFIG_INVALID");
+      if ((args.profile && path.resolve(args.profile) !== record.userDataDir) ||
+          (args.browser && args.browser !== record.channel)) throw nativeError("NATIVE_SELECTION_MISMATCH");
+    },
+    openErrorLog: function (clientInfo) {
+      assertBinding();
+      var directory = path.resolve(clientInfo.daemonProfilesDir);
+      var anchor = path.dirname(path.dirname(path.resolve(file)));
+      var relative = path.relative(anchor, directory);
+      if (relative === ".." || relative.indexOf(".." + path.sep) === 0 || path.isAbsolute(relative))
+        throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+      client.privatePath(anchor, true, true);
+      var current = anchor;
+      relative.split(path.sep).filter(Boolean).forEach(function (part) {
+        current = path.join(current, part);
+        try { fs.lstatSync(current); }
+        catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          fs.mkdirSync(current, { mode: 448 });
+          privateGeneration(current);
+        }
+        client.privatePath(current, true, false);
+      });
+      client.privatePath(directory, true, true);
+      var log = path.join(directory, contextId + ".err"), fd;
+      if (fs.existsSync(log)) { client.privatePath(log, false, true); throw nativeError("NATIVE_PRIVATE_PATH_INVALID"); }
+      try {
+        fd = fs.openSync(log, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0), 384);
+        var own = fs.fstatSync(fd, { bigint: true });
+        client.privatePath(log, false, false);
+        var named = fs.lstatSync(log, { bigint: true });
+        if (own.dev !== named.dev || own.ino !== named.ino) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+        protectNativeErrorLog(fd, directory, log);
+        client.privatePath(log, false, true);
+        named = fs.lstatSync(log, { bigint: true });
+        if (own.dev !== named.dev || own.ino !== named.ino) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+        return fd;
+      } catch (error) { if (fd !== undefined) fs.closeSync(fd); throw error; }
+    }
+  });
+}
+// The decoder has no config/custody authority. This fixed source-only property
+// shares the identical projection and descriptor checks without a fake binding.
+nativeErrorTransportBinding.json = function (value) { return transportJson(value, 20); };
+nativeErrorTransportBinding.project = function (error) {
+  var verified = verifyGeneration({ dir: path.resolve(__dirname, "../../..") });
+  return transportProject(require(path.join(verified.runtime.mcpRoot, "web-native-messaging.cjs")), error);
+};
 module.exports = { BINDING_KEY: BINDING_KEY, EXTENSION_ID: EXTENSION_ID, initialize: initialize, protect: protect,
   redactProtected: redactProtected, flushProtection: flushProtection, readExtensionToken: readExtensionToken,
   nativeInventory: nativeInventory, publicCode: publicCode, privateGeneration: privateGeneration,
   captureNativeDiscoveryInputs: captureNativeDiscoveryInputs, verifyGeneration: verifyGeneration,
-  validateNativeBinding: validateNativeBinding, getNativeBinding: getNativeBinding };
+  validateNativeBinding: validateNativeBinding, getNativeBinding: getNativeBinding,
+  nativeErrorTransportBinding: nativeErrorTransportBinding };

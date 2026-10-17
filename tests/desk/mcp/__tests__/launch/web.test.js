@@ -19,7 +19,8 @@ import { openSession } from "./_mcp_session.js"
 const require = createRequire(import.meta.url)
 const browserPath = path.join(mcpRoot, "web.cjs")
 const browser = require(browserPath)
-const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
+const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
 
@@ -210,6 +211,8 @@ function main() {
     fs.mkdirSync(path.join(modules, "playwright-core", "lib"), { recursive: true })
     const lifecycle = ${JSON.stringify(stockLifecycle)}
     fs.writeFileSync(path.join(modules, "playwright-core", "lib", "coreBundle.js"), mode === "badlifecycle" ? lifecycle.replace("let backendPromise;", "let backendPromise = factory.promise;") : lifecycle)
+    fs.mkdirSync(path.join(modules, "playwright-core", "lib", "tools", "cli-client"), { recursive: true })
+    fs.writeFileSync(path.join(modules, "playwright-core", "lib", "tools", "cli-client", "session.js"), ${JSON.stringify(errorFixture.sessionSource)})
   }
 }
 setTimeout(main, Number(process.env.FAKE_NPM_DELAY_MS || 0))
@@ -257,6 +260,7 @@ function preinstall(state, version = "0.0.81", id = "installs/1-1-a", cli = "pro
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), cli)
   touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+  touch(path.join(modules, "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
   if (patched) playwrightPatch.apply({ dir: path.join(state, id), version, core: null })
   touch(path.join(state, "current.json"), JSON.stringify({ version, dir: id, previous: null }))
   return path.join(modules, "@playwright", "mcp", "cli.js")
@@ -861,6 +865,9 @@ test("a revision-one generation migrates offline without changing its live bundl
   const old = stockLifecycle.replace(stockLifecycle.slice(stockLifecycle.indexOf(start), stockLifecycle.indexOf(end)),
     current.slice(current.indexOf(start), current.indexOf(end)))
   writeFileSync(bundle, old)
+  // Revision one predates the external Session transport as well. Pairing its
+  // Core with a revision-four Session would be an unsupported partial input.
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
   writeFileSync(path.join(lib, "desk-extension-credential.cjs"), "old generation helper")
   touch(path.join(dir, "playwright-patch.json"), JSON.stringify({
     revision: 1, mcpVersion: "0.0.81", coreVersion: null,
@@ -1756,7 +1763,7 @@ async function fixturePlugin(prefix) {
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
   const nativeClosure = require(path.join(mcpRoot, "web-extension-credential.cjs")).nativeInventory(realpathSync(mcpRoot)).map(entry => entry.path)
-  for (const file of new Set(["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-native-relay.cjs", "web-catalog.json", ...nativeClosure])) {
+  for (const file of new Set(["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-native-relay.cjs", "web-native-error-transport.cjs", "web-catalog.json", ...nativeClosure])) {
     mkdirSync(path.dirname(path.join(plugin, "mcp", file)), { recursive: true })
     copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
   }

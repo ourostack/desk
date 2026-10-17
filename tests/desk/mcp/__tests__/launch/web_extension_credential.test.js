@@ -13,7 +13,8 @@ const require = createRequire(import.meta.url)
 const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
 const patch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const sourceCredential = require(path.join(mcpRoot, "web-extension-credential.cjs"))
-const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
+const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const bindingKey = "DESK_BROWSER_PROFILE_DIR"
 
 function templateCredential(overrides = {}, directory = mcpRoot, proc = process, timers = {}) {
@@ -149,7 +150,7 @@ test("Windows private-generation and receipt verdicts use the genuine SID/DACL c
   const helper = templateCredential({ child_process: child }, lib, proc)
   helper.privateGeneration(installed.dir)
   helper.privateGeneration(installed.dir, path.join(installed.dir, "playwright-patch.json"))
-  assert.equal(helper.verifyGeneration(installed, mcpRoot).receipt.revision, 3)
+  assert.equal(helper.verifyGeneration(installed, mcpRoot).receipt.revision, patch.REVISION)
   verdict = "exposed"
   assert.throws(() => helper.verifyGeneration(installed, mcpRoot), { code: "NATIVE_PRIVATE_PATH_INVALID" })
   for (const env of [{}, { SYSTEMROOT: "relative" }]) {
@@ -223,7 +224,7 @@ test("private receipt refuses schema/capture/proof changes and observed identity
     assert.throws(() => templateCredential({ fs: observed }, lib).verifyGeneration(installed),
       { code: mutation === "lib" ? "NATIVE_CODE_UNAVAILABLE" : "NATIVE_CODE_CHANGED" })
   }
-  assert.equal(sourceCredential.verifyGeneration(installed, mcpRoot).receipt.revision, 3)
+  assert.equal(sourceCredential.verifyGeneration(installed, mcpRoot).receipt.revision, patch.REVISION)
 })
 
 test("native binding uses a strict presence gate before loading a client/helper", () => {
@@ -250,9 +251,9 @@ test("partial revision-three stock initializer deletion is rejected, never silen
   assert.throws(() => patch.patchSource(partial), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
 })
 
-test("real staged revision three binds the exact normal root closure and source changes invalidate it", async () => {
+test("real staged current revision binds the exact normal root closure and source changes invalidate it", async () => {
   const { installed, lib } = await staged()
-  assert.equal(patch.readRevision(installed), 3)
+  assert.equal(patch.readRevision(installed), patch.REVISION)
   const receipt = JSON.parse(readFileSync(path.join(installed.dir, "playwright-patch.json")))
   assert.equal(receipt.nativeRuntime.mcpRoot, realpathSync(mcpRoot))
   assert.equal(receipt.nativeRuntime.modules.length, 10)
@@ -567,6 +568,8 @@ async function staged() {
   const lib = path.join(root, "node_modules", "playwright-core", "lib")
   mkdirSync(lib, { recursive: true })
   writeFileSync(path.join(lib, "coreBundle.js"), stock)
+  mkdirSync(path.join(lib, "tools/cli-client"), { recursive: true })
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
   patch.apply(installed)
   const file = path.join(lib, "desk-extension-credential.cjs")
   assert.equal(existsSync(file), true, "verified generation must contain its credential reader")

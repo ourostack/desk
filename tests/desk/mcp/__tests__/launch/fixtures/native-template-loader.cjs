@@ -13,8 +13,10 @@ const root = path.resolve(__dirname, "../../../../../../plugins/desk/mcp");
 const names = {
   "desk-extension-credential.cjs": "web-extension-credential.cjs",
   "desk-native-relay.cjs": "web-native-relay.cjs",
+  "desk-native-error-transport.cjs": "web-native-error-transport.cjs",
   "web-extension-credential.cjs": "web-extension-credential.cjs",
   "web-native-relay.cjs": "web-native-relay.cjs",
+  "web-native-error-transport.cjs": "web-native-error-transport.cjs",
   "web-playwright-patch.cjs": "web-playwright-patch.cjs",
 };
 
