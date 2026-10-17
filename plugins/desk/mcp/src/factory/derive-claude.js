@@ -248,6 +248,15 @@ function isHumanPromptLine(line) {
   return hasTextOrImage && !isAllToolResult
 }
 
+// Child resumes are marked meta and are not human attention. Their native
+// coordinator/completion inputs still delimit execution, unlike injections.
+function isChildResumeLine(line) {
+  if (line.isCompactSummary || line.promptSource === "system") return false
+  if (line.origin?.kind !== "coordinator" && line.origin?.kind !== "task-notification") return false
+  const { hasTextOrImage, isAllToolResult } = classifyUserContent(line.message?.content)
+  return hasTextOrImage && !isAllToolResult
+}
+
 // A root line that starts a human turn: it passes `isHumanPromptLine` and carries every positive mark of a human prompt, `origin.kind` must be exactly "human": the interrupt marker and a headless prompt carry no origin and are not turns.
 function isHumanTurnLine(line) {
   if (line.isSidechain === true || line.isMeta === true) return false
@@ -382,6 +391,8 @@ function createAgentProcessor({ agentIndex }) {
 
   let currentPromptStart = null
   let lastActivityTs = null
+  let childStopped = false
+  let turnBoundaryUndated = false
 
   let earliestTimestamp = null
   let latestTimestamp = null
@@ -460,6 +471,8 @@ function createAgentProcessor({ agentIndex }) {
 
     const message = line.message
     if (!message) return
+
+    if (agentIndex !== 0 && !line.isApiErrorMessage && message.model !== SYNTHETIC_MODEL) childStopped = STOP_REASON_END.has(message.stop_reason)
 
     if (line.isApiErrorMessage) {
       closePendingApiRetries(ts)
@@ -576,12 +589,20 @@ function createAgentProcessor({ agentIndex }) {
   }
 
   function handleUserLine(line, ts) {
+    const childInput = agentIndex !== 0 && isChildResumeLine(line)
+    // A delivered message is not evidence that an unfinished response or
+    // pending tool stopped. Only a confirmed stopped child starts afresh.
+    const childResume = childInput && (currentPromptStart === null || (childStopped && pendingCalls.size === 0))
     if (!firstPromptSeen && isHumanPromptLine(line)) {
       firstPromptSeen = true
       firstPromptTask = parseDeskTaskLine(promptText(line.message?.content))
     }
     for (const block of toolResultBlocksOf(line)) {
       if (typeof block.tool_use_id === "string") finalizeToolResult(block, line.toolUseResult, ts)
+    }
+    if (agentIndex !== 0 && ts !== null && isToolResultLine(line)) {
+      lastActivityTs = ts
+      childStopped = false
     }
 
     if (humanTurns !== null && line.isSidechain !== true && isHumanPromptLine(line)) {
@@ -591,9 +612,18 @@ function createAgentProcessor({ agentIndex }) {
     }
     if (ts === null) {
       if (humanTurns !== null && isHumanTurnLine(line)) humanTurnUndated = true
+      if (childInput) {
+        turnBoundaryUndated = true
+        if (childResume && currentPromptStart !== null) {
+          intervals.push({ kind: "turn", agent: agentIndex, start: currentPromptStart, end: lastActivityTs ?? currentPromptStart })
+          currentPromptStart = null
+          lastActivityTs = null
+          childStopped = false
+        }
+      }
       return
     }
-    if (isHumanPromptLine(line)) {
+    if (isHumanPromptLine(line) || childResume) {
       const marker = isInterruptMarker(line.message?.content)
       if (currentPromptStart !== null) {
         const end = lastActivityTs ?? currentPromptStart
@@ -610,6 +640,7 @@ function createAgentProcessor({ agentIndex }) {
       }
       currentPromptStart = ts
       lastActivityTs = null
+      childStopped = false
       stopEnd = null
       stopAsks = null
       stopPending = null
@@ -693,6 +724,7 @@ function createAgentProcessor({ agentIndex }) {
         entrypoint: mapEntrypoint(firstEntrypointRaw),
         humanTurns,
         humanTurnUndated,
+        turnBoundaryUndated,
         // Prompt-like lines exist but none carries an `origin` key (an older host): who typed them cannot be told.
         humanTurnsAbsent: promptLikeSeen && !originSeen,
         // Some prompt lines say who wrote them and some that should do not: the list is a lower bound.
@@ -764,6 +796,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   const spawnIds = [null]
 
   let truncatedAny = rootRead.truncated
+  let turnBoundaryUndatedAny = rootResult.turnBoundaryUndated
   let totalParseFailures = rootRead.parseFailures
   let hadUnresolvedAny = rootResult.hadUnresolvedCall
   let invalidModelSeen = rootResult.invalidModelSeen
@@ -780,6 +813,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     const result = processor.finish()
 
     truncatedAny = truncatedAny || read.truncated
+    turnBoundaryUndatedAny = turnBoundaryUndatedAny || result.turnBoundaryUndated
     totalParseFailures += read.parseFailures
     hadUnresolvedAny = hadUnresolvedAny || result.hadUnresolvedCall
     invalidModelSeen = invalidModelSeen || result.invalidModelSeen
@@ -863,6 +897,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")
   addUnavailable(unavailable, "commits", "host_does_not_record")
   if (truncatedAny) addUnavailable(unavailable, "turns", "log_truncated")
+  if (turnBoundaryUndatedAny) addUnavailable(unavailable, "turns", "source_unreadable")
   const humanTurnList = rootResult.humanTurns.finish(unavailable)
   if (rootResult.humanTurnsAbsent) addUnavailable(unavailable, "human_turns", "field_absent")
   if (rootResult.humanTurnUndated) addUnavailable(unavailable, "human_turns", "source_unreadable")

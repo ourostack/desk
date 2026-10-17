@@ -39,13 +39,14 @@ async function sourceStamp(file) {
  * between two different cards no longer joins them, a focus on a merged task follows the merge, and `segments_capped_ms` also counts time the
  * cap hands to another task, so an older receipt's credit, and its `segments_capped_ms: 0`, is not this binder's. 7: the derivers record
  * each human wait's stop facts, the ask-tool waits and whether the session created each PR (published facts /4), so every ended session
- * still on disk is derived once more to carry them.
+ * still on disk is derived once more to carry them. 8: Claude child coordinator/completion inputs delimit separate execution turns rather
+ * than crediting the stopped gap between them as work. Existing ended transcripts replay through the ordinary sweep.
  */
-export const BINDING_VERSION = 7
+export const BINDING_VERSION = 8
 
 /**
  * The last re-derive version that changed what binding credits (see `BINDING_VERSION` 6). A receipt at or above it says how this binder bound
- * the session, so `reconcile` reads its binding and measures as current and capture coverage counts its orphan as derived. Version 7 changed
+ * the session, so `reconcile` reads its binding and measures as current and capture coverage counts its orphan as derived. Versions 7 and 8 changed
  * the facts, not the binding, so a session whose transcript is gone before it re-derives is not stale. Never above `BINDING_VERSION`.
  */
 export const BINDING_RULES_VERSION = 6
