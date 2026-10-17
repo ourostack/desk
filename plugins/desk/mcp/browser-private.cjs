@@ -173,8 +173,9 @@ function run(argv, options) {
     }
     checkOwned(configFile, false);
     // A short real directory, not a symlink or global Playwright override. Windows
-    // keeps upstream's named pipes. A marker binds hash collisions to the exact owner.
-    var shortBase = o.socketRoot || (process.platform === "win32" ? root : "/tmp");
+    // keeps upstream's named pipes and avoids nesting temporary browser profiles
+    // under the deep context path. A marker binds collisions to the exact owner.
+    var shortBase = o.socketRoot || (process.platform === "win32" ? os.tmpdir() : "/tmp");
     var socketDir = path.join(shortBase, "dp-" + (process.getuid ? process.getuid() : "win") + "-" + crypto.createHash("sha256").update(owner).digest("hex").slice(0, 16));
     resources.socketDirectory = socketDir;
     if (creating) fs.mkdirSync(socketDir, { mode: 448 });

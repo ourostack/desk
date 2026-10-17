@@ -4,6 +4,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
+import os from "node:os"
 import { createRequire } from "node:module"
 import childProcess, { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -385,10 +386,27 @@ test("default browser existence checks remain private and cover native Windows n
   try {
     Object.defineProperty(process, "platform", { configurable: true, value: "win32" })
     Object.defineProperty(process, "getuid", { configurable: true, value: undefined })
-    const result = await f.invoke(["create"], { socketRoot: undefined, execute: async () => ({ state: "running" }) })
+    let environment
+    const execute = async (_node, _args, options) => {
+      environment = options.env
+      return { state: "running" }
+    }
+    const result = await f.invoke(["create"], { socketRoot: undefined, execute })
     assert.equal(result.exitCode, 0)
-    assert.ok(result.payload.resources.socketDirectory.startsWith(result.payload.resources.contextDirectory))
-    assert.match(result.payload.resources.socketDirectory, /dp-win-/)
+    const directory = result.payload.resources.socketDirectory
+    console.log("RESOURCE native Windows temp namespace " + directory)
+    t.after(() => removeTree(directory))
+    assert.equal(path.dirname(directory), os.tmpdir(), "browser profiles must not inherit the deep context path")
+    assert.match(path.basename(directory), /^dp-win-[0-9a-f]{16}$/)
+    assert.equal(fs.lstatSync(directory).isSymbolicLink(), false)
+    assert.deepEqual([environment.TMPDIR, environment.TMP, environment.TEMP], [directory, directory, directory])
+    assert.equal(environment.LOCALAPPDATA, path.join(result.payload.resources.contextDirectory, "local"))
+    const owner = JSON.parse(fs.readFileSync(path.join(directory, ".desk-private-owner")))
+    assert.equal(owner.contextId, result.payload.contextId)
+    assert.equal(owner.directory, result.payload.resources.contextDirectory)
+    const kept = await f.invoke(["keep", result.payload.contextId], { socketRoot: undefined, execute })
+    assert.equal(kept.exitCode, 0)
+    assert.equal(kept.payload.resources.socketDirectory, directory)
   } finally {
     Object.defineProperty(process, "platform", platform)
     if (uid) Object.defineProperty(process, "getuid", uid)
