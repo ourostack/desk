@@ -11,7 +11,7 @@ import { mkTempRoot } from "../_temp_roots.js";
 import { mcpRoot } from "./_mcp_handshake.js";
 
 const require = createRequire(import.meta.url);
-const { read } = require("./fixtures/playwright-native-error-transport.cjs");
+const { read, cliDirectory } = require("./fixtures/playwright-native-error-transport.cjs");
 const A = "11111111-1111-4111-8111-111111111111";
 const resources = { contextId: A, disposition: "unknown", closedTabIds: [7],
   remainingTabIds: [8], unknownRevokedTabs: [{ tabId: 9, windowId: 2 }] };
@@ -259,7 +259,7 @@ test("actual transformed backend retains primary C errors before text conversion
       const daemon = source.slice(daemonStart, source.indexOf("\nasync function saveSessionFile(", daemonStart));
       const metadataStart = source.indexOf("function createSessionConfig(");
       const metadata = source.slice(metadataStart, source.indexOf("\nvar import_fs67, import_net10, import_path63;", metadataStart));
-      const { SocketConnection } = require(path.resolve(process.env.DESK_TEST_MAINTAINED_CLI_DIR, "../utils/socketConnection.js"));
+      const { SocketConnection } = require(path.resolve(cliDirectory(), "../utils/socketConnection.js"));
       const server = new EventEmitter(), sockets = [], wire = [];
       let accept, published;
       server.listen = (_path, callback) => options.listenError ? server.emit("error", options.listenError) : callback();
@@ -1235,7 +1235,7 @@ function maintainedConfigInterface(f, boundary = f.observedFs) {
     "\ninit_configIni(); ({ tools: tools_exports, loadConfig })", {
       import_fs65: { default: boundary },
       require: name => name === "fs" ? boundary :
-        require(path.resolve(process.env.DESK_TEST_MAINTAINED_CLI_DIR, "../../utilsBundle.js")),
+        require(path.resolve(cliDirectory(), "../../utilsBundle.js")),
       __esm: object => () => Object.values(object)[0](),
       __toESM: value => ({ default: value }),
       __export: (target, entries) => {

@@ -1,8 +1,8 @@
 "use strict";
 // SPDX-License-Identifier: Apache-2.0
 // Microsoft Playwright 1.64.0-alpha-1790635538000, supplied maintained library.
-// LICENSE.playwright.txt beside this fixture applies. Read only the explicitly
-// supplied public runtime input, never unpublished Git objects or a live profile.
+// LICENSE.playwright.txt beside this fixture applies. Read the locked public
+// test input or an explicitly admitted runtime input, never a live profile.
 // Complete bounded regions are independently pinned to the reviewed contract.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -18,12 +18,27 @@ const regions = [
   ["configIni", "function configFromIniFile(filePath) {", "\n// packages/playwright-core/src/tools/mcp/config.ts", "4deca6f390b3931fee8cc57ed3076ed384a0f4f1e33a3077c6b749d50d0d41fa"],
   ["toolsExports", "var tools_exports = {};", "\nvar init_tools2 = __esm({", "bbbe1a73e260c1bd94c759018d09cbf8823684f4718c3e34ec3f0445d0c0c202"],
 ];
-function read() {
-  const cli = process.env.DESK_TEST_MAINTAINED_CLI_DIR;
-  assert.ok(cli, "requires the admitted public maintained CLI input");
+function cliDirectory(env = process.env) {
+  const supplied = env.DESK_TEST_MAINTAINED_CLI_DIR;
+  const cli = supplied === undefined ? path.join(__dirname, "maintained-playwright/node_modules/playwright-core/lib/tools/cli-client") : supplied;
+  assert.ok(typeof cli === "string" && cli.length > 0, "requires an admitted maintained CLI input");
+  if (supplied === undefined) {
+    assert.ok(fs.existsSync(path.join(cli, "session.js")),
+      "Install the maintained input: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright");
+  }
+  return cli;
+}
+function read(env = process.env) {
+  const cli = cliDirectory(env);
   const core = fs.readFileSync(path.resolve(cli, "../../coreBundle.js"), "utf8");
+  const coreSha256 = crypto.createHash("sha256").update(core).digest("hex");
+  // Pristine npm input and the qualified predecessor's credential/cold-close patch.
+  assert.ok([
+    "cd6730be1bbcff00771a0fc1390f200306d28428ce68e305420ca623cb39cdeb",
+    "df9b76136c1de7fd36a8060765737434e99ab5d0800c703517205705a5f9d924",
+  ].includes(coreSha256), "exact admitted full maintained source");
   const sessionFile = path.join(cli, "session.js");
-  const session = fs.readFileSync(sessionFile, "utf8"), out = { sessionFile, sessionSource: session };
+  const session = fs.readFileSync(sessionFile, "utf8"), out = { sessionFile, sessionSource: session, coreSha256 };
   for (const [key, begin, finish, hash] of regions) {
     const source = key === "session" ? session : core;
     const start = source.indexOf(begin), end = source.indexOf(finish, start);
@@ -45,4 +60,4 @@ function read() {
     out.toolsExports + "\nvar init_tools2 = __esm({});\n}\n";
   return out;
 }
-module.exports = { read, regions };
+module.exports = { read, regions, cliDirectory };

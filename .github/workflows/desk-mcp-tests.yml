@@ -171,6 +171,9 @@ jobs:
           npm ci
           npm ci --prefix ../browser-context-broker
 
+      - name: Install locked maintained browser test input
+        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
+
       - name: Run desk MCP coverage shard
         working-directory: plugins/desk/mcp
         env:

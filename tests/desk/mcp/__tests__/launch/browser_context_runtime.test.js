@@ -34,7 +34,7 @@ test("actual maintained daemon options can reach native acquisition using the st
     fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700})
     fs.writeFileSync(file,typeof value === "string" ? value : JSON.stringify(value),{mode:0o600})
   }
-  const actualCli = process.env.DESK_TEST_MAINTAINED_CLI_DIR
+  const actualCli = require("./fixtures/playwright-native-error-transport.cjs").cliDirectory()
   assert.ok(actualCli,"requires admitted maintained source")
   const input = require("./fixtures/playwright-native-error-transport.cjs").read()
   const lib = path.join(root,"generation/node_modules/playwright-core/lib")
@@ -101,7 +101,7 @@ test("actual maintained daemon options can reach native acquisition using the st
   async function signedWorkerFixture(t, options = {}) {
     const root = await mkTempRoot("desk-F-signed-worker-")
     t.after(()=>removeTree(root))
-    const actualCli = process.env.DESK_TEST_MAINTAINED_CLI_DIR
+    const actualCli = require("./fixtures/playwright-native-error-transport.cjs").cliDirectory()
     assert.ok(actualCli,"requires the admitted actual maintained library")
     const input = require("./fixtures/playwright-native-error-transport.cjs").read()
     const home = path.join(root,"native-home"), user = os.userInfo()

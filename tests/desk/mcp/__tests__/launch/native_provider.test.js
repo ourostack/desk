@@ -21,7 +21,7 @@ const require = createRequire(import.meta.url);
 const rootUrl = new URL('../../../../../plugins/desk/mcp/', import.meta.url);
 const A = '11111111-1111-4111-8111-111111111111', B = '22222222-2222-4222-8222-222222222222';
 const TOKEN = 'a'.repeat(64), SOURCE = 'b'.repeat(64), EXTENSION = 'c'.repeat(32);
-const actualCli = process.env.DESK_TEST_MAINTAINED_CLI_DIR;
+const actualCli = require('./fixtures/playwright-native-error-transport.cjs').cliDirectory();
 const roots = [], shortRoots = [], servers = new Set();
 const trackedServers = new Set(), trackedTests = new WeakSet();
 const chain = [

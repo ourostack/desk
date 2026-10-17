@@ -29,10 +29,10 @@ async function profileFixture(t, profile = "Profile 17") {
     fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value), { mode: 0o600 });
   };
   const input = require("./fixtures/playwright-native-error-transport.cjs").read();
-  const cli = process.env.DESK_TEST_MAINTAINED_CLI_DIR;
+  const cli = path.dirname(input.sessionFile);
   const original = fs.readFileSync(path.resolve(cli, "../../coreBundle.js"), "utf8");
   assert.equal(createHash("sha256").update(original).digest("hex"),
-    "df9b76136c1de7fd36a8060765737434e99ab5d0800c703517205705a5f9d924",
+    input.coreSha256,
     "bounded extraction is from the exact admitted full maintained source");
   const installed = { dir: path.join(root, "generation"), version: "owned-E-profile", core: null };
   const lib = path.join(installed.dir, "node_modules/playwright-core/lib");
