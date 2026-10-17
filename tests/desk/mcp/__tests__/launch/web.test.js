@@ -1188,7 +1188,7 @@ test("the Claude and Copilot configs declare the web server beside Desk, never a
 
 test("the inline launcher's degraded tool names, the degraded catalog and the first-use catalog all list the browser's tools in one order", () => {
   const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
-  const declarations=claude.args[1].split("\n").filter(line=>/^var (id|tools)=/.test(line)).join("\n")
+  const declarations=claude.args[1].split("\n").filter(line=>/^var (id|tools)=/.test(line)||/^function described\(/.test(line)).join("\n")
   const inline=new Function(declarations+";return tools")()
   assert.deepEqual(inline.map(tool=>tool.name), browser.BROWSER_TOOL_NAMES)
   const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8")).tools
