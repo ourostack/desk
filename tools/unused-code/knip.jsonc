@@ -88,6 +88,12 @@
         // The private shell entry and its fresh compatible child are started by path.
         "browser-private.cjs",
         "private-browser-runtime.cjs",
+        // Explicit context shell/worker and selected-Node frontend are path launches.
+        "browser-context.cjs",
+        "browser-context-runtime.cjs",
+        "browser-context-mcp.cjs",
+        // prepareRuntime's existing src mirror imports this exact browser-only entry.
+        "src/browser/context-mcp.js",
         // The native Go entry selects this module by its verified absolute path.
         "native-host.mjs",
         // Exact helper copied into Core/lib and entered by guarded Core source.

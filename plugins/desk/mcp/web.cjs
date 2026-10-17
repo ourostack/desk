@@ -46,13 +46,7 @@ var DEFAULT_PROTOCOL = "2025-06-18";
 // looks like the real server's. Desk tracks @playwright/mcp@latest with no pinned version (see PACKAGE above), so
 // this list can drift from a future release's; that is harmless, because every tools/call below answers with the
 // same degraded payload whatever name it is asked for.
-var BROWSER_TOOL_NAMES = [
-  "browser_click", "browser_close", "browser_console_messages", "browser_drag", "browser_drop",
-  "browser_emulate_media", "browser_evaluate", "browser_file_upload", "browser_fill_form", "browser_find",
-  "browser_handle_dialog", "browser_hover", "browser_navigate", "browser_navigate_back", "browser_network_request",
-  "browser_network_requests", "browser_press_key", "browser_resize", "browser_run_code_unsafe", "browser_select_option",
-  "browser_snapshot", "browser_tabs", "browser_take_screenshot", "browser_type", "browser_wait_for"
-];
+var BROWSER_TOOL_NAMES = ["browser_context", "browser_command"];
 // npm without retries and with a short fetch timeout: an unreachable registry fails in seconds, not minutes.
 var NPM_ENV = {
   npm_config_fetch_retries: "0",
@@ -604,13 +598,7 @@ function degraded(code, summary, fix) {
 }
 
 function placeholderTools() {
-  return BROWSER_TOOL_NAMES.map(function (name) {
-    return {
-      name: name,
-      description: "Unavailable: the browser could not start. Call this tool for the code and the fix.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: true }
-    };
-  });
+  return require("./web-catalog.json").tools;
 }
 
 function respond(stdout, id, body) {
@@ -899,15 +887,7 @@ function start(o, io) {
 // Never throws or rejects: anything that goes wrong is degraded:launch_failed over the handshake above, which the
 // host reports as a connected but degraded server, never a failed one. Every option defaults to the real process.
 function run(o) {
-  var io = { stderr: either(o.stderr, process.stderr), stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), exit: either(o.exit, process.exit) };
-  function failed(error) {
-    return fail(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin"));
-  }
-  try {
-    return start(o, io).then(null, failed);
-  } catch (error) {
-    return failed(error);
-  }
+  return require("./browser-context-mcp.cjs").run(o);
 }
 
 module.exports = {
