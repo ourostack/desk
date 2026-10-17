@@ -62,7 +62,10 @@ test("old-Node missing-root inline launcher preserves the exact two healthy sche
   const declaration = JSON.parse(fs.readFileSync(path.join(mcpRoot,"../.mcp.json"))).mcpServers["desk-web"]
   const stdin = new PassThrough()
   let stdout = ""
+  const oldObject = vm.runInNewContext("Object")
+  delete oldObject.assign
   vm.runInNewContext(declaration.args[1],{
+    Object:oldObject,
     require(name) {
       if (name === "fs") return {existsSync:()=>false}
       if (name === "path") return path
