@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.332 — 2026-10-17
+
+### Fixed
+
+- Factory capture keeps resumed Claude workers' execution periods separate when the host marks coordinator messages or completion notifications as meta inputs. Stopped gaps no longer become continuous work, and those inputs do not become human attention. The ordinary sweep re-derives available historical transcripts automatically.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.331 — 2026-10-17
 
 Desk adds an explicit [agent-owned private browser CLI](skills/cdp-headed-browser/SKILL.md#agent-owned-private-browser-contexts): create a fresh in-memory context, keep or resume its live page across shell clients, run page commands, and discard only that context. It shares the verified browser installer, isolates home/configuration/session and short socket paths, rejects session/profile/connection overrides, and reports failed startup or unconfirmed cleanup rather than silently recreating a browser. The existing signed-in `desk-web` route is unchanged.
