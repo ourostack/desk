@@ -151,7 +151,7 @@ test("stale fully-qualified prior E3 stays unqualified and a staged write race c
   assert.throws(() => module.exports.apply(installed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
   const failure = new Error("owned ACL inspection process terminated without a code"), credentialModule = { exports: {} }
   loadTemplate(path.join(mcpRoot, "web-extension-credential.cjs"), {
-    module: credentialModule, __dirname: lib, process, Buffer, setTimeout, clearTimeout,
+    module: credentialModule, __dirname: lib, process: { platform: "win32", env: { SystemRoot: "C:\\Windows" } }, Buffer, setTimeout, clearTimeout,
     require(name) { return name === "child_process" ? { execFileSync() { throw failure } } : require(name) },
   })
   const failedRead = { exports: {} }

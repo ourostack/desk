@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { runInNewContext } from "node:vm"
 import { mcpRoot } from "./_mcp_handshake.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { different } from "../_file_identity.js"
 
 const require = createRequire(import.meta.url)
 const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
@@ -127,7 +128,7 @@ test("public code rejects noncanonical roots, invalid relative paths, size and i
       if (name === file && options?.bigint) {
         calls++
         if (mutation === "size") return { ...stat, size: 4194305n }
-        if (calls === 2) return { ...stat, ino: stat.ino + 1n }
+        if (calls === 2) return { ...stat, ino: different(stat.ino) }
       }
       return stat
     }
@@ -161,11 +162,19 @@ test("Windows private-generation and receipt verdicts use the genuine SID/DACL c
   assert.deepEqual(executions[0], [installed.dir])
   assert.equal(executions[1].length, 2)
   assert.throws(() => helper.privateGeneration(path.join(lib, "coreBundle.js")), { code: "NATIVE_PRIVATE_PATH_INVALID" })
-  const wrongOwner = templateCredential({}, lib, { ...process, getuid: () => fs.lstatSync(installed.dir).uid + 1 })
+  const posixFs = Object.create(fs)
+  posixFs.lstatSync = (...args) => {
+    const stat = fs.lstatSync(...args), permissions = stat.isDirectory() ? 0o700 : 0o600
+    const mode = typeof stat.mode === "bigint" ? (stat.mode & ~0o777n) | BigInt(permissions) : (stat.mode & ~0o777) | permissions
+    return Object.assign(Object.create(stat), { mode })
+  }
+  const wrongOwner = templateCredential({ fs: posixFs }, lib, { ...process, platform: "linux", getuid: () => fs.lstatSync(installed.dir).uid + 1 })
   assert.throws(() => wrongOwner.privateGeneration(installed.dir), { code: "NATIVE_PRIVATE_PATH_INVALID" })
   assert.throws(() => wrongOwner.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
-  const macACL = templateCredential({ child_process: { execFileSync() { return " 0: user:other allow read" } } }, lib)
+  let macChecks = 0
+  const macACL = templateCredential({ fs: posixFs, child_process: { execFileSync() { macChecks++; return " 0: user:other allow read" } } }, lib, { ...process, platform: "darwin" })
   assert.throws(() => macACL.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  assert.equal(macChecks, 1, "the modeled POSIX metadata must reach the actual macOS ACL branch")
 })
 
 test("normal code import closure retains builtin capability fallback and rejects external imports", async () => {
@@ -215,9 +224,9 @@ test("private receipt refuses schema/capture/proof changes and observed identity
     observed.lstatSync = (file, options) => {
       const stat = fs.lstatSync(file, options)
       if (options?.bigint && file === receiptFile && ++receiptObservations === (mutation === "receipt-read" ? 2 : 3) && mutation.startsWith("receipt"))
-        return { ...stat, ino: stat.ino + 1n }
+        return { ...stat, ino: different(stat.ino) }
       if (options?.bigint && file === installed.dir && ++directoryObservations === 2 && mutation === "directory")
-        return { ...stat, ino: stat.ino + 1n }
+        return { ...stat, ino: different(stat.ino) }
       return stat
     }
     observed.realpathSync = file => file === lib && mutation === "lib" ? path.join(lib, "replacement") : fs.realpathSync(file)

@@ -174,7 +174,7 @@ function sharedScript() {
   return readFileSync(path.join(repoRoot, "scripts", "build-and-check-release.sh"), "utf8")
 }
 
-test("release setup installs both committed dependency sets before running native acceptance", () => {
+test("release setup installs all committed dependency sets before running native acceptance", () => {
   const { workflow } = releaseWorkflow()
   const setup = workflow.jobs.build.steps
   const acceptance = setup.findIndex(step => step.name === "Build and check the release")
@@ -193,6 +193,7 @@ test("release setup installs both committed dependency sets before running nativ
   assert.deepEqual(installed, [
     { command: "ci", root: "plugins/desk/mcp" },
     { command: "ci", root: "plugins/desk/browser-context-broker" },
+    { command: "ci", root: "tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright" },
   ], "the actual release job must establish native dependencies before acceptance, just like the PR dry run")
 })
 

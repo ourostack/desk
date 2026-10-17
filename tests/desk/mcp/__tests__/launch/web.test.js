@@ -71,7 +71,18 @@ for (const [channel, app] of [["chrome", "Google Chrome"], ["msedge", "Microsoft
 
 test("the pure discovery module loads only itself and builtins, not the CLI/bootstrap closure", () => {
   const modulePath = path.join(mcpRoot, "web-browser-discovery.cjs")
-  const code = `const assert=require("node:assert/strict");const before=new Set(Object.keys(require.cache));const helper=require(${JSON.stringify(modulePath)});assert.equal(typeof helper.channelBrowserSelection,"function");assert.deepEqual(Object.keys(require.cache).filter(p=>!before.has(p)),[${JSON.stringify(modulePath)}]);`
+  const code = `
+    const assert=require("node:assert/strict"), Module=require("node:module");
+    const source=${JSON.stringify(modulePath)}, loaded=[], load=Module._load;
+    Module._load=function(request,parent,isMain) {
+      if(parent?.filename===source) loaded.push(request);
+      return load.apply(this,arguments);
+    };
+    let helper;
+    try { helper=require(source); } finally { Module._load=load; }
+    assert.equal(typeof helper.channelBrowserSelection,"function");
+    assert.deepEqual(loaded,["path"]);
+  `
   const got = spawnSync(process.execPath, ["--import", fileURLToPath(new URL("../_isolated_env.mjs", import.meta.url)), "-e", code],
     { env: process.env, encoding: "utf8" })
   assert.equal(got.status, 0, got.stderr)

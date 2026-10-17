@@ -127,11 +127,15 @@ test("actual maintained daemon options can reach native acquisition using the st
     put(app,"owned executable observation only, never started")
     const realStat=fs.statSync
     const systemBrowsers=["msedge","chrome"].flatMap(channel=>require(path.join(mcpRoot,"web-browser-discovery.cjs")).browserPaths(channel,process.platform,process.env))
+    const selectedBrowser=require(path.join(mcpRoot,"web-browser-discovery.cjs")).browserPaths("msedge",process.platform,process.env)[0]
     t.mock.method(fs,"statSync",(file,...args)=>{
+      if(process.platform!=="darwin" && String(file)===selectedBrowser) return realStat(app,...args)
       if(systemBrowsers.includes(String(file)) && !String(file).startsWith(root+path.sep))
         throw Object.assign(Error("unavailable owned observation"),{code:"ENOENT"})
       return realStat(file,...args)
     })
+    const realpath=fs.realpathSync
+    t.mock.method(fs,"realpathSync",(file,...args)=>process.platform!=="darwin" && String(file)===selectedBrowser ? realpath(app,...args) : realpath(file,...args))
     const stateRoot = path.join(root,"browser")
     const common = require(path.join(mcpRoot,"browser-context-common.cjs"))
     const native = require(path.join(mcpRoot,"web-native-messaging.cjs"))
@@ -678,7 +682,9 @@ test("actual maintained daemon options can reach native acquisition using the st
   })
 
   test("signed worker inventory retains the normal-parent socket root after owner environment isolation",async t=>{
-    const f=await signedWorkerFixture(t,{socketRoot:"/private/tmp"})
+    const socketRoot=fs.mkdtempSync(path.join(process.platform==="darwin"?"/private/tmp":os.tmpdir(),"df-"))
+    t.after(()=>removeTree(socketRoot))
+    const f=await signedWorkerFixture(t,{socketRoot})
     assert.equal((await f.run()).state,"running")
   })
 

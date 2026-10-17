@@ -730,7 +730,10 @@ test('native binding rejects malformed routes, absent browser/OS observations an
   assert.throws(() => f.binding(), { code: 'NATIVE_SELECTION_MISMATCH' });
   f.records.get(A).label = originalLabel;
   const original = f.observations.realpathSync;
-  f.observations.realpathSync = file => file === binding.selection.browserExecutable ? path.join(f.root, 'replaced-browser') : original(file);
+  f.observations.realpathSync = file => {
+    const resolved = original(file);
+    return resolved === binding.selection.browserExecutable ? path.join(f.root, 'replaced-browser') : resolved;
+  };
   assert.throws(() => f.binding(), { code: 'NATIVE_SELECTION_MISMATCH' });
   f.observations.realpathSync = original;
   const other = path.join(f.root, 'wrong-browser'); fs.writeFileSync(other, 'owned wrong executable');

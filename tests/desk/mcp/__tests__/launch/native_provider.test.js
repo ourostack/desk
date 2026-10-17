@@ -956,6 +956,10 @@ test('mediator refresh requires fresh same-browser profile and source and resume
   let current = structuredClone(chain);
   const client = await f.client.attestNativeContext(a.record, { ...f.selection, browserExecutable: f.config.browserExecutable },
     { readAncestry: async () => structuredClone(current) });
+  // Keep the old inode allocated so this replacement-generation case cannot
+  // turn into same-inode reuse on a filesystem that immediately recycles it.
+  const priorReady = await fs.open(f.config.nativeReadyFile, 'r');
+  t.after(() => priorReady.close());
   await f.provider.close();
   await assert.rejects(client.refresh(), code('NATIVE_ATTESTATION_UNAVAILABLE'));
   f.resetNative();
@@ -969,6 +973,9 @@ test('mediator refresh requires fresh same-browser profile and source and resume
     processReader: async pid => structuredClone(current.find(p => p.pid === pid)) });
   servers.add(next);
   t.after(async () => { try { await next.close(); } finally { servers.delete(next); } });
+  const currentReady = await fs.stat(f.config.nativeReadyFile, { bigint: true });
+  const previousReady = await priorReady.stat({ bigint: true });
+  assert.notEqual(`${currentReady.dev}:${currentReady.ino}`, `${previousReady.dev}:${previousReady.ino}`);
   await assert.rejects(client.request('context.resume', {}), error => ['NATIVE_READY_CHANGED', 'NATIVE_ATTESTATION_UNAVAILABLE'].includes(error.code));
   assert.deepEqual(await client.refresh(), { available: true, contextId: A });
   assert.equal((await client.request('context.resume', {})).contextId, A);
