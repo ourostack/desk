@@ -63,8 +63,8 @@ function environment(source, root, socketDir, node) {
   env.XDG_DATA_HOME = path.join(root, "data");
   env.XDG_STATE_HOME = path.join(root, "state");
   env.XDG_RUNTIME_DIR = path.join(root, "runtime");
-  env.LOCALAPPDATA = path.join(root, "local");
-  env.APPDATA = path.join(root, "roaming");
+  env.LOCALAPPDATA = process.platform === "win32" ? path.join(env.HOME, "AppData", "Local") : path.join(root, "local");
+  env.APPDATA = process.platform === "win32" ? path.join(env.HOME, "AppData", "Roaming") : path.join(root, "roaming");
   env.TMPDIR = socketDir;
   env.TMP = socketDir;
   env.TEMP = socketDir;
@@ -161,6 +161,10 @@ function run(argv, options) {
     var owner = JSON.stringify({ contextId: id, directory: root });
     marker(root, owner, creating);
     [".playwright", "home", "config", "cache", "data", "state", "runtime", "local", "roaming"].forEach(function (dir) { ownedDir(path.join(root, dir), creating); });
+    // Native Windows shell lookups also resolve these beneath USERPROFILE.
+    if (process.platform === "win32") {
+      ["AppData", path.join("AppData", "Local"), path.join("AppData", "Roaming")].forEach(function (dir) { ownedDir(path.join(root, "home", dir), creating); });
+    }
     var configFile = path.join(root, "config", "browser.json");
     resources.configFile = configFile;
     var choice = [];

@@ -401,7 +401,12 @@ test("default browser existence checks remain private and cover native Windows n
     assert.match(path.basename(directory), /^dp-win-[0-9a-f]{16}$/)
     assert.equal(fs.lstatSync(directory).isSymbolicLink(), false)
     assert.deepEqual([environment.TMPDIR, environment.TMP, environment.TEMP], [directory, directory, directory])
-    assert.equal(environment.LOCALAPPDATA, path.join(result.payload.resources.contextDirectory, "local"))
+    assert.equal(environment.LOCALAPPDATA, path.join(environment.USERPROFILE, "AppData", "Local"))
+    assert.equal(environment.APPDATA, path.join(environment.USERPROFILE, "AppData", "Roaming"))
+    for (const directory of [environment.LOCALAPPDATA, environment.APPDATA]) {
+      assert.equal(fs.lstatSync(directory).isDirectory(), true)
+      assert.equal(fs.lstatSync(directory).isSymbolicLink(), false)
+    }
     const owner = JSON.parse(fs.readFileSync(path.join(directory, ".desk-private-owner")))
     assert.equal(owner.contextId, result.payload.contextId)
     assert.equal(owner.directory, result.payload.resources.contextDirectory)
