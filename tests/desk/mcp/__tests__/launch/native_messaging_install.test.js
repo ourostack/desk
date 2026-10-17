@@ -100,7 +100,7 @@ async function fixture(t, { channel = 'msedge', location = 'system', wrongExecut
   const installed = path.join(env.DESK_BROWSER_STATE_DIR, 'installs/owned-fixture');
   const modules = path.join(installed, 'node_modules');
   const credential = await fs.readFile(new URL('web-extension-credential.cjs', mcp));
-  const bundle = '// owned synthetic maintained CLI receipt fixture; not a shipping implementation\n';
+  const bundle = await fs.readFile(new URL('./fixtures/playwright-server-lifecycle.cjs', import.meta.url));
   await put(path.join(modules, '@playwright/mcp/package.json'), { version: '1.2.3', bin: 'cli.js' });
   await put(path.join(modules, '@playwright/mcp/cli.js'), '// never executed\n');
   await put(path.join(modules, 'playwright-core/package.json'), { version: '1.2.4' });
@@ -112,8 +112,8 @@ async function fixture(t, { channel = 'msedge', location = 'system', wrongExecut
   await put(path.join(modules, 'playwright-core/lib/package.js'), 'exports.packageJSON={version:"1.2.4"};\n');
   await put(path.join(modules, 'classic-level/package.json'), { name: 'classic-level', main: 'index.js' });
   await put(path.join(modules, 'classic-level/index.js'), 'exports.ClassicLevel=class ClassicLevel { constructor() { throw Error("no credential DB read during install"); } };\n');
-  await put(path.join(installed, 'playwright-patch.json'), { revision: patch.REVISION, mcpVersion: '1.2.3',
-    coreVersion: '1.2.4', bundleSha256: sha(bundle), credentialSha256: sha(credential) });
+  patch.apply({ dir: installed, version: '1.2.3', core: '1.2.4' });
+  assert.equal(patch.readRevision({ dir: installed, version: '1.2.3', core: '1.2.4' }), patch.REVISION);
   await put(path.join(env.DESK_BROWSER_STATE_DIR, 'current.json'), { version: '1.2.3', dir: 'installs/owned-fixture', previous: null });
   // Actual normal discovery runs. Only candidate filesystem observations are
   // redirected to this exact owned worker; no installed browser is observed.

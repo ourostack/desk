@@ -4,7 +4,7 @@ var crypto = require("crypto");
 var fs = require("fs");
 var path = require("path");
 
-var REVISION = 2;
+var REVISION = 3;
 var CREDENTIAL_FILE = "desk-extension-credential.cjs";
 // Audited createServer from playwright-core 1.64.0-alpha-1790635538000.
 // Match the lifecycle, not a package version: newer packages may retain this implementation.
@@ -17,6 +17,63 @@ var ACQUISITION_END = "\nvar import_path60, debug16, debugLogger3;";
 var ACQUISITION_SHA256 = "e014782f47d440a616b852b8a5838d4d49a2d2c458a5eba2b3ecd70ae5fe91ca";
 var ACQUISITION_ANCHOR = "  const relay = new CDPRelayServer(";
 var INITIALIZE_CREDENTIAL = '  await require("./' + CREDENTIAL_FILE + '").initialize(customUserDataDir, profileDirectory);\n';
+var BROWSER_START = "async function createBrowser(config,";
+var BROWSER_END = "\nasync function connectToBrowserEndpoint(";
+var BROWSER_SHA256 = "b4976bd9fda5aa82d853428acf2ff586fa16dae44b605649bd2652dd89759d0e";
+var RELAY_START = "    CDPRelayServer = class {";
+var RELAY_END = "\n    ExtensionConnection = class {";
+var RELAY_SHA256 = "0c01234faaad68848d096c87c384a4a9318bdab8a5aef964824498b7e64751e5";
+var BROWSER_PREFLIGHT = [
+  '  const deskNativeBinding = Object.prototype.hasOwnProperty.call(config, "deskNativeContext")',
+  '    ? require("./desk-extension-credential.cjs").validateNativeBinding(config.deskNativeContext, {',
+  '        extension: config.extension, browser: config.browser, options: resolveExtensionOptions(cliOptions)',
+  '      }) : undefined;',
+].join("\n") + "\n";
+var NATIVE_PREFIX = [
+  'async function createExtensionBrowser(channel, executablePath, customUserDataDir, profileDirName, clientName, deskNativeContext) {',
+  '  if (deskNativeContext !== undefined) {',
+  '    const deadline = monotonicTime() + 30000;',
+  '    const binding = require("./desk-extension-credential.cjs").validateNativeBinding(deskNativeContext, {',
+  '      extension: true, browserName: "chromium", channel, executablePath,',
+  '      userDataDir: customUserDataDir, profileDirName',
+  '    });',
+  '    const acquisition = await require("./desk-native-relay.cjs").initialize(binding.record, binding.selection, { deadline, now: monotonicTime });',
+  '    binding.retain(acquisition);',
+  '    let relay;',
+  '    try {',
+  '      relay = new CDPRelayServer(channel, binding.selection.browserExecutable, customUserDataDir, profileDirName, acquisition);',
+  '      await relay.start();',
+  '      debugLogger3("Native relay acquisition");',
+  '      await relay.establishExtensionConnection(clientName);',
+  '      const remaining = deadline - monotonicTime();',
+  '      if (remaining <= 0) throw Object.assign(new Error("NATIVE_HANDSHAKE_TIMEOUT"), { code: "NATIVE_HANDSHAKE_TIMEOUT" });',
+  '      const browser = await playwright.chromium.connectOverCDP(relay.cdpEndpoint(), { isLocal: true, timeout: remaining, noDefaults: true });',
+  '      browser.on("disconnected", () => { acquisition.retire(); relay.stop(); });',
+  '      return browser;',
+  '    } catch (error) {',
+  '      acquisition.retire();',
+  '      relay?.stop();',
+  '      throw acquisition.failure(error);',
+  '    }',
+  '  }',
+].join("\n") + "\n";
+var RELAY_EDITS = [
+  ["constructor(browserChannel, executablePath, customUserDataDir, profileDirectory) {",
+    "constructor(browserChannel, executablePath, customUserDataDir, profileDirectory, deskNativeAcquisition) {\n        this._nativeAcquisition = deskNativeAcquisition;"],
+  ["this._protocolVersion = parseInt(process.env.PWTEST_EXTENSION_PROTOCOL ?? VERSION.toString(), 10);",
+    "this._protocolVersion = this._nativeAcquisition ? VERSION : parseInt(process.env.PWTEST_EXTENSION_PROTOCOL ?? VERSION.toString(), 10);"],
+  ["this._token = process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;",
+    "this._token = this._nativeAcquisition ? undefined : process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;"],
+  ['this._extensionPath = `/extension/${uuid}`;',
+    'this._extensionPath = `/extension/${uuid}`;\n        if (this._nativeAcquisition) this._nativeAcquisition.protectPaths(this._cdpPath, this._extensionPath);'],
+  ['this._wsHost = await this._wsServer.listen(0, void 0, "");',
+    'this._wsHost = await this._wsServer.listen(0, void 0, "");\n        if (this._nativeAcquisition) this._nativeAcquisition.protectEndpoints(this.cdpEndpoint(), this.extensionEndpoint());'],
+  ["const deadline = this._token ? monotonicTime() + extensionConnectionTimeout : 0;",
+    "const deadline = this._nativeAcquisition ? this._nativeAcquisition.deadline : this._token ? monotonicTime() + extensionConnectionTimeout : 0;"],
+  ["if (timedOut) {\n          const profile", 'if (timedOut) {\n          if (this._nativeAcquisition) throw this._nativeAcquisition.failure({ code: "NATIVE_HANDSHAKE_TIMEOUT" });\n          const profile'],
+  ["async _openConnectPageInBrowser(clientName) {",
+    "async _openConnectPageInBrowser(clientName) {\n        if (this._nativeAcquisition) return await this._nativeAcquisition.connect(this.extensionEndpoint());"]
+];
 var IDLE_CLOSE = [
   '      if (!backendPromise && request2.params.name === "browser_close") {',
   '        const closeTool = factory.toolSchemas.find((tool) => tool.name === "browser_close");',
@@ -61,16 +118,51 @@ function patchLifecycle(source) {
   return source.slice(0, start) + patched + source.slice(end);
 }
 
+function region(source, startMarker, endMarker) {
+  var start = source.indexOf(startMarker), end = source.indexOf(endMarker, start);
+  if (start < 0 || end < 0 || source.indexOf(startMarker, start + startMarker.length) !== -1) throw unsupported();
+  return { start: start, end: end, text: source.slice(start, end) };
+}
+function count(source, text) { return source.split(text).length - 1; }
+function normalizeEdits(text, edits) {
+  var applied = edits.filter(function (edit) { return count(text, edit[1]) === 1; }).length;
+  if (applied && applied !== edits.length) throw unsupported();
+  if (applied) edits.slice().reverse().forEach(function (edit) { text = text.replace(edit[1], edit[0]); });
+  return { text: text, native: !!applied };
+}
 function patchSource(source) {
-  var patched = patchLifecycle(source);
-  var start = patched.indexOf(ACQUISITION_START);
-  var end = patched.indexOf(ACQUISITION_END, start);
-  if (start < 0 || end < 0 || patched.indexOf(ACQUISITION_START, start + ACQUISITION_START.length) !== -1) throw unsupported();
-  var acquisition = patched.slice(start, end);
-  var original = acquisition.replace(INITIALIZE_CREDENTIAL, "");
-  if (hash(original) !== ACQUISITION_SHA256) throw unsupported();
-  var replacement = original.replace(ACQUISITION_ANCHOR, INITIALIZE_CREDENTIAL + ACQUISITION_ANCHOR);
-  return patched.slice(0, start) + replacement + patched.slice(end);
+  var server = region(source, START, END);
+  var acquisition = region(source, "async function createExtensionBrowser(", ACQUISITION_END);
+  var browser = region(source, BROWSER_START, BROWSER_END);
+  var relay = region(source, RELAY_START, RELAY_END);
+  var originalAcquisition = acquisition.text, nativeAcquisition = count(originalAcquisition, NATIVE_PREFIX) === 1;
+  if (count(originalAcquisition, INITIALIZE_CREDENTIAL) && count(server.text, IDLE_CLOSE) !== 1) throw unsupported();
+  if (nativeAcquisition && count(originalAcquisition, INITIALIZE_CREDENTIAL) !== 1) throw unsupported();
+  if (nativeAcquisition) originalAcquisition = originalAcquisition.replace(NATIVE_PREFIX, ACQUISITION_START + "\n");
+  originalAcquisition = originalAcquisition.replace(INITIALIZE_CREDENTIAL, "");
+  if (hash(originalAcquisition) !== ACQUISITION_SHA256) throw unsupported();
+  var browserEdits = [
+    ["  if (config.browser.remoteEndpoint)", BROWSER_PREFLIGHT + "  if (config.browser.remoteEndpoint)"],
+    ["profileDirName, clientInfo.clientName);", "profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);"],
+    ["    throw error;\n  }\n}", "    throw deskNativeBinding ? deskNativeBinding.failure(error) : error;\n  }\n}"]
+  ];
+  var originalBrowser = normalizeEdits(browser.text, browserEdits);
+  var originalRelay = normalizeEdits(relay.text, RELAY_EDITS);
+  if (hash(originalBrowser.text) !== BROWSER_SHA256 || hash(originalRelay.text) !== RELAY_SHA256) throw unsupported();
+  if ((nativeAcquisition || originalBrowser.native || originalRelay.native) &&
+      !(nativeAcquisition && originalBrowser.native && originalRelay.native && count(server.text, IDLE_CLOSE) === 1)) throw unsupported();
+  var replacements = [
+    { area: acquisition, text: originalAcquisition.replace(ACQUISITION_ANCHOR, INITIALIZE_CREDENTIAL + ACQUISITION_ANCHOR)
+      .replace(ACQUISITION_START + "\n", NATIVE_PREFIX) },
+    { area: browser, text: originalBrowser.text },
+    { area: relay, text: originalRelay.text }
+  ];
+  browserEdits.forEach(function (edit) { replacements[1].text = replacements[1].text.replace(edit[0], edit[1]); });
+  RELAY_EDITS.forEach(function (edit) { replacements[2].text = replacements[2].text.replace(edit[0], edit[1]); });
+  replacements.sort(function (a, b) { return b.area.start - a.area.start; }).forEach(function (replacement) {
+    source = source.slice(0, replacement.area.start) + replacement.text + source.slice(replacement.area.end);
+  });
+  return patchLifecycle(source);
 }
 
 function bundleFile(dir) {
@@ -91,29 +183,45 @@ function apply(installed) {
     throw error;
   }
   var patched = patchSource(source);
-  var credential = fs.readFileSync(path.join(__dirname, "web-extension-credential.cjs"));
+  var helper = require("./web-extension-credential.cjs"), root = fs.realpathSync(__dirname);
+  var modules = helper.nativeInventory(root);
+  var credential = helper.publicCode(root, "web-extension-credential.cjs");
+  var nativeHelper = helper.publicCode(root, "web-native-relay.cjs");
+  var capture = captureNativeDiscoveryInputs(process.platform, process.env, require("os").userInfo().homedir);
+  helper.privateGeneration(installed.dir);
   fs.writeFileSync(path.join(path.dirname(file), CREDENTIAL_FILE), credential);
+  fs.writeFileSync(path.join(path.dirname(file), "desk-native-relay.cjs"), nativeHelper);
   fs.writeFileSync(file, patched);
   fs.writeFileSync(path.join(installed.dir, "playwright-patch.json"), JSON.stringify({
-    revision: REVISION, mcpVersion: installed.version, coreVersion: installed.core, bundleSha256: hash(patched), credentialSha256: hash(credential)
-  }) + "\n");
+    revision: REVISION, mcpVersion: installed.version, coreVersion: installed.core, bundleSha256: hash(patched), credentialSha256: hash(credential),
+    nativeHelperSha256: hash(nativeHelper), patchSourceSha256: hash(helper.publicCode(root, "web-playwright-patch.cjs")),
+    nativeRuntime: { version: 1, mcpRoot: root, modules: modules, discoveryInputs: capture },
+    guardedRegionProofs: guardedRegionProofs(patched)
+  }) + "\n", { mode: 384 });
+  helper.privateGeneration(installed.dir, path.join(installed.dir, "playwright-patch.json"));
+  if (readRevision(installed) !== REVISION) throw unsupported();
 }
 
 function readRevision(installed) {
-  var receipt;
-  var source;
-  var credential;
   try {
-    receipt = JSON.parse(fs.readFileSync(path.join(installed.dir, "playwright-patch.json"), "utf8"));
-    if (!receipt || receipt.revision !== REVISION || receipt.mcpVersion !== installed.version || receipt.coreVersion !== installed.core) return 0;
-    source = fs.readFileSync(bundleFile(installed.dir), "utf8");
-    credential = fs.readFileSync(path.join(path.dirname(bundleFile(installed.dir)), CREDENTIAL_FILE));
+    var verified = require("./web-extension-credential.cjs").verifyGeneration(installed, __dirname);
+    var source = fs.readFileSync(bundleFile(installed.dir), "utf8");
+    if (patchSource(source) !== source || JSON.stringify(verified.receipt.guardedRegionProofs) !== JSON.stringify(guardedRegionProofs(source))) return 0;
+    return REVISION;
   } catch (error) {
-    if (error.code === "ENOENT" || error instanceof SyntaxError) return 0;
+    if (error.code === "ENOENT" || error instanceof SyntaxError || /^NATIVE_/.test(error.code || "") ||
+        error.code === "PLAYWRIGHT_PATCH_UNSUPPORTED") return 0;
     throw error;
   }
-  return hash(source) === receipt.bundleSha256 && hash(credential) === receipt.credentialSha256 &&
-    hash(credential) === hash(fs.readFileSync(path.join(__dirname, "web-extension-credential.cjs"))) ? REVISION : 0;
+}
+function guardedRegionProofs(source) {
+  return [[START, END, ORIGINAL_SHA256], ["async function createExtensionBrowser(", ACQUISITION_END, ACQUISITION_SHA256],
+    [BROWSER_START, BROWSER_END, BROWSER_SHA256], [RELAY_START, RELAY_END, RELAY_SHA256]].map(function (entry) {
+    return { original: entry[2], patched: hash(region(source, entry[0], entry[1]).text) };
+  });
+}
+function captureNativeDiscoveryInputs(platform, env, home) {
+  return require("./web-extension-credential.cjs").captureNativeDiscoveryInputs(platform, env, home);
 }
 
 // Do not follow package symlinks into profiles, credentials or another generation.
@@ -148,4 +256,5 @@ function copyPackages(fromRoot, toRoot) {
   return copy(fromRoot, toRoot);
 }
 
-module.exports = { REVISION: REVISION, apply: apply, copyPackages: copyPackages, patchSource: patchSource, readRevision: readRevision };
+module.exports = { REVISION: REVISION, apply: apply, copyPackages: copyPackages, patchSource: patchSource, readRevision: readRevision,
+  captureNativeDiscoveryInputs: captureNativeDiscoveryInputs };

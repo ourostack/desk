@@ -90,6 +90,8 @@
         "private-browser-runtime.cjs",
         // The native Go entry selects this module by its verified absolute path.
         "native-host.mjs",
+        // Exact helper copied into Core/lib and entered by guarded Core source.
+        "web-native-relay.cjs",
         "scripts/*.{js,mjs}",
         // Codex is a supported host and the adapter is its activation surface: the host manifests and tests drive it, and the files below are the parts of it that nothing in this package imports by a static path.
         "src/activation/adapters/codex.js",

@@ -781,7 +781,7 @@ test("a fresh install is lifecycle-patched before any browser process starts", p
   await h.handshake()
   const result = await h.call(2)
   assert.notEqual(result.result.isError, true)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   const installed = browser.readInstalled(m.state)
   const bundle = readFileSync(path.join(installed.dir, "node_modules", "playwright-core", "lib", "coreBundle.js"), "utf8")
   assert.match(bundle, /No browser session is open/)
@@ -801,7 +801,7 @@ test("an offline legacy install is copied and patched without changing its live 
   await l.ready
   const installed = browser.readInstalled(m.state)
   assert.notEqual(installed.cli, cli, "a new client must use a new, patched generation")
-  assert.equal(installed.patchRevision, 2)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.equal(readFileSync(bundle, "utf8"), stockLifecycle, "a running old client keeps unmodified files")
   assert.equal(require("node:fs").readlinkSync(path.join(installed.dir, "node_modules", ".bin", "playwright-mcp")), "../@playwright/mcp/cli.js")
   assert.deepEqual(m.calls(), [], "migration is offline, not a reinstall")
@@ -818,7 +818,7 @@ test("offline migration preserves a recorded reader refusal and its retry age", 
   const l = launch(m.options)
   await l.ready
   const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, 2)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.equal(installed.reader, true)
   assert.ok(Math.abs(installed.unavailableAt - age.getTime()) < 1)
   assert.deepEqual(m.calls(), [])
@@ -843,7 +843,7 @@ test("an unchanged npm version still migrates a missing lifecycle patch", posixO
   const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
   touch(path.join(path.dirname(path.dirname(path.dirname(cli))), "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
   assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: true })
-  assert.equal(browser.readInstalled(m.state).patchRevision, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   assert.deepEqual(m.calls().map(call => call.args[0]), ["view"])
 })
 
@@ -853,7 +853,13 @@ test("a revision-one generation migrates offline without changing its live bundl
   const dir = path.join(m.state, "installs/1-1-a")
   const lib = path.join(dir, "node_modules", "playwright-core", "lib")
   const bundle = path.join(lib, "coreBundle.js")
-  const old = readFileSync(bundle, "utf8").replace('  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n', "")
+  const current = readFileSync(bundle, "utf8")
+  const start = "function createServer(name, version3, factory, transportInitialized, runHeartbeat) {"
+  const end = "\nfunction addServerListener("
+  // A genuine revision-one input: only idle-close is patched; no revision-three
+  // native regions are partially deleted and mislabelled as historical source.
+  const old = stockLifecycle.replace(stockLifecycle.slice(stockLifecycle.indexOf(start), stockLifecycle.indexOf(end)),
+    current.slice(current.indexOf(start), current.indexOf(end)))
   writeFileSync(bundle, old)
   writeFileSync(path.join(lib, "desk-extension-credential.cjs"), "old generation helper")
   touch(path.join(dir, "playwright-patch.json"), JSON.stringify({
@@ -863,7 +869,7 @@ test("a revision-one generation migrates offline without changing its live bundl
   const l = launch(m.options)
   await l.ready
   const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, 2)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.notEqual(installed.cli, cli)
   assert.equal(readFileSync(bundle, "utf8"), old)
   assert.equal(readFileSync(path.join(lib, "desk-extension-credential.cjs"), "utf8"), "old generation helper")
@@ -882,7 +888,7 @@ test("concurrent legacy clients publish one patched generation without npm", pos
     await h.close()
   }))
   assert.equal(readdirSync(path.join(m.state, "installs")).length, 2)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   assert.deepEqual(m.calls(), [])
 })
 
@@ -896,7 +902,7 @@ test("a changed bundle invalidates its receipt and migrates instead of mutating 
   const h = host(m.options)
   await h.handshake()
   assert.notEqual((await h.call(2)).result.isError, true)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   assert.notEqual(browser.readInstalled(m.state).cli, cli)
   assert.equal(readFileSync(bundle, "utf8"), changed)
   assert.deepEqual(m.calls(), [])
@@ -928,7 +934,7 @@ test("an incompatible refresh retains the compatible pointer and surfaces its fa
   assert.equal(result.ok, false)
   assert.equal(result.code, "browser_patch_unsupported")
   assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   const l = launch({ ...m.options, startRefresh: () => {} })
   await l.ready
   assert.equal(l.spawns[0].argv[0], cli)
@@ -948,7 +954,7 @@ test("a pruning failure cannot publish a pointer to the generation being discard
   })
   assert.equal((await m.refresh()).ok, false)
   assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 2)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
 })
 
 test("a refresh that finds the channel unchanged installs nothing", posixOnly, async () => {
@@ -1749,9 +1755,13 @@ async function fixturePlugin(prefix) {
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  const nativeClosure = require(path.join(mcpRoot, "web-extension-credential.cjs")).nativeInventory(realpathSync(mcpRoot)).map(entry => entry.path)
+  for (const file of new Set(["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-native-relay.cjs", "web-catalog.json", ...nativeClosure])) {
+    mkdirSync(path.dirname(path.join(plugin, "mcp", file)), { recursive: true })
+    copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  }
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
-  writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
+  writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", type: "module", engines: { node: ">=24.999.0" } }))
   const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")
   const node = touch(path.join(nodeDir, "bin", "node"), [
     "#!/bin/sh",

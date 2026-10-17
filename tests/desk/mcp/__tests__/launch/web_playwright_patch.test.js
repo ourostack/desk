@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { runInNewContext } from "node:vm"
@@ -12,6 +12,108 @@ const require = createRequire(import.meta.url)
 const patchPath = path.join(mcpRoot, "web-playwright-patch.cjs")
 const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
 const { apply, copyPackages, patchSource, readRevision } = require(patchPath)
+
+test("revision three guards the complete browser routing and actual relay class regions", () => {
+  for (const [before, after] of [
+    ['let ownership = "own";', 'let ownership = "changed";'],
+    ['this._protocolVersion = parseInt(', 'this._protocolVersion = Number.parseInt('],
+    ['const uuid = crypto.randomUUID();', 'const uuid = crypto.randomUUID() + "drift";'],
+  ]) {
+    assert.ok(stock.includes(before))
+    assert.throws(() => patchSource(stock.replace(before, after)), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  }
+  const start = stock.indexOf("async function createBrowser(config,")
+  const end = stock.indexOf("\nasync function connectToBrowserEndpoint(", start)
+  assert.throws(() => patchSource(stock + "\n" + stock.slice(start, end)), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  assert.equal(require(patchPath).REVISION, 3)
+  for (const [begin, finish] of [
+    ["function createServer(", "\nfunction addServerListener("],
+    ["async function createBrowser(config,", "\nasync function connectToBrowserEndpoint("],
+    ["async function createExtensionBrowser(", "\nvar import_path60, debug16, debugLogger3;"],
+    ["    CDPRelayServer = class {", "\n    ExtensionConnection = class {"],
+  ]) {
+    const start = stock.indexOf(begin), end = stock.indexOf(finish, start)
+    assert.ok(start >= 0 && end > start)
+    assert.throws(() => patchSource(stock + "\n" + stock.slice(start, end)), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+    assert.throws(() => patchSource(stock.slice(0, start + begin.length) + " " + stock.slice(start + begin.length)),
+      { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  }
+})
+
+test("native discovery capture preserves redirected Windows roots and normal first-case semantics", () => {
+  const capture = require(patchPath).captureNativeDiscoveryInputs
+  assert.equal(typeof capture, "function")
+  const env = { LocalAppData: "Z:\\Redirected\\Local", LOCALAPPDATA: "C:\\wrong",
+    ProgramFiles: "Q:\\Apps", "PROGRAMFILES(X86)": "R:\\Apps32", HOME: "/private", TOKEN: "must-not-copy" }
+  const got = capture("win32", env, "C:\\Users\\native")
+  assert.deepEqual(got, { version: 1, platform: "win32", nativeHome: "C:\\Users\\native",
+    browserEnv: { LOCALAPPDATA: "Z:\\Redirected\\Local", PROGRAMFILES: "Q:\\Apps", "PROGRAMFILES(X86)": "R:\\Apps32" } })
+  assert.ok(Object.isFrozen(got) && Object.isFrozen(got.browserEnv))
+  assert.deepEqual(capture("win32", {}, "C:\\Users\\native").browserEnv, {})
+  assert.throws(() => capture("win32", { LOCALAPPDATA: "relative" }, "C:\\Users\\native"))
+  for (const invalid of [null, undefined, [], false])
+    assert.throws(() => capture("win32", invalid, "C:\\Users\\native"), { code: "NATIVE_DISCOVERY_INPUTS_UNAVAILABLE" })
+  const discovery = require(path.join(mcpRoot, "web-browser-discovery.cjs"))
+  for (const channel of ["chrome", "msedge"]) {
+    const suffix = channel === "chrome" ? "\\Google\\Chrome\\Application\\chrome.exe" : "\\Microsoft\\Edge\\Application\\msedge.exe"
+    for (const available of [0, 1, 2]) {
+      const candidates = ["Z:\\Redirected\\Local", "Q:\\Apps", "R:\\Apps32"].map(root => root + suffix)
+      const seen = []
+      const selected = discovery.channelBrowserSelection(channel, "win32", got.browserEnv,
+        file => { seen.push(file); return file === candidates[available] }, { nativeHome: got.nativeHome })
+      assert.equal(selected.executablePath, candidates[available])
+      assert.deepEqual(seen, candidates.slice(0, available + 1))
+    }
+    const absent = capture("win32", {}, "C:\\Users\\native")
+    const seen = []
+    assert.equal(discovery.channelBrowserSelection(channel, "win32", absent.browserEnv,
+      file => { seen.push(file); return true }, { nativeHome: absent.nativeHome }).executablePath, null)
+    assert.deepEqual(seen, [], "absent captured roots are not guessed from nativeHome")
+  }
+})
+
+test("one-argument apply captures its normal parent, never the facade/npm-child environment", async () => {
+  const root = await mkTempRoot("playwright-parent-capture-"), module = { exports: {} }
+  const lib = path.join(root, "node_modules/playwright-core/lib")
+  mkdirSync(lib, { recursive: true })
+  writeFileSync(path.join(lib, "coreBundle.js"), stock)
+  const normal = { LocalAppData: "Z:\\Redirected\\Local", ProgramFiles: "Q:\\Programs",
+    "ProgramFiles(x86)": "R:\\Programs32", HOME: "/not-native-home" }
+  runInNewContext(readFileSync(patchPath, "utf8"), {
+    module, __dirname: mcpRoot, process: { platform: "win32", env: normal },
+    require(name) {
+      if (name === "./web-extension-credential.cjs") return require(path.join(mcpRoot, name))
+      if (name === "os") return { userInfo: () => ({ homedir: "C:\\Users\\native" }) }
+      return require(name)
+    },
+  })
+  const installed = { dir: root, version: "owned", core: null, env: { LOCALAPPDATA: "C:\\isolated" } }
+  module.exports.apply(installed)
+  assert.equal(module.exports.readRevision(installed), 3)
+  const capture = JSON.parse(readFileSync(path.join(root, "playwright-patch.json"))).nativeRuntime.discoveryInputs
+  assert.deepEqual(capture, { version: 1, platform: "win32", nativeHome: "C:\\Users\\native",
+    browserEnv: { LOCALAPPDATA: "Z:\\Redirected\\Local", PROGRAMFILES: "Q:\\Programs", "PROGRAMFILES(X86)": "R:\\Programs32" } })
+  normal.LocalAppData = "C:\\later-isolated"
+  assert.equal(JSON.parse(readFileSync(path.join(root, "playwright-patch.json"))).nativeRuntime.discoveryInputs.browserEnv.LOCALAPPDATA,
+    "Z:\\Redirected\\Local")
+})
+
+test("private receipt and generation exposures remain unqualified without chmod repair on read", {
+  skip: process.platform === "win32" ? "POSIX exposure seam; native Windows ACL acceptance remains separate" : false,
+}, async () => {
+  const root = await mkTempRoot("playwright-private-receipt-")
+  mkdirSync(path.join(root, "node_modules/playwright-core/lib"), { recursive: true })
+  writeFileSync(path.join(root, "node_modules/playwright-core/lib/coreBundle.js"), stock)
+  const installed = { dir: root, version: "owned", core: null }
+  apply(installed)
+  const receipt = path.join(root, "playwright-patch.json")
+  chmodSync(receipt, 0o644)
+  assert.equal(readRevision(installed), 0)
+  chmodSync(receipt, 0o600)
+  assert.equal(readRevision(installed), 3)
+  chmodSync(root, 0o755)
+  assert.equal(readRevision(installed), 0)
+})
 
 function lifecycle({ acquire = async () => { throw new Error("owned browser acquisition blocked") } } = {}) {
   let acquisitions = 0
@@ -183,6 +285,16 @@ test("patch rejects duplicate lifecycle definitions", () => {
 test("patch is idempotent without adding another idle-close handler", async () => {
   const patched = patchSource(stock)
   assert.equal(patchSource(patched), patched)
+})
+
+test("exact historical revision two migrates, but a credential-only partial transform refuses", () => {
+  const revised = patchSource(stock), start = stock.indexOf("function createServer("), end = stock.indexOf("\nfunction addServerListener(", start)
+  const revisedStart = revised.indexOf("function createServer("), revisedEnd = revised.indexOf("\nfunction addServerListener(", revisedStart)
+  const initialize = '  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n'
+  const partial = stock.replace("  const relay = new CDPRelayServer(", initialize + "  const relay = new CDPRelayServer(")
+  const revisionTwo = partial.slice(0, start) + revised.slice(revisedStart, revisedEnd) + partial.slice(end)
+  assert.equal(patchSource(revisionTwo), revised)
+  assert.throws(() => patchSource(partial), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
 })
 
 test("a duplicated applied guard is rejected rather than accepted as an idempotent patch", () => {

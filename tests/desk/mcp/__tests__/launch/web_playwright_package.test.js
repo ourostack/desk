@@ -10,7 +10,7 @@ import { mcpRoot } from "./_mcp_handshake.js"
 import { openSession } from "./_mcp_session.js"
 
 const require = createRequire(import.meta.url)
-const { apply } = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
+const { apply, readRevision, REVISION } = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
 const source = process.env.DESK_PLAYWRIGHT_TEST_MODULES
 const enabled = source && process.platform !== "win32"
 
@@ -189,7 +189,8 @@ test("latest-channel production install and warm launch preserve failed-close sa
       assert.notEqual(close.result?.isError, true)
       const pointer = JSON.parse(readFileSync(path.join(state, "current.json"), "utf8"))
       const receipt = JSON.parse(readFileSync(path.join(state, pointer.dir, "playwright-patch.json"), "utf8"))
-      assert.equal(receipt.revision, 2)
+      assert.equal(receipt.revision, REVISION)
+      assert.equal(readRevision({ dir: path.join(state, pointer.dir), version: receipt.mcpVersion, core: receipt.coreVersion }), REVISION)
       if (mode === "fresh") generation = pointer.dir
       else assert.equal(pointer.dir, generation, "warm launch reuses the verified generation")
       t.diagnostic(JSON.stringify({ mode, mcp: receipt.mcpVersion, core: receipt.coreVersion, patchRevision: receipt.revision, afterNavigation, afterClose: count(), actualBrowserProcesses: 0 }))

@@ -819,7 +819,7 @@ test("a legacy real-profile generation migrates safely before acquiring its miss
   assert.equal(textOf(await host.call(2)), "ran browser_navigate")
   await host.close()
   const installed = browser.readInstalled(machine.state)
-  assert.equal(installed.patchRevision, 2)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.equal(installed.reader, true)
   assert.equal(installed.ws, true)
   assert.equal(calls.length, 1)
