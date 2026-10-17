@@ -197,7 +197,7 @@ test("private receipt refuses schema/capture/proof changes and observed identity
   const { installed, lib } = await staged(), receiptFile = path.join(installed.dir, "playwright-patch.json")
   const coreFile = path.join(lib, "coreBundle.js"), receiptBytes = readFileSync(receiptFile), coreBytes = readFileSync(coreFile)
   const sha = bytes => require("node:crypto").createHash("sha256").update(bytes).digest("hex")
-  for (const mutation of ["large", "null", "version", "core", "mcp", "capture-array", "capture-root", "capture-order", "proof",
+  for (const mutation of ["large", "null", "version", "core", "mcp", "capture-array", "capture-root", "capture-order", "proof", "error-proof",
     "missing-region", "missing-end", "duplicate-region"]) {
     const receipt = JSON.parse(receiptBytes)
     let bytes = coreBytes
@@ -208,6 +208,7 @@ test("private receipt refuses schema/capture/proof changes and observed identity
     if (mutation === "capture-root") receipt.nativeRuntime.discoveryInputs.browserEnv = { INVALID: "x" }
     if (mutation === "capture-order") receipt.nativeRuntime.discoveryInputs = Object.fromEntries(Object.entries(receipt.nativeRuntime.discoveryInputs).reverse())
     if (mutation === "proof") receipt.guardedRegionProofs[0].patched = "0".repeat(64)
+    if (mutation === "error-proof") receipt.errorRegionProofs.core[0].patched = "0".repeat(64)
     if (mutation === "missing-region") bytes = Buffer.from(coreBytes.toString().replace("async function createBrowser(config,", "async function notCreateBrowser(config,"))
     if (mutation === "missing-end") bytes = Buffer.from(coreBytes.toString().replace("\nasync function connectToBrowserEndpoint(", "\nasync function notConnectToBrowserEndpoint("))
     if (mutation === "duplicate-region") bytes = Buffer.concat([coreBytes, Buffer.from("\nasync function createBrowser(config,")])

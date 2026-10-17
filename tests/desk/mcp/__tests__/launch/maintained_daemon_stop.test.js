@@ -245,4 +245,24 @@ test("stop qualification rejects partial suppression and arbitrary monitor or da
     assert.notEqual(changed, current, before)
     assert.throws(() => patch.patchSource(changed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
   }
+  const monitor = region(current, "async function monitorSocketPath(", "\nasync function startCliDaemonServer(")
+  const old = input.priorStopSource(current)
+  const daemon = region(current, "async function startCliDaemonServer(", "\nasync function saveSessionFile(")
+  for (const changed of [
+    current.replace(monitor, region(old, "async function monitorSocketPath(", "\nasync function startCliDaemonServer(")),
+    current.replace(daemon, region(old, "async function startCliDaemonServer(", "\nasync function saveSessionFile(")),
+    current.replace(monitor, monitor.replace("1e3", "2e3")),
+    current.replace(daemon, daemon.replace("Browser context was closed before the daemon could start", "owned changed daemon body")),
+  ]) {
+    assert.notEqual(changed, current)
+    assert.throws(() => patch.patchSource(changed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+  }
+  const mixed = current.replace(
+    "options: { ...resolveExtensionOptions(cliOptions),\n          ...(cliOptions.profileDirName !== undefined ? { profileDirName: cliOptions.profileDirName } : {}) }",
+    "options: resolveExtensionOptions(cliOptions)")
+    .replace("deskNativeBinding ? deskNativeBinding.selection.profileDirName : profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);",
+      "profileDirName, clientInfo.clientName, deskNativeBinding ? deskNativeBinding.record : undefined);")
+  assert.notEqual(mixed, current)
+  assert.throws(() => patch.patchSource(mixed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" },
+    "a known older profile body combined with the new stop guards is not a complete qualified generation")
 })
