@@ -203,49 +203,60 @@ function encodeFrame(v) {
   return wire
 }
 function createFrameDecoder({ role, binding, phase }) {
-  let used = 0, target = 4, ended = false, current = phase, digest = binding.payloadDigest
+  let used = 0, target = 4, ended = false, failed = false, digest = binding.payloadDigest, resultB64 = null
+  // The parent driver shares its send/receive phase; Root needs only a private cursor.
+  const cursor = typeof phase === "string" ? { current: phase } : phase
+  closed(cursor, ["current"])
   const buffer = Buffer.alloc(16384)
   const transitions = {
-    preparing: { CLOCK_READY: "clock_ready", HELLO: "hello" }, clock_ready: { READY: "ready" },
-    ready: { CONFIGURED: "configured" }, configured: { RESULT: "result" },
+    preparing: { CLOCK_READY: "clock_ready", HELLO: "hello" }, clock_accepted: { READY: "ready" },
+    configuring: { CONFIGURED: "configured" },
     running: { RESULT: "result" }, result: { CONTROL_COMPLETE: "complete" },
     hello: { AUTH: "authenticated" }, authenticated: { CONFIG: "configured_root" },
     configured_root: { START: "running" },
   }
   return {
     push(chunk) {
-      if (ended || !Buffer.isBuffer(chunk)) refuse()
-      const values = []
-      for (let at = 0; at < chunk.length;) {
-        const n = Math.min(target - used, chunk.length - at)
-        chunk.copy(buffer, used, at, at + n); used += n; at += n
-        if (used !== target) continue
-        if (target === 4) {
-          const length = buffer.readUInt32LE()
-          if (!length || length > 16380) refuse()
-          target += length; continue
+      try {
+        if (failed || ended || !Buffer.isBuffer(chunk)) refuse()
+        const values = []
+        for (let at = 0; at < chunk.length;) {
+          const n = Math.min(target - used, chunk.length - at)
+          chunk.copy(buffer, used, at, at + n); used += n; at += n
+          if (used !== target) continue
+          if (target === 4) {
+            const length = buffer.readUInt32LE()
+            if (!length || length > 16380) refuse()
+            target += length; continue
+          }
+          const value = validateFrame(parseJSON(buffer.subarray(4, target), 16380))
+          const current = cursor.current
+          if (value.role !== role || value.generation !== binding.generation ||
+            value.preparationDigest !== binding.preparationDigest) refuse()
+          if (value.type === "CONFIG" && role === "owner" && current === "authenticated") digest = value.payloadDigest
+          else if (value.type === "CONFIGURED" && role === "owner" && current === "configuring") {
+            if (!binding.proposedPayloadDigest || value.payloadDigest !== binding.proposedPayloadDigest) refuse()
+            digest = value.payloadDigest
+          } else if (value.type === "TERMINAL" && role === "owner" && digest === null) {
+            if (value.payloadDigest !== null && value.payloadDigest !== binding.proposedPayloadDigest) refuse()
+          } else if (value.payloadDigest !== digest) refuse()
+          if (value.type === "TERMINAL" && role === "owner" && current !== "terminal") {
+            if ((value.resultB64 !== null || value.certificate?.startIssued === true) &&
+              !["running", "result", "complete"].includes(current)) refuse()
+            if (resultB64 !== null && value.resultB64 !== resultB64) refuse()
+            cursor.current = "terminal"
+          } else {
+            const next = transitions[current]?.[value.type]
+            if (!next) refuse()
+            cursor.current = next
+          }
+          if (value.type === "RESULT") resultB64 = value.resultB64
+          values.push(value); used = 0; target = 4
         }
-        const value = validateFrame(parseJSON(buffer.subarray(4, target), 16380))
-        if (value.role !== role || value.generation !== binding.generation ||
-          value.preparationDigest !== binding.preparationDigest) refuse()
-        if (value.type === "CONFIG" && role === "owner" && current === "authenticated") digest = value.payloadDigest
-        else if (value.type === "CONFIGURED" && role === "owner" && current === "ready") {
-          if (!binding.proposedPayloadDigest || value.payloadDigest !== binding.proposedPayloadDigest) refuse()
-          digest = value.payloadDigest
-        } else if (value.type === "TERMINAL" && role === "owner" && digest === null) {
-          if (value.payloadDigest !== null && value.payloadDigest !== binding.proposedPayloadDigest) refuse()
-        } else if (value.payloadDigest !== digest) refuse()
-        if (value.type === "TERMINAL" && role === "owner" && current !== "terminal") current = "terminal"
-        else {
-          const next = transitions[current]?.[value.type]
-          if (!next) refuse()
-          current = next
-        }
-        values.push(value); used = 0; target = 4
-      }
-      return values
+        return values
+      } catch (error) { failed = true; throw error }
     },
-    end() { if (ended || used) refuse(); ended = true },
+    end() { if (failed || ended || used) { failed = true; refuse() } ended = true },
   }
 }
 function createFrameWriter(stream, onError = () => {}) {

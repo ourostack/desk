@@ -40,6 +40,23 @@ static BOOL WINAPI fixture_create(LPCWSTR application, LPWSTR line, LPSECURITY_A
 #undef AssignProcessToJobObject
 #undef QueryInformationJobObject
 
+/* Class C SOURCE ONLY: later native admission must execute the actual validator. */
+static int fixture_result_vectors(void) {
+  const char enoent[] =
+    "eyJjb21tYW5kIjp7InN0YXRlIjoic3Bhd25fZmFpbGVkIiwiY29kZSI6IkVOT0VOVCJ9LCJpbnB1dCI6eyJzdGF0ZSI6ImNvbXBsZXRlIiwiZXhwZWN0ZWRCeXRlcyI6MCwic3VibWl0dGVkQnl0ZXMiOjAsImVycm9yQ29kZSI6bnVsbH19";
+  const char maximal[] =
+    "eyJjb21tYW5kIjp7InN0YXRlIjoic3Bhd25fZmFpbGVkIiwiY29kZSI6IlhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYIn0sImlucHV0Ijp7InN0YXRlIjoidW5rbm93biIsImV4cGVjdGVkQnl0ZXMiOjkwMDcxOTkyNTQ3NDA5OTEsInN1Ym1pdHRlZEJ5dGVzIjo5MDA3MTk5MjU0NzQwOTkxLCJlcnJvckNvZGUiOiJZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWSJ9fQ==";
+  const char whitespace[] =
+    "eyJjb21tYW5kIjp7InN0YXRlIjoic3Bhd25fZmFpbGVkIiwiY29kZSI6IkVOT0VOVCJ9LCJpbnB1dCI6eyJzdGF0ZSI6ImNvbXBsZXRlIiwiZXhwZWN0ZWRCeXRlcyI6MCwic3VibWl0dGVkQnl0ZXMiOjAsImVycm9yQ29kZSI6bnVsbH19IA==";
+  char padded[sizeof(enoent) + 4], oversized[685]; size_t i;
+  memcpy(padded, enoent, sizeof(enoent) - 1);
+  memcpy(padded + sizeof(enoent) - 1, "====", 5);
+  for (i = 0; i < 684; i += 4) memcpy(oversized + i, "ICAg", 4);
+  oversized[684] = 0; /* 513 decoded spaces: within base64 bound, outside decoded bound. */
+  return result_valid(enoent) && result_valid(maximal) && !result_valid(padded) &&
+    !result_valid(whitespace) && !result_valid(oversized) ? 0 : 1;
+}
+
 int wmain(int argc, wchar_t **argv) {
   wchar_t *fixed[] = { L"fault-owner", L"--owned-git" };
   uint64_t value, ticks, now, edge;
@@ -50,6 +67,7 @@ int wmain(int argc, wchar_t **argv) {
   else if (!wcscmp(argv[1], L"--resume-failure")) fixture_fault = 3;
   else if (!wcscmp(argv[1], L"--pause-after-create")) fixture_fault = 4;
   else if (!wcscmp(argv[1], L"--owner-loss-after-create")) fixture_fault = 5;
+  else if (!wcscmp(argv[1], L"--result-vectors")) return fixture_result_vectors();
   else if (!wcscmp(argv[1], L"--clock-vector")) {
     return clock_convert(10000000ULL, 10000000ULL, &value) && value == 1000000000ULL ? 0 : 1;
   } else if (!wcscmp(argv[1], L"--delayed-entry")) {

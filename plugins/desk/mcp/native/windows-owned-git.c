@@ -466,7 +466,8 @@ static int json_integer(const char **p, char *out, size_t cap, int signed_code, 
 static int result_valid(const char *base64) {
   unsigned char decoded[513]; size_t i, n = strlen(base64), used = 0;
   const char *alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  char canonical[513], state[12], code[81], signal[24], expected[24], submitted[24], error[81];
+  /* Longest Command state plus NUL; the Input states are shorter. */
+  char canonical[513], state[sizeof("spawn_failed")], code[81], signal[24], expected[24], submitted[24], error[81];
   char command[160], error_json[84]; const char *p; uint64_t expected_n, submitted_n, ignored;
   int out, complete;
   if (!n || n > 684 || n % 4) return 0;

@@ -40,17 +40,41 @@ function authenticate(c) {
   assert.equal(state.accept(frame("owner", "AUTH", { clientNonce: nonce, capability: Q })), "send_ack")
   return state
 }
+function componentSession() {
+  const c = core(), d = driver(), stream = new EventEmitter(), frames = [], errors = [], writes = []
+  const currentBinding = { ...binding }, deadline = c.captureDeadline(1000)
+  const observations = d.createObservations(currentBinding, 0)
+  stream.write = (bytes, callback) => { writes.push(Buffer.from(bytes)); callback() }
+  stream.end = () => {}
+  const wire = d.createWire({ stream, binding: currentBinding, deadline,
+    onFrame(value) {
+      if (["RESULT", "CONTROL_COMPLETE", "TERMINAL"].includes(value.type)) observations.owner(value)
+      frames.push(value)
+    }, onError: (error) => errors.push(error.message) })
+  const receive = (value) => stream.emit("data", c.encodeFrame(value))
+  const clock = { clock: deadline.clock, deadlineNs: deadline.expiresNs.toString() }
+  const clockReady = () => receive(frame("owner", "CLOCK_READY", { ...clock,
+    qpcTicks: "10000000", qpcFrequency: "10000000", nowNs: "1000000000" }))
+  const acceptClock = () => wire.send(frame("parent", "CLOCK_ACCEPT", clock))
+  const ready = () => receive(frame("owner", "READY", { payloadPath: "/payload" }))
+  return { wire, receive, frames, errors, writes, observations, clockReady, acceptClock, ready,
+    configure() {
+      clockReady(); acceptClock(); ready()
+      wire.send(frame("parent", "CONFIG", { path: "/payload" }, Q))
+      receive(frame("owner", "CONFIGURED", {}, Q))
+    } }
+}
 
 // Each test's assertions name an observable break, not a source-text spelling.
 test("portable codec rejects foreign replay and encoded bounds", () => {
   const c = core(), value = frame("owner", "READY", { payloadPath: "/private/payload.json" })
-  const dec = c.createFrameDecoder({ role: "owner", binding, phase: "clock_ready" })
+  const dec = c.createFrameDecoder({ role: "owner", binding, phase: "clock_accepted" })
   const bytes = c.encodeFrame(value)
   assert.deepEqual(dec.push(bytes.subarray(0, 3)), [])
   assert.deepEqual(dec.push(bytes.subarray(3)), [value])
   assert.throws(() => dec.push(bytes))
   assert.throws(() => c.encodeFrame({ ...value, unexpected: true }))
-  const fresh = () => c.createFrameDecoder({ role: "owner", binding, phase: "clock_ready" })
+  const fresh = () => c.createFrameDecoder({ role: "owner", binding, phase: "clock_accepted" })
   assert.throws(() => fresh().push(c.encodeFrame({ ...value, generation: Q })))
   const max = frame("parent", "CONFIG", { path: "/" }, Q)
   max.path += "x".repeat(16380 - Buffer.byteLength(JSON.stringify(max)))
@@ -67,6 +91,11 @@ test("portable codec rejects foreign replay and encoded bounds", () => {
     { certificate: certificate(), resultB64: null, failureCode: "none" }, Q))))
   const poisoned = Buffer.from([1, 0, 0, 0, 255])
   assert.throws(() => fresh().push(poisoned))
+  const noClockAccept = c.createFrameDecoder({ role: "owner", binding, phase: "clock_ready" })
+  assert.throws(() => noClockAccept.push(bytes), { code: "protocol" })
+  assert.throws(() => noClockAccept.push(Buffer.alloc(0)), { code: "protocol" })
+  const noStart = c.createFrameDecoder({ role: "owner", binding: { ...binding, payloadDigest: Q }, phase: "configured" })
+  assert.throws(() => noStart.push(c.encodeFrame(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))), { code: "protocol" })
 })
 
 test("portable preparation binding canonical tuple", () => {
@@ -238,6 +267,29 @@ test("portable root result and actual EOF remain distinct", () => {
   bounded.send(frame("root", "RESULT", { resultB64: b64(result()) }, Q))
   assert.throws(() => bounded.send(frame("root", "RESULT", { resultB64: b64(result()) }, Q)))
   assert.equal(writes, 1)
+  const original = b64(result()), acceptedBinding = { ...binding, payloadDigest: Q }
+  const terminal = (cert, resultB64) => frame("owner", "TERMINAL", { certificate: cert, resultB64, failureCode: "none" }, Q)
+  const unknown = certificate({ payloadDigest: Q, startIssued: true, commandState: "unknown" })
+  const reported = certificate({ payloadDigest: Q, startIssued: true, commandState: "reported", resultB64: original })
+  for (const missing of [terminal(unknown, null), terminal(null, null)]) {
+    const observed = driver().createObservations(acceptedBinding, 0)
+    observed.owner(frame("owner", "RESULT", { resultB64: original }, Q))
+    assert.throws(() => observed.owner(missing), /component_protocol/u)
+    assert.deepEqual(observed.snapshot().result, result())
+    assert.equal(observed.snapshot().certificate, null)
+    assert.throws(() => observed.owner(terminal(reported, original)), /component_protocol/u)
+    const decoder = c.createFrameDecoder({ role: "owner", binding: acceptedBinding, phase: "running" })
+    decoder.push(c.encodeFrame(frame("owner", "RESULT", { resultB64: original }, Q)))
+    assert.throws(() => decoder.push(c.encodeFrame(missing)), { code: "protocol" })
+  }
+  for (const cert of [reported, null]) {
+    const valid = driver().createObservations(acceptedBinding, 0)
+    valid.owner(frame("owner", "RESULT", { resultB64: original }, Q))
+    valid.owner(frame("owner", "CONTROL_COMPLETE", {}, Q))
+    valid.owner(terminal(cert, original))
+    assert.deepEqual(valid.snapshot().result, result())
+    assert.deepEqual(valid.snapshot().certificate, cert)
+  }
 })
 
 async function fixture() {
@@ -320,6 +372,12 @@ test("portable native state and proof validation MODEL", () => {
   const pressured = new EventEmitter(); pressured.write = () => {}
   const expiredWire = d.createWire({ stream: pressured, binding, deadline: { clock: deadline.clock, expiresNs: 0n } })
   assert.throws(() => expiredWire.send(frame("parent", "CANCEL")))
+  const wrongClock = componentSession()
+  wrongClock.clockReady()
+  assert.throws(() => wrongClock.wire.send(frame("parent", "CLOCK_ACCEPT", { clock: "win-qpc-ns/1", deadlineNs: "1" })))
+  wrongClock.ready()
+  assert.deepEqual(wrongClock.errors, ["component_protocol"])
+  assert.deepEqual(wrongClock.frames.map((value) => value.type), ["CLOCK_READY"])
 })
 
 test("portable raw component driver uses product wire without adapter", async () => {
@@ -335,17 +393,73 @@ test("portable raw component driver uses product wire without adapter", async ()
   observed.ownerClose(); assert.equal(observed.snapshot().ownerClosed, true)
   assert.throws(() => observed.owner(frame("owner", "TERMINAL", { certificate: certificate({ exactJobZero: false }), resultB64: null, failureCode: "none" })))
   assert.throws(() => wire.send(frame("parent", "CANCEL", {}, Q)))
-  const ownerBinding = { ...binding }
-  const configuredFrames = []
-  const configuredWire = d.createWire({ stream: edges, binding: ownerBinding, deadline: core().captureDeadline(1000),
-    onFrame: (value) => configuredFrames.push(value), onError: (error) => { throw error } })
-  edges.emit("data", core().encodeFrame(frame("owner", "CLOCK_READY", { clock: "win-qpc-ns/1", deadlineNs: "1",
-    qpcTicks: "10000000", qpcFrequency: "10000000", nowNs: "1000000000" })))
-  edges.emit("data", core().encodeFrame(frame("owner", "READY", { payloadPath: "/payload" })))
-  configuredWire.send(frame("parent", "CONFIG", { path: "/payload" }, Q))
-  edges.emit("data", core().encodeFrame(frame("owner", "CONFIGURED", {}, Q)))
-  configuredWire.send(frame("parent", "START", {}, Q))
-  assert.equal(configuredFrames.length, 3)
+  const noClock = componentSession(), noStart = componentSession()
+  noClock.clockReady(); noClock.ready()
+  noStart.configure()
+  noStart.receive(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))
+  assert.deepEqual([noClock.errors, noStart.errors], [["component_protocol"], ["component_protocol"]])
+  assert.deepEqual(noClock.frames.map((value) => value.type), ["CLOCK_READY"])
+  assert.equal(noStart.observations.snapshot().result, null)
+  assert.throws(() => noClock.acceptClock())
+  noClock.ready(); noStart.receive(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))
+  assert.deepEqual([noClock.errors, noStart.errors], [["component_protocol"], ["component_protocol"]])
+  const legal = componentSession()
+  legal.configure(); legal.wire.send(frame("parent", "START", {}, Q))
+  legal.receive(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))
+  legal.receive(frame("owner", "CONTROL_COMPLETE", {}, Q))
+  legal.wire.send(frame("parent", "SEAL", {}, Q))
+  legal.receive(frame("owner", "TERMINAL", { certificate: certificate({ payloadDigest: Q, startIssued: true,
+    commandState: "reported", resultB64: b64(result()) }), resultB64: b64(result()), failureCode: "none" }, Q))
+  assert.deepEqual(legal.errors, [])
+  assert.deepEqual(legal.observations.snapshot().result, result())
+  assert.equal(legal.observations.snapshot().certificate.commandState, "reported")
+  assert.deepEqual(legal.frames.map((value) => value.type), ["CLOCK_READY", "READY", "CONFIGURED", "RESULT", "CONTROL_COMPLETE", "TERMINAL"])
+  assert.equal(JSON.parse(legal.writes[0].subarray(4)).type, "CLOCK_ACCEPT")
+  const cancel = componentSession()
+  cancel.configure(); cancel.wire.send(frame("parent", "CANCEL", {}, Q))
+  cancel.receive(frame("owner", "TERMINAL", { certificate: certificate({ payloadDigest: Q }),
+    resultB64: null, failureCode: "none" }, Q))
+  assert.deepEqual(cancel.errors, [])
+  assert.equal(cancel.observations.snapshot().certificate.startIssued, false)
+  assert.throws(() => cancel.wire.send(frame("parent", "START", {}, Q)))
+  const earlyCancel = componentSession()
+  earlyCancel.wire.send(frame("parent", "CANCEL"))
+  earlyCancel.clockReady()
+  earlyCancel.receive(frame("owner", "TERMINAL", { certificate: null, resultB64: null, failureCode: "none" }))
+  assert.deepEqual(earlyCancel.errors, [])
+  assert.equal(earlyCancel.observations.snapshot().certificate, null)
+  const pendingCancel = componentSession()
+  pendingCancel.clockReady(); pendingCancel.acceptClock(); pendingCancel.ready()
+  pendingCancel.wire.send(frame("parent", "CONFIG", { path: "/payload" }, Q))
+  pendingCancel.wire.send(frame("parent", "CANCEL", {}, Q))
+  pendingCancel.receive(frame("owner", "TERMINAL", { certificate: certificate({ payloadDigest: Q }),
+    resultB64: null, failureCode: "none" }, Q))
+  assert.deepEqual(pendingCancel.errors, [])
+  assert.equal(pendingCancel.observations.snapshot().certificate.payloadDigest, Q)
+  const runningCancel = componentSession()
+  runningCancel.configure(); runningCancel.wire.send(frame("parent", "START", {}, Q))
+  runningCancel.wire.send(frame("parent", "CANCEL", {}, Q))
+  runningCancel.receive(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))
+  runningCancel.receive(frame("owner", "TERMINAL", { certificate: certificate({ payloadDigest: Q, startIssued: true,
+    commandState: "reported", resultB64: b64(result()) }), resultB64: b64(result()), failureCode: "none" }, Q))
+  assert.deepEqual(runningCancel.errors, [])
+  assert.deepEqual(runningCancel.observations.snapshot().result, result())
+  const unknown = componentSession()
+  unknown.configure(); unknown.wire.send(frame("parent", "START", {}, Q))
+  unknown.receive(frame("owner", "TERMINAL", { certificate: certificate({ payloadDigest: Q, startIssued: true,
+    commandState: "unknown" }), resultB64: null, failureCode: "retirement" }, Q))
+  assert.deepEqual(unknown.errors, [])
+  assert.equal(unknown.observations.snapshot().result, null)
+  assert.equal(unknown.observations.snapshot().certificate.commandState, "unknown")
+  const dropped = componentSession()
+  dropped.configure(); dropped.wire.send(frame("parent", "START", {}, Q))
+  dropped.receive(frame("owner", "RESULT", { resultB64: b64(result()) }, Q))
+  const lostResult = frame("owner", "TERMINAL", { certificate: certificate({ payloadDigest: Q, startIssued: true,
+    commandState: "unknown" }), resultB64: null, failureCode: "none" }, Q)
+  dropped.receive(lostResult); dropped.receive(lostResult)
+  assert.deepEqual(dropped.errors, ["component_protocol"])
+  assert.deepEqual(dropped.observations.snapshot().result, result())
+  assert.equal(dropped.observations.snapshot().certificate, null)
   const capture = d.createDataObservations({ outputLimit: 3 })
   capture.chunk("stdout", Buffer.from("é")); capture.chunk("stderr", Buffer.from("ab"))
   assert.equal(capture.snapshot().bytes, 4)

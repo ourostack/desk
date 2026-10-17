@@ -43,32 +43,36 @@ function createDataObservations({ outputLimit } = {}) {
 }
 function createObservations(binding, expectedBytes) {
   const value = { ownerExited: false, ownerClosed: false, controlEOF: false, controlComplete: false, result: null, certificate: null }
-  let ended = false
+  let ended = false, rejected = false, resultB64 = null
   return {
     owner(frame) {
-      if (ended) fail()
-      core.encodeFrame(frame)
-      if (frame.role !== "owner" || frame.generation !== binding.generation || frame.preparationDigest !== binding.preparationDigest) fail()
-      const pendingTerminal = frame.type === "TERMINAL" && binding.payloadDigest === null &&
-        (frame.payloadDigest === null || frame.payloadDigest === binding.proposedPayloadDigest)
-      if (!pendingTerminal && frame.payloadDigest !== binding.payloadDigest) fail()
-      if (frame.type === "RESULT") {
-        if (value.result) fail()
-        value.result = core.decodeResult(frame.resultB64)
-        if (value.result.input.expectedBytes !== expectedBytes) fail()
-      } else if (frame.type === "CONTROL_COMPLETE") {
-        if (!value.result || value.controlComplete) fail()
-        value.controlComplete = true
-      } else if (frame.type === "TERMINAL") {
-        ended = true
-        if (frame.certificate !== null) value.certificate = core.validateCertificate(frame.certificate,
-          { ...binding, payloadDigest: frame.payloadDigest })
-        if (frame.resultB64 !== null) {
+      try {
+        if (ended || rejected) fail()
+        core.encodeFrame(frame)
+        if (frame.role !== "owner" || frame.generation !== binding.generation || frame.preparationDigest !== binding.preparationDigest) fail()
+        const pendingTerminal = frame.type === "TERMINAL" && binding.payloadDigest === null &&
+          (frame.payloadDigest === null || frame.payloadDigest === binding.proposedPayloadDigest)
+        if (!pendingTerminal && frame.payloadDigest !== binding.payloadDigest) fail()
+        if (frame.type === "RESULT") {
+          if (value.result) fail()
           const result = core.decodeResult(frame.resultB64)
-          if (result.input.expectedBytes !== expectedBytes ||
-            (value.result && JSON.stringify(value.result) !== JSON.stringify(result))) fail()
-        }
-      } else fail()
+          if (result.input.expectedBytes !== expectedBytes) fail()
+          value.result = result; resultB64 = frame.resultB64
+        } else if (frame.type === "CONTROL_COMPLETE") {
+          if (!value.result || value.controlComplete) fail()
+          value.controlComplete = true
+        } else if (frame.type === "TERMINAL") {
+          if (resultB64 !== null && frame.resultB64 !== resultB64) fail()
+          const certificate = frame.certificate === null ? null : core.validateCertificate(frame.certificate,
+            { ...binding, payloadDigest: frame.payloadDigest })
+          let result = value.result
+          if (frame.resultB64 !== null) {
+            result = core.decodeResult(frame.resultB64)
+            if (result.input.expectedBytes !== expectedBytes) fail()
+          }
+          value.result = result; value.certificate = certificate; resultB64 = frame.resultB64; ended = true
+        } else fail()
+      } catch { rejected = true; fail() }
     },
     expectInput(bytes) {
       if (value.result || !Number.isSafeInteger(bytes) || bytes < 0) fail()
@@ -81,43 +85,53 @@ function createObservations(binding, expectedBytes) {
   }
 }
 function createWire({ stream, binding, deadline, onFrame = () => {}, onError = () => {} }) {
-  const decoder = core.createFrameDecoder({ role: "owner", binding, phase: "preparing" })
-  const writer = core.createFrameWriter(stream, onError)
-  let closed = false, stopped = false, phase = "preparing"
+  const phase = { current: "preparing" }
+  const decoder = core.createFrameDecoder({ role: "owner", binding, phase })
+  let closed = false, stopped = false, failed = false
+  const reject = () => {
+    if (failed) return
+    failed = true; stopped = true
+    onError(new Error("component_protocol"))
+  }
+  const writer = core.createFrameWriter(stream, reject)
   stream.on("data", (bytes) => {
+    if (failed || closed) return
     try {
       for (const value of decoder.push(bytes)) {
-        if (value.type === "CLOCK_READY") phase = "clock_ready"
-        else if (value.type === "READY") phase = "ready"
-        else if (value.type === "CONFIGURED") { binding.payloadDigest = value.payloadDigest; phase = "configured" }
-        else if (value.type === "CONTROL_COMPLETE") phase = "complete"
+        if (value.type === "CONFIGURED") binding.payloadDigest = value.payloadDigest
         else if (value.type === "TERMINAL") stopped = true
         onFrame(value)
       }
-    } catch (error) { stopped = true; onError(error) }
+    } catch { reject() }
   })
-  stream.on("end", () => { try { decoder.end(); closed = true } catch (error) { onError(error) } })
-  stream.on("error", onError)
+  stream.on("end", () => { closed = true; if (!failed) { try { decoder.end() } catch { reject() } } })
+  stream.on("error", reject)
   return {
     send(value) {
-      if (closed || stopped || !core.remainingNanoseconds(deadline, process.hrtime.bigint()) ||
-        value.role !== "parent" || value.generation !== binding.generation ||
-        value.preparationDigest !== binding.preparationDigest) fail()
-      core.encodeFrame(value)
-      if (value.type === "CONFIG") {
-        if (phase !== "ready" || binding.proposedPayloadDigest) fail()
-        binding.proposedPayloadDigest = value.payloadDigest; phase = "configuring"
-      } else if (value.type === "CANCEL") {
-        if (value.payloadDigest !== (binding.proposedPayloadDigest ?? binding.payloadDigest)) fail()
-        stopped = true
-      } else {
-        if (value.payloadDigest !== binding.payloadDigest) fail()
-        if (value.type === "START") { if (phase !== "configured") fail(); phase = "running" }
-        else if (value.type === "CLOCK_ACCEPT") { if (phase !== "clock_ready") fail(); phase = "clock_accepted" }
-        else if (value.type === "SEAL") { if (phase !== "complete") fail(); stopped = true }
-        else if (value.type !== "PREPARE" || phase !== "preparing") fail()
-      }
-      writer.send(value)
+      try {
+        if (closed || stopped || failed || !core.remainingNanoseconds(deadline, process.hrtime.bigint()) ||
+          value.role !== "parent" || value.generation !== binding.generation ||
+          value.preparationDigest !== binding.preparationDigest) fail()
+        core.encodeFrame(value)
+        if (value.type === "CONFIG") {
+          if (phase.current !== "ready" || binding.proposedPayloadDigest) fail()
+          binding.proposedPayloadDigest = value.payloadDigest; phase.current = "configuring"
+        } else if (value.type === "CANCEL") {
+          if (value.payloadDigest !== (binding.proposedPayloadDigest ?? binding.payloadDigest)) fail()
+          stopped = true
+        } else {
+          if (value.payloadDigest !== binding.payloadDigest) fail()
+          if (value.type === "START") { if (phase.current !== "configured") fail(); phase.current = "running" }
+          else if (value.type === "CLOCK_ACCEPT") {
+            if (phase.current !== "clock_ready" || value.clock !== deadline.clock ||
+              value.deadlineNs !== deadline.expiresNs.toString()) fail()
+            phase.current = "clock_accepted"
+          } else if (value.type === "SEAL") { if (phase.current !== "complete") fail(); stopped = true }
+          else if (value.type !== "PREPARE" || phase.current !== "preparing") fail()
+        }
+        writer.send(value)
+        if (failed) fail()
+      } catch { reject(); fail() }
     },
   }
 }
