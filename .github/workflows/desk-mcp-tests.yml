@@ -120,6 +120,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - name: Verify native Windows private shell folders before launching
+        if: ${{ runner.os == 'Windows' }}
+        run: node --import ./tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern="Windows shell folders" ./tests/desk/mcp/__tests__/launch/browser_private.test.js
       - name: Verify actual cold private creation and retained page lifecycle
         env:
           DESK_PRIVATE_BROWSER_SMOKE: "1"
