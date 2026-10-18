@@ -650,6 +650,22 @@ test('native entry initialization receives its own profile reply without a frame
   const { runNativeEntry } = await import(new URL('native-host.mjs', rootUrl));
   const host = await import(new URL('src/browser/native-host.mjs', rootUrl));
   const configFile = await entryConfiguration(f);
+  const probe = await fs.open(path.join(f.root, 'ready-write-probe'), 'wx', 0o600);
+  const handlePrototype = Object.getPrototypeOf(probe), writeFile = handlePrototype.writeFile;
+  await probe.close();
+  let partialPublications = 0;
+  t.mock.method(handlePrototype, 'writeFile', async function (bytes, ...options) {
+    if (Buffer.isBuffer(bytes) && bytes.toString().includes(`"profileRoot":${JSON.stringify(f.config.profileRoot)}`)) {
+      partialPublications++;
+      await writeFile.call(this, bytes.subarray(0, 1), ...options);
+      const partial = await fs.readFile(f.config.nativeReadyFile, 'utf8');
+      assert.equal(partial, '{');
+      assert.throws(() => JSON.parse(partial), SyntaxError);
+      await sleep(50);
+      return writeFile.call(this, bytes.subarray(1), ...options);
+    }
+    return writeFile.call(this, bytes, ...options);
+  });
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const entryChain = structuredClone(chain); entryChain[0].pid = process.pid;
   const native = [];
@@ -673,14 +689,14 @@ test('native entry initialization receives its own profile reply without a frame
   });
   await sleep(20);
   stdin.write(host.encodeNativeMessage(f.construction.ready));
-  let ready = false;
+  let binding;
   for (let i = 0; i < 100; i++) {
-    try { await fs.stat(f.config.nativeReadyFile); ready = true; break; } catch {}
+    try { binding = JSON.parse(await fs.readFile(f.config.nativeReadyFile, 'utf8')); break; }
+    catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
     await sleep(5);
   }
-  assert.equal(ready, true);
+  assert.ok(binding, 'startup publishes a complete readiness record within the original wait budget');
   assert.equal(native.length, 0, 'startup hello must not self-confirm a retry budget');
-  const binding = JSON.parse(await fs.readFile(f.config.nativeReadyFile, 'utf8'));
   let healthy = false;
   for (let i = 0; i < 100 && !healthy; i++) {
     try { healthy = (await f.client.providerRequest(binding.endpoint, 'attest', {})).healthy; }
@@ -688,6 +704,7 @@ test('native entry initialization receives its own profile reply without a frame
     if (!healthy) await sleep(5);
   }
   assert.equal(healthy, true);
+  assert.equal(partialPublications, 1, 'the owned readiness write crossed an incomplete-JSON publication interval');
   assert.ok(native.some(r => r.method === 'profile.read' && r.params.profileToken === TOKEN));
   const before = native.length;
   replyToProfile = false;
