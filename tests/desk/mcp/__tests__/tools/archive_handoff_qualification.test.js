@@ -150,6 +150,19 @@ scenario("03-two-real-processes-race-the-same-folder", async () => {
       publication:!onGit || (git(f.root, "status", "--short") === "" &&
         published.includes(`t/_archive/${SLUG}/task.md`) && !published.includes(`t/${SLUG}/task.md`)) })
   }
+  const summary = { scope:"owned two-process archive observations; criteria and product bytes unchanged",
+    platform:process.platform,variants:variants.map(({root,onGit,outcomes,oneWinner,exactPayload,retired,publication}) => ({
+      onGit,oneWinner,exactPayload,retired,publication,
+      outcomes:outcomes.map(({result,error,renameReturned}) => ({
+        status:result?.status ?? null,renameReturned,
+        publication:result?.publication?.status ?? null,
+        commitReason:result?.commit?.reason?.replaceAll(root,"<owned-root>") ?? null,
+        error:error === null ? null : {name:error.name,code:error.code,phase:error.phase,
+          message:error.message.replaceAll(root,"<owned-root>")},
+      })),
+    })) }
+  fs.writeFileSync(new URL("../../../../../windows-archive-race-observations.json",import.meta.url),
+    JSON.stringify(summary,null,2)+"\n")
   return { variants,
     checks: {
       exactlyOneArchiveAndOneHonestConflict:variants.every((row) => row.oneWinner),
