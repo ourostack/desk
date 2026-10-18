@@ -71,6 +71,24 @@ $out = Join-Path $LogDir 'stdout.log'
 $err = Join-Path $LogDir 'stderr.log'
 $exitCode = 1
 try {
+if ($OwnedGitProduct) {
+  $productRootExited = $false
+  $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/d', '/c', "`"$wrapper`"" `
+    -Credential $cred -WorkingDirectory $WorkDir -LoadUserProfile -PassThru `
+    -RedirectStandardOutput $out -RedirectStandardError $err
+  try {
+    $p.WaitForExit()
+    $productRootExited = $true
+    $exitCode = $p.ExitCode
+  } finally {
+    if ($productRootExited) {
+      try { $p.Dispose() } catch {
+        $ownedCleanupFailed = $true
+        try { [Console]::Error.WriteLine('owned_git_product_process_cleanup_failed') } catch { }
+      }
+    }
+  }
+} else {
 $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/d', '/c', "`"$wrapper`"" `
   -Credential $cred -WorkingDirectory $WorkDir -LoadUserProfile -PassThru -Wait `
   -RedirectStandardOutput $out -RedirectStandardError $err
@@ -79,6 +97,7 @@ if (-not $OwnedGitProduct) {
   Get-Content $err | ForEach-Object { Write-Host "[stderr] $_" }
 }
 $exitCode = $p.ExitCode
+}
 } finally {
   if (-not $OwnedGitProduct) { Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue }
 }

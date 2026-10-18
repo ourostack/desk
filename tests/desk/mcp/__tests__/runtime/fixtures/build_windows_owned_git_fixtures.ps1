@@ -298,6 +298,17 @@ public static class OwnedGitBuild {
       return i.volume+":"+i.indexHigh+":"+i.indexLow+":"+i.sizeHigh+":"+i.sizeLow+":"+i.writeHigh+":"+i.writeLow;
     } finally { Require(CloseHandle(h)); }
   }
+  public static string DirectoryIdentity(string directory) {
+    var sa=new SA {size=Marshal.SizeOf<SA>()};
+    IntPtr h=CreateFileW(directory,0x80,7,ref sa,3,0x02200000,IntPtr.Zero);
+    Require(h!=IntPtr.Zero && h!=INVALID);
+    try {
+      uint flags; FILEINFO i=new FILEINFO();
+      Require(SetHandleInformation(h,1,0) && GetHandleInformation(h,out flags) && (flags&1)==0 &&
+        GetFileInformationByHandle(h,out i) && (i.attributes&0x10u)!=0 && (i.attributes&0x400u)==0);
+      return i.volume+":"+i.indexHigh+":"+i.indexLow+":"+i.sizeHigh+":"+i.sizeLow+":"+i.writeHigh+":"+i.writeLow;
+    } finally { Require(CloseHandle(h)); }
+  }
   public static string OpenIdentity(Microsoft.Win32.SafeHandles.SafeFileHandle handle) {
     FILEINFO i;
     Require(GetFileInformationByHandle(handle.DangerousGetHandle(),out i) && (i.attributes&(0x400u|0x10u))==0);
@@ -798,7 +809,7 @@ function InspectGitPolicy($Policy) {
   $rows = [Collections.Generic.List[string]]::new()
   foreach ($dir in $Policy.directories) {
     Deadline; Guard $dir $true
-    $rows.Add($dir+'='+[OwnedGitBuild]::Identity($dir))
+    $rows.Add($dir+'='+[OwnedGitBuild]::DirectoryIdentity($dir))
   }
   GitEmpty $Policy.exec
   foreach ($dir in $Policy.directories) {
@@ -820,7 +831,7 @@ function InspectGitPolicy($Policy) {
   if ($mount.sha256 -cne $Policy.mount.sha256 -or $mount.prefix -cne $Policy.mount.prefix -or
       $mount.identity -cne $Policy.mount.identity) { throw 'identity_changed' }
   $user = Join-Path $Policy.home 'etc\fstab.d'
-  if ($null -ne (GitAttributes $user)) { GitEmpty $user; $rows.Add($user+'='+[OwnedGitBuild]::Identity($user)) }
+  if ($null -ne (GitAttributes $user)) { GitEmpty $user; $rows.Add($user+'='+[OwnedGitBuild]::DirectoryIdentity($user)) }
   if ((Hash $Policy.msys) -cne $Policy.hashes[$Policy.msys]) { throw 'identity_changed' }
   $rows.Add($Policy.msys+'='+[OwnedGitBuild]::Identity($Policy.msys))
   Deadline

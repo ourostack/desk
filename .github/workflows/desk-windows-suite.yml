@@ -260,6 +260,13 @@ jobs:
           path: shard-results
 
       - name: Fail unless every shard reported and every file passed
-        run: node .github/scripts/windows-suite-verdict.mjs shard-results 8 tests/desk/mcp/__tests__ "$ONLY_FILES"
+        run: |
+          if [ "$ONLY_FILES" = '^runtime/windows_owned_git\.test\.js$' ]; then
+            if [ "${OWNED_GIT_WINDOWS_RESULT-}" != 'success' ]; then
+              exit 1
+            fi
+          fi
+          node .github/scripts/windows-suite-verdict.mjs shard-results 8 tests/desk/mcp/__tests__ "$ONLY_FILES"
         env:
           ONLY_FILES: ${{ inputs.only }}
+          OWNED_GIT_WINDOWS_RESULT: ${{ needs.windows-suite.result }}

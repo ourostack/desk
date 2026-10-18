@@ -1176,11 +1176,34 @@ test("portable public root domains reject private mirror fallback", async () => 
     after: () => identity, read: () => { contentReads++; return Buffer.from("{}") } }, 10))
   assert.equal(contentReads, 0)
   assert.throws(() => r.guardedRoleRead({ before: () => identity,
-    after: () => ({ ...identity, ino: 3 }), read: () => { contentReads++; return Buffer.from("{}") } }, 10))
+    after: () => ({ ...identity, ino: 3 }), read: () => { contentReads++; return Buffer.from("{}") } }, 10),
+  { code: "identity_changed" })
   assert.equal(contentReads, 1)
-  assert.throws(() => r.guardedRoleRead({ expected: identity, before: () => ({ ...identity, ino: 4 }),
-    after: () => identity, read: () => { contentReads++; return Buffer.from("{}") } }, 10))
-  assert.equal(contentReads, 1) // Known identity drift must refuse before opening content.
+  for (const patch of [{ ino: 4 }, { dev: 4 }, { size: 3 }]) {
+    let beforeCalls = 0, afterCalls = 0, ledger = 0
+    assert.throws(() => r.guardedRoleRead({ expected: identity,
+      before: () => { beforeCalls++; return { ...identity, ...patch } },
+      after: () => { afterCalls++; return identity },
+      read: () => { ledger++; return Buffer.from("{}") } }, 10), { code: "identity_changed" })
+    assert.deepEqual([beforeCalls, ledger, afterCalls], [1, 0, 0])
+  }
+  for (const patch of [{ reparse: true }, { type: "directory" }, { size: 11 }, { size: -1 }]) {
+    let reads = 0
+    assert.throws(() => r.guardedRoleRead({ expected: identity, before: () => ({ ...identity, ...patch }),
+      read: () => { reads++; return Buffer.from("{}") }, after: () => identity }, 10), { code: "guard_failed" })
+    assert.equal(reads, 0)
+  }
+  let matchingReads = 0
+  assert.deepEqual(r.guardedRoleRead({ expected: identity, before: () => identity,
+    read: () => { matchingReads++; return Buffer.from("{}") }, after: () => identity }, 10), Buffer.from("{}"))
+  assert.equal(matchingReads, 1)
+  assert.throws(() => r.guardedRoleRead({ expected: { ...identity, mtimeNs: 1n },
+    before: () => ({ ...identity, mtimeNs: 2n }),
+    read: () => { contentReads++; return Buffer.from("{}") }, after: () => identity }, 10),
+  { code: "identity_changed" })
+  assert.throws(() => r.guardedRoleRead({ before: () => { throw Object.assign(new Error("quota"), { code: "quota" }) },
+    read: () => { contentReads++; return Buffer.from("{}") } }, 10), { code: "quota" })
+  assert.equal(contentReads, 1)
   const f = await fixture()
   assert.equal((await f.v.resolveOwnedGitTarget(f.options)).targetDir, f.target)
   await assert.rejects(f.v.resolveOwnedGitTarget({ publicMcpRoot: f.realm, privateRealmRoot: f.realm }))
@@ -1620,6 +1643,147 @@ test("portable raw component driver uses product wire without adapter", async ()
   assert.equal(io.isOwnedGitProductSelection("^runtime/windows_owned_git\\.test\\.js$", "elevated"), false)
   const tap = "TAP version 13\n# secret C:\\private\\capability\n" +
     "ok 1 - native Windows owned-Git product admission\n1..1\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n"
+  assert.equal(io.makeProductResult({ counts: { valid: true, pass: 1, fail: 0, skipped: 0 },
+    exitCode: 0, timedOut: false, bytes: { stdout: 0, stderr: 0 }, ms: 1, code: "none",
+    completion: "incomplete" }).exitCode, 1)
+  const flushCompletion = async () => { for (let n = 0; n < 12; n++) await Promise.resolve() }
+  const completionFixture = ({ persistence, kill } = {}) => {
+    let now = 100n, killed = 0, ended = 0
+    const timers = [], writes = [], exits = [], realCounter = io.createProductTapCounter()
+    const child = new EventEmitter()
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter()
+    child.kill = () => { killed++; return kill ? kill(child) : true }
+    const counter = { push: (...args) => realCounter.push(...args),
+      end: () => { ended++; return realCounter.end() } }
+    const completion = io.createProductCompletion({ envelope: cliH, nowNs: () => now,
+      counter, bytes: { stdout: 0, stderr: 0 },
+      arm: (callback, ms) => { const timer = { callback, ms, cleared: false }; timers.push(timer); return timer },
+      disarm: (timer) => { timer.cleared = true },
+      persist: (row) => { writes.push(structuredClone(row)); return persistence?.(row, writes.length) },
+      terminate: (code) => exits.push(code) })
+    return { child, completion, timers, writes, exits, ended: () => ended, killed: () => killed,
+      setNow: (value) => { now = value },
+      expire: () => { now = cliH.Hns; timers[0].callback() } }
+  }
+  const normalCompletion = completionFixture()
+  assert.equal(await normalCompletion.completion.prepare(), true)
+  assert.equal(normalCompletion.timers.length, 1)
+  assert.equal(normalCompletion.timers[0].ms, 120000)
+  assert.equal(normalCompletion.writes[0].exitCode, 1)
+  assert.equal(normalCompletion.writes[0].product.completion, "incomplete")
+  normalCompletion.completion.attach(normalCompletion.child)
+  normalCompletion.child.stdout.emit("data", Buffer.from(tap))
+  normalCompletion.child.emit("exit", 0)
+  normalCompletion.child.stdout.emit("end"); normalCompletion.child.stderr.emit("end")
+  await flushCompletion()
+  assert.equal(normalCompletion.writes.length, 1)
+  assert.deepEqual(normalCompletion.exits, [])
+  normalCompletion.child.emit("close", 0); await flushCompletion()
+  assert.deepEqual(normalCompletion.exits, [0])
+  assert.equal(normalCompletion.writes.length, 2)
+  assert.equal(normalCompletion.writes[1].product.completion, "child-close")
+  assert.equal(normalCompletion.writes[1].exitCode, 0)
+  assert.equal(normalCompletion.ended(), 1)
+  assert.equal(normalCompletion.killed(), 0)
+  assert.equal(normalCompletion.timers[0].cleared, true)
+  const prematureClose = completionFixture()
+  await prematureClose.completion.prepare()
+  await prematureClose.completion.close(0)
+  assert.deepEqual(prematureClose.exits, [1])
+  assert.equal(prematureClose.writes.length, 1)
+  assert.equal(prematureClose.completion.snapshot().closeObserved, false)
+  for (const kill of [() => false, () => { throw new Error("private must not escape") },
+    (child) => { child.emit("error", new Error("private")); child.emit("close", 0); return true }]) {
+    const f = completionFixture({ kill })
+    await f.completion.prepare(); f.completion.attach(f.child)
+    f.child.stdout.emit("data", Buffer.from(tap))
+    f.expire(); await flushCompletion()
+    assert.deepEqual(f.exits, [1])
+    assert.equal(f.writes.length, 1)
+    assert.equal(f.killed(), 1)
+    assert.equal(f.completion.snapshot().fatal, true)
+    f.child.emit("close", 0); f.child.emit("error", new Error("late")); f.expire()
+    await flushCompletion()
+    assert.deepEqual(f.exits, [1])
+    assert.equal(f.writes.length, 1)
+    assert.equal(f.child.listenerCount("error"), 1)
+    assert.equal(f.child.stdout.listenerCount("data"), 1)
+    assert.equal(f.timers.length, 1)
+  }
+  for (const stage of [1, 2]) for (const outcome of ["reject", "throw", "stall"]) {
+    let release
+    const f = completionFixture({ persistence: (_row, count) => {
+      if (count !== stage) return
+      if (outcome === "throw") throw new Error("private")
+      if (outcome === "reject") return Promise.reject(new Error("private"))
+      return new Promise((resolve) => { release = resolve })
+    } })
+    const preparing = f.completion.prepare()
+    if (stage === 2) {
+      assert.equal(await preparing, true); f.completion.attach(f.child)
+      f.child.stdout.emit("data", Buffer.from(tap)); f.child.emit("close", 0)
+    }
+    await flushCompletion()
+    if (outcome === "stall") {
+      assert.deepEqual(f.exits, []); f.expire(); release(); await flushCompletion()
+    }
+    assert.deepEqual(f.exits, [1])
+    assert.equal(f.timers.length, 1)
+    assert.equal(f.writes.length, stage)
+    assert.equal(f.completion.snapshot().terminalCode, 1)
+  }
+  const errorThenClose = completionFixture({ kill: () => false })
+  await errorThenClose.completion.prepare(); errorThenClose.completion.attach(errorThenClose.child)
+  errorThenClose.child.emit("error", new Error("private"))
+  errorThenClose.child.stdout.emit("data", Buffer.from(tap)); errorThenClose.child.emit("close", 0)
+  await flushCompletion()
+  assert.deepEqual(errorThenClose.exits, [1])
+  assert.equal(errorThenClose.writes[1].exitCode, 1)
+  assert.equal(errorThenClose.killed(), 1)
+  let finishPublishing
+  const publishingError = completionFixture({ persistence: (_row, stage) =>
+    stage === 2 ? new Promise((resolve) => { finishPublishing = resolve }) : undefined })
+  await publishingError.completion.prepare(); publishingError.completion.attach(publishingError.child)
+  publishingError.child.stdout.emit("data", Buffer.from(tap)); publishingError.child.emit("close", 0)
+  publishingError.child.emit("error", new Error("private"))
+  finishPublishing(); await flushCompletion()
+  assert.equal(publishingError.writes[1].exitCode, 0)
+  assert.deepEqual(publishingError.exits, [1])
+  assert.equal(publishingError.killed(), 0)
+  const failedExit = completionFixture()
+  await failedExit.completion.prepare(); failedExit.completion.attach(failedExit.child)
+  failedExit.child.stdout.emit("data", Buffer.from(tap)); failedExit.child.emit("close", 1)
+  await flushCompletion(); assert.deepEqual(failedExit.exits, [1])
+  assert.equal(failedExit.writes[1].exitCode, 1)
+  const lateClose = completionFixture()
+  await lateClose.completion.prepare(); lateClose.completion.attach(lateClose.child)
+  lateClose.child.stdout.emit("data", Buffer.from(tap))
+  lateClose.setNow(cliH.Hns); lateClose.child.emit("close", 0); await flushCompletion()
+  assert.deepEqual(lateClose.exits, [1])
+  assert.equal(lateClose.writes.length, 1)
+  const acquiredAtH = completionFixture({ kill: () => false })
+  await acquiredAtH.completion.prepare()
+  acquiredAtH.setNow(cliH.Hns); acquiredAtH.completion.attach(acquiredAtH.child)
+  assert.deepEqual(acquiredAtH.exits, [1])
+  assert.equal(acquiredAtH.killed(), 1)
+  assert.equal(acquiredAtH.child.listenerCount("error"), 1)
+  assert.equal(acquiredAtH.writes.length, 1)
+  const noClose = completionFixture()
+  await noClose.completion.prepare(); noClose.completion.attach(noClose.child)
+  noClose.child.emit("exit", 0); noClose.child.stdout.emit("end"); noClose.child.stderr.emit("end")
+  await flushCompletion(); assert.deepEqual(noClose.exits, [])
+  noClose.expire(); assert.deepEqual(noClose.exits, [1])
+  const quotaCompletion = completionFixture({ kill: () => false })
+  await quotaCompletion.completion.prepare(); quotaCompletion.completion.attach(quotaCompletion.child)
+  quotaCompletion.child.stdout.emit("data", Buffer.alloc(1048577))
+  quotaCompletion.child.stderr.emit("error", new Error("private"))
+  assert.equal(quotaCompletion.killed(), 1)
+  quotaCompletion.expire(); assert.deepEqual(quotaCompletion.exits, [1])
+  const latePreparation = completionFixture()
+  latePreparation.setNow(cliH.Hns)
+  assert.equal(await latePreparation.completion.prepare(), false)
+  assert.equal(latePreparation.writes.length, 0)
+  assert.deepEqual(latePreparation.exits, [1])
   for (const chunks of [[Buffer.from(tap)], [...Buffer.from(tap)].map((v) => Buffer.from([v]))]) {
     const counter = io.createProductTapCounter()
     for (const chunk of chunks) counter.push(chunk, "stdout")
@@ -1627,7 +1791,7 @@ test("portable raw component driver uses product wire without adapter", async ()
     assert.equal(counts.valid, true)
     assert.deepEqual([counts.pass, counts.fail, counts.skipped], [1, 0, 0])
     const row = io.makeProductResult({ counts, exitCode: 0, timedOut: false,
-      bytes: { stdout: Buffer.byteLength(tap), stderr: 0 }, ms: 10, code: "none" })
+      bytes: { stdout: Buffer.byteLength(tap), stderr: 0 },       ms: 10, code: "none", completion: "child-close" })
     assert.equal(row.exitCode, 0)
     assert.deepEqual([row.tail, row.outputTail, row.firstFailures, row.stuck], ["", "", "", ""])
     assert.equal(JSON.stringify(row).includes("private"), false)

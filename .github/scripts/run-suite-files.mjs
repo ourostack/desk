@@ -1,5 +1,5 @@
 // Runs the Desk unit test files one process each, with a per-file time limit, and writes a JSON result.
-// A file that hangs is killed (whole process tree) and recorded as a timeout instead of stalling the shard.
+// Legacy hangs use tree termination; product mode fails at its original H without inventing retirement.
 // Usage: node run-suite-files.mjs --shard 1/6 --out <results.json> [--timeout-ms 1800000] [--only <file regex>] [--tests-root <folder>] [--durations <table.json>]
 // Exit code: 1 when any file failed, timed out or reported a failed test, so a job that runs this script is red whenever the suite is. 0 only when every file passed.
 import { spawn, spawnSync } from "node:child_process"
@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
 import { assignShards, loadDurations } from "./suite-shards.mjs"
 import { PRODUCT_SELECTOR, NATIVE_TEST_NAME, isOwnedGitProductSelection,
-  createProductTapCounter, makeProductResult, captureProductEnvelope, productEnvelopeRemaining } from "./owned-git-product-io.mjs"
+  createProductTapCounter, createProductCompletion, captureProductEnvelope, productEnvelopeRemaining } from "./owned-git-product-io.mjs"
 
 const cliEnvelope = captureProductEnvelope(process.hrtime.bigint())
 const args = process.argv.slice(2)
@@ -73,9 +73,8 @@ const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: 
   return { name: m[1], error: error.slice(0, 3000), stack: stack.slice(0, 700) }
 })
 
-const runProductFile = (file) => new Promise((resolve) => {
+const runProductFile = async (file) => {
   const H = cliEnvelope.Hns
-  const started = cliEnvelope.startedNs
   const counter = createProductTapCounter(), bytes = { stdout: 0, stderr: 0 }
   const env = {}
   for (const key of ["SystemRoot", "WINDIR", "SystemDrive", "COMSPEC", "PATH", "TEMP", "TMP", "PATHEXT",
@@ -86,42 +85,68 @@ const runProductFile = (file) => new Promise((resolve) => {
   Object.assign(env, { DESK_TEST_RUN_DIR: isolation, TMPDIR: isolation, TEMP: isolation, TMP: isolation,
     GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", DESK_TEST_OWNED_GIT_NATIVE: "1",
     DESK_TEST_OWNED_GIT_H: H.toString(), DESK_TEST_SUITE_MODE: "standard" })
-  let timedOut = false, errorCode = "none", child, timer, settled = false
-  const finish = (code) => {
-    if (settled) return
-    settled = true; clearTimeout(timer)
-    const elapsed = Number((process.hrtime.bigint() - started) / 1000000n)
-    resolve(makeProductResult({ counts: counter.end(), exitCode: code, timedOut, bytes,
-      ms: Math.min(elapsed, 120000), code: errorCode }))
+  const heldFiles = new Set()
+  let completion
+  const live = () => {
+    if (completion.snapshot().terminalCode !== null) return false
+    if (!productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint())) {
+      completion.deadline(); return false
+    }
+    return true
   }
+  const persist = async (row) => {
+    if (path.resolve(out) !== path.join(repoRoot, "results.json")) throw new Error("ci_envelope")
+    const json = Buffer.from(JSON.stringify({ shard: `${index}/${total}`, platform: process.platform,
+      aclProbe: null, results: [row] }, null, 1))
+    const summary = Buffer.from("| Files | Files with a failure | Timeouts | Tests passed | Tests failed |\n" +
+      "|---|---|---|---|---|\n" +
+      `| 1 | ${row.exitCode === 0 ? 0 : 1} | ${row.timedOut ? 1 : 0} | ${row.pass} | ${row.fail} |\n`)
+    if (json.length > 4096 || summary.length > 4096 || heldFiles.size) throw new Error("ci_envelope")
+    for (const [name, buffer] of [["results.json", json], ["results-summary.md", summary]]) {
+      if (!live()) return
+      const file = path.join(repoRoot, name)
+      let st
+      try { st = await fs.promises.lstat(file) }
+      catch (error) { if (error.code !== "ENOENT") throw error }
+      if (!live()) return
+      if (st && (!st.isFile() || st.isSymbolicLink())) throw new Error("ci_envelope")
+      const handle = await fs.promises.open(file, "w")
+      heldFiles.add(handle)
+      if (!live()) return
+      try {
+        let at = 0
+        while (at < buffer.length) {
+          if (!live()) return
+          const { bytesWritten } = await handle.write(buffer, at, buffer.length - at, at)
+          if (!live()) return
+          if (!Number.isSafeInteger(bytesWritten) || bytesWritten <= 0 || bytesWritten > buffer.length - at) {
+            throw new Error("ci_envelope")
+          }
+          at += bytesWritten
+        }
+      } finally {
+        if (live()) {
+          await handle.close()
+          heldFiles.delete(handle)
+        }
+      }
+      if (!live()) return
+    }
+  }
+  completion = createProductCompletion({ envelope: cliEnvelope, nowNs: () => process.hrtime.bigint(),
+    counter, bytes, arm: setTimeout, disarm: clearTimeout, persist, terminate: (code) => process.exit(code) })
   try {
-    if (!productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint())) {
-      timedOut = true; errorCode = "deadline"; finish(1); return
-    }
-    fs.mkdirSync(isolation)
-    if (!productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint())) {
-      timedOut = true; errorCode = "deadline"; finish(1); return
-    }
-    child = spawn(process.execPath, ["--import", pathToFileURL(isolatedEnv).href, "--test", "--test-reporter=tap",
+    if (!await completion.prepare()) return
+    if (!live()) return
+    await fs.promises.mkdir(isolation)
+    if (!live()) return
+    const child = spawn(process.execPath, ["--import", pathToFileURL(isolatedEnv).href, "--test", "--test-reporter=tap",
       `--test-name-pattern=^${NATIVE_TEST_NAME}$`, file], { cwd: mcpRoot, env, windowsHide: true })
-    for (const name of ["stdout", "stderr"]) {
-      child[name].on("data", (chunk) => {
-        bytes[name] += chunk.length; counter.push(chunk, name)
-        if (bytes.stdout + bytes.stderr > 1048576) { errorCode = "quota"; child.kill() }
-      })
-      child[name].on("error", () => { errorCode = "ci_envelope" })
-    }
-    child.on("error", () => { errorCode = "ci_envelope" })
-    child.once("close", finish)
-    timer = setTimeout(() => {
-      timedOut = true; errorCode = "deadline"
-      // Original retained handle only. The independent supervisor honors H.
-      child.kill()
-    }, productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint()))
-  } catch { errorCode = "ci_envelope"; finish(1) }
-})
+    await completion.attach(child)
+  } catch { completion.error() }
+}
 
-const runFile = (file) => productMode ? runProductFile(file) : new Promise((resolve) => {
+const runFile = (file) => new Promise((resolve) => {
   const started = Date.now()
   const child = spawn(process.execPath, [
     "--import", pathToFileURL(isolatedEnv).href, "--test", "--test-reporter=tap", file,
@@ -163,6 +188,11 @@ const probeAcl = async () => {
   }
   fs.rmSync(dir, { recursive: true, force: true })
   return { powershellStartMs: plain, desk_acl_provider_ms: provider }
+}
+if (productMode && mine.length > 0) {
+  if (mine.length !== 1) process.exit(1)
+  await runProductFile(mine[0])
+  process.exit(1)
 }
 const aclProbe = !productMode && args.includes("--probe-acl") ? await probeAcl() : null
 console.log("acl probe:", JSON.stringify(aclProbe))

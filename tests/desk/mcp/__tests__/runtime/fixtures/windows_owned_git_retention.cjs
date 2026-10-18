@@ -162,7 +162,8 @@ function sameIdentity(a, b) {
 function guardedRoleRead(io, bound) {
   const before = io.before()
   if (!before || before.reparse || before.type !== "file" || !Number.isSafeInteger(before.size) ||
-    before.size < 0 || before.size > bound || (io.expected && !sameIdentity(io.expected, before))) fail("guard_failed")
+    before.size < 0 || before.size > bound) fail("guard_failed")
+  if (io.expected && !sameIdentity(io.expected, before)) fail("identity_changed")
   const bytes = io.read(before)
   if (!Buffer.isBuffer(bytes) || bytes.length !== before.size || !sameIdentity(before, io.after())) fail("identity_changed")
   return bytes
