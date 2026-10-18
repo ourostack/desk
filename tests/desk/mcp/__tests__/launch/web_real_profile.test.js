@@ -16,6 +16,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
+const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
 const browser = require(path.join(mcpRoot, "web.cjs"))
 const real = require(path.join(mcpRoot, "web-real-profile.cjs"))
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
@@ -618,19 +619,7 @@ async function realMachine(options = {}) {
 // Actual controller with only normal account/executable observations scoped to
 // owned fixtures. It never substitutes a native client or grants readiness.
 function canonicalCjs(file,context) {
-  const canonical=path.join(mcpRoot,file)
-  let source=readFileSync(canonical,"utf8")
-  if(process.env.NYC_CONFIG){
-    const owner=Object.keys(require.cache).find(file=>/[/\\]nyc[/\\]index\.js$/.test(file))
-    const instrumenter=new(require(owner))(JSON.parse(process.env.NYC_CONFIG)).instrumenter()
-    source=instrumenter.instrumentSync(source,canonical,{registerMap(){}})
-    const existing=global.__coverage__?.[canonical],generated=instrumenter.lastFileCoverage()
-    if(existing)for(const key of ["statementMap","fnMap","branchMap"])
-      assert.deepEqual(JSON.parse(JSON.stringify(generated[key])),JSON.parse(JSON.stringify(existing[key])),"standard canonical instrumentation positions")
-    context.__coverage__=global.__coverage__
-  }
-  vm.runInNewContext(source,context,{filename:canonical})
-  return context.module.exports
+  return loadTemplate(path.join(mcpRoot,file),context)
 }
 function nativeController(machine,resources={}) {
   const module={exports:{}},actualFs=require("fs"),observed=Object.create(actualFs)
@@ -900,19 +889,9 @@ function installNpm(calls, options = {}) {
 // It is not reachable by native desk-web calls and is never used as a fallback.
 async function prepareLegacyReader(machine,extra={}) {
   const canonical=path.join(mcpRoot,"web.cjs"),module={exports:{}},errors=[]
-  let source=readFileSync(canonical,"utf8")
   const scope={module,__dirname:mcpRoot,process,Buffer,setTimeout,clearTimeout,
     require:name=>require(name.startsWith(".")?path.join(mcpRoot,name):name)}
-  if(process.env.NYC_CONFIG){
-    const owner=Object.keys(require.cache).find(file=>/[/\\]nyc[/\\]index\.js$/.test(file))
-    const instrumenter=new(require(owner))(JSON.parse(process.env.NYC_CONFIG)).instrumenter()
-    source=instrumenter.instrumentSync(source,canonical,{registerMap(){}})
-    const existing=global.__coverage__?.[canonical],generated=instrumenter.lastFileCoverage()
-    if(existing)for(const key of ["statementMap","fnMap","branchMap"])
-      assert.deepEqual(generated[key],existing[key],"unmodified canonical source positions")
-    scope.__coverage__=global.__coverage__
-  }
-  vm.runInNewContext(source,scope,{filename:canonical})
+  loadTemplate(canonical,scope)
   const runtime=scope.browserRuntimeTools({...machine.launchOptions,...extra},{stderr:{write:text=>errors.push(text)}})
   const result=await scope.ensureInstalled(runtime.tools,runtime.root,runtime.clock()+110000,true)
   return{...result,errors}
