@@ -17,6 +17,7 @@ import { mkTempRoot } from '../_temp_roots.js';
 import { removeTree } from '../_remove_tree.js';
 import { BrokerError } from '../../../../../plugins/desk/mcp/src/util/broker-error.mjs';
 import { NativeCommandTransport } from '../../../../../plugins/desk/mcp/src/browser/native-transport.mjs';
+import { protectWindowsPaths } from '../../../../../plugins/desk/mcp/src/factory/windows-acl.js';
 
 const require = createRequire(import.meta.url);
 const rootUrl = new URL('../../../../../plugins/desk/mcp/', import.meta.url);
@@ -173,6 +174,9 @@ async function fixture(t, options = {}) {
     nativeReadyFile: config.nativeReadyFile,
   };
   await fs.mkdir(path.join(config.browserStateRoot, 'signed-in'), { recursive: true, mode: 0o700 });
+  if (process.platform === 'win32') await protectWindowsPaths(
+    [config.browserStateRoot, path.join(config.browserStateRoot, 'signed-in')]
+      .map(path => ({ path, kind: 'directory', created: true })));
   const inventory = createNativeOwnerInventory({
     browserStateRoot: config.browserStateRoot, cliDir: actualCli,
     binding: selection, socketRoot, env: { USER: 'fixture', USERNAME: 'fixture' },
@@ -190,13 +194,20 @@ async function fixture(t, options = {}) {
     });
     const layout = inventory.layout(id);
     await put(path.join(layout.socketDirectory, '.desk-context-owner'), marker);
-    await fs.mkdir(path.dirname(layout.socketPath), { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') await fs.mkdir(path.dirname(layout.socketPath), { recursive: true, mode: 0o700 });
     const metadata = { name: id, version: inventory.version, timestamp: Date.now(), workspaceDir: directory,
       attached: true, cli: { persistent: true }, browser: {
         browserName: 'chromium', launchOptions: {}, userDataDir: config.userDataDir,
       },
       socketPath: layout.socketPath };
     if (!settings.startup) await put(layout.sessionFile, settings.bad ? '{' : metadata, 0o644);
+    if (process.platform === 'win32') await protectWindowsPaths([
+      directory, ...['.playwright', 'home', 'config', 'cache', 'data', 'state', 'runtime', 'local', 'roaming']
+        .map(name => path.join(directory, name)), layout.socketDirectory,
+    ].map(path => ({ path, kind: 'directory', created: true })).concat([
+      path.join(directory, '.desk-context-owner'), path.join(directory, 'config/browser.json'),
+      path.join(layout.socketDirectory, '.desk-context-owner'),
+    ].map(path => ({ path, kind: 'file', created: true }))));
     return { id, directory, layout, record, metadata };
   }
   let pin = TOKEN, alive = true;
@@ -604,6 +615,7 @@ test('native entry initialization receives its own profile reply without a frame
   const host = await import(new URL('src/browser/native-host.mjs', rootUrl));
   const configFile = path.join(f.root, 'entry', 'provider-config.json');
   await put(configFile, f.config);
+  if (process.platform === 'win32') await protectWindowsPaths([{ path: configFile, kind: 'file', created: true }]);
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const entryChain = structuredClone(chain); entryChain[0].pid = process.pid;
   const native = [];
@@ -746,7 +758,10 @@ test('actual Registry loadEntry inventories both owners without pruning or unlin
   assert.equal(process.env.HOME, beforeHome); assert.equal(process.cwd(), beforeCwd);
   await assert.rejects(f.provider.invoke('prepareUpdate', {}), code('NATIVE_UPDATE_OWNERS_UNSETTLED'));
   assert.ok((await fs.lstat(a.layout.sessionFile)).isFile());
-  assert.ok((await fs.lstat(b.layout.socketPath)).isSocket());
+  if (process.platform === 'win32') {
+    assert.equal(live.listening, true);
+    assert.equal(live.address(), b.layout.socketPath);
+  } else assert.ok((await fs.lstat(b.layout.socketPath)).isSocket());
 });
 
 test('actual unreachable Unix owner socket and maintained metadata are never pruned', {

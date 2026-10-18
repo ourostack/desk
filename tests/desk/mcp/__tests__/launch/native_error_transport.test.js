@@ -16,6 +16,22 @@ const A = "11111111-1111-4111-8111-111111111111";
 const resources = { contextId: A, disposition: "unknown", closedTabIds: [7],
   remainingTabIds: [8], unknownRevokedTabs: [{ tabId: 9, windowId: 2 }] };
 
+test.beforeEach(t => {
+  if (process.platform !== "win32") return;
+  const cp = require("node:child_process"), original = cp.execFileSync, calls = [];
+  t.mock.method(cp, "execFileSync", function (executable, ...args) {
+    if (path.basename(executable).toLowerCase() !== "powershell.exe") return original.call(this, executable, ...args);
+    const started = performance.now(), row = {};
+    try { return original.call(this, executable, ...args); }
+    catch (error) { row.error = { code: error.code, status: error.status, signal: error.signal }; throw error; }
+    finally { row.ms = Math.round(performance.now() - started); calls.push(row); }
+  });
+  t.after(() => t.diagnostic("actual Windows ACL provider timing " + JSON.stringify({
+    calls: calls.length, totalMs: calls.reduce((total, row) => total + row.ms, 0),
+    maxMs: Math.max(0, ...calls.map(row => row.ms)), failures: calls.filter(row => row.error),
+  })));
+});
+
 test("E4 exposes the real codec and credential binding and selects revision four", () => {
   const codec = require(path.join(mcpRoot, "web-native-error-transport.cjs"));
   assert.deepEqual(Object.keys(codec).sort(), ["decodeError", "forDaemon", "forLaunch", "markResult", "project", "sessionStamp", "takeResult", "writeLaunch"].sort());

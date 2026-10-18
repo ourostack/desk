@@ -17,6 +17,7 @@ import { readNativeAncestry } from '../../../../../plugins/desk/mcp/src/browser/
 import { readProcessStart } from '../../../../../plugins/desk/mcp/src/readiness/process-start.js';
 import { removeTree } from '../_remove_tree.js';
 import { mcpRoot } from './_mcp_handshake.js';
+import { protectWindowsPaths } from '../../../../../plugins/desk/mcp/src/factory/windows-acl.js';
 import '../_isolated_env.mjs';
 
 const require = createRequire(import.meta.url);
@@ -122,6 +123,18 @@ async function integrated(t, options = {}) {
     records.set(contextId, record);
     await put(path.join(directory, '.desk-context-owner'), { contextId, directory });
     await put(path.join(directory, 'config/browser.json'), { extension: true, browser: { userDataDir: config.userDataDir }, deskNativeContext: record });
+  }
+  if (process.platform === 'win32') {
+    const directories = [config.browserStateRoot, path.join(config.browserStateRoot, 'signed-in')];
+    const files = [];
+    for (const contextId of [A, B]) {
+      const directory = inventory.layout(contextId).directory;
+      directories.push(directory, ...['.playwright', 'home', 'config', 'cache', 'data', 'state', 'runtime', 'local', 'roaming']
+        .map(name => path.join(directory, name)));
+      files.push(path.join(directory, '.desk-context-owner'), path.join(directory, 'config/browser.json'));
+    }
+    await protectWindowsPaths(directories.map(path => ({ path, kind: 'directory', created: true }))
+      .concat(files.map(path => ({ path, kind: 'file', created: true }))));
   }
   const output = [], binary = [], coreProc = { platform: process.platform, pid: process.pid, getuid: process.getuid?.bind(process),
     env: { ...process.env, HOME: path.join(root, 'isolated-cli-home'), PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'stock-must-not-be-used' },

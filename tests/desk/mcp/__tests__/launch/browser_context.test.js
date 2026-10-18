@@ -186,14 +186,25 @@ function ownedNodeProbe(file) {
     `const fs=require("fs"),cp=require("child_process");fs.writeFileSync(${JSON.stringify(file+".generation")},JSON.stringify({pid:process.pid,start:cp.execFileSync("/bin/ps",["-p",String(process.pid),"-o","lstart="],{encoding:"utf8"}).trim()}));console.log(process.version+" "+process.versions.modules);`)
   fs.chmodSync(file,0o700)
 }
+function ownedRuntime(root) {
+  const windows=process.platform==="win32"
+  const node=path.join(root,windows?"nvm/v22.23.3/node.exe":".nvm/versions/node/v22.23.3/bin/node")
+  const env={HOME:root,PATH:"",DESK_NODE_SYSTEM_PREFIX:root}
+  for(const key of Object.keys(process.env))
+    if(/^(SYSTEMROOT|WINDIR|NODE_OPTIONS)$/i.test(key))env[key]=process.env[key]
+  if(windows)Object.assign(env,{NVM_HOME:path.join(root,"nvm"),ProgramFiles:path.join(root,"program-files"),
+    "ProgramFiles(x86)":path.join(root,"program-files-x86")})
+  return{node,env}
+}
 async function controllerEntry(t,{candidate=false,spawnError=false,current=false,prefix=true}={}) {
   const root=await mkTempRoot("desk-F-shell-")
   t.after(()=>removeTree(root))
-  const node=path.join(root,".nvm/versions/node/v22.23.3/bin/node")
+  const {node,env}=ownedRuntime(root)
+  if(!prefix)delete env.DESK_NODE_SYSTEM_PREFIX
   if(candidate)ownedNodeProbe(node)
   const module={exports:{}},calls=[],output=[]
-  const proc=Object.assign(new EventEmitter(),{env:{HOME:root,PATH:"",...(prefix?{DESK_NODE_SYSTEM_PREFIX:root}: {})},
-    platform:"linux",arch:process.arch,version:current?process.version:"v16.20.2",
+  const proc=Object.assign(new EventEmitter(),{env,
+    platform:process.platform,arch:process.arch,version:current?process.version:"v16.20.2",
     versions:process.versions,execPath:current?process.execPath:path.join(root,"old/node"),
     argv:[process.execPath,path.join(mcpRoot,"browser-context.cjs"),"create"],stdout:{write:bytes=>output.push(bytes)},stderr:{write(){}}})
   const req=Object.assign(name=>{
@@ -251,11 +262,11 @@ test("controller bounds serialized input, rejects invalid create modes, and comm
 test("frontend reexec uses the normal default process resources and propagates selected-child exit",async t=>{
   const root=await mkTempRoot("desk-F-frontend-default-resources-")
   t.after(()=>removeTree(root))
-  const node=path.join(root,".nvm/versions/node/v22.23.3/bin/node")
+  const {node,env}=ownedRuntime(root)
   ownedNodeProbe(node)
   const module={exports:{}},calls=[]
-  const proc=Object.assign(new EventEmitter(),{env:{HOME:root,PATH:"",DESK_NODE_SYSTEM_PREFIX:root},
-    platform:"linux",arch:process.arch,version:"v16.20.2",versions:process.versions,execPath:path.join(root,"old/node"),
+  const proc=Object.assign(new EventEmitter(),{env,
+    platform:process.platform,arch:process.arch,version:"v16.20.2",versions:process.versions,execPath:path.join(root,"old/node"),
     stdin:{},stdout:{write(){}},stderr:{write(){}},kill(){assert.fail("no signal exit")}})
   const req=name=>name==="child_process"?{spawn:(...args)=>{
     calls.push(args);const child=new EventEmitter();child.kill=()=>{}

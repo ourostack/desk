@@ -18,6 +18,7 @@ import {readNativeAncestry} from "../../../../../plugins/desk/mcp/src/browser/na
 import {mcpRoot} from "./_mcp_handshake.js"
 import {mkTempRoot} from "../_temp_roots.js"
 import {removeTree} from "../_remove_tree.js"
+import {protectWindowsPaths} from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 const require = createRequire(import.meta.url)
 test("fresh worker refuses unknown modes before loading CLI modules", async () => {
   const file = path.join(mcpRoot,"browser-context-runtime.cjs")
@@ -164,6 +165,11 @@ test("actual maintained daemon options can reach native acquisition using the st
     const config = {extension:true,browser:{browserName:"chromium",userDataDir:selection.userDataDir,
       launchOptions:{channel:"msedge"}},deskNativeContext:record}
     put(l.configFile,config)
+    if (process.platform === "win32") await protectWindowsPaths([
+      stateRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
+    ].map(path=>({path,kind:"directory",created:true})).concat([
+      path.join(l.root,l.markerName),path.join(l.socketDir,l.markerName),l.configFile,
+    ].map(path=>({path,kind:"file",created:true}))))
     const inventoryModule = await import(pathToFileURL(path.join(mcpRoot,"src/browser/native-owner-inventory.mjs")).href)
     const inventory = inventoryModule.createNativeOwnerInventory({browserStateRoot:stateRoot,cliDir:actualCli,binding:selection,
       socketRoot:options.socketRoot})
@@ -195,9 +201,12 @@ test("actual maintained daemon options can reach native acquisition using the st
     assert.equal(produced.info.workspaceDir,l.root)
     assert.equal(produced.metadata.attached,true)
     assert.equal(produced.metadata.cli.persistent,true)
-    for (let current = path.dirname(descriptor.sessionFile);current !== l.root;current = path.dirname(current))
-      assert.equal(fs.statSync(current).mode & 0o077,0,"actual generated private directory "+current)
-    assert.equal(fs.statSync(descriptor.sessionFile).mode & 0o077,0)
+    for (let current = path.dirname(descriptor.sessionFile);current !== l.root;current = path.dirname(current)) {
+      if (process.platform === "win32") native.privatePath(current,true,false)
+      else assert.equal(fs.statSync(current).mode & 0o077,0,"actual generated private directory "+current)
+    }
+    if (process.platform === "win32") native.readPrivateJson(descriptor.sessionFile,{anchor:l.root})
+    else assert.equal(fs.statSync(descriptor.sessionFile).mode & 0o077,0)
     // Make actual stamp generation, not an invented current-client correlation.
     const observedFs = Object.create(fs)
     const candidates = require(path.join(mcpRoot,"web-browser-discovery.cjs")).browserPaths("msedge",process.platform,process.env)
