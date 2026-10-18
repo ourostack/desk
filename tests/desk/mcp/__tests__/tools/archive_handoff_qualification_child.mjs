@@ -210,11 +210,27 @@ export function descriptor(base, root, person = null) {
 
 const actors = new Set()
 const workers = new Set()
+const candidateAttempts = []
+export function archiveCandidateObservations({ includeSynthetic = false } = {}) {
+  return candidateAttempts.filter(attempt => includeSynthetic || attempt.scope === "actual_native_controller")
+}
+function missingHandleStages(native) {
+  if (!native) return ["native_receipt_missing"]
+  const required = ["native_spawn", "capture_requested", "native_result", "native_exit", "native_close", "session_settled"]
+  if (native.capturedValidated) required.push("native_captured")
+  if (native.admissionValidated) required.push("admission_requested", "native_ready")
+  if (native.archiveMove?.released) required.push("callback_started", "callback_completed", "GO_attempted")
+  return required.filter(type => !native.events?.some(event => event.type === type))
+}
 export function nativeActorObservations() {
   return [...actors].filter(actor => actor.role === "archive").map(actor => {
-    const observation = actor.messages.findLast(message => message.moveObservation)?.moveObservation ?? null
+    const attempts = actor.messages.findLast(message => message.candidateAttempts)?.candidateAttempts ?? []
+    const observation = actor.messages.findLast(message => message.moveObservation)?.moveObservation ?? attempts.at(-1) ?? null
     return { actorPid: actor.pid, caseId: actor.caseId, receipt: observation,
-      missingNativeStages: observation ? nativeStages.filter(type => !observation.events.some(item => item.type === type)) : nativeStages,
+      missingNativeStages: observation?.kind === "test_only_preadmitted_source_handle" ?
+        missingHandleStages(observation.native) :
+        observation ? nativeStages.filter(type => !observation.events.some(item => item.type === type)) : nativeStages,
+      candidateAttempts: attempts,
       receiptReceived: observation !== null }
   })
 }
@@ -334,6 +350,101 @@ export function options(fixture, extra = {}) {
   return { deskRoot: fixture.root, person: fixture.person, env: fixture.env,
     spawnGit: realGit, schedulePush: scheduleFor(fixture), ...extra }
 }
+export async function archiveOwned(fixture, extra = {}, {
+  candidate = process.env.DESK_TEST_ARCHIVE_HANDLE_CANDIDATE === "1",
+  platform = process.platform, lstat = io.lstat, runArchive = task_archive, openSession, decorateMove, afterCapture,
+} = {}) {
+  if (!candidate) return runArchive(options(fixture, decorateMove ?
+    { ...extra, moveArchive: decorateMove(moveArchive, null) } : extra))
+  if (platform !== "win32") throw new Error("The archive source-handle candidate is Windows-test-only")
+  if (candidateAttempts.length >= 64) throw new Error("Owned archive candidate attempt observations exceeded their bound")
+  const observation = { kind: "test_only_preadmitted_source_handle",
+    scope: openSession ? "synthetic_controller" : "actual_native_controller", caseId: digest(fixture.root),
+    sourceCapture: "not_started", native: null, operationOutcome: "not_entered",
+    cleanupFailure: null, events: [], droppedEvents: 0 }
+  candidateAttempts.push(observation)
+  const event = type => {
+    if (observation.events.length >= 32) {
+      observation.droppedEvents++
+      throw new Error("Owned archive candidate controller events exceeded their bound")
+    }
+    observation.events.push({ type, sequence: observation.events.length + 1,
+      monotonicNs: process.hrtime.bigint().toString() })
+  }
+  let session, failure, result, invoked = false
+  try {
+    let sourcePresent = true
+    try { await lstat(fixture.src) }
+    catch (error) { if (error.code !== "ENOENT") throw error; sourcePresent = false }
+    if (sourcePresent) {
+      const capture = openSession ?? (await import("./_windows_archive_handle.mjs")).openArchiveHandleSession
+      observation.sourceCapture = "capture_attempted"
+      event("source-capture-entered")
+      session = await capture({ source: fixture.src, destination: fixture.dst })
+      observation.native = session.receipt
+      observation.destinationParentAtCapture = observation.native.destinationParentValidation ?? null
+      observation.sourceCapture = "captured_before_operation"
+      event("source-captured")
+      if (afterCapture) await afterCapture()
+    } else observation.sourceCapture = "not_applicable_source_absent"
+    const move = async (source, destination, atUse) => {
+      if (!session || invoked || source !== fixture.src || destination !== fixture.dst)
+        throw new Error("Owned archive candidate requires one exact source/destination attempt")
+      invoked = true
+      event("move-callable-entered")
+      try { await session.admit() } finally { observation.native = session.receipt }
+      event("native-admission-confirmed")
+      try { return await session.move(atUse) } finally { observation.native = session.receipt }
+    }
+    const callable = decorateMove ? decorateMove(move, observation) : move
+    event("operation-entered")
+    observation.operationOutcome = "entered"
+    result = await runArchive(options(fixture, { ...extra, moveArchive: callable }))
+    observation.operationOutcome = "returned"
+  } catch (error) {
+    failure = error
+    observation.failureStage = observation.operationOutcome === "not_entered" ? "before_operation" : "operation"
+    if (observation.operationOutcome === "entered") observation.operationOutcome = "threw"
+    if (observation.sourceCapture === "capture_attempted") {
+      observation.sourceCapture = "capture_failed"
+      observation.native = error.handleReceipt ?? null
+    }
+  }
+  finally {
+    if (session) {
+      try { await session.close(); event("session-retired") }
+      catch (error) {
+        observation.cleanupFailure = "native_session_close_unconfirmed"
+        failure ??= error
+      } finally { observation.native = session.receipt }
+    }
+  }
+  if (failure) throw failure
+  return result
+}
+function candidateMoveObserver(observation, source, destination, fixture) {
+  observation.sourceMatchesFixture = source === fixture.src
+  observation.destinationMatchesFixture = destination === fixture.dst
+  const event = type => {
+    if (observation.events.length >= 32) {
+      observation.droppedEvents++
+      throw new Error("Owned archive candidate controller events exceeded their bound")
+    }
+    observation.events.push({ type, sequence: observation.events.length + 1,
+      monotonicNs: process.hrtime.bigint().toString() })
+  }
+  return {
+    receipt: observation, event,
+    async before() { event("move-decorator-entered") },
+    returned(state) { observation.helperOutcome = "returned"; observation.movement = state.movement },
+    threw(error) {
+      observation.helperOutcome = "threw"
+      observation.movement = ["not_released", "confirmed", "refused", "unconfirmed"].includes(error.archiveMove?.movement) ?
+        error.archiveMove.movement : null
+    },
+    async after() { event("move-decorator-finished") },
+  }
+}
 export async function openReadiness(fixture, name) {
   const journal = await openChangeJournal({ root: fixture.root, stateDir: path.join(fixture.base, `journal-${name}`) })
   return {
@@ -436,14 +547,15 @@ if (process.argv[1] === HELPER) {
     if (role === "push") result = await runPushWorker({ root: owned.root, env: owned.env, debounceMs: 0, spawnGit: realGit })
     else {
       reader = await openReadiness(owned, `actor-${process.pid}`)
-      const qualifiedMove = async (source, destination, atUse) => {
-        const observer = nativeMoveObserver({ source, destination, fixture: owned })
+      const decorateMove = (delegate, admission) => async (source, destination, atUse) => {
+        const observer = admission ? candidateMoveObserver(admission, source, destination, owned) :
+          nativeMoveObserver({ source, destination, fixture: owned })
         moveObserver = observer
         moveObservation = observer.receipt
         await observer.before()
         let nativeMove
         try {
-          nativeMove = await moveArchive(source, destination, async () => {
+          nativeMove = await delegate(source, destination, async () => {
             await atUse()
             observer.event("freshness-callback-completed")
             if (config.mode !== "plain") {
@@ -461,6 +573,7 @@ if (process.argv[1] === HELPER) {
         if (nativeMove) record("native-move-returned", nativeMove)
         renameReturned = true
         observer.event("rename-returned-set")
+        if (admission) await sendMessage({ type: "native-move-settled", moveObservation: observer.receipt })
         if (config.mode === "exit-after-rename") {
           const receipt = { pid: process.pid, exe: process.execPath, source, destination,
             actualDestination: fs.realpathSync(destination), gitCallsBeforeExit: gitCalls.length,
@@ -473,14 +586,15 @@ if (process.argv[1] === HELPER) {
           process.exit(37)
         }
       }
-      result = await task_archive(options(owned, { readiness: reader.readiness, input: { track: "t", slug: SLUG }, moveArchive: qualifiedMove }))
+      result = await archiveOwned(owned, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }, { decorateMove })
     }
   } catch (error) { failure = errorData(error) }
   finally {
     if (reader) await reader.journal.close()
   }
   moveObserver?.event("archive-result", { status: result?.status ?? null, errorPhase: failure?.phase ?? null })
-  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned, moveObservation })
+  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned, moveObservation,
+    candidateAttempts: archiveCandidateObservations() })
   await take("finish")
   await drainActors()
   clearTimeout(lease)

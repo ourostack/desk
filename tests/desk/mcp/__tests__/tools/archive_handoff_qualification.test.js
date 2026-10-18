@@ -6,13 +6,14 @@ import fs from "node:fs"
 import { promises as io } from "node:fs"
 import path from "node:path"
 import { EventEmitter } from "node:events"
-import { task_archive, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { findCard } from "../../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { ART, SLUG, RESOURCE, exists, digest, record, fixture, options, complete, readCard,
   openReadiness, requests, realGit, git, spawnActor, actorMessage, send, finishActor, drainActors, errorData, ownIdentity,
-  nativeMoveObserver, nativeActorObservations, drainWithNativeObservations } from "./archive_handoff_qualification_child.mjs"
+  nativeMoveObserver, nativeActorObservations, drainWithNativeObservations,
+  archiveOwned, archiveCandidateObservations } from "./archive_handoff_qualification_child.mjs"
 
 const reports = []
 const readers = []
@@ -194,6 +195,7 @@ after(async () => {
       const artifact = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) :
         { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
       artifact.actorReceipts = nativeActorObservations()
+      artifact.candidateAttempts = archiveCandidateObservations()
       fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
     } catch (error) { result.observationPersistenceFailure = error.code ?? "unavailable" }
     fs.writeFileSync(path.join(ART, "summary.json"), JSON.stringify(result, null, 2) + "\n")
@@ -222,7 +224,7 @@ async function terminalWorkflow(name, onGit) {
   const frontBefore = (await readCard(f.card)).data
   const trackBeforeArchive = await io.readFile(f.track, "utf8")
   const requestsBefore = await requests(f)
-  const archived = await task_archive(options(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }))
+  const archived = await archiveOwned(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } })
   const firstArchiveHead = onGit ? git(f.root, "rev-parse", "HEAD") : null
   const after = await io.readFile(f.archived)
   const frontAfter = (await readCard(f.archived)).data
@@ -234,7 +236,7 @@ async function terminalWorkflow(name, onGit) {
   const journal = reader.journal.replay()
   const requestsAfter = await requests(f)
   const retryBefore = await requests(f)
-  const retried = await task_archive(options(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }))
+  const retried = await archiveOwned(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } })
   const retryAfter = await requests(f)
   const finalHead = onGit ? git(f.root, "rev-parse", "HEAD") : null
   return {
@@ -331,7 +333,7 @@ scenario("04-crash-after-real-rename-normal-retry-recovers-publication", async (
   const headAfterCrashBeforeRetry = git(f.root, "rev-parse", "HEAD")
   const foundBeforeRetry = await findCard({ deskRoot: f.root, track: "t", slug: SLUG })
   const reader = await readiness(f, "fresh-retry")
-  const retried = await attempt(() => task_archive(options(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } })))
+  const retried = await attempt(() => archiveOwned(f, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }))
   const published = git(f.root, "ls-tree", "-r", "--name-only", "HEAD").split("\n")
   const status = git(f.root, "status", "--short")
   const journal = reader.journal.replay()
@@ -396,7 +398,7 @@ scenario("06-head-index-destination-occupancy-refuses-before-write", async () =>
     const head = git(f.root, "rev-parse", "HEAD")
     const index = git(f.root, "ls-files", "-s")
     const source = await io.readFile(f.card)
-    const outcome = await attempt(() => task_archive(options(f, { input: { track: "t", slug: SLUG } })))
+    const outcome = await attempt(() => archiveOwned(f, { input: { track: "t", slug: SLUG } }))
     variants.push({ stagedDelete, root: f.root, outcome, headBefore: head, headAfter: git(f.root, "rev-parse", "HEAD"),
       status: git(f.root, "status", "--short"), sourceStillPresent: exists(f.card),
       foreignBackupPreserved: foreignBytes.equals(await io.readFile(path.join(f.base, "owned-foreign-archive-backup", "task.md"))),
@@ -420,7 +422,7 @@ scenario("07-dirty-and-untracked-companions-are-not-published", async () => {
     await io.writeFile(path.join(f.src, "foreign.txt"), untracked)
     const head = git(f.root, "rev-parse", "HEAD")
     const index = git(f.root, "ls-files", "-s")
-    const outcome = await attempt(() => task_archive(options(f, { input: { track: "t", slug: SLUG } })))
+    const outcome = await attempt(() => archiveOwned(f, { input: { track: "t", slug: SLUG } }))
     const newPath = exists(f.src) ? f.src : f.dst
     const publishedPaths = git(f.root, "ls-tree", "-r", "--name-only", "HEAD")
     variants.push({ staged, root: f.root, outcome, publishedPaths, status: git(f.root, "status", "--short"),
@@ -443,12 +445,12 @@ scenario("08-preflight-and-archived-resource-policy-preserve-records", async () 
   const f = await fixture("08-policies", { person: "alice", resource: true })
   await io.mkdir(path.join(f.root, "desks", "bob"), { recursive: true })
   const original = await io.readFile(f.card)
-  const wrong = await attempt(() => task_archive(options(f, { person: "bob", input: { track: "t", slug: SLUG } })))
-  const badEvidence = await attempt(() => task_archive(options(f, { input: { track: "t", slug: SLUG,
-    evidence: { kind: "non_code", ref: "does-not-exist.md" } } })))
+  const wrong = await attempt(() => archiveOwned(f, { person: "bob", input: { track: "t", slug: SLUG } }))
+  const badEvidence = await attempt(() => archiveOwned(f, { input: { track: "t", slug: SLUG,
+    evidence: { kind: "non_code", ref: "does-not-exist.md" } } }))
   const untouched = original.equals(await io.readFile(f.card)) && !exists(f.dst)
   await complete(f)
-  await task_archive(options(f, { input: { track: "t", slug: SLUG } }))
+  await archiveOwned(f, { input: { track: "t", slug: SLUG } })
   const raw = await io.readFile(f.archived, "utf8")
   const front = raw.match(/^---[\s\S]*?\n---\n/u)?.[0]
   const requestsBefore = await requests(f)
