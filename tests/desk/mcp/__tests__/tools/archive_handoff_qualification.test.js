@@ -12,7 +12,7 @@ import { readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/clean
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { ART, SLUG, RESOURCE, exists, digest, record, fixture, options, complete, readCard,
   openReadiness, requests, realGit, git, spawnActor, actorMessage, send, finishActor, drainActors, errorData, ownIdentity,
-  nativeMoveObserver, nativeActorObservations } from "./archive_handoff_qualification_child.mjs"
+  nativeMoveObserver, nativeActorObservations, drainWithNativeObservations } from "./archive_handoff_qualification_child.mjs"
 
 const reports = []
 const readers = []
@@ -111,6 +111,45 @@ for (const [name, options, issue] of [
     })
   })
 }
+
+test("native receipt cleanup retains successful drain results", async () => {
+  const actors = []
+  let retained
+  assert.equal(await drainWithNativeObservations(async () => actors, (value, error) => {
+    retained = value
+    assert.equal(error, undefined)
+  }), actors)
+  assert.equal(retained, actors)
+})
+
+test("native receipt cleanup persists partial observations before rethrowing the exact teardown failure", async () => {
+  const failure = new Error("owned teardown failed")
+  let retained = false
+  await assert.rejects(drainWithNativeObservations(async () => { throw failure }, (value, error) => {
+    assert.equal(value, undefined)
+    assert.equal(error, failure)
+    retained = true
+  }), error => error === failure)
+  assert.equal(retained, true)
+})
+
+test("native receipt cleanup does not replace teardown failure when observation persistence also fails", async t => {
+  const failure = new Error("owned teardown failed")
+  const logged = t.mock.method(console, "error", () => {})
+  let retained = false
+  await assert.rejects(drainWithNativeObservations(async () => { throw failure }, () => {
+    retained = true
+    throw Object.assign(new Error("private persistence detail"), { code: "EIO" })
+  }), error => error === failure)
+  assert.equal(retained, true)
+  assert.deepEqual(logged.mock.calls[0].arguments, ["Passive native observation persistence failed:", "EIO"])
+})
+
+test("native receipt cleanup does not convert a persistence failure into success", async () => {
+  const failure = new Error("owned persistence failed")
+  await assert.rejects(drainWithNativeObservations(async () => [], () => { throw failure }),
+    error => error === failure)
+})
 async function readiness(f, label) {
   const reader = await openReadiness(f, label)
   readers.push(reader)
@@ -144,21 +183,23 @@ function scenario(name, body) {
 }
 after(async () => {
   const journals = await Promise.allSettled(readers.map((reader) => reader.journal.close()))
-  const actors = await drainActors()
   const failures = journals.filter((item) => item.status === "rejected")
-  const result = { reports: reports.map(({ name, verdict, failedCriteria, error }) => ({ name, verdict, failedCriteria, error })),
-    actors, journalCloseFailures: failures.map((item) => String(item.reason)),
-    retainedFixtures: true, noOperatorState: true, noNetworkPush: true, productSourceWritesByHarness: false }
-  try {
-    const target = new URL("../../../../../windows-archive-race-observations.json", import.meta.url)
-    const artifact = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) :
-      { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
-    artifact.actorReceipts = nativeActorObservations()
-    fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
-  } catch (error) { result.observationPersistenceFailure = error.code ?? "unavailable" }
-  fs.writeFileSync(path.join(ART, "summary.json"), JSON.stringify(result, null, 2) + "\n")
+  await drainWithNativeObservations(drainActors, (actors, teardownError) => {
+    const result = { reports: reports.map(({ name, verdict, failedCriteria, error }) => ({ name, verdict, failedCriteria, error })),
+      actors: actors ?? null, actorTeardownFailed: teardownError !== undefined,
+      journalCloseFailures: failures.map((item) => String(item.reason)),
+      retainedFixtures: true, noOperatorState: true, noNetworkPush: true, productSourceWritesByHarness: false }
+    try {
+      const target = new URL("../../../../../windows-archive-race-observations.json", import.meta.url)
+      const artifact = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) :
+        { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
+      artifact.actorReceipts = nativeActorObservations()
+      fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
+    } catch (error) { result.observationPersistenceFailure = error.code ?? "unavailable" }
+    fs.writeFileSync(path.join(ART, "summary.json"), JSON.stringify(result, null, 2) + "\n")
+    assert.equal(result.observationPersistenceFailure, undefined, "Passive observation persistence failed; original scenario verdicts are unchanged")
+  })
   assert.equal(failures.length, 0)
-  assert.equal(result.observationPersistenceFailure, undefined, "Passive observation persistence failed; original scenario verdicts are unchanged")
 })
 
 async function terminalWorkflow(name, onGit) {

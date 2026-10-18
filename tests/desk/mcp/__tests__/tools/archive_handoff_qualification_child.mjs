@@ -218,6 +218,17 @@ export function nativeActorObservations() {
       receiptReceived: observation !== null }
   })
 }
+export async function drainWithNativeObservations(drain, persist) {
+  let result, primary, failed = false
+  try { result = await drain() } catch (error) { primary = error; failed = true }
+  try { await persist(result, primary) } catch (error) {
+    if (!failed) throw error
+    const code = ["EIO", "EACCES", "EPERM", "ENOENT", "ENOSPC", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unavailable"
+    console.error("Passive native observation persistence failed:", code)
+  }
+  if (failed) throw primary
+  return result
+}
 const HELPER = fileURLToPath(import.meta.url)
 function bounded(promise, ms, label) {
   let timer
