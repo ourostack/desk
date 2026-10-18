@@ -362,6 +362,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     const closed = final.filter(row => row.event === "close");
     assert.equal(closed.length, 1);
     assert.deepEqual({ code: closed[0].code, signal: closed[0].signal }, { code: 0, signal: null });
+    assert.equal(closed[0].stderrBytes, 0, "the fixed read-only program must not produce module-preparation progress");
     assert.equal(closed[0].partialReply, false);
     assert.deepEqual(JSON.parse(output), { mode, exitCode: mode === "uncaught" ? 1 : 0, digest: boot.digest });
     if (mode === "uncaught") assert.match(diagnostic, /OWNED_BACKEND_EXPECTED_FAILURE/);

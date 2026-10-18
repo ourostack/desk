@@ -154,6 +154,7 @@ while ($true) {
 const ENCODED_PROGRAM = Buffer.from(ACL_PROGRAM, "utf16le").toString("base64")
 const PRIVATE_PROGRAM = `
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8

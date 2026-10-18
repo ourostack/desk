@@ -85,6 +85,9 @@ test("readonly verifier runs the fixed unchanged policy on every request without
     assert.deepEqual(JSON.parse(calls[0].payload), PRIVATE_ENTRIES)
     assert.deepEqual(calls[0].args.slice(0, -1), ["-NoProfile", "-NonInteractive", "-EncodedCommand"])
     const program = Buffer.from(calls[0].args.at(-1), "base64").toString("utf16le")
+    assert.match(program, /\$ProgressPreference = 'SilentlyContinue'/)
+    assert.ok(program.indexOf("$ProgressPreference") < program.indexOf("New-Object"),
+      "cold module preparation must not emit a progress record into the strict response transport")
     for (const pattern of [/ReadLine/, /foreach/, /PSIsContainer/, /ReparsePoint/, /AreAccessRulesProtected/,
       /GetCurrent/, /GetOwner/, /Count -ne 1/, /IdentityReference/, /AccessControlType/, /FullControl/])
       assert.match(program, pattern)
@@ -130,7 +133,8 @@ test("readonly verifier accepts only its exact bounded response and never includ
     await mkProvider(base, ECHO_PROVIDER)
     for (const answer of [{ code: 1, stdout: "private" }, { code: 0, stdout: "private " },
       { code: 0, stdout: "private\njunk" }, { code: 0, stdout: "private\r\r" }, { code: 0, stdout: "" },
-      { code: 0, stdout: "PRIVATE" }, { code: 0, stdout: "private", stderr: "private SID path diagnostic" }]) {
+      { code: 0, stdout: "PRIVATE" }, { code: 0, stdout: "private", stderr: "private SID path diagnostic" },
+      { code: 0, stdout: "private", stderr: '#< CLIXML\n<Objs><Obj S="progress"/></Objs>' }]) {
       const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base },
         runner: async () => ({ stderr: "", ...answer }) })
       await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
