@@ -251,3 +251,42 @@ test("rereview: a release notification during a failed drain cannot be lost behi
     reservation.release()
   }
 })
+
+for (const replacement of ["token", "inode", "content"]) {
+  test(`release correction: exact reservation ${replacement} replacement retains route and forbids launch`, async () => {
+    const root = await ownedRoot()
+    const state = await ownedRoot()
+    const env = { ...process.env, XDG_STATE_HOME: state }
+    const scope = await deskMutationScope(root)
+    const route = { root, state_home: state }
+    updateSyncStatus(root, env, { push_handoff_version: 1, release_handoffs: [route] }, scope.pushStatus, { strict: true })
+    const lockFile = resolveSyncLockPath({ root, env })
+    let retainedBytes
+    let scheduled = 0
+    await assert.rejects(continuePushHandoffs({
+      scope,
+      schedule: () => { scheduled++; return { scheduled: true } },
+      claim: async (action) => {
+        await action()
+        const original = await fs.readFile(lockFile, "utf8")
+        const record = JSON.parse(original)
+        assert.equal(record.pid, process.pid)
+        assert.ok(record.start)
+        assert.equal(record.start, await readProcessStart(process.pid))
+        if (replacement === "inode") {
+          await fs.rename(lockFile, `${lockFile}.owned-original`)
+          retainedBytes = original
+          await fs.writeFile(lockFile, retainedBytes, { flag: "wx", mode: 0o600 })
+        } else {
+          retainedBytes = `${JSON.stringify(replacement === "token" ?
+            { ...record, token: "owned-distinct-replacement-token" } :
+            { ...record, ownedReplacement: true })}\n`
+          await fs.writeFile(lockFile, retainedBytes)
+        }
+      },
+    }), /reservation.*release/i)
+    assert.equal(scheduled, 0)
+    assert.equal(await fs.readFile(lockFile, "utf8"), retainedBytes)
+    assert.deepEqual(JSON.parse(await fs.readFile(scope.pushStatus, "utf8")).release_handoffs, [route])
+  })
+}

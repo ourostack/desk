@@ -149,6 +149,40 @@ function releaseSyncLock(lockPath, token) {
   }
 }
 
+// Only this exact acquired file/record can acknowledge release. A refusal is
+// latched: later cleanup cannot turn an observed replacement into ownership.
+function createSyncReservation(lockPath, bytes, token) {
+  let fd
+  try { fd = openSync(lockPath, "wx", 0o600) } catch (error) {
+    if (error.code === "EEXIST") return null
+    throw error
+  }
+  try {
+    const identity = fstatSync(fd, { bigint: true })
+    writeFileSync(fd, bytes)
+    let disposition = "held"
+    return { token, release() {
+      if (disposition !== "held") return disposition === "released"
+      try {
+        const found = lstatSync(lockPath, { bigint: true })
+        if (!found.isFile() || found.nlink !== 1n || found.dev !== identity.dev || found.ino !== identity.ino ||
+            readFileSync(lockPath, "utf8") !== bytes) {
+          disposition = "refused"
+          return false
+        }
+        unlinkSync(lockPath)
+        disposition = "released"
+        return true
+      } catch {
+        disposition = "refused"
+        return false
+      }
+    } }
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /**
  * Acquires the sync lock for `root`, or resolves `null` when a live worker
  * already holds it (the contention rule: exit quietly, the holder will push
@@ -178,8 +212,8 @@ export async function acquireSyncLock({
   const start = await processStart(pid)
   const bytes = `${JSON.stringify({ token, pid, start })}\n`
 
+  if (createOnly) return createSyncReservation(lockPath, bytes, token)
   if (tryCreateExclusive(lockPath, bytes)) return { token, release: () => releaseSyncLock(lockPath, token) }
-  if (createOnly) return null
 
   const existing = readLock(lockPath)
   if (existing !== null && (await isLockLive(existing, processStart, kill))) return null
@@ -645,8 +679,10 @@ async function transferPushHandoffs({ scope, claim, schedule }) {
   // from registering a coalesced request that this transfer could erase.
   const scheduled = new Set()
   try {
-    for (const { item, env, lock } of reserved) {
-      lock.release()
+    for (const { lock } of reserved) {
+      if (lock.release() !== true) throw new Error("Exact sync reservation release was not acknowledged; no continuation was launched")
+    }
+    for (const { item, env } of reserved) {
       const result = schedule({ root: item.root, env })
       if (!result.scheduled) throw new Error(`Push continuation could not be scheduled: ${result.error}`)
       scheduled.add(handoffKey(item))
