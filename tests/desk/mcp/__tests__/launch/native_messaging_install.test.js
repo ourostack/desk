@@ -7,6 +7,7 @@ import childProcess from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
+import { Worker } from 'node:worker_threads';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTempRoot } from '../_temp_roots.js';
 import { processStartReaders, readProcessStart, windowsPowerShellPath } from '../../../../../plugins/desk/mcp/src/readiness/process-start.js';
@@ -22,6 +23,92 @@ const put = async (file, value) => {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await fs.writeFile(file, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value), { mode: 0o600 });
 };
+
+async function linuxNativeChildren(pid, { read = fs.readFile, list = fs.readdir } = {}) {
+  const taskRoot = `/proc/${pid}/task`, children = [];
+  // Linux records children per thread, not for the whole Go process.
+  for (const thread of await list(taskRoot)) {
+    let text;
+    try { text = await read(`${taskRoot}/${thread}/children`, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    children.push(...text.trim().split(/\s+/u).map(Number).filter(value => Number.isSafeInteger(value) && value > 0));
+  }
+  return [...new Set(children)];
+}
+
+test('native Linux fixture discovers the owned process child of a nonleader thread', async () => {
+  const reads = [];
+  const children = await linuxNativeChildren(100, {
+    list: async directory => {
+      assert.equal(directory, '/proc/100/task');
+      return ['100', '101'];
+    },
+    read: async (file, encoding) => {
+      reads.push(file);
+      assert.equal(encoding, 'utf8');
+      if (file === '/proc/100/task/100/children') return '';
+      assert.equal(file, '/proc/100/task/101/children');
+      return '200 ';
+    },
+  });
+  assert.deepEqual(children, [200], 'a Go-spawned Node child need not belong to the thread-group leader');
+  assert.deepEqual(reads.sort(), ['/proc/100/task/100/children', '/proc/100/task/101/children']);
+});
+
+test('native Linux fixture tolerates a thread exiting during its own process scan', async () => {
+  const children = await linuxNativeChildren(100, {
+    list: async () => ['100', '101', '102'],
+    read: async file => {
+      if (file === '/proc/100/task/101/children') throw Object.assign(Error('thread exited'), { code: 'ENOENT' });
+      return file === '/proc/100/task/102/children' ? '200 ' : '';
+    },
+  });
+  assert.deepEqual(children, [200]);
+});
+
+test('native Linux fixture does not hide an unreadable owned thread', async () => {
+  await assert.rejects(linuxNativeChildren(100, {
+    list: async () => ['100'],
+    read: async () => { throw Object.assign(Error('unreadable'), { code: 'EACCES' }); },
+  }), { code: 'EACCES' });
+});
+
+test('native Linux fixture observes a real child spawned by its nonleader thread', {
+  skip: process.platform !== 'linux', timeout: 10000,
+}, async t => {
+  const worker = new Worker(`
+    const { parentPort } = require('node:worker_threads');
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    child.once('spawn', () => parentPort.postMessage({ pid: child.pid }));
+    child.once('error', error => parentPort.postMessage({ error: error.code }));
+    child.once('close', () => parentPort.close());
+    parentPort.once('message', () => child.stdin.end());
+  `, { eval: true });
+  const ended = once(worker, 'exit');
+  let pid, start;
+  try {
+    const [message] = await once(worker, 'message');
+    assert.equal(message.error, undefined);
+    pid = message.pid;
+    start = await readProcessStart(pid);
+    assert.notEqual(start, null);
+    const identity = await readNativeProcess(pid);
+    assert.equal(identity.parentPid, process.pid);
+    const leader = await fs.readFile(`/proc/${process.pid}/task/${process.pid}/children`, 'utf8');
+    assert.equal(leader.trim().split(/\s+/u).map(Number).includes(pid), false,
+      'the real child belongs to its spawning thread, not the thread-group leader');
+    assert.ok((await linuxNativeChildren(process.pid)).includes(pid));
+    t.diagnostic(`D exact nonleader fixture parent=${process.pid}; pid=${pid}; start=${start}`);
+  } finally {
+    worker.postMessage('close');
+    const [exit] = await ended;
+    assert.equal(exit, 0);
+    if (start !== undefined) assert.notEqual(await readProcessStart(pid), start, 'exact owned nonleader child generation is gone');
+  }
+});
 
 for (const channel of ['chrome', 'msedge']) {
   test(`native install admits normal per-user macOS ${channel} without a global-channel fallback`,
@@ -241,7 +328,7 @@ test('native: actual host-OS Go entry loads the real capsule Node entry/config a
     for (const deadline = Date.now() + (process.platform === 'win32' ? 30000 : 10000); !runtimePid && Date.now() < deadline;) {
       assert.equal(await readProcessStart(child.pid), start);
       let text;
-      if (process.platform === 'linux') text = await fs.readFile(`/proc/${child.pid}/task/${child.pid}/children`, 'utf8');
+      if (process.platform === 'linux') text = (await linuxNativeChildren(child.pid)).join(' ');
       else {
         const command = process.platform === 'win32' ? windowsPowerShellPath() : '/usr/bin/pgrep';
         const args = process.platform === 'win32'
@@ -262,6 +349,10 @@ test('native: actual host-OS Go entry loads the real capsule Node entry/config a
     }
     assert.ok(runtimePid, 'actual Go-selected Node child identified before sending the frame');
     assert.notEqual(runtimeStart, null);
+    if (process.platform === 'linux') {
+      const leader = await fs.readFile(`/proc/${child.pid}/task/${child.pid}/children`, 'utf8');
+      t.diagnostic(`D exact Node fixture listed by leader=${leader.trim().split(/\s+/u).map(Number).includes(runtimePid)}`);
+    }
     t.diagnostic(`D exact Node fixture parent=${child.pid}; pid=${runtimePid}; start=${runtimeStart}`);
     child.stdin.end(Buffer.alloc(4)); // Zero-length native frame, no hello/provider RPC.
     const [exit, signal] = await ended;
