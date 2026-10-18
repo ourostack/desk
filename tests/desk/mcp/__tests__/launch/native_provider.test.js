@@ -269,6 +269,16 @@ async function fixture(t, options = {}) {
     setPin(value) { pin = value; }, resetNative() { alive = true; },
     client: require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl))) };
 }
+async function entryConfiguration(f) {
+  const file = path.join(f.root, 'entry', 'provider-config.json');
+  await put(file, f.config);
+  if (process.platform === 'win32') await protectWindowsPaths([
+    { path: path.dirname(file), kind: 'directory', created: true },
+    { path: file, kind: 'file', created: true },
+  ]);
+  assert.deepEqual(f.client.readPrivateJson(file), f.config);
+  return file;
+}
 
 test('inventory descriptor preserves both private batches on their own side of the marker read', { skip: !actualCli }, async t => {
   const f = await fixture(t);
@@ -639,9 +649,7 @@ test('native entry initialization receives its own profile reply without a frame
   await f.provider.close();
   const { runNativeEntry } = await import(new URL('native-host.mjs', rootUrl));
   const host = await import(new URL('src/browser/native-host.mjs', rootUrl));
-  const configFile = path.join(f.root, 'entry', 'provider-config.json');
-  await put(configFile, f.config);
-  if (process.platform === 'win32') await protectWindowsPaths([{ path: configFile, kind: 'file', created: true }]);
+  const configFile = await entryConfiguration(f);
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const entryChain = structuredClone(chain); entryChain[0].pid = process.pid;
   const native = [];
@@ -1040,8 +1048,7 @@ test('EOF during selected-pin startup cannot publish a provider after the native
   await f.provider.close();
   const { runNativeEntry } = await import(new URL('native-host.mjs', rootUrl));
   const host = await import(new URL('src/browser/native-host.mjs', rootUrl));
-  const configFile = path.join(f.root, 'entry', 'provider-config.json');
-  await put(configFile, f.config);
+  const configFile = await entryConfiguration(f);
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const entryChain = structuredClone(chain); entryChain[0].pid = process.pid;
   let selected, created = 0;
@@ -1051,13 +1058,20 @@ test('EOF during selected-pin startup cannot publish a provider after the native
   const running = runNativeEntry({ stdin, stdout, stderr, origin: f.config.extensionOrigin, configFile,
     processReader: async pid => structuredClone(entryChain.find(p => p.pid === pid)),
     providerOptions: { ...f.construction, readProfileToken: async () => { selected(); await sleep(50); return TOKEN; } } });
-  const refused = assert.rejects(running, code('NATIVE_PROVIDER_START_FAILED'));
+  const completed = settled(running);
+  t.after(async () => {
+    stdin.end();
+    await completed;
+    stdout.destroy(); stderr.destroy();
+  });
   await sleep(20);
   stdin.write(host.encodeNativeMessage(f.construction.ready));
-  await selecting;
+  await Promise.race([selecting, completed.then(result => {
+    if (result.error) throw result.error;
+    assert.fail('native entry ended before selected-pin startup');
+  })]);
   stdin.end();
-  await refused;
+  await assert.rejects(running, code('NATIVE_PROVIDER_START_FAILED'));
   assert.equal(created, 0);
   await assert.rejects(fs.lstat(f.config.nativeReadyFile), { code: 'ENOENT' });
-  stdout.destroy(); stderr.destroy();
 });

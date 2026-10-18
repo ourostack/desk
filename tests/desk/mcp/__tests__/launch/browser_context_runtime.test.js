@@ -201,6 +201,12 @@ test("actual maintained daemon options can reach native acquisition using the st
     assert.equal(produced.info.workspaceDir,l.root)
     assert.equal(produced.metadata.attached,true)
     assert.equal(produced.metadata.cli.persistent,true)
+    // This fixture writes metadata first; normal launch protects this leaf
+    // while opening the error log, before the upstream metadata writer runs.
+    if (process.platform === "win32") await protectWindowsPaths([
+      {path:descriptor.daemonProfilesDir,kind:"directory",created:true},
+    ])
+    native.privatePath(descriptor.daemonProfilesDir,true)
     for (let current = path.dirname(descriptor.sessionFile);current !== l.root;current = path.dirname(current)) {
       if (process.platform === "win32") native.privatePath(current,true,false)
       else assert.equal(fs.statSync(current).mode & 0o077,0,"actual generated private directory "+current)
