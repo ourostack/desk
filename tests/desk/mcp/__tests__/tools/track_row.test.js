@@ -6,7 +6,7 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { setTaskState } from "../../../../../plugins/desk/mcp/src/tools/track-row.js"
+import { setTaskState, setTaskArchiveLinks } from "../../../../../plugins/desk/mcp/src/tools/track-row.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 const TABLE = [
@@ -42,6 +42,33 @@ test("setTaskState handles bare slugs, indented rows, no trailing pipe, a second
   assert.equal(setTaskState("| State | Slug |\n|---|---|\n| drafting | a |\n", "a", "done"), "| State | Slug |\n|---|---|\n| done | a |\n")
   assert.equal(setTaskState("  | Slug | State\n  |---|---\n  | a | drafting\n", "a", "done"), "  | Slug | State\n  |---|---\n  | a | done \n")
   assert.equal(setTaskState("| Slug | State |\r\n|---|---|\r\n| a | b |\r\n", "a", "done"), "| Slug | State |\r\n|---|---|\r\n| a | done |\r\n")
+})
+
+test("archive links change only the matching task row and preserve every other byte", () => {
+  const links = "[task](api-validation-layer/task.md#proof) [dot](./api-validation-layer/doing.md) " +
+    "[web](https://example.test/api-validation-layer/doing.md) [peer](api-validation-layer-other/task.md) " +
+    "[past](_archive/api-validation-layer/task.md)"
+  const before = TABLE.replace("`x/doing.md`",links).replace("\n","\r\n")
+  const expected = before.replace("[task](api-validation-layer/","[task](_archive/api-validation-layer/")
+    .replace("[dot](./api-validation-layer/","[dot](./_archive/api-validation-layer/")
+  assert.equal(setTaskArchiveLinks(before,"api-validation-layer"),expected)
+  const angle = TABLE.replace("`x/doing.md`",'[task](<api-validation-layer/report (final).md> "proof")')
+  assert.equal(setTaskArchiveLinks(angle,"api-validation-layer"),
+    angle.replace("<api-validation-layer/","<_archive/api-validation-layer/"))
+  const reordered = "| State | Slug | Link |\r\n|---|---|---|\r\n  | done | api-validation-layer | [task](./api-validation-layer/task.md)\r\n"
+  assert.equal(setTaskArchiveLinks(reordered,"api-validation-layer"),
+    reordered.replace("(./api-validation-layer/","(./_archive/api-validation-layer/"))
+})
+
+test("archive links leave examples, unrelated tables, absent rows and unchanged targets alone", () => {
+  for (const before of [
+    "", TABLE, "| Slug | State |", "| Slug | State |\n| a | b |\n",
+    "| Slug | Link |\n|---|---|\n| api-validation-layer | [task](api-validation-layer/task.md) |\n",
+    "~~~\n"+TABLE.replace("`x/doing.md`","[task](api-validation-layer/task.md)")+"\n~~~\n",
+    "| State | Slug |\n|---|---|\n| done |\n",
+    TABLE.replace("api-validation-layer","another-task").replace("`x/doing.md`","[task](api-validation-layer/task.md)"),
+    TABLE.replace("`x/doing.md`","[task](_archive/api-validation-layer/task.md)"),
+  ]) assert.equal(setTaskArchiveLinks(before,"api-validation-layer"),null)
 })
 
 function git(dir, ...args) {
