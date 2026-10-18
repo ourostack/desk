@@ -16,6 +16,7 @@ import { recentProgress } from "./task-body.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
+import { archiveDueAnswer } from "./task-archive-due.js"
 
 export const TASK_FOCUS_FIELDS = ["track", "slug", "clear", "display_label"]
 
@@ -99,6 +100,7 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   if (card.data.planning_complete === true) result.planning_complete = true
   if (found.archived) result.archived = true
   result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel })
+  Object.assign(result, archiveDueAnswer({ track, slug, status: card.data.status, archived: found.archived }))
   return result
 }
 

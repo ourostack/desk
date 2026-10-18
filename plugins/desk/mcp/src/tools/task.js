@@ -53,6 +53,7 @@ import { applyResource, cleanupAnswer, dueResources, openResources } from "../de
 import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
 import { makeSessionLabelProposal } from "../runtime/session-label.js"
+import { archiveDueAnswer } from "./task-archive-due.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -1194,6 +1195,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   if (focused || values.display_label !== undefined) {
     result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused })
   }
+  Object.assign(result, archiveDueAnswer({ track, slug, status: merged.status }))
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }

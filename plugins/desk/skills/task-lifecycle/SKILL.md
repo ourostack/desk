@@ -26,6 +26,8 @@ Every task moves through a state machine with 8 states. The `status` field in `t
 
 ## Done is a delivery
 
+A live terminal `task_update` result or explicit `task_focus` reinspection carries `archive_due: { track, slug }` and `archive_next_action`. The owning main agent calls the normal `task_archive` tool with that key before final delivery, then inspects the actual result. The cue itself performs no move, grants no ownership and records no acceptance. Keep an existing unsigned signoff packet intact. An archive refusal or `archive_pending` is unresolved: follow its named repair/next action, retain the actual path, and never claim archival from the cue alone. Already-archived and nonterminal cards carry no cue; this is not a global boot scan.
+
 Done is a delivery, not an acceptance. The task is accepted only when the operator says so.
 
 - When you move a task to `done`, `task_update` and `task_archive` answer with `signoff: "delivered_unsigned"`, `signoff_packet` and `signoff_note`. End the operator delivery with `Asked: <outcome>`, `Delivered: <result and proof>`, and `Accept or send back?` on separate lines, even when the operator is away. Keep the labels and final question literal; adapt only the outcome and proof wording. Until that reply is sent, preserve the literal lines as a required next action in any compaction or handoff summary, never as optional. Archiving an unsigned, evidenced delivery repeats its existing packet without recording another delivery or acceptance. Do not wait for the answer and do not ask again in this session.
