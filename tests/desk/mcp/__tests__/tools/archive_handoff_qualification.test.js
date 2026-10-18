@@ -151,8 +151,9 @@ scenario("03-two-real-processes-race-the-same-folder", async () => {
         published.includes(`t/_archive/${SLUG}/task.md`) && !published.includes(`t/${SLUG}/task.md`)) })
   }
   const summary = { scope:"owned two-process archive observations; criteria and product bytes unchanged",
-    platform:process.platform,variants:variants.map(({root,onGit,outcomes,oneWinner,exactPayload,retired,publication}) => ({
+    platform:process.platform,variants:variants.map(({root,onGit,outcomes,exits,oneWinner,exactPayload,retired,publication}) => ({
       onGit,oneWinner,exactPayload,retired,publication,
+      retirements:exits.map(({code,signal}) => ({code,signal})),
       outcomes:outcomes.map(({result,error,renameReturned}) => ({
         status:result?.status ?? null,renameReturned,
         publication:result?.publication?.status ?? null,

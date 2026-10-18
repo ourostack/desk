@@ -113,11 +113,13 @@ jobs:
           if-no-files-found: warn
 
       - name: Keep bounded owned archive race observations when present
-        if: ${{ always() && hashFiles('windows-archive-race-observations.json') != '' }}
+        if: ${{ always() && (hashFiles('windows-archive-race-observations.json') != '' || hashFiles('windows-native-directory-move-*.jsonl') != '') }}
         uses: actions/upload-artifact@v4
         with:
           name: windows-archive-race-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          path: windows-archive-race-observations.json
+          path: |
+            windows-archive-race-observations.json
+            windows-native-directory-move-*.jsonl
           if-no-files-found: error
 
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the

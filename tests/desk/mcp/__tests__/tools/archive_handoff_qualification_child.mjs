@@ -266,6 +266,7 @@ if (process.argv[1] === HELPER) {
   let failure
   let reader
   let renameReturned = false
+  let nativeMove = null
   const originalRename = io.rename
   try {
     if (start.cmd === "abort") throw new Error("Owned qualification aborted before action")
@@ -274,12 +275,21 @@ if (process.argv[1] === HELPER) {
       reader = await openReadiness(owned, `actor-${process.pid}`)
       io.rename = async (source, destination) => {
         if (source !== owned.src || destination !== owned.dst) return originalRename(source, destination)
-        if (config.mode !== "plain") {
-          await sendMessage({ type: "rename-barrier", source, destination, gitCallsBeforeRename: gitCalls.length })
-          const command = await take("go")
-          if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
+        const beforeMove = async (nativeReady = null) => {
+          if (config.mode !== "plain") {
+            await sendMessage({ type: "rename-barrier", source, destination, gitCallsBeforeRename: gitCalls.length, nativeReady })
+            const command = await take("go")
+            if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
+          }
         }
-        await originalRename(source, destination)
+        if (process.platform === "win32" && process.env.DESK_TEST_ARCHIVE_MOVE_NATIVE === "directory_move") {
+          const { moveOwnedDirectory } = await import("./_windows_archive_move.cjs")
+          try { nativeMove = await moveOwnedDirectory(source, destination, beforeMove) }
+          catch (error) { nativeMove = error.nativeMove ?? null; throw error }
+        } else {
+          await beforeMove()
+          await originalRename(source, destination)
+        }
         renameReturned = true
         if (config.mode === "exit-after-rename") {
           const receipt = { pid: process.pid, exe: process.execPath, source, destination,
@@ -287,7 +297,7 @@ if (process.argv[1] === HELPER) {
             gitPublicationCallsBeforeExit: gitCalls.filter((call) =>
               ["add", "commit", "update-index", "update-ref", "read-tree", "mv", "reset", "checkout", "switch", "merge", "rebase", "stash"].includes(call.args[2]) ||
               (call.args[2] === "hash-object" && call.args.includes("-w"))).length,
-            cardHash: digest(fs.readFileSync(path.join(destination, "task.md"))), exitCode: 37 }
+            cardHash: digest(fs.readFileSync(path.join(destination, "task.md"))), exitCode: 37, nativeMove }
           fs.writeFileSync(path.join(owned.base, "crash-after-rename.json"), JSON.stringify(receipt, null, 2) + "\n")
           record("intentional-exit-after-actual-rename", receipt)
           process.exit(37)
@@ -300,7 +310,7 @@ if (process.argv[1] === HELPER) {
     io.rename = originalRename
     if (reader) await reader.journal.close()
   }
-  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned })
+  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned, nativeMove })
   await take("finish")
   await drainActors()
   clearTimeout(lease)
