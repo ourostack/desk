@@ -88,6 +88,23 @@ test("an unborn Git desk can publish its first archived card",async () => {
   assert.match(git(f.root,"ls-tree","-r","HEAD"),/archive\/source\/task\.md/u)
 })
 
+test("a logical desk root alias publishes the archive in its physical Git repository",async () => {
+  const f = await archiveFixture(), aliases = await mkTempDeskRoot(), root = path.join(aliases,"desk")
+  const physical = await fs.realpath(f.root)
+  await fs.symlink(physical,root,process.platform === "win32" ? "junction" : "dir")
+  assert.notEqual(path.resolve(root),physical)
+  assert.equal(await fs.realpath(root),physical)
+  const result = await task_archive({deskRoot:root,input:{track:"t",slug:"mode-proof"},schedulePush:() => {}})
+  assert.equal(result.status,"archived")
+  assert.equal(result.path,"t/_archive/mode-proof/task.md")
+  await assert.rejects(fs.lstat(f.source),{code:"ENOENT"})
+  assert.equal(await fs.readFile(path.join(f.destination,"companion.txt"),"utf8"),"peer.txt")
+  assert.notEqual(git(f.root,"rev-parse","HEAD"),f.head)
+  assert.equal(git(f.root,"status","--porcelain"),"")
+  assert.match(git(f.root,"ls-tree","-r","HEAD"),/t\/_archive\/mode-proof\/companion\.txt/u)
+  assert.doesNotMatch(git(f.root,"ls-tree","-r","HEAD"),/t\/mode-proof\//u)
+})
+
 for (const [name,match,answer,message] of [
   ["Git top-level lookup",a => a[2] === "rev-parse" && a[3] === "--show-toplevel",failed,/precondition unavailable/u],
   ["initial HEAD lookup",a => a[2] === "rev-parse" && a[3] === "--verify",failed,/HEAD could not be qualified/u],
