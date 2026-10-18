@@ -90,13 +90,14 @@ function transform(state, bytes) {
 function decorate(stream) {
   if (stream[STREAM_KEY]) return stream[STREAM_KEY];
   var state = { stream: stream, original: stream.write, forms: [], textForms: [], tail: Buffer.alloc(0),
-    quarantine: [], pending: 0, blocked: false, failure: false, waiters: [] };
+    quarantine: [], pending: 0, blocked: false, failure: false, waiters: [], writeSequence: 0 };
   Object.defineProperty(stream, STREAM_KEY, { value: state });
   if (typeof stream.on === "function") {
     stream.on("drain", function () { state.blocked = false; notify(state); });
     stream.on("error", function () { state.failure = true; notify(state); });
   }
-  stream.write = function (chunk, encoding, callback) {
+  state.writer = stream.write = function (chunk, encoding, callback) {
+    state.writeSequence++;
     if (typeof encoding === "function") { callback = encoding; encoding = undefined; }
     if (typeof chunk !== "string" && !ArrayBuffer.isView(chunk))
       return state.original.apply(stream, arguments);
@@ -173,14 +174,33 @@ function redactProtected(proc, value) {
   }
   return copy(value, 0);
 }
-async function flushProtection(proc) {
+function writeNativeReady(proc, bytes, callback) {
+  var state = proc.stdout[STREAM_KEY];
+  if (!state || state.writer !== proc.stdout.write || !Number.isSafeInteger(state.writeSequence) ||
+      !Buffer.isBuffer(bytes) || bytes[bytes.length - 1] !== 10)
+    throw protectionError("TEXT_PROTECTION_FRAME_CHANGED");
+  var frame = Buffer.from(bytes), sequence = state.writeSequence;
+  proc.stdout.write(frame, function (error) {
+    if (error) { callback(error); return; }
+    callback(null, function () {
+      if (proc.stdout !== state.stream || proc.stdout.write !== state.writer ||
+          !Number.isSafeInteger(state.writeSequence) || state.writeSequence !== sequence + 1)
+        return Promise.reject(protectionError("TEXT_PROTECTION_FRAME_CHANGED"));
+      return flushProtectedStreams(proc, state);
+    });
+  });
+}
+function flushProtection(proc) { return flushProtectedStreams(proc); }
+async function flushProtectedStreams(proc, nativeReadyState) {
   return Promise.all(states(proc).map(function (state) {
     if (state.tail.length) {
+      var tail = state.tail;
       state.quarantine = state.forms.filter(function (form) {
-        return form.length > state.tail.length && form.subarray(0, state.tail.length).equals(state.tail);
-      }).map(function (form) { return { form: form, offset: state.tail.length }; });
+        return form.length > tail.length && form.subarray(0, tail.length).equals(tail);
+      }).map(function (form) { return { form: form, offset: tail.length }; });
       state.tail = Buffer.alloc(0);
-      forward(state, MASK);
+      // Only the ready encoder's own fixed delimiter may leave quarantine unmasked.
+      forward(state, state === nativeReadyState && tail.length === 1 && tail[0] === 10 ? tail : MASK);
     }
     if (state.failure) return Promise.reject(protectionError("TEXT_PROTECTION_SINK_ERROR"));
     if (!state.pending && !state.blocked) return Promise.resolve();
@@ -835,7 +855,7 @@ nativeErrorTransportBinding.project = function (error) {
   return transportProject(require(path.join(verified.runtime.mcpRoot, "web-native-messaging.cjs")), error);
 };
 module.exports = { BINDING_KEY: BINDING_KEY, EXTENSION_ID: EXTENSION_ID, initialize: initialize, protect: protect,
-  redactProtected: redactProtected, flushProtection: flushProtection, readExtensionToken: readExtensionToken,
+  redactProtected: redactProtected, flushProtection: flushProtection, writeNativeReady: writeNativeReady, readExtensionToken: readExtensionToken,
   nativeInventory: nativeInventory, publicCode: publicCode, privateGeneration: privateGeneration,
   captureNativeDiscoveryInputs: captureNativeDiscoveryInputs, verifyGeneration: verifyGeneration,
   validateNativeBinding: validateNativeBinding, getNativeBinding: getNativeBinding,

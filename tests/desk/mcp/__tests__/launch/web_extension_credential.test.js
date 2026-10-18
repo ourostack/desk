@@ -26,6 +26,71 @@ function templateCredential(overrides = {}, directory = mcpRoot, proc = process,
   })
 }
 
+test("native ready output requires its exact protected writer and a complete byte frame", () => {
+  for (const invalid of ["unprotected","writer","sequence","text","delimiter"]) {
+    const { proc } = fixtureProcess()
+    if (invalid !== "unprotected") sourceCredential.protect(proc)
+    if (invalid === "writer") proc.stdout.write = () => true
+    if (invalid === "sequence") proc.stdout.__desk_text_protection_v3__.writeSequence = NaN
+    const bytes = invalid === "text" ? "ready\n" : Buffer.from(invalid === "delimiter" ? "ready" : "ready\n")
+    assert.throws(() => sourceCredential.writeNativeReady(proc,bytes,assert.fail), { code:"TEXT_PROTECTION_FRAME_CHANGED" })
+  }
+})
+
+test("native ready completion rejects stream, writer, counter and intervening-write changes", async () => {
+  for (const changed of ["stream","writer","sequence","write"]) {
+    const { proc } = fixtureProcess()
+    sourceCredential.protect(proc)
+    const state = proc.stdout.__desk_text_protection_v3__
+    await new Promise((resolve,reject) => {
+      sourceCredential.writeNativeReady(proc,Buffer.from("ready\n"),(error,flush) => {
+        try {
+          assert.ifError(error)
+          if (changed === "stream") proc.stdout = { write:() => true }
+          if (changed === "writer") proc.stdout.write = () => true
+          if (changed === "sequence") state.writeSequence = NaN
+          if (changed === "write") proc.stdout.write("")
+          assert.rejects(flush(),{ code:"TEXT_PROTECTION_FRAME_CHANGED" }).then(resolve,reject)
+        } catch (error) { reject(error) }
+      })
+    })
+  }
+})
+
+test("native ready write failure provides no releasable flush", async () => {
+  const sink = new Writable({ write(_bytes,_encoding,done) { done() } })
+  const proc = { stdout:sink,stderr:sink }
+  sourceCredential.protect(proc)
+  sink.emit("error",new Error("owned sink failure"))
+  await new Promise((resolve,reject) => {
+    sourceCredential.writeNativeReady(proc,Buffer.from("ready\n"),(error,flush) => {
+      try { assert.equal(error.code,"TEXT_PROTECTION_SINK_ERROR"); assert.equal(flush,undefined); resolve() }
+      catch (error) { reject(error) }
+    })
+  })
+  sink.destroy()
+})
+
+test("native ready release cannot unmask stderr or a non-delimiter retained byte", async () => {
+  for (const changedTail of [false,true]) {
+    const { proc,output } = fixtureProcess()
+    sourceCredential.protect(proc,"0a112233-4455-4677-8899-aabbccddeeff")
+    sourceCredential.protect(proc,"xy")
+    proc.stderr.write("\n")
+    await new Promise((resolve,reject) => {
+      sourceCredential.writeNativeReady(proc,Buffer.from("ready\n"),(error,flush) => {
+        try {
+          assert.ifError(error)
+          if (changedTail) proc.stdout.__desk_text_protection_v3__.tail = Buffer.from("x")
+          flush().then(resolve,reject)
+        } catch (error) { reject(error) }
+      })
+    })
+    assert.equal(output.stdout.join(""),changedTail ? "ready<token>" : "ready\n")
+    assert.equal(output.stderr.join(""),"<token>")
+  }
+})
+
 test("stream rejection and graceful drain expose actual errors without releasing quarantine or accepting invalid chunks", async () => {
   const chunks = [], completions = []
   const sink = new Writable({ write(bytes, _encoding, done) { chunks.push(Buffer.from(bytes)); completions.push(done) } })

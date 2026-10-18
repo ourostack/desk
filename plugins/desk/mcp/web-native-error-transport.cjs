@@ -188,15 +188,17 @@ async function writeLaunch(scope, value) {
     await new Promise(function (resolve, reject) {
       timer = setTimeout(function () { reject(unknown(scope)); }, Math.max(0, deadline - now()));
       var called = false;
-      process.stdout.write(bytes, function (error) {
+      function written(error, flushReady) {
         if (called || retired) return;
         called = true;
         if (error) { reject(error); return; }
         // This callback proves only this frame's acceptance, not delivery.
         // A false return may be accepted backpressure; the callback and E3's
         // actual pending-write/drain proof are independently required.
-        helper.flushProtection(process).then(resolve, reject);
-      });
+        (flushReady ? flushReady() : helper.flushProtection(process)).then(resolve, reject);
+      }
+      if (envelope.kind === "ready") helper.writeNativeReady(process, bytes, written);
+      else process.stdout.write(bytes, written);
     });
     if (now() >= deadline) throw unknown(scope);
   } catch (_) { throw unknown(scope); }

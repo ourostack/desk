@@ -853,6 +853,70 @@ test("launch emitter waits actual Writable completion and drain rather than the 
   sink.destroy();
 });
 
+test("launch emitter preserves the typed readiness delimiter with a newline-prefixed encoded nonce", async t => {
+  const f = await stagedTransport(t);
+  const nonce = "0a112233-4455-4677-8899-aabbccddeeff";
+  f.template("desk-extension-credential.cjs").protect(f.proc, nonce);
+  const ready = { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null };
+  await f.codec.writeLaunch(f.scope, ready);
+  assert.equal(Buffer.concat(f.output).toString(), "DESK_NATIVE_CLI_V1 " + JSON.stringify(ready) + "\n");
+});
+
+test("typed readiness never releases a multi-byte ambiguous suffix or a complete encoded secret", async t => {
+  for (const [nonce, suffix, maskedTail] of [
+    ["7d0a1122-3344-4566-8899-aabbccddeeff", "}\n", true],
+    ["6e756c6c-3344-4566-8899-aabbccddeeff", "null", false],
+  ]) {
+    const f = await stagedTransport(t);
+    f.template("desk-extension-credential.cjs").protect(f.proc, nonce);
+    const ready = { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null };
+    await f.codec.writeLaunch(f.scope, ready);
+    const emitted = Buffer.concat(f.output).toString();
+    if (maskedTail) assert.ok(emitted.includes("<token>"));
+    assert.equal(emitted.includes(suffix), false);
+    const reader = f.codec.forLaunch({ config: f.configFile, session: A, browser: "msedge" }, f.clientInfo);
+    try {
+      reader.push(Buffer.from(emitted)); reader.end();
+      await assert.rejects(reader.wait(), { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED" });
+    } finally { reader.dispose(); }
+  }
+});
+
+test("a trusted readiness newline still quarantines the encoded secret's following continuation", async t => {
+  const f = await stagedTransport(t), helper = f.template("desk-extension-credential.cjs");
+  helper.protect(f.proc, "0a112233-4455-4677-8899-aabbccddeeff");
+  const ready = { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null };
+  await f.codec.writeLaunch(f.scope, ready);
+  f.proc.stdout.write(Buffer.from("112233", "hex"));
+  await helper.flushProtection(f.proc);
+  const expected = "DESK_NATIVE_CLI_V1 " + JSON.stringify(ready) + "\n";
+  assert.equal(Buffer.concat(f.output).toString(), expected);
+  f.proc.stdout.write(Buffer.from("0a112233", "hex"));
+  await helper.flushProtection(f.proc);
+  assert.equal(Buffer.concat(f.output).toString(), expected);
+});
+
+test("native error frames retain generic mask-on-ambiguity output protection", async t => {
+  const f = await stagedTransport(t);
+  f.template("desk-extension-credential.cjs").protect(f.proc, "0a112233-4455-4677-8899-aabbccddeeff");
+  const envelope = f.codec.project(await originalCError(), f.scope, { stage: "launch.acquire", requestId: null });
+  await f.codec.writeLaunch(f.scope, envelope);
+  assert.equal(Buffer.concat(f.output).toString(), "DESK_NATIVE_CLI_V1 " + JSON.stringify(envelope) + "<token>");
+});
+
+test("typed readiness refuses an interleaved protected write even when its tail is also a newline", async t => {
+  let f, interleaved = false;
+  const sink = { write(_bytes, callback) {
+    if (!interleaved) { interleaved = true; f.proc.stdout.write("\n"); }
+    callback?.(); return true;
+  } };
+  f = await stagedTransport(t, { sink });
+  f.template("desk-extension-credential.cjs").protect(f.proc, "0a112233-4455-4677-8899-aabbccddeeff");
+  const ready = { ...f.stamp, kind: "ready", stage: "launch.ready", requestId: null };
+  await assert.rejects(f.codec.writeLaunch(f.scope, ready), { code: "NATIVE_ERROR_TRANSPORT_UNCONFIRMED" });
+  assert.equal(interleaved, true);
+});
+
 test("five-second output failure is bounded, never raw-falls-back and settles its owned Writable before teardown", async t => {
   let done, clock = 0, counter = 0; const timers = new Map(), bytes = [];
   const sink = new Writable({ highWaterMark: 1, write(value, _encoding, callback) { bytes.push(Buffer.from(value)); done = callback; } });
@@ -1345,9 +1409,11 @@ test("actual startup does not attempt a second terminal record after ambiguous r
     const f = await stagedTransport(t, { sink, now: () => clock,
       setTimeout(callback, delay) { const id = ++counter; timers.set(id, { callback, due: clock + delay }); return id; },
       clearTimeout(id) { timers.delete(id); } });
+    const diagnostics = [];
+    f.proc.stderr = { write(bytes) { diagnostics.push(Buffer.from(bytes)); return true; } };
     const helper = f.template("desk-extension-credential.cjs"); helper.protect(f.proc);
-    let attempts = 0; const write = sink.write;
-    sink.write = function (...args) { attempts++; return write.apply(this, args); };
+    let attempts = 0; const writeLaunch = f.codec.writeLaunch;
+    t.mock.method(f.codec, "writeLaunch", function (...args) { attempts++; return writeLaunch.apply(this, args); });
     const daemon = transformedDaemon(f); t.after(() => daemon.close());
     const program = transformedProgram(f, daemon, undefined, "ready");
     const action = program.action(A, { config: f.configFile, browser: "msedge" });
@@ -1358,9 +1424,8 @@ test("actual startup does not attempt a second terminal record after ambiguous r
     await action;
     done(); await new Promise(resolve => setImmediate(resolve));
     sink.destroy();
-    // stderr shares the protected sink in this fixture; the fixed unconfirmed
-    // diagnostic is permitted, a second reserved terminal frame is not.
-    assert.equal(attempts, 2, "one frame attempt and one fixed stderr diagnostic only");
+    assert.equal(attempts, 1, "one terminal frame attempt only");
+    assert.equal(Buffer.concat(diagnostics).toString(), "NATIVE_ERROR_TRANSPORT_UNCONFIRMED\n");
     assert.equal(program.exit, 1); assert.equal(timers.size, 0);
 });
 

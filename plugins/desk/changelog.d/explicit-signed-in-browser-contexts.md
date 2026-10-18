@@ -7,3 +7,5 @@ The broker's shared primitives remain inside its source package, preserving stan
 Maintained CLI shutdown now keeps its explicit stop acknowledgement ahead of competing context-close and socket-loss exits, including a socket observation already in flight. Natural shutdown and embedded-server behavior remain unchanged; missing acknowledgements are still failures, not inferred from absence. Signed package-download URLs are redacted from installation diagnostics.
 
 Windows generation-directory and receipt ACL checks share one read-only provider request per verification fence. The private-state policy and full verification boundaries remain intact, with Node file identities bracketing each complete batch.
+
+The native CLI ready encoder preserves its fixed newline when an encoded relay capability happens to share that one-byte prefix. It still quarantines later secret continuations, refuses intervening output writes, and leaves ordinary error/log masking and output deadlines unchanged.

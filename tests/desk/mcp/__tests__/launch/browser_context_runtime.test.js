@@ -312,15 +312,17 @@ test("actual maintained daemon options can reach native acquisition using the st
       const child=new EventEmitter()
       child.stdout=new EventEmitter();child.stdout.destroy=()=>{};child.unref=()=>{};child.pid=810017
       const program=utils.program.createCommand()
-      const previous=proc.stdout.write
-      proc.stdout.write=(bytes,callback)=>{
+      const previous=proc.stdout,previousError=proc.stderr
+      const previousNative=coreNativeProcess.stdout,previousNativeError=coreNativeProcess.stderr
+      proc.stdout=coreNativeProcess.stdout={write:(bytes,callback)=>{
         recordLaunch("stdout-write",{bytes:Buffer.byteLength(bytes),pidField:/"pid"\s*:/.test(String(bytes))})
         queueMicrotask(()=>{
           recordLaunch("stdout-delivery",{listeners:child.stdout.listenerCount("data")})
           child.stdout.emit("data",Buffer.from(bytes))
         })
         callback?.();return true
-      }
+      }}
+      proc.stderr=coreNativeProcess.stderr={write(){return true}}
       const decorate=vm.runInNewContext(
         exactRegion(core,"function decorateProgram3(program4) {","\nfunction defaultConfigFile(")+"\ndecorateProgram3",{
           require:name=>{assert.equal(name,"./desk-native-error-transport.cjs");return codec},
@@ -337,7 +339,8 @@ test("actual maintained daemon options can reach native acquisition using the st
       decorate(program)
       queueMicrotask(()=>{launchAction=program.parseAsync(args.slice(1),{from:"user"}).finally(()=>{
         recordLaunch("program-settled")
-        proc.stdout.write=previous
+        proc.stdout=previous;proc.stderr=previousError
+        coreNativeProcess.stdout=previousNative;coreNativeProcess.stderr=previousNativeError
       })})
       return child
     }
@@ -570,7 +573,7 @@ test("actual maintained daemon options can reach native acquisition using the st
         require:name=>name==="./desk-extension-credential.cjs"?template("desk-extension-credential.cjs"):
           name==="./desk-native-relay.cjs"?relayHelper:require(name),
         process:coreNativeProcess,Buffer,URL,WSServer,VERSION:2,ws3:{OPEN:1},
-        crypto:{randomUUID:()=>{nonce=require("crypto").randomUUID();return nonce}},extensionConnectionTimeout:30000,monotonicTime:()=>clock,
+        crypto:{randomUUID:()=>{nonce=options.relayNonce || require("crypto").randomUUID();return nonce}},extensionConnectionTimeout:30000,monotonicTime:()=>clock,
         debugLogger2(){},debugLogger3(){},logUnhandledError(){},
         raceAgainstDeadline:async(callback,deadline)=>{
           let timer
@@ -887,8 +890,10 @@ test("actual acquired native Core remains usable beyond handshake deadline throu
   assert.ok(f.tabs.has(1))
 })
 
-test("fixed internal attach creates through actual Session, Commander, native Core, C and kernel before F reports running",async t=>{
-  const f=await signedWorkerFixture(t,{skipNative:true})
+for (const relayNonce of [undefined,"0a112233-4455-4677-8899-aabbccddeeff"])
+test("fixed internal attach creates through actual Session, Commander, native Core, C and kernel before F reports running"+
+  (relayNonce ? " with newline-prefixed encoded nonce" : ""),async t=>{
+  const f=await signedWorkerFixture(t,{skipNative:true,relayNonce})
   fs.unlinkSync(f.descriptor.sessionFile)
   f.setLaunchSuccess()
   const result=await f.run({operation:"create"})
