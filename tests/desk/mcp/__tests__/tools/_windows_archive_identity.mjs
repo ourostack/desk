@@ -3,6 +3,7 @@ import { spawn as spawnChild } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 const PROGRAM = `
 $ErrorActionPreference = 'Stop'
@@ -17,6 +18,8 @@ $baselineHandle = [IntPtr]::Zero
 $native = $null
 $phase = 'setup'
 $programError = $null
+$script:operation = 'setup'
+$script:firstFailure = $null
 $access = [uint32]0
 $share = [uint32]7
 $disposition = [uint32]3
@@ -29,16 +32,40 @@ function Error-Code($ok, [int]$last) {
   if (!$ok) { return [BitConverter]::ToUInt32([BitConverter]::GetBytes($last), 0) }
   return $null
 }
+function Remember-ApiFailure([int]$last) {
+  if ($null -eq $script:firstFailure) {
+    $script:firstFailure = @{ operation = $script:operation; kind = 'api_return'
+      exception = $null; hresult = $null; nativeError = (Error-Code $false $last) }
+  }
+}
+function Remember-Exception($exception) {
+  if ($null -eq $script:firstFailure) {
+    $failure = $exception.GetBaseException()
+    $name = $failure.GetType().FullName
+    if (@('System.InvalidOperationException', 'System.ArgumentException', 'System.TypeLoadException',
+      'System.MissingMethodException', 'System.EntryPointNotFoundException', 'System.DllNotFoundException',
+      'System.Runtime.InteropServices.MarshalDirectiveException', 'System.Reflection.AmbiguousMatchException',
+      'System.Management.Automation.RuntimeException', 'System.Management.Automation.MethodException',
+      'System.Management.Automation.MethodInvocationException', 'System.Management.Automation.ParameterBindingException') -notcontains $name) {
+      $name = 'other'
+    }
+    $script:firstFailure = @{ operation = $script:operation; kind = 'exception'
+      exception = $name; hresult = $failure.HResult; nativeError = $null }
+  }
+}
 function Close-Owned([IntPtr]$handle) {
   $script:closeAttempts++
+  $script:operation = 'dispose_handle'
   $ok = $native::CloseHandle($handle)
   $last = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  if (!$ok) { Remember-ApiFailure $last }
   if ($ok) { $script:closed++ } else { $script:closeFailures++ }
   $result = @{ phase = $phase; success = [bool]$ok; error = (Error-Code $ok $last) }
   [void]$script:disposals.Add($result)
   return $result
 }
 function Read-Entry([string]$file) {
+  $prefix = if ($phase -eq 'baseline') { 'baseline' } else { 'current' }
   $sample = @{
     openSuccess = $false; openError = $null
     volumeSuccess = $false; volumeError = $null; filesystem = 'unavailable'
@@ -46,28 +73,33 @@ function Read-Entry([string]$file) {
     attributeSuccess = $false; attributeError = $null; attributes = $null; reparseTag = $null
     closeAttempted = $false; closeSuccess = $null; closeError = $null
   }
+  $script:operation = $prefix + '_open'
   $handle = $native::CreateFileW($file, $access, $share, [IntPtr]::Zero, $disposition, $flags, [IntPtr]::Zero)
   $last = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
   $sample.openSuccess = $handle -ne [IntPtr]::Zero -and $handle -ne [IntPtr](-1)
   $sample.openError = Error-Code $sample.openSuccess $last
-  if (!$sample.openSuccess) { return @{ handle = [IntPtr]::Zero; sample = $sample } }
+  if (!$sample.openSuccess) { Remember-ApiFailure $last; return @{ handle = [IntPtr]::Zero; sample = $sample } }
   $script:opened++
   try {
     $name = New-Object Text.StringBuilder(32)
+    $script:operation = $prefix + '_volume'
     $ok = $native::GetVolumeInformationByHandleW($handle, [IntPtr]::Zero, [uint32]0,
       [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, $name, [uint32]32)
     $last = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
     $sample.volumeSuccess = [bool]$ok
     $sample.volumeError = Error-Code $ok $last
+    if (!$ok) { Remember-ApiFailure $last }
     if ($ok) {
       if ($name.ToString() -ceq 'NTFS') { $sample.filesystem = 'NTFS' } else { $sample.filesystem = 'other' }
     }
     $buffer = [Runtime.InteropServices.Marshal]::AllocHGlobal(24)
     try {
+      $script:operation = $prefix + '_id'
       $ok = $native::GetFileInformationByHandleEx($handle, [int]18, $buffer, [uint32]24)
       $last = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
       $sample.idSuccess = [bool]$ok
       $sample.idError = Error-Code $ok $last
+      if (!$ok) { Remember-ApiFailure $last }
       if ($ok) {
         $bytes = New-Object byte[] 24
         [Runtime.InteropServices.Marshal]::Copy($buffer, $bytes, 0, 24)
@@ -77,10 +109,12 @@ function Read-Entry([string]$file) {
     } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer) }
     $buffer = [Runtime.InteropServices.Marshal]::AllocHGlobal(8)
     try {
+      $script:operation = $prefix + '_attributes'
       $ok = $native::GetFileInformationByHandleEx($handle, [int]9, $buffer, [uint32]8)
       $last = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
       $sample.attributeSuccess = [bool]$ok
       $sample.attributeError = Error-Code $ok $last
+      if (!$ok) { Remember-ApiFailure $last }
       if ($ok) {
         $bytes = New-Object byte[] 8
         [Runtime.InteropServices.Marshal]::Copy($buffer, $bytes, 0, 8)
@@ -89,16 +123,21 @@ function Read-Entry([string]$file) {
       }
     } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer) }
   } catch {
+    Remember-Exception $_.Exception
     $disposal = Close-Owned $handle
     throw
   }
   return @{ handle = $handle; sample = $sample }
 }
 try {
+  $script:operation = 'emit_assembly'
   $assemblyName = New-Object Reflection.AssemblyName('DeskIdentityObservation')
   $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($assemblyName, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+  $script:operation = 'emit_module'
   $module = $assembly.DefineDynamicModule('InMemory')
+  $script:operation = 'emit_type'
   $type = $module.DefineType('DeskIdentityNative', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
+  $script:operation = 'emit_import_metadata'
   $ctor = [Runtime.InteropServices.DllImportAttribute].GetConstructor([type[]]@([string]))
   $fields = [Reflection.FieldInfo[]]@(
     [Runtime.InteropServices.DllImportAttribute].GetField('SetLastError'),
@@ -106,6 +145,7 @@ try {
     [Runtime.InteropServices.DllImportAttribute].GetField('CharSet'),
     [Runtime.InteropServices.DllImportAttribute].GetField('CallingConvention'))
   function Define-Native([string]$name, [type]$returns, [type[]]$parameters) {
+    $script:operation = 'emit_method'
     $method = $type.DefinePInvokeMethod($name, 'kernel32.dll', $name,
       [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard,
       $returns, $parameters, [Runtime.InteropServices.CallingConvention]::Winapi,
@@ -114,13 +154,16 @@ try {
     $attribute = [Reflection.Emit.CustomAttributeBuilder]::new($ctor,
       [object[]]@('kernel32.dll'), $fields, [object[]]@($true, $true,
         [Runtime.InteropServices.CharSet]::Unicode, [Runtime.InteropServices.CallingConvention]::Winapi))
+    $script:operation = 'emit_method_metadata'
     $method.SetCustomAttribute($attribute)
   }
   Define-Native 'CreateFileW' ([IntPtr]) ([type[]]@([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr]))
   Define-Native 'GetFileInformationByHandleEx' ([bool]) ([type[]]@([IntPtr], [int], [IntPtr], [uint32]))
   Define-Native 'GetVolumeInformationByHandleW' ([bool]) ([type[]]@([IntPtr], [IntPtr], [uint32], [IntPtr], [IntPtr], [IntPtr], [Text.StringBuilder], [uint32]))
   Define-Native 'CloseHandle' ([bool]) ([type[]]@([IntPtr]))
+  $script:operation = 'create_type'
   $native = $type.CreateType()
+  $script:operation = 'verify_metadata'
   $methods = $native.GetMethods([Reflection.BindingFlags]'Public, Static, DeclaredOnly')
   if ($methods.Count -ne 4) { throw 'invalid_emitted_metadata' }
   foreach ($method in $methods) {
@@ -133,6 +176,7 @@ try {
     }
   }
   $phase = 'request'
+  $script:operation = 'read_request'
   $line = [Console]::ReadLine()
   if ($null -eq $line -or $line.Length -gt 16384) { throw 'invalid_request' }
   $request = $line | ConvertFrom-Json
@@ -140,6 +184,7 @@ try {
   $phase = 'baseline'
   $baseline = Read-Entry $request.source
   $baselineHandle = $baseline.handle
+  $script:operation = 'emit_ready'
   Emit @{ state = 'ready'; pid = $PID; powershell = $PSVersionTable.PSVersion.ToString()
     runtime = [Environment]::Version.ToString(); edition = [string]$PSVersionTable.PSEdition
     compiler = 'reflection_emit_in_process'; metadataVerified = $true
@@ -147,6 +192,7 @@ try {
     baseline = $baseline.sample }
   $phase = 'observe'
   $count = 0
+  $script:operation = 'read_command'
   while ($null -ne ($line = [Console]::ReadLine())) {
     if ($line.Length -gt 16384) { throw 'invalid_request' }
     $command = $line | ConvertFrom-Json
@@ -167,16 +213,19 @@ try {
         $sample.closeError = $disposal.error
       }
     }
+    $script:operation = 'emit_observation'
     Emit @{ state = 'observation'; sequence = $count; sample = $sample }
+    $script:operation = 'read_command'
   }
   $phase = 'finish'
-} catch { $programError = $phase }
+} catch { Remember-Exception $_.Exception; $programError = $phase }
 finally {
   if ($baselineHandle -ne [IntPtr]::Zero -and $null -ne $native) {
     $disposal = Close-Owned $baselineHandle
   }
   Emit @{ state = 'finished'; opened = $script:opened; closeAttempts = $script:closeAttempts
     closed = $script:closed; closeFailures = $script:closeFailures; programError = $programError
+    firstFailure = $script:firstFailure; finalOperation = $script:operation
     disposals = @($script:disposals.ToArray()) }
 }
 if ($null -ne $programError) { exit 4 }
@@ -193,6 +242,52 @@ const phases = new Set(["baseline_current", "physical", "alias", "old_name", "ne
   "retained_original", "reparse_entry", "target"])
 const stages = ["native_spawn", "native_ready", "native_finished", "native_exit", "native_close"]
 const error = message => Object.assign(new Error(`Identity observation: ${message}`), { code: "IDENTITY_OBSERVATION" })
+const operations = new Set(["setup", "emit_assembly", "emit_module", "emit_type", "emit_import_metadata",
+  "emit_method", "emit_method_metadata", "create_type", "verify_metadata", "read_request", "read_command",
+  "baseline_open", "baseline_volume", "baseline_id", "baseline_attributes", "current_open", "current_volume",
+  "current_id", "current_attributes", "dispose_handle", "emit_ready", "emit_observation"])
+const exceptionClasses = new Set(["System.InvalidOperationException", "System.ArgumentException", "System.TypeLoadException",
+  "System.MissingMethodException", "System.EntryPointNotFoundException", "System.DllNotFoundException",
+  "System.Runtime.InteropServices.MarshalDirectiveException", "System.Reflection.AmbiguousMatchException",
+  "System.Management.Automation.RuntimeException", "System.Management.Automation.MethodException",
+  "System.Management.Automation.MethodInvocationException", "System.Management.Automation.ParameterBindingException"])
+const signedInt = value => Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+const safeFailure = value => value == null ? null : {
+  operation: operations.has(value.operation) ? value.operation : "unknown",
+  kind: ["exception", "api_return"].includes(value.kind) ? value.kind : "unknown",
+  exception: value.exception === null ? null : exceptionClasses.has(value.exception) ? value.exception : "other",
+  hresult: signedInt(value.hresult) ? value.hresult : null,
+  nativeError: uint(value.nativeError) ? value.nativeError : null,
+}
+
+function stderrFacts(memory, totalBytes) {
+  const text = memory.toString("utf8"), lines = PROGRAM.split("\n")
+  const positions = [...new Set([...text.matchAll(/\bAt line:(\d{1,6}) char:(\d{1,6})\b/gu)]
+    .map(match => `${match[1]}:${match[2]}`))]
+  let line = null, character = null
+  if (positions.length === 1) {
+    const [l, c] = positions[0].split(":").map(Number)
+    if (l > 0 && l <= lines.length && c > 0 && c <= lines[l - 1].length + 1) { line = l; character = c }
+  }
+  const ids = [...new Set([...text.matchAll(/\bFullyQualifiedErrorId\s*:\s*([A-Za-z][A-Za-z0-9_]{0,80})\b/gu)]
+    .map(match => match[1]))]
+  const allowed = new Set(["UnexpectedToken", "MissingEndCurlyBrace", "MissingExpressionAfterToken",
+    "MissingEndParenthesisInExpression", "MissingArgument", "MissingPropertyName", "ExpectedValueExpression",
+    "TerminatorExpectedAtEndOfString", "InvalidLeftHandSide", "ParserError"])
+  const errorId = ids.length === 1 && allowed.has(ids[0]) ? ids[0] : "unknown"
+  const category = /\bCategoryInfo\s*:\s*ParserError\b/u.test(text) ? "ParserError" : "unknown"
+  let status = totalBytes === 0 ? "missing" : "unrecognized"
+  if (positions.length > 1 || ids.length > 1) status = "ambiguous"
+  else if (line !== null && category === "ParserError" && errorId !== "unknown") status = "recognized"
+  else if (line !== null || category !== "unknown" || errorId !== "unknown") status = "partial"
+  const truncated = totalBytes > memory.length
+  if (truncated && status === "recognized") status = "partial"
+  return { status, line, character, category, errorId, bytes: totalBytes, truncated }
+}
+
+export function identityArtifactPath() {
+  return fileURLToPath(new URL("../../../../../windows-archive-race-observations.json", import.meta.url))
+}
 
 export function decodeFileIdInfo(bytes) {
   if (!Buffer.isBuffer(bytes) || bytes.length !== 24) throw error("unsupported FileIdInfo layout")
@@ -299,6 +394,7 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
     return answer
   }
   let child, primary, problem, pending = "", rawReady, finalAck, sequence = 0, waiting
+  let stderrMemory = Buffer.alloc(0)
   let readyResolve, readyReject, closeResolve, finishRequested = false
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject })
   const closed = new Promise(resolve => { closeResolve = resolve })
@@ -342,6 +438,8 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
         return fail("invalid_finished")
       finalAck = { opened: item.opened, closeAttempts: item.closeAttempts, closed: item.closed,
         closeFailures: item.closeFailures, programError: item.programError,
+        firstFailure: safeFailure(item.firstFailure),
+        finalOperation: item.finalOperation == null ? null : operations.has(item.finalOperation) ? item.finalOperation : "unknown",
         disposals: item.disposals.map(disposal => ({ phase: disposal.phase, success: disposal.success, error: disposal.error })) }
       event("native_finished")
       if (!rawReady) fail("native_error_before_ready")
@@ -382,6 +480,7 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
     })
     child.stderr.on("data", chunk => {
       receipt.stderrBytes += chunk.length
+      stderrMemory = Buffer.concat([stderrMemory, Buffer.from(chunk).subarray(0, 16384 - stderrMemory.length)])
       fail(receipt.stderrBytes > 16384 ? "stderr_oversized" : "stderr_nonempty")
     })
     child.on("exit", (code, signal) => { receipt.exit = { code, signal }; event("native_exit") })
@@ -449,6 +548,7 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
         finalAck.disposals.every(disposal => disposal.success) &&
         !currentCloseUnconfirmed }
       if (!finalAck) issue("missing_finished")
+      receipt.stderrObservation = stderrFacts(stderrMemory, receipt.stderrBytes)
       receipt.missingStages = stages.filter(type => !receipt.events.some(item => item.type === type))
       if (receipt.missingStages.length) {
         issue("missing_native_stage")

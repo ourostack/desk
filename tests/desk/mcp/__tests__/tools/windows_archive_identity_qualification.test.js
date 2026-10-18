@@ -7,9 +7,10 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { createHash, randomBytes } from "node:crypto"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { prepareArchiveState } from "../../../../../plugins/desk/mcp/src/tools/archive-state.js"
-import { observeIdentity, decodeFileIdInfo } from "./_windows_archive_identity.mjs"
+import { observeIdentity, decodeFileIdInfo, identityArtifactPath } from "./_windows_archive_identity.mjs"
 
 const source = "C:\\owned\\PRIVATE_SOURCE"
 const volumeHex = "8877665544332211"
@@ -88,6 +89,91 @@ function fakeNative(options = {}) {
   return { child, requests, dependencies, args: () => args }
 }
 const input = { source, nodeBaseline: nodeStat, admittedIdentity }
+
+test("synthetic: persistence resolver targets the checkout root from the actual runner working directory", () => {
+  const execArgv = process.execArgv.filter(arg => arg !== "--test" && !arg.startsWith("--test-"))
+  const result = spawnSync(process.execPath, [...execArgv, "--input-type=module", "-e",
+    `import { identityArtifactPath } from ${JSON.stringify(new URL("./_windows_archive_identity.mjs", import.meta.url).href)}; process.stdout.write(identityArtifactPath())`], {
+    cwd: fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url)), encoding: "utf8", env: process.env,
+  })
+  assert.equal(result.status, 0, result.error?.code ?? "isolated resolver child failed")
+  assert.equal(result.stdout, path.join(fileURLToPath(new URL("../../../../../", import.meta.url)), "windows-archive-race-observations.json"))
+})
+
+function failedBeforeReady(fields = {}, stderr = null) {
+  return fakeNative({
+    start: ({ child }) => { if (stderr !== null) child.stderr.emit("data", Buffer.from(stderr)) },
+    finish: ({ emit, close }) => {
+      emit({ state: "finished", opened: 0, closeAttempts: 0, closed: 0, closeFailures: 0,
+        programError: "setup", disposals: [], ...fields })
+      close(4)
+    },
+  })
+}
+
+test("synthetic: first native failure is distinct from final disposal and exports only closed metadata", async () => {
+  const f = failedBeforeReady({
+    firstFailure: { operation: "verify_metadata", kind: "exception", exception: "System.InvalidOperationException",
+      hresult: -2146233079, nativeError: null, message: "PRIVATE_NATIVE_PATH" },
+    finalOperation: "dispose_handle",
+  }, "unrecognized private stderr PRIVATE_NATIVE_PATH")
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    assert.deepEqual(error.identityReceipt.handles.firstFailure, { operation: "verify_metadata", kind: "exception",
+      exception: "System.InvalidOperationException", hresult: -2146233079, nativeError: null })
+    assert.equal(error.identityReceipt.handles.finalOperation, "dispose_handle")
+    assert.equal(JSON.stringify(error.identityReceipt).includes("PRIVATE_NATIVE_PATH"), false)
+    return true
+  })
+})
+
+test("synthetic: unknown failure annotations remain explicit unknowns without leaking arbitrary strings", async () => {
+  const f = failedBeforeReady({
+    firstFailure: { operation: "PRIVATE_NATIVE_PATH", kind: "other", exception: "PRIVATE_NATIVE_PATH",
+      hresult: Number.MAX_SAFE_INTEGER, nativeError: "PRIVATE_NATIVE_PATH" },
+    finalOperation: "PRIVATE_NATIVE_PATH",
+  }, "unrecognized private stderr")
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    assert.deepEqual(error.identityReceipt.handles.firstFailure, { operation: "unknown", kind: "unknown",
+      exception: "other", hresult: null, nativeError: null })
+    assert.equal(error.identityReceipt.handles.finalOperation, "unknown")
+    assert.equal(JSON.stringify(error.identityReceipt).includes("PRIVATE_NATIVE_PATH"), false)
+    return true
+  })
+})
+
+for (const [name, stderr, expected] of [
+  ["recognized", "At line:1 char:1\nCategoryInfo : ParserError: (:) [], ParentContainsErrorRecordException\nFullyQualifiedErrorId : UnexpectedToken\nPRIVATE_NATIVE_PATH", {
+    status: "recognized", line: 1, character: 1, category: "ParserError", errorId: "UnexpectedToken",
+  }],
+  ["ambiguous", "At line:1 char:1\nAt line:2 char:1\nFullyQualifiedErrorId : UnexpectedToken", {
+    status: "ambiguous", line: null, character: null, category: "unknown", errorId: "UnexpectedToken",
+  }],
+  ["out-of-bounds", "At line:999999 char:999999\nFullyQualifiedErrorId : PRIVATE_NATIVE_PATH", {
+    status: "unrecognized", line: null, character: null, category: "unknown", errorId: "unknown",
+  }],
+]) test(`synthetic: ${name} stderr annotations stay passive, bounded and private`, async () => {
+  const f = failedBeforeReady({}, stderr)
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    assert.deepEqual(error.identityReceipt.stderrObservation, { ...expected, bytes: Buffer.byteLength(stderr), truncated: false })
+    assert.equal(JSON.stringify(error.identityReceipt).includes("PRIVATE_NATIVE_PATH"), false)
+    return true
+  })
+})
+
+test("synthetic: truncated stderr annotations never inspect beyond the byte bound", async () => {
+  const prefix = "At line:1 char:1\nCategoryInfo : ParserError\nFullyQualifiedErrorId : UnexpectedToken\n"
+  const stderr = prefix + "PRIVATE_NATIVE_PATH".repeat(1000) + "\nFullyQualifiedErrorId : MissingEndCurlyBrace"
+  const f = failedBeforeReady({}, stderr)
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    const observation = error.identityReceipt.stderrObservation
+    assert.equal(observation.bytes, Buffer.byteLength(stderr))
+    assert.equal(observation.truncated, true)
+    assert.equal(observation.status, "partial")
+    assert.equal(observation.errorId, "UnexpectedToken")
+    assert.equal(JSON.stringify(error.identityReceipt).includes("PRIVATE_NATIVE_PATH"), false)
+    return true
+  })
+})
 
 test("synthetic: complete FileIdInfo is decoded unsigned little-endian without losing upper bits", () => {
   const id = decodeFileIdInfo(Buffer.from(volumeHex + fileIdHex, "hex"))
@@ -411,7 +497,7 @@ test("synthetic: unsupported current full identity is retained and refused witho
 const actual = []
 async function persistActual() {
   if (actual.length === 0) return
-  await fs.writeFile(path.resolve("windows-archive-race-observations.json"), JSON.stringify({
+  await fs.writeFile(identityArtifactPath(), JSON.stringify({
     schema: 1, scope: "observation_only", observationKind: "finite_ntfs_identity_bridge_only",
     actualRace: false, renameCandidate: false, identityAuthority: false, cases: actual,
     limits: ["finite_controlled_fixture_only", "Node_does_not_expose_complete_native_identity",
@@ -421,18 +507,27 @@ async function persistActual() {
 }
 after(persistActual)
 
-async function fixture() {
+async function fixture(record) {
+  record.fixtureStage = "runtime_check"
   assert.equal(process.versions.node, "24.18.0", "finite source-contract fixture requires Node 24.18.0")
+  record.fixtureStage = "temp_root"
   const base = await mkTempRoot("desk-identity-observation-"), root = path.join(base, "身份's & $(data)")
+  record.fixtureStage = "root_mkdir"
   await fs.mkdir(root)
   const src = path.join(root, "source")
+  record.fixtureStage = "source_mkdir"
   await fs.mkdir(src)
+  record.fixtureStage = "archive_mkdir"
   await fs.mkdir(path.join(root, "_archive"))
   const marker = randomBytes(32)
+  record.fixtureStage = "marker_write"
   await fs.writeFile(path.join(src, "task.md"), marker)
+  record.fixtureStage = "prepare"
   const prepared = await prepareArchiveState({ effectiveRoot: root, srcDir: src,
     archiveDir: path.join(root, "_archive", "source"), srcFile: path.join(src, "task.md"), spawnGit: spawnSync })
+  record.fixtureStage = "source_lstat"
   const node = await fs.lstat(src, { bigint: true })
+  record.fixtureStage = "reference_open"
   const reference = await fs.open(path.join(src, "task.md"), "r")
   const referenceMatches = async () => {
     const buffer = Buffer.alloc(32)
@@ -446,22 +541,25 @@ function actualCell(name, body) {
   test(`actual Windows: ${name}`, { skip: process.platform !== "win32", timeout: 20000 }, async () => {
     const record = { name, platform: process.platform, node: process.versions.node,
       replacementPhaseBegunAtBaseline: false, receipt: null,
-      fixtureFacts: { nodeReferenceAcquired: false, nodeReferenceClosed: null }, outcome: "incomplete" }
+      fixtureFacts: { nodeReferenceAcquired: false, nodeReferenceClosed: null },
+      casePersistenceAttempted: false, casePersistenceCompleted: false, outcome: "incomplete" }
     actual.push(record)
     let f, failure
     try {
-      f = await fixture()
+      f = await fixture(record)
       record.fixtureFacts.nodeReferenceAcquired = true
       await body(f, record)
     } catch (error) {
       record.receipt ??= error.identityReceipt ?? null
       record.outcome = "failed"
       record.errorPhase = error.identityReceipt ? "native_session" : "fixture"
+      record.firstFailureStage = record.fixtureStage
       record.errorCode = ["ENOENT", "EPERM", "EACCES", "ERR_ASSERTION", "IDENTITY_OBSERVATION"].includes(error.code) ? error.code : "unavailable"
       failure = new Error(`Identity observation fixture failed (${record.errorCode}); partial safe receipt retained`)
     } finally {
       if (f) {
         try {
+          record.fixtureStage = "reference_close"
           await f.reference.close()
           record.fixtureFacts.nodeReferenceClosed = true
         } catch {
@@ -469,6 +567,7 @@ function actualCell(name, body) {
           record.nodeReferenceClosureFailure = true
           record.outcome = "failed"
           record.errorPhase ??= "node_reference_close"
+          record.firstFailureStage ??= record.fixtureStage
           failure ??= new Error("Identity fixture Node reference closure unconfirmed; safe receipt retained")
         }
       }
@@ -476,7 +575,11 @@ function actualCell(name, body) {
     // Persist before file-level fixture cleanup, including an unsettled native
     // session or failed Node-reference close. Neither failure erases its receipt.
     if (!failure) record.outcome = "observed"
-    try { await persistActual() } catch (error) {
+    try {
+      record.casePersistenceAttempted = true
+      await persistActual()
+      record.casePersistenceCompleted = true
+    } catch (error) {
       const code = ["EIO", "EACCES", "EPERM", "ENOSPC"].includes(error.code) ? error.code : "unavailable"
       console.error("Identity observation persistence failed:", code)
       record.outcome = "failed"
@@ -488,6 +591,7 @@ function actualCell(name, body) {
 }
 const observeActual = async (f, record, work, sourcePath = f.src, admission = f.admission) => {
   try {
+    record.fixtureStage = "native_observation"
     record.receipt = await observeIdentity({ source: sourcePath, nodeBaseline: await fs.lstat(sourcePath, { bigint: true }),
       admittedIdentity: admission }, async session => {
       await f.prepared.atUse()
@@ -512,16 +616,23 @@ actualCell("owned root alias observes the same full native object", async (f, re
   const alias = path.join(f.root, "root-alias")
   // A sibling alias avoids recursively aliasing its own parent.
   const physical = path.join(f.root, "physical")
+  record.fixtureStage = "alias_physical_mkdir"
   await fs.mkdir(physical)
+  record.fixtureStage = "alias_source_rename"
   await fs.rename(f.src, path.join(physical, "source"))
+  record.fixtureStage = "alias_junction_create"
   await fs.symlink(physical, alias, "junction")
   const logicalSource = path.join(alias, "source"), physicalSource = path.join(physical, "source")
+  record.fixtureStage = "alias_archive_mkdir"
   await fs.mkdir(path.join(physical, "_archive"))
+  record.fixtureStage = "alias_prepare"
   const prepared = await prepareArchiveState({ effectiveRoot: alias, srcDir: logicalSource,
     archiveDir: path.join(alias, "_archive", "source"), srcFile: path.join(logicalSource, "task.md"), spawnGit: spawnSync })
   const admission = prepared.snapshot.get("").identity
+  record.fixtureStage = "alias_lstat"
   record.fixtureFacts.aliasConstructed = (await fs.lstat(alias)).isSymbolicLink()
   assert.equal(record.fixtureFacts.aliasConstructed, true)
+  record.fixtureStage = "native_observation"
   record.receipt = await observeIdentity({ source: logicalSource,
     nodeBaseline: await fs.lstat(logicalSource, { bigint: true }), admittedIdentity: admission }, async session => {
     await prepared.atUse()
