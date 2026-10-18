@@ -178,6 +178,10 @@ function entrySource(file) {
 }
 function ownedNodeProbe(file) {
   fs.mkdirSync(path.dirname(file),{recursive:true})
+  if(process.platform==="win32"){
+    fs.copyFileSync(process.execPath,file)
+    return
+  }
   fs.writeFileSync(file,"#!"+process.execPath+"\n"+
     `const fs=require("fs"),cp=require("child_process");fs.writeFileSync(${JSON.stringify(file+".generation")},JSON.stringify({pid:process.pid,start:cp.execFileSync("/bin/ps",["-p",String(process.pid),"-o","lstart="],{encoding:"utf8"}).trim()}));console.log(process.version+" "+process.versions.modules);`)
   fs.chmodSync(file,0o700)

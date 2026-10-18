@@ -215,7 +215,9 @@ test("actual maintained SocketConnection settles a backpressured write when its 
   socket.on("error", () => {})
   connection = new SocketConnection(socket)
   const filler = Buffer.alloc(8 * 1024 * 1024)
-  assert.equal(socket.write(filler, () => {}), false, "bounded owned bytes create actual transport backpressure")
+  let writable = true, writes = 0
+  while (writable && writes++ < 8) writable = socket.write(filler, () => {})
+  assert.equal(writable, false, "bounded owned bytes create actual transport backpressure")
   let settled = false
   const outcome = connection.send({ id: 17, result: "ok" }).then(
     () => { settled = true; return { success: true } },

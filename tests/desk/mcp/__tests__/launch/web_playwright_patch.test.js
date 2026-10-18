@@ -472,6 +472,7 @@ test("invalid receipts are unqualified but filesystem failures are not silently 
   const receipt = path.join(root, "playwright-patch.json")
   for (const contents of ["null", '{"revision":0}', "{broken"]) {
     writeFileSync(receipt, contents, { mode: 0o600 })
+    if (process.platform === "win32") require(path.join(mcpRoot, "web-extension-credential.cjs")).privateGeneration(root, receipt)
     assert.equal(readRevision(installed), 0)
   }
   const unreadable = path.join(root, "unreadable")

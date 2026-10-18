@@ -59,7 +59,9 @@ async function profileFixture(t, profile = "Profile 17") {
   observedFs.existsSync = file => candidates.includes(String(file)) && process.platform !== "darwin" ? true :
     path.resolve(String(file)).startsWith(root + path.sep) && fs.existsSync(file);
   observedFs.realpathSync = file => candidates.includes(String(file)) && process.platform !== "darwin" ? app : fs.realpathSync(file);
-  const proc = Object.assign(signals, { ...process, env: {}, stdout: { write(bytes, callback) {
+  const nativeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+    process.platform === "win32" && name.toLowerCase() === "systemroot"));
+  const proc = Object.assign(signals, { ...process, env: { ...nativeEnv }, stdout: { write(bytes, callback) {
     output.push(Buffer.from(bytes)); callback?.(); return true;
   } } });
   proc.stderr = { write() { return true; } };
@@ -95,7 +97,7 @@ async function profileFixture(t, profile = "Profile 17") {
       resolveExtensionOptions: configApi.resolveExtensionOptions,
       createExtensionBrowser: async (...args) => { acquisitions.push(args); throw checkpoint; },
     });
-  return { root, lib, core, config, configFile, record, put, proc, output, observedFs,
+  return { root, lib, core, config, configFile, record, put, proc, nativeEnv, output, observedFs,
     credential, template, configApi, create, acquisitions, checkpoint, utils,
     clientInfo: { daemonProfilesDir: path.join(owner, "cache/ms-playwright/daemon/owned"), workspaceDirHash: "owned", version: "owned-E-profile" },
   };
@@ -113,7 +115,7 @@ test("actual native preflight and extension argument path derive an absent profi
   await assert.rejects(f.create(resolved, {}, { ...options, profileDirName: "Profile 17" }, {}), error => error === f.checkpoint);
   assert.equal(f.acquisitions[1][3], "Profile 17");
   assert.equal(Object.hasOwn(options, "profileDirName"), false);
-  assert.deepEqual(f.proc.env, {}, "no profile environment workaround");
+  assert.deepEqual(f.proc.env, f.nativeEnv, "no profile environment workaround");
 });
 
 for (const profile of ["Wrong profile", null, "", false, 0]) {

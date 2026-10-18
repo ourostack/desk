@@ -127,6 +127,7 @@ test('BigInt inode and device replacement refuse reclaim; Windows ACL created fl
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 const base = ${JSON.stringify(primitives.href)};
 const texts = Object.fromEntries(await Promise.all(['broker-lock.mjs','broker-error.mjs','private-state.mjs'].map(async name =>
   [name, await fs.readFile(new URL(name, base), 'utf8')])));
@@ -189,7 +190,7 @@ async function fixture(mode) {
     cache.set(name,module);
     await module.link(async spec => {
       if(spec.startsWith('./'))return load(spec.slice(2));
-      return synthetic(spec==='node:fs/promises'?fsp:await import(spec));
+      return synthetic(spec==='node:fs/promises'?fsp:spec==='node:path'?{default:path.posix}:await import(spec));
     });
     return module;
   }

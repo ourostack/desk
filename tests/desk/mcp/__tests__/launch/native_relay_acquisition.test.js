@@ -563,6 +563,8 @@ test('replacing the protected generation receipt during actual C attestation can
   const receipt = path.join(f.generation, 'playwright-patch.json'), bytes = readFileSync(receipt);
   fs.renameSync(receipt, receipt + '.owned-original');
   fs.writeFileSync(receipt, bytes, { mode: 0o600, flag: 'wx' });
+  if (process.platform === 'win32')
+    require(path.join(mcpRoot, 'web-extension-credential.cjs')).privateGeneration(f.generation, receipt);
   f.tokenGate.resolve();
   const { error } = await pending;
   assert.equal(error?.code, 'NATIVE_CODE_CHANGED');

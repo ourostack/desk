@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { readProcessStart } from '../../../../../plugins/desk/mcp/src/readiness/process-start.js';
 import vm from 'node:vm';
 import { mkTempRoot } from '../_temp_roots.js';
@@ -255,7 +256,7 @@ async function fixture(t, options = {}) {
   });
   return { root, config, provider, owner, inventory, requests, contexts, selection, transport, options, construction,
     setPin(value) { pin = value; }, resetNative() { alive = true; },
-    client: require(new URL('web-native-messaging.cjs', rootUrl).pathname) };
+    client: require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl))) };
 }
 
 for (const intervening of ['recreate', 'unavailable']) {
@@ -492,7 +493,7 @@ test('ordinary selected-profile resolver reads only synthetic declared Local Sta
   const f = await fixture(t);
   await f.provider.close();
   const { startNativeProvider } = await import(new URL('src/browser/native-provider.mjs', rootUrl));
-  const real = require(new URL('web-real-profile.cjs', rootUrl).pathname);
+  const real = require(fileURLToPath(new URL('web-real-profile.cjs', rootUrl)));
   // HOME is the existing isolated runner's private HOME; do not change it or
   // invoke any Registry API that caches it. This exact subtree was absent.
   const userDataDir = real.userDataDir('msedge', process.platform, process.env, os.homedir());
@@ -521,7 +522,7 @@ test('ordinary selected-profile resolver reads only synthetic declared Local Sta
 });
 
 async function rawHttp(endpoint, body, overrides = {}) {
-  const client = require(new URL('web-native-messaging.cjs', rootUrl).pathname);
+  const client = require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl)));
   const parts = client.endpointParts(endpoint);
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: parts.port, path: parts.path, method: 'POST',
@@ -563,7 +564,7 @@ test('HTTP capability host origin method UTF8 and body limits reject before nati
 
 test('client timeouts malformed responses and hostile error text retain only bounded unknown resources', async t => {
   instrumentServers(t);
-  const client = require(new URL('web-native-messaging.cjs', rootUrl).pathname);
+  const client = require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl)));
   const sockets = new Set();
   let mode = 'timeout';
   const server = http.createServer((_req, res) => {
