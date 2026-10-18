@@ -5,16 +5,112 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import { promises as io } from "node:fs"
 import path from "node:path"
+import { EventEmitter } from "node:events"
 import { task_archive, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { findCard } from "../../../../../plugins/desk/mcp/src/tools/task-focus.js"
 import { readCleanupIndex } from "../../../../../plugins/desk/mcp/src/desk/cleanup-index.js"
 import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { ART, SLUG, RESOURCE, exists, digest, record, fixture, options, complete, readCard,
-  openReadiness, requests, realGit, git, spawnActor, actorMessage, send, finishActor, drainActors, errorData, ownIdentity } from "./archive_handoff_qualification_child.mjs"
+  openReadiness, requests, realGit, git, spawnActor, actorMessage, send, finishActor, drainActors, errorData, ownIdentity,
+  nativeMoveObserver, nativeActorObservations } from "./archive_handoff_qualification_child.mjs"
 
 const reports = []
 const readers = []
 record("qualification-suite-start", await ownIdentity())
+const moveForObserverControl = () => import("../../../../../plugins/desk/mcp/src/tools/archive-move.js")
+function observedChild({ requestOutput, releaseOutput } = {}) {
+  const child = new EventEmitter()
+  child.pid = 42
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.stdin = new EventEmitter()
+  const writes = [], ends = []
+  const emit = item => child.stdout.emit("data", Buffer.from(typeof item === "string" ? item : JSON.stringify(item) + "\n"))
+  const close = code => { child.emit("exit", code, null); child.emit("close", code, null) }
+  child.stdin.write = function (...args) {
+    writes.push({ receiverMatches: this === child.stdin, args })
+    const callback = args.find(item => typeof item === "function")
+    if (callback) callback()
+    queueMicrotask(() => emit(requestOutput ?? { state: "ready", pid: child.pid, powershell: "5.1", runtime: "4.0",
+      edition: "Desktop", api: "System.IO.Directory.Move" }))
+    return false
+  }
+  child.stdin.end = function (...args) {
+    ends.push({ receiverMatches: this === child.stdin, args })
+    const callback = args.find(item => typeof item === "function")
+    if (callback) callback()
+    queueMicrotask(() => {
+      if (args[0]) {
+        for (const item of releaseOutput ?? [{ state: "result", moved: true, exception: null, hresult: null }]) emit(item)
+        close(releaseOutput?.[0]?.moved === false ? 3 : 0)
+      } else close(2)
+    })
+    return this
+  }
+  queueMicrotask(() => child.emit("spawn"))
+  return { child, writes, ends }
+}
+
+test("passive native receipt preserves real helper outcomes, child events and pipe forwarding", async () => {
+  const { moveArchive } = await moveForObserverControl()
+  const source = "C:\\owned\\source", destination = "C:\\owned\\archive", fixture = { src: source, dst: destination }
+  const f = observedChild()
+  let spawnArguments
+  const observer = nativeMoveObserver({ source, destination, fixture, spawnChild(...args) {
+    spawnArguments = args
+    return f.child
+  } })
+  const state = await moveArchive(source, destination, async () => observer.event("freshness-callback-completed"), {
+    platform: "win32", env: { SystemRoot: "C:\\Windows" }, realpath: async value => value, spawn: observer.spawn,
+  })
+  observer.returned(state)
+  assert.equal(state.movement, "confirmed")
+  assert.equal(observer.receipt.executableMatches, true)
+  assert.equal(observer.receipt.ready.pidMatchesChild, true)
+  assert.deepEqual(observer.receipt.ack, { valid: true, moved: true, exception: null, hresult: null })
+  assert.deepEqual(observer.receipt.close, { code: 0, signal: null })
+  assert.deepEqual(observer.receipt.protocolIssues, [])
+  assert.equal(observer.receipt.events.filter(item => item.type === "native-child-exit").length, 1)
+  assert.equal(observer.receipt.events.filter(item => item.type === "native-child-close").length, 1)
+
+  const forwarded = observedChild(), second = nativeMoveObserver({ source, destination, fixture, spawnChild(...args) {
+    assert.deepEqual(args, spawnArguments)
+    return forwarded.child
+  } })
+  const observed = second.spawn(...spawnArguments)
+  let writes = 0, ends = 0
+  const onWrite = () => { writes += 1 }, onEnd = () => { ends += 1 }
+  assert.equal(observed, forwarded.child)
+  assert.equal(observed.stdin.write("{}", "utf8", onWrite), false)
+  assert.equal(observed.stdin.end("move\n", "utf8", onEnd), forwarded.child.stdin)
+  assert.equal(writes, 1)
+  assert.equal(ends, 1)
+  assert.deepEqual(forwarded.writes, [{ receiverMatches: true, args: ["{}", "utf8", onWrite] }])
+  assert.deepEqual(forwarded.ends, [{ receiverMatches: true, args: ["move\n", "utf8", onEnd] }])
+})
+
+for (const [name, options, issue] of [
+  ["malformed", { requestOutput: "DO_NOT_RETAIN\n" }, "malformed_json"],
+  ["unknown", { requestOutput: { state: "other", secret: "DO_NOT_RETAIN" } }, "unexpected_protocol_state"],
+  ["oversized", { requestOutput: "DO_NOT_RETAIN".repeat(2000) }, "stdout_oversized"],
+  ["duplicate", { releaseOutput: Array(2).fill({ state: "result", moved: true, exception: null, hresult: null }) }, "duplicate_result"],
+]) {
+  test(`passive native receipt keeps ${name} protocol failure explicit and private`, async () => {
+    const { moveArchive } = await moveForObserverControl()
+    const source = "C:\\owned\\source", destination = "C:\\owned\\archive"
+    const f = observedChild(options)
+    const observer = nativeMoveObserver({ source, destination, fixture: { src: source, dst: destination }, spawnChild: () => f.child })
+    await assert.rejects(moveArchive(source, destination, async () => {}, {
+      platform: "win32", env: { SystemRoot: "C:\\Windows" }, realpath: async value => value, spawn: observer.spawn,
+    }), error => {
+      observer.threw(error)
+      assert.equal(observer.receipt.helper.outcome, "threw")
+      assert.ok(observer.receipt.protocolIssues.includes(issue))
+      assert.equal(JSON.stringify(observer.receipt).includes("DO_NOT_RETAIN"), false)
+      return true
+    })
+  })
+}
 async function readiness(f, label) {
   const reader = await openReadiness(f, label)
   readers.push(reader)
@@ -53,8 +149,16 @@ after(async () => {
   const result = { reports: reports.map(({ name, verdict, failedCriteria, error }) => ({ name, verdict, failedCriteria, error })),
     actors, journalCloseFailures: failures.map((item) => String(item.reason)),
     retainedFixtures: true, noOperatorState: true, noNetworkPush: true, productSourceWritesByHarness: false }
+  try {
+    const target = new URL("../../../../../windows-archive-race-observations.json", import.meta.url)
+    const artifact = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, "utf8")) :
+      { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
+    artifact.actorReceipts = nativeActorObservations()
+    fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
+  } catch (error) { result.observationPersistenceFailure = error.code ?? "unavailable" }
   fs.writeFileSync(path.join(ART, "summary.json"), JSON.stringify(result, null, 2) + "\n")
   assert.equal(failures.length, 0)
+  assert.equal(result.observationPersistenceFailure, undefined, "Passive observation persistence failed; original scenario verdicts are unchanged")
 })
 
 async function terminalWorkflow(name, onGit) {
@@ -152,9 +256,9 @@ scenario("03-two-real-processes-race-the-same-folder", async () => {
   }
   const summary = { scope:"owned two-process archive observations; criteria and product bytes unchanged",
     platform:process.platform,variants:variants.map(({root,onGit,outcomes,oneWinner,exactPayload,retired,publication}) => ({
-      onGit,oneWinner,exactPayload,retired,publication,
-      outcomes:outcomes.map(({result,error,renameReturned}) => ({
-        status:result?.status ?? null,renameReturned,
+      caseId:digest(root),onGit,oneWinner,exactPayload,retired,publication,
+      outcomes:outcomes.map(({result,error,renameReturned,moveObservation}) => ({
+        status:result?.status ?? null,renameReturned,moveObservation,
         publication:result?.publication?.status ?? null,
         commitReason:result?.commit?.reason?.replaceAll(root,"<owned-root>") ?? null,
         error:error === null ? null : {name:error.name,code:error.code,phase:error.phase,

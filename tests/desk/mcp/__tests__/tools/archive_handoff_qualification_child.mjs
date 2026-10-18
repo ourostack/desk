@@ -4,7 +4,7 @@ import fs from "node:fs"
 import { promises as io } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { fork, spawnSync } from "node:child_process"
+import { fork, spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { moveArchive } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
@@ -23,6 +23,148 @@ export const SLUG = "archive-proof"
 export const RESOURCE = "branch:qualification/owned#retained-fixture"
 export const digest = (value) => createHash("sha256").update(value).digest("hex")
 export const exists = (file) => fs.existsSync(file)
+const moveSourceHash = digest(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/tools/archive-move.js", import.meta.url)))
+const moveProgramHash = "4e41cc66ef0e98ec2cecb5ff6cb3a6b57a8c9f91759eecffc4c0372a88f7b2fa"
+const nativeStages = ["native-child-spawned", "native-ready-observed", "native-release-attempted",
+  "native-result-observed", "native-child-exit", "native-child-close"]
+
+export function nativeMoveObserver({ source, destination, fixture, spawnChild = spawn }) {
+  const receipt = {
+    actorPid: process.pid, platform: process.platform, node: process.versions.node, helperSourceHash: moveSourceHash,
+    sourceMatchesFixture: source === fixture.src, destinationMatchesFixture: destination === fixture.dst,
+    spawnReached: false, executableMatches: null, programHash: null, childPid: null,
+    ready: null, ack: null, exit: null, close: null, helper: null, events: [], protocolIssues: [],
+    droppedEvents: 0,
+  }
+  let sequence = 0, stdoutBytes = 0, stderrBytes = 0, pending = "", readyCount = 0, resultCount = 0
+  const event = (type, detail = {}) => {
+    const item = { sequence: ++sequence, monotonicNs: process.hrtime.bigint().toString(), type, ...detail }
+    if (receipt.events.length < 128) receipt.events.push(item)
+    else receipt.droppedEvents += 1
+  }
+  const issue = (code) => {
+    if (!receipt.protocolIssues.includes(code) && receipt.protocolIssues.length < 16) receipt.protocolIssues.push(code)
+  }
+  const version = value => typeof value === "string" && /^\d{1,6}(?:\.\d{1,6}){1,3}$/u.test(value)
+  const exception = value => typeof value === "string" &&
+    /^System\.(?:IO\.[A-Za-z]{1,64}Exception|UnauthorizedAccessException|ArgumentException|NotSupportedException|Security\.SecurityException)$/u.test(value)
+  const response = (item) => {
+    if (item?.state === "ready") {
+      readyCount += 1
+      if (readyCount > 1) issue("duplicate_ready")
+      const valid = item.pid === receipt.childPid && version(item.powershell) && version(item.runtime) &&
+        item.edition === "Desktop" && item.api === "System.IO.Directory.Move"
+      if (!valid) issue("invalid_ready")
+      receipt.ready = { valid, pidMatchesChild: item.pid === receipt.childPid,
+        powershell: version(item.powershell) ? item.powershell : null, runtime: version(item.runtime) ? item.runtime : null }
+      event("native-ready-observed", receipt.ready)
+    } else if (item?.state === "result") {
+      resultCount += 1
+      if (resultCount > 1) issue("duplicate_result")
+      const valid = item.moved === true && item.exception === null && item.hresult === null ||
+        item.moved === false && exception(item.exception) && Number.isInteger(item.hresult) &&
+        item.hresult >= -2147483648 && item.hresult <= 2147483647
+      if (!valid) issue("invalid_result")
+      receipt.ack = { valid, moved: typeof item.moved === "boolean" ? item.moved : null,
+        exception: exception(item.exception) ? item.exception : null,
+        hresult: Number.isInteger(item.hresult) && item.hresult >= -2147483648 && item.hresult <= 2147483647 ? item.hresult : null }
+      event("native-result-observed", receipt.ack)
+    } else issue("unexpected_protocol_state")
+  }
+  const stateOf = state => state ? {
+    released: state.released === true, closed: state.closed === true, forced: state.forced === true,
+    movement: ["not_released", "confirmed", "refused", "unconfirmed"].includes(state.movement) ? state.movement : null,
+    retirement: ["confirmed", "forced", "unconfirmed"].includes(state.retirement) ? state.retirement : null,
+    runtime: state.runtime ? { powershell: version(state.runtime.powershell) ? state.runtime.powershell : null,
+      runtime: version(state.runtime.runtime) ? state.runtime.runtime : null } : null,
+    refusal: state.refusal ? { exception: exception(state.refusal.exception) ? state.refusal.exception : null,
+      hresult: Number.isInteger(state.refusal.hresult) ? state.refusal.hresult : null } : null,
+  } : null
+  const observeSpawn = (executable, args, settings) => {
+    receipt.spawnReached = true
+    receipt.executableMatches = executable === path.win32.join(settings?.env?.SystemRoot || settings?.env?.SYSTEMROOT || "",
+      "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    receipt.programHash = typeof args?.[4] === "string" ? digest(args[4]) : null
+    const child = spawnChild(executable, args, settings)
+    receipt.childPid = child.pid ?? null
+    if (!receipt.executableMatches || receipt.programHash !== moveProgramHash ||
+        JSON.stringify(args.slice(0, 4)) !== JSON.stringify(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])) {
+      issue("unexpected_spawn")
+      return child
+    }
+    child.on("spawn", () => event("native-child-spawned"))
+    child.on("error", () => event("native-child-error"))
+    child.stdout.on("data", chunk => {
+      stdoutBytes += chunk.length
+      if (stdoutBytes > 16384) { issue("stdout_oversized"); return }
+      pending += chunk.toString("utf8")
+      for (;;) {
+        const newline = pending.indexOf("\n")
+        if (newline < 0) break
+        const line = pending.slice(0, newline).trim()
+        pending = pending.slice(newline + 1)
+        let item
+        try { item = JSON.parse(line) } catch { issue("malformed_json"); continue }
+        response(item)
+      }
+    })
+    child.stderr.on("data", chunk => {
+      stderrBytes += chunk.length
+      if (stderrBytes > 16384) issue("stderr_oversized")
+    })
+    child.on("exit", (code, signal) => { receipt.exit = { code, signal }; event("native-child-exit", receipt.exit) })
+    child.on("close", (code, signal) => {
+      receipt.close = { code, signal }
+      if (pending.trim()) issue("unterminated_output")
+      event("native-child-close", receipt.close)
+    })
+    const write = child.stdin.write, end = child.stdin.end
+    let requestObserved = false
+    child.stdin.write = function (...values) {
+      if (!requestObserved) {
+        requestObserved = true
+        let request
+        try { request = JSON.parse(String(values[0])) } catch { issue("invalid_request_observation") }
+        event("native-request-attempted", { sourceMatches: request?.source === source, destinationMatches: request?.destination === destination })
+      }
+      return Reflect.apply(write, this, values)
+    }
+    child.stdin.end = function (...values) {
+      if (values[0] !== undefined && values[0] !== null && typeof values[0] !== "function")
+        event("native-release-attempted", { literalMatches: String(values[0]) === "move\n" })
+      return Reflect.apply(end, this, values)
+    }
+    return child
+  }
+  const identity = async file => {
+    try {
+      const stat = await io.stat(file, { bigint: true })
+      return { state: "observed", identity: digest(`${stat.dev}:${stat.ino}`) }
+    } catch (error) {
+      return { state: error.code === "ENOENT" ? "absent" : "unavailable",
+        code: ["ENOENT", "EACCES", "EPERM", "ENOTDIR"].includes(error.code) ? error.code : "other" }
+    }
+  }
+  return {
+    receipt, event, spawn: observeSpawn,
+    async before() {
+      event("move-callable-entered")
+      receipt.baseline = { source: await identity(source), parent: await identity(path.dirname(destination)),
+        destination: await identity(destination) }
+    },
+    returned(state) { receipt.helper = { outcome: "returned", state: stateOf(state) }; event("helper-returned") },
+    threw(error) { receipt.helper = { outcome: "threw", state: stateOf(error.archiveMove) }; event("helper-threw") },
+    async after() {
+      const final = { source: await identity(source), parent: await identity(path.dirname(destination)),
+        destination: await identity(destination) }
+      receipt.final = { sourceState: final.source.state, destinationState: final.destination.state,
+        destinationMatchesOriginalSource: receipt.baseline.source.state === "observed" &&
+          final.destination.identity === receipt.baseline.source.identity,
+        parentMatchesBaseline: receipt.baseline.parent.state === "observed" && final.parent.identity === receipt.baseline.parent.identity }
+      receipt.missingNativeStages = nativeStages.filter(type => !receipt.events.some(item => item.type === type))
+    },
+  }
+}
 export function record(type, detail = {}) {
   fs.appendFileSync(path.join(ART, `events-${process.pid}.jsonl`),
     JSON.stringify({ pid: process.pid, ...detail, type, at: new Date().toISOString() }) + "\n")
@@ -68,6 +210,14 @@ export function descriptor(base, root, person = null) {
 
 const actors = new Set()
 const workers = new Set()
+export function nativeActorObservations() {
+  return [...actors].filter(actor => actor.role === "archive").map(actor => {
+    const observation = actor.messages.findLast(message => message.moveObservation)?.moveObservation ?? null
+    return { actorPid: actor.pid, caseId: actor.caseId, receipt: observation,
+      missingNativeStages: observation ? nativeStages.filter(type => !observation.events.some(item => item.type === type)) : nativeStages,
+      receiptReceived: observation !== null }
+  })
+}
 const HELPER = fileURLToPath(import.meta.url)
 function bounded(promise, ms, label) {
   let timer
@@ -99,7 +249,8 @@ export function spawnActor(role, fixture, mode = "plain") {
   const child = fork(HELPER, [role, JSON.stringify({ base: fixture.base, root: fixture.root, person: fixture.person, mode })], {
     execArgv, env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"],
   })
-  const actor = { child, pid: child.pid, role, messages: [], waiters: new Set(), exit: null, stderr: "", stdout: "" }
+  const actor = { child, pid: child.pid, role, caseId: digest(fixture.root),
+    messages: [], waiters: new Set(), exit: null, stderr: "", stdout: "" }
   actors.add(actor)
   record("actor-born", { childPid: child.pid, role, exe: process.execPath,
     importCount: execArgv.filter((arg) => arg === "--import").length,
@@ -267,22 +418,38 @@ if (process.argv[1] === HELPER) {
   let failure
   let reader
   let renameReturned = false
+  let moveObservation = null
+  let moveObserver = null
   try {
     if (start.cmd === "abort") throw new Error("Owned qualification aborted before action")
     if (role === "push") result = await runPushWorker({ root: owned.root, env: owned.env, debounceMs: 0, spawnGit: realGit })
     else {
       reader = await openReadiness(owned, `actor-${process.pid}`)
       const qualifiedMove = async (source, destination, atUse) => {
-        const nativeMove = await moveArchive(source, destination, async () => {
-          await atUse()
-          if (config.mode !== "plain") {
-            await sendMessage({ type: "rename-barrier", source, destination, gitCallsBeforeRename: gitCalls.length })
-            const command = await take("go")
-            if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
-          }
-        })
+        const observer = nativeMoveObserver({ source, destination, fixture: owned })
+        moveObserver = observer
+        moveObservation = observer.receipt
+        await observer.before()
+        let nativeMove
+        try {
+          nativeMove = await moveArchive(source, destination, async () => {
+            await atUse()
+            observer.event("freshness-callback-completed")
+            if (config.mode !== "plain") {
+              observer.event("existing-barrier-entered")
+              await sendMessage({ type: "rename-barrier", source, destination, gitCallsBeforeRename: gitCalls.length,
+                moveObservation: observer.receipt })
+              const command = await take("go")
+              observer.event(command.cmd === "abort" ? "existing-barrier-aborted" : "existing-go-received")
+              if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
+            }
+          }, { spawn: observer.spawn })
+          observer.returned(nativeMove)
+        } catch (error) { observer.threw(error); throw error }
+        finally { await observer.after() }
         if (nativeMove) record("native-move-returned", nativeMove)
         renameReturned = true
+        observer.event("rename-returned-set")
         if (config.mode === "exit-after-rename") {
           const receipt = { pid: process.pid, exe: process.execPath, source, destination,
             actualDestination: fs.realpathSync(destination), gitCallsBeforeExit: gitCalls.length,
@@ -301,7 +468,8 @@ if (process.argv[1] === HELPER) {
   finally {
     if (reader) await reader.journal.close()
   }
-  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned })
+  moveObserver?.event("archive-result", { status: result?.status ?? null, errorPhase: failure?.phase ?? null })
+  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned, moveObservation })
   await take("finish")
   await drainActors()
   clearTimeout(lease)
