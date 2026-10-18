@@ -1001,8 +1001,13 @@ const observeActual = async (f, record, work, sourcePath = f.src, admission = f.
       admittedIdentity: admission }, async session => {
       await f.prepared.atUse()
       record.fixtureFacts.realSnapshotRecheckedBeforeObservation = true
-      record.fixtureFacts.originalReferenceMatchesMarker = await f.referenceMatches()
-      assert.equal(record.fixtureFacts.originalReferenceMatchesMarker, true)
+      if (f.reference) {
+        record.fixtureFacts.originalReferenceMatchesMarker = await f.referenceMatches()
+        assert.equal(record.fixtureFacts.originalReferenceMatchesMarker, true)
+      } else {
+        record.fixtureFacts.payloadBeforeMatchesMarker = (await fs.readFile(path.join(f.src, "task.md"))).equals(f.marker)
+        assert.equal(record.fixtureFacts.payloadBeforeMatchesMarker, true)
+      }
       await work(session)
     })
   } catch (error) { record.receipt = error.identityReceipt ?? null; throw error }
@@ -1036,7 +1041,10 @@ actualCell("owned root alias observes the same full native object", async (f, re
   })
 }, { rootAlias: true })
 
-actualCell("sequential rename preserves held native baseline while the old name disappears", async (f, record) => {
+actualCell("native-anchored sequential rename preserves full identity while the old name disappears", async (f, record) => {
+  record.anchorKind = "native_full_identity_handle"
+  record.nodeMarkerReferenceHeld = false
+  record.markerVerification = "completed_reads"
   await observeActual(f, record, async session => {
     const moved = path.join(f.root, "renamed-original")
     await fs.rename(f.src, moved)
@@ -1046,12 +1054,16 @@ actualCell("sequential rename preserves held native baseline while the old name 
     assert.ok([2, 3].includes(absent.openError))
     const found = await session.observe(moved, "new_name", await fs.lstat(moved, { bigint: true }), f.admission)
     assert.equal(found.sameAsBaseline, true)
-    record.fixtureFacts.originalReferenceSurvivesRename = await f.referenceMatches()
-    assert.equal(record.fixtureFacts.originalReferenceSurvivesRename, true)
+    record.fixtureFacts.nativeIdentityPersistsAcrossRename = found.sameAsBaseline
+    record.fixtureFacts.originalPayloadMatchesMarkerAfterRename = (await fs.readFile(path.join(moved, "task.md"))).equals(f.marker)
+    assert.equal(record.fixtureFacts.originalPayloadMatchesMarkerAfterRename, true)
   })
-})
+}, { nodeReference: false })
 
-actualCell("replacement is distinct from the retained original and rejected by real admission", async (f, record) => {
+actualCell("native-anchored replacement differs from the retained original and is rejected by real admission", async (f, record) => {
+  record.anchorKind = "native_full_identity_handle"
+  record.nodeMarkerReferenceHeld = false
+  record.markerVerification = "completed_reads"
   await observeActual(f, record, async session => {
     const retained = path.join(f.root, "retained-original")
     await fs.rename(f.src, retained)
@@ -1064,14 +1076,16 @@ actualCell("replacement is distinct from the retained original and rejected by r
     assert.equal(changed.sameAsBaseline, false)
     record.fixtureFacts.replacementNodeTupleMatchesOriginalAdmission = changed.nodeTupleMatchesAdmission
     assert.equal(original.sameAsBaseline, true)
+    record.fixtureFacts.retainedOriginalNativeIdentityMatchesBaseline = original.sameAsBaseline
+    record.fixtureFacts.replacementNativeIdentityMatchesBaseline = changed.sameAsBaseline
     await assert.rejects(f.prepared.atUse())
     record.fixtureFacts.realAdmissionRejectedReplacement = true
-    record.fixtureFacts.originalReferenceSurvivesReplacement = await f.referenceMatches()
+    record.fixtureFacts.originalPayloadMatchesMarkerAfterReplacement = (await fs.readFile(path.join(retained, "task.md"))).equals(f.marker)
     record.fixtureFacts.oldNameContainsIndependentReplacement = (await fs.readFile(path.join(f.src, "task.md"))).equals(replacement)
-    assert.equal(record.fixtureFacts.originalReferenceSurvivesReplacement, true)
+    assert.equal(record.fixtureFacts.originalPayloadMatchesMarkerAfterReplacement, true)
     assert.equal(record.fixtureFacts.oldNameContainsIndependentReplacement, true)
   })
-})
+}, { nodeReference: false })
 
 actualCell("final-component reparse is observed without following it to its target", async (f, record) => {
   const link = path.join(f.root, "source-link")
@@ -1096,6 +1110,7 @@ for (const nodeReference of [false, true]) for (const nativeBaseline of [false, 
     actualCell(`diagnostic only: marker=${nodeReference}, baseline=${nativeBaseline}, route=${route}`, async (f, record) => {
       record.requestedRoute = route
       record.diagnosticFactors = { nodeMarkerReferenceHeld: nodeReference, nativeMetadataBaselineHeld: nativeBaseline }
+      record.controlKind = nodeReference ? "finite_Node_marker_held_refusal" : "finite_route_discriminator"
       record.causalConclusion = "not_established"
       const moved = path.join(f.root, "renamed-original")
       const present = async file => {
@@ -1114,6 +1129,7 @@ for (const nodeReference of [false, true]) for (const nativeBaseline of [false, 
         }
         record.fixtureStage = "diagnostic_rename_attempt"
         await observeRenameAttempt(f.src, moved, record)
+        if (nodeReference) assert.equal(record.renameAttempt.outcome, "refused")
         record.fixtureStage = "diagnostic_placement"
         record.placement = { sourcePresent: await present(f.src), destinationPresent: await present(moved) }
         const renamed = record.renameAttempt.outcome === "moved"
