@@ -118,3 +118,15 @@ test("a create without the session focus holder cannot claim a focused label", a
   assert.equal(result.focused, undefined)
   assert.deepEqual(result.session_label, { state: "unavailable", code: "awaiting_focus" })
 })
+
+test("punctuation-prefixed credentials never return in a focused proposal", async () => {
+  const deskRoot = await mkTempDeskRoot()
+  await create(deskRoot)
+  for (const separator of ["-", ".", "_"]) {
+    const display_label = `Review prod${separator}ghp_${"Gz".repeat(18)}`
+    const result = await taskFocus({ deskRoot, input: { ...target, display_label }, statusContext: context() })
+    assert.equal(result.status, "focused")
+    assert.deepEqual(result.session_label, { state: "unavailable", code: "unsafe_label" })
+    assert.equal(JSON.stringify(result).includes(display_label), false)
+  }
+})

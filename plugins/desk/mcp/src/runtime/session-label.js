@@ -16,7 +16,8 @@ export function makeSessionLabelProposal({ task, displayLabel, focused = true })
   const text = displayLabel.trim()
   if (text === "" || [...text].length > 72 || UNSAFE_TEXT.test(displayLabel) ||
       CREDENTIAL_VALUE.test(text) || isCredentialLike(text) ||
-      text.split(/[^\p{L}\p{N}_.-]+/u).some(isCredentialLike)) return unavailable("unsafe_label")
+      [...text.matchAll(/(?:^|[^\p{L}\p{N}])/gu)]
+        .some((match) => isCredentialLike(text.slice(match.index + match[0].length)))) return unavailable("unsafe_label")
   return {
     proposal: {
       version: 1,

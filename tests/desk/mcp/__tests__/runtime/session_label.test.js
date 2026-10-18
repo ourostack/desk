@@ -56,6 +56,15 @@ for (const displayLabel of ["Rotate API token", "Review password handling", "Fix
   })
 }
 
+for (const prefix of ["ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_", "sk-"]) {
+  for (const separator of ["-", ".", "_"]) {
+    test(`known token prefixes remain unsafe after punctuation (${prefix}, ${separator})`, () => {
+      const displayLabel = `Review prod${separator}${prefix}${"Gz".repeat(18)}`
+      assert.deepEqual(makeSessionLabelProposal({ task, displayLabel }), unavailable("unsafe_label"))
+    })
+  }
+}
+
 test("a proposal is detached from the caller's mutable task object", () => {
   const supplied = { ...task }
   const { proposal } = makeSessionLabelProposal({ task: supplied, displayLabel: "Workflow review" })
