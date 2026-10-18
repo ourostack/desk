@@ -202,3 +202,27 @@ audit-only original input and guarded transformation. Source tests are under
 actual maintained components over in-memory Chrome/native/socket resource seams.
 They do not qualify live focus, real profile permissions, cold enrollment,
 Teams/OOPIF behavior, Windows delivery, native ancestry, or whole-V2 readiness.
+# Prospective transition capture (source contract)
+
+Every new factory initially holds context effects. Actual `onInstalled` /
+`onStartup` listeners record that factory's browser event; evaluation, an event
+reason or a UUID is not proof of first-ever profile use. Native-only
+`transition.capture` binds the held zero-effect witness to an exact challenge,
+factory and port. `transition.release` is one-way ordinary admission, not
+continuity/update authority. Failed/unknown effects are never reset by events.
+
+Normal entry performs this finite handoff only after healthy private provider
+admission. With no pending normal journal it releases ordinary use with
+continuity UNKNOWN. A released factory reconnecting keeps its custody and does
+not pretend to be a new zero-effect activation. Capture-only replies do not
+replenish the ordinary-confirmation retry budget.
+
+The existing `extension-update.json` v2 path retains a matching pending capture
+without releasing or cancelling prepared work. **No production origin sealer
+is available in this delivery:** normal setup does not yet positively observe
+fresh-owned-profile creation/enrollment or a complete predecessor cut.
+Normal `prepareNativeExtensionUpdate` validates distribution/selection and
+refuses unavailable continuity before source publication, registration or
+native preparation. Install/update event + empty state never grants a baseline.
+Legacy operator-profile migration and zero-human cold enrollment remain
+unproved. No browser-facing configuration or HTTP transition control exists.

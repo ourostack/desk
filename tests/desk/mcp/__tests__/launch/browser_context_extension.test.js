@@ -179,10 +179,24 @@ async function eventually(read) {
   assert.fail("Expected asynchronous relay disposition within fixture deadline")
 }
 
+async function admitOrdinary(engine, sourceDigest = SOURCE) {
+  // Explicit ordinary UNKNOWN handoff at the native boundary; no constructor
+  // bypass disables production admission for these existing custody scenarios.
+  const transactionId = crypto.randomUUID(), challenge = "d".repeat(64)
+  const captured = await engine.dispatch(request("transition.capture", undefined, { transactionId, challenge, sourceDigest }))
+  assert.equal(captured.result?.admission, "held")
+  const released = await engine.dispatch(request("transition.release", undefined, {
+    transactionId, challenge, workerEpoch: captured.result.workerEpoch,
+    witnessDigest: captured.result.witnessDigest, mode: "ordinary", sourceDigest,
+  }))
+  assert.equal(released.result?.released, true)
+}
 async function kernel(f = fixture(), options = {}) {
   const module = await import(extensionUrl)
   assert.equal(typeof module.createBrowserExtension, "function", "explicit context factory must exist")
-  return { ...f, engine: module.createBrowserExtension(f.api, { WebSocket: f.Socket, sourceDigest: "c".repeat(64), ...options }) }
+  const engine = module.createBrowserExtension(f.api, { WebSocket: f.Socket, sourceDigest: SOURCE, ...options })
+  await admitOrdinary(engine)
+  return { ...f, engine }
 }
 
 // Break caught: missing-binding resume must not allocate replacement resources.
@@ -1110,6 +1124,7 @@ test("producer A automatic native reconnect preserves the existing tab group and
     await clock.advance(0)
     assert.equal(f.nativePorts.length, 1)
     const digest = (await import(new URL("./source-digest.mjs", extensionUrl))).SOURCE_DIGEST
+    await admitOrdinary(background.extension, digest)
     const req = create()
     req.params.sourceDigest = digest
     const made = await background.extension.dispatch(req)
@@ -1271,6 +1286,7 @@ test("producer A relay loss is retained unavailable and never invokes native ret
   const b = await backgroundKernel()
   try {
     await b.clock.advance(0)
+    await admitOrdinary(b.engine)
     const made = await b.engine.dispatch(create())
     assert.ok(made.result)
     b.sockets[0].close()

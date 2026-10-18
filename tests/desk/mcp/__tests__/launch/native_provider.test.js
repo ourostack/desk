@@ -45,13 +45,13 @@ const createParams = { label: 'owned current-A fixture', relayUrl: `ws://127.0.0
 
 // Same Chrome/WebSocket boundary as browser_context_extension.test.js. The
 // current A kernel AND its maintained relay are real; no browser/network runs.
-async function currentA(t) {
+async function currentA(t, { admit = true } = {}) {
   const event = () => {
     const listeners = new Set();
     return { addListener: fn => listeners.add(fn), removeListener: fn => listeners.delete(fn),
       emit: (...args) => { for (const fn of [...listeners]) fn(...args); } };
   };
-  let nextTab = 10, nextGroup = 50;
+  let nextTab = 10, nextGroup = 50, ready;
   const tabs = new Map([[1, { id: 1, windowId: 7, groupId: -1, active: true }]]);
   const groups = new Map(), sockets = [];
   const api = {
@@ -100,6 +100,10 @@ async function currentA(t) {
       id: EXTENSION, getURL: name => `chrome-extension://${EXTENSION}/${name}`,
       async getContexts() { return [{ documentUrl: api.runtime.getURL('token.html') }]; },
       async sendMessage() { return { token: TOKEN }; },
+      connectNative() {
+        return { onMessage: event(), onDisconnect: event(), disconnect() {},
+          postMessage(message) { if (message.event === 'ready') ready = structuredClone(message); } };
+      },
     },
     offscreen: { async createDocument() { assert.fail('No real offscreen document'); } },
   };
@@ -112,6 +116,15 @@ async function currentA(t) {
   }
   const { createBrowserExtension } = await import('../../../../../plugins/desk/browser-extension/context-engine.mjs');
   const engine = createBrowserExtension(api, { WebSocket: Socket, sourceDigest: SOURCE });
+  if (admit) {
+    const transition = { transactionId: A, challenge: 'd'.repeat(64), profileToken: TOKEN, sourceDigest: SOURCE };
+    const captured = await engine.dispatch({ id: 'fixture-capture', method: 'transition.capture', params: transition });
+    assert.equal(captured.result?.admission, 'held');
+    const released = await engine.dispatch({ id: 'fixture-release', method: 'transition.release',
+      params: { ...transition, workerEpoch: captured.result.workerEpoch,
+        witnessDigest: captured.result.witnessDigest, mode: 'ordinary' } });
+    assert.equal(released.result?.released, true);
+  } else await engine.start();
   t.after(async () => {
     // Exact owned synthetic contexts only; never stop/inspect an operator tab.
     for (const contextId of [A, B]) await engine.dispatch({ id: `cleanup-${contextId}`, method: 'context.discard',
@@ -121,7 +134,7 @@ async function currentA(t) {
     assert.ok(sockets.every(socket => socket.readyState === 3), 'all in-memory relay sockets closed');
     t.diagnostic(`current A fixture closed; allocated synthetic tabs=${nextTab - 10}; real browser/native processes=0`);
   });
-  return { engine, tabs };
+  return { engine, tabs, ready };
 }
 test.after(async () => {
   assert.equal(servers.size, 0, 'all exact owned servers closed');
@@ -247,16 +260,19 @@ async function fixture(t, options = {}) {
     transport.request = request;
     transport.close = () => { alive = false; transport.emit('close'); };
   }
+  const proof = options.normalProof ?
+    (await import(new URL('src/browser/native-update-proof.mjs', rootUrl))).createNativeUpdateProof(config) : undefined;
   const construction = {
-    config, ready: { event: 'ready', protocolVersion: 1, extensionId: EXTENSION, sourceDigest: SOURCE, profileToken: TOKEN },
+    config, ready: options.ready || { event: 'ready', protocolVersion: 1, extensionId: EXTENSION, sourceDigest: SOURCE, profileToken: TOKEN },
     chain, transport, inventory, processReader: options.processReader || reader,
     resolveSelection: async () => selection, readProfileToken: async () => { await options.beforeTokenRead?.(); return pin; },
-    verifyContinuity: options.verifyContinuity || (options.trustedBaseline ? async evidence => ({
+    verifyContinuity: proof?.verifyContinuity || options.verifyContinuity || (options.trustedBaseline ? async evidence => ({
       generation: evidence.generation, bindingDigest: evidence.bindingDigest, snapshotDigest: evidence.snapshot.digest,
       baselineId: A,
     }) : undefined),
     updateTtlMs: options.updateTtlMs || 1000,
     protectSecret() {},
+    onAdmitted: proof?.onAdmitted || options.onAdmitted,
   };
   const provider = await startNativeProvider(construction);
   servers.add(provider);
@@ -269,6 +285,53 @@ async function fixture(t, options = {}) {
     setPin(value) { pin = value; }, resetNative() { alive = true; },
     client: require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl))) };
 }
+test('post-admission handoff sees healthy reserved readiness with zero prior native RPC', async t => {
+  let entered = false;
+  const f = await fixture(t, { onAdmitted: async evidence => {
+    entered = true;
+    const ready = JSON.parse(await fs.readFile(evidence.readyFile, 'utf8'));
+    assert.equal(ready.generation, evidence.generation);
+    assert.match(evidence.bindingDigest, /^[a-f0-9]{64}$/u);
+    // The callback runs only once a client-ready binding exists.
+    assert.equal(typeof evidence.capture, 'function');
+  } });
+  assert.equal(entered, true);
+  assert.equal(f.requests.length, 0, 'handoff construction itself did not issue native traffic');
+});
+
+test('post-admission HTTP effects remain fenced until the source handoff completes', async t => {
+  const f = await fixture(t, { onAdmitted: async evidence => {
+    const ready = JSON.parse(await fs.readFile(evidence.readyFile, 'utf8'));
+    const client = require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl)));
+    await assert.rejects(client.providerRequest(ready.endpoint, 'dispatch',
+      { contextId: A, method: 'context.create', params: createParams }), { code: 'NATIVE_UPDATE_IN_PROGRESS' });
+    await assert.rejects(client.providerRequest(ready.endpoint, 'dispatch',
+      { contextId: A, method: 'transition.capture', params: {} }), { code: 'NATIVE_UPDATE_IN_PROGRESS' });
+  } });
+  assert.equal(f.requests.length, 0);
+});
+
+test('post-admission asynchronous ready replacement refuses and preserves the replacement', async t => {
+  let replacement;
+  await assert.rejects(fixture(t, { onAdmitted: async evidence => {
+    replacement = evidence.readyFile;
+    await fs.rename(replacement, replacement + '.owned-previous');
+    await put(replacement, { foreign: true });
+  } }), error => ['NATIVE_STATE_CHANGED', 'NATIVE_READY_CHANGED'].includes(error.code));
+  assert.deepEqual(JSON.parse(await fs.readFile(replacement)), { foreign: true });
+});
+test('actual producer plus fixed normal proof releases ordinary contexts but cannot issue update authority', async t => {
+  const native = await currentA(t, { admit: false });
+  const f = await fixture(t, { kernel: native.engine, ready: native.ready, normalProof: true });
+  assert.deepEqual(f.requests.map(r => r.method), ['transition.capture', 'transition.release']);
+  await f.owner(A);
+  const made = await f.provider.invoke('dispatch', { contextId: A, method: 'context.create', params: createParams });
+  assert.equal(made.tabs[0].tabId, 10);
+  const discarded = await f.provider.invoke('dispatch', { contextId: A, method: 'context.discard', params: {} });
+  assert.equal(discarded.discarded, true);
+  await assert.rejects(f.provider.invoke('prepareUpdate'), { code: 'NATIVE_CONTINUITY_UNKNOWN' });
+});
+
 async function entryConfiguration(f) {
   const file = path.join(f.root, 'entry', 'provider-config.json');
   await put(file, f.config);

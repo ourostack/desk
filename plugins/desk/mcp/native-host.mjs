@@ -7,12 +7,14 @@ import { BrokerError } from './src/util/broker-error.mjs';
 import { runNativeHost, reportNativeDiagnostic, readNativeProcess } from './src/browser/native-host.mjs';
 import { NativeCommandTransport } from './src/browser/native-transport.mjs';
 import { startNativeProvider, validateNativeHostConfig } from './src/browser/native-provider.mjs';
+import { createNativeUpdateProof } from './src/browser/native-update-proof.mjs';
 
 export async function runNativeEntry({ stdin, stdout, stderr, origin,
   configFile = new URL('./provider-config.json', import.meta.url),
   processReader = readNativeProcess, providerOptions = {} }) {
   if (configFile instanceof URL) configFile = fileURLToPath(configFile);
   const config = validateNativeHostConfig(client.readPrivateJson(configFile, { maxBytes: 16384 }));
+  const proof = createNativeUpdateProof(config);
   let transport, provider, initializing, failure;
   const stopNative = () => transport?.close();
   stdin.once('end', stopNative);
@@ -26,7 +28,8 @@ export async function runNativeEntry({ stdin, stdout, stderr, origin,
           transport = new NativeCommandTransport({ send });
           // Never await initialization in the frame path. Authorized requests
           // and their profile.read replies share this same stream.
-          initializing = startNativeProvider({ ...providerOptions, config, ready: message, chain, transport, processReader })
+          initializing = startNativeProvider({ ...providerOptions, config, ready: message, chain, transport, processReader,
+            verifyContinuity: proof.verifyContinuity, onAdmitted: proof.onAdmitted })
             .then(value => { provider = value; return value; });
           initializing.catch(error => {
             failure = error; transport.close(); stdin.destroy();
