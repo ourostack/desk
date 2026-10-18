@@ -12,6 +12,7 @@ const plugin = fileURLToPath(new URL('../../../../../plugins/desk/', import.meta
 const closure = [
   'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
+  'src/browser/native-update-proof.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
   'src/factory/os-protect.js', 'src/factory/windows-acl.js', 'src/factory/plugin-sources.cjs', 'src/readiness/process-start.js',
 ].map(name => `mcp/${name}`).concat([
@@ -42,7 +43,7 @@ test('native distribution has exactly the real B/C closure, normal package bound
   assert.equal(result.extensionId, want);
   assert.match(result.extensionId, /^[a-p]{32}$/u);
   assert.equal(JSON.parse(result.sources.get('mcp/package.json')).type, 'module');
-  for (const name of result.sources.keys()) assert.doesNotMatch(name, /\/(?:claims|registry|leases)\.mjs$|node_modules|native-update-proof/u);
+  for (const name of result.sources.keys()) assert.doesNotMatch(name, /\/(?:claims|registry|leases)\.mjs$|node_modules/u);
   const provenance = JSON.parse(result.artifactManifest).provenance;
   assert.match(provenance.goLicense, /Redistribution.*source and binary/su);
   assert.equal(provenance.predecessor, '60adac5ff6f14fbef6e371fa2983f84e0f7eba9f');

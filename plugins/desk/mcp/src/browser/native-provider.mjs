@@ -72,7 +72,7 @@ async function resolveSelectedNativeProfile(config, { env = process.env, homeDir
 
 export async function startNativeProvider({ config: supplied, ready, chain: suppliedChain, transport,
   processReader = readNativeProcess, resolveSelection = resolveSelectedNativeProfile,
-  readProfileToken, inventory: suppliedInventory, verifyContinuity,
+  readProfileToken, inventory: suppliedInventory, verifyContinuity, onAdmitted,
   updateTtlMs = 30_000, protectSecret }) {
   const config = structuredClone(validateNativeHostConfig(supplied));
   readProfileToken ||= profileRoot => credential.readExtensionToken(profileRoot, {
@@ -341,8 +341,10 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
 
   // Hello is the startup oracle. A successful bootstrap profile.read would
   // confirm A's retry budget even when later private admission fails forever.
-  // No native request at all until a real client reaches the admitted service.
-  try { await attest({ helloOnly: true }); }
+  // No native request before a healthy private binding/reservation. The finite
+  // source-only handoff below runs while public effect dispatch is still fenced.
+  let initialAttestation;
+  try { initialAttestation = await attest({ helloOnly: true }); }
   catch (error) {
     transport.off?.('close', lost); transport.off?.('event', event); transport.close(); throw error;
   }
@@ -410,6 +412,31 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
     readyFingerprint = hash(record);
     if (hash(client.readPrivateJson(config.nativeReadyFile)) !== readyFingerprint) throw fail('NATIVE_READY_CHANGED');
     if (!connected) throw fail('NATIVE_TRANSPORT_DISCONNECTED');
+    if (onAdmitted !== undefined) {
+      if (typeof onAdmitted !== 'function') throw fail('NATIVE_CONFIG_INVALID');
+      const recheck = async () => {
+        const fresh = await attest({ helloOnly: true });
+        if (fresh.bindingDigest !== initialAttestation.bindingDigest) throw fail('NATIVE_READY_CHANGED');
+        return fresh;
+      };
+      const control = async (method, params) => {
+        await recheck();
+        const result = await requestNative({ method, params: { ...params,
+          profileToken: initialAttestation.pin, sourceDigest: config.extensionSourceDigest } });
+        await recheck();
+        return result;
+      };
+      // Source-only finite handoff after healthy private reservation. HTTP
+      // remains fenced until it completes; no control operation is exposed.
+      await onAdmitted(Object.freeze({
+        generation, bindingDigest: initialAttestation.bindingDigest,
+        readyFile: config.nativeReadyFile, activation: structuredClone(ready.activation),
+        capture: params => control('transition.capture', params),
+        release: params => control('transition.release', params),
+        recheck,
+      }));
+      await recheck();
+    }
     phase = 'open';
   } catch (error) { await close(); throw fail(error.code === 'NATIVE_STATE_CHANGED' ? error.code : 'NATIVE_PROVIDER_START_FAILED'); }
   return Object.freeze({ invoke, close, readyFile: config.nativeReadyFile });

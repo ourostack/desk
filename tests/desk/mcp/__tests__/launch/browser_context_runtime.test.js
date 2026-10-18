@@ -13,6 +13,7 @@ import {pathToFileURL} from "node:url"
 import http from "node:http"
 import {createBrowserExtension} from "../../../../../plugins/desk/browser-extension/context-engine.mjs"
 import {startNativeProvider} from "../../../../../plugins/desk/mcp/src/browser/native-provider.mjs"
+import {createNativeUpdateProof} from "../../../../../plugins/desk/mcp/src/browser/native-update-proof.mjs"
 import {NativeCommandTransport} from "../../../../../plugins/desk/mcp/src/browser/native-transport.mjs"
 import {readNativeAncestry} from "../../../../../plugins/desk/mcp/src/browser/native-host.mjs"
 import {mcpRoot} from "./_mcp_handshake.js"
@@ -138,11 +139,12 @@ test("actual maintained daemon options can reach native acquisition using the st
     const realpath=fs.realpathSync
     t.mock.method(fs,"realpathSync",(file,...args)=>process.platform!=="darwin" && String(file)===selectedBrowser ? realpath(app,...args) : realpath(file,...args))
     const stateRoot = path.join(root,"browser")
+    const installedNativeRoot = path.join(stateRoot,"native-owned")
     const common = require(path.join(mcpRoot,"browser-context-common.cjs"))
     const native = require(path.join(mcpRoot,"web-native-messaging.cjs"))
     const id = "11111111-1111-4111-8111-111111111111"
     const l = common.layout(stateRoot,id,"signed-in",options.socketRoot)
-    const privateDirectories = [stateRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
+    const privateDirectories = [stateRoot,installedNativeRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
       ...(process.platform === "win32" ? ["AppData","AppData/Local","AppData/Roaming"].map(n=>path.join(l.root,"home",n)) : [])]
     for (const d of privateDirectories)
       fs.mkdirSync(d,{recursive:true,mode:0o700})
@@ -173,6 +175,9 @@ test("actual maintained daemon options can reach native acquisition using the st
       path.join(l.root,l.markerName),path.join(l.socketDir,l.markerName),l.configFile,
     ].map(path=>({path,kind:"file",created:true}))))
     if (process.platform === "win32") for (const directory of privateDirectories) native.privatePath(directory,true)
+    // Normal installation provisions this ancestor before the entry starts.
+    // Readiness reservation protects its immediate state parent, not ancestors.
+    native.privatePath(installedNativeRoot,true)
     const inventoryModule = await import(pathToFileURL(path.join(mcpRoot,"src/browser/native-owner-inventory.mjs")).href)
     const inventory = inventoryModule.createNativeOwnerInventory({browserStateRoot:stateRoot,cliDir:actualCli,binding:selection,
       socketRoot:options.socketRoot})
@@ -508,6 +513,11 @@ test("actual maintained daemon options can reach native acquisition using the st
           return{}
         }},
       runtime:{id:selection.extensionId,getURL:name=>"chrome-extension://"+selection.extensionId+"/"+name,
+        connectNative(host){
+          assert.equal(host,"com.ourostack.desk.browser")
+          return{onMessage:event(),onDisconnect:event(),disconnect(){},
+            postMessage(message){if(message.event==="ready")nativeReady=structuredClone(message)}}
+        },
         async getContexts(){return[{documentUrl:api.runtime.getURL("token.html")}]},async sendMessage(){return{token:"d".repeat(64)}}},
       offscreen:{async createDocument(){assert.fail("No token page")}},
       action:{async setBadgeText(){},async setBadgeBackgroundColor(){},async setTitle(){}},
@@ -524,8 +534,13 @@ test("actual maintained daemon options can reach native acquisition using the st
       const socket={readyState:1,send(){},close(){socket.readyState=3;socket.onclose?.()}}
       virtualSockets.push(socket);return socket
     }})
-    let transport
-    transport=new NativeCommandTransport({send:async request=>transport.receive(await engine.dispatch(request))})
+    let nativeReady,transport,providerStarted=false
+    const startupMethods=[]
+    await engine.start()
+    transport=new NativeCommandTransport({send:async request=>{
+      if(!providerStarted)startupMethods.push(request.method)
+      transport.receive(await engine.dispatch(request))
+    }})
     t.mock.method(http,"createServer",()=>{
       const server=new EventEmitter()
       server.listen=(_port,_host,callback)=>{queueMicrotask(callback);return server}
@@ -539,10 +554,13 @@ test("actual maintained daemon options can reach native acquisition using the st
       browserExecutable:app,expectedBrowser:chain[2],channel:selection.channel,userDataDir:selection.userDataDir,
       profileDirName:selection.profileDirName,profileRoot:path.join(selection.userDataDir,selection.profileDirName),
       pluginDirs:[declarationRoot],nativeReadyFile:selection.nativeReadyFile,browserStateRoot:stateRoot,cliDir:actualCli}
-    provider=await startNativeProvider({config:providerConfig,
-      ready:{event:"ready",protocolVersion:1,extensionId:selection.extensionId,sourceDigest:selection.sourceDigest,profileToken:"d".repeat(64)},
+    const proof=createNativeUpdateProof(providerConfig)
+    provider=await startNativeProvider({config:providerConfig,ready:nativeReady,
+      onAdmitted:proof.onAdmitted,verifyContinuity:proof.verifyContinuity,
       chain,transport,inventory,processReader:async pid=>structuredClone(chain.find(row=>row.pid===pid)),
       resolveSelection:async()=>({...selection,profileRoot:providerConfig.profileRoot}),readProfileToken:async()=>"d".repeat(64)})
+    providerStarted=true
+    assert.deepEqual(startupMethods,["transition.capture","transition.release"],"actual normal D ordinary handoff after healthy C admission")
     t.after(async()=>{
       for(const state of socketStates.values())
         await engine.dispatch({id:"cleanup-"+state.id,method:"context.discard",contextId:state.id,params:{profileToken:"d".repeat(64),sourceDigest:selection.sourceDigest}})
@@ -612,11 +630,15 @@ test("actual maintained daemon options can reach native acquisition using the st
     if(process.env.NYC_CONFIG) {
       const owner=Object.keys(require.cache).find(file=>/[/\\]nyc[/\\]index\.js$/.test(file))
       assert.ok(owner,"running standard NYC instrumenter")
-      const instrumenter=new (require(owner))(JSON.parse(process.env.NYC_CONFIG)).instrumenter()
-      code=instrumenter.instrumentSync(code,canonical,{registerMap(){}})
-      const existing=global.__coverage__?.[canonical],generated=instrumenter.lastFileCoverage()
-      if(existing)for(const key of ["statementMap","fnMap","branchMap"])
-        assert.deepEqual(plain(generated[key]),plain(existing[key]),"unaltered canonical Istanbul positions")
+      const nyc=new (require(owner))(JSON.parse(process.env.NYC_CONFIG))
+      if(nyc.exclude.shouldInstrument(canonical)){
+        const instrumenter=nyc.instrumenter()
+        code=instrumenter.instrumentSync(code,canonical,{registerMap(){}})
+        assert.ok(global.__coverage__,"ordinary NYC collector already initialized by normal module imports")
+        const existing=global.__coverage__[canonical],generated=instrumenter.lastFileCoverage()
+        if(existing)for(const key of ["statementMap","fnMap","branchMap"])
+          assert.deepEqual(plain(generated[key]),plain(existing[key]),"unaltered canonical Istanbul positions")
+      }
     }
     const request={mode:"signed-in",operation:"keep",contextId:id,root:l.root,stateRoot,socketDir:l.socketDir,socketRoot:options.socketRoot,
       installed,selection,cliDir:actualCli,args:[]}

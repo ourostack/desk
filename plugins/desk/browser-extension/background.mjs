@@ -57,14 +57,16 @@ export function createBackground(api, { timers = globalThis, onStatus = code => 
         terminal = true
         connected = false
         finish()
-        api.runtime.onInstalled.removeListener(start)
-        api.runtime.onStartup.removeListener(start)
+        api.runtime.onInstalled.removeListener(installed)
+        api.runtime.onStartup.removeListener(startup)
       }
       onStatus(code)
     },
   })
-  api.runtime.onInstalled.addListener(start)
-  api.runtime.onStartup.addListener(start)
+  function installed(details) { engine.observeActivation("installed", details); start() }
+  function startup() { engine.observeActivation("startup"); start() }
+  api.runtime.onInstalled.addListener(installed)
+  api.runtime.onStartup.addListener(startup)
   start()
   return engine
 }

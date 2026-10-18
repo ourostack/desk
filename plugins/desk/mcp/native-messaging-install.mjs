@@ -24,6 +24,7 @@ const EXTENSION_FILES = [...EXECUTION_FILES, 'source-digest.mjs', 'build.mjs', '
 const CAPSULE_FILES = [
   'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
+  'src/browser/native-update-proof.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
   'src/factory/os-protect.js', 'src/factory/windows-acl.js', 'src/factory/plugin-sources.cjs', 'src/readiness/process-start.js',
 ].map(name => `mcp/${name}`).concat([
@@ -305,8 +306,24 @@ async function normalInputs(options, distribution, readNativeProcess) {
     channel: declaration.channel, userDataDir, profileDirName, pluginDirs, cliDir };
 }
 
-// Explicit setup API only. No browser command/import calls it, and no update/
-// recovery/verifier placeholders are exposed while D4-D7 remain blocked.
+// Normal source/selector preflight, not an updater with an empty-map grant.
+// No registration, source publication or native preparation occurs before
+// continuity authority is available through the fixed normal journal reader.
+export async function prepareNativeExtensionUpdate(options) {
+  if (!object(options) || Object.keys(options).some(k => !['env', 'homeDir', 'browserProcessId'].includes(k)) ||
+      !Number.isSafeInteger(options.browserProcessId) || options.browserProcessId <= 0)
+    throw failure('NATIVE_INSTALL_OPTIONS_INVALID');
+  const distribution = await verifyNativeDistribution();
+  const { readNativeProcess } = await import('./src/browser/native-host.mjs');
+  const { createNativeUpdateProof } = await import('./src/browser/native-update-proof.mjs');
+  const input = await normalInputs(options, distribution, readNativeProcess);
+  await createNativeUpdateProof({ browserStateRoot: input.browserStateRoot,
+    profileRoot: path.join(input.userDataDir, input.profileDirName), extensionId: distribution.extensionId,
+    extensionSourceDigest: distribution.extensionSourceDigest }).assertPreparationAvailable();
+}
+
+// Explicit setup API only. No browser command/import calls it. The separate
+// transition preflight above cannot publish/recover an unproved update.
 export async function installNativeMessaging(options) {
   try {
     const distribution = await verifyNativeDistribution();

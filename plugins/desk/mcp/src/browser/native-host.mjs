@@ -74,6 +74,21 @@ export function assertNativeReady(message, config) {
   if (message.profileToken !== config.expectedProfileToken) {
     throw new BrokerError('NATIVE_PROFILE_MISMATCH', 'Native readiness does not match the independently verified selected profile');
   }
+  if (Object.hasOwn(message, 'activation')) assertNativeActivation(message.activation, true);
+}
+
+export function assertNativeActivation(value, hello = false) {
+  const fields = ['protocol', 'workerEpoch', 'trigger', 'reason', ...(hello ? ['admission', 'contextEffectSequence'] : [])];
+  if (!messageObject(value) || Object.keys(value).some(k => !fields.includes(k)) || value.protocol !== 1 ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.workerEpoch ?? '') ||
+      !['evaluation', 'startup', 'browser-install-event', 'browser-update-event'].includes(value.trigger) ||
+      (value.trigger === 'browser-install-event' ? value.reason !== 'install' :
+        value.trigger === 'browser-update-event' ? !['update', 'chrome_update', 'shared_module_update'].includes(value.reason) :
+          Object.hasOwn(value, 'reason')) ||
+      (hello && (!['held', 'ordinary'].includes(value.admission) || !Number.isSafeInteger(value.contextEffectSequence) ||
+        value.contextEffectSequence < 0 || (value.admission === 'held' && value.contextEffectSequence !== 0))))
+    throw new BrokerError('NATIVE_PROTOCOL_MISMATCH', 'Native activation is not a declared factory observation');
+  return value;
 }
 
 export function encodeNativeMessage(message) {
