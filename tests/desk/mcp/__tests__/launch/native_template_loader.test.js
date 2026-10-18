@@ -48,15 +48,17 @@ for (const included of [false, true]) {
     fs.mkdirSync(home)
     const include = included ? "plugins/desk/mcp/web-native-error-transport.cjs" :
       "plugins/desk/hooks/lib/copilot-intake-context.cjs"
+    const exclude = ["tests/desk/mcp/__tests__/**", "plugins/desk/mcp/node_modules/**"]
     const raw = path.join(root, "raw")
     // NYC's spawn hook propagates its parent config; preserve each actual CLI cell's declared scope.
     const inherited = { ...process.env, NODE_OPTIONS:
       [process.env.NODE_OPTIONS, "--require=" + JSON.stringify(preload)].filter(Boolean).join(" ") }
     const env = { ...isolatedEnv({ home, cache: path.join(root, "cache") }), NODE_OPTIONS: inherited.NODE_OPTIONS,
-      NYC_CONFIG_OVERRIDE: JSON.stringify({ cwd: repo, include: [include], tempDirectory: raw, tempDir: raw, all: false }) }
+      NYC_CONFIG_OVERRIDE: JSON.stringify({ cwd: repo, include: [include], exclude, tempDirectory: raw, tempDir: raw, all: false }) }
     const result = spawnSync(process.execPath, [
       require.resolve("nyc/bin/nyc.js"), "--silent", "--all=false", "--cwd", repo, "--temp-dir", raw,
       "--include", include,
+      ...exclude.flatMap(pattern => ["--exclude", pattern]),
       process.execPath, script,
     ], { cwd: repo, env, encoding: "utf8", timeout: 20000 })
     assert.equal(result.error, undefined)
