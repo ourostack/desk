@@ -265,6 +265,7 @@ if (process.argv[1] === HELPER) {
   let result
   let failure
   let reader
+  let renameReturned = false
   const originalRename = io.rename
   try {
     if (start.cmd === "abort") throw new Error("Owned qualification aborted before action")
@@ -279,6 +280,7 @@ if (process.argv[1] === HELPER) {
           if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
         }
         await originalRename(source, destination)
+        renameReturned = true
         if (config.mode === "exit-after-rename") {
           const receipt = { pid: process.pid, exe: process.execPath, source, destination,
             actualDestination: fs.realpathSync(destination), gitCallsBeforeExit: gitCalls.length,
@@ -298,7 +300,7 @@ if (process.argv[1] === HELPER) {
     io.rename = originalRename
     if (reader) await reader.journal.close()
   }
-  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null })
+  await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned })
   await take("finish")
   await drainActors()
   clearTimeout(lease)
