@@ -112,6 +112,14 @@ jobs:
           path: results.json
           if-no-files-found: warn
 
+      - name: Keep bounded ACL timing measurements when present
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-acl-phase-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: windows-generation-acl-timing.json
+          if-no-files-found: ignore
+
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
   # standard-user shards uploaded (not the shards' job conclusions), so a shard that never ran, was cancelled or reported a failed test
   # fails it. The elevated diagnostic is not counted. It is separate from "CI gate" (desk-mcp-tests.yml) because a job's `needs` cannot

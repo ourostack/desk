@@ -94,10 +94,13 @@ test("owned Windows generation ACL timing separates program time from invocation
         rows.push({ sample, ...current });
       }
     }
-    t.diagnostic("Windows generation ACL phase timing " + JSON.stringify({
+    const summary = {
       timeoutMs: 5000, maxBuffer: 16384, sourceProgramSha256: PROGRAM_SHA, rows,
       scope: "Original calls unchanged; separate marked twins only. No raw program, input, paths, stdout or stderr logged.",
-    }));
+    };
+    await fs.writeFile(fileURLToPath(new URL("../../../../../windows-generation-acl-timing.json", import.meta.url)),
+      JSON.stringify(summary, null, 2) + "\n", { mode: 0o600 });
+    t.diagnostic("Windows generation ACL phase timing " + JSON.stringify(summary));
     assert.equal(rows.filter(row => !row.guardPassed).length, 0, "actual guard failures remain failures, not timing waivers");
     assert.ok(rows.filter(row => row.mode === "diagnostic-twin")
       .every(row => row.startedMarkerCaptured && row.programMs !== null && row.privateResult));
