@@ -300,6 +300,10 @@ test('current producer dispatch consumes discriminated requests and keeps bootst
   try {
     assert.deepEqual(await t.request({ method: 'profile.read', params: {} }),
       { profileToken, extensionId, sourceDigest });
+    const transactionId = '11111111-1111-4111-8111-111111111111', challenge = 'e'.repeat(64);
+    const captured = await t.request({ method: 'transition.capture', params: { profileToken, sourceDigest, transactionId, challenge } });
+    await t.request({ method: 'transition.release', params: { profileToken, sourceDigest, transactionId, challenge,
+      workerEpoch: captured.workerEpoch, witnessDigest: captured.witnessDigest, mode: 'ordinary' } });
     await assert.rejects(t.request(request('context.status')), code('native_context_unavailable'));
     await assert.rejects(t.request({ method: 'profile.read', params: { profileToken: 'd'.repeat(64) } }),
       code('native_profile_mismatch'));

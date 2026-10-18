@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTempRoot } from '../_temp_roots.js';
 import { createBrowserExtension } from '../../../../../plugins/desk/browser-extension/context-engine.mjs';
 import { startNativeProvider } from '../../../../../plugins/desk/mcp/src/browser/native-provider.mjs';
+import { createNativeUpdateProof } from '../../../../../plugins/desk/mcp/src/browser/native-update-proof.mjs';
 import { createNativeOwnerInventory } from '../../../../../plugins/desk/mcp/src/browser/native-owner-inventory.mjs';
 import { NativeCommandTransport } from '../../../../../plugins/desk/mcp/src/browser/native-transport.mjs';
 import { readNativeAncestry } from '../../../../../plugins/desk/mcp/src/browser/native-host.mjs';
@@ -228,6 +229,11 @@ async function integrated(t, options = {}) {
         return {};
       } },
     runtime: { id: EXTENSION, getURL: name => `chrome-extension://${EXTENSION}/${name}`,
+      connectNative(host) {
+        assert.equal(host, 'com.ourostack.desk.browser');
+        return { onMessage: event(), onDisconnect: event(), disconnect() {},
+          postMessage(message) { if (message.event === 'ready') nativeReady = structuredClone(message); } };
+      },
       async getContexts() { return [{ documentUrl: api.runtime.getURL('token.html') }]; }, async sendMessage() { return { token: TOKEN }; } },
     offscreen: { async createDocument() { assert.fail('No real token document'); } },
     action: { async setBadgeText() {}, async setBadgeBackgroundColor() {}, async setTitle() {} },
@@ -248,8 +254,11 @@ async function integrated(t, options = {}) {
     relay.delegate.onConnection({}, new URL(endpoint), pair.server);
     return pair.client;
   } });
-  let transport;
+  let nativeReady, transport;
+  const startupMethods = [];
+  await engine.start(); // Actual factory hello, not an install/origin assertion.
   transport = new NativeCommandTransport({ send: async message => {
+    if (!providerStarted) startupMethods.push(message.method);
     const reply = await engine.dispatch(message);
     if (message.method === 'context.create') {
       timeline.push('native-create-completed');
@@ -261,9 +270,14 @@ async function integrated(t, options = {}) {
   } });
   const tokenGate = deferred(); let blockToken = false, tokenBlocked = false;
   let foreignReady;
-  const provider = await startNativeProvider({ config, ready: { event: 'ready', protocolVersion: 1, extensionId: EXTENSION, sourceDigest: SOURCE, profileToken: TOKEN },
+  let providerStarted = false;
+  const proof = createNativeUpdateProof(config);
+  const provider = await startNativeProvider({ config, ready: nativeReady,
+    onAdmitted: proof.onAdmitted, verifyContinuity: proof.verifyContinuity,
     chain, transport, inventory, processReader: reader, resolveSelection: async () => ({ ...selection, profileRoot: config.profileRoot }),
     readProfileToken: async () => { if (blockToken) { tokenBlocked = true; await tokenGate.promise; } return TOKEN; } });
+  providerStarted = true;
+  assert.deepEqual(startupMethods, ['transition.capture', 'transition.release'], 'real ordinary handoff after private C admission');
   t.after(async () => {
     tokenGate.resolve(); holdInitialized.resolve(); holdAck.resolve(); holdListen.resolve(); holdCDP.resolve(); holdBind.resolve(); holdClose.resolve();
     for (const browser of cdpBrowsers) await browser.close();
