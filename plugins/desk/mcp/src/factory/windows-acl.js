@@ -152,6 +152,34 @@ while ($true) {
 
 
 const ENCODED_PROGRAM = Buffer.from(ACL_PROGRAM, "utf16le").toString("base64")
+const PRIVATE_PROGRAM = `
+$ErrorActionPreference = 'Stop'
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+function Verify-Request($entries) {
+  $s = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  foreach ($e in @($entries)) {
+    $i = Get-Item -LiteralPath $e.file -Force
+    if ($i.PSIsContainer -ne $e.directory -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'refused' }
+    $a = $i.GetAccessControl('Access,Owner')
+    if ($a.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $s -or -not $a.AreAccessRulesProtected) { throw 'refused' }
+    $r = @($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
+    if ($r.Count -ne 1 -or $r[0].IdentityReference -ne $s -or $r[0].AccessControlType -ne 'Allow' -or
+        ($r[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl) { throw 'refused' }
+  }
+}
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  try {
+    Verify-Request ($line | ConvertFrom-Json)
+    [Console]::Out.WriteLine('private')
+  } catch {
+    [Console]::Out.WriteLine('refused')
+  }
+}
+`
+const PRIVATE_ARGS = ["-NoProfile", "-NonInteractive", "-EncodedCommand",
+  Buffer.from(PRIVATE_PROGRAM, "utf16le").toString("base64")]
 
 function fail(label, message) {
   throw new Error(`${label}: ${message}`)
@@ -258,7 +286,9 @@ function createSession(executable, args, idleMs) {
   for (const stream of [child.stdin, child.stdout, child.stderr]) stream.unref()
   child.stdout.setEncoding("utf8")
   child.stderr.setEncoding("utf8")
-  const session = { child, pending: null, queue: Promise.resolve(), idleTimer: null, dead: false, stderr: "" }
+  const session = { child, pending: null, queue: Promise.resolve(), idleTimer: null, dead: false, stderr: "",
+    closeError: false, onIdle: null }
+  session.closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })))
   const retire = (error) => {
     if (session.dead) return
     session.dead = true
@@ -299,8 +329,9 @@ function createSession(executable, args, idleMs) {
       retire(new Error(`${waiting.label}: Windows ACL provider produced too much output`))
     }
   })
-  child.on("error", retire)
-  child.stdin.on("error", retire)
+  const streamError = error => { session.closeError = true; retire(error) }
+  child.on("error", streamError)
+  child.stdin.on("error", streamError)
   child.on("close", (code) => {
     const diagnostic = session.stderr.trim().slice(0, 500) || "no diagnostic output"
     const label = session.pending?.label ?? DEFAULT_LABEL
@@ -327,7 +358,7 @@ function ask(session, { payload, timeoutMs, maxOutputBytes, label, due }) {
       settle: (error, value) => {
         clearTimeout(timer)
         if (error) return reject(error)
-        session.idleTimer = setTimeout(() => session.retire(new Error("idle")), session.idleMs)
+        session.idleTimer = setTimeout(() => session.onIdle ? session.onIdle() : session.retire(new Error("idle")), session.idleMs)
         session.idleTimer.unref()
         resolve(value)
       },
@@ -336,7 +367,7 @@ function ask(session, { payload, timeoutMs, maxOutputBytes, label, due }) {
   })
 }
 
-function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due = Date.now() + timeoutMs }) {
+function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due = Date.now() + timeoutMs, lifecycle }) {
   const key = sessionKey(executable, args)
   let session = sessions.get(key)
   if (session === undefined) {
@@ -344,12 +375,101 @@ function defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, l
     sessions.set(key, session)
   }
   const current = session
+  if (lifecycle) {
+    lifecycle.sessions.add(current)
+    current.onIdle = () => {
+      closePrivateSession(current, key, Date.now() + timeoutMs).then(
+        () => { lifecycle.sessions.delete(current) },
+        () => { lifecycle.failed = true },
+      )
+    }
+  }
   // Requests to one session run one after another: the process answers lines in order, so two in flight would pair the wrong answers.
   // The deadline started when the caller asked, not when the request reached the front of the queue, so a hung provider costs every
   // waiting caller the one limit, never one limit per caller ahead of it. A request whose time ran out while it waited is never sent.
-  const turn = current.queue.then(() => (due - Date.now() <= 0 ? Promise.reject(timedOutError(label, timeoutMs)) : current.dead ? defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due }) : ask(current, { payload, timeoutMs, maxOutputBytes, label, due })))
+  const turn = current.queue.then(() => (
+    lifecycle?.closed || lifecycle?.failed ? Promise.reject(new Error("NATIVE_PRIVATE_PATH_INVALID")) :
+    due - Date.now() <= 0 ? Promise.reject(timedOutError(label, timeoutMs)) :
+    current.dead ? defaultRunner({ executable, args, payload, timeoutMs, maxOutputBytes, label, idleMs, due, lifecycle }) :
+    ask(current, { payload, timeoutMs, maxOutputBytes, label, due })))
   current.queue = turn.then(() => undefined, () => undefined)
   return turn
+}
+
+function closePrivateSession(session, key, due) {
+  if (session.closing) return session.closing
+  session.dead = true
+  clearTimeout(session.idleTimer)
+  if (sessions.get(key) === session) sessions.delete(key)
+  const pending = session.pending
+  session.pending = null
+  if (pending) pending.settle(new Error("NATIVE_PRIVATE_PATH_INVALID"))
+  session.closing = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      session.child.kill("SIGKILL")
+      reject(new Error("NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN"))
+    }, Math.max(0, due - Date.now()))
+    session.closed.then(({ code, signal }) => {
+      clearTimeout(timer)
+      if (code === 0 && signal === null && !session.closeError) resolve()
+      else reject(new Error("NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN"))
+    })
+    session.child.ref()
+    for (const stream of [session.child.stdin, session.child.stdout, session.child.stderr]) stream.ref()
+    session.child.stdin.end()
+  })
+  return session.closing
+}
+
+// A separate, read-only session key: no repair, shared decision cache or path
+// contents. Closing this owner waits for EOF and actual process close.
+export function createWindowsPrivatePathVerifier({
+  env = process.env,
+  runner = defaultRunner,
+  timeoutMs = 5000,
+  idleMs = DEFAULT_IDLE_MS,
+} = {}) {
+  let executable
+  try {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 5000 ||
+        !Number.isSafeInteger(idleMs) || idleMs <= 0) throw new Error()
+    executable = assertWindowsAclAvailable({ env })
+  } catch {
+    throw new Error("NATIVE_PRIVATE_PATH_INVALID")
+  }
+  const lifecycle = { closed: false, failed: false, sessions: new Set() }
+  let closing
+  return {
+    async verify(entries, due = Date.now() + timeoutMs) {
+      try {
+        if (lifecycle.closed || lifecycle.failed || !Number.isSafeInteger(due) ||
+            due <= Date.now() || due > Date.now() + timeoutMs ||
+            !Array.isArray(entries) || entries.length < 1 || entries.length > MAX_PATHS ||
+            entries.some(entry => entry === null || typeof entry !== "object" || Array.isArray(entry) ||
+              Object.keys(entry).length !== 2 || !Object.hasOwn(entry, "file") || !Object.hasOwn(entry, "directory") ||
+              typeof entry.directory !== "boolean" ||
+              typeof entry.file !== "string" || !path.win32.isAbsolute(entry.file) ||
+              /[\x00-\x1f\x7f]/u.test(entry.file) || entry.file.length > 32768)) throw new Error()
+        const payload = JSON.stringify(entries)
+        if (Buffer.byteLength(payload) > DEFAULT_MAX_OUTPUT_BYTES) throw new Error()
+        const completed = await runner({ executable, args: PRIVATE_ARGS, payload, due, timeoutMs,
+          maxOutputBytes: 16384, idleMs, label: "NATIVE_PRIVATE_PATH_INVALID", lifecycle })
+        if (lifecycle.closed || lifecycle.failed || Date.now() >= due || completed.code !== 0 ||
+            (completed.stdout !== "private" && completed.stdout !== "private\r") || completed.stderr !== "") throw new Error()
+      } catch {
+        throw new Error("NATIVE_PRIVATE_PATH_INVALID")
+      }
+    },
+    close() {
+      if (!closing) {
+        lifecycle.closed = true
+        const key = sessionKey(executable, PRIVATE_ARGS)
+        const due = Date.now() + timeoutMs
+        closing = Promise.all([...lifecycle.sessions].map(session => closePrivateSession(session, key, due))).then(() => undefined)
+      }
+      return closing
+    },
+  }
 }
 
 function readResponse({ code, stdout, stderr }, label) {

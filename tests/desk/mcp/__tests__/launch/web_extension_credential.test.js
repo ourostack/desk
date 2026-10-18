@@ -185,7 +185,7 @@ test("normal code import closure retains builtin capability fallback and rejects
   assert.equal(api.isBuiltin("node:sqlite"), true, "this admitted Node supports the optional stock reader builtin")
   // Node omits prefix-only builtins from builtinModules; the boundary models a
   // complete older enumeration API for the same real host capabilities.
-  assert.equal(templateCredential({ module: { builtinModules: [...api.builtinModules, "sqlite"] } }).nativeInventory(realpathSync(mcpRoot)).length, 12)
+  assert.equal(templateCredential({ module: { builtinModules: [...api.builtinModules, "sqlite"] } }).nativeInventory(realpathSync(mcpRoot)).length, 13)
   assert.throws(() => templateCredential({ module: {} }).nativeInventory(realpathSync(mcpRoot)), { code: "NATIVE_CODE_UNAVAILABLE" })
   const root = path.join(await mkTempRoot("credential-external-import-"), "mcp")
   for (const item of sourceCredential.nativeInventory(realpathSync(mcpRoot))) {
@@ -322,13 +322,13 @@ test("native binding uses a strict presence gate before loading a client/helper"
     assert.throws(() => sourceCredential.validateNativeBinding(record, {}), { code: "NATIVE_CONFIG_INVALID" })
 })
 
-test("public twelve-module closure permits ordinary code modes but refuses an outside dependency", async () => {
+test("public thirteen-module closure permits ordinary code modes but refuses an outside dependency", async () => {
   const root = path.join(await mkTempRoot("native-E-public-closure-"), "mcp")
   for (const { path: name } of sourceCredential.nativeInventory(realpathSync(mcpRoot))) {
     mkdirSync(path.dirname(path.join(root, name)), { recursive: true, mode: 0o755 })
     copyFileSync(path.join(mcpRoot, name), path.join(root, name))
   }
-  assert.equal(sourceCredential.nativeInventory(root).length, 12)
+  assert.equal(sourceCredential.nativeInventory(root).length, 13)
   const file = path.join(root, "src/util/broker-error.mjs")
   writeFileSync(file, readFileSync(file, "utf8") + '\nimport "../outside-closure.mjs";\n')
   assert.throws(() => sourceCredential.nativeInventory(root), { code: "NATIVE_CODE_UNAVAILABLE" })
@@ -346,7 +346,7 @@ test("real staged current revision binds the exact normal root closure and sourc
   assert.equal(patch.readRevision(installed), patch.REVISION)
   const receipt = JSON.parse(readFileSync(path.join(installed.dir, "playwright-patch.json")))
   assert.equal(receipt.nativeRuntime.mcpRoot, realpathSync(mcpRoot))
-  assert.equal(receipt.nativeRuntime.modules.length, 12)
+  assert.equal(receipt.nativeRuntime.modules.length, 13)
   assert.deepEqual(receipt.nativeRuntime.modules.filter(item => item.path.startsWith("../")).map(item => item.path), [
     "../browser-context-broker/src/primitives/broker-error.mjs",
     "../browser-context-broker/src/primitives/private-state.mjs",
@@ -356,6 +356,28 @@ test("real staged current revision binds the exact normal root closure and sourc
   const changed = path.join(lib, "desk-native-relay.cjs")
   writeFileSync(changed, readFileSync(changed, "utf8") + "\n// drift\n")
   assert.equal(patch.readRevision(installed), 0)
+})
+
+test("installed receipt refuses a missing, linked or tampered readonly worker before native use", async () => {
+  const { installed, lib } = await staged()
+  const worker = path.join(realpathSync(mcpRoot), "web-native-private-path.cjs")
+  const receipt = sourceCredential.verifyGeneration(installed, mcpRoot).receipt
+  assert.ok(receipt.nativeRuntime.modules.some(item => item.path === "web-native-private-path.cjs"))
+  for (const mode of ["missing", "linked", "tampered"]) {
+    const observed = Object.create(fs)
+    observed.lstatSync = function (name, options) {
+      if (name === worker && mode === "missing") throw Object.assign(Error("owned missing worker"), { code: "ENOENT" })
+      const stat = fs.lstatSync(name, options)
+      return name === worker && mode === "linked" ? Object.assign(Object.create(stat), { isSymbolicLink: () => true }) : stat
+    }
+    observed.readFileSync = function (name, options) {
+      const bytes = fs.readFileSync(name, options)
+      return name === worker && mode === "tampered" ? Buffer.concat([bytes, Buffer.from("\n// owned worker drift\n")]) : bytes
+    }
+    assert.throws(() => templateCredential({ fs: observed }, lib).verifyGeneration(installed, mcpRoot),
+      mode === "missing" ? { code: "ENOENT" } : { code: "NATIVE_CODE_UNAVAILABLE" })
+  }
+  assert.equal(sourceCredential.verifyGeneration(installed, mcpRoot).receipt.revision, patch.REVISION)
 })
 
 test("stream protection masks every UTF8 byte split and one-byte write with acceptance callbacks", async () => {

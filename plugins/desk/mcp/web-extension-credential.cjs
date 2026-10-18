@@ -303,7 +303,7 @@ function initialize(userDataDir, profileDirectory, o) {
 }
 
 var NATIVE_FILES = Object.freeze([
-  "package.json", "web-native-messaging.cjs", "web-extension-credential.cjs", "web-browser-discovery.cjs",
+  "package.json", "web-native-messaging.cjs", "web-native-private-path.cjs", "web-extension-credential.cjs", "web-browser-discovery.cjs",
   "src/browser/native-host.mjs", "src/util/broker-error.mjs", "src/util/private-state.mjs",
   "src/factory/os-protect.js", "src/factory/windows-acl.js", "src/readiness/process-start.js",
   "../browser-context-broker/src/primitives/broker-error.mjs",

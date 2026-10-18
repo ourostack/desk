@@ -22,7 +22,7 @@ const GO_SOURCES = ['go.mod', 'main.go', 'private_unix.go', 'private_windows.go'
 const EXECUTION_FILES = ['background.mjs', 'context-engine.mjs', 'manifest.json', 'token.html', 'token.mjs', 'vendor/maintained.mjs'];
 const EXTENSION_FILES = [...EXECUTION_FILES, 'source-digest.mjs', 'build.mjs', 'README.md', 'vendor/LICENSE', 'vendor/PROVENANCE.md'].sort();
 const CAPSULE_FILES = [
-  'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
+  'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
   'src/factory/os-protect.js', 'src/factory/windows-acl.js', 'src/factory/plugin-sources.cjs', 'src/readiness/process-start.js',

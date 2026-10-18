@@ -99,18 +99,7 @@ function privatePaths(entries) {
       return stat;
     }
     var before = entries.map(metadata);
-    var script = "$ErrorActionPreference='Stop';$entries=[Console]::In.ReadToEnd()|ConvertFrom-Json;" +
-      "$s=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;foreach($e in @($entries)){" +
-      "$i=Get-Item -LiteralPath $e.file -Force;" +
-      "if($i.PSIsContainer -ne $e.directory -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)){exit 2};" +
-      "$a=$i.GetAccessControl('Access,Owner');if($a.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $s -or -not $a.AreAccessRulesProtected){exit 2};" +
-      "$r=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]));" +
-      "if($r.Count -ne 1 -or $r[0].IdentityReference -ne $s -or $r[0].AccessControlType -ne 'Allow' -or " +
-      "($r[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl){exit 2}};[Console]::Out.Write('private')";
-    var out = require("child_process").execFileSync(path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      { input: JSON.stringify(entries), encoding: "utf8", timeout: 5000, maxBuffer: 16384, windowsHide: true });
-    if (out !== "private") throw failure("NATIVE_PRIVATE_PATH_INVALID");
+    require("./web-native-private-path.cjs").verify(entries, root);
     return entries.map(function (entry, index) {
       var after = metadata(entry);
       if (["dev", "ino", "size", "ctimeNs", "mtimeNs"].some(function (key) { return before[index][key] !== after[key]; }))

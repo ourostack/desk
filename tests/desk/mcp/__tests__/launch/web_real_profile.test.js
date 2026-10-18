@@ -695,13 +695,12 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
             owner_sid:invalidSid?"not-a-sid":"S-1-5-21-123",owner_reassigned:false}))}),stderr:""}
         }})}
     }}
-  const nativeModule={exports:{}},cp=require("child_process")
+  const nativeModule={exports:{}}
   vm.runInNewContext(readFileSync(path.join(mcpRoot,"web-native-messaging.cjs"),"utf8"),{module:nativeModule,__dirname:mcpRoot,Buffer,
     process:{...process,platform:"win32",env:{SystemRoot:systemRoot}},
-    require:name=>name==="child_process"?{...cp,execFileSync:(file,args,options)=>{
-      assert.equal(file,path.win32.join(systemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"))
-      assert.match(args.at(-1),/GetAccessControl/)
-      for(const entry of JSON.parse(options.input)){
+    require:name=>name==="./web-native-private-path.cjs"?{verify:(entries,root)=>{
+      assert.equal(root,systemRoot)
+      for(const entry of entries){
         assert.ok(existsSync(entry.file),"readonly ACL verification only observes owned paths")
         assert.equal(fs.lstatSync(entry.file).isDirectory(),entry.directory)
       }

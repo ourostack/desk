@@ -10,7 +10,7 @@ import { computeSourceDigest } from '../../../../../plugins/desk/browser-extensi
 
 const plugin = fileURLToPath(new URL('../../../../../plugins/desk/', import.meta.url));
 const closure = [
-  'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
+  'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
   'src/factory/os-protect.js', 'src/factory/windows-acl.js', 'src/factory/plugin-sources.cjs', 'src/readiness/process-start.js',
@@ -48,12 +48,13 @@ test('native distribution has exactly the real B/C closure, normal package bound
   assert.equal(provenance.predecessor, '60adac5ff6f14fbef6e371fa2983f84e0f7eba9f');
 });
 
-for (const change of ['missing-import', 'missing-module', 'extra-executable', 'generated-digest', 'source-link', 'manifest-key',
+for (const change of ['missing-import', 'missing-module', 'missing-worker', 'extra-executable', 'generated-digest', 'source-link', 'manifest-key',
   'shared-missing', 'shared-link', 'shared-import']) {
   test(`native distribution refuses ${change} rather than shipping incomplete/stale source`, async t => {
     const root = await fixture(t);
     if (change === 'missing-import') await fs.appendFile(path.join(root, 'mcp/native-host.mjs'), '\nimport "./not-shipped.mjs";\n');
     if (change === 'missing-module') await fs.rename(path.join(root, 'mcp/src/browser/native-provider.mjs'), path.join(root, 'mcp/src/browser/owned-away.mjs'));
+    if (change === 'missing-worker') await fs.rename(path.join(root, 'mcp/web-native-private-path.cjs'), path.join(root, 'mcp/owned-worker-away.cjs'));
     if (change === 'extra-executable') await fs.writeFile(path.join(root, 'browser-extension/unverified.mjs'), 'throw Error("not shipped");');
     if (change === 'generated-digest') await fs.writeFile(path.join(root, 'browser-extension/source-digest.mjs'), 'export const SOURCE_DIGEST = "' + '0'.repeat(64) + '";\n');
     if (change === 'source-link') {
@@ -73,7 +74,7 @@ for (const change of ['missing-import', 'missing-module', 'extra-executable', 'g
       await fs.writeFile(file, JSON.stringify(manifest));
     }
     const expected = ['missing-import', 'shared-import'].includes(change) ? 'NATIVE_CAPSULE_DEPENDENCY_MISSING'
-      : ['missing-module', 'source-link', 'shared-missing', 'shared-link'].includes(change) ? 'NATIVE_DISTRIBUTION_INCOMPLETE' : 'NATIVE_EXTENSION_SOURCE_INVALID';
+      : ['missing-module', 'missing-worker', 'source-link', 'shared-missing', 'shared-link'].includes(change) ? 'NATIVE_DISTRIBUTION_INCOMPLETE' : 'NATIVE_EXTENSION_SOURCE_INVALID';
     await assert.rejects(verifyNativeDistribution(root), { code: expected });
   });
 
@@ -92,4 +93,12 @@ test('license/provenance affect distribution integrity, never the six-file execu
   const after = await verifyNativeDistribution(root);
   assert.equal(after.extensionSourceDigest, before.extensionSourceDigest);
   assert.notEqual(after.distributionDigest, before.distributionDigest);
+});
+
+test('readonly worker source changes invalidate the exact native distribution digest', async t => {
+  const root = await fixture(t), before = await verifyNativeDistribution(root);
+  await fs.appendFile(path.join(root, 'mcp/web-native-private-path.cjs'), '\n// owned worker source drift\n');
+  const after = await verifyNativeDistribution(root);
+  assert.notEqual(after.distributionDigest, before.distributionDigest);
+  assert.equal(after.extensionSourceDigest, before.extensionSourceDigest);
 });
