@@ -411,10 +411,17 @@ function privateGeneration(directory, file) {
 function verifyGeneration(installed, expectedRoot) {
   var receiptPath = path.join(installed.dir, "playwright-patch.json");
   if (fs.lstatSync(receiptPath).isDirectory()) fs.readFileSync(receiptPath); // preserve real EISDIR
-  assertPrivateState(installed.dir, true);
-  var directoryIdentity = fs.lstatSync(installed.dir, { bigint: true });
-  assertPrivateState(receiptPath, false);
-  var before = fs.lstatSync(receiptPath, { bigint: true });
+  var directoryIdentity, before;
+  if (process.platform === "win32") {
+    var initialPair = assertPrivateGeneration(installed.dir, receiptPath);
+    directoryIdentity = initialPair[0];
+    before = initialPair[1];
+  } else {
+    assertPrivateState(installed.dir, true);
+    directoryIdentity = fs.lstatSync(installed.dir, { bigint: true });
+    assertPrivateState(receiptPath, false);
+    before = fs.lstatSync(receiptPath, { bigint: true });
+  }
   if (before.size > BigInt(65536)) throw nativeError("NATIVE_CODE_UNAVAILABLE");
   var receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
   var after = fs.lstatSync(receiptPath, { bigint: true });
@@ -481,10 +488,17 @@ function verifyGeneration(installed, expectedRoot) {
   var patch = require(path.join(runtime.mcpRoot, "web-playwright-patch.cjs"));
   if (patch.patchSource(source) !== source || patch.patchSessionSource(sessionSource) !== sessionSource)
     throw nativeError("NATIVE_CODE_UNAVAILABLE");
-  assertPrivateState(installed.dir, true);
-  assertPrivateState(receiptPath, false);
-  var final = fs.lstatSync(receiptPath, { bigint: true });
-  var finalDirectory = fs.lstatSync(installed.dir, { bigint: true });
+  var final, finalDirectory;
+  if (process.platform === "win32") {
+    var finalPair = assertPrivateGeneration(installed.dir, receiptPath);
+    finalDirectory = finalPair[0];
+    final = finalPair[1];
+  } else {
+    assertPrivateState(installed.dir, true);
+    assertPrivateState(receiptPath, false);
+    final = fs.lstatSync(receiptPath, { bigint: true });
+    finalDirectory = fs.lstatSync(installed.dir, { bigint: true });
+  }
   if (["dev", "ino", "size", "ctimeNs", "mtimeNs"].some(function (key) { return before[key] !== final[key]; }))
     throw nativeError("NATIVE_CODE_CHANGED");
   if (directoryIdentity.dev !== finalDirectory.dev || directoryIdentity.ino !== finalDirectory.ino)
@@ -499,25 +513,38 @@ function assertPrivateState(file, directory) {
   if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1) ||
       (process.getuid && stat.uid !== process.getuid())) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
   var exec = require("child_process").execFileSync;
-  if (process.platform !== "win32") {
-    if (stat.mode & 63) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
-    if (process.platform === "darwin" && /^\s*\d+:/m.test(exec("/bin/ls", ["-ldeq", file],
-      { encoding: "utf8", timeout: 5000, maxBuffer: 16384 }))) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
-    return;
-  }
+  if (stat.mode & 63) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+  if (process.platform === "darwin" && /^\s*\d+:/m.test(exec("/bin/ls", ["-ldeq", file],
+    { encoding: "utf8", timeout: 5000, maxBuffer: 16384 }))) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+}
+function assertPrivateGeneration(directory, receipt) {
+  var paths = [{ file: directory, directory: true }, { file: receipt, directory: false }];
+  var identities = paths.map(function (entry) {
+    var stat = fs.lstatSync(entry.file, { bigint: true });
+    if (stat.isSymbolicLink() || (entry.directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== BigInt(1)) ||
+        (process.getuid && stat.uid !== BigInt(process.getuid()))) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+    return stat;
+  });
   var key = Object.keys(process.env).filter(function (name) { return name.toLowerCase() === "systemroot"; })[0];
   var root = process.env[key];
   if (!root || !path.win32.isAbsolute(root)) throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
-  var script = "$ErrorActionPreference='Stop';$p=[Console]::In.ReadToEnd()|ConvertFrom-Json;" +
-    "$i=Get-Item -LiteralPath $p -Force;$s=[Security.Principal.WindowsIdentity]::GetCurrent().User;" +
-    "if($i.Attributes -band [IO.FileAttributes]::ReparsePoint){exit 2};$a=$i.GetAccessControl('Access,Owner');" +
+  var script = "$ErrorActionPreference='Stop';$paths=[Console]::In.ReadToEnd()|ConvertFrom-Json;" +
+    "$s=[Security.Principal.WindowsIdentity]::GetCurrent().User;foreach($p in $paths){" +
+    "$i=Get-Item -LiteralPath $p.file -Force;" +
+    "if(($i.PSIsContainer -ne $p.directory) -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)){exit 2};$a=$i.GetAccessControl('Access,Owner');" +
     "if($a.GetOwner([Security.Principal.SecurityIdentifier]) -ne $s -or -not $a.AreAccessRulesProtected){exit 2};" +
     "$r=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]));" +
     "if($r.Count -ne 1 -or $r[0].IdentityReference -ne $s -or $r[0].AccessControlType -ne 'Allow' -or " +
-    "($r[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl){exit 2};[Console]::Out.Write('private')";
-  if (exec(path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-    ["-NoProfile", "-NonInteractive", "-Command", script], { input: JSON.stringify(file), encoding: "utf8",
+    "($r[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl){exit 2}};[Console]::Out.Write('private')";
+  if (require("child_process").execFileSync(path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command", script], { input: JSON.stringify(paths), encoding: "utf8",
       timeout: 5000, maxBuffer: 16384, windowsHide: true }) !== "private") throw nativeError("NATIVE_PRIVATE_PATH_INVALID");
+  paths.forEach(function (entry, index) {
+    var after = fs.lstatSync(entry.file, { bigint: true });
+    if (["dev", "ino", "size", "ctimeNs", "mtimeNs"].some(function (name) { return identities[index][name] !== after[name]; }))
+      throw nativeError("NATIVE_CODE_CHANGED");
+  });
+  return identities;
 }
 function validateNativeBinding(record, route) {
   if (!record || typeof record !== "object" || Array.isArray(record) || !Object.keys(record).length)

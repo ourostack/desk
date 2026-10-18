@@ -5,3 +5,5 @@ The signed-in route adds a source-bound extension kernel, protected native messa
 The broker's shared primitives remain inside its source package, preserving standalone POSIX package installation. MCP imports retain the same class and function identities, and both native source inventories verify the exact shared implementation bytes.
 
 Maintained CLI shutdown now keeps its explicit stop acknowledgement ahead of competing context-close and socket-loss exits, including a socket observation already in flight. Natural shutdown and embedded-server behavior remain unchanged; missing acknowledgements are still failures, not inferred from absence. Signed package-download URLs are redacted from installation diagnostics.
+
+Windows generation-directory and receipt ACL checks share one read-only provider request per verification fence. The private-state policy and full verification boundaries remain intact, with Node file identities bracketing each complete batch.

@@ -2,7 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import fs, { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import { spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { Writable } from "node:stream"
 import * as path from "node:path"
 import { runInNewContext } from "node:vm"
@@ -191,6 +191,83 @@ test("normal code import closure retains builtin capability fallback and rejects
   }
   fs.appendFileSync(path.join(root, "src/util/broker-error.mjs"), '\nimport "not-a-builtin";\n')
   assert.throws(() => sourceCredential.nativeInventory(root), { code: "NATIVE_CODE_UNAVAILABLE" })
+})
+
+test("Windows generation ACL pairs retain identity fences around each single provider request", async () => {
+  const { installed, lib } = await staged(), receiptFile = path.join(installed.dir, "playwright-patch.json")
+  const proc = { platform: "win32", env: { SystemRoot: "C:\\Windows" } }
+  const expected = [{ file: installed.dir, directory: true }, { file: receiptFile, directory: false }]
+  let calls = 0, mutation
+  const child = { execFileSync(_file, args, options) {
+    calls++
+    assert.deepEqual(JSON.parse(options.input), expected)
+    assert.match(args.at(-1), /foreach/)
+    assert.match(args.at(-1), /PSIsContainer/)
+    assert.match(args.at(-1), /AreAccessRulesProtected/)
+    assert.match(args.at(-1), /GetAccessRules\(\$true,\$true/)
+    if (mutation?.failure && calls === mutation.batch) throw Error("owned ACL refusal")
+    return "private"
+  } }
+  const observed = Object.create(fs)
+  observed.lstatSync = (file, options) => {
+    const stat = fs.lstatSync(file, options)
+    if (mutation && options?.bigint && file === mutation.file && calls === mutation.batch)
+      return { ...stat, [mutation.key]: different(stat[mutation.key]) }
+    return stat
+  }
+  const helper = templateCredential({ fs: observed, child_process: child }, lib, proc)
+  assert.equal(helper.verifyGeneration(installed, mcpRoot).receipt.revision, patch.REVISION)
+  assert.equal(calls, 2, "each complete verification retains its before/after pair but starts only two providers")
+  for (const batch of [1, 2]) {
+    for (const file of [installed.dir, receiptFile]) {
+      for (const key of ["dev", "ino", "size", "ctimeNs", "mtimeNs"]) {
+        calls = 0; mutation = { file, batch, key }
+        assert.throws(() => helper.verifyGeneration(installed, mcpRoot), { code: "NATIVE_CODE_CHANGED" }, `${batch}:${file}:${key}`)
+        assert.equal(calls, batch)
+      }
+    }
+    calls = 0; mutation = { failure: true, batch }
+    assert.throws(() => helper.verifyGeneration(installed, mcpRoot), /owned ACL refusal/)
+    assert.equal(calls, batch, "a failed whole batch must not yield a partial qualification")
+  }
+  for (const file of [installed.dir, receiptFile]) {
+    calls = 0; mutation = null
+    observed.lstatSync = (name, options) => {
+      const stat = fs.lstatSync(name, options)
+      return name === file ? Object.assign(Object.create(stat), { isSymbolicLink: () => true }) : stat
+    }
+    assert.throws(() => helper.verifyGeneration(installed, mcpRoot), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+    assert.equal(calls, 0, "both Node kind checks must precede the provider")
+  }
+})
+
+test("real OS private-generation qualification rejects exposure of either member", async t => {
+  const { installed, lib } = await staged(), receiptFile = path.join(installed.dir, "playwright-patch.json")
+  const requests = []
+  const helper = templateCredential({ child_process: { execFileSync(...args) {
+    const start = performance.now()
+    try { return execFileSync(...args) }
+    finally { requests.push(performance.now() - start) }
+  } } }, lib)
+  assert.equal(helper.verifyGeneration(installed, mcpRoot).receipt.revision, patch.REVISION)
+  const expectedRequests = process.platform === "win32" ? 2 : process.platform === "darwin" ? 4 : 0
+  assert.equal(requests.length, expectedRequests)
+  t.diagnostic(JSON.stringify({ platform: process.platform, qualificationProviderRequests: requests.length,
+    providerMilliseconds: requests.map(value => Math.round(value)) }))
+  for (const file of [installed.dir, receiptFile]) {
+    if (process.platform === "win32") {
+      const key = Object.keys(process.env).find(name => name.toLowerCase() === "systemroot")
+      const script = "$ErrorActionPreference='Stop';$p=[Console]::In.ReadToEnd()|ConvertFrom-Json;" +
+        "$i=Get-Item -LiteralPath $p -Force;$a=$i.GetAccessControl('Access');" +
+        "$a.SetAccessRuleProtection($false,$true);$i.SetAccessControl($a)";
+      execFileSync(path.win32.join(process.env[key], "System32/WindowsPowerShell/v1.0/powershell.exe"),
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        { input: JSON.stringify(file), encoding: "utf8", timeout: 5000, windowsHide: true })
+    } else fs.chmodSync(file, file === installed.dir ? 0o755 : 0o644)
+    assert.throws(() => helper.verifyGeneration(installed, mcpRoot), undefined, file)
+    sourceCredential.privateGeneration(installed.dir, receiptFile)
+    assert.equal(helper.verifyGeneration(installed, mcpRoot).receipt.revision, patch.REVISION)
+  }
 })
 
 test("private receipt refuses schema/capture/proof changes and observed identity replacements", async () => {
