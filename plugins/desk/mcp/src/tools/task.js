@@ -48,6 +48,7 @@ import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
 import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
+import { makeSessionLabelProposal } from "../runtime/session-label.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -311,8 +312,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource"]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -809,6 +810,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     const note = focusNote(statusContext)
     if (note !== undefined) result.focus_note = note
   }
+  if (values.focus === true || values.display_label !== undefined) {
+    result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused: result.focused === true })
+  }
   return result
 }
 
@@ -1171,6 +1175,11 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   const focus = focusNote(statusContext, { track, slug })
   if (focus !== undefined) result.focus_note = focus
+  const currentFocus = statusContext.focus?.get()
+  const focused = currentFocus?.track === track && currentFocus?.slug === slug
+  if (focused || values.display_label !== undefined) {
+    result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused })
+  }
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }
