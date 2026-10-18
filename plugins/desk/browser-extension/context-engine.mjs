@@ -4,7 +4,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u
 const TOKEN = /^[a-f0-9]{64}$/u
 const CONTEXT = new Set(["context.create", "context.resume", "context.status", "context.label", "context.discard"])
-const PROVIDER = new Set(["profile.read", "extension.reload", "extension.reload.commit"])
+const PROVIDER = new Set(["profile.read", "extension.reload", "extension.reload.commit", "transition.capture", "transition.release"])
 const HOST = "com.ourostack.desk.browser"
 const integer = value => Number.isSafeInteger(value) && value > 0
 const INTERNAL = Symbol("bounded_native_error")
@@ -54,6 +54,56 @@ export function createBrowserExtension(api, options = {}) {
   let totalEffects = 0
   let removeDebuggerObserver
   let observerRetirementRequested = false
+  const workerEpoch = crypto.randomUUID()
+  let activation = { protocol: 1, workerEpoch, trigger: "evaluation" }
+  let activationVersion = 0, contextEffectSequence = 0
+  let admissionHeld = true, captured
+
+  // Called by the same factory's actual browser listeners, never native input.
+  function observeActivation(kind, details) {
+    if (stopped) return
+    if (kind === "installed" && ["install", "update", "chrome_update", "shared_module_update"].includes(details?.reason)) {
+      activation = { protocol: 1, workerEpoch,
+        trigger: details.reason === "install" ? "browser-install-event" : "browser-update-event", reason: details.reason }
+    } else if (kind === "startup") activation = { protocol: 1, workerEpoch, trigger: "startup" }
+    else return
+    ++activationVersion // Does not reset effects, custody, or a sealed witness.
+  }
+  async function transition(method, params) {
+    const allowed = ["profileToken", "sourceDigest", "transactionId", "challenge",
+      ...(method === "transition.release" ? ["workerEpoch", "witnessDigest", "mode"] : [])]
+    if (Object.keys(params).some(k => !allowed.includes(k)) ||
+        !UUID.test(params.transactionId ?? "") || !TOKEN.test(params.challenge ?? ""))
+      throw fail("native_request_invalid")
+    if (method === "transition.release") {
+      if (!captured || !admissionHeld || captured.version !== activationVersion || captured.port !== generation ||
+          params.transactionId !== captured.value.transactionId || params.challenge !== captured.value.challenge ||
+          params.workerEpoch !== workerEpoch || params.witnessDigest !== captured.value.witnessDigest || params.mode !== "ordinary")
+        throw fail("native_transition_changed")
+      admissionHeld = false
+      captured = undefined
+      return { transactionId: params.transactionId, workerEpoch, released: true }
+    }
+    if (!admissionHeld || contextEffectSequence || totalEffects || bindings.size || debuggerCustody.size || update)
+      throw fail("native_transition_unavailable")
+    if (requests.size !== 1) throw fail("native_request_busy")
+    if (captured) {
+      if (captured.version !== activationVersion || captured.port !== generation ||
+          captured.value.transactionId !== params.transactionId || captured.value.challenge !== params.challenge)
+        throw fail("native_transition_changed")
+      return structuredClone(captured.value)
+    }
+    const version = activationVersion, connection = generation
+    const value = { transactionId: params.transactionId, challenge: params.challenge, workerEpoch,
+      activation: structuredClone(activation), admission: "held", firstContextEffect: null,
+      contextEffectSequence: 0, currentUnknownObligations: [] }
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))
+    if (stopped || !admissionHeld || activationVersion !== version || connection !== generation)
+      throw fail("native_transition_changed")
+    value.witnessDigest = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("")
+    captured = { value, version, port: connection }
+    return structuredClone(value)
+  }
 
   function listen(target, fn) {
     target.addListener(fn)
@@ -593,6 +643,11 @@ export function createBrowserExtension(api, options = {}) {
     }
     await authorize(params)
     if (stopped) throw fail("native_extension_stopped")
+    if (method.startsWith("transition.")) return transition(method, params)
+    if (CONTEXT.has(method)) {
+      if (admissionHeld) throw fail("native_transition_pending")
+      ++contextEffectSequence // Before any attempted context effect, including failures.
+    }
     if (PROVIDER.has(method)) {
       for (const b of bindings.values()) settleRevocations(b)
       if (requests.size !== 1 || totalEffects || debuggerCustody.size || [...bindings.values()].some(b =>
@@ -666,7 +721,7 @@ export function createBrowserExtension(api, options = {}) {
         dispatch(request).then(response => {
           if (port !== connected) { onStatus("native_response_undelivered"); return }
           const sent = publish(response)
-          if (sent && port === connected && !stopped && response.result && !observed) {
+          if (sent && port === connected && !stopped && response.result && !observed && request.method !== "transition.capture") {
             observed = true
             onStatus("native_transport_confirmed")
           }
@@ -679,10 +734,12 @@ export function createBrowserExtension(api, options = {}) {
         if (port === connected) {
           port = undefined
           update = undefined
+          captured = undefined
           onStatus(failed ? "native_transport_failed" : "native_transport_disconnected")
         }
       })
       const sent = publish({ event: "ready", protocolVersion: 1, extensionId: api.runtime.id, sourceDigest, profileToken: token,
+        activation: { ...structuredClone(activation), admission: admissionHeld ? "held" : "ordinary", contextEffectSequence },
         browserVersion: globalThis.navigator?.userAgent?.match(/(?:Edg|Chrome)\/[\d.]+/u)?.[0],
         userAgent: globalThis.navigator?.userAgent })
       if (!sent || port !== connected || stopped) throw fail("native_transport_disconnected")
@@ -710,5 +767,5 @@ export function createBrowserExtension(api, options = {}) {
     observerRetirementRequested = true
     retireStoppedDebuggerObserver()
   }
-  return Object.freeze({ dispatch, start, stop })
+  return Object.freeze({ dispatch, start, stop, observeActivation })
 }

@@ -24,6 +24,12 @@ const put = async (file, value) => {
   await fs.writeFile(file, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value), { mode: 0o600 });
 };
 
+test('normal transition preflight refuses unobserved continuity without a source swap or registration', async t => {
+  const f = await fixture(t);
+  await assert.rejects(installer.prepareNativeExtensionUpdate(f.options), { code: 'NATIVE_CONTINUITY_UNKNOWN' });
+  await assert.rejects(fs.lstat(path.join(f.env.DESK_BROWSER_STATE_DIR, 'native-owned')), { code: 'ENOENT' });
+});
+
 async function linuxNativeChildren(pid, { read = fs.readFile, list = fs.readdir } = {}) {
   const taskRoot = `/proc/${pid}/task`, children = [];
   // Linux records children per thread, not for the whole Go process.

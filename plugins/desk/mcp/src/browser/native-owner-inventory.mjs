@@ -14,6 +14,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const hash = (value, algorithm = 'sha256') => createHash(algorithm).update(value).digest('hex');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+// Shared read-only definition, unchanged encoding/order from C's inventory.
+export function nativeOwnerSnapshotDigest(owners) {
+  return hash(JSON.stringify(owners));
+}
+
 export function createNativeOwnerInventory({ browserStateRoot, cliDir, binding, platform = process.platform,
   env = process.env, socketRoot = platform === 'win32' ? os.tmpdir() : '/tmp', probeTimeoutMs = 500 }) {
   if (![browserStateRoot, cliDir, socketRoot].every(p => typeof p === 'string' && path.isAbsolute(p)) ||
@@ -136,7 +141,7 @@ export function createNativeOwnerInventory({ browserStateRoot, cliDir, binding, 
     }
     if (!same(names, (await fs.readdir(signedIn)).sort()))
       owners.push({ cli: 'unknown', reason: 'NATIVE_INVENTORY_CHANGED' });
-    return { owners, digest: hash(JSON.stringify(owners)) };
+    return { owners, digest: nativeOwnerSnapshotDigest(owners) };
   }
   return Object.freeze({ layout, descriptor, inspectOwner, snapshot, version });
 }

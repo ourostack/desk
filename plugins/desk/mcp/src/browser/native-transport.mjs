@@ -9,7 +9,7 @@ import { encodeNativeMessage } from './native-host.mjs';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const ROUTE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u;
 const CONTEXT = new Set(['context.create', 'context.resume', 'context.status', 'context.label', 'context.discard']);
-const PROVIDER = new Set(['profile.read', 'extension.reload', 'extension.reload.commit']);
+const PROVIDER = new Set(['profile.read', 'extension.reload', 'extension.reload.commit', 'transition.capture', 'transition.release']);
 const REMOTE_CODES = new Set([
   'native_browser_operation_failed', 'native_cdp_method_denied', 'native_cleanup_unconfirmed',
   'native_close_unconfirmed', 'native_discard_incomplete', 'native_context_busy', 'native_context_duplicate', 'native_context_create_failed',
@@ -22,6 +22,7 @@ const REMOTE_CODES = new Set([
   'native_target_not_owned', 'native_target_unavailable', 'native_token_document_invalid',
   'native_transport_disconnected', 'native_update_effects_pending', 'native_update_pending', 'native_update_token_invalid',
   'native_request_invalid', 'native_request_busy', 'native_operation_failed', 'native_task_create_failed', 'native_method_denied',
+  'native_transition_pending', 'native_transition_changed', 'native_transition_unavailable',
 ]);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 // Preserve structured resource obligations, not raw native exceptions, URLs or

@@ -888,10 +888,10 @@ function installNpm(calls, options = {}) {
 // Preserve the retained non-MCP reader producer's own unit contract directly.
 // It is not reachable by native desk-web calls and is never used as a fallback.
 async function prepareLegacyReader(machine,extra={}) {
-  const canonical=path.join(mcpRoot,"web.cjs"),module={exports:{}},errors=[]
+  const module={exports:{}},errors=[]
   const scope={module,__dirname:mcpRoot,process,Buffer,setTimeout,clearTimeout,
     require:name=>require(name.startsWith(".")?path.join(mcpRoot,name):name)}
-  loadTemplate(canonical,scope)
+  canonicalCjs("web.cjs",scope)
   const runtime=scope.browserRuntimeTools({...machine.launchOptions,...extra},{stderr:{write:text=>errors.push(text)}})
   const result=await scope.ensureInstalled(runtime.tools,runtime.root,runtime.clock()+110000,true)
   return{...result,errors}
