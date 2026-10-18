@@ -100,8 +100,9 @@ export function spawnActor(role, fixture, mode = "plain") {
   })
   const actor = { child, pid: child.pid, role, messages: [], waiters: new Set(), exit: null, stderr: "", stdout: "" }
   actors.add(actor)
-  record("actor-born", { childPid: child.pid, role, exe: process.execPath, execArgv,
-    nodeOptionsPreserved: child.spawnargs.includes(HELPER), fixture: fixture.root })
+  record("actor-born", { childPid: child.pid, role, exe: process.execPath,
+    importCount: execArgv.filter((arg) => arg === "--import").length,
+    helperArgPresent: child.spawnargs.includes(HELPER), fixture: fixture.root })
   child.stderr.on("data", (chunk) => { actor.stderr += String(chunk) })
   child.stdout.on("data", (chunk) => { actor.stdout += String(chunk) })
   child.on("message", (message) => {
@@ -258,7 +259,8 @@ if (process.argv[1] === HELPER) {
   const lease = setTimeout(() => { record("actor-lease-expired", { role }); process.exit(124) }, 20000)
   lease.unref()
   await sendMessage({ type: "hello", pid: process.pid, exe: process.execPath, start: await readOwnProcessStart(),
-    role, execArgv: process.execArgv, nodeOptions: process.env.NODE_OPTIONS ?? null })
+    role, importCount: process.execArgv.filter((arg) => arg === "--import").length,
+    nodeOptionsPresent: Object.hasOwn(process.env, "NODE_OPTIONS") })
   const start = await take("start")
   let result
   let failure
@@ -280,6 +282,9 @@ if (process.argv[1] === HELPER) {
         if (config.mode === "exit-after-rename") {
           const receipt = { pid: process.pid, exe: process.execPath, source, destination,
             actualDestination: fs.realpathSync(destination), gitCallsBeforeExit: gitCalls.length,
+            gitPublicationCallsBeforeExit: gitCalls.filter((call) =>
+              ["add", "commit", "update-index", "update-ref", "read-tree", "mv", "reset", "checkout", "switch", "merge", "rebase", "stash"].includes(call.args[2]) ||
+              (call.args[2] === "hash-object" && call.args.includes("-w"))).length,
             cardHash: digest(fs.readFileSync(path.join(destination, "task.md"))), exitCode: 37 }
           fs.writeFileSync(path.join(owned.base, "crash-after-rename.json"), JSON.stringify(receipt, null, 2) + "\n")
           record("intentional-exit-after-actual-rename", receipt)
@@ -295,6 +300,7 @@ if (process.argv[1] === HELPER) {
   }
   await sendMessage({ type: "result", result: result ?? null, error: failure ?? null })
   await take("finish")
+  await drainActors()
   clearTimeout(lease)
   process.disconnect()
 }
