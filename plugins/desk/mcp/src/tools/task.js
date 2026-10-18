@@ -829,7 +829,7 @@ function archivePendingAnswer(path, publication) {
   return {
     status: "archive_pending", path, publication,
     commit: { status: "failed", reason: publication.reason },
-    next_action: "Keep the archived folder intact. Resolve the named HEAD/index or companion discrepancy, then call task_archive again for the same track and slug; do not create a replacement task or claim publication.",
+    next_action: "Keep the archived folder intact and do not repeat the directory move. Resolve the named publication or change-recording failure through its supported repair, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
   }
 }
 
@@ -1252,11 +1252,24 @@ async function refillArchivedReport({ deskRoot, person, track, slug, env, archiv
     return { commit: { status: "failed", reason: error.message } }
   }
   const expected = patchedCardText(before, existing, fields)
-  await patchMarkdownFrontmatter(publication.file, fields)
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
-  const commit = await publication.publish(expected, `task_archive: ${track}/${slug} report link`)
+  let commit, patched = false
+  try {
+    await patchMarkdownFrontmatter(publication.file, fields)
+    patched = true
+    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
+    commit = await publication.publish(expected, `task_archive: ${track}/${slug} report link`)
+  } catch (error) {
+    commit = { status: "failed", reason: error.message }
+  }
   if (commit === undefined && publication.git !== null) schedulePush({ root: deskRoot })
-  return { ...reportResult(report, true), ...(commit === undefined ? {} : { commit }) }
+  if (commit === undefined) return reportResult(report, true)
+  const actual = await publication.retainedTarget()
+  return {
+    ...(patched ? reportResult(report, true) : {}),
+    commit,
+    publication: { status: actual === null ? "unknown" : "pending", reason: commit.reason, placement: actual === null ? "unknown" : "retained",
+      actual_path: actual, last_known_path: relPath(deskRoot, archivedFile) },
+  }
 }
 
 // An archive never changes the held focus: the factory credits a declared task until the next `task_focus` call, so the held focus
@@ -1364,6 +1377,10 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
     } else {
       const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
+      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
+        ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
+          refilled.publication ?? { status: "pending", reason: refilled.commit.reason }),
+      })
       let pending = null
       try {
         pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
@@ -1375,9 +1392,6 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
         { path: relPath(deskRoot, archiveDir), operation: "write" },
       ] })
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
-        ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile), { status: "pending", reason: refilled.commit.reason }),
-      })
       return withArchiveFocus(statusContext, { track, slug }, {
         status: "already_archived",
         path: relPath(deskRoot, archivedFile),

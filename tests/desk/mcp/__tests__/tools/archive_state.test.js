@@ -73,9 +73,18 @@ test("interrupted archive refuses a companion type substitution with identical b
 for (const [name,policy] of [
   ["an executable bit ignored by Git",{ filemode:false,mode:"100755" }],
   ["Git's plain-file symlink representation",{ symlinks:false,mode:"120000" }],
-]) test(`interrupted archive preserves ${name} in the published index`,async () => {
+  ["Git's mode when only non-owner execute bits are set",{ filemode:true,mode:"100644",permissions:0o645 }],
+]) test(`interrupted archive preserves ${name} in the published index`,async t => {
   const f = await interrupted(policy)
-  await fs.chmod(f.file,0o644)
+  await fs.chmod(f.file,policy.permissions ?? 0o644)
+  if (process.platform === "win32" && policy.permissions !== undefined) {
+    const lstat = fs.lstat
+    t.mock.method(fs,"lstat",async (file,...args) => {
+      const stat = await lstat(file,...args)
+      return file === f.file
+        ? Object.assign(Object.create(stat),{mode:(stat.mode & ~0o777n) | BigInt(policy.permissions)}) : stat
+    })
+  }
   const result = await retry(f)
   assert.equal(result.status,"archived")
   assert.equal(result.commit,undefined)

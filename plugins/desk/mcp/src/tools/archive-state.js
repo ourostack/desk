@@ -101,7 +101,7 @@ function cleanHash(git, file, bytes) {
 function gitMode(entry, previous, git) {
   if (entry.kind === "link" || (previous?.mode === "120000" && !git.symlinks)) return "120000"
   if (!git.fileMode) return previous?.mode === "100755" ? "100755" : "100644"
-  return entry.mode & 0o111 ? "100755" : "100644"
+  return entry.mode & 0o100 ? "100755" : "100644"
 }
 function blobHash(git, file, bytes, mode) {
   return mode === "120000"
@@ -291,7 +291,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
         const sha = blobHash(git, path.join(archiveDir, name), entry.bytes, mode)
         expected.set(`${destination}/${name}`, { sha, mode,
           stageSha: entry.kind === "file" && mode === "120000" ? cleanHash(git, path.join(archiveDir, name), entry.bytes) : sha,
-          stageMode: entry.kind === "link" ? "120000" : git.fileMode && entry.mode & 0o111 ? "100755" : "100644" })
+          stageMode: entry.kind === "link" ? "120000" : git.fileMode && entry.mode & 0o100 ? "100755" : "100644" })
       }
       if (track) {
         const bytes = Buffer.from(track.after)
@@ -331,6 +331,14 @@ export async function prepareArchivedCardPublication({ effectiveRoot, file, befo
   }
   return {
     file: physical, git,
+    async retainedTarget() {
+      try {
+        const actual = await fs.realpath(physical)
+        if (!isPathContained(boundary, actual)) return null
+        const current = await fs.lstat(actual, { bigint: true })
+        return current.isFile() && identity(current) === identity(stat) ? actual : null
+      } catch { return null }
+    },
     async assertBefore() {
       if (!(await sameTarget(before))) throw new Error("task_archive: archived card changed before its report patch")
       if (git) assertGitState(git)
@@ -387,7 +395,7 @@ export async function qualifyArchiveFailure(error, { effectiveRoot, srcDir, arch
   const physical = await fs.realpath(effectiveRoot).catch(() => null)
   const outside = actual !== null && physical !== null && !isPathContained(physical, actual)
   error.archive_phase = outside ? "relocated_outside_boundary" : published ? "archived_publication_complete" :
-    moved ? "relocated_uncommitted" : actual === null ? "relocation_outcome_uncertain" : "not_moved"
+    moved ? "relocated_publication_unconfirmed" : actual === null ? "relocation_outcome_uncertain" : "not_moved"
   error.actual_path = actual === null ? null : path.join(actual, "task.md")
   error.path = error.actual_path
   if (actual === null) error.last_known_path = path.join(archiveDir, "task.md")

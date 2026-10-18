@@ -353,6 +353,65 @@ test("a failed commit of a refilled archived card is reported, and a desk outsid
   assert.deepEqual(result.commit, { status: "failed", reason: "commit refused" })
 }))
 
+for (const mode of ["head","journal","target"]) {
+  test(`a refilled archive qualifies a post-patch ${mode} failure without losing its pending path`,() => scratch(async ({ base,desk,env:scratchEnv }) => {
+    const env = await hostEnv(base,scratchEnv)
+    await contribute(env)
+    await githubDesk(base,desk,env,null)
+    await task_create({ deskRoot:desk,input:{track:"track",slug:"finished-work",title:"fixture",status:"processing"},schedulePush:() => {} })
+    await done(desk,env,"finished-work",{schedulePush:() => {}})
+    await task_archive({ deskRoot:desk,env,input:{track:"track",slug:"finished-work"},schedulePush:() => {} })
+    await visibility(env,"private")
+    const file = "track/_archive/finished-work/task.md"
+    let records = 0, changed = false, uncertain = false
+    const result = await task_archive({ deskRoot:desk,env,input:{track:"track",slug:"finished-work"},
+      schedulePush:() => assert.fail("an unqualified refill is never pushed"),
+      readiness:{
+        async recordChange(change) {
+          records++
+          if (mode === "journal") throw new Error("owned journal acknowledgement failure")
+          if (!changed && change.path === file) {
+            if (mode === "head") {
+              await fs.writeFile(path.join(desk,"unrelated.txt"),"owned concurrent work\n")
+              git(desk,"add","--","unrelated.txt")
+              git(desk,"commit","-q","-m","unrelated during refill")
+            } else {
+              await fs.rename(path.join(desk,file),path.join(base,"retained-refilled-card.md"))
+              await fs.writeFile(path.join(desk,file),"FOREIGN_REPLACEMENT\n")
+            }
+            changed = true
+          }
+          return {recorded:true}
+        },
+        async markUncertain() { uncertain = true },
+      },
+    })
+    assert.equal(result.status,"archive_pending")
+    assert.equal(result.path,file)
+    assert.equal(result.commit.status,"failed")
+    assert.ok(["pending","unknown"].includes(result.publication.status))
+    assert.equal(result.factory_report,expectedLink())
+    if (mode === "target") {
+      assert.equal(result.publication.placement,"unknown")
+      assert.equal(result.publication.actual_path,null)
+      assert.equal(result.publication.last_known_path,file)
+      assert.match(await fs.readFile(path.join(base,"retained-refilled-card.md"),"utf8"),/factory_report:/u)
+      assert.equal(await fs.readFile(path.join(desk,file),"utf8"),"FOREIGN_REPLACEMENT\n")
+    } else {
+      assert.equal(result.publication.placement,"retained")
+      assert.equal((await card(desk,file)).factory_report,expectedLink())
+    }
+    assert.match(git(desk,"show",`HEAD:${file}`).toString(),/factory_report_unavailable/u)
+    if (mode === "head") {
+      assert.equal(changed,true)
+      assert.match(result.commit.reason,/HEAD changed/u)
+    } else if (mode === "journal") {
+      assert.equal(uncertain,true)
+      assert.equal(records,1,"a failed journal is not called again to decorate the pending result")
+    }
+  }))
+}
+
 test("the link fields are the tools' own: task_update and task_create refuse them in frontmatter", () => scratch(async ({ base, desk, env: scratchEnv }) => {
   const env = await hostEnv(base, scratchEnv)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
