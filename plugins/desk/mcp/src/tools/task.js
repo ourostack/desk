@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process"
 import {
   nowIso,
   readMarkdown,
+  parseMarkdownText,
   writeMarkdown,
   patchMarkdownFrontmatter,
   patchFrontmatterFields,
@@ -40,7 +41,7 @@ import { assertCodeRepoEvidence, prRepoVerdict, recordedRepos } from "./done-evi
 import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
-import { prepareArchiveState, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
+import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
@@ -832,6 +833,12 @@ function archivePendingAnswer(path, publication) {
   }
 }
 
+function patchedCardText(raw, existing, fields) {
+  const data = { ...existing.data, ...fields }
+  for (const [key, value] of Object.entries(fields)) if (value === undefined) delete data[key]
+  return patchFrontmatterFields(raw, fields) ?? serializeMarkdown(data, existing.content)
+}
+
 /**
  * task_update
  *
@@ -1222,22 +1229,33 @@ async function archivedTaskStatus(archivedFile) {
 // Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
 // `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
 async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
-  let data
+  let existing, before
   try {
-    data = (await readMarkdown(archivedFile)).data
+    before = await fs.readFile(archivedFile, "utf8")
+    existing = parseMarkdownText(before, archivedFile)
   } catch {
     return {}
   }
+  const { data } = existing
   if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
   const report = await factoryReportFor({ deskRoot, person, track, slug, env })
   const fields = reportFields(report)
   // The same answer the card already records changes nothing: no write and no commit (an empty commit would read as a failed one).
   if (Object.entries(fields).every(([key, value]) => data[key] === value)) return { ...reportResult(report, false), factory_report_unchanged: true }
-  await patchMarkdownFrontmatter(archivedFile, fields)
+  let publication
+  try {
+    publication = await prepareArchivedCardPublication({
+      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), file: archivedFile, before, spawnGit,
+    })
+    await publication.assertBefore()
+  } catch (error) {
+    return { commit: { status: "failed", reason: error.message } }
+  }
+  const expected = patchedCardText(before, existing, fields)
+  await patchMarkdownFrontmatter(publication.file, fields)
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
-  const root = path.resolve(personPrefix(deskRoot, person))
-  const commit = stageAndCommitMove(root, [archivedFile], `task_archive: ${track}/${slug} report link`, spawnGit)
-  if (commit === undefined && isGitRepository(root, spawnGit)) schedulePush({ root: deskRoot })
+  const commit = await publication.publish(expected, `task_archive: ${track}/${slug} report link`)
+  if (commit === undefined && publication.git !== null) schedulePush({ root: deskRoot })
   return { ...reportResult(report, true), ...(commit === undefined ? {} : { commit }) }
 }
 
@@ -1333,12 +1351,14 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const dstExists = await pathExists(archiveDir)
   let relocated = false
   let retainedStatus = null
+  let sourceCardBytes = null
 
   if (!srcExists && dstExists) {
     retainedStatus = await archivedTaskStatus(archivedFile)
     const publication = await archivePublicationState({ effectiveRoot, srcDir, archiveDir, spawnGit })
     if (publication.status === "pending" && (retainedStatus === null || TERMINAL_STATUSES.has(retainedStatus))) {
       relocated = true
+      if (await pathExists(archivedFile)) sourceCardBytes = await fs.readFile(archivedFile)
     } else if (publication.status === "pending" || publication.status === "unknown") {
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
       return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
@@ -1355,6 +1375,9 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
         { path: relPath(deskRoot, archiveDir), operation: "write" },
       ] })
       await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
+      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
+        ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile), { status: "pending", reason: refilled.commit.reason }),
+      })
       return withArchiveFocus(statusContext, { track, slug }, {
         status: "already_archived",
         path: relPath(deskRoot, archivedFile),
@@ -1385,10 +1408,9 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   // terminal, or no card at all, makes no completion claim and needs
   // neither.
   let archiveBump = null
-  let sourceCardBytes = null
   if (await pathExists(srcFile)) {
     sourceCardBytes = await fs.readFile(srcFile)
-    const sourceCard = await readMarkdown(srcFile)
+    const sourceCard = parseMarkdownText(sourceCardBytes.toString("utf8"), srcFile)
     if (!TERMINAL_STATUSES.has(sourceCard.data.status)) {
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
@@ -1411,7 +1433,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     }
   }
 
-  if (sourceCardBytes !== null && !(await fs.readFile(srcFile)).equals(sourceCardBytes))
+  if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
     throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
   if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
   const trackPlan = await archiveTrackPlan(await target([track, "track.md"]), slug, archiveBump?.status ?? null)
@@ -1445,7 +1467,9 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     let delivered = null
     let report = null
     if (await pathExists(filePath)) {
-      const existing = await readMarkdown(filePath)
+      if (sourceCardBytes === null || !(await fs.readFile(filePath)).equals(sourceCardBytes))
+        throw new Error("task_archive: card changed after admission; outside edits were retained")
+      const raw = sourceCardBytes.toString("utf8"), existing = parseMarkdownText(raw, filePath)
       finalStatus = existing.data.status
       cardBody = existing.content
       delivered = pendingDeliveryAnswer(existing.data, slug)
@@ -1463,11 +1487,9 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable"))
         report = await factoryReportFor({ deskRoot, person, track, slug, env })
       if (report !== null) Object.assign(patchFields, reportFields(report))
-      let expected = await fs.readFile(filePath, "utf8")
+      let expected = raw
       if (Object.keys(patchFields).length > 0) {
-        const data = { ...existing.data, ...patchFields }
-        for (const [key, value] of Object.entries(patchFields)) if (value === undefined) delete data[key]
-        expected = patchFrontmatterFields(expected, patchFields) ?? serializeMarkdown(data, existing.content)
+        expected = patchedCardText(expected, existing, patchFields)
         await patchMarkdownFrontmatter(filePath, patchFields)
         await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
       }

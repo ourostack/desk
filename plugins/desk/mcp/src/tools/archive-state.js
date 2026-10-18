@@ -10,6 +10,7 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex")
 const identity = (stat) => `${stat.dev}:${stat.ino}:${stat.mode & 0o170000n}`
 const relative = (root, file) => path.relative(root, file).split(path.sep).join("/")
 function gitPath(git, file) {
+  if (isPathContained(git.physicalRoot, file)) return relative(git.root, file)
   const suffix = path.relative(git.logicalRoot, file)
   if (suffix === ".." || suffix.startsWith(`..${path.sep}`) || path.isAbsolute(suffix))
     throw new Error("task_archive: a Git path leaves the effective desk")
@@ -26,6 +27,13 @@ function readGit(root, args, spawnGit, input) {
   if (answer.status !== 0) throw new Error(`task_archive: Git precondition unavailable (${args[0]}): ${answer.stderr || answer.error?.code || answer.status}`)
   return answer.stdout
 }
+function gitBoolean(root, name, spawnGit) {
+  const answer = spawnGit("git", ["-C", root, "config", "--bool", "--get", name], { encoding: "utf8", timeout: 10000 })
+  if (answer.status === 1) return true
+  if (answer.status !== 0 || !["true", "false"].includes(answer.stdout.trim()))
+    throw new Error(`task_archive: Git ${name} could not be qualified`)
+  return answer.stdout.trim() === "true"
+}
 async function gitContext(root, spawnGit) {
   const physicalRoot = await fs.realpath(root)
   let marker = false
@@ -37,7 +45,8 @@ async function gitContext(root, spawnGit) {
   const top = readGit(root, ["rev-parse", "--show-toplevel"], spawnGit).trim()
   const head = spawnGit("git", ["-C", top, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8", timeout: 10000 })
   if (head.status !== 0 && head.status !== 1) throw new Error("task_archive: HEAD could not be qualified; nothing was moved")
-  return { root: top, logicalRoot: path.resolve(root), physicalRoot, head: head.status === 0 ? head.stdout.trim() : null, spawnGit }
+  return { root: top, logicalRoot: path.resolve(root), physicalRoot, head: head.status === 0 ? head.stdout.trim() : null,
+    fileMode: gitBoolean(top, "core.filemode", spawnGit), symlinks: gitBoolean(top, "core.symlinks", spawnGit), spawnGit }
 }
 function headEntries(git, folder) {
   if (!git.head) return []
@@ -89,6 +98,48 @@ function cleanHash(git, file, bytes) {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(oid)) throw new Error("task_archive: Git did not return a qualified clean blob")
   return oid
 }
+function gitMode(entry, previous, git) {
+  if (entry.kind === "link" || (previous?.mode === "120000" && !git.symlinks)) return "120000"
+  if (!git.fileMode) return previous?.mode === "100755" ? "100755" : "100644"
+  return entry.mode & 0o111 ? "100755" : "100644"
+}
+function blobHash(git, file, bytes, mode) {
+  return mode === "120000"
+    ? readGit(git.root, ["hash-object", "--stdin"], git.spawnGit, bytes).trim()
+    : cleanHash(git, file, bytes)
+}
+function assertGitState(git) {
+  if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed after preflight")
+  if (gitBoolean(git.root, "core.filemode", git.spawnGit) !== git.fileMode ||
+      gitBoolean(git.root, "core.symlinks", git.spawnGit) !== git.symlinks)
+    throw new Error("task_archive: Git mode/type policy changed after preflight")
+}
+function indexMatches(entries, expected) {
+  return entries !== null && entries.length === expected.size && entries.every((entry) =>
+    entry.stage === "0" && expected.get(entry.path)?.sha === entry.sha && expected.get(entry.path)?.mode === entry.mode)
+}
+function publishExpected(git, paths, expected, message) {
+  assertGitState(git)
+  const staged = stagePaths(git.root, paths, git.spawnGit)
+  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  let entries = indexEntries(git.root, paths, git.spawnGit)
+  const normalStage = new Map([...expected].map(([file, entry]) => [file, { sha: entry.stageSha, mode: entry.stageMode }]))
+  if (!indexMatches(entries, normalStage))
+    return { status: "failed", reason: "staged archive differs from the admitted bytes; no commit was attempted" }
+  const metadata = [...expected].filter(([, entry]) => entry.mode !== entry.stageMode || entry.sha !== entry.stageSha)
+  if (metadata.length) {
+    const input = metadata.map(([file, entry]) => `${entry.mode} ${entry.sha}\t${file}\0`).join("")
+    const updated = git.spawnGit("git", ["-C", git.root, "update-index", "-z", "--index-info"],
+      { encoding: "utf8", timeout: 10000, input })
+    if (updated.status !== 0) return { status: "failed", reason: updated.stderr || updated.error?.code || "Git metadata staging failed" }
+    entries = indexEntries(git.root, paths, git.spawnGit)
+  }
+  if (!indexMatches(entries, expected))
+    return { status: "failed", reason: "the admitted Git mode/type metadata could not be staged" }
+  assertGitState(git)
+  const committed = commitIndexPaths(git.root, paths, entries, message, git.spawnGit)
+  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+}
 async function ancestry(boundary, destination) {
   const physical = await fs.realpath(boundary)
   const segments = path.relative(boundary, path.dirname(destination)).split(path.sep).filter(Boolean)
@@ -125,6 +176,8 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
     track = { ...trackPlan, identity: identity(stat), mode: Number(stat.mode & 0o777n) }
   }
   let tracked = []
+  let originals = new Map()
+  let trackEntry = null
   let cardDirty = false
   if (git) {
     destinationVacant(git, archiveDir)
@@ -135,6 +188,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       throw new Error("task_archive: source index conflicts/submodules cannot be admitted; nothing was moved")
     const baseline = new Map(headEntries(git, srcDir).map((entry) => [entry.path, entry]))
     tracked = entries.map((entry) => entry.path)
+    originals = new Map(entries.map((entry) => [entry.path, entry]))
     if (relocated) {
       if (entries.length === 0 || entries.length !== baseline.size ||
           entries.some((entry) => baseline.get(entry.path)?.sha !== entry.sha || baseline.get(entry.path)?.mode !== entry.mode))
@@ -142,10 +196,9 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       for (const [key, entry] of snapshot) {
         if (entry.kind === "directory") continue
         const held = baseline.get(`${source}/${key}`)
-        const sha = entry.kind === "link"
-          ? readGit(git.root, ["hash-object", "--stdin"], spawnGit, entry.bytes).trim()
-          : cleanHash(git, path.join(srcDir, key), entry.bytes)
-        if (!held || held.sha !== sha)
+        const mode = gitMode(entry, held, git)
+        const sha = blobHash(git, path.join(srcDir, key), entry.bytes, mode)
+        if (!held || held.sha !== sha || held.mode !== mode)
           throw new Error("task_archive: relocated bytes differ from the source HEAD/index; preserve the archive and resolve the discrepancy before retrying")
       }
       if ([...baseline.keys()].some((file) => !snapshot.has(file.slice(source.length + 1))))
@@ -155,11 +208,10 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       if (entry.path === card) continue
       const previous = baseline.get(entry.path)
       const key = entry.path.slice(source.length + 1)
-      const bytes = snapshot.get(key)?.bytes
+      const current = snapshot.get(key), bytes = current?.bytes
       if (!previous || previous.sha !== entry.sha || previous.mode !== entry.mode || !bytes ||
-          (snapshot.get(key).kind === "link"
-            ? readGit(git.root, ["hash-object", "--stdin"], spawnGit, bytes).trim()
-            : cleanHash(git, path.join(srcDir, key), bytes)) !== entry.sha)
+          gitMode(current, entry, git) !== entry.mode ||
+          blobHash(git, path.join(srcDir, key), bytes, entry.mode) !== entry.sha)
         throw new Error("task_archive: a staged or dirty companion is not implicitly owned; nothing was moved")
     }
     for (const args of relocated ? [] : [
@@ -178,6 +230,12 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       ["ls-files", "--others", "--", gitPath(git, track.file)],
     ].some((args) => readGit(git.root, args, spawnGit).trim()))
       throw new Error("task_archive: the track row/link has outside edits; nothing was moved")
+    if (track) {
+      const held = indexEntries(git.root, [gitPath(git, track.file)], spawnGit)
+      if (held === null || held.length !== 1 || held[0].stage !== "0" || !["100644", "100755"].includes(held[0].mode))
+        throw new Error("task_archive: the track's regular Git file state could not be qualified")
+      trackEntry = held[0]
+    }
   }
   async function assertTrack() {
     if (!track) return
@@ -196,7 +254,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
         throw new Error("task_archive: the other archive path appeared before publication")
       if (git) {
         destinationVacant(git, archiveDir)
-        if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed after preflight")
+        assertGitState(git)
       }
     },
     async afterMove() {
@@ -214,9 +272,13 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       }
     },
     async publish(message) {
-      if (!git) return undefined
       await fence.assert()
       if (!sameTree(await tree(archiveDir), snapshot)) throw new Error("task_archive: relocated bytes changed before staging; outside edits retained")
+      if (track && (!(await fs.lstat(track.file)).isFile() ||
+          !isPathContained(fence.physical, await fs.realpath(track.file)) ||
+          !(await fs.readFile(track.file)).equals(Buffer.from(track.after))))
+        throw new Error("task_archive: track changed before publication")
+      if (!git) return undefined
       destinationVacant(git, archiveDir)
       if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed before publication")
       const expected = new Map()
@@ -225,31 +287,64 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       for (const [name, entry] of snapshot) {
         if (entry.kind === "directory") continue
         if (!tracked.includes(`${source}/${name}`) && name !== "task.md") continue
-        expected.set(`${destination}/${name}`, {
-          sha: entry.kind === "link"
-            ? readGit(git.root, ["hash-object", "--stdin"], spawnGit, entry.bytes).trim()
-            : cleanHash(git, path.join(archiveDir, name), entry.bytes),
-          mode: entry.kind === "link" ? "120000" : entry.mode & 0o111 ? "100755" : "100644",
-        })
+        const mode = gitMode(entry, originals.get(`${source}/${name}`), git)
+        const sha = blobHash(git, path.join(archiveDir, name), entry.bytes, mode)
+        expected.set(`${destination}/${name}`, { sha, mode,
+          stageSha: entry.kind === "file" && mode === "120000" ? cleanHash(git, path.join(archiveDir, name), entry.bytes) : sha,
+          stageMode: entry.kind === "link" ? "120000" : git.fileMode && entry.mode & 0o111 ? "100755" : "100644" })
       }
       if (track) {
         const bytes = Buffer.from(track.after)
-        if (!(await fs.readFile(track.file)).equals(bytes)) throw new Error("task_archive: track changed before publication")
-        expected.set(gitPath(git, track.file), { sha: cleanHash(git, track.file, bytes), mode: track.mode & 0o111 ? "100755" : "100644" })
+        const sha = cleanHash(git, track.file, bytes), mode = gitMode({ kind: "file", mode: track.mode }, trackEntry, git)
+        expected.set(gitPath(git, track.file), { sha, mode, stageSha: sha, stageMode: mode })
       }
       const paths = [...new Set([...tracked, ...expected.keys()])]
-      const staged = stagePaths(git.root, paths, spawnGit)
-      if (!staged.ok) return { status: "failed", reason: staged.stderr }
-      const entries = indexEntries(git.root, paths, spawnGit)
-      if (entries === null || entries.length !== expected.size || entries.some((entry) =>
-        entry.stage !== "0" || expected.get(entry.path)?.sha !== entry.sha || expected.get(entry.path)?.mode !== entry.mode))
-        return { status: "failed", reason: "staged archive differs from the admitted HEAD/index/bytes; no commit was attempted" }
-      if (headSha(git) !== git.head) return { status: "failed", reason: "HEAD changed before the pinned archive commit" }
-      const committed = commitIndexPaths(git.root, paths, entries, message, spawnGit)
-      return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+      return publishExpected(git, paths, expected, message)
     },
   }
 }
+
+export async function prepareArchivedCardPublication({ effectiveRoot, file, before, spawnGit }) {
+  const physical = await fs.realpath(file), boundary = await fs.realpath(effectiveRoot)
+  if (!isPathContained(boundary, physical)) throw new Error("task_archive: archived card target is outside the effective desk")
+  const stat = await fs.lstat(physical, { bigint: true })
+  if (!stat.isFile()) throw new Error("task_archive: archived card target is not a regular file")
+  const git = await gitContext(effectiveRoot, spawnGit)
+  let previous = null
+  let key
+  if (git) {
+    key = gitPath(git, physical)
+    const held = indexEntries(git.root, [key], spawnGit)
+    if (held === null || held.length !== 1 || held[0].stage !== "0" || !["100644", "100755"].includes(held[0].mode))
+      throw new Error("task_archive: archived card Git state could not be qualified")
+    previous = held[0]
+    for (const args of [
+      ["diff", "--name-only", "--", key], ["diff", "--cached", "--name-only", "--", key],
+      ["ls-files", "--others", "--", key],
+    ]) if (readGit(git.root, args, spawnGit).trim())
+      throw new Error("task_archive: archived card has outside edits; no report fields were changed")
+  }
+  async function sameTarget(expected) {
+    return await fs.realpath(file) === physical &&
+      identity(await fs.lstat(physical, { bigint: true })) === identity(stat) &&
+      (await fs.readFile(physical)).equals(Buffer.from(expected))
+  }
+  return {
+    file: physical, git,
+    async assertBefore() {
+      if (!(await sameTarget(before))) throw new Error("task_archive: archived card changed before its report patch")
+      if (git) assertGitState(git)
+    },
+    async publish(expected, message) {
+      if (!(await sameTarget(expected))) return { status: "failed", reason: "archived card changed during its report patch; no commit was attempted" }
+      if (!git) return undefined
+      const mode = gitMode({ kind: "file", mode: Number(stat.mode & 0o777n) }, previous, git)
+      const sha = cleanHash(git, physical, Buffer.from(expected))
+      return publishExpected(git, [key], new Map([[key, { sha, mode, stageSha: sha, stageMode: mode }]]), message)
+    },
+  }
+}
+
 function headSha(git) {
   const answer = git.spawnGit("git", ["-C", git.root, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8", timeout: 10000 })
   if (answer.status === 1) return null

@@ -9,6 +9,7 @@ import matter from "gray-matter"
 import {
   findFilenameEquivalent,
   readMarkdown,
+  parseMarkdownText,
   serializeMarkdown,
   slugify,
   today,
@@ -32,6 +33,18 @@ test("vendored Unicode 16 category tables match their pinned source", async () =
     const bytes = await fs.readFile(path.join(root, file))
     assert.equal(createHash("sha256").update(bytes).digest("hex"), hash)
   }
+})
+
+test("captured markdown parsing uses one immutable card version and the normal parser errors", async () => {
+  const root = await mkTempDeskRoot(), file = path.join(root,"task.md")
+  const raw = "---\nstatus: done\n---\n\nCaptured body.\n"
+  await fs.writeFile(file,raw)
+  const captured = await readMarkdown(file)
+  await fs.writeFile(file,"---\nstatus: processing\n---\n\nLater body.\n")
+  assert.deepEqual(parseMarkdownText(raw,file),captured)
+  assert.notDeepEqual(await readMarkdown(file),captured)
+  assert.throws(() => parseMarkdownText("---\nstatus: [\n---\n",file),
+    error => error.message.includes(file) && error.message.includes("frontmatter is not valid YAML"))
 })
 
 test("filename equivalence is pinned across case and normalization", async () => {

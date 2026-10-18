@@ -24,7 +24,7 @@ export const digest = (value) => createHash("sha256").update(value).digest("hex"
 export const exists = (file) => fs.existsSync(file)
 export function record(type, detail = {}) {
   fs.appendFileSync(path.join(ART, `events-${process.pid}.jsonl`),
-    JSON.stringify({ type, pid: process.pid, at: new Date().toISOString(), ...detail }) + "\n")
+    JSON.stringify({ pid: process.pid, ...detail, type, at: new Date().toISOString() }) + "\n")
 }
 export const gitCalls = []
 export async function ownIdentity() {

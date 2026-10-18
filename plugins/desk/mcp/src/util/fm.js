@@ -66,6 +66,11 @@ export async function readMarkdown(filePath) {
     }
     throw err
   }
+  return parseMarkdownText(raw, filePath)
+}
+
+/** Parse one already-captured card version without rereading the file. */
+export function parseMarkdownText(raw, filePath) {
   const parsed = parseCard(raw, filePath)
   return { data: parsed.data, content: parsed.content }
 }
