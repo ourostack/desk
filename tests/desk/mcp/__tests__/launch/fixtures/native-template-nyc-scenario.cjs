@@ -10,7 +10,10 @@ const canonical = path.join(root, "web-native-relay.cjs");
 const other = path.join(root, "web-native-artifacts.cjs");
 const cell = process.argv[2];
 const staged = process.argv[3];
-assert.ok((process.env.NODE_OPTIONS || "").includes(process.argv[4]), "all inherited parent preloads remain present");
+assert.equal(process.argv.length, 4, "scenario argv carries only cell and owned staged-source path");
+assert.ok(Object.hasOwn(process.env, "DESK_TEST_PARENT_NODE_OPTIONS"), "private inherited-preload reference is present");
+assert.ok((process.env.NODE_OPTIONS || "").includes(process.env.DESK_TEST_PARENT_NODE_OPTIONS),
+  "all inherited parent preloads remain present");
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const sourceSha256 = hash(fs.readFileSync(canonical));
 const owner = Object.keys(require.cache).find(file => /[/\\]nyc[/\\]index\.js$/.test(file));

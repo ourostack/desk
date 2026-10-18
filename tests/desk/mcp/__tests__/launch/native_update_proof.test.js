@@ -20,6 +20,10 @@ async function fixture() {
   const root = await mkTempRoot('desk-native-transition-');
   const directory = path.join(root, 'native-owned');
   await fs.mkdir(directory, { mode: 0o700 });
+  // Exclusive owned creation above; chmod's mode alone is not an NTFS DACL.
+  // No-journal handoff reaches the readonly guard BEFORE writer/lock setup.
+  if (process.platform === 'win32') await protectWindowsPaths([
+    { path: directory, kind: 'directory', created: true }]);
   const config = { browserStateRoot: root, profileRoot: path.join(root, 'profile', 'Default'),
     extensionId: 'd'.repeat(32), extensionSourceDigest: SOURCE };
   const file = path.join(directory, 'extension-update.json');
@@ -32,6 +36,12 @@ async function fixture() {
     profileRoot: config.profileRoot, extensionId: config.extensionId, sourceDigest: SOURCE, terminalReceipts: [] };
   return { config, file, write, journal };
 }
+
+test('owned no-journal native root passes actual readonly admission before any writer or lock', async () => {
+  const f = await fixture();
+  assert.doesNotThrow(() => client.privatePath(path.dirname(f.file), true));
+  await assert.rejects(fs.lstat(f.file), { code: 'ENOENT' });
+});
 
 test('ordinary no-journal handoff captures and releases UNKNOWN after admission, without creating state', async () => {
   const module = await load();

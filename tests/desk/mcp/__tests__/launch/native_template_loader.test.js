@@ -33,11 +33,12 @@ for (const cell of ['empty-required', 'other-measured', 'selected-initialized', 
     fs.copyFileSync(path.join(repo, canonical), staged);
     const child = spawnSync(process.execPath, [bin, '--cwd', repo, '--nycrc-path', configFile,
       process.execPath, '--import', fileURLToPath(new URL('../_isolated_env.mjs', import.meta.url)),
-      scenario, cell, staged, process.env.NODE_OPTIONS || ''],
+      scenario, cell, staged],
     // NYC's maintained wrap.js explicitly supports this nested-run override.
     // Retain every inherited preload; only this owned child's actual NYC
     // selection changes to the cell's config, never the producer/parent.
-    { cwd: repo, env: { ...process.env, NYC_CONFIG_OVERRIDE: JSON.stringify(config) },
+    { cwd: repo, env: { ...process.env, NYC_CONFIG_OVERRIDE: JSON.stringify(config),
+        DESK_TEST_PARENT_NODE_OPTIONS: process.env.NODE_OPTIONS || '' },
       encoding: 'utf8', timeout: 15000, maxBuffer: 2 * 1024 * 1024 });
     assert.equal(child.signal, null, child.stderr);
     assert.equal(child.status, 0, child.stdout + child.stderr);
