@@ -15,8 +15,11 @@ const canonical = path.join(mcpRoot, "web-native-error-transport.cjs")
 for (const included of [false, true]) {
   test(`actual NYC ${included ? "collects the first included VM template" : "leaves an excluded VM template uninstrumented"}`, async () => {
     const root = await mkTempRoot("native-template-nyc-"), script = path.join(root, "probe.cjs")
+    const preload = path.join(root, "preload.cjs")
+    fs.writeFileSync(preload, `global.__deskTemplatePreload = ${JSON.stringify(root)};\n`)
     fs.writeFileSync(script, `
       const assert = require("node:assert/strict");
+      assert.equal(global.__deskTemplatePreload, ${JSON.stringify(root)}, "inherited preloads still execute");
       const { loadTemplate } = require(${JSON.stringify(loader)});
       const canonical = ${JSON.stringify(canonical)};
       assert.equal(global.__coverage__, undefined, "no eligible normal module has run");
@@ -47,7 +50,9 @@ for (const included of [false, true]) {
       "plugins/desk/hooks/lib/copilot-intake-context.cjs"
     const raw = path.join(root, "raw")
     // NYC's spawn hook propagates its parent config; preserve each actual CLI cell's declared scope.
-    const env = { ...isolatedEnv({ home, cache: path.join(root, "cache") }),
+    const inherited = { ...process.env, NODE_OPTIONS:
+      [process.env.NODE_OPTIONS, "--require=" + JSON.stringify(preload)].filter(Boolean).join(" ") }
+    const env = { ...isolatedEnv({ home, cache: path.join(root, "cache") }), NODE_OPTIONS: inherited.NODE_OPTIONS,
       NYC_CONFIG_OVERRIDE: JSON.stringify({ cwd: repo, include: [include], tempDirectory: raw, tempDir: raw, all: false }) }
     const result = spawnSync(process.execPath, [
       require.resolve("nyc/bin/nyc.js"), "--silent", "--all=false", "--cwd", repo, "--temp-dir", raw,
