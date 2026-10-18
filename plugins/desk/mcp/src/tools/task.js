@@ -44,6 +44,7 @@ import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
 import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
+import { moveArchive as moveArchiveDefault } from "./archive-move.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
@@ -1335,7 +1336,7 @@ function withArchiveFocus(statusContext, target, result) {
  *
  * Returns: { status: "archived" | "already_archived" | "archive_pending", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive = moveArchiveDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1477,8 +1478,16 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   let published = false
   try {
     await withCreatedDirs(path.dirname(archiveDir), async () => {
-      await prepared.atUse()
-      if (!relocated) { await fs.rename(srcDir, archiveDir); moved = true }
+      if (relocated) await prepared.atUse()
+      else { await moveArchive(srcDir, archiveDir, () => prepared.atUse()); moved = true }
+    }, {
+      shouldCleanup(error) {
+        if (error.archiveMove?.released && error.archiveMove.retirement !== "confirmed") {
+          error.created_parents = "retained_until_native_retirement_resolved"
+          return false
+        }
+        return true
+      },
     })
     await prepared.afterMove()
     await recordCanonicalChanges({ root: deskRoot, readiness, changes: [

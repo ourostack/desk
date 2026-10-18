@@ -402,8 +402,17 @@ export async function qualifyArchiveFailure(error, { effectiveRoot, srcDir, arch
   }
   const physical = await fs.realpath(effectiveRoot).catch(() => null)
   const outside = actual !== null && physical !== null && !isPathContained(physical, actual)
+  const uncertain = error.archiveMove?.released && error.archiveMove.movement === "unconfirmed"
   error.archive_phase = outside ? "relocated_outside_boundary" : published ? "archived_publication_complete" :
-    moved ? "relocated_publication_unconfirmed" : actual === null ? "relocation_outcome_uncertain" : "not_moved"
+    uncertain ? "relocation_outcome_uncertain" : moved ? "relocated_publication_unconfirmed" : actual === null ? "relocation_outcome_uncertain" : "not_moved"
+  if (uncertain) {
+    error.possible_late_effect = error.archiveMove.retirement !== "confirmed"
+    error.observed_placement = actual
+    error.message += `; possible_late_effect=${error.possible_late_effect}; reconcile observed placement before any retry`
+  }
+  if (error.created_parents === "retained_until_native_retirement_resolved")
+    error.message += "; created_parents=retained_until_native_retirement_resolved; do not retry or reuse parents until native retirement is resolved"
+  if (error.native_close_failure) error.message += `; ${error.native_close_failure}`
   error.actual_path = actual === null ? null : path.join(actual, "task.md")
   error.path = error.actual_path
   if (actual === null) error.last_known_path = path.join(archiveDir, "task.md")

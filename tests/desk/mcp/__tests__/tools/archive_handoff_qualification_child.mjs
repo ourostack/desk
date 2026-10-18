@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { fork, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { moveArchive } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
 import { readMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
@@ -266,20 +267,21 @@ if (process.argv[1] === HELPER) {
   let failure
   let reader
   let renameReturned = false
-  const originalRename = io.rename
   try {
     if (start.cmd === "abort") throw new Error("Owned qualification aborted before action")
     if (role === "push") result = await runPushWorker({ root: owned.root, env: owned.env, debounceMs: 0, spawnGit: realGit })
     else {
       reader = await openReadiness(owned, `actor-${process.pid}`)
-      io.rename = async (source, destination) => {
-        if (source !== owned.src || destination !== owned.dst) return originalRename(source, destination)
-        if (config.mode !== "plain") {
-          await sendMessage({ type: "rename-barrier", source, destination, gitCallsBeforeRename: gitCalls.length })
-          const command = await take("go")
-          if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
-        }
-        await originalRename(source, destination)
+      const qualifiedMove = async (source, destination, atUse) => {
+        const nativeMove = await moveArchive(source, destination, async () => {
+          await atUse()
+          if (config.mode !== "plain") {
+            await sendMessage({ type: "rename-barrier", source, destination, gitCallsBeforeRename: gitCalls.length })
+            const command = await take("go")
+            if (command.cmd === "abort") throw new Error("Owned qualification aborted at pre-rename barrier")
+          }
+        })
+        if (nativeMove) record("native-move-returned", nativeMove)
         renameReturned = true
         if (config.mode === "exit-after-rename") {
           const receipt = { pid: process.pid, exe: process.execPath, source, destination,
@@ -293,11 +295,10 @@ if (process.argv[1] === HELPER) {
           process.exit(37)
         }
       }
-      result = await task_archive(options(owned, { readiness: reader.readiness, input: { track: "t", slug: SLUG } }))
+      result = await task_archive(options(owned, { readiness: reader.readiness, input: { track: "t", slug: SLUG }, moveArchive: qualifiedMove }))
     }
   } catch (error) { failure = errorData(error) }
   finally {
-    io.rename = originalRename
     if (reader) await reader.journal.close()
   }
   await sendMessage({ type: "result", result: result ?? null, error: failure ?? null, renameReturned })
