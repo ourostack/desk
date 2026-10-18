@@ -22,13 +22,30 @@ test.beforeEach(t => {
   t.mock.method(cp, "execFileSync", function (executable, ...args) {
     if (path.basename(executable).toLowerCase() !== "powershell.exe") return original.call(this, executable, ...args);
     const started = performance.now(), row = {};
+    const [argv, options] = args;
+    const commandIndex = argv.findIndex(value => /^-(?:Encoded)?Command$/i.test(value));
+    assert.ok(commandIndex >= 0, 'the measured ACL call supplies an explicit PowerShell program');
+    const script = /^-EncodedCommand$/i.test(argv[commandIndex]) ?
+      Buffer.from(argv[commandIndex + 1], "base64").toString("utf16le") : argv[commandIndex + 1];
+    row.scriptSha256 = require("node:crypto").createHash("sha256").update(script).digest("hex");
+    row.timeoutMs = options.timeout;
     try { return original.call(this, executable, ...args); }
-    catch (error) { row.error = { code: error.code, status: error.status, signal: error.signal }; throw error; }
+    catch (error) {
+      const stdout = error.stdout ?? "", stderr = error.stderr ?? "";
+      row.error = { code: error.code, status: error.status, signal: error.signal,
+        stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr),
+        privateResult: stdout.toString() === "private" };
+      throw error;
+    }
     finally { row.ms = Math.round(performance.now() - started); calls.push(row); }
   });
   t.after(() => t.diagnostic("actual Windows ACL provider timing " + JSON.stringify({
     calls: calls.length, totalMs: calls.reduce((total, row) => total + row.ms, 0),
     maxMs: Math.max(0, ...calls.map(row => row.ms)), failures: calls.filter(row => row.error),
+    scripts: [...new Set(calls.map(row => row.scriptSha256))].map(scriptSha256 => {
+      const group = calls.filter(row => row.scriptSha256 === scriptSha256);
+      return { scriptSha256, calls: group.length, maxMs: Math.max(...group.map(row => row.ms)) };
+    }),
   })));
 });
 
