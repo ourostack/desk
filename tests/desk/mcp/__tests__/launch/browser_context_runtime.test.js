@@ -223,6 +223,7 @@ test("actual maintained daemon options can reach native acquisition using the st
       path.resolve(String(file)).startsWith(root+path.sep) && fs.existsSync(file)
     observedFs.realpathSync = file => candidates.includes(String(file)) && process.platform !== "darwin" ? app : fs.realpathSync(file)
     const proc = Object.assign(new EventEmitter(),{platform:process.platform,pid:process.pid,execPath:process.execPath,
+      nextTick:process.nextTick.bind(process),
       getuid:process.getuid?.bind(process),env:common.environment(process.env,l.root,l.socketDir,process.execPath),cwd:()=>l.root,
       stdout:{write(){return true}},stderr:{write(){return true}},umask(value){assert.equal(value,0o077)}}
     )
