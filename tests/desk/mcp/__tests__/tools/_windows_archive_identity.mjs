@@ -163,19 +163,18 @@ try {
   $script:operation = 'emit_import_metadata'
   $ctor = [Runtime.InteropServices.DllImportAttribute].GetConstructor([type[]]@([string]))
   $fields = [Reflection.FieldInfo[]]@(
+    [Runtime.InteropServices.DllImportAttribute].GetField('EntryPoint'),
+    [Runtime.InteropServices.DllImportAttribute].GetField('PreserveSig'),
     [Runtime.InteropServices.DllImportAttribute].GetField('SetLastError'),
     [Runtime.InteropServices.DllImportAttribute].GetField('ExactSpelling'),
     [Runtime.InteropServices.DllImportAttribute].GetField('CharSet'),
     [Runtime.InteropServices.DllImportAttribute].GetField('CallingConvention'))
   function Define-Native([string]$name, [type]$returns, [type[]]$parameters) {
     $script:operation = 'emit_method'
-    $method = $type.DefinePInvokeMethod($name, 'kernel32.dll', $name,
-      [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard,
-      $returns, $parameters, [Runtime.InteropServices.CallingConvention]::Winapi,
-      [Runtime.InteropServices.CharSet]::Unicode)
+    $method = $type.DefineMethod($name, [Reflection.MethodAttributes]'Public, Static', $returns, $parameters)
     $method.SetImplementationFlags($method.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
     $attribute = [Reflection.Emit.CustomAttributeBuilder]::new($ctor,
-      [object[]]@('kernel32.dll'), $fields, [object[]]@($true, $true,
+      [object[]]@('kernel32.dll'), $fields, [object[]]@($name, $true, $true, $true,
         [Runtime.InteropServices.CharSet]::Unicode, [Runtime.InteropServices.CallingConvention]::Winapi))
     $script:operation = 'emit_method_metadata'
     $method.SetCustomAttribute($attribute)

@@ -136,6 +136,129 @@ foreach ($name in @('Fail-Metadata', 'Require-Metadata')) {
   ] })
 })
 
+test("synthetic: captured emitter produces complete managed metadata without invoking PInvoke", async t => {
+  const f = fakeNative()
+  await observeIdentity(input, async () => {}, f.dependencies)
+  const parser = process.platform === "win32" ?
+    path.win32.join(process.env.SystemRoot || process.env.SYSTEMROOT || "", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "pwsh"
+  const script = `
+$ErrorActionPreference = 'Stop'
+function Library-Stage([string]$stage) {
+  [Console]::WriteLine('LIBRARY_STAGE:' + $stage)
+  [Console]::Out.Flush()
+}
+Library-Stage 'read'
+$tokens = $null
+$parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$tokens, [ref]$parseErrors)
+Library-Stage 'parse'
+if ($parseErrors.Count -ne 0) { throw 'captured_emitter_parse_failed' }
+$setup = @($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] })
+if ($setup.Count -ne 1) { throw 'captured_setup_missing' }
+$definitions = @($setup[0].Body.Statements | Where-Object {
+  $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Define-Native'
+})
+if ($definitions.Count -ne 1) { throw 'captured_emitter_missing' }
+$definition = $definitions[0]
+if (($definition.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) -join ',' -cne 'name,returns,parameters') {
+  throw 'captured_emitter_parameters_changed'
+}
+$context = @{}
+foreach ($key in @('ctor', 'fields')) {
+  $assignments = @($setup[0].Body.Statements | Where-Object {
+    $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+      $_.Left -is [Management.Automation.Language.VariableExpressionAst] -and $_.Left.VariablePath.UserPath -ceq $key
+  })
+  if ($assignments.Count -ne 1) { throw 'captured_metadata_context_missing' }
+  $right = $assignments[0].Right
+  $statements = New-Object 'System.Collections.Generic.List[System.Management.Automation.Language.StatementAst]'
+  $statements.Add($right.Copy())
+  $block = [Management.Automation.Language.StatementBlockAst]::new($right.Extent, $statements,
+    [Management.Automation.Language.TrapStatementAst[]]@())
+  $expression = [Management.Automation.Language.ScriptBlockAst]::new($right.Extent, $null, $block, $false)
+  $context[$key] = $expression.GetScriptBlock().InvokeReturnAsIs()
+}
+Library-Stage 'contexts'
+$name = New-Object Reflection.AssemblyName('DeskMetadataLibraryControl')
+$legacy = [AppDomain]::CurrentDomain.GetType().GetMethod('DefineDynamicAssembly',
+  [type[]]@([Reflection.AssemblyName], [Reflection.Emit.AssemblyBuilderAccess]))
+if ($null -ne $legacy) {
+  $assembly = $legacy.Invoke([AppDomain]::CurrentDomain, @($name, [Reflection.Emit.AssemblyBuilderAccess]::Run))
+  $route = 'AppDomain_DefineDynamicAssembly_Framework_metadata_only'
+} else {
+  $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+  $route = 'AssemblyBuilder_DefineDynamicAssembly_Core_metadata_only'
+}
+$module = $assembly.DefineDynamicModule('InMemory')
+$builder = $module.DefineType('DeskCapturedMetadata', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
+Library-Stage 'assembly'
+$specifications = @(
+  @{ name = 'CreateFileW'; returns = [IntPtr]; parameters = [type[]]@([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr]) },
+  @{ name = 'GetFileInformationByHandleEx'; returns = [bool]; parameters = [type[]]@([IntPtr], [int], [IntPtr], [uint32]) },
+  @{ name = 'GetVolumeInformationByHandleW'; returns = [bool]; parameters = [type[]]@([IntPtr], [IntPtr], [uint32], [IntPtr], [IntPtr], [IntPtr], [Text.StringBuilder], [uint32]) },
+  @{ name = 'CloseHandle'; returns = [bool]; parameters = [type[]]@([IntPtr]) })
+$body = $definition.Body.GetScriptBlock()
+foreach ($specification in $specifications) {
+  Library-Stage ('emit_' + $specification.name)
+  $variables = New-Object 'System.Collections.Generic.List[System.Management.Automation.PSVariable]'
+  foreach ($key in @('name', 'returns', 'parameters')) {
+    $variables.Add([Management.Automation.PSVariable]::new($key, $specification[$key]))
+  }
+  $variables.Add([Management.Automation.PSVariable]::new('type', $builder))
+  $variables.Add([Management.Automation.PSVariable]::new('ctor', $context.ctor))
+  $variables.Add([Management.Automation.PSVariable]::new('fields', [Reflection.FieldInfo[]]@($context.fields)))
+  [void]$body.InvokeWithContext($null, $variables, @())
+}
+Library-Stage 'create_type'
+$native = $builder.CreateType()
+Library-Stage 'reflect'
+$rows = @()
+foreach ($specification in $specifications) {
+  $method = $native.GetMethod($specification.name)
+  $imports = @($method.GetCustomAttributes([Runtime.InteropServices.DllImportAttribute], $false))
+  if ($imports.Count -ne 1) { throw 'captured_import_count_invalid' }
+  $import = $imports[0]
+  $actualParameters = @($method.GetParameters() | ForEach-Object { $_.ParameterType })
+  $signature = $method.ReturnType -eq $specification.returns -and $actualParameters.Count -eq $specification.parameters.Count
+  for ($index = 0; $index -lt $actualParameters.Count -and $signature; $index++) {
+    $signature = $actualParameters[$index] -eq $specification.parameters[$index]
+  }
+  $rows += @{ method = $specification.name; signatureMatches = $signature
+    publicStatic = $method.IsPublic -and $method.IsStatic
+    managedCallingConventionStandard = $method.CallingConvention -eq [Reflection.CallingConventions]::Standard
+    pinvokeImplementation = ($method.Attributes -band [Reflection.MethodAttributes]::PinvokeImpl) -ne 0
+    importMatches = $import.Value -ceq 'kernel32.dll'; entryPointMatches = $import.EntryPoint -ceq $specification.name
+    setLastError = $import.SetLastError; exactSpelling = $import.ExactSpelling
+    unicode = $import.CharSet -eq [Runtime.InteropServices.CharSet]::Unicode
+    winapi = $import.CallingConvention -eq [Runtime.InteropServices.CallingConvention]::Winapi
+    methodImplementationPreserveSig = ($method.GetMethodImplementationFlags() -band [Reflection.MethodImplAttributes]::PreserveSig) -ne 0 }
+}
+Library-Stage 'done'
+[Console]::WriteLine((@{ scope = 'managed_metadata_library_only_not_file_API_or_Windows_ABI'
+  runtime = [Environment]::Version.ToString(); powershell = $PSVersionTable.PSVersion.ToString()
+  assemblyRoute = $route; methods = $rows } | ConvertTo-Json -Depth 5 -Compress))
+`
+  const observed = spawnSync(parser, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+    input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: 5000,
+  })
+  if (process.platform !== "win32" && observed.error?.code === "ENOENT") {
+    t.skip("PowerShell metadata library unavailable on this non-Windows host; Windows ABI remains unqualified")
+    return
+  }
+  if (observed.status !== 0) t.diagnostic(JSON.stringify({ metadataLibraryStages: String(observed.stdout).split(/\r?\n/u)
+    .filter(line => /^LIBRARY_STAGE:(?:read|parse|contexts|assembly|emit_(?:CreateFileW|GetFileInformationByHandleEx|GetVolumeInformationByHandleW|CloseHandle)|create_type|reflect|done)$/u.test(line)) }))
+  assert.equal(observed.status, 0, observed.error?.code ?? "captured emitter metadata-only characterization failed")
+  const report = JSON.parse(observed.stdout.trim().split(/\r?\n/u).at(-1))
+  t.diagnostic(JSON.stringify({ scope: report.scope, runtime: report.runtime, powershell: report.powershell, assemblyRoute: report.assemblyRoute }))
+  assert.equal(report.scope, "managed_metadata_library_only_not_file_API_or_Windows_ABI")
+  assert.ok(["AppDomain_DefineDynamicAssembly_Framework_metadata_only",
+    "AssemblyBuilder_DefineDynamicAssembly_Core_metadata_only"].includes(report.assemblyRoute))
+  assert.deepEqual(report.methods, nativeMethodNames.map(method => ({ method, signatureMatches: true,
+    publicStatic: true, managedCallingConventionStandard: true, pinvokeImplementation: true,
+    importMatches: true, entryPointMatches: true, setLastError: true, exactSpelling: true,
+    unicode: true, winapi: true, methodImplementationPreserveSig: true })))
+})
+
 test("synthetic: persistence resolver targets the checkout root from the actual runner working directory", () => {
   const execArgv = process.execArgv.filter(arg => arg !== "--test" && !arg.startsWith("--test-"))
   const result = spawnSync(process.execPath, [...execArgv, "--input-type=module", "-e",
