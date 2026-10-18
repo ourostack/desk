@@ -202,6 +202,23 @@ async function controllerEntry(t,{candidate=false,spawnError=false,current=false
   const {node,env}=ownedRuntime(root)
   if(!prefix)delete env.DESK_NODE_SYSTEM_PREFIX
   if(candidate)ownedNodeProbe(node)
+  if(candidate){
+    const spawnSync=childProcess.spawnSync
+    t.mock.method(childProcess,"spawnSync",(file,args,options)=>{
+      const started=Date.now(),result=spawnSync(file,args,options)
+      if(file===node&&args.length===2&&args[0]==="-e"&&
+          args[1]==='process.stdout.write(process.version + " " + process.versions.modules)')
+        t.diagnostic("OWNED_BROWSER_NODE_PROBE "+JSON.stringify({
+          program:"node_version_abi",elapsedMs:Date.now()-started,timeoutMs:options.timeout,
+          status:result.status,signal:result.signal,errorCode:result.error?.code||null,
+          stdoutBytes:Buffer.byteLength(result.stdout||""),stderrBytes:Buffer.byteLength(result.stderr||""),
+          validVersionAbi:/^v(\d+\.\d+\.\d+)\S*\s+(\d+)$/.test((result.stdout||"").trim()),
+          preloadPresent:Boolean(options.env.NODE_OPTIONS),
+          inheritedPreloadUnchanged:options.env.NODE_OPTIONS===process.env.NODE_OPTIONS,
+        }))
+      return result
+    })
+  }
   const module={exports:{}},calls=[],output=[]
   const proc=Object.assign(new EventEmitter(),{env,
     platform:process.platform,arch:process.arch,version:current?process.version:"v16.20.2",
