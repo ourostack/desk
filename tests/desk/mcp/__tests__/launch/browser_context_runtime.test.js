@@ -142,7 +142,9 @@ test("actual maintained daemon options can reach native acquisition using the st
     const native = require(path.join(mcpRoot,"web-native-messaging.cjs"))
     const id = "11111111-1111-4111-8111-111111111111"
     const l = common.layout(stateRoot,id,"signed-in",options.socketRoot)
-    for (const d of [stateRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir])
+    const privateDirectories = [stateRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
+      ...(process.platform === "win32" ? ["AppData","AppData/Local","AppData/Roaming"].map(n=>path.join(l.root,"home",n)) : [])]
+    for (const d of privateDirectories)
       fs.mkdirSync(d,{recursive:true,mode:0o700})
     t.diagnostic("RESOURCE signed socket "+l.socketDir)
     t.after(()=>removeTree(l.socketDir))
@@ -166,10 +168,11 @@ test("actual maintained daemon options can reach native acquisition using the st
       launchOptions:{channel:"msedge"}},deskNativeContext:record}
     put(l.configFile,config)
     if (process.platform === "win32") await protectWindowsPaths([
-      stateRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
+      ...privateDirectories,
     ].map(path=>({path,kind:"directory",created:true})).concat([
       path.join(l.root,l.markerName),path.join(l.socketDir,l.markerName),l.configFile,
     ].map(path=>({path,kind:"file",created:true}))))
+    if (process.platform === "win32") for (const directory of privateDirectories) native.privatePath(directory,true)
     const inventoryModule = await import(pathToFileURL(path.join(mcpRoot,"src/browser/native-owner-inventory.mjs")).href)
     const inventory = inventoryModule.createNativeOwnerInventory({browserStateRoot:stateRoot,cliDir:actualCli,binding:selection,
       socketRoot:options.socketRoot})
@@ -1183,7 +1186,11 @@ test("two actual agent handles on one SDK connection keep independent native Cor
   assert.equal((await call("browser_context",{action:"discard",contextId:b.contextId})).state,"discarded")
   for(const owner of [a,b]){
     const layout=f.inventory.layout(owner.contextId)
-    assert.equal(fs.statSync(layout.sessionFile).mode&0o077,0,"actual maintained metadata is private")
+    if(process.platform==="win32"){
+      const native=require(path.join(mcpRoot,"web-native-messaging.cjs"))
+      native.privatePath(layout.daemonProfilesDir,true)
+      native.readPrivateJson(layout.sessionFile,{anchor:layout.directory})
+    }else assert.equal(fs.statSync(layout.sessionFile).mode&0o077,0,"actual maintained metadata is private")
     assert.equal(JSON.parse(fs.readFileSync(layout.sessionFile)).deskNativeErrorTransport.contextId,owner.contextId)
   }
   assert.deepEqual([...f.tabs.keys()],[1],"manual peer survives both explicit dispositions")
