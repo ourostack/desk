@@ -327,6 +327,11 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     t.after(async () => {
       if (child.exitCode === null && child.signalCode === null) child.kill();
       await exited;
+      const receipt = await fs.readFile(log, "utf8").catch(error => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      });
+      if (receipt) t.diagnostic("owned classified transport: " + receipt.trim().split("\n").join(" "));
       if (helper) {
         for (let i = 0; i < 100 && !absent(helper.pid, start, await readProcessStart(helper.pid)); i++)
           await new Promise(resolve => setTimeout(resolve, 20));
@@ -338,7 +343,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
       exited.then(() => { throw Error("OWNED_BACKEND_ENDED_BEFORE_BOOT: " + diagnostic); }),
     ]);
     assert.equal(boot.event, "booted");
-    const seen = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse);
+    const seen = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse).filter(row => row.event === "spawn");
     assert.equal(seen.length, 1, "two verifies own exactly one live helper");
     helper = seen[0];
     assert.equal(helper.event, "spawn"); assert.equal(helper.isMainThread, false);
@@ -352,7 +357,12 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
     child.send("proceed");
     assert.deepEqual(await exited, { code: mode === "uncaught" ? 1 : 0, signal: null });
     const final = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse);
-    assert.deepEqual(final.slice(1), [{ event: "eof", pid: helper.pid }, { event: "close", pid: helper.pid, code: 0, signal: null }]);
+    assert.deepEqual(final.filter(row => row.event === "reply").map(row => row.token), ["private", "private"]);
+    assert.deepEqual(final.filter(row => row.event === "eof"), [{ event: "eof", pid: helper.pid }]);
+    const closed = final.filter(row => row.event === "close");
+    assert.equal(closed.length, 1);
+    assert.deepEqual({ code: closed[0].code, signal: closed[0].signal }, { code: 0, signal: null });
+    assert.equal(closed[0].partialReply, false);
     assert.deepEqual(JSON.parse(output), { mode, exitCode: mode === "uncaught" ? 1 : 0, digest: boot.digest });
     if (mode === "uncaught") assert.match(diagnostic, /OWNED_BACKEND_EXPECTED_FAILURE/);
     else assert.equal(diagnostic, "");
