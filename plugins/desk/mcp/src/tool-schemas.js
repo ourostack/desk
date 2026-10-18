@@ -39,6 +39,8 @@ const TASK_TARGET = {
   slug: text("The task folder name."),
 }
 
+const DISPLAY_LABEL = text("Optional transient display proposal for the current focused task: author a short safe functional description, at most 72 Unicode code points. Never supply paths, URLs, email addresses or credential-like values. Omitted/unsafe labels do not change task CRUD. A proposal is not an applied native name, activity, ownership or delivery proof; no card title is used as a fallback.")
+
 const CARD_UPDATE = {
   frontmatter: {
     type: "object",
@@ -119,6 +121,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     status: text("Initial status; defaults to drafting. Must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
     focus: flag("Pass true to also declare this new task as the one this session is working on (as task_focus does), for work that starts now; leave it out for a parked follow-up. Only if you are the session's main agent."),
+    display_label: DISPLAY_LABEL,
     intake_proposal: {
       type: "object",
       additionalProperties: false,
@@ -170,7 +173,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table; each may depend on the ones before it. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),
@@ -184,6 +187,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     track: text("The track folder of the task you are working on; give it with `slug`."),
     slug: text("The task folder name; give it with `track`."),
     clear: flag("Pass true, alone, to declare no task: for a side conversation that belongs to none."),
+    display_label: DISPLAY_LABEL,
   }),
   task_move: schema({
     ...TASK_TARGET,
