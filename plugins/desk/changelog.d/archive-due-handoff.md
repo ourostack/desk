@@ -1,0 +1,1 @@
+Live terminal task updates and explicit focus/reinspection now return a typed archive-due key and a next-action reminder for the owning main agent to use the normal archive tool before final delivery. Already-archived, nonterminal and unknown-status cards carry no cue. The advice does not move files, grant ownership, accept delivery or turn pending publication into success.

@@ -193,9 +193,15 @@ test("unsupported filesystem companion types are explicitly refused",async t => 
   await assert.rejects(prepare(f),/unsupported companion type/u)
 })
 
-test("a payload write during the admission read is not accepted",async t => {
-  const f = await plainFixture(), file = path.join(f.source,"task.md"), readFile = fs.readFile
+test("a payload write during admission is refused even when filesystem timestamps have not advanced",async t => {
+  const f = await plainFixture(), file = path.join(f.source,"task.md"), readFile = fs.readFile, lstat = fs.lstat
+  const admitted = await lstat(file,{bigint:true})
   let injected = false
+  t.mock.method(fs,"lstat",async (target,...args) => {
+    const stat = await lstat(target,...args)
+    return target === file
+      ? Object.assign(Object.create(stat),{mtimeNs:admitted.mtimeNs,ctimeNs:admitted.ctimeNs}) : stat
+  })
   t.mock.method(fs,"readFile",async (target,...args) => {
     const bytes = await readFile(target,...args)
     if (target === file && !injected) {
@@ -206,6 +212,7 @@ test("a payload write during the admission read is not accepted",async t => {
   })
   await assert.rejects(prepare(f),/source changed while its bytes/u)
   assert.equal(injected,true)
+  assert.ok((await lstat(file,{bigint:true})).size > admitted.size)
   assert.match(await readFile(file,"utf8"),/OUTSIDE_DURING_READ/u)
 })
 
@@ -553,7 +560,7 @@ test("nested tracked payloads retain their directory keys during admission and p
   assert.equal(await fs.readFile(path.join(f.destination,"nested","peer.txt"),"utf8"),"nested owned\n")
 })
 
-test("owner-executable payloads retain their actual Git mode",async t => {
+test("executable payload admission honors real Git observations, not a syscall-only mode",async t => {
   const f = await archiveFixture({mode:"100755"})
   if (process.platform === "win32") {
     const lstat = fs.lstat
@@ -562,20 +569,21 @@ test("owner-executable payloads retain their actual Git mode",async t => {
       return [f.file,path.join(f.destination,"companion.txt")].includes(file)
         ? Object.assign(Object.create(stat),{mode:stat.mode | 0o100n}) : stat
     })
+    assert.equal(git(f.root,"diff","--name-only","--",sourceRelative),`${sourceRelative}/companion.txt`)
+    await assert.rejects(prepare(f),/dirty, staged, or untracked companion bytes/u)
+    assert.equal(git(f.root,"rev-parse","HEAD"),f.head)
+    assert.equal(git(f.root,"ls-files","-s"),f.index)
+    await assert.rejects(fs.lstat(f.destination),{code:"ENOENT"})
+    return
   }
   const state = await prepare(f)
   await move(f,state)
   const result = await state.publish("archive")
-  if (process.platform === "win32") {
-    assert.equal(result?.status,"failed","a syscall-only executable cell cannot claim native Git honored a chmod")
-    assert.equal(git(f.root,"rev-parse","HEAD"),f.head)
-  } else {
-    assert.equal(result,undefined)
-    assert.match(git(f.root,"ls-tree","HEAD",`${archiveRelative}/companion.txt`),/^100755 /u)
-  }
+  assert.equal(result,undefined)
+  assert.match(git(f.root,"ls-tree","HEAD",`${archiveRelative}/companion.txt`),/^100755 /u)
 })
 
-test("tracked symbolic payloads retain link text rather than adopting referent bytes",async t => {
+test("symbolic payload admission honors real Git observations, not a syscall-only link",async t => {
   const f = await archiveFixture({mode:"120000"})
   if (process.platform === "win32") {
     const lstat = fs.lstat
@@ -589,6 +597,12 @@ test("tracked symbolic payloads retain link text rather than adopting referent b
       assert.ok([f.file,path.join(f.destination,"companion.txt")].includes(file))
       return "peer.txt"
     })
+    assert.equal(git(f.root,"diff","--name-only","--",sourceRelative),`${sourceRelative}/companion.txt`)
+    await assert.rejects(prepare(f),/dirty, staged, or untracked companion bytes/u)
+    assert.equal(git(f.root,"rev-parse","HEAD"),f.head)
+    assert.equal(git(f.root,"ls-files","-s"),f.index)
+    await assert.rejects(fs.lstat(f.destination),{code:"ENOENT"})
+    return
   } else {
     await fs.rename(f.file,path.join(f.root,"retained-plain-companion"))
     await fs.symlink("peer.txt",f.file)
@@ -596,14 +610,9 @@ test("tracked symbolic payloads retain link text rather than adopting referent b
   const state = await prepare(f)
   await move(f,state)
   const result = await state.publish("archive")
-  if (process.platform === "win32") {
-    assert.equal(result?.status,"failed","a syscall-only link cell cannot claim native Git observed a real link")
-    assert.equal(git(f.root,"rev-parse","HEAD"),f.head)
-  } else {
-    assert.equal(result,undefined)
-    assert.equal(await fs.readlink(path.join(f.destination,"companion.txt")),"peer.txt")
-    assert.match(git(f.root,"ls-tree","HEAD",`${archiveRelative}/companion.txt`),/^120000 /u)
-  }
+  assert.equal(result,undefined)
+  assert.equal(await fs.readlink(path.join(f.destination,"companion.txt")),"peer.txt")
+  assert.match(git(f.root,"ls-tree","HEAD",`${archiveRelative}/companion.txt`),/^120000 /u)
 })
 
 test("a card referent outside the moved directory is not inserted as a new snapshot key",async t => {
