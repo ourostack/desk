@@ -1,0 +1,1 @@
+Archive admission now checks file size as well as identity and timestamps around each payload read. A size-changing write cannot pass that read fence merely because filesystem timestamps have not advanced; the outside edit remains intact and no relocation is admitted.

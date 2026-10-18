@@ -79,7 +79,8 @@ async function tree(directory) {
     entry.bytes = before.isSymbolicLink() ? Buffer.from(await fs.readlink(file)) : await fs.readFile(file)
     entry.hash = hash(entry.bytes)
     const after = await fs.lstat(file, { bigint: true })
-    if (identity(after) !== entry.identity || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+    if (identity(after) !== entry.identity || before.size !== after.size ||
+        before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
       throw new Error("task_archive: source changed while its bytes were being admitted")
     result.set(key, entry)
   }

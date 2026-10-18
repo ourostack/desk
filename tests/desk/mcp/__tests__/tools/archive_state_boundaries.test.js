@@ -193,9 +193,15 @@ test("unsupported filesystem companion types are explicitly refused",async t => 
   await assert.rejects(prepare(f),/unsupported companion type/u)
 })
 
-test("a payload write during the admission read is not accepted",async t => {
-  const f = await plainFixture(), file = path.join(f.source,"task.md"), readFile = fs.readFile
+test("a payload write during admission is refused even when filesystem timestamps have not advanced",async t => {
+  const f = await plainFixture(), file = path.join(f.source,"task.md"), readFile = fs.readFile, lstat = fs.lstat
+  const admitted = await lstat(file,{bigint:true})
   let injected = false
+  t.mock.method(fs,"lstat",async (target,...args) => {
+    const stat = await lstat(target,...args)
+    return target === file
+      ? Object.assign(Object.create(stat),{mtimeNs:admitted.mtimeNs,ctimeNs:admitted.ctimeNs}) : stat
+  })
   t.mock.method(fs,"readFile",async (target,...args) => {
     const bytes = await readFile(target,...args)
     if (target === file && !injected) {
@@ -206,6 +212,7 @@ test("a payload write during the admission read is not accepted",async t => {
   })
   await assert.rejects(prepare(f),/source changed while its bytes/u)
   assert.equal(injected,true)
+  assert.ok((await lstat(file,{bigint:true})).size > admitted.size)
   assert.match(await readFile(file,"utf8"),/OUTSIDE_DURING_READ/u)
 })
 
