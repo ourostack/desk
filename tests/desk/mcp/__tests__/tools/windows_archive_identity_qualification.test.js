@@ -10,6 +10,8 @@ import { createHash, randomBytes } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { prepareArchiveState } from "../../../../../plugins/desk/mcp/src/tools/archive-state.js"
+import { moveArchive } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
+import { nativeMoveObserver } from "./archive_handoff_qualification_child.mjs"
 import { observeIdentity, decodeFileIdInfo, identityArtifactPath } from "./_windows_archive_identity.mjs"
 
 const source = "C:\\owned\\PRIVATE_SOURCE"
@@ -180,17 +182,35 @@ foreach ($key in @('ctor', 'fields')) {
 }
 Library-Stage 'contexts'
 $name = New-Object Reflection.AssemblyName('DeskMetadataLibraryControl')
-$legacy = [AppDomain]::CurrentDomain.GetType().GetMethod('DefineDynamicAssembly',
-  [type[]]@([Reflection.AssemblyName], [Reflection.Emit.AssemblyBuilderAccess]))
-if ($null -ne $legacy) {
-  $assembly = $legacy.Invoke([AppDomain]::CurrentDomain, @($name, [Reflection.Emit.AssemblyBuilderAccess]::Run))
-  $route = 'AppDomain_DefineDynamicAssembly_Framework_metadata_only'
-} else {
-  $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
-  $route = 'AssemblyBuilder_DefineDynamicAssembly_Core_metadata_only'
+$route = 'unselected'
+$factoryStage = 'select_factory'
+try {
+  if ($PSVersionTable.PSEdition -ceq 'Desktop' -and [Environment]::Version.Major -eq 4) {
+    $route = 'AppDomain_DefineDynamicAssembly_Framework_metadata_only'
+    $factoryStage = 'construct_framework_assembly'
+    $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+  } elseif ($PSVersionTable.PSEdition -ceq 'Core' -and [Environment]::Version.Major -ge 6) {
+    $route = 'AssemblyBuilder_DefineDynamicAssembly_Core_metadata_only'
+    $factoryStage = 'construct_core_assembly'
+    $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+  } else { throw 'unknown_metadata_library_host' }
+  $factoryStage = 'construct_module'
+  $module = $assembly.DefineDynamicModule('InMemory')
+  $factoryStage = 'construct_type'
+  $builder = $module.DefineType('DeskCapturedMetadata', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
+} catch {
+  $failure = $_.Exception.GetBaseException()
+  $exception = $failure.GetType().FullName
+  if (@('System.ArgumentException', 'System.InvalidOperationException', 'System.MissingMethodException',
+    'System.Reflection.AmbiguousMatchException', 'System.Management.Automation.RuntimeException',
+    'System.Management.Automation.MethodException', 'System.Management.Automation.MethodInvocationException') -notcontains $exception) {
+    $exception = 'other'
+  }
+  [Console]::WriteLine('LIBRARY_FACTORY_FAILURE:' + (@{ stage = $factoryStage; route = $route
+    edition = [string]$PSVersionTable.PSEdition; runtime = [Environment]::Version.ToString()
+    exception = $exception; hresult = $failure.HResult } | ConvertTo-Json -Compress))
+  exit 4
 }
-$module = $assembly.DefineDynamicModule('InMemory')
-$builder = $module.DefineType('DeskCapturedMetadata', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
 Library-Stage 'assembly'
 $specifications = @(
   @{ name = 'CreateFileW'; returns = [IntPtr]; parameters = [type[]]@([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr]) },
@@ -236,7 +256,7 @@ foreach ($specification in $specifications) {
 Library-Stage 'done'
 [Console]::WriteLine((@{ scope = 'managed_metadata_library_only_not_file_API_or_Windows_ABI'
   runtime = [Environment]::Version.ToString(); powershell = $PSVersionTable.PSVersion.ToString()
-  assemblyRoute = $route; methods = $rows } | ConvertTo-Json -Depth 5 -Compress))
+  edition = [string]$PSVersionTable.PSEdition; assemblyRoute = $route; methods = $rows } | ConvertTo-Json -Depth 5 -Compress))
 `
   const observed = spawnSync(parser, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
     input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: 5000,
@@ -245,14 +265,22 @@ Library-Stage 'done'
     t.skip("PowerShell metadata library unavailable on this non-Windows host; Windows ABI remains unqualified")
     return
   }
-  if (observed.status !== 0) t.diagnostic(JSON.stringify({ metadataLibraryStages: String(observed.stdout).split(/\r?\n/u)
-    .filter(line => /^LIBRARY_STAGE:(?:read|parse|contexts|assembly|emit_(?:CreateFileW|GetFileInformationByHandleEx|GetVolumeInformationByHandleW|CloseHandle)|create_type|reflect|done)$/u.test(line)) }))
+  if (observed.status !== 0) {
+    const lines = String(observed.stdout).split(/\r?\n/u)
+    const factoryLine = lines.find(line => line.startsWith("LIBRARY_FACTORY_FAILURE:"))
+    const factory = factoryLine ? JSON.parse(factoryLine.slice("LIBRARY_FACTORY_FAILURE:".length)) : null
+    t.diagnostic(JSON.stringify({ metadataLibraryStages: lines
+      .filter(line => /^LIBRARY_STAGE:(?:read|parse|contexts|assembly|emit_(?:CreateFileW|GetFileInformationByHandleEx|GetVolumeInformationByHandleW|CloseHandle)|create_type|reflect|done)$/u.test(line)),
+    factoryFailure: factory }))
+  }
   assert.equal(observed.status, 0, observed.error?.code ?? "captured emitter metadata-only characterization failed")
   const report = JSON.parse(observed.stdout.trim().split(/\r?\n/u).at(-1))
-  t.diagnostic(JSON.stringify({ scope: report.scope, runtime: report.runtime, powershell: report.powershell, assemblyRoute: report.assemblyRoute }))
+  t.diagnostic(JSON.stringify({ scope: report.scope, runtime: report.runtime, powershell: report.powershell,
+    edition: report.edition, assemblyRoute: report.assemblyRoute }))
   assert.equal(report.scope, "managed_metadata_library_only_not_file_API_or_Windows_ABI")
   assert.ok(["AppDomain_DefineDynamicAssembly_Framework_metadata_only",
     "AssemblyBuilder_DefineDynamicAssembly_Core_metadata_only"].includes(report.assemblyRoute))
+  assert.equal(report.edition, process.platform === "win32" ? "Desktop" : "Core")
   assert.deepEqual(report.methods, nativeMethodNames.map(method => ({ method, signatureMatches: true,
     publicStatic: true, managedCallingConventionStandard: true, pinvokeImplementation: true,
     importMatches: true, entryPointMatches: true, setLastError: true, exactSpelling: true,
@@ -711,6 +739,152 @@ test("synthetic: unsupported current full identity is retained and refused witho
   })
 })
 
+test("synthetic: rename discriminator records one Node call and a closed refusal without private errors", async () => {
+  const record = { requestedRoute: "node_fs_rename" }
+  let calls = 0
+  await observeRenameAttempt(source, "C:\\owned\\destination", record, {
+    rename: async () => {
+      calls++
+      throw Object.assign(new Error("PRIVATE_RENAME_PATH"), { code: "EPERM", syscall: "rename", errno: -4048 })
+    },
+  })
+  assert.equal(calls, 1)
+  assert.deepEqual(record.renameAttempt, { requestedRoute: "node_fs_rename", actualInvocation: "node_fs_rename",
+    outcome: "refused", error: { code: "EPERM", syscall: "rename", errno: -4048 }, nativeMove: null })
+  assert.equal(JSON.stringify(record).includes("PRIVATE_RENAME_PATH"), false)
+})
+
+test("synthetic: rename discriminator preserves unknown Node failures instead of reporting an observed refusal", async () => {
+  const record = { requestedRoute: "node_fs_rename" }
+  const primary = Object.assign(new Error("PRIVATE_RENAME_PATH"), { code: "PRIVATE_CODE", syscall: "PRIVATE_SYSCALL" })
+  await assert.rejects(observeRenameAttempt(source, "C:\\owned\\destination", record, {
+    rename: async () => { throw primary },
+  }), error => error === primary)
+  assert.equal(record.renameAttempt.outcome, "unqualified")
+  assert.deepEqual(record.renameAttempt.error, { code: "unavailable", syscall: null, errno: null })
+  assert.equal(JSON.stringify(record).includes("PRIVATE_"), false)
+})
+
+test("synthetic: rename discriminator does not relabel an unretired native operation as a refusal", async () => {
+  const record = { requestedRoute: "native_Directory_Move" }
+  const primary = new Error("PRIVATE_NATIVE_ERROR")
+  const observation = {
+    receipt: { spawnReached: true, executableMatches: true, programHash: "a".repeat(64), childPid: 42,
+      ready: { valid: true, pidMatchesChild: true }, ack: { valid: true, moved: false }, events: [],
+      protocolIssues: [], droppedEvents: 0, exit: null, close: null },
+    before: async () => {}, after: async () => {}, returned() {}, threw() {},
+  }
+  await assert.rejects(observeRenameAttempt(source, "C:\\owned\\destination", record, {
+    nativeMove: async () => { throw primary }, makeObserver: () => observation,
+  }), error => error === primary)
+  assert.equal(record.renameAttempt.outcome, "unqualified")
+  assert.equal(record.renameAttempt.nativeMove.close, null)
+  assert.equal(JSON.stringify(record).includes("PRIVATE_"), false)
+})
+
+for (const moved of [false, true]) {
+  test(`synthetic: rename discriminator retains a fully closed native ${moved ? "move" : "refusal"} without fallback`, async () => {
+    const record = { requestedRoute: "native_Directory_Move" }
+    const state = { released: true, closed: true, forced: false, retirement: "confirmed",
+      movement: moved ? "confirmed" : "refused" }
+    const primary = new Error("PRIVATE_NATIVE_REFUSAL")
+    const receipt = { spawnReached: true, executableMatches: true, programHash: "a".repeat(64), childPid: 42,
+      ready: { valid: true, pidMatchesChild: true }, ack: { valid: true, moved },
+      events: [{ type: "native-request-attempted", sourceMatches: true, destinationMatches: true },
+        { type: "native-release-attempted", literalMatches: true }],
+      protocolIssues: [], missingNativeStages: [], droppedEvents: 0,
+      exit: { code: moved ? 0 : 3, signal: null }, close: { code: moved ? 0 : 3, signal: null } }
+    let calls = 0, before = 0, after = 0
+    const observer = { receipt, before: async () => { before++ }, after: async () => { after++ },
+      returned: () => { receipt.helper = { state } }, threw: () => { receipt.helper = { state } } }
+    await observeRenameAttempt(source, "C:\\owned\\destination", record, {
+      makeObserver: () => observer,
+      rename: () => assert.fail("native comparison fell back to Node"),
+      nativeMove: async (src, dst, atUse) => {
+        calls++
+        assert.equal(src, source)
+        assert.equal(dst, "C:\\owned\\destination")
+        await atUse()
+        if (!moved) throw primary
+        return state
+      },
+    })
+    assert.equal(calls, 1)
+    assert.equal(before, 1)
+    assert.equal(after, 1)
+    assert.equal(record.renameAttempt.outcome, moved ? "moved" : "refused")
+    assert.equal(record.renameAttempt.actualInvocation, "native_Directory_Move")
+    assert.equal(record.renameAttempt.nativeMove.helper.state.retirement, "confirmed")
+    assert.equal(JSON.stringify(record).includes("PRIVATE_"), false)
+  })
+}
+
+test("synthetic: rename discriminator keeps its first operation error when observation cleanup also fails", async () => {
+  const record = { requestedRoute: "native_Directory_Move" }
+  const primary = new Error("PRIVATE_PRIMARY")
+  const cleanup = new Error("PRIVATE_CLEANUP")
+  const observer = { receipt: {}, before: async () => {}, after: async () => { throw cleanup }, threw() {} }
+  await assert.rejects(observeRenameAttempt(source, "C:\\owned\\destination", record, {
+    makeObserver: () => observer, nativeMove: async () => { throw primary },
+  }), error => error === primary)
+  assert.equal(record.renameAttempt.outcome, "unqualified")
+  assert.equal(record.renameAttempt.observationFailure, true)
+  assert.equal(JSON.stringify(record).includes("PRIVATE_"), false)
+})
+
+const renameCodes = new Set(["ENOENT", "EPERM", "EACCES", "EBUSY", "EEXIST", "ENOTEMPTY", "ENOTDIR", "EXDEV"])
+async function observeRenameAttempt(source, destination, record, {
+  rename = fs.rename, nativeMove = moveArchive, makeObserver = nativeMoveObserver,
+} = {}) {
+  const attempt = record.renameAttempt = { requestedRoute: record.requestedRoute, actualInvocation: null,
+    outcome: "unqualified", error: null, nativeMove: null }
+  if (record.requestedRoute === "node_fs_rename") {
+    attempt.actualInvocation = "node_fs_rename"
+    try {
+      await rename(source, destination)
+      attempt.outcome = "moved"
+    } catch (error) {
+      attempt.error = { code: renameCodes.has(error.code) ? error.code : "unavailable",
+        syscall: error.syscall === "rename" ? "rename" : null,
+        errno: Number.isInteger(error.errno) && error.errno >= -2147483648 && error.errno <= 2147483647 ? error.errno : null }
+      if (!renameCodes.has(error.code)) throw error
+      attempt.outcome = "refused"
+    }
+    return
+  }
+  assert.equal(record.requestedRoute, "native_Directory_Move")
+  const observer = makeObserver({ source, destination, fixture: { src: source, dst: destination } })
+  let failure, observationFailure
+  try {
+    const state = await nativeMove(source, destination, async () => {
+      await observer.before()
+      attempt.actualInvocation = "native_Directory_Move"
+    }, { spawn: observer.spawn })
+    observer.returned(state)
+  } catch (error) { failure = error; observer.threw(error) }
+  finally {
+    try { await observer.after() } catch (error) {
+      observationFailure = true
+      failure ??= error
+    }
+    attempt.nativeMove = Object.fromEntries(["spawnReached", "executableMatches", "programHash", "childPid", "ready", "ack",
+      "exit", "close", "helper", "events", "protocolIssues", "droppedEvents", "missingNativeStages"]
+      .map(key => [key, observer.receipt[key] ?? null]))
+    if (observationFailure) attempt.observationFailure = true
+  }
+  const r = attempt.nativeMove, state = r.helper?.state, moved = r.ack?.moved
+  const qualified = !observationFailure && r.spawnReached && r.executableMatches && r.ready?.valid &&
+    r.ready.pidMatchesChild && r.ack?.valid && r.protocolIssues?.length === 0 && r.droppedEvents === 0 &&
+    r.missingNativeStages?.length === 0 && r.events.some(event => event.type === "native-request-attempted" &&
+      event.sourceMatches && event.destinationMatches) &&
+    r.events.some(event => event.type === "native-release-attempted" && event.literalMatches) &&
+    r.exit?.code === (moved ? 0 : 3) && r.exit.signal === null &&
+    r.close?.code === r.exit.code && r.close.signal === null && state?.closed && !state.forced &&
+    state.retirement === "confirmed" && state.movement === (moved ? "confirmed" : "refused")
+  if (!qualified || moved !== !failure) throw failure ?? new Error("Native rename discriminator receipt unqualified")
+  attempt.outcome = moved ? "moved" : "refused"
+}
+
 const actual = []
 async function persistActual() {
   if (actual.length === 0) return
@@ -724,7 +898,7 @@ async function persistActual() {
 }
 after(persistActual)
 
-async function fixture(record, { rootAlias = false } = {}) {
+async function fixture(record, { rootAlias = false, nodeReference = true } = {}) {
   record.fixtureStage = "runtime_check"
   assert.equal(process.versions.node, "24.18.0", "finite source-contract fixture requires Node 24.18.0")
   record.fixtureStage = "temp_root"
@@ -757,8 +931,9 @@ async function fixture(record, { rootAlias = false } = {}) {
   record.fixtureStage = "source_lstat"
   const node = await fs.lstat(src, { bigint: true })
   record.fixtureStage = "reference_open"
-  const reference = await fs.open(path.join(src, "task.md"), "r")
+  const reference = nodeReference ? await fs.open(path.join(src, "task.md"), "r") : null
   const referenceMatches = async () => {
+    assert.ok(reference, "independent marker reference was not requested")
     const buffer = Buffer.alloc(32)
     const result = await reference.read(buffer, 0, buffer.length, 0)
     return result.bytesRead === 32 && buffer.equals(marker)
@@ -769,6 +944,7 @@ async function fixture(record, { rootAlias = false } = {}) {
 function actualCell(name, body, options = {}) {
   test(`actual Windows: ${name}`, { skip: process.platform !== "win32", timeout: 20000 }, async () => {
     const record = { name, platform: process.platform, node: process.versions.node,
+      caseKind: options.diagnostic ? "rename_handle_route_discriminator" : "identity_relationship_acceptance",
       replacementPhaseBegunAtBaseline: false, receipt: null,
       fixtureFacts: { nodeReferenceAcquired: false, nodeReferenceClosed: null },
       casePersistenceAttempted: false, casePersistenceCompleted: false, outcome: "incomplete" }
@@ -776,7 +952,7 @@ function actualCell(name, body, options = {}) {
     let f, failure
     try {
       f = await fixture(record, options)
-      record.fixtureFacts.nodeReferenceAcquired = true
+      record.fixtureFacts.nodeReferenceAcquired = f.reference !== null
       await body(f, record)
     } catch (error) {
       record.receipt ??= error.identityReceipt ?? null
@@ -786,7 +962,7 @@ function actualCell(name, body, options = {}) {
       record.errorCode = ["ENOENT", "EPERM", "EACCES", "ERR_ASSERTION", "IDENTITY_OBSERVATION"].includes(error.code) ? error.code : "unavailable"
       failure = new Error(`Identity observation fixture failed (${record.errorCode}); partial safe receipt retained`)
     } finally {
-      if (f) {
+      if (f?.reference) {
         try {
           record.fixtureStage = "reference_close"
           await f.reference.close()
@@ -914,3 +1090,68 @@ actualCell("final-component reparse is observed without following it to its targ
     assert.equal(record.fixtureFacts.originalReferenceMatchesMarker, true)
   })
 })
+
+for (const nodeReference of [false, true]) for (const nativeBaseline of [false, true]) {
+  for (const route of ["node_fs_rename", "native_Directory_Move"]) {
+    actualCell(`diagnostic only: marker=${nodeReference}, baseline=${nativeBaseline}, route=${route}`, async (f, record) => {
+      record.requestedRoute = route
+      record.diagnosticFactors = { nodeMarkerReferenceHeld: nodeReference, nativeMetadataBaselineHeld: nativeBaseline }
+      record.causalConclusion = "not_established"
+      const moved = path.join(f.root, "renamed-original")
+      const present = async file => {
+        try { return (await fs.lstat(file)).isDirectory() }
+        catch (error) { if (error.code === "ENOENT") return false; throw error }
+      }
+      const work = async session => {
+        record.fixtureStage = "diagnostic_admission"
+        await f.prepared.atUse()
+        record.fixtureFacts.realSnapshotRecheckedBeforeObservation = true
+        record.fixtureFacts.payloadBeforeMatchesMarker = (await fs.readFile(path.join(f.src, "task.md"))).equals(f.marker)
+        assert.equal(record.fixtureFacts.payloadBeforeMatchesMarker, true)
+        if (nodeReference) {
+          record.fixtureFacts.originalReferenceMatchesMarker = await f.referenceMatches()
+          assert.equal(record.fixtureFacts.originalReferenceMatchesMarker, true)
+        }
+        record.fixtureStage = "diagnostic_rename_attempt"
+        await observeRenameAttempt(f.src, moved, record)
+        record.fixtureStage = "diagnostic_placement"
+        record.placement = { sourcePresent: await present(f.src), destinationPresent: await present(moved) }
+        const renamed = record.renameAttempt.outcome === "moved"
+        assert.deepEqual(record.placement, { sourcePresent: !renamed, destinationPresent: renamed })
+        const location = renamed ? moved : f.src
+        record.fixtureFacts.payloadAfterMatchesMarker = (await fs.readFile(path.join(location, "task.md"))).equals(f.marker)
+        assert.equal(record.fixtureFacts.payloadAfterMatchesMarker, true)
+        if (nodeReference) {
+          record.fixtureFacts.originalReferenceSurvivesAttempt = await f.referenceMatches()
+          assert.equal(record.fixtureFacts.originalReferenceSurvivesAttempt, true)
+        }
+        if (session) {
+          record.fixtureStage = "diagnostic_current_identity"
+          const sample = await session.observe(location, renamed ? "new_name" : "baseline_current",
+            await fs.lstat(location, { bigint: true }), f.admission)
+          assert.equal(sample.sameAsBaseline, true)
+          assert.equal(sample.reparse, false)
+        }
+      }
+      if (!nativeBaseline) {
+        record.nativeBaseline = "not_requested"
+        await work(null)
+        return
+      }
+      let phase, failure
+      try {
+        record.fixtureStage = "diagnostic_native_baseline"
+        record.receipt = await observeIdentity({ source: f.src, nodeBaseline: f.node, admittedIdentity: f.admission },
+          session => { phase = work(session); return phase })
+      } catch (error) { record.receipt = error.identityReceipt ?? null; failure = error }
+      finally {
+        // A timed-out observation does not cancel its callback. Drain the bounded
+        // route before closing the marker reference or persisting this failed cell.
+        if (phase) {
+          try { await phase } catch (error) { failure ??= error }
+        }
+      }
+      if (failure) throw failure
+    }, { nodeReference, diagnostic: true })
+  }
+}
