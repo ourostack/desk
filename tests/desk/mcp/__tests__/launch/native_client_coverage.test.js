@@ -401,7 +401,7 @@ for (const fault of ["request-error", "response-error", "aborted", "oversized", 
 }
 
 function attestation(t, options = {}) {
-  const disk = privateFs(), exchanges = [], http = transport(({ payload, send }) => {
+  const disk = privateFs(), exchanges = [], readonlyCalls = [], http = transport(({ payload, send }) => {
     exchanges.push(payload);
     if (options.respond) return options.respond({ payload, send, disk });
     const r = disk.state.value;
@@ -411,13 +411,19 @@ function attestation(t, options = {}) {
   });
   const loaded = load({ fs: disk.io, http: http.io, child_process: {
     execFileSync(command) {
-      if (command === "/bin/ls") return "owned regular node";
-      assert.match(command, /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/);
-      return "private";
+      assert.equal(command, "/bin/ls");
+      return "owned regular node";
+    },
+  }, "./web-native-private-path.cjs": {
+    verify(entries, root) {
+      assert.ok(path.win32.isAbsolute(root));
+      assert.deepEqual(json(entries), [{ file: "/owned/state", directory: true },
+        { file: "/owned/state/ready.json", directory: false }]);
+      readonlyCalls.push(json(entries));
     },
   } }, options.nativeContext);
   t.after(() => { assert.equal(disk.state.open.size, 0); assert.equal(loaded.timers.size, 0); });
-  return { ...loaded, disk, http, exchanges, dependencies: { readAncestry: async () => json(disk.state.value.chain) } };
+  return { ...loaded, disk, http, exchanges, readonlyCalls, dependencies: { readAncestry: async () => json(disk.state.value.chain) } };
 }
 
 test("attested client freezes caller selection, fences every operation and uses update tickets only after a valid prepare", async t => {
@@ -524,5 +530,7 @@ test("default ancestry uses its fixed module and rejects an invalid PID before p
   f.disk.state.value.chain[0].pid = 0;
   await assert.rejects(f.client.attestNativeContext(record(), selection()),
     error => ["NATIVE_ATTESTATION_UNAVAILABLE", "NATIVE_ANCESTRY_INVALID"].includes(error.code));
+  assert.equal(f.readonlyCalls.length, process.platform === "win32" ? 1 : 0,
+    "the native-context control uses the same in-memory private filesystem, not actual NTFS paths");
   assert.equal(f.exchanges.length, 0);
 });
