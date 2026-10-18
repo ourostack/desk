@@ -32,7 +32,7 @@ for (const cell of ['empty-required', 'other-measured', 'selected-initialized', 
     const staged = path.join(root, 'desk-native-relay.cjs');
     fs.copyFileSync(path.join(repo, canonical), staged);
     const child = spawnSync(process.execPath, [bin, '--cwd', repo, '--nycrc-path', configFile,
-      process.execPath, '--import', fileURLToPath(new URL('../_isolated_env.mjs', import.meta.url)),
+      process.execPath, '--import', new URL('../_isolated_env.mjs', import.meta.url).href,
       scenario, cell, staged],
     // NYC's maintained wrap.js explicitly supports this nested-run override.
     // Retain every inherited preload; only this owned child's actual NYC

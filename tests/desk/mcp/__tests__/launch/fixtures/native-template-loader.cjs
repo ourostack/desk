@@ -18,6 +18,9 @@ const names = {
   "web-native-relay.cjs": "web-native-relay.cjs",
   "web-native-error-transport.cjs": "web-native-error-transport.cjs",
   "web-playwright-patch.cjs": "web-playwright-patch.cjs",
+  "web.cjs": "web.cjs",
+  "browser-context.cjs": "browser-context.cjs",
+  "browser-context-common.cjs": "browser-context-common.cjs",
 };
 
 function loadTemplate(runtimeFile, context) {
