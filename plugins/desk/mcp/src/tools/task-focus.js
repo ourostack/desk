@@ -15,14 +15,15 @@ import { EFFECTIVE_ROOT_MISSING, resolveWriteTarget, validateWriteSegment } from
 import { recentProgress } from "./task-body.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
+import { makeSessionLabelProposal } from "../runtime/session-label.js"
 
-export const TASK_FOCUS_FIELDS = ["track", "slug", "clear"]
+export const TASK_FOCUS_FIELDS = ["track", "slug", "clear", "display_label"]
 
 /** How many progress entries a focus answer carries, and the longest an entry may be (longer ones end in an ellipsis). */
 export const PROGRESS_ENTRIES = 5
 export const PROGRESS_ENTRY_CHARS = 300
 
-const ACCEPTED = "pass `track` and `slug` to focus a task, or `clear: true` to declare no task (not both, and nothing else)"
+const ACCEPTED = "pass `track` and `slug` to focus a task, or `clear: true` alone to declare no task; `display_label` is optional only with a task"
 
 export const NO_FOCUS_HINT = "If you are the session's main agent: no task in focus; call task_focus with the task you are working on, or with clear: true for none."
 export const focusedHint = ({ track, slug }) => `If you are the session's main agent: focused on ${track}/${slug}; call task_focus if you have switched tasks, or with clear: true for none.`
@@ -70,10 +71,11 @@ export async function findCard({ deskRoot, person, track, slug }) {
  */
 export async function taskFocus({ deskRoot, input, person = null, statusContext = {} }) {
   const values = input ?? {}
-  const { track, slug, clear } = values
+  const { track, slug, clear, display_label: displayLabel } = values
   const named = track !== undefined || slug !== undefined
   if (clear !== undefined && clear !== true) throw new Error(`task_focus: \`clear\` can only be true; ${ACCEPTED}`)
   if (clear === true && named) throw new Error(`task_focus: \`clear\` cannot be combined with \`track\` or \`slug\`; ${ACCEPTED}`)
+  if (clear === true && displayLabel !== undefined) throw new Error(`task_focus: \`clear\` cannot be combined with \`display_label\`; ${ACCEPTED}`)
   if (clear === true) {
     statusContext.focus?.set(null)
     return { status: "cleared" }
@@ -96,6 +98,7 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   }
   if (card.data.planning_complete === true) result.planning_complete = true
   if (found.archived) result.archived = true
+  result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel })
   return result
 }
 
