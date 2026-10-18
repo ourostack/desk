@@ -270,6 +270,32 @@ async function fixture(t, options = {}) {
     client: require(fileURLToPath(new URL('web-native-messaging.cjs', rootUrl))) };
 }
 
+test('inventory descriptor preserves both private batches on their own side of the marker read', { skip: !actualCli }, async t => {
+  const f = await fixture(t);
+  const owner = await f.owner(A);
+  const events = [], batch = f.client.privatePaths, read = f.client.readPrivateJson;
+  t.mock.method(f.client, 'privatePaths', function (entries) {
+    events.push({ batch: entries });
+    return batch(entries);
+  });
+  t.mock.method(f.client, 'readPrivateJson', function (file, options) {
+    events.push({ read: file });
+    return read(file, options);
+  });
+  assert.deepEqual(f.inventory.descriptor(A).record, owner.record);
+  const first = { batch: [f.config.browserStateRoot, path.dirname(owner.directory), owner.directory]
+    .map(file => ({ file, directory: true })) };
+  const marker = { read: path.join(owner.directory, '.desk-context-owner') };
+  assert.deepEqual(events, [first, marker, {
+    batch: ['.playwright', 'home', 'config', 'cache', 'data', 'state', 'runtime', 'local', 'roaming']
+      .map(name => ({ file: path.join(owner.directory, name), directory: true })),
+  }, { read: path.join(owner.directory, 'config/browser.json') }]);
+  await put(marker.read, { contextId: B, directory: owner.directory });
+  events.length = 0;
+  assert.throws(() => f.inventory.descriptor(A), { code: 'NATIVE_OWNER_INVALID' });
+  assert.deepEqual(events, [first, marker], 'invalid owner marker cannot authorize the later batch');
+});
+
 for (const intervening of ['recreate', 'unavailable']) {
   // Break caught: an old discard receipt must not overwrite newer effects or
   // a later unavailable event while its final attestation is suspended.

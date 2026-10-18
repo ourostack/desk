@@ -75,21 +75,48 @@ function privatePath(file, directory, strict) {
       if (/^\s*\d+:/m.test(acl)) throw failure("NATIVE_PRIVATE_PATH_INVALID");
     }
     if (process.platform === "win32" && strict !== false) {
-      var root = process.env.SystemRoot || process.env.SYSTEMROOT || process.env.windir || process.env.WINDIR;
-      if (!root || !path.win32.isAbsolute(root)) throw failure("NATIVE_PRIVATE_PATH_INVALID");
-      var script = "$ErrorActionPreference='Stop';$p=[Console]::In.ReadToEnd()|ConvertFrom-Json;" +
-        "$i=Get-Item -LiteralPath $p -Force;$s=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;" +
-        "if($i.Attributes -band [IO.FileAttributes]::ReparsePoint){exit 2};" +
-        "$a=$i.GetAccessControl('Access,Owner');if($a.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $s -or -not $a.AreAccessRulesProtected){exit 2};" +
-        "$r=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]));" +
-        "if($r.Count -ne 1 -or $r[0].IdentityReference -ne $s -or $r[0].AccessControlType -ne 'Allow' -or " +
-        "($r[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl){exit 2};[Console]::Out.Write('private')";
-      var out = require("child_process").execFileSync(path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-        ["-NoProfile", "-NonInteractive", "-Command", script],
-        { input: JSON.stringify(file), encoding: "utf8", timeout: 5000, maxBuffer: 16384, windowsHide: true });
-      if (out !== "private") throw failure("NATIVE_PRIVATE_PATH_INVALID");
+      privatePaths([{ file: file, directory: !!directory }]);
     }
     return stat;
+  } catch (error) {
+    if (error.code === "ENOENT") throw error;
+    throw failure("NATIVE_PRIVATE_PATH_INVALID");
+  }
+}
+function privatePaths(entries) {
+  try {
+    if (!Array.isArray(entries) || entries.some(function (entry) {
+      return !object(entry) || !text(entry.file) || !entry.file || typeof entry.directory !== "boolean";
+    })) throw failure("NATIVE_PRIVATE_PATH_INVALID");
+    if (process.platform !== "win32") return entries.map(function (entry) { return privatePath(entry.file, entry.directory); });
+    if (!entries.length) return [];
+    var root = process.env.SystemRoot || process.env.SYSTEMROOT || process.env.windir || process.env.WINDIR;
+    if (!root || !path.win32.isAbsolute(root)) throw failure("NATIVE_PRIVATE_PATH_INVALID");
+    function metadata(entry) {
+      var stat = fs.lstatSync(entry.file, { bigint: true });
+      if (stat.isSymbolicLink() || (entry.directory ? !stat.isDirectory() : (!stat.isFile() || stat.nlink !== BigInt(1))) ||
+          (process.getuid && stat.uid !== BigInt(process.getuid()))) throw failure("NATIVE_PRIVATE_PATH_INVALID");
+      return stat;
+    }
+    var before = entries.map(metadata);
+    var script = "$ErrorActionPreference='Stop';$entries=[Console]::In.ReadToEnd()|ConvertFrom-Json;" +
+      "$s=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;foreach($e in @($entries)){" +
+      "$i=Get-Item -LiteralPath $e.file -Force;" +
+      "if($i.PSIsContainer -ne $e.directory -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)){exit 2};" +
+      "$a=$i.GetAccessControl('Access,Owner');if($a.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $s -or -not $a.AreAccessRulesProtected){exit 2};" +
+      "$r=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]));" +
+      "if($r.Count -ne 1 -or $r[0].IdentityReference -ne $s -or $r[0].AccessControlType -ne 'Allow' -or " +
+      "($r[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl){exit 2}};[Console]::Out.Write('private')";
+    var out = require("child_process").execFileSync(path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { input: JSON.stringify(entries), encoding: "utf8", timeout: 5000, maxBuffer: 16384, windowsHide: true });
+    if (out !== "private") throw failure("NATIVE_PRIVATE_PATH_INVALID");
+    return entries.map(function (entry, index) {
+      var after = metadata(entry);
+      if (["dev", "ino", "size", "ctimeNs", "mtimeNs"].some(function (key) { return before[index][key] !== after[key]; }))
+        throw failure("NATIVE_PRIVATE_PATH_INVALID");
+      return after;
+    });
   } catch (error) {
     if (error.code === "ENOENT") throw error;
     throw failure("NATIVE_PRIVATE_PATH_INVALID");
@@ -113,6 +140,7 @@ function fileIdentity(file) {
 function readPrivateJson(file, options) {
   options = options || {};
   if (options.anchor) ownedTree(file, options.anchor);
+  else if (process.platform === "win32") privatePaths([{ file: path.dirname(file), directory: true }, { file: file, directory: false }]);
   else { privatePath(path.dirname(file), true); privatePath(file, false); }
   var before = fileIdentity(file), fd;
   try {
@@ -290,7 +318,7 @@ function attestNativeContext(record, selection, dependencies) {
   }).catch(function (error) { throw failure(safeCode(error.code, "NATIVE_ATTESTATION_UNAVAILABLE"), safeResources(error.resources)); });
 }
 module.exports = {
-  validateNativeRecord: validateNativeRecord, privatePath: privatePath, ownedTree: ownedTree,
+  validateNativeRecord: validateNativeRecord, privatePath: privatePath, privatePaths: privatePaths, ownedTree: ownedTree,
   readPrivateJson: readPrivateJson, fileIdentity: fileIdentity, endpointParts: endpointParts,
   safeCode: safeCode, safeResources: safeResources,
   providerRequest: providerRequest, attestNativeContext: attestNativeContext

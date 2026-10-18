@@ -701,7 +701,10 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
     require:name=>name==="child_process"?{...cp,execFileSync:(file,args,options)=>{
       assert.equal(file,path.win32.join(systemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"))
       assert.match(args.at(-1),/GetAccessControl/)
-      assert.ok(existsSync(JSON.parse(options.input)),"readonly ACL verification only observes owned paths")
+      for(const entry of JSON.parse(options.input)){
+        assert.ok(existsSync(entry.file),"readonly ACL verification only observes owned paths")
+        assert.equal(fs.lstatSync(entry.file).isDirectory(),entry.directory)
+      }
       return"private"
     }}:require(name.startsWith(".")?path.join(mcpRoot,name):name)})
   resources.native=nativeModule.exports

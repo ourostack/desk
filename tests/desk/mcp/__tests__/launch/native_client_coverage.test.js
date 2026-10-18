@@ -70,7 +70,8 @@ function privateFs(initial = ready()) {
       state.stats++;
       const directory = file !== "/owned/state/ready.json";
       const stat = { dev: 1n, ino: directory ? 1n : state.ino, size: BigInt(state.bytes?.length ?? Buffer.byteLength(JSON.stringify(state.value))),
-        uid: state.uid, mode: directory ? 0o700 : state.mode, nlink: state.nlink,
+        uid: options?.bigint ? BigInt(state.uid) : state.uid, mode: directory ? 0o700 : state.mode,
+        nlink: options?.bigint ? BigInt(state.nlink) : state.nlink, ctimeNs: 10n, mtimeNs: 20n,
         isDirectory: () => (directory || state.directory) && !state.symlink,
         isFile: () => !directory && !state.directory && !state.symlink,
         isSymbolicLink: () => state.symlink };
@@ -155,7 +156,7 @@ test("private path policies exercise actual macOS ACL and Windows SID command bo
           calls.push({ executable, args, options });
           if (platform === "win32") {
             assert.equal(executable, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-            assert.equal(JSON.parse(options.input), "/owned/state/ready.json");
+            assert.deepEqual(JSON.parse(options.input), [{ file: "/owned/state/ready.json", directory: false }]);
             assert.match(args.at(-1), /AreAccessRulesProtected/);
             assert.match(args.at(-1), /GetCurrent/);
             return "private";
@@ -184,6 +185,92 @@ test("private path policies exercise actual macOS ACL and Windows SID command bo
   const f = privateFs(), { client } = load({ fs: f.io, process: { getuid: undefined } });
   assert.doesNotThrow(() => client.privatePath("/owned", true));
   assert.throws(() => client.privatePath("/owned/state/ready.json", true), { code: "NATIVE_PRIVATE_PATH_INVALID" });
+});
+
+test("Windows private batch checks typed paths in one read-only policy operation before JSON opens", () => {
+  const f = privateFs(), events = [];
+  f.onStat((file, options) => { if (options?.bigint) events.push(["stat", file]); });
+  f.onOpen(() => events.push(["open"]));
+  const { client } = load({ fs: f.io, process: { platform: "win32", env: { SystemRoot: "C:\\Windows" } },
+    child_process: { execFileSync(executable, args, options) {
+      events.push(["policy", JSON.parse(options.input)]);
+      assert.equal(executable, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+      for (const policy of [/foreach/, /PSIsContainer/, /ReparsePoint/, /AreAccessRulesProtected/,
+        /GetCurrent/, /GetOwner/, /Count -ne 1/, /IdentityReference/, /AccessControlType/, /FullControl/])
+        assert.match(args.at(-1), policy);
+      assert.doesNotMatch(args.at(-1), /Set-Acl|SetAccessControl|ReadAllText|ReadAllBytes|Get-Content/);
+      return "private";
+    } } });
+  const entries = [{ file: "/owned/state", directory: true }, { file: "/owned/state/ready.json", directory: false }];
+  const stats = client.privatePaths(entries);
+  assert.equal(stats.length, 2);
+  assert.deepEqual(events, [["stat", entries[0].file], ["stat", entries[1].file], ["policy", entries],
+    ["stat", entries[0].file], ["stat", entries[1].file]]);
+  events.length = 0;
+  assert.equal(client.readPrivateJson(entries[1].file).version, 1);
+  assert.equal(events.filter(event => event[0] === "policy").length, 1);
+  assert.deepEqual(events.find(event => event[0] === "policy")[1], entries);
+  assert.ok(events.findIndex(event => event[0] === "open") > events.findIndex(event => event[0] === "policy"));
+  f.state.mode = 0o644;
+  assert.equal(typeof client.privatePath(entries[1].file, false).nlink, "number");
+  events.length = 0;
+  client.privatePath(entries[1].file, false, false);
+  assert.equal(events.some(event => event[0] === "policy"), false);
+});
+
+test("Windows private batch refuses every pre/post identity or metadata change and never caches policy", () => {
+  const entries = [{ file: "/owned/state", directory: true }, { file: "/owned/state/ready.json", directory: false }];
+  for (const file of entries.map(entry => entry.file)) {
+    for (const field of ["dev", "ino", "size", "ctimeNs", "mtimeNs"]) {
+      const f = privateFs();
+      let policyRan = false;
+      f.onStat((name, options, stat) => name === file && options?.bigint && policyRan
+        ? { ...stat, [field]: different(stat[field]) } : stat);
+      const { client } = load({ fs: f.io, process: { platform: "win32", env: { SystemRoot: "C:\\Windows" } },
+        child_process: { execFileSync() { policyRan = true; return "private"; } } });
+      assert.throws(() => client.privatePaths(entries), { code: "NATIVE_PRIVATE_PATH_INVALID" }, `${file}:${field}`);
+    }
+  }
+  for (const phase of ["before", "after"]) {
+    for (const mode of ["link", "kind", "nlink", "uid", "missing", "denied"]) {
+      const f = privateFs();
+      let policyRan = false;
+      f.onStat((name, options, stat) => {
+        if (!options?.bigint || (phase === "after") !== policyRan || name !== entries[1].file) return stat;
+        if (mode === "missing" || mode === "denied")
+          throw Object.assign(Error("private"), { code: mode === "missing" ? "ENOENT" : "EACCES" });
+        return { ...stat, ...(mode === "link" ? { isSymbolicLink: () => true } :
+          mode === "kind" ? { isFile: () => false } : mode === "nlink" ? { nlink: 2n } : { uid: stat.uid + 1n }) };
+      });
+      const { client } = load({ fs: f.io, process: { platform: "win32", env: { SystemRoot: "C:\\Windows" } },
+        child_process: { execFileSync() { policyRan = true; return "private"; } } });
+      assert.throws(() => client.privatePaths(entries),
+        { code: mode === "missing" ? "ENOENT" : "NATIVE_PRIVATE_PATH_INVALID" }, `${phase}:${mode}`);
+    }
+  }
+  const f = privateFs();
+  let calls = 0;
+  const { client } = load({ fs: f.io, process: { platform: "win32", getuid: undefined,
+    env: { SystemRoot: "C:\\Windows" } }, child_process: { execFileSync() { return ++calls === 1 ? "private" : "not private"; } } });
+  client.privatePaths(entries);
+  assert.throws(() => client.privatePaths(entries), { code: "NATIVE_PRIVATE_PATH_INVALID" });
+});
+
+test("private batch validates requests, preserves native errors and reuses non-Windows policies", () => {
+  const f = privateFs(), { client } = load({ fs: f.io });
+  for (const entries of [null, {}, [null], [{}], [{ file: 1, directory: true }],
+    [{ file: "", directory: false }], [{ file: "/owned", directory: 1 }]])
+    assert.throws(() => client.privatePaths(entries), { code: "NATIVE_PRIVATE_PATH_INVALID" });
+  assert.equal(client.privatePaths([]).length, 0);
+  assert.equal(client.privatePaths([{ file: "/owned", directory: true }]).length, 1);
+  for (const env of [{}, { SystemRoot: "relative" }]) {
+    const win = load({ fs: f.io, process: { platform: "win32", env } });
+    assert.throws(() => win.client.privatePaths([{ file: "/owned", directory: true }]), { code: "NATIVE_PRIVATE_PATH_INVALID" });
+  }
+  const win = load({ fs: f.io, process: { platform: "win32", env: { SystemRoot: "C:\\Windows" } },
+    child_process: { execFileSync() { throw Object.assign(Error("policy failed"), { code: "EACCES" }); } } });
+  assert.equal(win.client.privatePaths([]).length, 0);
+  assert.throws(() => win.client.privatePaths([{ file: "/owned", directory: true }]), { code: "NATIVE_PRIVATE_PATH_INVALID" });
 });
 
 test("private JSON requires a complete owned tree, bounded UTF8 object and stable open/name identities", () => {

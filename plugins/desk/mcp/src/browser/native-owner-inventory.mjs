@@ -52,13 +52,11 @@ export function createNativeOwnerInventory({ browserStateRoot, cliDir, binding, 
   }
   function descriptor(contextId) {
     const l = layout(contextId);
-    client.privatePath(browserStateRoot, true);
-    client.privatePath(signedIn, true);
-    client.privatePath(l.directory, true);
+    client.privatePaths([browserStateRoot, signedIn, l.directory].map(file => ({ file, directory: true })));
     const marker = client.readPrivateJson(path.join(l.directory, '.desk-context-owner'));
     if (!same(marker, l.marker)) throw new BrokerError('NATIVE_OWNER_INVALID', 'NATIVE_OWNER_INVALID');
-    for (const name of ['.playwright', 'home', 'config', 'cache', 'data', 'state', 'runtime', 'local', 'roaming'])
-      client.privatePath(path.join(l.directory, name), true);
+    client.privatePaths(['.playwright', 'home', 'config', 'cache', 'data', 'state', 'runtime', 'local', 'roaming']
+      .map(name => ({ file: path.join(l.directory, name), directory: true })));
     const config = client.readPrivateJson(path.join(l.directory, 'config', 'browser.json'));
     const record = client.validateNativeRecord(config.deskNativeContext);
     if (config.extension !== true || !config.browser || typeof config.browser !== 'object' || Array.isArray(config.browser) ||
