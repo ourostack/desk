@@ -37,21 +37,27 @@ func fixture(t *testing.T, source string) config {
 		t.Fatal(err)
 	}
 	qh, _ := json.Marshal(filepath.ToSlash(helper))
-	wrapper := `(async()=>{
+	wrapper := `let phase="load-start-reader";(async()=>{
 const {pathToFileURL}=require("node:url");
 const {readProcessStart}=await import(pathToFileURL(` + string(qh) + `));
+phase="read-start";
 const start=await readProcessStart(process.pid);
-if(!start) throw Error("fixture start identity unavailable");
+if(!start) throw Object.assign(Error("fixture start identity unavailable"),{code:"OWNED_FIXTURE_START_UNAVAILABLE"});
+phase="write-receipt";
 require("node:fs").writeFileSync(` + string(q) + `, JSON.stringify({pid:process.pid,start}), {mode:0o600});
+phase="exercise";
 ` + source + `
-})().catch(()=>process.exitCode=90);`
+})().catch(error=>{
+const code=typeof error.code==="string"&&/^[A-Z0-9_]+$/.test(error.code)?error.code:"UNKNOWN";
+process.stderr.write("OWNED_NATIVE_FIXTURE_FAILED "+phase+" "+code+"\n");process.exitCode=90;
+});`
 	if err := os.WriteFile(script, []byte(wrapper), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		data, err := os.ReadFile(identity)
 		if os.IsNotExist(err) {
-			t.Log("fixture never started (refused before dispatch)")
+			t.Log("fixture generation receipt absent; run result determines whether dispatch was refused")
 			return
 		}
 		var observed struct {
@@ -101,6 +107,17 @@ func TestChildExitAndDiagnosticStayDistinct(t *testing.T) {
 	}
 	if out.Len() != 0 || diagnostic.String() != "child-diagnostic" {
 		t.Fatalf("stdio corrupted: stdout=%q stderr=%q", out.String(), diagnostic.String())
+	}
+}
+
+func TestFixtureReportsPhaseWithoutRawError(t *testing.T) {
+	c := fixture(t, `throw Object.assign(Error("owned-private-diagnostic"),{code:"EOWNED"});`)
+	var out, diagnostic bytes.Buffer
+	if code := run(c, []string{allowedOrigin}, bytes.NewReader(nil), &out, &diagnostic); code != 90 {
+		t.Fatalf("fixture failure status not preserved: %d", code)
+	}
+	if out.Len() != 0 || diagnostic.String() != "OWNED_NATIVE_FIXTURE_FAILED exercise EOWNED\n" {
+		t.Fatalf("unexpected fixture failure: stdout=%q stderr=%q", out.String(), diagnostic.String())
 	}
 }
 
