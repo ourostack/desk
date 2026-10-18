@@ -97,6 +97,45 @@ function fakeNative(options = {}) {
 }
 const input = { source, nodeBaseline: nodeStat, admittedIdentity }
 
+test("synthetic: PowerShell AST keeps metadata helpers script-scoped before use", async t => {
+  const f = fakeNative()
+  await observeIdentity(input, async () => {}, f.dependencies)
+  const parser = process.platform === "win32" ?
+    path.win32.join(process.env.SystemRoot || process.env.SYSTEMROOT || "", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "pwsh"
+  const script = `
+$ErrorActionPreference = 'Stop'
+$program = [Console]::In.ReadToEnd()
+$tokens = $null
+$parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseInput($program, [ref]$tokens, [ref]$parseErrors)
+$setup = @($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] })
+$helpers = @()
+foreach ($name in @('Fail-Metadata', 'Require-Metadata')) {
+  $top = @($ast.EndBlock.Statements | Where-Object {
+    $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name
+  })
+  $beforeUse = $false
+  if ($top.Count -eq 1 -and $setup.Count -eq 1) {
+    $beforeUse = $top[0].Extent.EndOffset -lt $setup[0].Extent.StartOffset
+  }
+  $helpers += @{ name = $name; definitions = $top.Count; scriptScoped = $top.Count -eq 1; beforeUse = $beforeUse }
+}
+[Console]::WriteLine((@{ parseErrors = $parseErrors.Count; helpers = $helpers } | ConvertTo-Json -Depth 4 -Compress))
+`
+  const parsed = spawnSync(parser, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+    input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: 5000,
+  })
+  if (process.platform !== "win32" && parsed.error?.code === "ENOENT") {
+    t.skip("PowerShell AST parser unavailable on this non-Windows host; native execution remains unqualified")
+    return
+  }
+  assert.equal(parsed.status, 0, parsed.error?.code ?? "PowerShell AST-only parser failed")
+  assert.deepEqual(JSON.parse(parsed.stdout), { parseErrors: 0, helpers: [
+    { name: "Fail-Metadata", definitions: 1, scriptScoped: true, beforeUse: true },
+    { name: "Require-Metadata", definitions: 1, scriptScoped: true, beforeUse: true },
+  ] })
+})
+
 test("synthetic: persistence resolver targets the checkout root from the actual runner working directory", () => {
   const execArgv = process.execArgv.filter(arg => arg !== "--test" && !arg.startsWith("--test-"))
   const result = spawnSync(process.execPath, [...execArgv, "--input-type=module", "-e",

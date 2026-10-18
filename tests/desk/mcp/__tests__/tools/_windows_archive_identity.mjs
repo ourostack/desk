@@ -62,19 +62,19 @@ function Remember-Exception($exception) {
       'System.Management.Automation.MethodInvocationException', 'System.Management.Automation.ParameterBindingException') -notcontains $name) {
       $name = 'other'
     }
-    function Fail-Metadata([string]$check, $methodName) {
-      if ($null -eq $script:metadataFailedCheck) {
-        $script:metadataFailedCheck = @{ check = $check; method = $methodName }
-      }
-      throw 'invalid_emitted_metadata'
-    }
-    function Require-Metadata($row, [string]$key, $value, [string]$check) {
-      $row[$key] = if ($null -eq $value) { 'unavailable' } else { $value }
-      if ($value -ne $true) { Fail-Metadata $check $row.method }
-    }
     $script:firstFailure = @{ operation = $script:operation; kind = 'exception'
       exception = $name; hresult = $failure.HResult; nativeError = $null }
   }
+}
+function Fail-Metadata([string]$check, $methodName) {
+  if ($null -eq $script:metadataFailedCheck) {
+    $script:metadataFailedCheck = @{ check = $check; method = $methodName }
+  }
+  throw 'invalid_emitted_metadata'
+}
+function Require-Metadata($row, [string]$key, $value, [string]$check) {
+  $row[$key] = if ($null -eq $value) { 'unavailable' } else { $value }
+  if ($value -ne $true) { Fail-Metadata $check $row.method }
 }
 function Close-Owned([IntPtr]$handle) {
   $script:closeAttempts++
