@@ -171,6 +171,9 @@ test("Windows private-generation and receipt verdicts use the genuine SID/DACL c
   const wrongOwner = templateCredential({ fs: posixFs }, lib, { ...process, platform: "linux", getuid: () => fs.lstatSync(installed.dir).uid + 1 })
   assert.throws(() => wrongOwner.privateGeneration(installed.dir), { code: "NATIVE_PRIVATE_PATH_INVALID" })
   assert.throws(() => wrongOwner.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
+  const wrongWindowsOwner = templateCredential({ fs: posixFs, child_process: child }, lib,
+    { ...proc, getuid: () => fs.lstatSync(installed.dir).uid + 1 })
+  assert.throws(() => wrongWindowsOwner.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
   let macChecks = 0
   const macACL = templateCredential({ fs: posixFs, child_process: { execFileSync() { macChecks++; return " 0: user:other allow read" } } }, lib, { ...process, platform: "darwin" })
   assert.throws(() => macACL.verifyGeneration(installed), { code: "NATIVE_PRIVATE_PATH_INVALID" })
