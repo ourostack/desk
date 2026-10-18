@@ -139,11 +139,12 @@ test("actual maintained daemon options can reach native acquisition using the st
     const realpath=fs.realpathSync
     t.mock.method(fs,"realpathSync",(file,...args)=>process.platform!=="darwin" && String(file)===selectedBrowser ? realpath(app,...args) : realpath(file,...args))
     const stateRoot = path.join(root,"browser")
+    const installedNativeRoot = path.join(stateRoot,"native-owned")
     const common = require(path.join(mcpRoot,"browser-context-common.cjs"))
     const native = require(path.join(mcpRoot,"web-native-messaging.cjs"))
     const id = "11111111-1111-4111-8111-111111111111"
     const l = common.layout(stateRoot,id,"signed-in",options.socketRoot)
-    const privateDirectories = [stateRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
+    const privateDirectories = [stateRoot,installedNativeRoot,l.parent,l.root,...[".playwright","home","config","cache","data","state","runtime","local","roaming"].map(n=>path.join(l.root,n)),l.socketDir,
       ...(process.platform === "win32" ? ["AppData","AppData/Local","AppData/Roaming"].map(n=>path.join(l.root,"home",n)) : [])]
     for (const d of privateDirectories)
       fs.mkdirSync(d,{recursive:true,mode:0o700})
@@ -174,6 +175,9 @@ test("actual maintained daemon options can reach native acquisition using the st
       path.join(l.root,l.markerName),path.join(l.socketDir,l.markerName),l.configFile,
     ].map(path=>({path,kind:"file",created:true}))))
     if (process.platform === "win32") for (const directory of privateDirectories) native.privatePath(directory,true)
+    // Normal installation provisions this ancestor before the entry starts.
+    // Readiness reservation protects its immediate state parent, not ancestors.
+    native.privatePath(installedNativeRoot,true)
     const inventoryModule = await import(pathToFileURL(path.join(mcpRoot,"src/browser/native-owner-inventory.mjs")).href)
     const inventory = inventoryModule.createNativeOwnerInventory({browserStateRoot:stateRoot,cliDir:actualCli,binding:selection,
       socketRoot:options.socketRoot})
