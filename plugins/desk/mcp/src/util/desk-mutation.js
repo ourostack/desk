@@ -10,12 +10,16 @@ import { readOwnProcessStart, readProcessStart } from "../readiness/process-star
 const context = new AsyncLocalStorage()
 
 export class DeskMutationCleanupError extends Error {
-  constructor(cause, result) {
-    super(`Desk mutation claim cleanup failed; claim retained (no automatic recovery): ${cause.message}`, { cause })
+  constructor(cause, result, released = false) {
+    super(released ? `Desk claim was released, but normal push handoff failed: ${cause.message}` :
+      `Desk mutation claim cleanup failed; claim retained (no automatic recovery): ${cause.message}`, { cause })
     this.result = result
+    this.released = released
   }
   toJSON() {
-    return { status: "partial_operation", code: "desk_mutation_cleanup_failed", path: this.result?.path ?? null,
+    return { status: "partial_operation", code: this.released ? "desk_push_handoff_failed" : "desk_mutation_cleanup_failed",
+      path: this.released ? null : this.result?.path ?? null,
+      ...(this.released && this.result?.path ? { last_known_path: this.result.path } : {}),
       retryable: false, result: this.result ?? null, message: this.message }
   }
 }
@@ -26,7 +30,7 @@ export async function assertDeskMutationHeld() {
   await held.assertHeld()
 }
 
-async function mutationLocation(deskRoot) {
+export async function deskMutationScope(deskRoot) {
   const root = await fs.realpath(deskRoot)
   let directory = root
   // A bound person/subdirectory still shares the worktree's index and HEAD.
@@ -49,13 +53,13 @@ async function mutationLocation(deskRoot) {
     if (ancestor === path.dirname(ancestor)) break
   }
   const file = path.join(directory, ".desk-mutation.lock")
-  return { root, file }
+  return { root, file, pushStatus: `${file}.push-status.json` }
 }
 
 // Read-only diagnosis, NOT permission to remove a claim. Even positive owner
 // termination cannot prove closure of orphaned Git/hook children.
 export async function inspectDeskMutation(deskRoot) {
-  const { file } = await mutationLocation(deskRoot)
+  const { file } = await deskMutationScope(deskRoot)
   try {
     const before = await fs.lstat(file, { bigint: true })
     if (!before.isFile() || before.nlink !== 1n || before.size > 16_384n) return { state: "unknown", file }
@@ -78,9 +82,30 @@ export async function inspectDeskMutation(deskRoot) {
 }
 
 export async function withDeskMutation(deskRoot, action) {
-  const { root, file } = await mutationLocation(deskRoot)
+  return runMutation(deskRoot, action, true)
+}
+
+// This is normal release notification, not stale-claim reconciliation. The
+// drainer must acquire a fresh canonical claim and never removes another one.
+export async function notifyDeskPushRelease(deskRoot) {
+  const scope = await deskMutationScope(deskRoot)
+  try { await fs.lstat(scope.pushStatus) } catch (error) {
+    if (error.code === "ENOENT") return
+    throw error
+  }
+  const { continuePushHandoffs } = await import("../runtime/sync-worker.js")
+  return continuePushHandoffs({ scope, claim: (action) => runMutation(deskRoot, action, false, true) })
+}
+
+async function runMutation(deskRoot, action, notify, fresh = false) {
+  const { root, file } = await deskMutationScope(deskRoot)
   const inherited = context.getStore()
   if (inherited?.file === file && inherited.active) {
+    if (fresh) {
+      const busy = new Error("Push handoff waits for the enclosing canonical mutation to release")
+      busy.code = "desk_mutation_busy"
+      throw busy
+    }
     await inherited.assertHeld()
     return action(inherited.assertHeld)
   }
@@ -122,14 +147,19 @@ export async function withDeskMutation(deskRoot, action) {
     throw error
   } finally {
     capability.active = false
+    let released = false
     try {
       if (handle) await handle.close()
       // Never remove a replacement, unknown or stale owner's claim.
       await assertHeld()
       await fs.unlink(file)
+      released = true
+      if (notify) await notifyDeskPushRelease(root)
     } catch (error) {
-      if (primaryError) primaryError.mutation_claim_cleanup_error = error.message
-      else throw new DeskMutationCleanupError(error, result)
+      if (primaryError) {
+        if (released) primaryError.message += `; normal push handoff remains pending: ${error.message}`
+        else primaryError.mutation_claim_cleanup_error = error.message
+      } else throw new DeskMutationCleanupError(error, result, released)
     }
   }
 }

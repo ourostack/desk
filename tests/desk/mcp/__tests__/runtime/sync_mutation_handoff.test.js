@@ -2,8 +2,10 @@ import { test, after } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { withDeskMutation } from "../../../../../plugins/desk/mcp/src/util/desk-mutation.js"
-import { runPushWorker, readSyncStatus, schedulePush } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { spawn, spawnSync } from "node:child_process"
+import { withDeskMutation, deskMutationScope } from "../../../../../plugins/desk/mcp/src/util/desk-mutation.js"
+import { runPushWorker, readSyncStatus, schedulePush, resolveSyncLockPath, acquireSyncLock, updateSyncStatus, continuePushHandoffs } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 
 const ownedRoots = new Set()
@@ -59,7 +61,7 @@ test("review: the sole push worker waits through live canonical contention and p
   }
 })
 
-test("review: bounded contention retains a pending push that the existing worker can retry without another write", async () => {
+test("review: expired contention retains its request while an active sync reservation prevents transfer", async () => {
   const root = await ownedRoot()
   const env = { ...process.env, XDG_STATE_HOME: await ownedRoot() }
   let entered, release
@@ -68,20 +70,23 @@ test("review: bounded contention retains a pending push that the existing worker
   const held = withDeskMutation(root, async () => { entered(); await wait })
   await ready
   const boundary = gitBoundary()
+  let reservation
   try {
     const pending = await runPushWorker({ root, env, debounceMs: 0, mutationWaitMs: 0,
       spawnGit: boundary.spawnGit, clock: { sleep: async () => {} } })
     assert.equal(pending.result, "pending")
     assert.equal(boundary.pushes, 0)
     assert.equal(readSyncStatus({ root, env }).pending_push, true)
+    reservation = await acquireSyncLock({ root, env, createOnly: true })
+    assert.ok(reservation?.release)
   } finally {
     release()
     await held
+    reservation?.release()
   }
-  const pushed = await runPushWorker({ root, env, debounceMs: 0, spawnGit: boundary.spawnGit, clock: { sleep: async () => {} } })
-  assert.equal(pushed.result, "ok")
-  assert.equal(boundary.pushes, 1)
-  assert.equal(readSyncStatus({ root, env }).pending_push, false)
+  const scope = await deskMutationScope(root)
+  assert.equal(JSON.parse(await fs.readFile(scope.pushStatus, "utf8")).release_handoffs.length, 1)
+  assert.equal(boundary.pushes, 0)
 })
 
 test("review: unknown mutation ownership never grants a push or an unbounded wait", async () => {
@@ -113,4 +118,136 @@ test("review: an unavailable post-handoff ahead count cannot acknowledge a pendi
   assert.equal(result.result, "pending")
   assert.equal(result.reason, "push_counts_unavailable")
   assert.equal(readSyncStatus({ root, env }).pending_push, true)
+})
+
+for (const ownerMode of ["same process", "separate process with nested binding"]) {
+test(`rereview: expired sole worker continues on ${ownerMode} release, without a manual worker call`, async () => {
+  const root = await ownedRoot()
+  const origin = await ownedRoot()
+  const env = { ...process.env, XDG_STATE_HOME: await ownedRoot() }
+  const git = (...args) => {
+    const result = spawnSync("git", args, { encoding: "utf8", timeout: 10_000 })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
+  }
+  git("init", "--bare", "-q", origin)
+  git("-C", root, "init", "-q")
+  git("-C", root, "config", "user.name", "Test")
+  git("-C", root, "config", "user.email", "test@example.com")
+  await fs.writeFile(path.join(root, "proof.txt"), "first\n")
+  git("-C", root, "add", "--", "proof.txt")
+  git("-C", root, "commit", "-qm", "first")
+  git("-C", root, "remote", "add", "origin", origin)
+  git("-C", root, "push", "-qu", "origin", "HEAD")
+  const first = git("-C", root, "rev-parse", "HEAD")
+  await fs.writeFile(path.join(root, "proof.txt"), "second\n")
+  git("-C", root, "add", "--", "proof.txt")
+  git("-C", root, "commit", "-qm", "second")
+  const second = git("-C", root, "rev-parse", "HEAD")
+  let ready, release, held, checkOwner
+  if (ownerMode === "same process") {
+    let entered
+    ready = new Promise((resolve) => { entered = resolve })
+    const wait = new Promise((resolve) => { release = resolve })
+    held = withDeskMutation(root, async () => { entered(); await wait })
+  } else {
+    const nested = path.join(root, "bound-person")
+    await fs.mkdir(nested)
+    const module = new URL("../../../../../plugins/desk/mcp/src/util/desk-mutation.js", import.meta.url).href
+    const script = `import{withDeskMutation}from ${JSON.stringify(module)};await withDeskMutation(${JSON.stringify(nested)},async()=>{const wait=new Promise(r=>process.stdin.once("data",r));process.stdout.write("ready\\n");await wait});process.stdin.destroy()`
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["pipe", "pipe", "pipe"], timeout: 10_000 })
+    let stderr = ""
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    held = new Promise((resolve, reject) => {
+      child.once("error", reject)
+      child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`owned owner child exit ${code}: ${stderr}`)))
+    })
+    ready = new Promise((resolve, reject) => {
+      let stdout = ""
+      child.stdout.on("data", (chunk) => { stdout += chunk; if (stdout.includes("ready\n")) resolve() })
+      child.once("error", reject)
+      child.once("close", (code) => reject(new Error(`owner child closed before readiness: ${code}`)))
+    })
+    release = () => { if (!child.stdin.destroyed) child.stdin.end("release\n") }
+    checkOwner = async () => {
+      const scope = await deskMutationScope(root)
+      const receipt = JSON.parse(await fs.readFile(scope.file, "utf8"))
+      assert.equal(receipt.pid, child.pid)
+      assert.equal(await readProcessStart(child.pid), receipt.start)
+    }
+  }
+  try {
+    await ready
+    await checkOwner?.()
+    const result = await runPushWorker({ root, env, debounceMs: 0, mutationWaitMs: 0 })
+    assert.equal(result.result, "pending")
+    assert.equal(git("--git-dir", origin, "rev-parse", "HEAD"), first)
+  } finally {
+    release()
+    await held
+  }
+  let worker
+  const deadline = Date.now() + 8_000
+  while (Date.now() < deadline) {
+    try { worker ??= JSON.parse(await fs.readFile(resolveSyncLockPath({ root, env }), "utf8")) } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
+    if (git("--git-dir", origin, "rev-parse", "HEAD") === second) break
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  // Observe the exact source-recorded worker generation and let it exit normally.
+  if (worker) {
+    const end = Date.now() + 35_000
+    for (;;) {
+      let alive = true
+      try { process.kill(worker.pid, 0) } catch (error) { if (error.code === "ESRCH") alive = false; else throw error }
+      const current = alive ? await readProcessStart(worker.pid) : null
+      if (!alive || (current !== null && current !== worker.start)) break
+      assert.ok(Date.now() < end, "owned continuation worker has not exited")
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+  assert.equal(git("--git-dir", origin, "rev-parse", "HEAD"), second, "normal release must continue the sole scheduled obligation")
+  assert.ok(worker?.start, "continuation must have an observed source-owned worker receipt")
+  assert.equal(readSyncStatus({ root, env }).pending_push, false)
+})
+}
+
+test("rereview: strict handoff state never steals an old unknown status lock or writes around it", async () => {
+  const root = await ownedRoot()
+  const file = path.join(root, "owned-handoff.status.json")
+  const lock = `${file}.lock`
+  await fs.writeFile(file, '{"preserved":true}\n')
+  await fs.writeFile(lock, "unknown")
+  const old = new Date(Date.now() - 60_000)
+  await fs.utimes(lock, old, old)
+  assert.throws(() => updateSyncStatus(root, process.env, { overwritten: true }, file, { strict: true, waitMs: 0 }), /busy/)
+  assert.equal(await fs.readFile(file, "utf8"), '{"preserved":true}\n')
+  assert.equal(await fs.readFile(lock, "utf8"), "unknown")
+})
+
+test("rereview: a release notification during a failed drain cannot be lost behind that drain", async () => {
+  const root = await ownedRoot()
+  const state = await ownedRoot()
+  const env = { ...process.env, XDG_STATE_HOME: state }
+  const scope = await deskMutationScope(root)
+  updateSyncStatus(root, env, { push_handoff_version: 1, release_handoffs: [{ root, state_home: state }] }, scope.pushStatus, { strict: true })
+  const reservation = await acquireSyncLock({ root, env, createOnly: true })
+  let claims = 0
+  let scheduled = 0
+  try {
+    await continuePushHandoffs({ scope, schedule: () => { scheduled++; return { scheduled: true } }, claim: async (action) => {
+      claims++
+      await action()
+      if (claims === 1) {
+        reservation.release()
+        updateSyncStatus(root, env, (current) => ({ ...current, handoff_epoch: (current.handoff_epoch ?? 0) + 1 }), scope.pushStatus, { strict: true })
+      }
+    } })
+    assert.equal(claims, 2)
+    assert.equal(scheduled, 1)
+    assert.deepEqual(JSON.parse(await fs.readFile(scope.pushStatus, "utf8")).release_handoffs, [])
+  } finally {
+    reservation.release()
+  }
 })

@@ -11,7 +11,7 @@ import { track_create, track_update } from "../../../../../plugins/desk/mcp/src/
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { task_move, track_rename } from "../../../../../plugins/desk/mcp/src/tools/move.js"
 import { taskSignoff } from "../../../../../plugins/desk/mcp/src/tools/task-signoff.js"
-import { runPushWorker } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+import { runPushWorker, acquireSyncLock } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 import { syncWorkspace } from "../../../../../plugins/desk/mcp/src/runtime/session-sync.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
 
@@ -81,6 +81,7 @@ test("normal sync cannot push or rebase while a canonical writer owns the claim"
   const held = withDeskMutation(root, async () => { entered(); await wait })
   await ready
   const calls = []
+  let reservation
   const spawnGit = (_command, args) => {
     calls.push(args[2])
     if (["push", "pull"].includes(args[2])) throw new Error("canonical mutation escaped the claim")
@@ -95,6 +96,8 @@ test("normal sync cannot push or rebase while a canonical writer owns the claim"
     assert.equal(result.reason, "canonical_mutation_busy")
     assert.equal(calls.includes("push"), false)
     assert.equal(calls.includes("pull"), false)
+    reservation = await acquireSyncLock({ root, env: { ...process.env, XDG_STATE_HOME: path.join(root, "owned-state") }, createOnly: true })
+    assert.ok(reservation?.release)
     const startup = await syncWorkspace({
       root, env: { ...process.env, XDG_STATE_HOME: path.join(root, "owned-state") },
       spawnGit, fileProblem: () => { throw new Error("busy is not a problem-filing authority") },
@@ -105,6 +108,7 @@ test("normal sync cannot push or rebase while a canonical writer owns the claim"
   } finally {
     release()
     await held
+    reservation?.release()
   }
 })
 

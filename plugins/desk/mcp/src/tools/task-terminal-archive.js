@@ -19,8 +19,8 @@ const relative = (root, file) => path.relative(root, file).split(path.sep).join(
 const identityOf = (stat) => `${stat.dev}:${stat.ino}`
 
 export class TerminalArchiveError extends Error {
-  constructor({ phase, path: cardPath, cause, committed = null }) {
-    const recovery = ["placement_uncertain", "relocated_outside_boundary"].includes(phase) ?
+  constructor({ phase, path: cardPath, cause, committed = null, placement = "known" }) {
+    const recovery = placement !== "known" ?
       "Retain the obligation and establish owned placement before further mutation; do not force an unarchive across the write boundary." :
       "Inspect this path; use task_move unarchive and a reasoned return to reopen."
     super(`Terminal update stopped at ${cardPath ?? "an unqualified location"} (${phase}): ${cause.message}. Payload was not rolled back; do not replay mixed/append-bearing updates. ${recovery}`, { cause })
@@ -28,10 +28,11 @@ export class TerminalArchiveError extends Error {
     this.phase = phase
     this.path = cardPath
     this.committed = committed
+    this.placement = placement
   }
   toJSON() {
     return { status: "partial_operation", code: this.code, phase: this.phase, path: this.path,
-      committed: this.committed, retryable: false, message: this.message,
+      committed: this.committed, placement: this.placement, retryable: false, message: this.message,
       ...(this.actual_path ? { actual_path: this.actual_path } : {}),
       ...(this.last_known_path ? { last_known_path: this.last_known_path } : {}),
       ...(this.mutation_claim_cleanup_error ? { mutation_claim_cleanup_error: this.mutation_claim_cleanup_error } : {}) }
@@ -178,7 +179,7 @@ export async function prepareTerminalArchive({ root, boundary = root, srcDir, fi
   if (git && [...snapshot.keys()].some((name) => name.split("/").includes(".gitattributes"))) {
     throw new Error("task_update: automatic archive cannot pre-admit task-local .gitattributes at a new path. Review and commit an equivalent inherited attribute policy before retrying, or explicitly archive an already-terminal card after reviewing destination attributes; nothing was written.")
   }
-  return { root, physicalRoot: await fs.realpath(root), srcDir, filePath, archiveDir, snapshot, fence, format, initialCardHash: digest(sourceBytes), git, head, tracked, trackFile, nextTrack, spawnGit }
+  return { root, physicalRoot: await fs.realpath(root), sourceLocation: await fs.realpath(srcDir), srcDir, filePath, archiveDir, snapshot, fence, format, initialCardHash: digest(sourceBytes), git, head, tracked, trackFile, nextTrack, spawnGit }
 }
 
 // Recheck immediately before rename under the shared canonical claim. POSIX
@@ -203,7 +204,6 @@ export async function relocateTaskDirectory({ srcDir, archiveDir, boundary = pat
 export async function finishTerminalArchive({ plan, bytes, body, readiness, env, schedulePush, terminalSync }) {
   const { root, srcDir, filePath, archiveDir, snapshot, fence, format, git, head, tracked, trackFile, nextTrack, spawnGit } = plan
   let actual = filePath
-  let actualCanonical = false
   let phase = "not_written"
   let committed = null
   let trackIdentity = nextTrack?.identity
@@ -214,6 +214,7 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
     if (await present(archiveDir)) throw new Error("archive destination appeared after preflight")
     if (nextTrack && !(await sameTrack(trackFile, nextTrack.before, trackIdentity, nextTrack.mode))) throw new Error("track bytes/path changed after preflight")
     const cleanHashes = new Map()
+    let cleanTrackHash
     if (git) {
       assertGitDestinationVacant(plan)
       for (const [name, entry] of snapshot) {
@@ -224,7 +225,7 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
         cleanHashes.set(name, entry.kind === "link" ? entry.gitHash :
           gitRead(root, ["hash-object", "--path", relative(root, path.join(archiveDir, name)), "--stdin"], spawnGit, content).trim())
       }
-      if (nextTrack) cleanHashes.set("track", gitRead(root, ["hash-object", "--path", relative(root, trackFile), "--stdin"], spawnGit, Buffer.from(nextTrack.after)).trim())
+      if (nextTrack) cleanTrackHash = gitRead(root, ["hash-object", "--path", relative(root, trackFile), "--stdin"], spawnGit, Buffer.from(nextTrack.after)).trim()
     }
     phase = "write_attempted"
     await writeFileAtomic(filePath, bytes)
@@ -249,6 +250,7 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
       { path: relative(root, archiveDir), operation: "write" },
       ...(nextTrack ? [{ path: relative(root, trackFile) }] : []),
     ] })
+    await fence.assert({ created: true })
     if (!sameTree(await tree(archiveDir, format), snapshot)) throw new Error("relocated bytes changed before staging; external bytes retained")
     if (nextTrack && !(await sameTrack(trackFile, nextTrack.after, trackIdentity, nextTrack.mode))) throw new Error("track changed before staging")
     if (git) {
@@ -269,7 +271,7 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
       // Every entry committed must be exactly one admitted snapshot blob.
       for (const entry of entries) {
         let expected
-        if (nextTrack && entry.path === relative(root, trackFile)) expected = { gitHash: cleanHashes.get("track"), mode: nextTrack.mode }
+        if (nextTrack && entry.path === relative(root, trackFile)) expected = { gitHash: cleanTrackHash, mode: nextTrack.mode }
         else {
           const prefix = `${relative(root, archiveDir)}/`
           if (entry.path.startsWith(prefix)) {
@@ -298,6 +300,7 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
       committed = gitRead(root, ["rev-parse", "--short", "HEAD"], spawnGit).trim()
       const scheduled = schedulePush({ root })
       if (scheduled?.scheduled === false) throw new Error(`commit retained but push handoff failed: ${scheduled.error}; pending recorded: ${scheduled.pending_recorded}`)
+      await fence.assert({ created: true })
       if (!sameTree(await tree(archiveDir, format), snapshot) ||
           (nextTrack && !(await sameTrack(trackFile, nextTrack.after, trackIdentity, nextTrack.mode)))) {
         throw new Error("external edits retained after the pinned commit; cleanup-index and terminal-sync obligations remain")
@@ -307,15 +310,11 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
     recordCleanupCard(root, relative(root, archiveDir), openResources(body).length > 0, env)
     const sync = await terminalSync()
     if (sync && Object.values(sync).some((value) => value?.status === "deferred")) throw new Error("terminal sync deferred; the recorded request obligation remains")
+    await fence.assert({ created: true })
     if (!sameTree(await tree(archiveDir, format), snapshot) ||
         (nextTrack && !(await sameTrack(trackFile, nextTrack.after, trackIdentity, nextTrack.mode)))) throw new Error("external edits retained after metadata refresh; derived state may need reconciliation")
     return { filePath: actual, deskCommit: committed, archive_phase: phase }
   } catch (cause) {
-    if (cause.actual_path) {
-      actual = cause.actual_path
-      actualCanonical = true
-      phase = isPathContained(fence.boundary, actual) ? "relocated_uncommitted" : "relocated_outside_boundary"
-    }
     if (phase === "write_attempted") {
       try {
         const current = await fs.readFile(filePath)
@@ -325,24 +324,28 @@ export async function finishTerminalArchive({ plan, bytes, body, readiness, env,
         phase = "write_outcome_uncertain"
       }
     }
-    if (phase === "written_active") {
+    const lastKnown = relative(root, actual)
+    let located = null
+    for (const candidate of [cause.actual_path, path.join(archiveDir, "task.md"), filePath].filter(Boolean)) {
       try {
-        const moved = await present(archiveDir)
-        if (!(await present(srcDir))) {
-          if (moved && identityOf(moved) === snapshot.get("").identity) {
-            actual = path.join(await fs.realpath(archiveDir), "task.md")
-            actualCanonical = true
-            phase = isPathContained(fence.boundary, actual) ? "relocated_uncommitted" : "relocated_outside_boundary"
-          } else phase = "placement_uncertain"
-        }
+        const directory = await fs.realpath(path.dirname(candidate))
+        if (identityOf(await fs.lstat(directory, { bigint: true })) !== snapshot.get("").identity) continue
+        const card = path.join(directory, "task.md")
+        if (await present(card)) { located = card; break }
       } catch {
-        phase = "placement_uncertain"
+        // An unreadable/moved candidate is not qualified placement.
       }
     }
-    const reportRoot = actualCanonical ? plan.physicalRoot : root
-    const error = new TerminalArchiveError({ phase, path: phase === "placement_uncertain" ? null : relative(reportRoot, actual), cause, committed })
-    if (phase === "placement_uncertain") error.last_known_path = relative(root, actual)
-    if (phase === "relocated_outside_boundary") error.actual_path = actual
+    const placement = located === null ? "unknown" : isPathContained(fence.boundary, located) ? "known" : "outside_boundary"
+    if (phase === "written_active") {
+      if (placement === "unknown") phase = "placement_uncertain"
+      else if (placement === "outside_boundary") phase = "relocated_outside_boundary"
+      else if (path.dirname(located) !== plan.sourceLocation &&
+          path.dirname(located) === await fs.realpath(archiveDir).catch(() => null)) phase = "relocated_uncommitted"
+    }
+    const error = new TerminalArchiveError({ phase, path: located === null ? null : relative(plan.physicalRoot, located), cause, committed, placement })
+    if (located === null) error.last_known_path = lastKnown
+    if (placement === "outside_boundary") error.actual_path = located
     throw error
   }
 }

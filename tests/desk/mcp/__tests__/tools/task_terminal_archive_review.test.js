@@ -1,6 +1,6 @@
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs } from "node:fs"
+import { promises as fs, renameSync as fsSyncRename, symlinkSync } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
@@ -171,4 +171,61 @@ test("review: externally moved ancestry reports unknown placement, not a fiction
   await assert.rejects(task_update({ deskRoot: root, input: { ...target, status: "cancelled" }, schedulePush }),
     (error) => error.phase === "placement_uncertain" && error.path === null && error.toJSON().last_known_path === active)
   assert.equal((await readFront(path.join(root, "owned-moved-parent/finish-work/task.md"))).data.status, "cancelled")
+})
+
+test("rereview: legal companion names cannot collide with parent-track clean metadata", async () => {
+  const root = await fixture({ gitDesk: true })
+  await fs.writeFile(path.join(root, "t/track.md"), "# Track\n\n## Tasks\n\n| Slug | State |\n| --- | --- |\n| finish-work | processing |\n")
+  for (const name of ["track", "__proto__", ".__proto__", "constructor"]) await fs.writeFile(path.join(root, "t/finish-work", name), `Companion ${name}\n`)
+  git(root, "add", "--", "t/track.md", "t/finish-work")
+  git(root, "commit", "-qm", "legal companion names")
+  const count = Number(git(root, "rev-list", "--count", "HEAD"))
+  const result = await task_update({ deskRoot: root, input: { ...target, status: "cancelled" }, schedulePush })
+  assert.equal(result.path, archived)
+  for (const name of ["track", "__proto__", ".__proto__", "constructor"]) assert.equal(await fs.readFile(path.join(root, "t/_archive/finish-work", name), "utf8"), `Companion ${name}\n`)
+  assert.match(await fs.readFile(path.join(root, "t/track.md"), "utf8"), /finish-work.*cancelled/)
+  assert.equal(Number(git(root, "rev-list", "--count", "HEAD")), count + 1)
+  assert.equal(git(root, "status", "--porcelain"), "")
+})
+
+for (const boundary of ["journal", "after commit"]) {
+  test(`rereview: unknown placement at ${boundary} preserves commit evidence separately`, async () => {
+    const root = await fixture({ gitDesk: true })
+    const head = git(root, "rev-parse", "HEAD")
+    let moved = false
+    const displace = async () => {
+      if (!moved) {
+        await fs.rename(path.join(root, "t/_archive"), path.join(root, "owned-moved-archive"))
+        moved = true
+      }
+
+    }
+    const options = { schedulePush }
+    if (boundary === "journal") options.readiness = { recordChange: displace, markUncertain: async () => {} }
+    // The scheduling hook is synchronous; the same owned rename is synchronous too.
+    if (boundary === "after commit") options.schedulePush = () => {
+      fsSyncRename(path.join(root, "t/_archive"), path.join(root, "owned-moved-archive"))
+      moved = true
+    }
+    await assert.rejects(task_update({ deskRoot: root, input: { ...target, status: "cancelled" }, ...options }),
+      (error) => error.path === null && error.placement === "unknown" && error.toJSON().last_known_path === archived &&
+        error.phase === (boundary === "journal" ? "relocated_uncommitted" : "committed") &&
+        (boundary === "journal" ? error.committed === null : Boolean(error.committed)))
+    assert.equal(moved, true)
+    assert.equal(await exists(path.join(root, archived)), false)
+    assert.equal((await readFront(path.join(root, "owned-moved-archive/finish-work/task.md"))).data.status, "cancelled")
+    assert.equal(git(root, "rev-parse", "HEAD") === head, boundary === "journal")
+  })
+}
+
+test("rereview: qualified outside placement after commit retains commit proof without a success result", async () => {
+  const root = await fixture({ gitDesk: true })
+  const other = await ownedRoot()
+  const outside = path.join(other, "owned-archive")
+  await assert.rejects(task_update({ deskRoot: root, input: { ...target, status: "cancelled" }, schedulePush: () => {
+    fsSyncRename(path.join(root, "t/_archive"), outside)
+    symlinkSync(outside, path.join(root, "t/_archive"), process.platform === "win32" ? "junction" : "dir")
+  } }), (error) => error.phase === "committed" && Boolean(error.committed) &&
+    error.placement === "outside_boundary" && error.toJSON().actual_path === path.join(outside, "finish-work/task.md"))
+  assert.equal((await readFront(path.join(outside, "finish-work/task.md"))).data.status, "cancelled")
 })

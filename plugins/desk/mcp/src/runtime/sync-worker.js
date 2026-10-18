@@ -47,7 +47,7 @@
 
 import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -59,7 +59,7 @@ import { shouldLaunchFiler } from "./filer-throttle.js"
 import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 import { renameWithRetry } from "../util/rename-retry.js"
 import { createGitReader } from "./git-read-worker.js"
-import { withDeskMutation } from "../util/desk-mutation.js"
+import { withDeskMutation, deskMutationScope, notifyDeskPushRelease } from "../util/desk-mutation.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -162,7 +162,7 @@ function releaseSyncLock(lockPath, token) {
  * worker — Review Focus, `sync_worker.test.js`).
  */
 export async function acquireSyncLock({
-  root, env, pid = process.pid, processStart = readProcessStart, readLock = readJsonIfPresent, kill = process.kill,
+  root, env, pid = process.pid, processStart = readProcessStart, readLock = readJsonIfPresent, kill = process.kill, createOnly = false,
 }) {
   const lockPath = resolveSyncLockPath({ root, env })
   try {
@@ -179,6 +179,7 @@ export async function acquireSyncLock({
   const bytes = `${JSON.stringify({ token, pid, start })}\n`
 
   if (tryCreateExclusive(lockPath, bytes)) return { token, release: () => releaseSyncLock(lockPath, token) }
+  if (createOnly) return null
 
   const existing = readLock(lockPath)
   if (existing !== null && (await isLockLive(existing, processStart, kill))) return null
@@ -355,8 +356,57 @@ function acquireStatusLock(lockFile, waitMs) {
   }
 }
 
+// Handoff routing is authoritative pending state, unlike best-effort health
+// telemetry. Its existing status-file lock must never time out into a write or
+// steal an old/unknown owner. This is not a stale-lock recovery mechanism.
+function acquireStrictStatusLock(file, waitMs) {
+  const deadline = Date.now() + waitMs
+  for (;;) {
+    let fd
+    try {
+      fd = openSync(file, "wx", 0o600)
+      const identity = fstatSync(fd)
+      const token = randomUUID()
+      writeFileSync(fd, token)
+      return { file, identity, token }
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+    } finally {
+      if (fd !== undefined) closeSync(fd)
+    }
+    if (Date.now() >= deadline) throw new Error("Push handoff status is busy; no unfenced update was made")
+    sleepSync(5)
+  }
+}
+
+function assertStrictStatusLock(lock) {
+  const found = lstatSync(lock.file)
+  if (!found.isFile() || found.nlink !== 1 || found.dev !== lock.identity.dev || found.ino !== lock.identity.ino ||
+      readFileSync(lock.file, "utf8") !== lock.token) throw new Error("Push handoff status owner changed; cleanup refused")
+}
+
+function readStrictStatus(file) {
+  let identity
+  try { identity = lstatSync(file) } catch (error) {
+    if (error.code === "ENOENT") return { data: {}, assertUnchanged() {
+      try { lstatSync(file) } catch (absent) { if (absent.code === "ENOENT") return; throw absent }
+      throw new Error("Push handoff status appeared during its update")
+    } }
+    throw error
+  }
+  if (!identity.isFile() || identity.nlink !== 1) throw new Error("Unsafe push handoff status file")
+  const text = readFileSync(file, "utf8")
+  const data = JSON.parse(text)
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid push handoff status")
+  return { data, assertUnchanged() {
+    const found = lstatSync(file)
+    if (!found.isFile() || found.nlink !== 1 || found.dev !== identity.dev || found.ino !== identity.ino ||
+        readFileSync(file, "utf8") !== text) throw new Error("Push handoff status changed outside its owner")
+  } }
+}
+
 /** Reads, merges `patch` into and atomically replaces the JSON file at `file`, under the lock described above. */
-export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env }), { waitMs = STATUS_LOCK_WAIT_MS } = {}) {
+export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root, env }), { waitMs = STATUS_LOCK_WAIT_MS, strict = false } = {}) {
   try {
     assertNotRealStateUnderTest(path.dirname(file), { env })
   } catch (error) {
@@ -366,15 +416,25 @@ export function updateSyncStatus(root, env, patch, file = syncStatusPath({ root,
     return null
   }
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const lock = acquireStatusLock(`${file}.lock`, waitMs)
+  const lock = strict ? acquireStrictStatusLock(`${file}.lock`, waitMs) : acquireStatusLock(`${file}.lock`, waitMs)
   try {
-    const next = { ...(readJsonIfPresent(file) ?? {}), ...patch }
+    if (strict) assertStrictStatusLock(lock)
+    const previous = strict ? readStrictStatus(file) : null
+    const current = previous?.data ?? readJsonIfPresent(file) ?? {}
+    const next = typeof patch === "function" ? patch(current) : { ...current, ...patch }
     const temporary = `${file}.${randomUUID()}.tmp`
-    writeFileSync(temporary, `${JSON.stringify(next)}\n`, { mode: 0o600 })
+    writeFileSync(temporary, `${JSON.stringify(next)}\n`, { mode: 0o600, ...(strict ? { flag: "wx" } : {}) })
+    if (strict) {
+      assertStrictStatusLock(lock)
+      previous.assertUnchanged()
+    }
     renameWithRetry(temporary, file)
     return next
   } finally {
-    if (lock !== null) {
+    if (strict) {
+      assertStrictStatusLock(lock)
+      unlinkSync(lock.file)
+    } else if (lock !== null) {
       try {
         unlinkSync(lock)
       } catch {
@@ -497,6 +557,114 @@ export function hostFromEnv(env) {
 
 const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }
 
+function handoffRoutes(status) {
+  if (Object.keys(status).length === 0) return []
+  if (Object.keys(status).some((key) => !["push_handoff_version", "release_handoffs", "handoff_epoch"].includes(key)) ||
+      status.push_handoff_version !== 1 || !Array.isArray(status.release_handoffs) ||
+      (status.handoff_epoch !== undefined && (!Number.isSafeInteger(status.handoff_epoch) || status.handoff_epoch < 0)) ||
+      status.release_handoffs.some((item) => !item || typeof item.root !== "string" || !path.isAbsolute(item.root) ||
+        typeof item.state_home !== "string" || !path.isAbsolute(item.state_home) ||
+        Object.keys(item).some((key) => !["root", "state_home"].includes(key)))) throw new Error("Unqualified push release handoff state")
+  return status.release_handoffs
+}
+
+const handoffKey = (item) => `${item.root}\0${item.state_home}`
+
+async function requestPushRelease(root, env) {
+  const scope = await deskMutationScope(root)
+  const item = { root: path.resolve(root), state_home: path.resolve(path.dirname(path.dirname(resolveDeskStateDir({ env })))) }
+  const result = updateSyncStatus(root, env, (current) => {
+    const routes = new Map(handoffRoutes(current).map((entry) => [handoffKey(entry), entry]))
+    routes.set(handoffKey(item), item)
+    return { push_handoff_version: 1, handoff_epoch: current.handoff_epoch ?? 0, release_handoffs: [...routes.values()] }
+  }, scope.pushStatus, { strict: true })
+  if (result === null) throw new Error("Push release handoff state was refused")
+}
+
+/**
+ * A coalesced normal-release notification, not a task/job ledger or recovery
+ * route. A fresh canonical claim and create-only sync reservations fence the
+ * transfer. No existing canonical or sync claim is removed to make it happen.
+ * `claim` is a source-owned closure from desk-mutation, never tool JSON.
+ */
+export async function continuePushHandoffs({ scope, claim, schedule = schedulePush }) {
+  if (handoffRoutes(readStrictStatus(scope.pushStatus).data).length === 0) return
+  let state = updateSyncStatus(scope.root, process.env, (current) => {
+    handoffRoutes(current)
+    const epoch = current.handoff_epoch ?? 0
+    if (epoch === Number.MAX_SAFE_INTEGER) throw new Error("Push handoff notification epoch is exhausted")
+    return { ...current, handoff_epoch: epoch + 1 }
+  }, scope.pushStatus, { strict: true })
+  if (state === null) throw new Error("Push handoff notification was refused")
+  for (;;) {
+    const epoch = state.handoff_epoch
+    await transferPushHandoffs({ scope, claim, schedule })
+    state = readStrictStatus(scope.pushStatus).data
+    if (handoffRoutes(state).length === 0 || (state.handoff_epoch ?? 0) === epoch) return
+    // A real owner/worker release raced a failed attempt behind this drainer's
+    // short claim. Retry that notification; do not poll an unchanged owner.
+  }
+}
+
+async function transferPushHandoffs({ scope, claim, schedule }) {
+  const reserved = []
+  try {
+    await claim(async () => {
+      const current = handoffRoutes(readStrictStatus(scope.pushStatus).data)
+      for (const item of current) {
+        if ((await deskMutationScope(item.root)).file !== scope.file) throw new Error("Push handoff crosses its canonical mutation scope")
+        // Only state routing is persisted. Credentials, HOME and tool input are
+        // never copied into the slot or changed for the continuing worker.
+        const env = { ...process.env, XDG_STATE_HOME: item.state_home }
+        const lock = await acquireSyncLock({ root: item.root, env, createOnly: true })
+        if (lock?.refused) throw new Error("Push handoff sync reservation was refused")
+        if (lock === null) continue
+        reserved.push({ item, env, lock })
+      }
+      if (reserved.length === 0) return
+      const selected = new Set(reserved.map(({ item }) => handoffKey(item)))
+      const result = updateSyncStatus(scope.root, process.env, (latest) => ({
+        push_handoff_version: 1,
+        handoff_epoch: latest.handoff_epoch ?? 0,
+        release_handoffs: handoffRoutes(latest).filter((item) => !selected.has(handoffKey(item))),
+      }), scope.pushStatus, { strict: true })
+      if (result === null) throw new Error("Push handoff transfer was refused")
+    })
+  } catch (error) {
+    for (const { lock } of reserved) lock.release()
+    if (error.code === "desk_mutation_busy") return
+    const failures = [error]
+    for (const { item, env } of reserved) {
+      try { await requestPushRelease(item.root, env) } catch (restore) { failures.push(restore) }
+    }
+    if (failures.length > 1) throw new AggregateError(failures, `Push handoff transfer and pending-state restoration failed: ${failures.map((failure) => failure.message).join("; ")}`)
+    throw error
+  }
+  // Both the old worker's sync lock and this drainer's canonical claim must
+  // have ended before launch. Reservations prevent a different expiring worker
+  // from registering a coalesced request that this transfer could erase.
+  const scheduled = new Set()
+  try {
+    for (const { item, env, lock } of reserved) {
+      lock.release()
+      const result = schedule({ root: item.root, env })
+      if (!result.scheduled) throw new Error(`Push continuation could not be scheduled: ${result.error}`)
+      scheduled.add(handoffKey(item))
+    }
+  } catch (error) {
+    const failures = [error]
+    for (const { item, env } of reserved) {
+      if (!scheduled.has(handoffKey(item))) {
+        try { await requestPushRelease(item.root, env) } catch (restore) { failures.push(restore) }
+      }
+    }
+    if (failures.length > 1) throw new AggregateError(failures, `Push continuation and pending-state restoration failed: ${failures.map((failure) => failure.message).join("; ")}`)
+    throw error
+  } finally {
+    for (const { lock } of reserved) lock.release()
+  }
+}
+
 /**
  * Runs the whole worker cycle for `root`: acquire the lock (exit quietly on
  * contention), skip entirely when there is no remote or no upstream (never
@@ -565,12 +733,17 @@ export async function runPushWorker({
           const reason = qualified ? "canonical_mutation_busy" : "mutation_owner_unqualified"
           updateSyncStatus(root, env, { blocked: true, reason, paths: [], pending_push: true })
           const remaining = deadline - performance.now()
-          if (!qualified || remaining <= 0) return { result: "pending", reason }
+          if (!qualified) return { result: "pending", reason }
+          if (remaining <= 0) {
+            await requestPushRelease(root, env)
+            return { result: "pending", reason }
+          }
           await clock.sleep(Math.min(100, remaining))
         }
       }
     } finally {
       lock.release()
+      await notifyDeskPushRelease(root)
     }
     // A canonical writer can commit after the final claim release but before
     // sync-lock release. Its schedule records pending BEFORE launching another
