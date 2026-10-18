@@ -67,9 +67,11 @@ test("the runner preserves stock connection launch and relay while redacting out
     { file: "/other", args: undefined, options: undefined },
   ])
   assert.ok(spawns.every((call) => call.self === cp))
-  assert.equal(out[0], `Page URL: ${connectPage("ws://x").replace(TOKEN, "<token>")}\n`)
-  assert.equal(out[1], "token <token>\n")
-  assert.deepEqual(out[2], new Uint8Array([65]))
+  assert.deepEqual(out.map(chunk => Buffer.from(chunk)), [
+    Buffer.from(`Page URL: ${connectPage("ws://x").replace(TOKEN, "<token>")}\n`),
+    Buffer.from("token <token>\n"),
+    Buffer.from([65]),
+  ])
 })
 
 test("without a token the runner leaves the output streams and the connect page alone", () => {
@@ -88,7 +90,7 @@ test("the runner also replaces the token's URL-encoded and JSON-escaped forms", 
   tabs.run(["cli.js"], { process: proc, childProcess: { spawn() {} }, load: () => {
     proc.stdout.write(`${token} ${encodeURIComponent(token)} ${JSON.stringify({ token })}\n`)
   } })
-  assert.equal(out[0], '<token> <token> {"token":"<token>"}\n')
+  assert.deepEqual(out.map(chunk => Buffer.from(chunk)), [Buffer.from('<token> <token> {"token":"<token>"}\n')])
 })
 
 // ---- the watchdog, in process ----

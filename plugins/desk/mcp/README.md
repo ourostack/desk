@@ -260,6 +260,14 @@ Boots the server with temp roots, asserts the tool surface registers, and exerci
 
 The tests live in [`tests/desk/mcp/__tests__`](../../../tests/desk/mcp/__tests__/), outside the plugin folder, so hosts that install or refresh Desk never download them. `tests/desk/mcp` mirrors this folder, and the test setup links `tests/desk/mcp/node_modules` to this folder's installed `node_modules` so the tests' package imports resolve. Run `npm ci` here first.
 
+Browser component tests also read a locked public Playwright source input. Install it from this folder before running the suite:
+
+```sh
+npm ci --ignore-scripts --prefix ../../../tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
+```
+
+CI installs the same test-only package. It is not a runtime dependency or browser download. `DESK_TEST_MAINTAINED_CLI_DIR` remains an explicit override for an admitted input; full-source and bounded-region hashes reject unknown input instead of borrowing a user cache.
+
 Every test process in the coverage gate runs with `HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_RUNTIME_DIR` in one temporary folder per run (`tests/desk/mcp/__tests__/_isolated_env.mjs`, which the gate preloads and `_temp_roots.js` imports), so no test reaches the real `~/.cache` or `~/.local/state`. `npm test` preloads it too. To run tests directly with the same setup, preload it from this folder: `node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test <files>`. (`package.json` is part of the published artifacts' source scope, so changing its `test` script meant re-anchoring the vector pack and snapshot manifests; their payloads are unchanged.) A write under the real home, outside the OS temp folder and this checkout, fails the test that made it; `test_isolation.test.js` guards the setup.
 
 Run the same changed-production coverage gate used by CI with Node 22 or later:
