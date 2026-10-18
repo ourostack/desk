@@ -9,6 +9,14 @@ description: Use for any new or resumed engineering work on a Desk, before invok
 
 Desk owns work identity, authority, durable state and the agreed delivery endpoint. Superpowers owns engineering discovery, planning, implementation and verification. This adapter is the only seam between them: it reads what Desk already recorded, selects one provider entry, and hands over explicit existing paths. It is not a second lifecycle, contract, store or scheduler.
 
+At `start`, resolve the canonical task through `desk:start-task` before selecting a provider. Search live and archived work for the same outcome first; create a new task only when none matches. For an unapproved new outcome, record the actual four-part `intake_proposal` and present all returned `alignment_packet` contents together before asking for agreement. Existing go remains valid. If a raw provider was already loaded, apply this intake and handoff before its next reply without invoking that same skill again.
+
+## Native intake context
+
+Copilot's post-skill hook reinforces this same intake contract for its qualified main-agent payload, an existing Desk session binding and the source-selected Superpowers method. It appends finite source-owned context only after the known successful `brainstorming` result. It does not call tools, write a task, classify the operator's go, change the tool result or permissions, replay the foundation, or start another lifecycle. Any role field (even null), an unknown payload or an unstarted session emits no context.
+
+This is conditional Desk guidance, not per-call provider attestation: the qualified Copilot tool name is `brainstorming`; `superpowers:brainstorming` is its slash-command name and is not accepted by the qualified native skill tool. The supported installation's unique Superpowers provider must be qualified separately. A successful result string cannot establish which plugin supplied it, so the hook never grants authority or claims provider identity from that string. Other hosts retain their existing adapter entry; this Copilot transport does not qualify them.
+
 ## This entry satisfies Superpowers' "1% chance" rule
 
 `superpowers:using-superpowers` requires invoking a skill the moment there is even a 1% chance it applies; for engineering work on a Desk task, this adapter is that skill, so invoking it at the start of engineering work, a reconciled resume or a material redesign is how that rule gets satisfied, not a workaround to weigh against it. Invoke this adapter first rather than reasoning about which raw `superpowers:*` skill might apply instead; its own Boundary below then selects and hands off to the specific one (brainstorming, writing-plans, subagent-driven-development, or the executing-plans fallback), which is the next required invocation the same rule already covers, not a redundant second decision.

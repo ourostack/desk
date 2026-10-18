@@ -1,6 +1,15 @@
 {
   "version": 1,
   "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "matcher": "skill",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-intake-context.cjs\"",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-intake-context.cjs\"",
+        "timeoutSec": 5
+      }
+    ],
     "sessionEnd": [
       {
         "type": "command",

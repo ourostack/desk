@@ -11,6 +11,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 const root = path.resolve(__dirname, "../../../../../../plugins/desk/mcp");
 const names = {
+  "browser-context.cjs": "browser-context.cjs",
+  "browser-context-common.cjs": "browser-context-common.cjs",
+  "web.cjs": "web.cjs",
   "desk-extension-credential.cjs": "web-extension-credential.cjs",
   "desk-native-relay.cjs": "web-native-relay.cjs",
   "desk-native-error-transport.cjs": "web-native-error-transport.cjs",
@@ -25,6 +28,7 @@ function loadTemplate(runtimeFile, context) {
   const bytes = fs.readFileSync(runtimeFile);
   assert.deepEqual(bytes, fs.readFileSync(canonical), "execute unchanged actual template bytes");
   let source = bytes.toString("utf8");
+  let instrumented = false;
   if (process.env.NYC_CONFIG) {
     // NYC is a declared MCP devDependency. A relocated retained invocation can
     // resolve from its actual loaded module, without an extra dependency/env
@@ -33,15 +37,22 @@ function loadTemplate(runtimeFile, context) {
     const filename = Object.keys(require.cache).find(file => /[/\\]nyc[/\\]index\.js$/.test(file));
     assert.ok(filename, "running NYC loaded its standard instrumenter owner");
     const NYC = require(filename);
-    const instrumenter = new NYC(JSON.parse(process.env.NYC_CONFIG)).instrumenter();
-    source = instrumenter.instrumentSync(source, canonical, { registerMap() {} });
-    assert.ok(global.__coverage__, "ordinary NYC collector already initialized by normal module imports");
-    const existing = global.__coverage__[canonical], generated = instrumenter.lastFileCoverage();
-    if (existing) for (const key of ["statementMap", "fnMap", "branchMap"])
-      assert.equal(JSON.stringify(generated[key]), JSON.stringify(existing[key]), "standard canonical source-position identity");
-    context.__coverage__ = global.__coverage__;
+    const nyc = new NYC(JSON.parse(process.env.NYC_CONFIG));
+    if (nyc.exclude.shouldInstrument(canonical)) {
+      const instrumenter = nyc.instrumenter();
+      source = instrumenter.instrumentSync(source, canonical, { registerMap() {} });
+      const existing = global.__coverage__ && global.__coverage__[canonical], generated = instrumenter.lastFileCoverage();
+      if (existing) for (const key of ["statementMap", "fnMap", "branchMap"])
+        assert.equal(JSON.stringify(generated[key]), JSON.stringify(existing[key]), "standard canonical source-position identity");
+      if (global.__coverage__) context.__coverage__ = global.__coverage__;
+      instrumented = true;
+    }
   }
   vm.runInNewContext(source, context, { filename: canonical });
+  if (instrumented && !global.__coverage__) {
+    assert.ok(context.__coverage__, "standard Istanbul template execution initialized its ordinary collector");
+    global.__coverage__ = context.__coverage__;
+  }
   return context.module.exports;
 }
 
