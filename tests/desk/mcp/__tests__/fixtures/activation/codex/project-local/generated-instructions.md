@@ -48,7 +48,7 @@ When a rule, tool or plugin we own gets in the way, fix it rather than work arou
 
 ## Engineering work
 
-Enter Superpowers through `desk:using-superpowers-with-desk` at the start of engineering work, at a reconciled resume or at a material redesign; review goes through `superpowers:requesting-code-review`.
+Resolve the canonical task through `desk:start-task` before the initial engineering handoff. Then enter Superpowers through `desk:using-superpowers-with-desk` at the start of engineering work, at a reconciled resume or at a material redesign; review goes through `superpowers:requesting-code-review`.
 
 ## Source and channels
 
