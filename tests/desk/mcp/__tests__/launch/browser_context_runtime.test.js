@@ -18,7 +18,7 @@ import {readNativeAncestry} from "../../../../../plugins/desk/mcp/src/browser/na
 import {mcpRoot} from "./_mcp_handshake.js"
 import {mkTempRoot} from "../_temp_roots.js"
 import {removeTree} from "../_remove_tree.js"
-import {protectWindowsPaths} from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
+import {protectWindowsPaths,assertWindowsAclAvailable} from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 const require = createRequire(import.meta.url)
 test("fresh worker refuses unknown modes before loading CLI modules", async () => {
   const file = path.join(mcpRoot,"browser-context-runtime.cjs")
@@ -1080,7 +1080,7 @@ test("metadata changed at stop cannot be re-anchored by an otherwise exact ackno
     assert.equal(result.payload.code,"unsupported_cli")
     assert.equal(Object.hasOwn(result.payload,"contextResources"),false)
   })
-  test("normal parent preflights current native readiness and refuses every mismatched binding or unreadable file before allocation",async t=>{
+  test("normal parent preflights current native readiness and refuses every mismatched binding or non-private file before allocation",async t=>{
     const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-context.cjs"))
     const file=f.request.selection.nativeReadyFile,original=JSON.parse(fs.readFileSync(file))
     for(const amend of [
@@ -1095,9 +1095,21 @@ test("metadata changed at stop cannot be re-anchored by an otherwise exact ackno
       assert.equal(result.payload.code,"NATIVE_READY_INVALID")
       assert.equal(Object.hasOwn(result.payload,"contextResources"),false)
     }
-    f.put(file,original);fs.chmodSync(file,0o644)
+    f.put(file,original)
+    if(process.platform==="win32"){
+      const script="$ErrorActionPreference='Stop';$p=[Console]::In.ReadToEnd()|ConvertFrom-Json;"+
+        "$item=Get-Item -LiteralPath $p -Force;$acl=$item.GetAccessControl('Access,Owner');"+
+        "$everyone=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0');"+
+        "$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($everyone,'Read','Allow')));"+
+        "$item.SetAccessControl($acl)"
+      childProcess.execFileSync(assertWindowsAclAvailable(),["-NoProfile","-NonInteractive","-Command",script],{
+        input:JSON.stringify(file),encoding:"utf8",timeout:5000,maxBuffer:16384,windowsHide:true,
+      })
+    }else fs.chmodSync(file,0o644)
+    assert.throws(()=>require(path.join(mcpRoot,"web-native-messaging.cjs")).privatePath(file,false),{code:"NATIVE_PRIVATE_PATH_INVALID"})
     assert.equal((await controller.context({action:"create",label:"No allocation"},f.controllerOptions)).payload.code,"NATIVE_PRIVATE_PATH_INVALID")
-    fs.chmodSync(file,0o600)
+    if(process.platform==="win32")await protectWindowsPaths([{path:file,kind:"file",created:true}])
+    else fs.chmodSync(file,0o600)
   })
   test("normal parent never rebinds an existing strict owner config to another handle or normal selection",async t=>{
     const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-context.cjs"))
