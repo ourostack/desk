@@ -8,7 +8,10 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
 import { assignShards, loadDurations } from "./suite-shards.mjs"
+import { PRODUCT_SELECTOR, NATIVE_TEST_NAME, isOwnedGitProductSelection,
+  createProductTapCounter, makeProductResult, captureProductEnvelope, productEnvelopeRemaining } from "./owned-git-product-io.mjs"
 
+const cliEnvelope = captureProductEnvelope(process.hrtime.bigint())
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
 const [index, total] = arg("--shard", "1/1").split("/").map(Number)
@@ -23,6 +26,14 @@ const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 // The same file list the verdict job checks against (suite-files.mjs). Which shard runs which file comes from suite-shards.mjs: longest first by the measured times in suite-durations.json, so the shards finish together.
 // --only <regex> narrows the run to matching files (relative to the tests folder, forward slashes) for quick investigation runs.
 const only = String(arg("--only", "") ?? "")
+const productRequested = only === PRODUCT_SELECTOR
+const productMode = isOwnedGitProductSelection(only, process.env.DESK_TEST_SUITE_MODE)
+if (productRequested && (!productMode || process.platform !== "win32" ||
+  process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || timeoutMs !== 120000 || total !== 8 ||
+  testsRoot !== path.join(repoRoot, "tests", "desk", "mcp", "__tests__"))) {
+  console.error("owned-git product: not_admitted")
+  process.exit(1)
+}
 const durations = loadDurations(arg("--durations", undefined))
 const plan = assignShards(suiteFiles(testsRoot, only), total, durations)
 const mine = (plan[index - 1]?.files ?? []).map((file) => path.join(testsRoot, ...file.split("/")))
@@ -62,7 +73,55 @@ const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: 
   return { name: m[1], error: error.slice(0, 3000), stack: stack.slice(0, 700) }
 })
 
-const runFile = (file) => new Promise((resolve) => {
+const runProductFile = (file) => new Promise((resolve) => {
+  const H = cliEnvelope.Hns
+  const started = cliEnvelope.startedNs
+  const counter = createProductTapCounter(), bytes = { stdout: 0, stderr: 0 }
+  const env = {}
+  for (const key of ["SystemRoot", "WINDIR", "SystemDrive", "COMSPEC", "PATH", "TEMP", "TMP", "PATHEXT",
+    "GITHUB_WORKSPACE", "GITHUB_SHA", "GITHUB_EVENT_NAME", "GITHUB_REF_NAME"]) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]
+  }
+  const isolation = path.join(repoRoot, `.owned-git-source-isolation-${process.hrtime.bigint()}`)
+  Object.assign(env, { DESK_TEST_RUN_DIR: isolation, TMPDIR: isolation, TEMP: isolation, TMP: isolation,
+    GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", DESK_TEST_OWNED_GIT_NATIVE: "1",
+    DESK_TEST_OWNED_GIT_H: H.toString(), DESK_TEST_SUITE_MODE: "standard" })
+  let timedOut = false, errorCode = "none", child, timer, settled = false
+  const finish = (code) => {
+    if (settled) return
+    settled = true; clearTimeout(timer)
+    const elapsed = Number((process.hrtime.bigint() - started) / 1000000n)
+    resolve(makeProductResult({ counts: counter.end(), exitCode: code, timedOut, bytes,
+      ms: Math.min(elapsed, 120000), code: errorCode }))
+  }
+  try {
+    if (!productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint())) {
+      timedOut = true; errorCode = "deadline"; finish(1); return
+    }
+    fs.mkdirSync(isolation)
+    if (!productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint())) {
+      timedOut = true; errorCode = "deadline"; finish(1); return
+    }
+    child = spawn(process.execPath, ["--import", pathToFileURL(isolatedEnv).href, "--test", "--test-reporter=tap",
+      `--test-name-pattern=^${NATIVE_TEST_NAME}$`, file], { cwd: mcpRoot, env, windowsHide: true })
+    for (const name of ["stdout", "stderr"]) {
+      child[name].on("data", (chunk) => {
+        bytes[name] += chunk.length; counter.push(chunk, name)
+        if (bytes.stdout + bytes.stderr > 1048576) { errorCode = "quota"; child.kill() }
+      })
+      child[name].on("error", () => { errorCode = "ci_envelope" })
+    }
+    child.on("error", () => { errorCode = "ci_envelope" })
+    child.once("close", finish)
+    timer = setTimeout(() => {
+      timedOut = true; errorCode = "deadline"
+      // Original retained handle only. The independent supervisor honors H.
+      child.kill()
+    }, productEnvelopeRemaining(cliEnvelope, process.hrtime.bigint()))
+  } catch { errorCode = "ci_envelope"; finish(1) }
+})
+
+const runFile = (file) => productMode ? runProductFile(file) : new Promise((resolve) => {
   const started = Date.now()
   const child = spawn(process.execPath, [
     "--import", pathToFileURL(isolatedEnv).href, "--test", "--test-reporter=tap", file,
@@ -105,7 +164,7 @@ const probeAcl = async () => {
   fs.rmSync(dir, { recursive: true, force: true })
   return { powershellStartMs: plain, desk_acl_provider_ms: provider }
 }
-const aclProbe = args.includes("--probe-acl") ? await probeAcl() : null
+const aclProbe = !productMode && args.includes("--probe-acl") ? await probeAcl() : null
 console.log("acl probe:", JSON.stringify(aclProbe))
 
 const results = []

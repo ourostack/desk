@@ -1,10 +1,11 @@
-# Runs one command as a freshly created, non-administrator local user and exits with its exit code.
+# Product mode requires fresh creation; legacy mode retains create-or-reuse.
 # Usage: run-as-standard-user.ps1 -WorkDir <dir> -Command '<cmd.exe command line>'
 # GitHub's Windows runners run as an administrator, so this is how the Desk suite is run as a user without elevation.
 param(
   [Parameter(Mandatory = $true)][string]$WorkDir,
   [Parameter(Mandatory = $true)][string]$Command,
-  [string]$LogDir = (Join-Path $env:RUNNER_TEMP 'standard-user-logs')
+  [string]$LogDir = (Join-Path $env:RUNNER_TEMP 'standard-user-logs'),
+  [switch]$OwnedGitProduct
 )
 $ErrorActionPreference = 'Stop'
 $userName = 'deskstd'
@@ -12,10 +13,24 @@ $userName = 'deskstd'
 $plain = 'Ds!' + [guid]::NewGuid().ToString('N')
 Write-Host "::add-mask::$plain"
 $secure = ConvertTo-SecureString $plain -AsPlainText -Force
+$ownedSid = $null
+$ownedCleanupFailed = $false
+try {
+if ($OwnedGitProduct) {
+  $created = @(Microsoft.PowerShell.LocalAccounts\New-LocalUser -Name $userName -Password $secure `
+    -PasswordNeverExpires -AccountNeverExpires -ErrorAction Stop -Confirm:$false)
+  if ($created.Count -ne 1 -or $created[0] -isnot [Microsoft.PowerShell.Commands.LocalUser] -or
+      ![string]::Equals($created[0].Name, $userName, [StringComparison]::OrdinalIgnoreCase) -or
+      $created[0].SID -isnot [Security.Principal.SecurityIdentifier]) {
+    throw 'owned_git_product_account_creation_unproved'
+  }
+  $ownedSid = $created[0].SID
+} else {
 if (-not (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue)) {
   New-LocalUser -Name $userName -Password $secure -PasswordNeverExpires -AccountNeverExpires | Out-Null
 } else {
   Set-LocalUser -Name $userName -Password $secure
+}
 }
 if (Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*\$userName" }) {
   throw "$userName must not be an administrator"
@@ -26,11 +41,10 @@ New-Item -ItemType Directory -Force -Path $tmp, $LogDir | Out-Null
 foreach ($dir in @($workspace, $tmp, $LogDir)) {
   icacls $dir /grant "${userName}:(OI)(CI)M" /T /C /Q | Out-Null
 }
-# This script assumes an ephemeral runner: handing the checkout to the new user and trusting every directory in
-# Git ('safe.directory *') are acceptable only because the runner is discarded after the job.
-# A person owns their own checkout. Without this Git refuses the repository as 'dubious ownership' for the new user.
+# Existing ephemeral-runner ownership provisioning remains shared. Only legacy
+# mode mutates machine-wide Git trust; product metadata uses exact command scope.
 icacls $workspace /setowner $userName /T /C /Q | Out-Null
-git config --system --add safe.directory '*'
+if (-not $OwnedGitProduct) { git config --system --add safe.directory '*' }
 
 $nodeDir = Split-Path (Get-Command node).Source
 $gitDir = Split-Path (Get-Command git).Source
@@ -43,6 +57,7 @@ set "PATH=$nodeDir;$gitDir;$machinePath"
 set "TEMP=$tmp"
 set "TMP=$tmp"
 set "CI=true"
+set "DESK_TEST_SUITE_MODE=standard"
 cd /d "$WorkDir"
 echo whoami: & whoami
 echo token elevation and integrity level: & whoami /groups | findstr /i "Mandatory Administrators"
@@ -59,10 +74,23 @@ try {
 $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/d', '/c', "`"$wrapper`"" `
   -Credential $cred -WorkingDirectory $WorkDir -LoadUserProfile -PassThru -Wait `
   -RedirectStandardOutput $out -RedirectStandardError $err
-Get-Content $out
-Get-Content $err | ForEach-Object { Write-Host "[stderr] $_" }
+if (-not $OwnedGitProduct) {
+  Get-Content $out
+  Get-Content $err | ForEach-Object { Write-Host "[stderr] $_" }
+}
 $exitCode = $p.ExitCode
 } finally {
-  Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
+  if (-not $OwnedGitProduct) { Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue }
 }
+} finally {
+  if ($OwnedGitProduct -and $null -ne $ownedSid) {
+    try {
+      Microsoft.PowerShell.LocalAccounts\Remove-LocalUser -SID $ownedSid -ErrorAction Stop -Confirm:$false
+    } catch {
+      $ownedCleanupFailed = $true
+      try { [Console]::Error.WriteLine('owned_git_product_account_cleanup_failed') } catch { }
+    }
+  }
+}
+if ($OwnedGitProduct -and $ownedCleanupFailed -and $exitCode -eq 0) { $exitCode = 1 }
 exit $exitCode

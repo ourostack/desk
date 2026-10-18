@@ -33,6 +33,63 @@ jobs:
     name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/8)
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      OWNED_GIT_PRODUCT_PATHS: |
+        owned-git-product-output/export/sources/s01-production-owner.c
+        owned-git-product-output/export/sources/s02-production-root.cjs
+        owned-git-product-output/export/sources/s03-production-builder.ps1
+        owned-git-product-output/export/sources/s04-production-verifier.js
+        owned-git-product-output/export/sources/s05-windows-workflow.yml
+        owned-git-product-output/export/sources/s06-standard-user.ps1
+        owned-git-product-output/export/sources/s07-suite-runner.mjs
+        owned-git-product-output/export/sources/s08-product-io.mjs
+        owned-git-product-output/export/sources/s09-product-test.js
+        owned-git-product-output/export/sources/s10-driver.cjs
+        owned-git-product-output/export/sources/s11-test-root.cjs
+        owned-git-product-output/export/sources/s12-fault-owner.c
+        owned-git-product-output/export/sources/s13-supervisor.c
+        owned-git-product-output/export/sources/s14-retention.cjs
+        owned-git-product-output/export/sources/s15-workload.cjs
+        owned-git-product-output/export/sources/s16-preload.cjs
+        owned-git-product-output/export/sources/s17-fixture-builder.ps1
+        owned-git-product-output/export/binaries/production-owner.exe
+        owned-git-product-output/export/binaries/production-owner-instrumented.exe
+        owned-git-product-output/export/binaries/fault-owner.exe
+        owned-git-product-output/export/binaries/fault-owner-instrumented.exe
+        owned-git-product-output/export/binaries/retained-supervisor.exe
+        owned-git-product-output/export/shim/owned-git-child.cjs
+        owned-git-product-output/export/manifests/production-assets.json
+        owned-git-product-output/export/manifests/fixture-assets.json
+        owned-git-product-output/export/manifests/source-assets.json
+        owned-git-product-output/safe-evidence/report.json
+        owned-git-product-output/safe-evidence/cases.json
+        owned-git-product-output/safe-evidence/clock.json
+        owned-git-product-output/safe-evidence/observer.json
+        owned-git-product-output/safe-evidence/runtime.json
+        owned-git-product-output/safe-evidence/build.json
+        owned-git-product-output/safe-evidence/retention-controls.json
+        owned-git-product-output/safe-evidence/manifest.json
+      OWNED_GIT_PROBE_PATHS: |
+        owned-git-probe-output/source/probe-owner.c
+        owned-git-probe-output/source/probe-shim.cjs
+        owned-git-probe-output/source/probe.test.cjs
+        owned-git-probe-output/source/channel-workload.cjs
+        owned-git-probe-output/source/build.ps1
+        owned-git-probe-output/source/preload.cjs
+        owned-git-probe-output/artifacts/owned-git/win32-x64/probe-owner.exe
+        owned-git-probe-output/artifacts/owned-git/win32-x64/probe-shim.cjs
+        owned-git-probe-output/artifacts/owned-git/win32-x64/probe.test.cjs
+        owned-git-probe-output/artifacts/owned-git/win32-x64/channel-workload.cjs
+        owned-git-probe-output/artifacts/owned-git/win32-x64/observation preload.cjs
+        owned-git-probe-output/artifacts/owned-git/win32-x64/sha256-manifest.json
+        owned-git-probe-output/report.json
+        owned-git-probe-output/safe-evidence/**
+        owned-git-probe-interpreters.json
+        !owned-git-probe-output/evidence/**
+        !owned-git-probe-output/**/*.payload.json
+        !owned-git-probe-output/**/channel-config.json
+        !owned-git-probe-output/**/*.stdout
+        !owned-git-probe-output/**/*.stderr
     # The elevated mode is a diagnostic that fails by policy (see the comment at the top), so it never turns the run red; the standard mode does.
     continue-on-error: ${{ matrix.mode == 'elevated' }}
     strategy:
@@ -61,47 +118,56 @@ jobs:
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
       - name: Provision owned-Git diagnostic floor interpreter
-        if: github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/setup-node@v4
         with:
           node-version: "20.0.0"
 
       - name: Record owned-Git floor interpreter
-        if: github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         shell: pwsh
         run: |
           $node = (Get-Command node).Source
           @(@{ path = $node; version = (& $node --version); sha256 = (Get-FileHash $node -Algorithm SHA256).Hash }) | ConvertTo-Json -AsArray | Set-Content owned-git-probe-interpreters.json
+          if ($env:PRODUCT_SELECTION -eq 'true') { Move-Item owned-git-probe-interpreters.json owned-git-product-interpreters.json }
+        env:
+          PRODUCT_SELECTION: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' }}
 
       - name: Provision owned-Git diagnostic Node 22
-        if: github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && '22.23.3' || '22' }}
 
       - name: Record owned-Git Node 22 interpreter
-        if: github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         shell: pwsh
         run: |
-          $nodes = @(Get-Content owned-git-probe-interpreters.json -Raw | ConvertFrom-Json)
+          $binding = if ($env:PRODUCT_SELECTION -eq 'true') { 'owned-git-product-interpreters.json' } else { 'owned-git-probe-interpreters.json' }
+          $nodes = @(Get-Content $binding -Raw | ConvertFrom-Json)
           $node = (Get-Command node).Source
           $nodes += @{ path = $node; version = (& $node --version); sha256 = (Get-FileHash $node -Algorithm SHA256).Hash }
-          $nodes | ConvertTo-Json -AsArray | Set-Content owned-git-probe-interpreters.json
+          $nodes | ConvertTo-Json -AsArray | Set-Content $binding
+        env:
+          PRODUCT_SELECTION: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' }}
 
       - name: Restore suite interpreter after owned-Git provisioning
-        if: github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/setup-node@v4
         with:
           node-version: "24.18.0"
 
       - name: Record restored suite interpreter
-        if: github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         shell: pwsh
         run: |
-          $nodes = @(Get-Content owned-git-probe-interpreters.json -Raw | ConvertFrom-Json)
+          $binding = if ($env:PRODUCT_SELECTION -eq 'true') { 'owned-git-product-interpreters.json' } else { 'owned-git-probe-interpreters.json' }
+          $nodes = @(Get-Content $binding -Raw | ConvertFrom-Json)
           $node = (Get-Command node).Source
           $nodes += @{ path = $node; version = (& $node --version); sha256 = (Get-FileHash $node -Algorithm SHA256).Hash }
-          $nodes | ConvertTo-Json -AsArray | Set-Content owned-git-probe-interpreters.json
+          $nodes | ConvertTo-Json -AsArray | Set-Content $binding
+        env:
+          PRODUCT_SELECTION: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' }}
 
       - name: Install dependencies
         working-directory: plugins/desk/mcp
@@ -126,13 +192,17 @@ jobs:
         env:
           GIT_TERMINAL_PROMPT: "0"
           ONLY_FILES: ${{ inputs.only }}
+          DESK_TEST_SUITE_MODE: elevated
 
       - name: Run the suite (standard user)
         if: matrix.mode == 'standard'
         shell: pwsh
         run: |
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '"'
-          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
+          $product = $env:ONLY_FILES -ceq '^runtime/windows_owned_git\.test\.js$'
+          if ($product -and ('${{ github.event_name }}' -ne 'workflow_dispatch' -or '${{ inputs.elevated }}' -eq 'true')) { throw 'owned-git product: not_admitted' }
+          $options = if ($product) { '--timeout-ms 120000' } else { '--probe-acl' }
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json ' + $options + ' --only "' + $env:ONLY_FILES + '"'
+          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command -OwnedGitProduct:$product
         env:
           ONLY_FILES: ${{ inputs.only }}
 
@@ -153,32 +223,12 @@ jobs:
           if-no-files-found: warn
 
       - name: Keep full owned-Git diagnostic evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'
+        if: always() && github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/upload-artifact@v4
         with:
-          name: owned-git-probe-${{ matrix.mode }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          path: |
-            owned-git-probe-output/source/probe-owner.c
-            owned-git-probe-output/source/probe-shim.cjs
-            owned-git-probe-output/source/probe.test.cjs
-            owned-git-probe-output/source/channel-workload.cjs
-            owned-git-probe-output/source/build.ps1
-            owned-git-probe-output/source/preload.cjs
-            owned-git-probe-output/artifacts/owned-git/win32-x64/probe-owner.exe
-            owned-git-probe-output/artifacts/owned-git/win32-x64/probe-shim.cjs
-            owned-git-probe-output/artifacts/owned-git/win32-x64/probe.test.cjs
-            owned-git-probe-output/artifacts/owned-git/win32-x64/channel-workload.cjs
-            owned-git-probe-output/artifacts/owned-git/win32-x64/observation preload.cjs
-            owned-git-probe-output/artifacts/owned-git/win32-x64/sha256-manifest.json
-            owned-git-probe-output/report.json
-            owned-git-probe-output/safe-evidence/**
-            owned-git-probe-interpreters.json
-            !owned-git-probe-output/evidence/**
-            !owned-git-probe-output/**/*.payload.json
-            !owned-git-probe-output/**/channel-config.json
-            !owned-git-probe-output/**/*.stdout
-            !owned-git-probe-output/**/*.stderr
-          if-no-files-found: warn
+          name: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && format('owned-git-product-standard-shard-1-attempt-{0}', github.run_attempt) || format('owned-git-probe-{0}-shard-{1}-attempt-{2}', matrix.mode, matrix.shard, github.run_attempt) }}
+          path: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && env.OWNED_GIT_PRODUCT_PATHS || env.OWNED_GIT_PROBE_PATHS }}
+          if-no-files-found: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && 'error' || 'warn' }}
           retention-days: 7
 
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
