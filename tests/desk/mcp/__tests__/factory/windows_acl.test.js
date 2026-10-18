@@ -109,6 +109,7 @@ test("readonly verifier validates typed bounded batches and deadlines before ask
       [{ file: "C:\\secret\npath", directory: false }], [{ file: "C:\\" + "x".repeat(32768), directory: false }],
       [{ file: FILE_ENTRY.path, directory: 1 }], [{ ...PRIVATE_ENTRIES[0], created: true }],
       [Object.assign(Object.create({ file: FILE_ENTRY.path }), { directory: false, extra: true })],
+      [Object.assign(Object.create({ directory: false }), { file: FILE_ENTRY.path, extra: true })],
       Array(65).fill(PRIVATE_ENTRIES[0]), Array(64).fill({ file: "C:\\" + "x".repeat(2000), directory: false })])
       await assert.rejects(reader.verify(entries), /NATIVE_PRIVATE_PATH_INVALID/)
     for (const due of [0, NaN, Infinity, "future", Date.now() - 1, Date.now() + 60000])
@@ -282,6 +283,21 @@ lines.on("close", () => { process.exitCode = 3 })
 test("readonly verifier's default provider environment is still resolved rather than fabricated", async () => {
   if (isWindows) await windowsAcl.createWindowsPrivatePathVerifier().close()
   else assert.throws(() => windowsAcl.createWindowsPrivatePathVerifier(), /NATIVE_PRIVATE_PATH_INVALID/)
+})
+
+test("readonly provider failure is refused without diagnostics and its already-retired key cannot become a clean close", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    const pidFile = path.join(base, "pid")
+    await mkProvider(base, `
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+process.stdin.once("data", () => { process.stderr.write("private diagnostic"); process.exit(3) })
+`)
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base } })
+    await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
+    await assert.rejects(reader.close(), error => error.message === "NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN")
+    assert.ok(await untilDead(Number(await fs.readFile(pidFile, "utf8"))))
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
 })
 
 function runnerReturning(response, { code = 0, stderr = "" } = {}) {

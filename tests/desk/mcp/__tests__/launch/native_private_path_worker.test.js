@@ -183,6 +183,10 @@ test("readonly frontend never extends its total budget for wall-clock movement o
   j.action("refuse");
   assert.throws(() => j.client.verify(entries, "D:\\Windows"), /NATIVE_PRIVATE_PATH_INVALID/);
   assert.equal(j.workers.length, 1);
+  const k = load();
+  k.client.verify(entries, "C:\\Windows");
+  k.onPost(message => { if (message.operation === "close") k.advance(6000); });
+  assert.throws(() => k.client.verify(entries, "D:\\Windows"), /NATIVE_PRIVATE_PATH_INVALID/);
 });
 
 test("readonly frontend hooks both normal drain and explicit exit and reports unknown close rather than success", () => {
