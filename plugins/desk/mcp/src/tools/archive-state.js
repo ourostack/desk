@@ -89,7 +89,7 @@ async function tree(directory) {
 function sameTree(actual, expected) {
   return actual.size === expected.size && [...expected].every(([key, entry]) => {
     const found = actual.get(key)
-    return found && found.identity === entry.identity && found.kind === entry.kind &&
+    return found && found.identity === entry.identity &&
       found.mode === entry.mode && found.hash === entry.hash
   })
 }
@@ -178,7 +178,6 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
   let tracked = []
   let originals = new Map()
   let trackEntry = null
-  let cardDirty = false
   if (git) {
     destinationVacant(git, archiveDir)
     const source = gitPath(git, srcDir)
@@ -189,6 +188,10 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
     const baseline = new Map(headEntries(git, srcDir).map((entry) => [entry.path, entry]))
     tracked = entries.map((entry) => entry.path)
     originals = new Map(entries.map((entry) => [entry.path, entry]))
+    for (const [name, entry] of snapshot) {
+      if (entry.kind !== "directory" && name !== "task.md" && !originals.has(`${source}/${name}`))
+        throw new Error("task_archive: an untracked companion is not implicitly owned; nothing was moved")
+    }
     if (relocated) {
       if (entries.length === 0 || entries.length !== baseline.size ||
           entries.some((entry) => baseline.get(entry.path)?.sha !== entry.sha || baseline.get(entry.path)?.mode !== entry.mode))
@@ -222,7 +225,6 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
       const changes = readGit(git.root, args, spawnGit).split("\0").filter(Boolean)
       if (changes.some((file) => file !== card))
         throw new Error("task_archive: dirty, staged, or untracked companion bytes cannot be adopted; nothing was moved")
-      cardDirty ||= changes.includes(card)
     }
     if (track && [
       ["diff", "--name-only", "--", gitPath(git, track.file)],
@@ -243,8 +245,12 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
     if (identity(stat) !== track.identity || !Buffer.from(await fs.readFile(track.file)).equals(Buffer.from(track.before)))
       throw new Error("task_archive: the track changed after preflight; outside edits were retained")
   }
+  function assertSourceIndex() {
+    if (!indexMatches(indexEntries(git.root, [gitPath(git, srcDir)], spawnGit), originals))
+      throw new Error("task_archive: source index changed after preflight; outside staged bytes were retained")
+  }
   return {
-    git, cardDirty, snapshot, fence,
+    git, snapshot, fence,
     async atUse() {
       await fence.assert()
       await assertTrack()
@@ -254,6 +260,7 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
         throw new Error("task_archive: the other archive path appeared before publication")
       if (git) {
         destinationVacant(git, archiveDir)
+        assertSourceIndex()
         assertGitState(git)
       }
     },
@@ -280,13 +287,13 @@ export async function prepareArchiveState({ effectiveRoot, srcDir, archiveDir, s
         throw new Error("task_archive: track changed before publication")
       if (!git) return undefined
       destinationVacant(git, archiveDir)
+      assertSourceIndex()
       if (headSha(git) !== git.head) throw new Error("task_archive: HEAD changed before publication")
       const expected = new Map()
       const source = gitPath(git, srcDir)
       const destination = gitPath(git, archiveDir)
       for (const [name, entry] of snapshot) {
         if (entry.kind === "directory") continue
-        if (!tracked.includes(`${source}/${name}`) && name !== "task.md") continue
         const mode = gitMode(entry, originals.get(`${source}/${name}`), git)
         const sha = blobHash(git, path.join(archiveDir, name), entry.bytes, mode)
         expected.set(`${destination}/${name}`, { sha, mode,

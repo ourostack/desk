@@ -47,6 +47,21 @@ test("captured markdown parsing uses one immutable card version and the normal p
     error => error.message.includes(file) && error.message.includes("frontmatter is not valid YAML"))
 })
 
+test("flow-style frontmatter uses parsed fallback instead of appending an invalid block mapping", async () => {
+  const root = await mkTempDeskRoot(), file = path.join(root,"task.md")
+  const raw = '---\n# owned header\n  {"status":"done","factory_report_unavailable":"visibility_not_known","title":"Keep me"}\n---\n\nOwned body.\n'
+  const fields = {factory_report:"https://example.invalid/owned-report",factory_report_unavailable:undefined}
+  assert.equal(patchFrontmatterFields(raw,fields),null)
+  assert.equal(patchFrontmatterFields("---\n\n# empty mapping\n---\nBody\n",{status:"done"}),
+    "---\n\n# empty mapping\nstatus: done\n---\nBody\n")
+  await fs.writeFile(file,raw)
+  await assertFrontmatterPatchable(file,fields)
+  await patchMarkdownFrontmatter(file,fields)
+  const result = await readMarkdown(file)
+  assert.deepEqual(result.data,{status:"done",title:"Keep me",factory_report:fields.factory_report})
+  assert.equal(result.content,"\nOwned body.\n")
+})
+
 test("filename equivalence is pinned across case and normalization", async () => {
   const root = await mkTempDeskRoot()
   const missing = path.join(root, "missing", "file.md")

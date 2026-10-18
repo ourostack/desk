@@ -412,6 +412,72 @@ for (const mode of ["head","journal","target"]) {
   }))
 }
 
+for (const mode of ["preflight","patch-write","flow-yaml"]) {
+  test(`an archived report refill qualifies its ${mode} boundary`,t => scratch(async ({ base,desk,env:scratchEnv }) => {
+    const env = await hostEnv(base,scratchEnv)
+    await contribute(env)
+    await githubDesk(base,desk,env,null)
+    await task_create({deskRoot:desk,input:{track:"track",slug:"finished-work",title:"fixture",status:"processing"},schedulePush:() => {}})
+    await done(desk,env,"finished-work",{schedulePush:() => {}})
+    await task_archive({deskRoot:desk,env,input:{track:"track",slug:"finished-work"},schedulePush:() => {}})
+    await visibility(env,"private")
+    const file = path.join(desk,"track","_archive","finished-work","task.md"), physical = await fs.realpath(file)
+    if (mode === "flow-yaml") {
+      const raw = await fs.readFile(file,"utf8"), parsed = matter(raw)
+      await fs.writeFile(file,`---\n${JSON.stringify(parsed.data)}\n---\n${parsed.content}`)
+      git(desk,"add","--","track/_archive/finished-work/task.md")
+      git(desk,"commit","-q","-m","owned flow-style card")
+    }
+    const before = await fs.readFile(file,"utf8"), head = git(desk,"rev-parse","HEAD").toString()
+    let intercepted = false, reads = 0, pushes = 0
+    if (mode === "preflight") {
+      const readFile = fs.readFile
+      t.mock.method(fs,"readFile",async (target,...args) => {
+        const bytes = await readFile(target,...args)
+        if ([file,physical].includes(target) && ++reads === 2) {
+          await fs.appendFile(file,"\nOUTSIDE_BEFORE_REPORT_PATCH\n")
+          intercepted = true
+        }
+        return bytes
+      })
+    } else if (mode === "patch-write") {
+      const writeFile = fs.writeFile
+      t.mock.method(fs,"writeFile",async (target,...args) => {
+        if ([file,physical].includes(target)) {
+          intercepted = true
+          throw Object.assign(new Error("CONTROLLED_REPORT_WRITE_FAILURE"),{code:"EIO"})
+        }
+        return writeFile(target,...args)
+      })
+    }
+    const result = await task_archive({deskRoot:desk,env,input:{track:"track",slug:"finished-work"},
+      schedulePush:() => { pushes++ }})
+    if (mode === "flow-yaml") {
+      assert.equal(result.status,"already_archived")
+      assert.equal(result.factory_report,expectedLink())
+      assert.equal(result.commit,undefined)
+      assert.equal(pushes,1)
+      assert.equal((await card(desk,"track/_archive/finished-work/task.md")).factory_report,expectedLink())
+      assert.equal(git(desk,"status","--porcelain").toString(),"")
+    } else {
+      assert.equal(intercepted,true)
+      assert.equal(result.status,"archive_pending")
+      assert.equal(result.commit.status,"failed")
+      assert.equal(result.factory_report,undefined,"an unsuccessful patch does not claim the report was recorded")
+      assert.equal(pushes,0)
+      assert.equal(git(desk,"rev-parse","HEAD").toString(),head)
+      if (mode === "preflight") {
+        assert.match(result.commit.reason,/outside edits/u)
+        assert.equal(await fs.readFile(file,"utf8"),before+"\nOUTSIDE_BEFORE_REPORT_PATCH\n")
+      } else {
+        assert.match(result.commit.reason,/CONTROLLED_REPORT_WRITE_FAILURE/u)
+        assert.equal(result.publication.placement,"retained")
+        assert.equal(await fs.readFile(file,"utf8"),before)
+      }
+    }
+  }))
+}
+
 test("the link fields are the tools' own: task_update and task_create refuse them in frontmatter", () => scratch(async ({ base, desk, env: scratchEnv }) => {
   const env = await hostEnv(base, scratchEnv)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
