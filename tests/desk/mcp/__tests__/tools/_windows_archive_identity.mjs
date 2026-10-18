@@ -20,6 +20,19 @@ $phase = 'setup'
 $programError = $null
 $script:operation = 'setup'
 $script:firstFailure = $null
+$script:metadataMethodCount = $null
+$script:metadataMethodCountStatus = 'not_reached'
+$script:metadataFailedCheck = $null
+$script:metadataCurrentMethod = $null
+$script:metadataRows = New-Object 'System.Collections.Generic.List[System.Object]'
+$script:metadataByName = @{}
+foreach ($fixedName in @('CreateFileW', 'GetFileInformationByHandleEx', 'GetVolumeInformationByHandleW', 'CloseHandle')) {
+  $row = @{ method = $fixedName; status = 'not_reached'; importCount = $null; importCountStatus = 'not_reached'
+    setLastError = 'not_reached'; exactSpelling = 'not_reached'; unicode = 'not_reached'
+    winapi = 'not_reached'; methodImplementationPreserveSig = 'not_reached' }
+  [void]$script:metadataRows.Add($row)
+  $script:metadataByName.Add($fixedName, $row)
+}
 $access = [uint32]0
 $share = [uint32]7
 $disposition = [uint32]3
@@ -48,6 +61,16 @@ function Remember-Exception($exception) {
       'System.Management.Automation.RuntimeException', 'System.Management.Automation.MethodException',
       'System.Management.Automation.MethodInvocationException', 'System.Management.Automation.ParameterBindingException') -notcontains $name) {
       $name = 'other'
+    }
+    function Fail-Metadata([string]$check, $methodName) {
+      if ($null -eq $script:metadataFailedCheck) {
+        $script:metadataFailedCheck = @{ check = $check; method = $methodName }
+      }
+      throw 'invalid_emitted_metadata'
+    }
+    function Require-Metadata($row, [string]$key, $value, [string]$check) {
+      $row[$key] = if ($null -eq $value) { 'unavailable' } else { $value }
+      if ($value -ne $true) { Fail-Metadata $check $row.method }
     }
     $script:firstFailure = @{ operation = $script:operation; kind = 'exception'
       exception = $name; hresult = $failure.HResult; nativeError = $null }
@@ -164,16 +187,42 @@ try {
   $script:operation = 'create_type'
   $native = $type.CreateType()
   $script:operation = 'verify_metadata'
-  $methods = $native.GetMethods([Reflection.BindingFlags]'Public, Static, DeclaredOnly')
-  if ($methods.Count -ne 4) { throw 'invalid_emitted_metadata' }
-  foreach ($method in $methods) {
-    $imports = $method.GetCustomAttributes([Runtime.InteropServices.DllImportAttribute], $false)
-    if ($imports.Count -ne 1 -or !$imports[0].SetLastError -or !$imports[0].ExactSpelling -or
-        $imports[0].CharSet -ne [Runtime.InteropServices.CharSet]::Unicode -or
-        $imports[0].CallingConvention -ne [Runtime.InteropServices.CallingConvention]::Winapi -or
-        ($method.GetMethodImplementationFlags() -band [Reflection.MethodImplAttributes]::PreserveSig) -eq 0) {
-      throw 'invalid_emitted_metadata'
+  try {
+    $methods = $native.GetMethods([Reflection.BindingFlags]'Public, Static, DeclaredOnly')
+    $script:metadataMethodCount = $methods.Count
+    $script:metadataMethodCountStatus = 'observed'
+    if ($methods.Count -ne 4) { Fail-Metadata 'method_count' $null }
+    foreach ($method in $methods) {
+      $script:metadataCurrentMethod = $null
+      if (!$script:metadataByName.ContainsKey($method.Name)) { Fail-Metadata 'metadata_read' $null }
+      $script:metadataCurrentMethod = $method.Name
+      $row = $script:metadataByName[$method.Name]
+      $row.status = 'observed'
+      $imports = $method.GetCustomAttributes([Runtime.InteropServices.DllImportAttribute], $false)
+      $row.importCount = $imports.Count
+      $row.importCountStatus = 'observed'
+      if ($imports.Count -ne 1) { Fail-Metadata 'import_count' $method.Name }
+      $lastError = $imports[0].SetLastError
+      Require-Metadata $row 'setLastError' $lastError 'set_last_error'
+      $exact = $imports[0].ExactSpelling
+      Require-Metadata $row 'exactSpelling' $exact 'exact_spelling'
+      $charset = $imports[0].CharSet
+      $unicode = if ($null -eq $charset) { $null } else { $charset -eq [Runtime.InteropServices.CharSet]::Unicode }
+      Require-Metadata $row 'unicode' $unicode 'charset'
+      $convention = $imports[0].CallingConvention
+      $winapi = if ($null -eq $convention) { $null } else { $convention -eq [Runtime.InteropServices.CallingConvention]::Winapi }
+      Require-Metadata $row 'winapi' $winapi 'calling_convention'
+      $implementation = $method.GetMethodImplementationFlags()
+      $preserve = if ($null -eq $implementation) { $null } else {
+        ($implementation -band [Reflection.MethodImplAttributes]::PreserveSig) -ne 0
+      }
+      Require-Metadata $row 'methodImplementationPreserveSig' $preserve 'preserve_sig'
     }
+  } catch {
+    if ($null -eq $script:metadataFailedCheck) {
+      $script:metadataFailedCheck = @{ check = 'metadata_read'; method = $script:metadataCurrentMethod }
+    }
+    throw
   }
   $phase = 'request'
   $script:operation = 'read_request'
@@ -226,6 +275,8 @@ finally {
   Emit @{ state = 'finished'; opened = $script:opened; closeAttempts = $script:closeAttempts
     closed = $script:closed; closeFailures = $script:closeFailures; programError = $programError
     firstFailure = $script:firstFailure; finalOperation = $script:operation
+    metadataFacts = @{ methodCount = $script:metadataMethodCount; methodCountStatus = $script:metadataMethodCountStatus
+      methods = @($script:metadataRows.ToArray()); failedCheck = $script:metadataFailedCheck }
     disposals = @($script:disposals.ToArray()) }
 }
 if ($null -ne $programError) { exit 4 }
@@ -259,6 +310,41 @@ const safeFailure = value => value == null ? null : {
   hresult: signedInt(value.hresult) ? value.hresult : null,
   nativeError: uint(value.nativeError) ? value.nativeError : null,
 }
+const nativeMethods = ["CreateFileW", "GetFileInformationByHandleEx", "GetVolumeInformationByHandleW", "CloseHandle"]
+const metadataChecks = new Set(["method_count", "import_count", "set_last_error", "exact_spelling",
+  "charset", "calling_convention", "preserve_sig", "metadata_read"])
+const metadataFlags = ["setLastError", "exactSpelling", "unicode", "winapi", "methodImplementationPreserveSig"]
+const factStatus = value => ["observed", "unavailable", "not_reached"].includes(value) ? value : "unavailable"
+function safeMetadata(value) {
+  const rows = Array.isArray(value?.methods) ? value.methods.slice(0, 16) : []
+  return {
+    methodCount: uint(value?.methodCount) && value.methodCount <= 16 ? value.methodCount : null,
+    methodCountStatus: value == null ? "not_reached" : factStatus(value.methodCountStatus),
+    unknownMethodsObserved: rows.some(row => !nativeMethods.includes(row?.method)),
+    duplicateMethodsObserved: nativeMethods.some(name => rows.filter(row => row?.method === name).length > 1),
+    methodsTruncated: Array.isArray(value?.methods) && value.methods.length > 16,
+    factSources: { methodCount: "Type.GetMethods_Public_Static_DeclaredOnly",
+      importCount: "MethodInfo.GetCustomAttributes_DllImportAttribute",
+      attributeFlags: "DllImportAttribute_fields",
+      methodImplementationPreserveSig: "MethodInfo.GetMethodImplementationFlags" },
+    methods: nativeMethods.map(method => {
+      const row = rows.find(item => item?.method === method)
+      return { method, status: row ? factStatus(row.status) : "not_reached",
+        importCount: uint(row?.importCount) && row.importCount <= 16 ? row.importCount : null,
+        importCountStatus: row ? factStatus(row.importCountStatus) : "not_reached",
+        ...Object.fromEntries(metadataFlags.map(key => [key, !row ? "not_reached" : typeof row[key] === "boolean" ? row[key] :
+          ["unavailable", "not_reached"].includes(row[key]) ? row[key] : "unavailable"])) }
+    }),
+    failedCheck: value?.failedCheck == null ? null : {
+      check: metadataChecks.has(value.failedCheck.check) ? value.failedCheck.check : "unknown",
+      method: value.failedCheck.method === null ? null : nativeMethods.includes(value.failedCheck.method) ? value.failedCheck.method : "unknown",
+    },
+  }
+}
+const metadataConfirmed = value => value?.methodCount === 4 && value.methodCountStatus === "observed" &&
+  !value.unknownMethodsObserved && !value.duplicateMethodsObserved && !value.methodsTruncated && value.failedCheck === null &&
+  value.methods.every(row => row.status === "observed" && row.importCount === 1 && row.importCountStatus === "observed" &&
+    metadataFlags.every(key => row[key] === true))
 
 function stderrFacts(memory, totalBytes) {
   const text = memory.toString("utf8"), lines = PROGRAM.split("\n")
@@ -440,6 +526,7 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
         closeFailures: item.closeFailures, programError: item.programError,
         firstFailure: safeFailure(item.firstFailure),
         finalOperation: item.finalOperation == null ? null : operations.has(item.finalOperation) ? item.finalOperation : "unknown",
+        metadataFacts: safeMetadata(item.metadataFacts),
         disposals: item.disposals.map(disposal => ({ phase: disposal.phase, success: disposal.success, error: disposal.error })) }
       event("native_finished")
       if (!rawReady) fail("native_error_before_ready")
@@ -548,6 +635,10 @@ export async function observeIdentity({ source, nodeBaseline, admittedIdentity }
         finalAck.disposals.every(disposal => disposal.success) &&
         !currentCloseUnconfirmed }
       if (!finalAck) issue("missing_finished")
+      if (rawReady && !metadataConfirmed(finalAck?.metadataFacts)) {
+        issue("metadata_confirmation_failed")
+        problem ??= error("emitted metadata confirmation incomplete")
+      }
       receipt.stderrObservation = stderrFacts(stderrMemory, receipt.stderrBytes)
       receipt.missingStages = stages.filter(type => !receipt.events.some(item => item.type === type))
       if (receipt.missingStages.length) {

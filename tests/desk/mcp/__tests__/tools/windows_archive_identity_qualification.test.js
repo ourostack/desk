@@ -17,6 +17,12 @@ const volumeHex = "8877665544332211"
 const fileIdHex = "08070605040302011020304050607080"
 const nodeStat = { dev: 0x55667788n, ino: 0x0102030405060708n, mode: 0o40755n }
 const admittedIdentity = `${nodeStat.dev}:${nodeStat.ino}:16384`
+const nativeMethodNames = ["CreateFileW", "GetFileInformationByHandleEx", "GetVolumeInformationByHandleW", "CloseHandle"]
+function metadataFacts() {
+  return { methodCount: 4, methodCountStatus: "observed", failedCheck: null,
+    methods: nativeMethodNames.map(method => ({ method, status: "observed", importCount: 1, importCountStatus: "observed",
+      setLastError: true, exactSpelling: true, unicode: true, winapi: true, methodImplementationPreserveSig: true })) }
+}
 function snapshot(extra = {}) {
   return {
     openSuccess: true, openError: null,
@@ -47,6 +53,7 @@ function fakeNative(options = {}) {
     if (options.finish) return options.finish({ emit, close, observations })
     emit({ state: "finished", opened: observations + 1, closeAttempts: observations + 1,
       closed: observations + 1, closeFailures: 0, programError: null,
+      metadataFacts: metadataFacts(),
       disposals: [...Array.from({ length: observations }, () => ({ phase: "observe", success: true, error: null })),
         { phase: "finish", success: true, error: null }] })
     close()
@@ -122,6 +129,54 @@ test("synthetic: first native failure is distinct from final disposal and export
       exception: "System.InvalidOperationException", hresult: -2146233079, nativeError: null })
     assert.equal(error.identityReceipt.handles.finalOperation, "dispose_handle")
     assert.equal(JSON.stringify(error.identityReceipt).includes("PRIVATE_NATIVE_PATH"), false)
+    return true
+  })
+})
+
+test("synthetic: metadata facts distinguish measured false, unavailable and not reached", async () => {
+  const facts = metadataFacts()
+  facts.failedCheck = { check: "set_last_error", method: "CreateFileW" }
+  facts.methods[0] = { ...facts.methods[0], setLastError: false, exactSpelling: "unavailable", unicode: "not_reached" }
+  const f = failedBeforeReady({ metadataFacts: facts }, "unrecognized private stderr")
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    const actual = error.identityReceipt.handles.metadataFacts
+    assert.equal(actual.methodCount, 4)
+    assert.equal(actual.methods[0].setLastError, false)
+    assert.equal(actual.methods[0].exactSpelling, "unavailable")
+    assert.equal(actual.methods[0].unicode, "not_reached")
+    assert.equal(actual.factSources.methodImplementationPreserveSig, "MethodInfo.GetMethodImplementationFlags")
+    assert.deepEqual(actual.failedCheck, facts.failedCheck)
+    return true
+  })
+})
+
+test("synthetic: metadata facts never export arbitrary method names, checks or flag strings", async () => {
+  const f = failedBeforeReady({ metadataFacts: {
+    methodCount: "PRIVATE_NATIVE_PATH", methodCountStatus: "PRIVATE_NATIVE_PATH",
+    failedCheck: { check: "PRIVATE_NATIVE_PATH", method: "PRIVATE_NATIVE_PATH" },
+    methods: [{ method: "PRIVATE_NATIVE_PATH", status: "PRIVATE_NATIVE_PATH", setLastError: "PRIVATE_NATIVE_PATH" }],
+  } }, "unrecognized private stderr")
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    const actual = error.identityReceipt.handles.metadataFacts
+    assert.equal(actual.methodCount, null)
+    assert.equal(actual.methodCountStatus, "unavailable")
+    assert.equal(actual.unknownMethodsObserved, true)
+    assert.deepEqual(actual.failedCheck, { check: "unknown", method: "unknown" })
+    assert.equal(JSON.stringify(error.identityReceipt).includes("PRIVATE_NATIVE_PATH"), false)
+    return true
+  })
+})
+
+test("synthetic: valid READY cannot override contradictory finished metadata", async () => {
+  const facts = metadataFacts()
+  facts.methods[0].setLastError = false
+  const f = fakeNative({ finish: ({ emit, close }) => {
+    emit({ state: "finished", opened: 1, closeAttempts: 1, closed: 1, closeFailures: 0, programError: null,
+      metadataFacts: facts, disposals: [{ phase: "finish", success: true, error: null }] })
+    close()
+  } })
+  await assert.rejects(observeIdentity(input, async () => {}, f.dependencies), error => {
+    assert.ok(error.identityReceipt.protocolIssues.includes("metadata_confirmation_failed"))
     return true
   })
 })
@@ -507,13 +562,25 @@ async function persistActual() {
 }
 after(persistActual)
 
-async function fixture(record) {
+async function fixture(record, { rootAlias = false } = {}) {
   record.fixtureStage = "runtime_check"
   assert.equal(process.versions.node, "24.18.0", "finite source-contract fixture requires Node 24.18.0")
   record.fixtureStage = "temp_root"
-  const base = await mkTempRoot("desk-identity-observation-"), root = path.join(base, "身份's & $(data)")
+  const base = await mkTempRoot("desk-identity-observation-"), container = path.join(base, "身份's & $(data)")
+  let root = container, physicalRoot = container
   record.fixtureStage = "root_mkdir"
-  await fs.mkdir(root)
+  await fs.mkdir(container)
+  if (rootAlias) {
+    physicalRoot = path.join(container, "physical")
+    record.fixtureStage = "alias_physical_mkdir"
+    await fs.mkdir(physicalRoot)
+    root = path.join(container, "root-alias")
+    record.fixtureStage = "alias_junction_create"
+    await fs.symlink(physicalRoot, root, "junction")
+    record.fixtureStage = "alias_lstat"
+    record.fixtureFacts.aliasConstructed = (await fs.lstat(root)).isSymbolicLink()
+    assert.equal(record.fixtureFacts.aliasConstructed, true)
+  }
   const src = path.join(root, "source")
   record.fixtureStage = "source_mkdir"
   await fs.mkdir(src)
@@ -534,10 +601,10 @@ async function fixture(record) {
     const result = await reference.read(buffer, 0, buffer.length, 0)
     return result.bytesRead === 32 && buffer.equals(marker)
   }
-  return { root, src, marker, reference, referenceMatches, prepared,
+  return { root, src, physicalSource: path.join(physicalRoot, "source"), marker, reference, referenceMatches, prepared,
     admission: prepared.snapshot.get("").identity, node }
 }
-function actualCell(name, body) {
+function actualCell(name, body, options = {}) {
   test(`actual Windows: ${name}`, { skip: process.platform !== "win32", timeout: 20000 }, async () => {
     const record = { name, platform: process.platform, node: process.versions.node,
       replacementPhaseBegunAtBaseline: false, receipt: null,
@@ -546,7 +613,7 @@ function actualCell(name, body) {
     actual.push(record)
     let f, failure
     try {
-      f = await fixture(record)
+      f = await fixture(record, options)
       record.fixtureFacts.nodeReferenceAcquired = true
       await body(f, record)
     } catch (error) {
@@ -613,32 +680,14 @@ actualCell("ordinary source observes real prepared snapshot without claiming a b
 })
 
 actualCell("owned root alias observes the same full native object", async (f, record) => {
-  const alias = path.join(f.root, "root-alias")
-  // A sibling alias avoids recursively aliasing its own parent.
-  const physical = path.join(f.root, "physical")
-  record.fixtureStage = "alias_physical_mkdir"
-  await fs.mkdir(physical)
-  record.fixtureStage = "alias_source_rename"
-  await fs.rename(f.src, path.join(physical, "source"))
-  record.fixtureStage = "alias_junction_create"
-  await fs.symlink(physical, alias, "junction")
-  const logicalSource = path.join(alias, "source"), physicalSource = path.join(physical, "source")
-  record.fixtureStage = "alias_archive_mkdir"
-  await fs.mkdir(path.join(physical, "_archive"))
-  record.fixtureStage = "alias_prepare"
-  const prepared = await prepareArchiveState({ effectiveRoot: alias, srcDir: logicalSource,
-    archiveDir: path.join(alias, "_archive", "source"), srcFile: path.join(logicalSource, "task.md"), spawnGit: spawnSync })
-  const admission = prepared.snapshot.get("").identity
-  record.fixtureStage = "alias_lstat"
-  record.fixtureFacts.aliasConstructed = (await fs.lstat(alias)).isSymbolicLink()
   assert.equal(record.fixtureFacts.aliasConstructed, true)
   record.fixtureStage = "native_observation"
-  record.receipt = await observeIdentity({ source: logicalSource,
-    nodeBaseline: await fs.lstat(logicalSource, { bigint: true }), admittedIdentity: admission }, async session => {
-    await prepared.atUse()
+  record.receipt = await observeIdentity({ source: f.src,
+    nodeBaseline: await fs.lstat(f.src, { bigint: true }), admittedIdentity: f.admission }, async session => {
+    await f.prepared.atUse()
     assert.equal(await f.referenceMatches(), true)
-    const a = await session.observe(physicalSource, "physical", await fs.lstat(physicalSource, { bigint: true }), admission)
-    const b = await session.observe(logicalSource, "alias", await fs.lstat(logicalSource, { bigint: true }), admission)
+    const a = await session.observe(f.physicalSource, "physical", await fs.lstat(f.physicalSource, { bigint: true }), f.admission)
+    const b = await session.observe(f.src, "alias", await fs.lstat(f.src, { bigint: true }), f.admission)
     assert.equal(a.sameAsBaseline, true)
     assert.equal(b.sameAsBaseline, true)
     assert.equal(a.reparse, false)
@@ -647,7 +696,7 @@ actualCell("owned root alias observes the same full native object", async (f, re
     assert.equal(b.nodeTupleMatchesAdmission, true)
     record.fixtureFacts.originalReferenceMatchesMarker = true
   })
-})
+}, { rootAlias: true })
 
 actualCell("sequential rename preserves held native baseline while the old name disappears", async (f, record) => {
   await observeActual(f, record, async session => {
@@ -691,6 +740,7 @@ actualCell("final-component reparse is observed without following it to its targ
   await fs.symlink(f.src, link, "junction")
   assert.equal((await fs.lstat(link)).isSymbolicLink(), true)
   record.fixtureFacts.reparseConstructed = true
+  record.fixtureStage = "native_observation"
   record.receipt = await observeIdentity({ source: link, nodeBaseline: await fs.lstat(link, { bigint: true }) }, async session => {
     const entry = await session.observe(link, "reparse_entry", await fs.lstat(link, { bigint: true }))
     const target = await session.observe(f.src, "target", await fs.lstat(f.src, { bigint: true }), f.admission)
