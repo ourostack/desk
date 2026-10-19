@@ -53,7 +53,7 @@
       "dependencies": {
         "superpowers": {
           "path": "../superpowers",
-          "version": "6.4.2",
+          "version": "7.0.0",
           "resolution": "flattened"
         },
         "plain-language": {
