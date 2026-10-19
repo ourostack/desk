@@ -912,9 +912,61 @@ test("actual acquired native Core remains usable beyond handshake deadline throu
   assert.ok(f.tabs.has(1))
 })
 
+function observeNativePreflightFailures(t){
+  const exec=childProcess.execFileSync
+  t.mock.method(childProcess,"execFileSync",function(...call){
+    const started=performance.now()
+    try{return exec.apply(this,call)}
+    catch(error){
+      const [file,args,options]=call
+      if(typeof file==="string" && path.basename(file).toLowerCase()==="powershell.exe" &&
+        Array.isArray(args) && options?.timeout===5000){
+        const command=args.indexOf("-Command"),script=command<0 ? undefined : args[command+1]
+        const bytes=value=>Buffer.isBuffer(value)||typeof value==="string" ? Buffer.byteLength(value) : null
+        t.diagnostic("owned native preflight failure "+JSON.stringify({
+          scope:"passive subprocess observation; original exception and native deadline unchanged",
+          programSha256:typeof script==="string" ? require("crypto").createHash("sha256").update(script).digest("hex") : null,
+          timeoutMs:options.timeout,durationMs:performance.now()-started,
+          code:["ETIMEDOUT","ENOENT","EACCES","EPERM","ERR_CHILD_PROCESS_STDIO_MAXBUFFER"].includes(error.code) ? error.code : "other",
+          status:Number.isInteger(error.status) ? error.status : null,
+          signal:[null,"SIGTERM","SIGKILL","SIGABRT","SIGINT"].includes(error.signal) ? error.signal : "other",
+          stdoutBytes:bytes(error.stdout),stderrBytes:bytes(error.stderr),
+        }))
+      }
+      throw error
+    }
+  })
+}
+
+test("passive native preflight diagnostics preserve exact failures and never export arguments or output",t=>{
+  const privateValue="PRIVATE_PREFLIGHT_DIAGNOSTIC"
+  const failure=Object.assign(new Error(privateValue),{
+    code:"ETIMEDOUT",status:null,signal:"SIGTERM",stdout:Buffer.from(privateValue),stderr:privateValue,
+  })
+  const returned={},seen=[],diagnostics=[]
+  t.mock.method(childProcess,"execFileSync",function(...call){
+    seen.push(call)
+    if(call[2].fail)throw failure
+    return returned
+  })
+  observeNativePreflightFailures({mock:t.mock,diagnostic:value=>diagnostics.push(value)})
+  const args=["-Command",privateValue],options={timeout:5000}
+  assert.equal(childProcess.execFileSync("powershell.exe",args,options),returned)
+  assert.equal(seen[0][1],args);assert.equal(seen[0][2],options)
+  assert.deepEqual(diagnostics,[])
+  assert.throws(()=>childProcess.execFileSync("powershell.exe",args,{...options,fail:true}),error=>error===failure)
+  assert.equal(diagnostics.length,1)
+  assert.equal(diagnostics[0].includes(privateValue),false)
+  const report=JSON.parse(diagnostics[0].slice("owned native preflight failure ".length))
+  assert.equal(report.code,"ETIMEDOUT");assert.equal(report.timeoutMs,5000)
+  assert.equal(report.stdoutBytes,Buffer.byteLength(privateValue));assert.equal(report.stderrBytes,Buffer.byteLength(privateValue))
+  assert.equal(report.programSha256,require("crypto").createHash("sha256").update(privateValue).digest("hex"))
+})
+
 for (const relayNonce of [undefined,"0a112233-4455-4677-8899-aabbccddeeff"])
 test("fixed internal attach creates through actual Session, Commander, native Core, C and kernel before F reports running"+
   (relayNonce ? " with newline-prefixed encoded nonce" : ""),async t=>{
+  observeNativePreflightFailures(t)
   const f=await signedWorkerFixture(t,{skipNative:true,relayNonce})
   fs.unlinkSync(f.descriptor.sessionFile)
   f.setLaunchSuccess()
