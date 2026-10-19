@@ -598,11 +598,34 @@ test("production factory with synthetic transport selects the actual native sour
 const parserExecutable = () => process.platform === "win32" ?
   path.win32.join(process.env.SystemRoot || process.env.SYSTEMROOT || "", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "pwsh"
 
+function observeMetadataStages(stderr) {
+  const stages = []
+  let unrecognizedLines = 0
+  for (const line of stderr.split(/\r?\n/u).filter(Boolean)) {
+    const stage = line.startsWith("DESK_METADATA_STAGE:") ? line.slice("DESK_METADATA_STAGE:".length) : null
+    if (["command_started", "input_read", "parsed", "helpers_checked", "report_written"].includes(stage) &&
+        stages.length < 16) stages.push(stage)
+    else unrecognizedLines++
+  }
+  return { stages, unrecognizedLines }
+}
+
+test("metadata phase observations retain only stage enums and account for unexpected stderr", () => {
+  assert.deepEqual(observeMetadataStages([
+    "DESK_METADATA_STAGE:command_started", "PRIVATE_FIXTURE",
+    "DESK_METADATA_STAGE:input_read", "DESK_METADATA_STAGE:PRIVATE_FIXTURE", "",
+  ].join("\n")), { stages: ["command_started", "input_read"], unrecognizedLines: 2 })
+})
+
 test("managed-only: actual captured PowerShell parses and defines its helpers before the native setup body", async t => {
   const script = `
 $ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('DESK_METADATA_STAGE:command_started')
 $tokens = $null; $errors = $null
-$ast = [Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$tokens, [ref]$errors)
+$program = [Console]::In.ReadToEnd()
+[Console]::Error.WriteLine('DESK_METADATA_STAGE:input_read')
+$ast = [Management.Automation.Language.Parser]::ParseInput($program, [ref]$tokens, [ref]$errors)
+[Console]::Error.WriteLine('DESK_METADATA_STAGE:parsed')
 $setup = @($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] })
 $rows = @()
 foreach ($name in @('Define-Native', 'Build-Layout', 'Build-RenameBuffer', 'Refuse', 'Close-Entry', 'Read-Entry', 'Valid-Entry', 'Same-Entry')) {
@@ -611,12 +634,26 @@ foreach ($name in @('Define-Native', 'Build-Layout', 'Build-RenameBuffer', 'Refu
   $rows += @{ name = $name; scriptScoped = $definitions.Count -eq 1
     beforeSetup = $definitions.Count -eq 1 -and $setup.Count -eq 1 -and $definitions[0].Extent.EndOffset -lt $setup[0].Extent.StartOffset }
 }
+[Console]::Error.WriteLine('DESK_METADATA_STAGE:helpers_checked')
 [Console]::WriteLine((@{ parseErrors = $errors.Count; helpers = $rows } | ConvertTo-Json -Depth 5 -Compress))
+[Console]::Error.WriteLine('DESK_METADATA_STAGE:report_written')
 `
+  const program = await capturedProgram(), started = performance.now()
   const parsed = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    { input: await capturedProgram(), encoding: "utf8", env: process.env, timeout: 5000 })
+    { input: program, encoding: "utf8", env: process.env, timeout: 5000 })
   if (process.platform !== "win32" && parsed.error?.code === "ENOENT") return t.skip("PowerShell parser unavailable; not native Windows proof")
+  const phases = observeMetadataStages(parsed.stderr ?? "")
+  if (parsed.status !== 0 || parsed.error) t.diagnostic(JSON.stringify({
+    scope: "managed_metadata_only_not_native_performance_or_Windows_ABI",
+    programSha256: createHash("sha256").update(program).digest("hex"),
+    wrapperSha256: createHash("sha256").update(script).digest("hex"),
+    timeoutMs: 5000, elapsedMs: Math.round(performance.now() - started),
+    error: parsed.error?.code ?? null, status: parsed.status, signal: parsed.signal,
+    stdoutBytes: Buffer.byteLength(parsed.stdout ?? ""), stderrBytes: Buffer.byteLength(parsed.stderr ?? ""), ...phases,
+  }))
   assert.equal(parsed.status, 0, parsed.error?.code ?? "PowerShell AST-only parse failed")
+  assert.equal(phases.unrecognizedLines, 0, "metadata parser emitted unexpected stderr")
+  assert.deepEqual(phases.stages, ["command_started", "input_read", "parsed", "helpers_checked", "report_written"])
   const report = JSON.parse(parsed.stdout)
   assert.equal(report.parseErrors, 0)
   assert.deepEqual(report.helpers, ["Define-Native", "Build-Layout", "Build-RenameBuffer", "Refuse", "Close-Entry",
