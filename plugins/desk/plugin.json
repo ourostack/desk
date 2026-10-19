@@ -37,7 +37,7 @@
       "dependencies": {
         "superpowers": {
           "path": "../superpowers",
-          "version": "6.4.2",
+          "version": "7.0.0",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         },
