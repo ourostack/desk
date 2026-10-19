@@ -5,6 +5,8 @@
 // Calls in one process can overlap: one call creates a folder, a second joins it, and the first then fails. Removing the
 // folder would break the second. A per-process count of in-flight folders prevents that: a folder is removed only when no
 // other in-flight call still uses it or anything under it.
+// A caller may decline error cleanup for an unsettled native operation. That retention follows overlapping current users
+// through their last release; all usage bookkeeping still disappears when those calls finish.
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
@@ -12,9 +14,9 @@ import * as path from "node:path"
 const inFlight = new Map()
 
 function release(directory) {
-  const count = inFlight.get(directory) - 1
-  if (count === 0) inFlight.delete(directory)
-  else inFlight.set(directory, count)
+  const entry = inFlight.get(directory)
+  if (--entry.count === 0) inFlight.delete(directory)
+  return entry.retain
 }
 
 const inUse = (folder) => [...inFlight.keys()].some((used) => used === folder || used.startsWith(`${folder}${path.sep}`))
@@ -35,8 +37,10 @@ async function missingFolders(directory) {
   return missing
 }
 
-export async function withCreatedDirs(directory, work) {
-  inFlight.set(directory, (inFlight.get(directory) ?? 0) + 1)
+export async function withCreatedDirs(directory, work, { shouldCleanup = () => true } = {}) {
+  const entry = inFlight.get(directory) ?? { count: 0, retain: false }
+  entry.count++
+  inFlight.set(directory, entry)
   let made = []
   try {
     made = await missingFolders(directory)
@@ -45,7 +49,15 @@ export async function withCreatedDirs(directory, work) {
     release(directory)
     return result
   } catch (error) {
-    release(directory)
+    if (!shouldCleanup(error)) {
+      // Retention follows only current in-process users, not a permanent lease.
+      for (const [used, active] of inFlight) {
+        if (used === directory || used.startsWith(`${directory}${path.sep}`) || directory.startsWith(`${used}${path.sep}`))
+          active.retain = true
+      }
+    }
+    const retain = release(directory)
+    if (retain) throw error
     for (const dir of made) {
       if (inUse(dir)) break
       try {

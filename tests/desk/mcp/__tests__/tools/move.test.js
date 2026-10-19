@@ -1122,6 +1122,9 @@ test("task_move unarchive with a new name renames the row that is still in the t
 test("task_move unarchive into another track moves the source row there", async () => {
   const root = await mkTempDeskRoot()
   await archivedTask(root, { rows: ["old-task"] })
+  const archived = await readFront(path.join(root, "main-track", "_archive", "old-task", "task.md"))
+  assert.equal(archived.data.status, "done")
+  assert.match(await trackBody(root, "main-track"), /^\| `old-task` \| done \|/m)
   await mkTrack(root, "track-b", { rows: [] })
 
   await task_move({
@@ -1131,7 +1134,10 @@ test("task_move unarchive into another track moves the source row there", async 
 
   assert.ok(await exists(path.join(root, "track-b", "old-task", "task.md")))
   assert.doesNotMatch(await trackBody(root, "main-track"), /`old-task`/)
-  assert.match(await trackBody(root, "track-b"), /^\| `old-task` \| drafting \|/m)
+  assert.match(await trackBody(root, "track-b"), /^\| `old-task` \| done \|/m)
+  const live = await readFront(path.join(root, "track-b", "old-task", "task.md"))
+  assert.equal(live.data.status, archived.data.status, "moving a terminal task does not reopen it")
+  assert.deepEqual(live.data.evidence, archived.data.evidence)
 })
 
 test("task_move unarchive into another track builds a row when the source table has none", async () => {

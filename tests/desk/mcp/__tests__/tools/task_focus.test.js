@@ -37,7 +37,7 @@ function ctx() {
 test("hint strings are the brief's, worded for the main agent", () => {
   assert.equal(NO_FOCUS_HINT, MAIN_NONE)
   assert.equal(focusedHint({ track: "a", slug: "b-c" }), MAIN_FOCUSED("a/b-c"))
-  assert.deepEqual(TASK_FOCUS_FIELDS, ["track", "slug", "clear"])
+  assert.deepEqual(TASK_FOCUS_FIELDS, ["track", "slug", "clear", "display_label"])
 })
 
 test("context observation reflects only an actual planning-complete card flag, never invented agreement", async () => {
