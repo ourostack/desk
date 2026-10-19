@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { mkTempRoot } from "../_temp_roots.js"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
 const { assignShards, shardFiles, loadDurations, defaultTablePath } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
@@ -159,4 +160,78 @@ test("the shard runner runs only its own files and reports its predicted load", 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+async function runFailingAclDiagnostic(diagnostics) {
+  const dir = await mkTempRoot("desk-shard-acl-diagnostic-")
+  const tests = path.join(dir, "tests")
+  mkdirSync(tests)
+  writeFileSync(path.join(tests, "acl.test.js"), `
+import { test } from "node:test"
+import assert from "node:assert/strict"
+test("original verifier failure", t => {
+  for (const diagnostic of ${JSON.stringify(diagnostics)}) t.diagnostic(diagnostic)
+  assert.fail("original verifier failure " + "failure detail ".repeat(150))
+})
+test("later output displaces the failure from the tail", t => {
+  t.diagnostic("later output ".repeat(1000))
+})
+`)
+  const out = path.join(dir, "results.json")
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  const result = spawnSync(process.execPath, [
+    path.join(scripts, "run-suite-files.mjs"), "--out", out, "--tests-root", tests,
+  ], { encoding: "utf8", env, timeout: 120000 })
+  assert.equal(result.status, 1, result.stdout + result.stderr)
+  const [file] = JSON.parse(readFileSync(out, "utf8")).results
+  assert.equal(file.exitCode, 1)
+  assert.equal(file.fail, 1)
+  assert.deepEqual(file.failedTests, ["original verifier failure"])
+  return file
+}
+
+test("failed-file results retain the complete safe ACL diagnostic after raw failure output is clipped", async () => {
+  const failure = {
+    scriptSha256: "4".repeat(64), timeoutMs: 5000, ms: 5025,
+    error: { code: "ETIMEDOUT", status: null, signal: "SIGTERM",
+      stdoutBytes: 0, stderrBytes: 0, privateResult: false, pid: 4321,
+      callSites: [{ function: "verifyGeneration", line: 438, column: 23 }] },
+  }
+  const unavailable = { ...failure, error: { ...failure.error, pid: null, callSites: [], locationUnavailable: true } }
+  const file = await runFailingAclDiagnostic([
+    "actual Windows ACL provider timing " + JSON.stringify({
+      calls: 16, totalMs: 10689, maxMs: 5025,
+      failures: [{ ...failure, input: "PRIVATE_FIXTURE", error: {
+        ...failure.error, stderr: "PRIVATE_FIXTURE", executable: "PRIVATE_FIXTURE",
+        callSites: failure.error.callSites.map(site => ({ ...site, path: "PRIVATE_FIXTURE" })),
+      } }, unavailable],
+      environment: "PRIVATE_FIXTURE", padding: "padding".repeat(1000),
+    }),
+  ])
+  assert.deepEqual(file.aclDiagnostics, { failures: [failure, unavailable], invalidRecords: 0, droppedFailures: 0 })
+  assert.equal(JSON.stringify(file.aclDiagnostics).includes("PRIVATE_FIXTURE"), false)
+  assert.equal(file.outputTail.includes("ETIMEDOUT"), false)
+  assert.equal(file.firstFailures.includes('"stderrBytes":0'), false)
+})
+
+test("ACL diagnostic retention bounds failure rows and reports malformed records without echoing them", async () => {
+  const failure = {
+    scriptSha256: "a".repeat(64), timeoutMs: 5000, ms: 5001,
+    error: { code: "ETIMEDOUT", status: null, signal: "SIGTERM",
+      stdoutBytes: 0, stderrBytes: 3, privateResult: false },
+  }
+  const file = await runFailingAclDiagnostic([
+    "actual Windows ACL provider timing PRIVATE_FIXTURE",
+    "actual Windows ACL provider timing " + JSON.stringify({ failures: [
+      { ...failure, error: { ...failure.error, code: "PRIVATE_FIXTURE" } },
+      { ...failure, error: { ...failure.error, pid: 0, callSites: [] } },
+      ...Array.from({ length: 65 }, () => failure),
+    ] }),
+  ])
+  assert.equal(file.aclDiagnostics.failures.length, 64)
+  assert.deepEqual(file.aclDiagnostics.failures[0], failure)
+  assert.equal(file.aclDiagnostics.invalidRecords, 3)
+  assert.equal(file.aclDiagnostics.droppedFailures, 1)
+  assert.equal(JSON.stringify(file.aclDiagnostics).includes("PRIVATE_FIXTURE"), false)
 })

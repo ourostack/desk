@@ -16,6 +16,68 @@ const A = "11111111-1111-4111-8111-111111111111";
 const resources = { contextId: A, disposition: "unknown", closedTabIds: [7],
   remainingTabIds: [8], unknownRevokedTabs: [{ tabId: 9, windowId: 2 }] };
 
+function aclFailureLocation(error) {
+  let pid = null;
+  try {
+    pid = Number.isSafeInteger(error.pid) && error.pid > 0 ? error.pid : null;
+    const stack = typeof error.stack === "string" ? error.stack.slice(0, 16384) : "";
+    const callSites = [...stack.matchAll(/^\s*at (assertPrivateGeneration|verifyGeneration) \([^\r\n]*[\\/](?:desk|web)-extension-credential\.cjs:(\d+):(\d+)\)\s*$/gm)]
+      .map(match => ({ function: match[1], line: Number(match[2]), column: Number(match[3]) }))
+      .filter(site => Number.isSafeInteger(site.line) && site.line > 0 && Number.isSafeInteger(site.column) && site.column > 0)
+      .slice(0, 4);
+    return { pid, callSites };
+  } catch {
+    return { pid, callSites: [], locationUnavailable: true };
+  }
+}
+
+test("ACL failure locations retain credential callsite coordinates without retaining stack paths", () => {
+  const observed = aclFailureLocation({ pid: 4321, stack: [
+    "Error: PRIVATE_FIXTURE",
+    "    at assertPrivateGeneration (C:\\PRIVATE_FIXTURE\\desk-extension-credential.cjs:559:7)",
+    "    at verifyGeneration (C:\\PRIVATE_FIXTURE\\desk-extension-credential.cjs:438:23)",
+    "    at stagedTransport (C:\\PRIVATE_FIXTURE\\native_error_transport.test.js:213:23)",
+  ].join("\n") });
+  assert.deepEqual(observed, { pid: 4321, callSites: [
+    { function: "assertPrivateGeneration", line: 559, column: 7 },
+    { function: "verifyGeneration", line: 438, column: 23 },
+  ] });
+  assert.equal(JSON.stringify(observed).includes("PRIVATE_FIXTURE"), false);
+});
+
+test("ACL failure locations bound callsites and report unavailable identity rather than guessing", () => {
+  assert.deepEqual(aclFailureLocation({ pid: "PRIVATE_FIXTURE", stack: null }), { pid: null, callSites: [] });
+  const observed = aclFailureLocation({ pid: 0, stack:
+    "    at verifyGeneration (C:\\PRIVATE_FIXTURE\\web-extension-credential.cjs:438:23)\n".repeat(6) });
+  assert.equal(observed.pid, null);
+  assert.equal(observed.callSites.length, 4);
+  assert.deepEqual(observed.callSites[3], { function: "verifyGeneration", line: 438, column: 23 });
+});
+
+test("ACL location inspection reports a formatting failure without replacing the subprocess error", () => {
+  const error = { pid: 4321, get stack() { throw new Error("PRIVATE_FIXTURE"); } };
+  assert.deepEqual(aclFailureLocation(error), { pid: 4321, callSites: [], locationUnavailable: true });
+});
+
+test("ACL failure locations read the real synchronous child result before error remapping", async () => {
+  const root = await mkTempRoot("acl-error-location-"), moduleFile = path.join(root, "web-extension-credential.cjs");
+  fs.writeFileSync(moduleFile, [
+    'const { execFileSync } = require("node:child_process");',
+    'function assertPrivateGeneration() { execFileSync(process.execPath, ["-e", \'process.stdout.write(String(process.pid));process.stderr.write("PRIVATE_FIXTURE");process.exit(7)\'], { stdio: ["ignore", "pipe", "pipe"] }); }',
+    'function verifyGeneration() { return assertPrivateGeneration(); }',
+    'module.exports = () => { try { verifyGeneration(); } catch (error) { return error; } };',
+  ].join("\n"));
+  const error = require(moduleFile)(), observed = aclFailureLocation(error);
+  assert.equal(error.status, 7);
+  assert.equal(observed.pid, Number(error.stdout.toString()));
+  assert.ok(observed.pid > 0);
+  assert.deepEqual(observed.callSites.map(({ function: name, line }) => ({ function: name, line })), [
+    { function: "assertPrivateGeneration", line: 2 }, { function: "verifyGeneration", line: 3 },
+  ]);
+  assert.equal(JSON.stringify(observed).includes(root), false);
+  assert.equal(JSON.stringify(observed).includes("PRIVATE_FIXTURE"), false);
+});
+
 test.beforeEach(t => {
   if (process.platform !== "win32") return;
   const cp = require("node:child_process"), original = cp.execFileSync, calls = [];
@@ -34,7 +96,7 @@ test.beforeEach(t => {
       const stdout = error.stdout ?? "", stderr = error.stderr ?? "";
       row.error = { code: error.code, status: error.status, signal: error.signal,
         stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr),
-        privateResult: stdout.toString() === "private" };
+        privateResult: stdout.toString() === "private", ...aclFailureLocation(error) };
       throw error;
     }
     finally { row.ms = Math.round(performance.now() - started); calls.push(row); }

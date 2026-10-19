@@ -62,6 +62,53 @@ const failures = (output) => [...output.matchAll(/^\s*not ok \d+ - ([^\n]+?)(?: 
   return { name: m[1], error: error.slice(0, 3000), stack: stack.slice(0, 700) }
 })
 
+// These failure-only observations can precede both clipped raw-output excerpts.
+// Keep only safe fields, never the subprocess input, arguments or output.
+const aclDiagnostics = (output) => {
+  const result = { failures: [], invalidRecords: 0, droppedFailures: 0 }
+  const codes = new Set(["ETIMEDOUT", "ENOBUFS", "ENOENT", "EACCES", "EPERM", "ENOMEM", "EIO", "ESRCH", "EPIPE"])
+  const integer = (value) => Number.isSafeInteger(value) && value >= 0
+  for (const match of output.matchAll(/^\s*# actual Windows ACL provider timing ([^\n]*)$/gm)) {
+    let record
+    try { record = JSON.parse(match[1]) }
+    catch { result.invalidRecords++; continue }
+    if (!Array.isArray(record?.failures)) { result.invalidRecords++; continue }
+    for (const row of record.failures) {
+      const error = row?.error
+      if (typeof row?.scriptSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(row.scriptSha256) ||
+          !integer(row?.timeoutMs) || row.timeoutMs === 0 || !integer(row?.ms) ||
+          !codes.has(error?.code) ||
+          !(error.status === null || Number.isSafeInteger(error.status)) ||
+          ![null, "SIGTERM", "SIGKILL", "SIGINT", "SIGABRT"].includes(error.signal) ||
+          !integer(error.stdoutBytes) || !integer(error.stderrBytes) ||
+          typeof error.privateResult !== "boolean") {
+        result.invalidRecords++
+        continue
+      }
+      const located = Object.hasOwn(error, "pid") || Object.hasOwn(error, "callSites")
+      if (located && (!(error.pid === null || (integer(error.pid) && error.pid > 0)) ||
+          !Array.isArray(error.callSites) || error.callSites.length > 4 ||
+          error.callSites.some(site => !["assertPrivateGeneration", "verifyGeneration"].includes(site?.function) ||
+            !integer(site.line) || site.line === 0 || !integer(site.column) || site.column === 0) ||
+          (Object.hasOwn(error, "locationUnavailable") &&
+            (error.locationUnavailable !== true || error.callSites.length !== 0)))) {
+        result.invalidRecords++
+        continue
+      }
+      if (result.failures.length >= 64) { result.droppedFailures++; continue }
+      result.failures.push({
+        scriptSha256: row.scriptSha256, timeoutMs: row.timeoutMs, ms: row.ms,
+        error: { code: error.code, status: error.status, signal: error.signal,
+          stdoutBytes: error.stdoutBytes, stderrBytes: error.stderrBytes, privateResult: error.privateResult,
+          ...(located ? { pid: error.pid, callSites: error.callSites.map(({ function: name, line, column }) =>
+            ({ function: name, line, column })),
+            ...(error.locationUnavailable === true ? { locationUnavailable: true } : {}) } : {}) },
+      })
+    }
+  }
+  return result
+}
+
 const runFile = (file) => new Promise((resolve) => {
   const started = Date.now()
   const child = spawn(process.execPath, [
@@ -82,6 +129,7 @@ const runFile = (file) => new Promise((resolve) => {
       exitCode: code, timedOut, ms: Date.now() - started,
       pass: count("pass"), fail: count("fail"), skipped: count("skipped"), failedTests: [...new Set(failed)],
       failures: failures(output),
+      aclDiagnostics: code === 0 ? undefined : aclDiagnostics(output),
       stuck, tail: timedOut ? output.slice(-2500) : "",
       // A file that exits non-zero with no failing assertion (a native abort) leaves its reason only in the raw output.
       outputTail: code !== 0 && !timedOut ? output.slice(-4000) : "",
