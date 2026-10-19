@@ -617,9 +617,13 @@ function correlateMetadataClock(times, clocks) {
 
 function observeMetadataStages(stderr, clocks) {
   const stages = [], times = []
-  let unrecognizedLines = 0
+  let unrecognizedLines = 0, scriptEntryCount = 0
   let powershell = null, runtimeRows = 0
   for (const line of stderr.split(/\r?\n/u).filter(Boolean)) {
+    if (line === "DESK_METADATA_BOUNDARY:script_entered") {
+      scriptEntryCount++
+      continue
+    }
     if (line.startsWith("DESK_METADATA_RUNTIME:")) {
       const match = /^DESK_METADATA_RUNTIME:(Desktop|Core):(\d{1,4}\.\d{1,4}\.\d{1,6}(?:\.\d{1,6})?)(?:-[0-9A-Za-z.-]{1,40})?$/u.exec(line)
       runtimeRows++
@@ -628,14 +632,16 @@ function observeMetadataStages(stderr, clocks) {
     }
     const [stage, stamp, ...extra] = line.startsWith("DESK_METADATA_STAGE:") ?
       line.slice("DESK_METADATA_STAGE:".length).split(":") : []
-    if (["command_started", "input_read", "parsed", "helpers_checked", "report_written"].includes(stage) &&
+    if (["command_started", "input_read", "parsed", "helpers_checked", "report_construction_entered",
+      "report_construction_returned", "json_entered", "json_returned", "stdout_entered", "stdout_returned",
+      "report_written"].includes(stage) &&
         stages.length < 16 && extra.length === 0) {
       stages.push(stage)
       times.push(typeof stamp === "string" && /^\d{1,16}$/u.test(stamp) && Number.isSafeInteger(Number(stamp)) ? Number(stamp) : null)
     }
     else unrecognizedLines++
   }
-  return { stages, unrecognizedLines,
+  return { stages, scriptEntryCount, unrecognizedLines,
     ...(clocks ? { clockEstimate: correlateMetadataClock(times, clocks), powershell } : {}) }
 }
 
@@ -643,7 +649,41 @@ test("metadata phase observations retain only stage enums and account for unexpe
   assert.deepEqual(observeMetadataStages([
     "DESK_METADATA_STAGE:command_started", "PRIVATE_FIXTURE",
     "DESK_METADATA_STAGE:input_read", "DESK_METADATA_STAGE:PRIVATE_FIXTURE", "",
-  ].join("\n")), { stages: ["command_started", "input_read"], unrecognizedLines: 2 })
+  ].join("\n")), { stages: ["command_started", "input_read"], scriptEntryCount: 0, unrecognizedLines: 2 })
+})
+
+test("metadata script entry observations retain only a fixed literal and expose missing or repeated entry", () => {
+  const observed = observeMetadataStages([
+    "DESK_METADATA_BOUNDARY:script_entered",
+    "DESK_METADATA_BOUNDARY:PRIVATE_FIXTURE",
+    "DESK_METADATA_BOUNDARY:script_entered:PRIVATE_FIXTURE",
+  ].join("\n"))
+  assert.deepEqual(observed, { stages: [], scriptEntryCount: 1, unrecognizedLines: 2 })
+  assert.equal(observeMetadataStages("").scriptEntryCount, 0)
+  assert.equal(observeMetadataStages(
+    "DESK_METADATA_BOUNDARY:script_entered\nDESK_METADATA_BOUNDARY:script_entered\n").scriptEntryCount, 2)
+  assert.equal(JSON.stringify(observed).includes("PRIVATE_FIXTURE"), false)
+})
+
+test("metadata report observations distinguish construction, JSON and stdout without admitting arbitrary phases", () => {
+  const observed = observeMetadataStages([
+    "DESK_METADATA_STAGE:report_construction_entered:1100",
+    "DESK_METADATA_STAGE:report_construction_returned:1101",
+    "DESK_METADATA_STAGE:json_entered:1102",
+    "DESK_METADATA_STAGE:json_returned:1200",
+    "DESK_METADATA_STAGE:stdout_entered:1201",
+    "DESK_METADATA_STAGE:stdout_returned:1202",
+    "DESK_METADATA_STAGE:PRIVATE_FIXTURE:1203",
+  ].join("\n"), { wallStart: 1000, wallEnd: 1500, monotonicMs: 500 })
+  assert.deepEqual(observed, {
+    stages: ["report_construction_entered", "report_construction_returned", "json_entered", "json_returned",
+      "stdout_entered", "stdout_returned"],
+    scriptEntryCount: 0, unrecognizedLines: 1,
+    clockEstimate: { kind: "utc_correlated_estimate", state: "checks_passed_not_alignment_proven",
+      reason: null, offsetsMs: [100, 101, 102, 200, 201, 202], clockAlignmentProven: false },
+    powershell: null,
+  })
+  assert.equal(JSON.stringify(observed).includes("PRIVATE_FIXTURE"), false)
 })
 
 test("metadata clock observations retain qualified offsets and numeric runtime components, never raw epochs", () => {
@@ -653,7 +693,7 @@ test("metadata clock observations retain qualified offsets and numeric runtime c
     "DESK_METADATA_STAGE:report_written:1700000001200",
   ].join("\n"), { wallStart: 1700000001000, wallEnd: 1700000001500, monotonicMs: 500 })
   assert.deepEqual(observed, {
-    stages: ["command_started", "report_written"], unrecognizedLines: 0,
+    stages: ["command_started", "report_written"], scriptEntryCount: 0, unrecognizedLines: 0,
     clockEstimate: { kind: "utc_correlated_estimate", state: "checks_passed_not_alignment_proven",
       reason: null, offsetsMs: [100, 200], clockAlignmentProven: false },
     powershell: { version: [7, 5, 2], edition: "Core" },
@@ -687,7 +727,8 @@ test("metadata clock observations report invalid or ambiguous timing instead of 
 })
 
 test("managed-only: actual captured PowerShell parses and defines its helpers before the native setup body", async t => {
-  const script = `
+  const script = `[Console]::Error.WriteLine('DESK_METADATA_BOUNDARY:script_entered')
+
 $ErrorActionPreference = 'Stop'
 function Write-MetadataStage($name) {
   try { $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() } catch { $stamp = 'unavailable' }
@@ -711,7 +752,15 @@ foreach ($name in @('Define-Native', 'Build-Layout', 'Build-RenameBuffer', 'Refu
     beforeSetup = $definitions.Count -eq 1 -and $setup.Count -eq 1 -and $definitions[0].Extent.EndOffset -lt $setup[0].Extent.StartOffset }
 }
 Write-MetadataStage 'helpers_checked'
-[Console]::WriteLine((@{ parseErrors = $errors.Count; helpers = $rows } | ConvertTo-Json -Depth 5 -Compress))
+Write-MetadataStage 'report_construction_entered'
+$report = @{ parseErrors = $errors.Count; helpers = $rows }
+Write-MetadataStage 'report_construction_returned'
+Write-MetadataStage 'json_entered'
+$json = ($report | ConvertTo-Json -Depth 5 -Compress)
+Write-MetadataStage 'json_returned'
+Write-MetadataStage 'stdout_entered'
+[Console]::WriteLine($json)
+Write-MetadataStage 'stdout_returned'
 Write-MetadataStage 'report_written'
 `
   const program = await capturedProgram(), wallStart = Date.now(), started = performance.now()
@@ -733,8 +782,11 @@ Write-MetadataStage 'report_written'
   if (parsed.status !== 0 || parsed.error) t.diagnostic(JSON.stringify(diagnostic))
   assert.equal(parsed.status, 0, failureMessage)
   assert.equal(parsed.error?.code, undefined, failureMessage)
+  assert.equal(phases.scriptEntryCount, 1, "metadata parser must report exactly one script entry")
   assert.equal(phases.unrecognizedLines, 0, "metadata parser emitted unexpected stderr")
-  assert.deepEqual(phases.stages, ["command_started", "input_read", "parsed", "helpers_checked", "report_written"])
+  assert.deepEqual(phases.stages, ["command_started", "input_read", "parsed", "helpers_checked",
+    "report_construction_entered", "report_construction_returned", "json_entered", "json_returned",
+    "stdout_entered", "stdout_returned", "report_written"])
   const report = JSON.parse(parsed.stdout)
   assert.equal(report.parseErrors, 0)
   assert.deepEqual(report.helpers, ["Define-Native", "Build-Layout", "Build-RenameBuffer", "Refuse", "Close-Entry",
