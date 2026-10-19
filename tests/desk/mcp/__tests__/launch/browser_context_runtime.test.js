@@ -912,9 +912,9 @@ test("actual acquired native Core remains usable beyond handshake deadline throu
   assert.ok(f.tabs.has(1))
 })
 
-function observeNativePreflightFailures(t){
-  const exec=childProcess.execFileSync
-  t.mock.method(childProcess,"execFileSync",function(...call){
+function observeNativePreflightFailures(t,runner=childProcess){
+  const exec=runner.execFileSync
+  t.mock.method(runner,"execFileSync",function(...call){
     const started=performance.now()
     try{return exec.apply(this,call)}
     catch(error){
@@ -943,24 +943,25 @@ test("passive native preflight diagnostics preserve exact failures and never exp
   const failure=Object.assign(new Error(privateValue),{
     code:"ETIMEDOUT",status:null,signal:"SIGTERM",stdout:Buffer.from(privateValue),stderr:privateValue,
   })
-  const returned={},seen=[],diagnostics=[]
-  t.mock.method(childProcess,"execFileSync",function(...call){
+  const original=childProcess.execFileSync,returned={},seen=[],diagnostics=[]
+  const runner={execFileSync(...call){
     seen.push(call)
     if(call[2].fail)throw failure
     return returned
-  })
-  observeNativePreflightFailures({mock:t.mock,diagnostic:value=>diagnostics.push(value)})
+  }}
+  observeNativePreflightFailures({mock:t.mock,diagnostic:value=>diagnostics.push(value)},runner)
   const args=["-Command",privateValue],options={timeout:5000}
-  assert.equal(childProcess.execFileSync("powershell.exe",args,options),returned)
+  assert.equal(runner.execFileSync("powershell.exe",args,options),returned)
   assert.equal(seen[0][1],args);assert.equal(seen[0][2],options)
   assert.deepEqual(diagnostics,[])
-  assert.throws(()=>childProcess.execFileSync("powershell.exe",args,{...options,fail:true}),error=>error===failure)
+  assert.throws(()=>runner.execFileSync("powershell.exe",args,{...options,fail:true}),error=>error===failure)
   assert.equal(diagnostics.length,1)
   assert.equal(diagnostics[0].includes(privateValue),false)
   const report=JSON.parse(diagnostics[0].slice("owned native preflight failure ".length))
   assert.equal(report.code,"ETIMEDOUT");assert.equal(report.timeoutMs,5000)
   assert.equal(report.stdoutBytes,Buffer.byteLength(privateValue));assert.equal(report.stderrBytes,Buffer.byteLength(privateValue))
   assert.equal(report.programSha256,require("crypto").createHash("sha256").update(privateValue).digest("hex"))
+  assert.equal(childProcess.execFileSync,original)
 })
 
 for (const relayNonce of [undefined,"0a112233-4455-4677-8899-aabbccddeeff"])
