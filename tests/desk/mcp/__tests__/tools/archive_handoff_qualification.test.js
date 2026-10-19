@@ -13,12 +13,13 @@ import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tas
 import { ART, SLUG, RESOURCE, exists, digest, record, fixture, options, complete, readCard,
   openReadiness, requests, realGit, git, spawnActor, actorMessage, send, finishActor, drainActors, errorData, ownIdentity,
   nativeMoveObserver, nativeActorObservations, drainWithNativeObservations,
-  archiveOwned, archiveCandidateObservations } from "./archive_handoff_qualification_child.mjs"
+  archiveOwned, archiveCandidateObservations, archiveProductionObservations } from "./archive_handoff_qualification_child.mjs"
 
 const reports = []
 const readers = []
 record("qualification-suite-start", await ownIdentity())
-const moveForObserverControl = () => import("../../../../../plugins/desk/mcp/src/tools/archive-move.js")
+// Preserve the old Directory.Move observer controls as historical, not default proof.
+const moveForObserverControl = () => import("./_legacy_directory_move.mjs")
 function observedChild({ requestOutput, releaseOutput } = {}) {
   const child = new EventEmitter()
   child.pid = 42
@@ -196,6 +197,7 @@ after(async () => {
         { scope: "owned two-process archive observations; criteria and product bytes unchanged", platform: process.platform, variants: [] }
       artifact.actorReceipts = nativeActorObservations()
       artifact.candidateAttempts = archiveCandidateObservations()
+      artifact.productionAttempts = archiveProductionObservations()
       fs.writeFileSync(target, JSON.stringify(artifact, null, 2) + "\n")
     } catch (error) { result.observationPersistenceFailure = error.code ?? "unavailable" }
     fs.writeFileSync(path.join(ART, "summary.json"), JSON.stringify(result, null, 2) + "\n")

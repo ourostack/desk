@@ -44,7 +44,7 @@ import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
 import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
-import { moveArchive as moveArchiveDefault } from "./archive-move.js"
+import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
@@ -1336,7 +1336,7 @@ function withArchiveFocus(statusContext, target, result) {
  *
  * Returns: { status: "archived" | "already_archived" | "archive_pending", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive = moveArchiveDefault }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive, openArchiveMove = openArchiveMoveDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1463,23 +1463,41 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
   if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
   const trackPlan = await archiveTrackPlan(await target([track, "track.md"]), slug, archiveBump?.status ?? null)
-  let prepared
-  try {
-    prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, spawnGit, relocated })
-  } catch (error) {
-    if (!relocated) throw error
-    await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
-    return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
-      status: "unknown", reason: error.message,
-    }))
+  let prepared, moveSession, sessionClosed = false
+  const closeSession = async () => {
+    if (!moveSession || sessionClosed) return
+    sessionClosed = true
+    await moveSession.close()
   }
-
+  const attachCleanup = error => {
+    if (Object.isExtensible(error)) {
+      try { error.native_close_failure = "archive native cleanup unconfirmed" } catch { /* Preserve the first error. */ }
+    }
+  }
   let moved = relocated
   let published = false
   try {
+    if (!relocated && moveArchive === undefined)
+      moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
+    try {
+      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, spawnGit, relocated })
+    } catch (error) {
+      if (!relocated) throw error
+      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
+      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
+        status: "unknown", reason: error.message,
+      }))
+    }
     await withCreatedDirs(path.dirname(archiveDir), async () => {
       if (relocated) await prepared.atUse()
-      else { await moveArchive(srcDir, archiveDir, () => prepared.atUse()); moved = true }
+      else {
+        if (moveSession) {
+          await moveSession.admit()
+          await moveSession.move(() => prepared.atUse())
+        } else await moveArchive(srcDir, archiveDir, () => prepared.atUse())
+        moved = true
+        await closeSession()
+      }
     }, {
       shouldCleanup(error) {
         if (error.archiveMove?.released && error.archiveMove.retirement !== "confirmed") {
@@ -1555,9 +1573,14 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
     return withArchiveFocus(statusContext, { track, slug }, result)
   } catch (error) {
+    try { await closeSession() } catch { attachCleanup(error) }
+    if (!prepared || !Object.isExtensible(error)) throw error
     throw await qualifyArchiveFailure(error, {
       effectiveRoot, srcDir, archiveDir, sourceIdentity: prepared.snapshot.get("").identity, moved, published,
     })
+  } finally {
+    // Success and error paths already attempted close; also cover an early return.
+    await closeSession()
   }
 }
 

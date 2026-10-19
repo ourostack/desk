@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 import { fork, spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
-import { moveArchive } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
+import { openArchiveMoveSession } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
 import { readMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
@@ -23,13 +23,14 @@ export const SLUG = "archive-proof"
 export const RESOURCE = "branch:qualification/owned#retained-fixture"
 export const digest = (value) => createHash("sha256").update(value).digest("hex")
 export const exists = (file) => fs.existsSync(file)
-const moveSourceHash = digest(fs.readFileSync(new URL("../../../../../plugins/desk/mcp/src/tools/archive-move.js", import.meta.url)))
+const moveSourceHash = digest(fs.readFileSync(new URL("./_legacy_directory_move.mjs", import.meta.url)))
 const moveProgramHash = "4e41cc66ef0e98ec2cecb5ff6cb3a6b57a8c9f91759eecffc4c0372a88f7b2fa"
 const nativeStages = ["native-child-spawned", "native-ready-observed", "native-release-attempted",
   "native-result-observed", "native-child-exit", "native-child-close"]
 
 export function nativeMoveObserver({ source, destination, fixture, spawnChild = spawn }) {
   const receipt = {
+    scope: "historical_directory_move_observer",
     actorPid: process.pid, platform: process.platform, node: process.versions.node, helperSourceHash: moveSourceHash,
     sourceMatchesFixture: source === fixture.src, destinationMatchesFixture: destination === fixture.dst,
     spawnReached: false, executableMatches: null, programHash: null, childPid: null,
@@ -211,6 +212,8 @@ export function descriptor(base, root, person = null) {
 const actors = new Set()
 const workers = new Set()
 const candidateAttempts = []
+const productionAttempts = []
+export function archiveProductionObservations() { return productionAttempts }
 export function archiveCandidateObservations({ includeSynthetic = false } = {}) {
   return candidateAttempts.filter(attempt => includeSynthetic || attempt.scope === "actual_native_controller")
 }
@@ -227,7 +230,7 @@ export function nativeActorObservations() {
     const attempts = actor.messages.findLast(message => message.candidateAttempts)?.candidateAttempts ?? []
     const observation = actor.messages.findLast(message => message.moveObservation)?.moveObservation ?? attempts.at(-1) ?? null
     return { actorPid: actor.pid, caseId: actor.caseId, receipt: observation,
-      missingNativeStages: observation?.kind === "test_only_preadmitted_source_handle" ?
+      missingNativeStages: ["test_only_preadmitted_source_handle", "production_default_archive_session"].includes(observation?.kind) ?
         missingHandleStages(observation.native) :
         observation ? nativeStages.filter(type => !observation.events.some(item => item.type === type)) : nativeStages,
       candidateAttempts: attempts,
@@ -353,9 +356,54 @@ export function options(fixture, extra = {}) {
 export async function archiveOwned(fixture, extra = {}, {
   candidate = process.env.DESK_TEST_ARCHIVE_HANDLE_CANDIDATE === "1",
   platform = process.platform, lstat = io.lstat, runArchive = task_archive, openSession, decorateMove, afterCapture,
+  beforeAdmit, openProductionSession = openArchiveMoveSession,
 } = {}) {
-  if (!candidate) return runArchive(options(fixture, decorateMove ?
-    { ...extra, moveArchive: decorateMove(moveArchive, null) } : extra))
+  if (!candidate) return runArchive(options(fixture, { ...extra, openArchiveMove: async pair => {
+    if (productionAttempts.length >= 64) throw new Error("Production archive observations exceeded their bound")
+    const observation = { kind: "production_default_archive_session",
+      scope: openProductionSession === openArchiveMoveSession ? "production_default_factory" : "controlled_factory_transport",
+      platform: process.platform, caseId: digest(fixture.root), sourceCapture: "capture_attempted", native: null,
+      events: [], droppedEvents: 0, cleanupFailure: null }
+    productionAttempts.push(observation)
+    const event = type => {
+      if (observation.events.length < 32) observation.events.push({ type, sequence: observation.events.length + 1 })
+      else observation.droppedEvents++
+    }
+    let session
+    try {
+      session = await openProductionSession(pair)
+      observation.native = session.receipt ?? null
+      observation.destinationParentAtCapture = observation.native?.destinationParentValidation ?? null
+      observation.sourceCapture = "captured_before_corresponding_preparation"
+      event("source-captured")
+      if (afterCapture) await afterCapture()
+    } catch (error) {
+      observation.sourceCapture = "capture_failed"
+      observation.native = error.handleReceipt ?? session?.receipt ?? null
+      if (session) {
+        try { await session.close() } catch { observation.cleanupFailure = "native_session_close_unconfirmed" }
+      }
+      throw error
+    }
+    const transport = async (source, destination, atUse) => {
+      if (source !== pair.source || destination !== pair.destination) throw new Error("Production decorator pair mismatch")
+      try { return await session.move(atUse) } finally { observation.native = session.receipt ?? null }
+    }
+    const callable = decorateMove ? decorateMove(transport, observation) : transport
+    return {
+      async admit() {
+        event("move-callable-entered")
+        if (beforeAdmit) await beforeAdmit()
+        try { return await session.admit() } finally { observation.native = session.receipt ?? null }
+      },
+      async move(atUse) { return callable(pair.source, pair.destination, atUse) },
+      async close() {
+        try { return await session.close() }
+        catch (error) { observation.cleanupFailure = "native_session_close_unconfirmed"; throw error }
+        finally { observation.native = session.receipt ?? null; event("session-retired") }
+      },
+    }
+  } }))
   if (platform !== "win32") throw new Error("The archive source-handle candidate is Windows-test-only")
   if (candidateAttempts.length >= 64) throw new Error("Owned archive candidate attempt observations exceeded their bound")
   const observation = { kind: "test_only_preadmitted_source_handle",
@@ -436,7 +484,7 @@ function candidateMoveObserver(observation, source, destination, fixture) {
   return {
     receipt: observation, event,
     async before() { event("move-decorator-entered") },
-    returned(state) { observation.helperOutcome = "returned"; observation.movement = state.movement },
+    returned(state) { observation.helperOutcome = "returned"; observation.movement = state?.movement ?? "posix_rename_returned" },
     threw(error) {
       observation.helperOutcome = "threw"
       observation.movement = ["not_released", "confirmed", "refused", "unconfirmed"].includes(error.archiveMove?.movement) ?

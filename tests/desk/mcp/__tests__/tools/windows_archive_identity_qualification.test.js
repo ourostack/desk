@@ -10,7 +10,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { prepareArchiveState } from "../../../../../plugins/desk/mcp/src/tools/archive-state.js"
-import { moveArchive } from "../../../../../plugins/desk/mcp/src/tools/archive-move.js"
+import { moveArchive } from "./_legacy_directory_move.mjs"
 import { nativeMoveObserver } from "./archive_handoff_qualification_child.mjs"
 import { observeIdentity, decodeFileIdInfo, identityArtifactPath } from "./_windows_archive_identity.mjs"
 

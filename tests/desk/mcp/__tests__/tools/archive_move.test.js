@@ -9,7 +9,8 @@ import { withCreatedDirs } from "../../../../../plugins/desk/mcp/src/util/create
 import { task_create, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { qualifyArchiveFailure } from "../../../../../plugins/desk/mcp/src/tools/archive-state.js"
 
-const load = () => import("../../../../../plugins/desk/mcp/src/tools/archive-move.js")
+// Historical Directory.Move protocol controls, not production-default evidence.
+const load = () => import("./_legacy_directory_move.mjs")
 const source = "C:\\desk\\task", destination = "C:\\desk\\_archive\\task"
 const ready = { state: "ready", pid: 42, powershell: "5.1.26100.33438", edition: "Desktop",
   runtime: "4.0.30319.42000", api: "System.IO.Directory.Move" }
