@@ -190,8 +190,10 @@ function stagePayloadFile({ payload, payloadPath, expectedPath, deadline = null 
   live()
   return { payloadDigest: encoded.payloadDigest, expectedBytes: payload.stdin?.length ?? 0 }
 }
-async function launchComponent({ publicMcpRoot, privateRealmRoot, nodeExecutable, prepareBinding, deadline, outputLimit,
-  fragment = false, pipeSuffix = null, isCancelled = () => false, onLaunched = () => {}, onFrame, onError = () => {} }) {
+async function launchComponent(options) {
+  requireNativeEffectsHeld()
+  const { publicMcpRoot, privateRealmRoot, nodeExecutable, prepareBinding, deadline, outputLimit,
+    fragment = false, pipeSuffix = null, isCancelled = () => false, onLaunched = () => {}, onFrame, onError = () => {} } = options
   // Source-only now: actual invocation requires a separately admitted native gate.
   if (process.platform !== "win32" || privateRealmRoot !== prepareBinding.privateRealmRoot) fail()
   const verify = await import(pathToFileURL(path.resolve(__dirname, "../../../../../../plugins/desk/mcp/scripts/verify-owned-git.js")).href)
@@ -199,9 +201,11 @@ async function launchComponent({ publicMcpRoot, privateRealmRoot, nodeExecutable
   if (isCancelled()) nativeFailure("producer_unjoined")
   return launchWithAssets({ assets, prepareBinding, deadline, outputLimit, fragment, pipeSuffix, onLaunched, onFrame, onError })
 }
-async function launchWithAssets({ assets, prepareBinding, deadline, outputLimit, onFrame, onError, faultCase = null,
-  fixtureH = null, postResultFault = false, pressurePeer = false, onFixtureFrame = () => {},
-  fragment = false, pipeSuffix = null, onLaunched = () => {}, preauthPeer = false, onPeerLive = () => {} }) {
+async function launchWithAssets(options) {
+  requireNativeEffectsHeld()
+  const { assets, prepareBinding, deadline, outputLimit, onFrame, onError, faultCase = null,
+    fixtureH = null, postResultFault = false, pressurePeer = false, onFixtureFrame = () => {},
+    fragment = false, pipeSuffix = null, onLaunched = () => {}, preauthPeer = false, onPeerLive = () => {} } = options
   const bound = core.createPreparationBinding(prepareBinding, { publicMcpRoot: assets.publicMcpRoot,
     nodeExecutable: assets.nodeExecutable, nodeSha256: assets.nodeSha256,
     ownerSha256: assets.ownerSha256 || assets.manifest.files.owner.sha256,
@@ -328,7 +332,9 @@ async function launchWithAssets({ assets, prepareBinding, deadline, outputLimit,
   actor.beforeNs=beforeNs
   return actor
 }
-function startWrongPidPeer({endpoint,binding,deadline}) {
+function startWrongPidPeer(options) {
+  requireNativeEffectsHeld()
+  const {endpoint,binding,deadline}=options
   if (!core.remainingNanoseconds(deadline,process.hrtime.bigint())) nativeFailure("deadline")
   const socket=new net.Socket(), value={rootLive:true,connected:false,closed:false,receivedBytes:0}
   let cancelled=false
@@ -372,7 +378,9 @@ async function runBadParentPeer({stream,deadline}) {
   finally { stream.resume(); value.resumed=true }
   return Object.freeze(value)
 }
-async function createPostResultRelease({ generation, preparationDigest, deadline, pressure = false, preauth = false, onPeerLive = () => {} }) {
+async function createPostResultRelease(options) {
+  requireNativeEffectsHeld()
+  const { generation, preparationDigest, deadline, pressure = false, preauth = false, onPeerLive = () => {} } = options
   if (!/^[0-9a-f]{64}$/.test(generation)) fail()
   let peer, admitted = null, released = false, stopped = false, settle, metrics = null, used = 0, rootLive=false
   const body = Buffer.alloc(4096)
@@ -460,8 +468,10 @@ function createFixtureBridgeObserver({ stream, deadline, mode = null, observatio
     }))
   }, snapshot: () => structuredClone({ lastState, lastStateLate, footer, footerLate, eof, closed, failed, bytes }) }
 }
-async function launchFixtureUtility({ construction, kind, role, nodeExecutable, deadline, origin = "parent",
-  onFrame = () => {}, isCancelled = () => false }) {
+async function launchFixtureUtility(options) {
+  requireNativeEffectsHeld()
+  const { construction, kind, role, nodeExecutable, deadline, origin = "parent",
+    onFrame = () => {}, isCancelled = () => false } = options
   const scope = fixtureConstructions.get(construction)
   const kinds = ["result-vectors", "clock-samples", "io-helpers", "production-seed", "fault-seed", "clock-companion"]
   const remaining = core.remainingNanoseconds(deadline, process.hrtime.bigint())
@@ -620,6 +630,7 @@ const NATIVE_REGISTRY = freeze([
 const getNativeCaseRegistry = () => NATIVE_REGISTRY
 const fixtureConstructions = new WeakMap()
 function createFixtureConstruction() {
+  requireNativeEffectsHeld()
   if (process.platform !== "win32" || process.env.DESK_TEST_OWNED_GIT_NATIVE !== "1") fail()
   const env = process.env, repository = path.resolve(__dirname, "../../../../../../")
   if (!/^[0-9a-f]{40}$/.test(env.DESK_TEST_OWNED_GIT_SOURCE_REVISION || "") ||
@@ -684,6 +695,7 @@ function resolveRegistryFixture({ productionAssets, fixtureManifest, caseId, par
     parent: retention.runtimeIdentity(plan.parent), root: retention.runtimeIdentity(plan.root) }) }
 }
 async function launchFixtureComponent(options) {
+  requireNativeEffectsHeld()
   const { publicMcpRoot, privateRealmRoot, nodeExecutable, prepareBinding, caseId, deadline } = options
   const construction = fixtureConstructions.get(options.construction)
   if (process.platform !== "win32" || process.env.DESK_TEST_OWNED_GIT_NATIVE !== "1" ||
@@ -785,7 +797,9 @@ function safeNativeGap(error) {
   return codes.includes(error?.code) && error.code !== "none" ? error.code : "case_mismatch"
 }
 function nativeFailure(code) { throw Object.assign(new Error("owned_git_native_incomplete"), { code }) }
+function requireNativeEffectsHeld() { nativeFailure("not_admitted") }
 async function getFixtureRuntime(construction, role) {
+  requireNativeEffectsHeld()
   const scope = fixtureConstructions.get(construction)
   if (!scope) fail()
   const retention = require("./windows_owned_git_retention.cjs"), wanted = retention.runtimeIdentity(role)
@@ -849,8 +863,10 @@ const SCALAR_CASES = Object.freeze([
   ["9007199254740993","1000000000","9007199254740992"],["18446744073709551615","1000000000",null],
   ["1","0",null],["1","3","333333333"],["18446744073709551615","1",null],
 ])
-async function runNativeUtilityCase({ construction, plan, deadline, emitClock = async () => {}, registerActor = () => {},
-  isCancelled = () => false }) {
+async function runNativeUtilityCase(options) {
+  requireNativeEffectsHeld()
+  const { construction, plan, deadline, emitClock = async () => {}, registerActor = () => {},
+    isCancelled = () => false } = options
   const retention = require("./windows_owned_git_retention.cjs")
   if (plan.expected.generations || !plan.expected.utilityProcesses) nativeFailure("not_admitted")
   const actors = [], clocks = []
@@ -1400,6 +1416,7 @@ function readBoundPublicFile(file,limit) {
   return bytes
 }
 function fixtureGit(construction,deadline) {
+  requireNativeEffectsHeld()
   const scope=fixtureConstructions.get(construction)
   if (!scope || !core.remainingNanoseconds(deadline,process.hrtime.bigint())) nativeFailure("deadline")
   const git=require("./windows_owned_git_retention.cjs").projectGitBinding(
@@ -1452,6 +1469,7 @@ function buildGitEnvironment({ privateRoot, fixtureRoot, nodeExecutable, gitExec
   LANG: "C", LC_ALL: "C", LANGUAGE: "C", HOME: scratch, USERPROFILE: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch }
 }
 function verifyFixtureGitExecution(scope,git,node,deadline) {
+  requireNativeEffectsHeld()
   const r=require("./windows_owned_git_retention.cjs")
   const layout=r.gitExecutionLayout({fixtureRoot:scope.fixtureRoot,nodeExecutable:node,
     gitExecutable:git.executable,shellExecutable:git.shellExecutable,systemRoot:process.env.SystemRoot})
@@ -1463,18 +1481,34 @@ function verifyFixtureGitExecution(scope,git,node,deadline) {
   scope.gitSnapshots.set(node,snapshot)
   return layout
 }
-function stageSyntheticGitFiles({ privateRoot, live, io = fs }) {
-  if (typeof privateRoot !== "string" || !path.isAbsolute(privateRoot) || typeof live !== "function") nativeFailure("guard_failed")
+function planSyntheticGitFiles(privateRoot) {
+  if (typeof privateRoot !== "string" || !path.isAbsolute(privateRoot)) nativeFailure("guard_failed")
   const bytes = syntheticGitConfiguration()
   if (bytes.length > 1024) nativeFailure("quota")
   const repository = path.join(privateRoot, "synthetic-repository")
-  for (const directory of [repository, path.join(repository, ".git"), path.join(privateRoot, "runtime-scratch")]) {
-    live(); io.mkdirSync(directory)
-  }
+  const operations = [repository, path.join(repository, ".git"), path.join(privateRoot, "runtime-scratch")]
+    .map((directory) => ({ op: "mkdir", path: directory }))
   for (const [file, data] of [[path.join(repository, ".git", "config"), bytes],
     [path.join(privateRoot, "git-global-empty.cfg"), Buffer.alloc(0)]]) {
+    operations.push({ op: "open", path: file, flags: "wx", mode: 0o600 },
+      { op: "write", bytes: data }, { op: "flush" }, { op: "close" })
+  }
+  return Object.freeze({ repository, operations: Object.freeze(operations.map(Object.freeze)) })
+}
+function stageSyntheticGitFiles(options) {
+  requireNativeEffectsHeld()
+  const { privateRoot, live, io = fs } = options
+  if (typeof live !== "function") nativeFailure("guard_failed")
+  const program = planSyntheticGitFiles(privateRoot)
+  for (const operation of program.operations.slice(0, 3)) {
+    live(); io.mkdirSync(operation.path)
+  }
+  for (let i = 3; i < program.operations.length; i += 4) {
+    const [open, write, flush, close] = program.operations.slice(i, i + 4)
+    if (open.op !== "open" || write.op !== "write" || flush.op !== "flush" || close.op !== "close") nativeFailure("schema")
+    const data = write.bytes
     live()
-    const fd = io.openSync(file, "wx", 0o600)
+    const fd = io.openSync(open.path, open.flags, open.mode)
     try {
       let at = 0
       while (at < data.length) {
@@ -1487,9 +1521,10 @@ function stageSyntheticGitFiles({ privateRoot, live, io = fs }) {
     } finally { io.closeSync(fd) }
   }
   live()
-  return Object.freeze({ repository })
+  return Object.freeze({ repository: program.repository })
 }
 async function initializeSyntheticRepository(construction) {
+  requireNativeEffectsHeld()
   const scope=fixtureConstructions.get(construction), now=process.hrtime.bigint()
   if (!scope || scope.repositoryAttempted || now>=scope.H-30000000000n) nativeFailure("not_admitted")
   scope.repositoryAttempted=true
@@ -1533,6 +1568,7 @@ function createDescendantObservations() {
   }
 }
 async function createGenerationWitness(deadline,onCue,onFailure) {
+  requireNativeEffectsHeld()
   const nonce=crypto.randomBytes(32).toString("hex"), endpoint=`\\\\.\\pipe\\desk-owned-git-witness-${crypto.randomBytes(32).toString("hex")}`
   const sockets=new Set(), seen=new Set()
   const observation=createDescendantObservations()
@@ -1622,7 +1658,9 @@ function classAPayload({ plan,slot,scope,root,git,deadline,witness,ambient=proce
     args:require("./windows_owned_git_retention.cjs").gitArguments(layout,args),cwd:repo,env,stdin:profile==="G_BASELINE" ? w.binaryInput(4096) :
       ["G_STDIN512K","G_EPIPE"].includes(profile) ? w.binaryInput(524288) : null }
 }
-async function runGenerationCase({ construction,plan,deadline,emitClock,registerActor,isCancelled }) {
+async function runGenerationCase(options) {
+  requireNativeEffectsHeld()
+  const { construction,plan,deadline,emitClock,registerActor,isCancelled } = options
   generationCasePlan(plan.id)
   const fixtureCase=plan.evidenceClass!=="A", nativeCase=plan.evidenceClass==="C"
   const r=require("./windows_owned_git_retention.cjs"), scope=fixtureConstructions.get(construction)
@@ -2029,6 +2067,7 @@ function sourceWorkerEnvironment() {
   return env
 }
 async function nativeCaseWorkerEntry(id) {
+  requireNativeEffectsHeld()
   const plan = NATIVE_REGISTRY.find((p) => p.id === id)
   if (process.platform !== "win32" || process.env.DESK_TEST_OWNED_GIT_NATIVE !== "1" || !plan) nativeFailure("not_admitted")
   const H = BigInt(process.env.DESK_TEST_OWNED_GIT_H)
@@ -2099,6 +2138,7 @@ async function nativeCaseWorkerEntry(id) {
 }
 const caseWorkerOrigins=new WeakMap()
 async function launchBoundCaseWorker(construction, plan, H, admission, stagingBudget) {
+  requireNativeEffectsHeld()
   const runtime = await getFixtureRuntime(construction,plan.parent)
   if (process.hrtime.bigint() >= H-30000000000n ||
     process.hrtime.bigint() >= BigInt(admission.deadlineNs)) nativeFailure("deadline")
@@ -2236,6 +2276,7 @@ function assembleUtilityWorkerFacts(records) {
   return { cases,utilities,clock }
 }
 async function nativeControllerEntry() {
+  requireNativeEffectsHeld()
   if (process.platform !== "win32" || process.env.DESK_TEST_OWNED_GIT_NATIVE !== "1") nativeFailure("not_admitted")
   const H=BigInt(process.env.DESK_TEST_OWNED_GIT_H), construction=createFixtureConstruction()
   await initializeSyntheticRepository(construction)
@@ -2303,6 +2344,7 @@ async function nativeControllerEntry() {
   if (gap!=="none") process.exitCode=1
 }
 async function runNativeOuter() {
+  requireNativeEffectsHeld()
   nativeFailure("not_admitted")
   const retention = require("./windows_owned_git_retention.cjs")
   const H=BigInt(process.env.DESK_TEST_OWNED_GIT_H), workspace=path.resolve(__dirname,"../../../../../../")
@@ -2321,8 +2363,16 @@ async function runNativeOuter() {
   if (incomplete || !exported.completeArtifact) nativeFailure("not_admitted")
   return exported
 }
+async function nativeMain(args) {
+  requireNativeEffectsHeld()
+  const entry=args.length===1&&args[0]==="--native-controller" ? () => nativeControllerEntry() :
+    args.length===2&&args[0]==="--native-case-worker"&&NATIVE_REGISTRY.some((p) => p.id===args[1])
+      ? () => nativeCaseWorkerEntry(args[1]) : null
+  if (!entry) process.exitCode=1
+  else await entry()
+}
 module.exports = { validateClockReady, createDriverPolicy, createDataObservations, createObservations, createWire, stagePayloadFile,
-  syntheticGitConfiguration, buildGitEnvironment, stageSyntheticGitFiles,
+  syntheticGitConfiguration, buildGitEnvironment, planSyntheticGitFiles, stageSyntheticGitFiles,
   launchComponent, createFixtureConstruction, launchFixtureComponent, launchFixtureUtility, createFixtureBridgeObserver,
   getNativeCaseRegistry, resolveFixtureAssets, resolveRegistryFixture, getUtilityInvocation, createNativeWorkerLedger,
   utilityObservationComplete, observeUtilityJoins, validateUtilityClockSample, runNativeUtilityCase, getFixtureRuntime,
@@ -2331,12 +2381,7 @@ module.exports = { validateClockReady, createDriverPolicy, createDataObservation
   classAPayload, generationInvocation, createDescendantObservations, generationCaseAvailable, createFixtureDecisions,
   createFixtureCaseEvidence, matchFixtureCase, runBadParentPeer, validateSpecialHandoff, deriveParentDeathCase,
   deriveQuarantineFacts, unrefQuarantinedWorker, aggregateControllerGap, primaryFailureExpected, caseDisposition,
-  utilityFooterComplete }
+  utilityFooterComplete, requireNativeEffectsHeld, nativeMain }
 if (require.main === module) {
-  const args=process.argv.slice(2)
-  const entry=args.length===1&&args[0]==="--native-controller" ? () => nativeControllerEntry() :
-    args.length===2&&args[0]==="--native-case-worker"&&NATIVE_REGISTRY.some((p) => p.id===args[1])
-      ? () => nativeCaseWorkerEntry(args[1]) : null
-  if (!entry) process.exitCode=1
-  else entry().catch(() => { process.exitCode=1; process.stderr.write("owned_git_native_incomplete\n") })
+  nativeMain(process.argv.slice(2)).catch(() => { process.exitCode=1; process.stderr.write("owned_git_native_incomplete\n") })
 }

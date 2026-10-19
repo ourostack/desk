@@ -1620,6 +1620,38 @@ test("portable native state and proof validation MODEL", () => {
 
 test("portable raw component driver uses product wire without adapter", async () => {
   {
+    let continuationReached = false
+    assert.throws(() => {
+      driver().requireNativeEffectsHeld()
+      continuationReached = true
+    }, { code: "not_admitted", message: "owned_git_native_incomplete" })
+    assert.equal(continuationReached, false)
+
+    const held = driver()
+    let touched = 0
+    const poison = new Proxy(Object.create(null), {
+      get() { touched++; throw new Error("native input read before refusal") },
+    })
+    for (const invoke of [
+      () => held.createFixtureConstruction(poison),
+      () => held.stageSyntheticGitFiles(poison),
+    ]) assert.throws(invoke, { code: "not_admitted", message: "owned_git_native_incomplete" })
+    for (const invoke of [
+      () => held.launchComponent(poison),
+      () => held.launchFixtureComponent(poison),
+      () => held.launchFixtureUtility(poison),
+      () => held.getFixtureRuntime(poison, poison),
+      () => held.runNativeUtilityCase(poison),
+      () => held.runNativeOuter(poison),
+      () => held.nativeMain(["--native-controller"]),
+      () => held.nativeMain(["--native-case-worker", held.getNativeCaseRegistry()[0].id]),
+      () => held.nativeMain(["--unknown"]),
+      () => held.nativeMain(undefined),
+      () => held.nativeMain(poison),
+    ]) await assert.rejects(invoke, { code: "not_admitted", message: "owned_git_native_incomplete" })
+    assert.equal(touched, 0)
+  }
+  {
   const fd = f0Data(), fp = f0PacketData(fd), hostBytes = Buffer.from(JSON.stringify(fp.host))
   const hostFrame = Buffer.alloc(hostBytes.length + 4)
   hostFrame.writeUInt32LE(hostBytes.length); hostBytes.copy(hostFrame, 4)
@@ -2026,13 +2058,34 @@ test("portable raw component driver uses product wire without adapter", async ()
   for (const key of ["BASH_ENV", "LLVM_PROFILE_FILE", "CL"]) assert.equal(Object.hasOwn(gitEnv, key), false)
   const files = new Map(), handles = new Map(), directories = new Set()
   let nextFd = 0
-  const stagedGit = driver().stageSyntheticGitFiles?.({ privateRoot: "/private", live: () => {},
-    io: { mkdirSync: (name) => { assert.equal(directories.has(name), false); directories.add(name) },
+  const stagedGit = driver().planSyntheticGitFiles("/private")
+  assert.deepEqual(stagedGit.operations.map((operation) => operation.op),
+    ["mkdir", "mkdir", "mkdir", "open", "write", "flush", "close", "open", "write", "flush", "close"])
+  assert.deepEqual(stagedGit.operations.slice(0, 3).map((operation) => operation.path),
+    ["/private/synthetic-repository", "/private/synthetic-repository/.git", "/private/runtime-scratch"])
+  assert.deepEqual(stagedGit.operations.filter((operation) => operation.op === "open").map(({ path, flags, mode }) =>
+    ({ path, flags, mode })), [
+    { path: "/private/synthetic-repository/.git/config", flags: "wx", mode: 0o600 },
+    { path: "/private/git-global-empty.cfg", flags: "wx", mode: 0o600 },
+  ])
+  let coerced = false
+  assert.throws(() => driver().planSyntheticGitFiles({ toString() { coerced = true; return "/private" } }))
+  assert.equal(coerced, false)
+  const memoryIO = { mkdirSync: (name) => { assert.equal(directories.has(name), false); directories.add(name) },
       openSync: (name, flags) => { assert.equal(flags, "wx"); assert.equal(files.has(name), false);
         files.set(name, Buffer.alloc(0)); handles.set(++nextFd, name); return nextFd },
       writeSync: (fd, bytes, at, length) => { const name = handles.get(fd);
         files.set(name, Buffer.concat([files.get(name), bytes.subarray(at, at + length)])); return length },
-      fsyncSync: (fd) => assert.equal(handles.has(fd), true), closeSync: (fd) => handles.delete(fd) } })
+      fsyncSync: (fd) => assert.equal(handles.has(fd), true), closeSync: (fd) => handles.delete(fd) }
+  let planFd = null
+  for (const operation of stagedGit.operations) {
+    if (operation.op === "mkdir") memoryIO.mkdirSync(operation.path)
+    else if (operation.op === "open") planFd = memoryIO.openSync(operation.path, operation.flags, operation.mode)
+    else if (operation.op === "write") memoryIO.writeSync(planFd, operation.bytes, 0, operation.bytes.length)
+    else if (operation.op === "flush") memoryIO.fsyncSync(planFd)
+    else if (operation.op === "close") { memoryIO.closeSync(planFd); planFd = null }
+    else assert.fail("unknown staging program operation")
+  }
   assert.equal(stagedGit?.repository, "/private/synthetic-repository")
   assert.equal(hash(files.get("/private/synthetic-repository/.git/config")),
     "72427377f73fb4c02c37b86c95177d769c91cd60293e967f605ab40e78efc6dc")
