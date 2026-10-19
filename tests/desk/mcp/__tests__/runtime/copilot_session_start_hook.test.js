@@ -53,7 +53,8 @@ test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
   const hooks = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
   const commands = (event) => hooks[event].map((entry) => entry.bash)
   assert.equal(hooks.preToolUse, undefined, "Desk registers no hook on the host's tool calls")
-  assert.equal(hooks.postToolUse, undefined)
+  assert.deepEqual(commands("postToolUse"), ['node "${PLUGIN_ROOT}/hooks/copilot-intake-context.cjs"'])
+  assert.equal(hooks.postToolUse[0].matcher, "skill")
   assert.deepEqual(commands("agentStop"), ['node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot'])
   assert.deepEqual(commands("userPromptSubmitted"), ['node "${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs"'])
 })

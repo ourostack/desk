@@ -9,6 +9,7 @@ import matter from "gray-matter"
 import {
   findFilenameEquivalent,
   readMarkdown,
+  parseMarkdownText,
   serializeMarkdown,
   slugify,
   today,
@@ -32,6 +33,33 @@ test("vendored Unicode 16 category tables match their pinned source", async () =
     const bytes = await fs.readFile(path.join(root, file))
     assert.equal(createHash("sha256").update(bytes).digest("hex"), hash)
   }
+})
+
+test("captured markdown parsing uses one immutable card version and the normal parser errors", async () => {
+  const root = await mkTempDeskRoot(), file = path.join(root,"task.md")
+  const raw = "---\nstatus: done\n---\n\nCaptured body.\n"
+  await fs.writeFile(file,raw)
+  const captured = await readMarkdown(file)
+  await fs.writeFile(file,"---\nstatus: processing\n---\n\nLater body.\n")
+  assert.deepEqual(parseMarkdownText(raw,file),captured)
+  assert.notDeepEqual(await readMarkdown(file),captured)
+  assert.throws(() => parseMarkdownText("---\nstatus: [\n---\n",file),
+    error => error.message.includes(file) && error.message.includes("frontmatter is not valid YAML"))
+})
+
+test("flow-style frontmatter uses parsed fallback instead of appending an invalid block mapping", async () => {
+  const root = await mkTempDeskRoot(), file = path.join(root,"task.md")
+  const raw = '---\n# owned header\n  {"status":"done","factory_report_unavailable":"visibility_not_known","title":"Keep me"}\n---\n\nOwned body.\n'
+  const fields = {factory_report:"https://example.invalid/owned-report",factory_report_unavailable:undefined}
+  assert.equal(patchFrontmatterFields(raw,fields),null)
+  assert.equal(patchFrontmatterFields("---\n\n# empty mapping\n---\nBody\n",{status:"done"}),
+    "---\n\n# empty mapping\nstatus: done\n---\nBody\n")
+  await fs.writeFile(file,raw)
+  await assertFrontmatterPatchable(file,fields)
+  await patchMarkdownFrontmatter(file,fields)
+  const result = await readMarkdown(file)
+  assert.deepEqual(result.data,{status:"done",title:"Keep me",factory_report:fields.factory_report})
+  assert.equal(result.content,"\nOwned body.\n")
 })
 
 test("filename equivalence is pinned across case and normalization", async () => {

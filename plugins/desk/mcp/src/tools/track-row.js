@@ -36,6 +36,7 @@ export function setTaskState(trackText, slug, status) {
       stateColumn = -1
       continue
     }
+
     const names = row.map((cell) => cell.trim().toLowerCase())
     if (slugColumn === -1 && names.includes("slug") && names.includes("state") && SEPARATOR.test(lines[index + 1] ?? "")) {
       slugColumn = names.indexOf("slug")
@@ -50,6 +51,39 @@ export function setTaskState(trackText, slug, status) {
     row[stateColumn] = ` ${status} `
     lines[index] = `${lead}|${row.join("|")}${line.trimEnd().endsWith("|") ? "|" : ""}`
     return lines.join(eol)
+  }
+  return null
+}
+
+// Move only local links in the task's structured row.
+export function setTaskArchiveLinks(trackText, slug) {
+  const lines = trackText.split(/(?<=\n)/u)
+  let slugColumn = -1
+  let fenced = false
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (/^\s{0,3}(```|~~~)/u.test(line)) fenced = !fenced
+    const row = fenced ? null : cells(line)
+    if (row === null) { slugColumn = -1; continue }
+    const names = row.map((cell) => cell.trim().toLowerCase())
+    if (slugColumn === -1 && names.includes("slug") && names.includes("state") && SEPARATOR.test(lines[index + 1] ?? "")) {
+      slugColumn = names.indexOf("slug")
+      index += 1
+      continue
+    }
+    if (slugColumn === -1 || row.length <= slugColumn ||
+        row[slugColumn].trim().replace(/^`+|`+$/gu, "") !== slug) continue
+    const next = line.replace(/(\[[^\]]*\]\()(<[^>\r\n]+>|[^\s)]+)([^)]*\))/gu, (whole, open, href, close) => {
+      const angled = href.startsWith("<")
+      const raw = angled ? href.slice(1,-1) : href
+      const dot = raw.startsWith("./") ? "./" : ""
+      const target = raw.slice(dot.length)
+      return target.startsWith(`${slug}/`)
+        ? `${open}${angled ? "<" : ""}${dot}_archive/${target}${angled ? ">" : ""}${close}` : whole
+    })
+    if (next === line) return null
+    lines[index] = next
+    return lines.join("")
   }
   return null
 }

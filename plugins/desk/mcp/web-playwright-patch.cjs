@@ -4,7 +4,7 @@ var crypto = require("crypto");
 var fs = require("fs");
 var path = require("path");
 
-var REVISION = 2;
+var REVISION = 3;
 var CREDENTIAL_FILE = "desk-extension-credential.cjs";
 // Audited createServer from playwright-core 1.64.0-alpha-1790635538000.
 // Match the lifecycle, not a package version: newer packages may retain this implementation.
@@ -17,6 +17,31 @@ var ACQUISITION_END = "\nvar import_path60, debug16, debugLogger3;";
 var ACQUISITION_SHA256 = "e014782f47d440a616b852b8a5838d4d49a2d2c458a5eba2b3ecd70ae5fe91ca";
 var ACQUISITION_ANCHOR = "  const relay = new CDPRelayServer(";
 var INITIALIZE_CREDENTIAL = '  await require("./' + CREDENTIAL_FILE + '").initialize(customUserDataDir, profileDirectory);\n';
+// Competing close observers must not exit before the explicit stop's real ACK.
+var STOP_REGIONS = [
+  {
+    start: "async function monitorSocketPath(", end: "\nasync function startCliDaemonServer(",
+    sha256: "4825ab691d6a37ee02320a678aa16dd443eca90bffbca6184ecb2b98f4664507",
+    edits: [
+      ["async function monitorSocketPath(socketPath) {", "async function monitorSocketPath(socketPath, deskStopping) {"],
+      ["    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);",
+        "    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);\n    if (deskStopping?.()) return;"]
+    ]
+  },
+  {
+    start: "async function startCliDaemonServer(", end: "\nasync function saveSessionFile(",
+    sha256: "b4b6608dc24505cc41c1ede77e96ae00426cd5ed52dc85652f0b933a399b4543",
+    edits: [
+      ["  const server = import_net10.default.createServer((socket) => {",
+        "  let deskStopInProgress = false;\n  const server = import_net10.default.createServer((socket) => {"],
+      ['        if (method === "stop") {',
+        '        if (method === "stop") {\n          deskStopInProgress = !!options?.exitOnClose;'],
+      ["    if (options?.exitOnClose)\n      gracefullyProcessExitDoNotHang(0);",
+        "    if (options?.exitOnClose && !deskStopInProgress)\n      gracefullyProcessExitDoNotHang(0);"],
+      ["  await monitorSocketPath(socketPath);", "  await monitorSocketPath(socketPath, () => deskStopInProgress);"]
+    ]
+  }
+];
 var IDLE_CLOSE = [
   '      if (!backendPromise && request2.params.name === "browser_close") {',
   '        const closeTool = factory.toolSchemas.find((tool) => tool.name === "browser_close");',
@@ -61,8 +86,37 @@ function patchLifecycle(source) {
   return source.slice(0, start) + patched + source.slice(end);
 }
 
+function stopRegion(source, specification) {
+  var start = source.indexOf(specification.start);
+  var end = source.indexOf(specification.end, start);
+  if (start < 0 || end < 0 || source.indexOf(specification.start, start + specification.start.length) !== -1) throw unsupported();
+  var text = source.slice(start, end);
+  var applied = 0;
+  specification.edits.forEach(function (edit) {
+    var offset = text.indexOf(edit[1]);
+    if (offset === -1) return;
+    if (text.indexOf(edit[1], offset + edit[1].length) !== -1) throw unsupported();
+    text = text.slice(0, offset) + edit[0] + text.slice(offset + edit[1].length);
+    applied++;
+  });
+  if (applied !== 0 && applied !== specification.edits.length || hash(text) !== specification.sha256) throw unsupported();
+  return { start: start, end: end, text: text, applied: applied !== 0 };
+}
+
+function patchStopCustody(source) {
+  var areas = STOP_REGIONS.map(function (specification) { return stopRegion(source, specification); });
+  if (areas[0].applied !== areas[1].applied) throw unsupported();
+  for (var index = areas.length - 1; index >= 0; index--) {
+    var area = areas[index];
+    var replacement = area.text;
+    STOP_REGIONS[index].edits.forEach(function (edit) { replacement = replacement.replace(edit[0], edit[1]); });
+    source = source.slice(0, area.start) + replacement + source.slice(area.end);
+  }
+  return source;
+}
+
 function patchSource(source) {
-  var patched = patchLifecycle(source);
+  var patched = patchStopCustody(patchLifecycle(source));
   var start = patched.indexOf(ACQUISITION_START);
   var end = patched.indexOf(ACQUISITION_END, start);
   if (start < 0 || end < 0 || patched.indexOf(ACQUISITION_START, start + ACQUISITION_START.length) !== -1) throw unsupported();
