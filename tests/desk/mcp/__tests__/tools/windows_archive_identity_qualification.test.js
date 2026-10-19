@@ -98,6 +98,8 @@ function fakeNative(options = {}) {
   return { child, requests, dependencies, args: () => args }
 }
 const input = { source, nodeBaseline: nodeStat, admittedIdentity }
+// These two controls parse/reflect only; production native archive deadlines are unchanged.
+const metadataOnlyTimeoutMs = 10_000
 
 test("synthetic: PowerShell AST keeps metadata helpers script-scoped before use", async t => {
   const f = fakeNative()
@@ -125,7 +127,7 @@ foreach ($name in @('Fail-Metadata', 'Require-Metadata')) {
 [Console]::WriteLine((@{ parseErrors = $parseErrors.Count; helpers = $helpers } | ConvertTo-Json -Depth 4 -Compress))
 `
   const parsed = spawnSync(parser, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
-    input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: 5000,
+    input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: metadataOnlyTimeoutMs,
   })
   if (process.platform !== "win32" && parsed.error?.code === "ENOENT") {
     t.skip("PowerShell AST parser unavailable on this non-Windows host; native execution remains unqualified")
@@ -259,7 +261,7 @@ Library-Stage 'done'
   edition = [string]$PSVersionTable.PSEdition; assemblyRoute = $route; methods = $rows } | ConvertTo-Json -Depth 5 -Compress))
 `
   const observed = spawnSync(parser, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
-    input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: 5000,
+    input: f.args().argv[4], encoding: "utf8", env: process.env, timeout: metadataOnlyTimeoutMs,
   })
   if (process.platform !== "win32" && observed.error?.code === "ENOENT") {
     t.skip("PowerShell metadata library unavailable on this non-Windows host; Windows ABI remains unqualified")
