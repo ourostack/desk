@@ -80,7 +80,21 @@ test("controlled factory: policy checks precede capture, and archived/interrupte
   const openArchiveMove = async () => { captures++; assert.fail("not a fresh admitted relocation") }
   await assert.rejects(call(f, { openArchiveMove }))
   assert.equal(captures, 0)
-  await call(f, { input: { track: "t", slug: "s", outcome: "cancelled" } })
+  const setupTrace = []
+  const openSetupMove = async pair => {
+    assert.deepEqual(pair, { source: f.source, destination: f.destination })
+    setupTrace.push("capture")
+    return {
+      async admit() {},
+      async move(atUse) { await atUse(); setupTrace.push("move"); await fs.rename(f.source, f.destination) },
+      async close() { setupTrace.push("close") },
+    }
+  }
+  const archived = await call(f, { input: { track: "t", slug: "s", outcome: "cancelled" }, openArchiveMove: openSetupMove })
+  assert.equal(archived.status, "archived")
+  assert.deepEqual(setupTrace, ["capture", "move", "close"])
+  assert.equal(await exists(f.source), false)
+  assert.match(await fs.readFile(path.join(f.destination, "task.md"), "utf8"), /status: cancelled/u)
   assert.equal((await call(f, { openArchiveMove })).status, "already_archived")
   assert.equal(captures, 0)
 })

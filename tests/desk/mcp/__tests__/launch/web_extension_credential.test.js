@@ -200,7 +200,7 @@ test("absent, empty and unreadable credentials fail closed without retaining the
 
 test("helper corruption and a helper from an older release invalidate the generation receipt", async () => {
   const { file, installed } = await staged()
-  assert.equal(patch.readRevision(installed), 2)
+  assert.equal(patch.readRevision(installed), 3)
   writeFileSync(file, readFileSync(file, "utf8") + "\n// stale helper\n")
   assert.equal(patch.readRevision(installed), 0)
   const receiptFile = path.join(installed.dir, "playwright-patch.json")
@@ -213,7 +213,8 @@ test("helper corruption and a helper from an older release invalidate the genera
 test("the acquisition patch rejects changed or duplicated initializer sites", () => {
   assert.throws(() => patch.patchSource(stock.replace("  await relay.start();", "  await relay.start(1);")), /unsupported/i)
   const start = stock.indexOf("async function createExtensionBrowser(")
-  assert.throws(() => patch.patchSource(stock + stock.slice(start)), /unsupported/i)
+  const end = stock.indexOf("\nvar import_path60, debug16, debugLogger3;", start)
+  assert.throws(() => patch.patchSource(stock + stock.slice(start, end)), /unsupported/i)
 })
 
 test("the runner and initializer share one generation-local redactor and reader", async () => {

@@ -90,3 +90,108 @@ async function createExtensionBrowser(channel, executablePath, customUserDataDir
   }
 }
 var import_path60, debug16, debugLogger3;
+
+// Unmodified CLI daemon/monitor and process-exit functions from the same bundle.
+async function monitorSocketPath(socketPath) {
+  if (process.platform === "win32")
+    return;
+  const socketStat = await import_fs67.default.promises.stat(socketPath);
+  async function checkSocketPath() {
+    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);
+    if (!currentStat || !currentStat.isSocket() || currentStat.dev !== socketStat.dev || currentStat.ino !== socketStat.ino) {
+      gracefullyProcessExitDoNotHang(0);
+      return;
+    }
+    scheduleSocketCheck();
+  }
+  function scheduleSocketCheck() {
+    const timer = setTimeout(() => void checkSocketPath(), 1e3);
+    timer.unref();
+  }
+  scheduleSocketCheck();
+}
+async function startCliDaemonServer(sessionName, browserContext, browserInfo2, contextConfig, clientInfo, mcpClientInfo, options) {
+  const sessionConfig = createSessionConfig(clientInfo, sessionName, browserInfo2, options);
+  const { socketPath } = sessionConfig;
+  if (process.platform !== "win32" && await socketExists(socketPath)) {
+    try {
+      await import_fs67.default.promises.unlink(socketPath);
+    } catch (error) {
+      throw error;
+    }
+  }
+  const backend = new BrowserBackend(contextConfig, browserContext, browserTools, { idleTimer: options.idleTimer });
+  await backend.initialize(mcpClientInfo);
+  if (browserContext.isClosed())
+    throw new Error("Browser context was closed before the daemon could start");
+  const server = import_net10.default.createServer((socket) => {
+    const connection = new SocketConnection(socket);
+    const abortController = new AbortController();
+    connection.onclose = () => abortController.abort();
+    connection.onmessage = async (message) => {
+      const { id, method, params: params2 } = message;
+      try {
+        if (method === "stop") {
+          await deleteSessionFile(clientInfo, sessionConfig);
+          const sendAck = async () => connection.send({ id, result: "ok" }).catch(() => {
+          });
+          if (options?.exitOnClose)
+            gracefullyProcessExitDoNotHang(0, () => sendAck());
+          else
+            await sendAck();
+        } else if (method === "run") {
+          const { toolName, toolParams } = parseCliCommand(params2.args);
+          toolParams._meta = { cwd: params2.cwd, raw: params2.raw || params2.json, json: !!params2.json };
+          const response2 = await backend.callTool(toolName, toolParams, abortController.signal);
+          await connection.send({ id, result: formatResult(response2) });
+        } else {
+          throw new Error(`Unknown method: ${method}`);
+        }
+      } catch (e) {
+        const error = process.env.PWDEBUGIMPL ? e.stack || e.message : e.message;
+        connection.send({ id, error }).catch(() => {
+        });
+      }
+    };
+  });
+  decorateServer(server);
+  browserContext.on("close", () => Promise.resolve().then(async () => {
+    await deleteSessionFile(clientInfo, sessionConfig);
+    if (options?.exitOnClose)
+      gracefullyProcessExitDoNotHang(0);
+  }));
+  await new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(socketPath, () => resolve());
+  });
+  await saveSessionFile(clientInfo, sessionConfig);
+  options.idleTimer?.poke();
+  await monitorSocketPath(socketPath);
+  return socketPath;
+}
+async function saveSessionFile(clientInfo, sessionConfig) {
+  await import_fs67.default.promises.mkdir(clientInfo.daemonProfilesDir, { recursive: true });
+  const sessionFile = import_path63.default.join(clientInfo.daemonProfilesDir, `${sessionConfig.name}.session`);
+  await import_fs67.default.promises.writeFile(sessionFile, JSON.stringify(sessionConfig, null, 2));
+}
+async function deleteSessionFile(clientInfo, sessionConfig) {
+  await import_fs67.default.promises.unlink(sessionConfig.socketPath).catch(() => {
+  });
+  if (!sessionConfig.cli.persistent) {
+    const sessionFile = import_path63.default.join(clientInfo.daemonProfilesDir, `${sessionConfig.name}.session`);
+    await import_fs67.default.promises.rm(sessionFile).catch(() => {
+    });
+  }
+}
+
+async function gracefullyCloseAll() {
+  await Promise.all(Array.from(gracefullyCloseSet).map((gracefullyClose) => gracefullyClose().catch((e) => {
+  })));
+}
+function gracefullyProcessExitDoNotHang(code, onExit2) {
+  const beforeExit = onExit2 ? () => onExit2().catch(() => {
+  }) : () => Promise.resolve();
+  const callback = () => beforeExit().then(() => process.exit(code));
+  setTimeout(callback, 3e4);
+  gracefullyCloseAll().then(callback);
+}
