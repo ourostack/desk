@@ -1908,6 +1908,7 @@ async function runGenerationCase({ construction,plan,deadline,emitClock,register
   return {record,clock:clocks,handoff:caseSpecial ? validateSpecialHandoff(caseSpecial,record) : null}
 }
 function nativeRegistrationAllowed(input) {
+  return false // This F0-only source candidate cannot register native execution.
   if (!input || input.platform !== "win32" || input.native !== "1" || input.event !== "workflow_dispatch" ||
     input.mode !== "standard" || !/^[0-9a-f]{40}$/.test(input.sha || "") ||
     !/^[1-9][0-9]{0,19}$/.test(input.Hns || "") || BigInt(input.Hns) > 18446744073709551615n ||
@@ -2302,6 +2303,7 @@ async function nativeControllerEntry() {
   if (gap!=="none") process.exitCode=1
 }
 async function runNativeOuter() {
+  nativeFailure("not_admitted")
   const retention = require("./windows_owned_git_retention.cjs")
   const H=BigInt(process.env.DESK_TEST_OWNED_GIT_H), workspace=path.resolve(__dirname,"../../../../../../")
   const context=retention.createRetentionContext({ workspace,expectedRun:{},

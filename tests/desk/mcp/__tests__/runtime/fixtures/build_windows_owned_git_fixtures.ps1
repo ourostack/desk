@@ -1,15 +1,43 @@
 # SOURCE ONLY. The host must observe this script's original process fullclose.
 # Worker facts below never assert this host's future close or issue bootstrap authority.
+[CmdletBinding(DefaultParameterSetName='Native')]
 param(
-  [Parameter(Mandatory=$true)][string]$PublicMcpRoot,
-  [Parameter(Mandatory=$true)][string]$FixtureRoot,
-  [Parameter(Mandatory=$true)][string]$SourceRevision,
-  [Parameter(Mandatory=$true)][string]$EnvelopeDeadlineNs,
-  [Parameter(Mandatory=$true)][string]$GitNodeExecutable,
-  [ValidateSet('host-build','host-coverage','build-worker','coverage-tools')][string]$WorkerMode = 'host-build'
+  [Parameter(Mandatory=$true,ParameterSetName='Native')][string]$PublicMcpRoot,
+  [Parameter(Mandatory=$true,ParameterSetName='Native')][string]$FixtureRoot,
+  [Parameter(Mandatory=$true,ParameterSetName='Native')][string]$SourceRevision,
+  [Parameter(Mandatory=$true,ParameterSetName='Native')][string]$EnvelopeDeadlineNs,
+  [Parameter(Mandatory=$true,ParameterSetName='Native')][string]$GitNodeExecutable,
+  [Parameter(Mandatory=$true,ParameterSetName='F0')][string]$F0RepositoryRoot,
+  [Parameter(Mandatory=$true,ParameterSetName='F0')][string]$F0SourceRevision,
+  [Parameter(Mandatory=$true,ParameterSetName='F0')][string]$F0NodePath,
+  [Parameter(Mandatory=$true,ParameterSetName='F0')][string]$F0IntentSha256,
+  [Parameter(Mandatory=$true,ParameterSetName='F0')][ValidateRange(1,300000)][int]$F0RemainingMs,
+  [ValidateSet('host-build','host-coverage','build-worker','coverage-tools','f0-host','f0-worker')][string]$WorkerMode = 'host-build'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$f0 = [string]::Equals($PSCmdlet.ParameterSetName, 'F0', [StringComparison]::Ordinal)
+$f0Clock = [Diagnostics.Stopwatch]::StartNew()
+if ($f0) {
+  if (!([string]::Equals($WorkerMode, 'f0-host', [StringComparison]::Ordinal) -or
+        [string]::Equals($WorkerMode, 'f0-worker', [StringComparison]::Ordinal)) -or
+      ![string]::Equals($PSVersionTable.PSEdition, 'Core', [StringComparison]::Ordinal) -or
+      $PSVersionTable.PSVersion.Major -lt 7 -or ![Environment]::Is64BitProcess -or
+      !($F0SourceRevision -cmatch '\A[0-9a-f]{40}\z') -or !($F0IntentSha256 -cmatch '\A[0-9a-f]{64}\z')) {
+    [Console]::Error.WriteLine('foundation'); exit 1
+  }
+  foreach ($value in @($F0RepositoryRoot, $F0NodePath)) {
+    if (![IO.Path]::IsPathFullyQualified($value) -or [Text.Encoding]::UTF8.GetByteCount($value) -gt 1024 -or
+        $value.IndexOfAny([char[]]@([char]0,[char]13,[char]10,[char]34)) -ge 0) {
+      [Console]::Error.WriteLine('foundation'); exit 1
+    }
+  }
+  $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..\..\..'))
+  if (![string]::Equals($repository, $F0RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    [Console]::Error.WriteLine('foundation'); exit 1
+  }
+} else {
+  throw 'not_admitted'
 if ($PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7 -or
     ![Environment]::Is64BitProcess -or $SourceRevision -cnotmatch '^[0-9a-f]{40}$' -or
     $EnvelopeDeadlineNs -cnotmatch '^(0|[1-9][0-9]{0,19})$') { throw 'not_admitted' }
@@ -29,12 +57,14 @@ if ($FixtureRoot -cne (Join-Path $public 'fixtures') -or $PublicMcpRoot -cne (Jo
 foreach ($p in @($repository, $PublicMcpRoot, $FixtureRoot, $PSCommandPath, $GitNodeExecutable)) {
   if (!$p -or $p -match '["%!\r\n&|<>^]' -or !$([IO.Path]::IsPathFullyQualified($p))) { throw 'guard_failed' }
 }
+}
 
 # PowerShell Core's bundled Roslyn Add-Type implementation is used in process.
 # No csc.exe, dotnet build, SDK installer, external compiler or fallback is allowed.
 if (!(Test-Path -LiteralPath (Join-Path $PSHOME 'Microsoft.CodeAnalysis.CSharp.dll') -PathType Leaf)) {
   throw 'tool_missing'
 }
+try {
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -103,10 +133,550 @@ public static class OwnedGitBuild {
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int cls,IntPtr data,uint size,out uint needed);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool ConvertSidToStringSidW(IntPtr sid,out IntPtr text);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr file,out FILEINFO info);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetFileAttributesW(string path);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetFinalPathNameByHandleW(IntPtr file,StringBuilder path,uint count,uint flags);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetFileType(IntPtr file);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetModuleFileNameW(IntPtr h,StringBuilder path,uint size);
   [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
     string sddl,uint revision,out IntPtr sd,out uint size);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr h);
+
+  sealed class F0Clock {
+    readonly System.Diagnostics.Stopwatch watch=System.Diagnostics.Stopwatch.StartNew();
+    readonly int allowance;
+    long last;
+    public F0Clock(int remaining) { Require(remaining>=1 && remaining<=300000); allowance=remaining; }
+    public int Remaining() {
+      long ticks=watch.Elapsed.Ticks;
+      long elapsed=ticks/TimeSpan.TicksPerMillisecond+(ticks%TimeSpan.TicksPerMillisecond==0?0:1);
+      Require(elapsed>=last && elapsed<allowance); last=elapsed;
+      return checked(allowance-(int)elapsed);
+    }
+  }
+  sealed class F0Refusal : Exception {
+    public readonly string reason;
+    public F0Refusal(string value) : base("catalogue") { reason=value; }
+  }
+  sealed class F0Buffer : MemoryStream {
+    readonly int cap;
+    public F0Buffer(int maximum) { cap=maximum; }
+    public override void Write(byte[] bytes,int offset,int count) {
+      Require(count>=0 && Position<=cap-count); base.Write(bytes,offset,count);
+    }
+    public override void Write(ReadOnlySpan<byte> bytes) {
+      Require(Position<=cap-bytes.Length); base.Write(bytes);
+    }
+    public override void WriteByte(byte value) { Require(Position<cap); base.WriteByte(value); }
+  }
+  static Dictionary<string,object> F0Object(params object[] pairs) {
+    Require(pairs.Length%2==0 && pairs.Length<=32);
+    var value=new Dictionary<string,object>(StringComparer.Ordinal);
+    for(int i=0;i<pairs.Length;i+=2) value.Add((string)pairs[i],pairs[i+1]);
+    return value;
+  }
+  static readonly System.Text.Json.JsonSerializerOptions F0JsonOptions=new System.Text.Json.JsonSerializerOptions {
+    Encoder=System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+  };
+  static byte[] F0Encode(object value,int cap) {
+    using(var buffer=new F0Buffer(cap)) {
+      System.Text.Json.JsonSerializer.Serialize(buffer,value,F0JsonOptions);
+      Require(buffer.Length>0 && buffer.Length<=cap);
+      return buffer.ToArray();
+    }
+  }
+  static object F0Version(Version value) {
+    Require(value.Major>=0 && value.Major<=65535 && value.Minor>=0 && value.Minor<=65535 &&
+      value.Build<=65535 && value.Revision<=65535);
+    return F0Object("major",value.Major,"minor",value.Minor,"build",value.Build<0?(object)null:value.Build,
+      "revision",value.Revision<0?(object)null:value.Revision);
+  }
+  static string F0Absolute(string value) {
+    Require(!String.IsNullOrEmpty(value) && Encoding.UTF8.GetByteCount(value)<=1024 &&
+      value.IndexOfAny(new[]{'\0','\r','\n','"'})<0 && value.Length>=3 && value[1]==':' && value[2]=='\\' &&
+      ((value[0]>='A' && value[0]<='Z') || (value[0]>='a' && value[0]<='z')) &&
+      String.Equals(Path.GetFullPath(value),value,StringComparison.OrdinalIgnoreCase));
+    return value;
+  }
+  static string F0EnvironmentValue(string name) { return F0Absolute(Environment.GetEnvironmentVariable(name)); }
+  static void F0Inputs(string root,string revision,string node,string intent) {
+    Require(IntPtr.Size==8 && BitConverter.IsLittleEndian && Environment.OSVersion.Platform==PlatformID.Win32NT);
+    F0Absolute(root); F0Absolute(node);
+    Require(System.Text.RegularExpressions.Regex.IsMatch(revision,@"\A[0-9a-f]{40}\z") &&
+      System.Text.RegularExpressions.Regex.IsMatch(intent,@"\A[0-9a-f]{64}\z") &&
+      String.Equals(Path.GetFileName(node),"node.exe",StringComparison.OrdinalIgnoreCase));
+  }
+  static IntPtr F0Environment() {
+    string systemRoot=F0EnvironmentValue("SystemRoot"),windir=F0EnvironmentValue("WINDIR");
+    string drive=Environment.GetEnvironmentVariable("SystemDrive"),ps=F0EnvironmentValue("PSHOME");
+    Require(String.Equals(systemRoot,windir,StringComparison.OrdinalIgnoreCase) &&
+      drive!=null && drive.Length==2 && String.Equals(systemRoot.Substring(0,2),drive,StringComparison.OrdinalIgnoreCase));
+    var entries=new SortedDictionary<string,string>(StringComparer.OrdinalIgnoreCase) {
+      {"SystemRoot",systemRoot},{"WINDIR",windir},{"SystemDrive",drive},{"PSHOME",ps},
+      {"PSModulePath",Path.Combine(ps,"Modules")},{"PSModuleAnalysisCachePath","NUL"},
+      {"POWERSHELL_TELEMETRY_OPTOUT","1"},{"DOTNET_EnableDiagnostics","0"},
+      {"F0_RUNNER_TOOL_CACHE",F0EnvironmentValue("F0_RUNNER_TOOL_CACHE")}
+    };
+    var block=new StringBuilder();
+    Require(entries.Count==9);
+    foreach(var entry in entries) {
+      Require(entry.Value.IndexOf('\0')<0);
+      block.Append(entry.Key).Append('=').Append(entry.Value).Append('\0');
+    }
+    block.Append('\0'); Require(block.Length<=8192);
+    return Marshal.StringToHGlobalUni(block.ToString());
+  }
+  static void F0Frame(object value,int cap) {
+    byte[] body=F0Encode(value,cap),prefix=BitConverter.GetBytes(body.Length);
+    using(Stream output=Console.OpenStandardOutput()) {
+      output.Write(prefix,0,4); output.Write(body,0,body.Length); output.Flush();
+    }
+  }
+  static void F0Json(System.Text.Json.JsonElement value,ref int tokens) {
+    Require(++tokens<=16384);
+    switch(value.ValueKind) {
+      case System.Text.Json.JsonValueKind.Object:
+        var keys=new HashSet<string>(StringComparer.Ordinal);
+        foreach(var field in value.EnumerateObject()) {
+          Require(keys.Count<32 && field.Name.Length<=64 && keys.Add(field.Name) &&
+            field.Name!="__proto__" && field.Name!="prototype" && field.Name!="constructor");
+          foreach(char c in field.Name) Require(c>=32 && c<=126);
+          F0Json(field.Value,ref tokens);
+        }
+        break;
+      case System.Text.Json.JsonValueKind.Array:
+        Require(value.GetArrayLength()<=411);
+        foreach(var item in value.EnumerateArray()) F0Json(item,ref tokens);
+        break;
+      case System.Text.Json.JsonValueKind.String:
+        string text=value.GetString(); Require(text.Length<=1024);
+        foreach(char c in text) Require(c>=32 && c<=126);
+        break;
+      case System.Text.Json.JsonValueKind.Number:
+        ulong number;
+        string raw=value.GetRawText();
+        Require(raw.Length<=16 && System.Text.RegularExpressions.Regex.IsMatch(raw,@"\A(?:0|[1-9][0-9]*)\z") &&
+          value.TryGetUInt64(out number) && number<=9007199254740991UL);
+        break;
+      case System.Text.Json.JsonValueKind.Null:
+      case System.Text.Json.JsonValueKind.True:
+      case System.Text.Json.JsonValueKind.False: break;
+      default: Require(false); break;
+    }
+  }
+  static void F0Keys(System.Text.Json.JsonElement value,params string[] names) {
+    Require(value.ValueKind==System.Text.Json.JsonValueKind.Object);
+    var keys=new HashSet<string>(names,StringComparer.Ordinal);
+    foreach(var field in value.EnumerateObject()) Require(keys.Remove(field.Name));
+    Require(keys.Count==0);
+  }
+  static System.Text.Json.JsonElement F0WorkerRecord(byte[] framed) {
+    Require(framed.Length>=5 && framed.Length<=458756);
+    int length=BitConverter.ToInt32(framed,0);
+    Require(length>0 && length<=458752 && length==framed.Length-4);
+    using(var document=System.Text.Json.JsonDocument.Parse(new ReadOnlyMemory<byte>(framed,4,length),
+      new System.Text.Json.JsonDocumentOptions { MaxDepth=16 })) {
+      var value=document.RootElement;
+      int tokens=0; F0Json(value,ref tokens);
+      F0Keys(value,"schema","foundation","collection","error","visited");
+      Require(value.GetProperty("schema").GetString()=="na1-f0-worker/1");
+      var collection=value.GetProperty("collection");
+      F0Keys(collection,"basis","roots","selectors","files");
+      Require(collection.GetProperty("basis").GetString()=="fixed-catalogue-only" &&
+        collection.GetProperty("roots").GetArrayLength()==17 && collection.GetProperty("selectors").GetArrayLength()==22 &&
+        collection.GetProperty("files").GetArrayLength()==411);
+      F0Keys(value.GetProperty("error"),"code","stage","subject");
+      F0Keys(value.GetProperty("visited"),"files","selectors","bytes");
+      Require(value.GetProperty("visited").GetProperty("files").GetUInt32()==411 &&
+        value.GetProperty("visited").GetProperty("selectors").GetUInt32()==22 &&
+        value.GetProperty("visited").GetProperty("bytes").GetUInt64()<=8589934592UL);
+      return value.Clone();
+    }
+  }
+  public static void F0Host(string script,string root,string revision,string node,string intent,int remaining) {
+    F0Inputs(root,revision,node,intent);
+    var clock=new F0Clock(remaining);
+    var owner=new Owner(); var stdout=new Pipe(); var stderr=new Pipe(); PI pi=new PI();
+    IntPtr job=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,jobs=IntPtr.Zero,env=IntPtr.Zero,sd=IntPtr.Zero;
+    bool initialized=false,created=false,complete=false;
+    object worker=null;
+    try {
+      string ps=F0EnvironmentValue("PSHOME"),image=ImagePath();
+      Require(String.Equals(image,Path.Combine(ps,"pwsh.exe"),StringComparison.OrdinalIgnoreCase) &&
+        String.Equals(script,Path.Combine(root,@"tests\desk\mcp\__tests__\runtime\fixtures\build_windows_owned_git_fixtures.ps1"),
+          StringComparison.OrdinalIgnoreCase));
+      uint size;
+      string sid=TokenSid(owner);
+      Require(!String.IsNullOrEmpty(sid) &&
+        ConvertStringSecurityDescriptorToSecurityDescriptorW("O:"+sid+"D:P(A;;GA;;;"+sid+")",1,out sd,out size));
+      stdout.Create(owner,sd); stderr.Create(owner,sd);
+      job=owner.Keep(CreateJobObjectW(IntPtr.Zero,null));
+      var limit=new LIMIT(); limit.basic.flags=0x2000|8|0x100|0x200; limit.basic.active=4;
+      limit.a=new UIntPtr(1073741824UL); limit.b=new UIntPtr(2147483648UL);
+      Require(SetInformationJobObject(job,9,ref limit,(uint)Marshal.SizeOf<LIMIT>()));
+      var sa=new SA { size=Marshal.SizeOf<SA>(),inherit=1 };
+      IntPtr nul=owner.Keep(CreateFileW("NUL",0x80000000,3,ref sa,3,0,IntPtr.Zero),true);
+      UIntPtr bytes=UIntPtr.Zero;
+      Require(!InitializeProcThreadAttributeList(IntPtr.Zero,2,0,ref bytes) &&
+        (uint)Marshal.GetLastWin32Error()==122 && bytes.ToUInt64()>0 && bytes.ToUInt64()<=65536);
+      attrs=Marshal.AllocHGlobal(checked((int)bytes.ToUInt64()));
+      Require(InitializeProcThreadAttributeList(attrs,2,0,ref bytes)); initialized=true;
+      handles=Marshal.AllocHGlobal(3*IntPtr.Size);
+      Marshal.WriteIntPtr(handles,0,nul); Marshal.WriteIntPtr(handles,IntPtr.Size,stdout.client);
+      Marshal.WriteIntPtr(handles,2*IntPtr.Size,stderr.client);
+      jobs=Marshal.AllocHGlobal(IntPtr.Size); Marshal.WriteIntPtr(jobs,job);
+      Require(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x20002),handles,new UIntPtr((uint)(3*IntPtr.Size)),IntPtr.Zero,IntPtr.Zero) &&
+        UpdateProcThreadAttribute(attrs,0,new IntPtr(0x2000d),jobs,new UIntPtr((uint)IntPtr.Size),IntPtr.Zero,IntPtr.Zero));
+      var startup=new SIX(); startup.si.cb=(uint)Marshal.SizeOf<SIX>(); startup.si.flags=0x100;
+      startup.si.input=nul; startup.si.output=stdout.client; startup.si.error=stderr.client; startup.attributes=attrs;
+      env=F0Environment();
+      string command=Argument(image)+" -NoLogo -NoProfile -NonInteractive -File "+Argument(script)+
+        " -WorkerMode f0-worker -F0RepositoryRoot "+Argument(root)+" -F0SourceRevision "+revision+
+        " -F0NodePath "+Argument(node)+" -F0IntentSha256 "+intent+
+        " -F0RemainingMs "+clock.Remaining().ToString(System.Globalization.CultureInfo.InvariantCulture);
+      Require(command.Length<=8192 && owner.handles.Count<=62 &&
+        CreateProcessW(image,new StringBuilder(command),IntPtr.Zero,IntPtr.Zero,true,
+          CREATE_SUSPENDED|EXTENDED|UNICODE_ENV,env,root,ref startup,out pi));
+      created=true;
+      owner.handles.Add(pi.process); owner.handles.Add(pi.thread);
+      bool member; uint processFlags,threadFlags;
+      Require(pi.process!=IntPtr.Zero && pi.thread!=IntPtr.Zero &&
+        SetHandleInformation(pi.process,1,0) && SetHandleInformation(pi.thread,1,0) &&
+        GetHandleInformation(pi.process,out processFlags) && (processFlags&1)==0 &&
+        GetHandleInformation(pi.thread,out threadFlags) && (threadFlags&1)==0 &&
+        IsProcessInJob(pi.process,job,out member) && member);
+      clock.Remaining(); Require(ResumeThread(pi.thread)==1);
+      owner.Close(stdout.client); stdout.client=IntPtr.Zero;
+      owner.Close(stderr.client); stderr.client=IntPtr.Zero; owner.Close(nul);
+      long outputBytes=0,errorBytes=0;
+      using(var capture=new F0Buffer(458756)) {
+        while(true) {
+          clock.Remaining();
+          stdout.Poll(ref outputBytes,capture,458756); stderr.Poll(ref errorBytes,null,4096);
+          uint waited=WaitForSingleObject(pi.process,0);
+          Require(waited==0 || waited==WAIT_TIMEOUT);
+          ACCOUNT accounting;
+          Require(QueryInformationJobObject(job,1,out accounting,(uint)Marshal.SizeOf<ACCOUNT>(),IntPtr.Zero));
+          if(waited==0 && stdout.eof && stderr.eof && accounting.active==0) {
+            uint code; Require(GetExitCodeProcess(pi.process,out code) && code==0);
+            Require(!stdout.pending && !stderr.pending);
+            worker=F0WorkerRecord(capture.ToArray()); complete=true; break;
+          }
+          Thread.Sleep(1);
+        }
+      }
+      clock.Remaining();
+      Require(!stdout.pending && !stderr.pending);
+      stdout.Free(); stderr.Free();
+      DeleteProcThreadAttributeList(attrs); initialized=false;
+      Marshal.FreeHGlobal(attrs); attrs=IntPtr.Zero;
+      Marshal.FreeHGlobal(handles); handles=IntPtr.Zero;
+      Marshal.FreeHGlobal(jobs); jobs=IntPtr.Zero;
+      Marshal.FreeHGlobal(env); env=IntPtr.Zero;
+      Require(LocalFree(sd)==IntPtr.Zero); sd=IntPtr.Zero;
+      owner.CloseAll(); Require(owner.closed);
+      clock.Remaining();
+      F0Frame(F0Object("schema","na1-f0-host/1","worker",worker,"completion",F0Object(
+        "workerExit",0,"workerExitObserved",true,"workerStdoutEOF",true,"workerStderrEOF",true,
+        "jobActive",0,"ioReaped",true,"criticalHandlesClosed",true,"ownership","closed")),524288);
+    } catch {
+      // Kernel-referenced storage is deliberately not freed on an unknown join.
+      if(created && job!=IntPtr.Zero) TerminateJobObject(job,91);
+      Environment.Exit(1);
+    }
+    Require(complete && !initialized && attrs==IntPtr.Zero && handles==IntPtr.Zero && jobs==IntPtr.Zero && env==IntPtr.Zero);
+  }
+  sealed class F0SelectorSpec {
+    public string id,root,type;
+    public string[] parts;
+    public int limit;
+  }
+  sealed class F0FileSpec {
+    public string id,root,kind,selector;
+    public string[] parts;
+    public int rank,insertAt;
+  }
+  static readonly string[] F0VS={"v22c","v22e","v22p","v22b","v18c","v18e","v18p","v18b"};
+  static readonly string[] F0Roots={"repo","os","ps","rtc","n24","g64","g32",
+    "v22c","v22e","v22p","v22b","v18c","v18e","v18p","v18b","sdk","vsdb"};
+  static void F0File(List<F0FileSpec> files,string id,string root,string parts,string kind,
+    string selector=null,int rank=0,int insertAt=0) {
+    files.Add(new F0FileSpec { id=id,root=root,parts=parts.Split('/'),kind=kind,selector=selector,rank=rank,insertAt=insertAt });
+  }
+  static void F0Catalogue(out List<F0SelectorSpec> selectors,out List<F0FileSpec> files) {
+    selectors=new List<F0SelectorSpec>(); files=new List<F0FileSpec>();
+    F0File(files,"node20","rtc","node/20.0.0/x64/node.exe","pe");
+    F0File(files,"node22","rtc","node/22.23.3/x64/node.exe","pe"); F0File(files,"node24","n24","node.exe","pe");
+    string[] psIds={"pwsh","sma","roslyn","utility"};
+    string[] psNames={"pwsh.exe","System.Management.Automation.dll","Microsoft.CodeAnalysis.CSharp.dll","Microsoft.PowerShell.Commands.Utility.dll"};
+    for(int i=0;i<4;i++) F0File(files,"ps."+psIds[i],"ps",psNames[i],"pe");
+    foreach(string r in new[]{"os","ps"}) {
+      string prefix=r=="os"?"System32/WindowsPowerShell/v1.0/":"";
+      F0File(files,"la."+r+".manifest",r,prefix+"Modules/Microsoft.PowerShell.LocalAccounts/Microsoft.PowerShell.LocalAccounts.psd1","manifest");
+      F0File(files,"la."+r+".assembly",r,prefix+"Modules/Microsoft.PowerShell.LocalAccounts/Microsoft.PowerShell.LocalAccounts.dll","pe");
+    }
+    string[] gitIds={"command","direct","sh","env","msys","gitconfig","fstab","userfstab","packages","release","bash","mintty"};
+    string[] gitPaths={"cmd/git.exe","mingw64/bin/git.exe","usr/bin/sh.exe","usr/bin/env.exe","usr/bin/msys-2.0.dll",
+      "etc/gitconfig","etc/fstab","etc/fstab.d/deskstd","etc/package-versions.txt","etc/git-for-windows-extra-release-notes.md","bin/bash.exe","usr/bin/mintty.exe"};
+    for(int g=0;g<2;g++) for(int i=0;i<12;i++) F0File(files,"git."+new[]{"g64","g32"}[g]+"."+gitIds[i],
+      new[]{"g64","g32"}[g],gitPaths[i],i>=5&&i<=7?"config":i==8||i==9?"metadata":"pe");
+    foreach(string g in new[]{"g64","g32"}) foreach(string dir in new[]{"mingw","usr"}) {
+      string q="git."+g+"."+dir,p=dir=="mingw"?"mingw64/bin":"usr/bin";
+      selectors.Add(new F0SelectorSpec { id=q,root=g,parts=p.Split('/'),type="git",limit=16 });
+      for(int rank=1;rank<=16;rank++) F0File(files,"dll."+g+"."+dir+"."+rank.ToString("D2"),g,p,"pe",q,rank,2);
+    }
+    foreach(string v in F0VS) selectors.Add(new F0SelectorSpec { id="llvm."+v,root=v,
+      parts="VC/Tools/Llvm/x64/lib/clang".Split('/'),type="llvm",limit=8 });
+    foreach(string v in F0VS) selectors.Add(new F0SelectorSpec { id="msvc."+v,root=v,
+      parts="VC/Tools/MSVC".Split('/'),type="msvc",limit=8 });
+    selectors.Add(new F0SelectorSpec { id="sdk.lib",root="sdk",parts=new[]{"Lib"},type="sdk",limit=8 });
+    selectors.Add(new F0SelectorSpec { id="vs.instances",root="vsdb",parts=Array.Empty<string>(),type="instance",limit=16 });
+    string[] vsIds={"clang","lld","readobj","profdata","cov","devcmd","toolversion","devenv"};
+    string[] vsPaths={"VC/Tools/Llvm/x64/bin/clang-cl.exe","VC/Tools/Llvm/x64/bin/lld-link.exe",
+      "VC/Tools/Llvm/x64/bin/llvm-readobj.exe","VC/Tools/Llvm/x64/bin/llvm-profdata.exe","VC/Tools/Llvm/x64/bin/llvm-cov.exe",
+      "Common7/Tools/VsDevCmd.bat","VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt","Common7/IDE/devenv.exe"};
+    foreach(string v in F0VS) for(int i=0;i<8;i++) F0File(files,"vs."+v+"."+vsIds[i],v,vsPaths[i],i==5?"script":i==6?"metadata":"pe");
+    foreach(string v in F0VS) for(int rank=1;rank<=8;rank++) F0File(files,"profile."+v+"."+rank.ToString("D2"),v,
+      "VC/Tools/Llvm/x64/lib/clang/lib/windows/clang_rt.profile-x86_64.lib","library","llvm."+v,rank,6);
+    foreach(string v in F0VS) for(int rank=1;rank<=8;rank++) foreach(string k in new[]{"cmt","vcruntime"})
+      F0File(files,"crt."+v+"."+rank.ToString("D2")+"."+k,v,"VC/Tools/MSVC/lib/x64/"+(k=="cmt"?"libcmt.lib":"libvcruntime.lib"),
+        "library","msvc."+v,rank,3);
+    for(int rank=1;rank<=8;rank++) foreach(string k in new[]{"ucrt","kernel","advapi"})
+      F0File(files,"sdk."+rank.ToString("D2")+"."+k,"sdk","Lib/"+(k=="ucrt"?"ucrt/x64/libucrt.lib":
+        k=="kernel"?"um/x64/kernel32.lib":"um/x64/advapi32.lib"),"library","sdk.lib",rank,1);
+    for(int rank=1;rank<=16;rank++) foreach(string k in new[]{"state","catalog"})
+      F0File(files,"instance."+rank.ToString("D2")+"."+k,"vsdb",k+".json","metadata","vs.instances",rank,0);
+    Require(F0Roots.Length==17 && selectors.Count==22 && files.Count==411);
+  }
+  static uint F0Attributes(string path) {
+    uint attributes=GetFileAttributesW(path);
+    if(attributes==UInt32.MaxValue) {
+      int code=Marshal.GetLastWin32Error();
+      throw new F0Refusal(code==2||code==3?"missing":code==5||code==32?"access":"io");
+    }
+    return attributes;
+  }
+  static string F0Final(IntPtr handle) {
+    var value=new StringBuilder(2048);
+    uint count=GetFinalPathNameByHandleW(handle,value,2048,0);
+    if(count==0 || count>=2048) throw new F0Refusal("io");
+    string path=value.ToString();
+    if(path.StartsWith(@"\\?\",StringComparison.Ordinal)) path=path.Substring(4);
+    return path;
+  }
+  static List<KeyValuePair<string,string>> F0Directories(string directory,F0Clock clock) {
+    F0Absolute(directory);
+    var guards=new List<KeyValuePair<string,string>>();
+    string current=Path.GetPathRoot(directory);
+    var components=directory.Substring(current.Length).Split(new[]{'\\'},StringSplitOptions.RemoveEmptyEntries);
+    for(int i=-1;i<components.Length;i++) {
+      clock.Remaining(); if(i>=0) current=Path.Combine(current,components[i]);
+      uint attributes=F0Attributes(current);
+      if((attributes&0x400)!=0) throw new F0Refusal("reparse");
+      if((attributes&0x10)==0) throw new F0Refusal("not-regular");
+      guards.Add(new KeyValuePair<string,string>(current,DirectoryIdentity(current)));
+    }
+    return guards;
+  }
+  static void F0Recheck(List<KeyValuePair<string,string>> guards,F0Clock clock) {
+    foreach(var guard in guards) {
+      clock.Remaining();
+      uint attributes=F0Attributes(guard.Key);
+      if((attributes&0x400)!=0) throw new F0Refusal("reparse");
+      if((attributes&0x10)==0 || DirectoryIdentity(guard.Key)!=guard.Value) throw new F0Refusal("changed");
+    }
+  }
+  static Dictionary<string,object> F0Root(string id,string path,F0Clock clock) {
+    if(String.IsNullOrEmpty(path)) return F0Object("id",id,"state","error","reason","io");
+    try { F0Absolute(path); }
+    catch(InvalidOperationException) { return F0Object("id",id,"state","refused","reason","outside-root"); }
+    try {
+      var guards=F0Directories(path,clock); F0Recheck(guards,clock);
+      return F0Object("id",id,"state","present","reason","none");
+    } catch(F0Refusal failure) {
+      string state=failure.reason=="missing"?"missing":failure.reason=="access"||failure.reason=="io"||failure.reason=="changed"?"error":"refused";
+      return F0Object("id",id,"state",state,"reason",failure.reason);
+    } catch(UnauthorizedAccessException) { return F0Object("id",id,"state","error","reason","access"); }
+      catch(IOException) { return F0Object("id",id,"state","error","reason","io"); }
+  }
+  static string F0Path(string root,string[] parts) {
+    string value=root; foreach(string part in parts) value=Path.Combine(value,part);
+    string canonical=Path.GetFullPath(value);
+    if(!String.Equals(canonical,root,StringComparison.OrdinalIgnoreCase) &&
+      !canonical.StartsWith(root.TrimEnd('\\')+"\\",StringComparison.OrdinalIgnoreCase)) throw new F0Refusal("outside-root");
+    return canonical;
+  }
+  static string F0NamePattern(string type) {
+    switch(type) {
+      case "git": return @"\A[A-Za-z0-9._+-]{1,124}\.[dD][lL][lL]\z";
+      case "llvm": return @"\A[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}\z";
+      case "msvc": return @"\A[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,6}\z";
+      case "sdk": return @"\A[0-9]{1,3}(?:\.[0-9]{1,6}){2,3}\z";
+      case "instance": return @"\A[A-Za-z0-9_-]{1,64}\z";
+      default: throw new InvalidOperationException("schema");
+    }
+  }
+  static Dictionary<string,object> F0Select(F0SelectorSpec spec,string root,string rootState,F0Clock clock) {
+    if(rootState!="present") return F0Object("id",spec.id,"state",rootState=="missing"?"parent-missing":"not-collected",
+      "names",Array.Empty<string>(),"reason",rootState=="missing"?"parent-missing":"not-started");
+    try {
+      string directory=F0Path(root,spec.parts);
+      var guards=F0Directories(directory,clock); var names=new List<string>();
+      var unique=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      var options=new EnumerationOptions { RecurseSubdirectories=false,IgnoreInaccessible=false,
+        ReturnSpecialDirectories=false,AttributesToSkip=0,BufferSize=4096,MatchType=MatchType.Simple };
+      using(var entries=Directory.EnumerateFileSystemEntries(directory,"*",options).GetEnumerator()) {
+        while(true) {
+          clock.Remaining(); if(!entries.MoveNext()) break;
+          string path=entries.Current,name=Path.GetFileName(path); uint attr=F0Attributes(path);
+          bool isDirectory=(attr&0x10)!=0,isReparse=(attr&0x400)!=0;
+          bool named=System.Text.RegularExpressions.Regex.IsMatch(name,F0NamePattern(spec.type));
+          if(spec.type=="git" ? !name.EndsWith(".dll",StringComparison.OrdinalIgnoreCase) : !isDirectory && !isReparse && !named) continue;
+          if(isReparse) throw new F0Refusal("reparse");
+          if(spec.type=="git"?isDirectory:!isDirectory) throw new F0Refusal("not-regular");
+          if(name.Length>128 || !named) throw new F0Refusal("unsupported-name");
+          if(!unique.Add(name)) throw new F0Refusal("ambiguous-case");
+          if(names.Count>=spec.limit) return F0Object("id",spec.id,"state","over-limit","names",Array.Empty<string>(),"reason","count-cap");
+          names.Add(name);
+        }
+      }
+      F0Recheck(guards,clock); names.Sort(StringComparer.Ordinal);
+      var row=F0Object("id",spec.id,"state","listed","names",names.ToArray(),"reason","none");
+      // Enforce F0-M1 on the actual emitted selector, before any ranked file is resolved.
+      if(F0Encode(row,4096).Length>2048) return F0Object("id",spec.id,"state","over-limit","names",Array.Empty<string>(),"reason","count-cap");
+      return row;
+    } catch(F0Refusal failure) {
+      string state=failure.reason=="missing"?"parent-missing":
+        failure.reason=="access"||failure.reason=="io"||failure.reason=="changed"?"unreadable":"unsupported-name";
+      return F0Object("id",spec.id,"state",state,"names",Array.Empty<string>(),
+        "reason",failure.reason=="missing"?"parent-missing":failure.reason);
+    } catch(UnauthorizedAccessException) { return F0Object("id",spec.id,"state","unreadable","names",Array.Empty<string>(),"reason","access"); }
+      catch(IOException) { return F0Object("id",spec.id,"state","unreadable","names",Array.Empty<string>(),"reason","io"); }
+  }
+  static Dictionary<string,object> F0FileRow(F0FileSpec spec,object locator,string state,string reason,object bytes=null,string hash=null) {
+    var row=F0Object("id",spec.id,"locator",locator,"state",state,"kind",spec.kind,"bytes",bytes,"sha256",hash,"reason",reason);
+    F0Encode(row,768); return row;
+  }
+  static Dictionary<string,object> F0Read(F0FileSpec spec,string root,string rootState,
+    Dictionary<string,Dictionary<string,object>> selected,F0Clock clock,ref ulong total) {
+    if(rootState!="present") return F0FileRow(spec,null,rootState=="missing"?"parent-missing":"not-collected",
+      rootState=="missing"?"parent-missing":"not-started");
+    var parts=new List<string>(spec.parts);
+    if(spec.selector!=null) {
+      var selector=selected[spec.selector]; string state=(string)selector["state"];
+      if(state!="listed") return F0FileRow(spec,null,state=="parent-missing"?"parent-missing":"not-collected",
+        state=="parent-missing"?"parent-missing":"not-started");
+      var names=(string[])selector["names"];
+      if(spec.rank>names.Length) return F0FileRow(spec,null,"slot-empty","slot-empty");
+      parts.Insert(spec.insertAt,names[spec.rank-1]);
+    }
+    Require(parts.Count>=1 && parts.Count<=12 && String.Join("/",parts).Length<=256);
+    var locator=F0Object("root",spec.root,"parts",parts.ToArray());
+    IntPtr file=IntPtr.Zero;
+    try {
+      string path=F0Path(root,parts.ToArray());
+      var guards=F0Directories(Path.GetDirectoryName(path),clock);
+      uint attributes=F0Attributes(path);
+      if((attributes&0x400)!=0) throw new F0Refusal("reparse");
+      if((attributes&0x10)!=0) throw new F0Refusal("not-regular");
+      var sa=new SA { size=Marshal.SizeOf<SA>() };
+      file=CreateFileW(path,0x80000000,1,ref sa,3,0x08200000,IntPtr.Zero);
+      if(file==IntPtr.Zero || file==INVALID) {
+        file=IntPtr.Zero; int error=Marshal.GetLastWin32Error();
+        throw new F0Refusal(error==2||error==3?"missing":error==5||error==32?"access":"io");
+      }
+      uint flags; FILEINFO before,after;
+      Require(SetHandleInformation(file,1,0) && GetHandleInformation(file,out flags) && (flags&1)==0);
+      if(GetFileType(file)!=1) throw new F0Refusal("not-regular");
+      if(!GetFileInformationByHandle(file,out before)) throw new F0Refusal("io");
+      if((before.attributes&0x400)!=0) throw new F0Refusal("reparse");
+      if((before.attributes&0x10)!=0) throw new F0Refusal("not-regular");
+      if(!String.Equals(F0Final(file),path,StringComparison.OrdinalIgnoreCase)) throw new F0Refusal("outside-root");
+      ulong size=((ulong)before.sizeHigh<<32)|before.sizeLow;
+      if(size>536870912UL || total>8589934592UL-size) return F0FileRow(spec,locator,"too-large",
+        size>536870912UL?"file-cap":"aggregate-cap",size<=9007199254740991UL?(object)size:null);
+      string hash;
+      using(var safe=new Microsoft.Win32.SafeHandles.SafeFileHandle(file,false))
+      using(var stream=new FileStream(safe,FileAccess.Read,65536,false))
+      using(var digest=System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256)) {
+        byte[] buffer=new byte[65536]; ulong read=0;
+        while(read<size) {
+          clock.Remaining(); int count=stream.Read(buffer,0,(int)Math.Min(65536UL,size-read));
+          if(count<=0) throw new F0Refusal("changed");
+          read+=(ulong)count; total+=(ulong)count;
+          Require(total<=8589934592UL); digest.AppendData(buffer,0,count);
+        }
+        clock.Remaining();
+        hash=Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
+        if(!GetFileInformationByHandle(file,out after) || before.volume!=after.volume ||
+          before.indexHigh!=after.indexHigh || before.indexLow!=after.indexLow ||
+          before.sizeHigh!=after.sizeHigh || before.sizeLow!=after.sizeLow ||
+          before.writeHigh!=after.writeHigh || before.writeLow!=after.writeLow ||
+          (after.attributes&(0x400u|0x10u))!=0) throw new F0Refusal("changed");
+        if(Identity(path)!=OpenIdentity(safe)) throw new F0Refusal("changed");
+        F0Recheck(guards,clock);
+      }
+      return F0FileRow(spec,locator,"present","none",size,hash);
+    } catch(F0Refusal failure) {
+      string state=failure.reason=="missing"?"missing":
+        failure.reason=="access"||failure.reason=="io"||failure.reason=="changed"?"unreadable":"refused";
+      return F0FileRow(spec,locator,state,failure.reason);
+    } catch(UnauthorizedAccessException) { return F0FileRow(spec,locator,"unreadable","access"); }
+      catch(IOException) { return F0FileRow(spec,locator,"unreadable","io"); }
+    finally { if(file!=IntPtr.Zero) Require(CloseHandle(file)); }
+  }
+  static string F0KnownJoin(string root,params string[] parts) {
+    if(String.IsNullOrEmpty(root)) return null;
+    string value=root; foreach(string part in parts) value=Path.Combine(value,part);
+    return value;
+  }
+  public static void F0Worker(string root,string revision,string node,string intent,int remaining,int psMajor,int psMinor,int psPatch) {
+    try {
+      F0Inputs(root,revision,node,intent); RequireJobMembership();
+      var clock=new F0Clock(remaining);
+      string pf=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles,Environment.SpecialFolderOption.DoNotVerify);
+      string pfx=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86,Environment.SpecialFolderOption.DoNotVerify);
+      string common=Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData,Environment.SpecialFolderOption.DoNotVerify);
+      var paths=new Dictionary<string,string>(StringComparer.Ordinal) {
+        {"repo",root},{"os",F0EnvironmentValue("SystemRoot")},{"ps",F0EnvironmentValue("PSHOME")},
+        {"rtc",F0EnvironmentValue("F0_RUNNER_TOOL_CACHE")},{"n24",Path.GetDirectoryName(node)},
+        {"g64",F0KnownJoin(pf,"Git")},{"g32",F0KnownJoin(pfx,"Git")},{"sdk",F0KnownJoin(pfx,@"Windows Kits\10")},
+        {"vsdb",F0KnownJoin(common,@"Microsoft\VisualStudio\Packages\_Instances")}
+      };
+      string[] editions={"Community","Enterprise","Professional","BuildTools"};
+      for(int i=0;i<8;i++) paths.Add(F0VS[i],F0KnownJoin(pf,"Microsoft Visual Studio",i<4?"2022":"18",editions[i%4]));
+      List<F0SelectorSpec> selectors; List<F0FileSpec> files; F0Catalogue(out selectors,out files);
+      var roots=new List<Dictionary<string,object>>();
+      var rootStates=new Dictionary<string,string>(StringComparer.Ordinal);
+      foreach(string id in F0Roots) { var row=F0Root(id,paths[id],clock); roots.Add(row); rootStates.Add(id,(string)row["state"]); }
+      foreach(string id in new[]{"repo","os","ps","rtc","n24"}) Require(rootStates[id]=="present");
+      var selected=new Dictionary<string,Dictionary<string,object>>(StringComparer.Ordinal);
+      var selectorRows=new List<Dictionary<string,object>>();
+      foreach(var spec in selectors) {
+        var row=F0Select(spec,paths[spec.root],rootStates[spec.root],clock); selected.Add(spec.id,row); selectorRows.Add(row);
+      }
+      ulong total=0; var fileRows=new List<Dictionary<string,object>>();
+      foreach(var spec in files) fileRows.Add(F0Read(spec,paths[spec.root],rootStates[spec.root],selected,clock,ref total));
+      foreach(string id in new[]{"node24","ps.pwsh","ps.sma","ps.roslyn","ps.utility"})
+        Require((string)fileRows.Find(row=>(string)row["id"]==id)["state"]=="present");
+      var nodeRow=fileRows.Find(row=>(string)row["id"]=="node24");
+      Require((string)nodeRow["sha256"]=="9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de");
+      string failed=null;
+      foreach(var row in roots) if(failed==null && (string)row["state"]!="present" && (string)row["state"]!="missing") failed=(string)row["id"];
+      foreach(var row in selectorRows) if(failed==null && (string)row["state"]!="listed" && (string)row["state"]!="parent-missing") failed=(string)row["id"];
+      foreach(var row in fileRows) if(failed==null && (string)row["state"]!="present" && (string)row["state"]!="missing" &&
+        (string)row["state"]!="parent-missing" && (string)row["state"]!="slot-empty") failed=(string)row["id"];
+      var foundation=F0Object("node",F0Object("version","24.18.0","sha256",nodeRow["sha256"]),
+        "powershell",F0Object("edition","Core","version",F0Version(new Version(psMajor,psMinor,psPatch))),
+        "dotnet",F0Object("version",F0Version(Environment.Version)),
+        "os",F0Object("platform","win32","version",F0Version(Environment.OSVersion.Version)),
+        "scope","R0-R1-bootstrap-assumed");
+      clock.Remaining();
+      F0Frame(F0Object("schema","na1-f0-worker/1","foundation",foundation,"collection",F0Object("basis","fixed-catalogue-only",
+        "roots",roots,"selectors",selectorRows,"files",fileRows),
+        "error",F0Object("code",failed==null?"none":"catalogue","stage",failed==null?"none":"collect","subject",failed),
+        "visited",F0Object("files",fileRows.Count,"selectors",selectorRows.Count,"bytes",total)),458752);
+    } catch { Environment.Exit(1); }
+  }
 
   public sealed class Facts {
     public string schema="desk.owned-git-infrastructure-worker/1", role, Hns, sourceRevision, deadlineNs, finishedNs;
@@ -316,6 +886,7 @@ public static class OwnedGitBuild {
     GC.KeepAlive(handle); return value;
   }
   public static Facts Run(string script,string mode,string publicRoot,string fixtures,string revision,ulong H,string gitNode) {
+    Require(false);
     Require(IntPtr.Size==8 && (mode=="build-worker" || mode=="coverage-tools") &&
       System.Text.RegularExpressions.Regex.IsMatch(revision,"^[0-9a-f]{40}$") &&
       Path.GetFileName(script)=="build_windows_owned_git_fixtures.ps1");
@@ -534,6 +1105,26 @@ public static class OwnedGitBuild {
   }
 }
 '@
+} catch {
+  [Console]::Error.WriteLine('foundation')
+  exit 1
+}
+if ($f0) {
+  try {
+    $remaining = $F0RemainingMs - [int][Math]::Ceiling($f0Clock.Elapsed.TotalMilliseconds)
+    if ($remaining -lt 1 -or $remaining -gt 300000) { throw 'foundation' }
+    if ([string]::Equals($WorkerMode, 'f0-host', [StringComparison]::Ordinal)) {
+      [OwnedGitBuild]::F0Host($PSCommandPath, $F0RepositoryRoot, $F0SourceRevision, $F0NodePath, $F0IntentSha256, $remaining)
+    } else {
+      [OwnedGitBuild]::F0Worker($F0RepositoryRoot, $F0SourceRevision, $F0NodePath, $F0IntentSha256, $remaining,
+        $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor, $PSVersionTable.PSVersion.Patch)
+    }
+    exit 0
+  } catch {
+    [Console]::Error.WriteLine('foundation')
+    exit 1
+  }
+}
 
 $sourcePaths = @(
   'plugins/desk/mcp/native/windows-owned-git.c',

@@ -1,13 +1,46 @@
 # Product mode requires fresh creation; legacy mode retains create-or-reuse.
 # Usage: run-as-standard-user.ps1 -WorkDir <dir> -Command '<cmd.exe command line>'
 # GitHub's Windows runners run as an administrator, so this is how the Desk suite is run as a user without elevation.
+[CmdletBinding(DefaultParameterSetName = 'Legacy')]
 param(
-  [Parameter(Mandatory = $true)][string]$WorkDir,
-  [Parameter(Mandatory = $true)][string]$Command,
-  [string]$LogDir = (Join-Path $env:RUNNER_TEMP 'standard-user-logs'),
-  [switch]$OwnedGitProduct
+  [Parameter(Mandatory = $true, ParameterSetName = 'Legacy')][string]$WorkDir,
+  [Parameter(Mandatory = $true, ParameterSetName = 'Legacy')][string]$Command,
+  [Parameter(ParameterSetName = 'Legacy')][string]$LogDir,
+  [Parameter(ParameterSetName = 'Legacy')][switch]$OwnedGitProduct,
+  [Parameter(Mandatory = $true, ParameterSetName = 'F0')][switch]$F0Inventory,
+  [Parameter(Mandatory = $true, ParameterSetName = 'F0')][string]$F0RepositoryRoot,
+  [Parameter(Mandatory = $true, ParameterSetName = 'F0')][string]$F0SourceRevision,
+  [Parameter(Mandatory = $true, ParameterSetName = 'F0')][string]$F0NodePath,
+  [Parameter(Mandatory = $true, ParameterSetName = 'F0')][string]$F0IntentSha256,
+  [Parameter(Mandatory = $true, ParameterSetName = 'F0')][ValidateRange(1,300000)][int]$F0RemainingMs
 )
 $ErrorActionPreference = 'Stop'
+if ([string]::Equals($PSCmdlet.ParameterSetName, 'F0', [StringComparison]::Ordinal)) {
+  try {
+    if (!$F0Inventory.IsPresent -or
+        ![string]::Equals($PSVersionTable.PSEdition, 'Core', [StringComparison]::Ordinal) -or
+        $PSVersionTable.PSVersion.Major -lt 7 -or ![Environment]::Is64BitProcess -or
+        !($F0SourceRevision -cmatch '\A[0-9a-f]{40}\z') -or !($F0IntentSha256 -cmatch '\A[0-9a-f]{64}\z')) {
+      throw 'foundation'
+    }
+    foreach ($value in @($F0RepositoryRoot, $F0NodePath)) {
+      if (![IO.Path]::IsPathFullyQualified($value) -or [Text.Encoding]::UTF8.GetByteCount($value) -gt 1024 -or
+          $value.IndexOfAny([char[]]@([char]0,[char]13,[char]10,[char]34)) -ge 0) { throw 'foundation' }
+    }
+    $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    if (![string]::Equals($repository, $F0RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'foundation' }
+    $builder = Join-Path $F0RepositoryRoot 'tests\desk\mcp\__tests__\runtime\fixtures\build_windows_owned_git_fixtures.ps1'
+    & $builder -WorkerMode f0-host -F0RepositoryRoot $F0RepositoryRoot -F0SourceRevision $F0SourceRevision `
+      -F0NodePath $F0NodePath -F0IntentSha256 $F0IntentSha256 -F0RemainingMs $F0RemainingMs
+    if ($LASTEXITCODE -isnot [int] -or $LASTEXITCODE -ne 0) { exit 1 }
+    exit 0
+  } catch {
+    [Console]::Error.WriteLine('foundation')
+    exit 1
+  }
+}
+if ($OwnedGitProduct) { [Console]::Error.WriteLine('not-admitted'); exit 1 }
+if (!$PSBoundParameters.ContainsKey('LogDir')) { $LogDir = Join-Path $env:RUNNER_TEMP 'standard-user-logs' }
 $userName = 'deskstd'
 # Throwaway account on an ephemeral runner; the password never leaves this job.
 $plain = 'Ds!' + [guid]::NewGuid().ToString('N')

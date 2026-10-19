@@ -1,4 +1,5 @@
 name: desk MCP tests on Windows
+run-name: ${{ inputs.na1_phase == 'f0-inventory' && format('NA1-F0 {0}', inputs.na1_intent_sha256) || format('Windows {0}', github.ref_name) }}
 
 # Runs the whole Desk unit suite (plugins/desk/mcp `npm test`) on a Windows runner as a standard user: a new local user outside
 # the Administrators group, which is what a managed Windows machine gives a person. The main desk MCP tests workflow covers Linux only.
@@ -20,6 +21,19 @@ on:
         type: boolean
         required: false
         default: false
+      na1_phase:
+        description: "F0 public inventory or the unchanged legacy suite"
+        type: choice
+        options: [legacy, f0-inventory]
+        default: legacy
+      na1_intent_oid:
+        description: "Immutable F0 intent Git blob OID"
+        type: string
+        default: ""
+      na1_intent_sha256:
+        description: "SHA256 of the exact F0 intent bytes"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -30,10 +44,36 @@ concurrency:
 
 jobs:
   windows-suite:
+    # Coarse provider route only. The dispatch-only R0 gate below enforces the strict table before checkout.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     name: Windows ${{ matrix.mode }} (shard ${{ matrix.shard }}/8)
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: ${{ inputs.na1_phase == 'f0-inventory' && 10 || 90 }}
+    permissions:
+      contents: read
+      actions: read
     env:
+      F0_EVENT_NAME: ${{ github.event_name }}
+      F0_ONLY: ${{ inputs.only }}
+      F0_PHASE: ${{ inputs.na1_phase }}
+      F0_ELEVATED: ${{ inputs.elevated }}
+      F0_INTENT_OID: ${{ inputs.na1_intent_oid }}
+      F0_INTENT_SHA256: ${{ inputs.na1_intent_sha256 }}
+      F0_MATRIX_MODE: ${{ matrix.mode }}
+      F0_MATRIX_SHARD: ${{ matrix.shard }}
+      F0_MATRIX_TOTAL: "8"
+      F0_REPOSITORY: ${{ github.repository }}
+      F0_REPOSITORY_ID: ${{ github.repository_id }}
+      F0_WORKFLOW_REF: ${{ github.workflow_ref }}
+      F0_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      F0_GITHUB_SHA: ${{ github.sha }}
+      F0_GITHUB_REF: ${{ github.ref }}
+      F0_RUN_ID: ${{ github.run_id }}
+      F0_RUN_ATTEMPT: ${{ github.run_attempt }}
+      F0_ACTOR_LOGIN: ${{ github.actor }}
+      F0_ACTOR_ID: ${{ github.actor_id }}
+      F0_TRIGGERING_ACTOR_LOGIN: ${{ github.triggering_actor }}
+      F0_WORKSPACE: ${{ github.workspace }}
       OWNED_GIT_PRODUCT_PATHS: |
         owned-git-product-output/export/sources/s01-production-owner.c
         owned-git-product-output/export/sources/s02-production-root.cjs
@@ -101,7 +141,65 @@ jobs:
         # Eight shards, balanced by the measured per-file times in .github/scripts/suite-durations.json (about 53 minutes of test time in all, the median over recent runs since #227 made private-store writes cheap, so each of the eight shards is predicted at about 7 minutes of tests). A test in scripts/windows_suite_shards.test.js checks that this list, the shard arguments and the verdict agree.
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
+      - name: Validate dispatch inputs before Windows preparation
+        id: f0_inputs
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $raw = @{}
+            foreach ($name in @('F0_EVENT_NAME','F0_ONLY','F0_PHASE','F0_ELEVATED','F0_INTENT_OID','F0_INTENT_SHA256','F0_RUN_ATTEMPT')) {
+              $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+              if (![object]::ReferenceEquals($value, $null) -and $value -isnot [string]) { throw 'not-admitted' }
+              $raw.Add($name, $value)
+            }
+            $event = $raw.F0_EVENT_NAME
+            $only = $raw.F0_ONLY
+            $phase = $raw.F0_PHASE
+            $elevated = $raw.F0_ELEVATED
+            $oid = $raw.F0_INTENT_OID
+            $sha = $raw.F0_INTENT_SHA256
+            $attempt = $raw.F0_RUN_ATTEMPT
+            if ([object]::ReferenceEquals($only, $null)) { $only = '' }
+            if ([object]::ReferenceEquals($oid, $null)) { $oid = '' }
+            if ([object]::ReferenceEquals($sha, $null)) { $sha = '' }
+            if ([object]::ReferenceEquals($phase, $null) -or $phase.Length -eq 0) { $phase = 'legacy' }
+            if (![string]::Equals($event, 'workflow_dispatch', [StringComparison]::Ordinal)) { throw 'not-admitted' }
+            $kind = $null
+            if ([string]::Equals($phase, 'legacy', [StringComparison]::Ordinal)) {
+              if ([object]::ReferenceEquals($elevated, $null) -or $elevated.Length -eq 0) { $elevated = 'false' }
+              if ($oid.Length -ne 0 -or $sha.Length -ne 0 -or
+                  [string]::Equals($only, '^runtime/windows_owned_git\.test\.js$', [StringComparison]::Ordinal) -or
+                  !([string]::Equals($elevated, 'true', [StringComparison]::Ordinal) -or
+                    [string]::Equals($elevated, 'false', [StringComparison]::Ordinal))) { throw 'not-admitted' }
+              $kind = 'legacy'
+            } elseif ([string]::Equals($phase, 'f0-inventory', [StringComparison]::Ordinal)) {
+              if (![string]::Equals($only, '^runtime/windows_owned_git\.test\.js$', [StringComparison]::Ordinal) -or
+                  ![string]::Equals($elevated, 'false', [StringComparison]::Ordinal) -or
+                  ![string]::Equals($attempt, '1', [StringComparison]::Ordinal) -or
+                  !($oid -cmatch '\A[0-9a-f]{40}\z') -or !($sha -cmatch '\A[0-9a-f]{64}\z')) { throw 'not-admitted' }
+              $kind = 'f0'
+            } else { throw 'not-admitted' }
+            $output = [Environment]::GetEnvironmentVariable('GITHUB_OUTPUT', 'Process')
+            if ($output -isnot [string] -or $output.Length -eq 0 -or ![IO.Path]::IsPathFullyQualified($output)) { throw 'not-admitted' }
+            $bytes = [Text.Encoding]::ASCII.GetBytes($(if ([string]::Equals($kind, 'f0', [StringComparison]::Ordinal)) { "kind=f0`n" } else { "kind=legacy`n" }))
+            if ($bytes.Length -gt 12) { throw 'not-admitted' }
+            $stream = [IO.FileStream]::new($output, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+            try {
+              if (!$stream.CanWrite -or !$stream.CanSeek) { throw 'not-admitted' }
+              [void]$stream.Seek(0, [IO.SeekOrigin]::End)
+              $stream.Write($bytes, 0, $bytes.Length)
+              $stream.Flush($true)
+            } finally { $stream.Dispose() }
+            exit 0
+          } catch {
+            [Console]::Error.WriteLine('not-admitted')
+            exit 1
+          }
+
       - name: Check out repository
+        if: github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && (steps.f0_inputs.outputs.kind == 'legacy' || (steps.f0_inputs.outputs.kind == 'f0' && matrix.mode == 'standard' && matrix.shard == 1 && github.run_attempt == 1)))
         uses: actions/checkout@v4
         with:
           # The coverage tests resolve a merge base against origin/main, as the Linux suite does, so they need history.
@@ -110,21 +208,22 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node
+        if: github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && (steps.f0_inputs.outputs.kind == 'legacy' || (steps.f0_inputs.outputs.kind == 'f0' && matrix.mode == 'standard' && matrix.shard == 1 && github.run_attempt == 1)))
         uses: actions/setup-node@v4
         with:
           # The Windows runtime pack is built with Node 24.18.0 (desk-mcp-tests.yml, win32-x64-node-137). Node 24.19.0 and later abort when a better-sqlite3 build made against their headers collects a prepared statement (nodejs/node#65446, WiseLibs/better-sqlite3#1515), so this suite pins the version the pack ships with.
           node-version: "24.18.0"
-          cache: "npm"
+          cache: ${{ steps.f0_inputs.outputs.kind != 'f0' && 'npm' || '' }}
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
       - name: Provision owned-Git diagnostic floor interpreter
-        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/setup-node@v4
         with:
           node-version: "20.0.0"
 
       - name: Record owned-Git floor interpreter
-        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         shell: pwsh
         run: |
           $node = (Get-Command node).Source
@@ -134,13 +233,13 @@ jobs:
           PRODUCT_SELECTION: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' }}
 
       - name: Provision owned-Git diagnostic Node 22
-        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && '22.23.3' || '22' }}
 
       - name: Record owned-Git Node 22 interpreter
-        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         shell: pwsh
         run: |
           $binding = if ($env:PRODUCT_SELECTION -eq 'true') { 'owned-git-product-interpreters.json' } else { 'owned-git-probe-interpreters.json' }
@@ -152,13 +251,13 @@ jobs:
           PRODUCT_SELECTION: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' }}
 
       - name: Restore suite interpreter after owned-Git provisioning
-        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         uses: actions/setup-node@v4
         with:
           node-version: "24.18.0"
 
       - name: Record restored suite interpreter
-        if: github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
         shell: pwsh
         run: |
           $binding = if ($env:PRODUCT_SELECTION -eq 'true') { 'owned-git-product-interpreters.json' } else { 'owned-git-probe-interpreters.json' }
@@ -170,14 +269,17 @@ jobs:
           PRODUCT_SELECTION: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' }}
 
       - name: Install dependencies
+        if: github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy')
         working-directory: plugins/desk/mcp
         run: npm ci
 
       - name: Install broker dependencies
+        if: github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy')
         shell: pwsh
         run: npm ci --prefix plugins/desk/browser-context-broker
 
       - name: Show the account this job runs as
+        if: github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy')
         shell: pwsh
         run: |
           whoami
@@ -186,7 +288,7 @@ jobs:
           "runner is administrator: $admin"
 
       - name: Run the suite (elevated)
-        if: matrix.mode == 'elevated'
+        if: matrix.mode == 'elevated' && (github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy'))
         shell: pwsh
         run: node .github/scripts/run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "$env:ONLY_FILES"
         env:
@@ -195,26 +297,39 @@ jobs:
           DESK_TEST_SUITE_MODE: elevated
 
       - name: Run the suite (standard user)
-        if: matrix.mode == 'standard'
+        if: matrix.mode == 'standard' && (github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && (steps.f0_inputs.outputs.kind == 'legacy' || (steps.f0_inputs.outputs.kind == 'f0' && matrix.shard == 1 && github.run_attempt == 1))))
         shell: pwsh
         run: |
-          $product = $env:ONLY_FILES -ceq '^runtime/windows_owned_git\.test\.js$'
-          if ($product -and ('${{ github.event_name }}' -ne 'workflow_dispatch' -or '${{ inputs.elevated }}' -eq 'true')) { throw 'owned-git product: not_admitted' }
-          $options = if ($product) { '--timeout-ms 120000' } else { '--probe-acl' }
-          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json ' + $options + ' --only "' + $env:ONLY_FILES + '"'
-          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command -OwnedGitProduct:$product
+          if ([string]::Equals($env:F0_PHASE, 'f0-inventory', [StringComparison]::Ordinal)) {
+            foreach ($blocked in @('NODE_OPTIONS','NODE_PATH','NODE_V8_COVERAGE','NODE_COMPILE_CACHE','NODE_REDIRECT_WARNINGS','NODE_DEBUG')) {
+              foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) {
+                if ([string]::Equals($key, $blocked, [StringComparison]::OrdinalIgnoreCase)) {
+                  [Console]::Error.WriteLine('foundation')
+                  exit 1
+                }
+              }
+            }
+            $env:F0_PS_HOME = $PSHOME
+            $env:F0_PWSH_PATH = [IO.Path]::Combine($PSHOME, 'pwsh.exe')
+            node .github/scripts/run-suite-files.mjs --shard 1/8 --only "$env:F0_ONLY"
+            exit $LASTEXITCODE
+          }
+          $command = 'node .github\scripts\run-suite-files.mjs --shard ${{ matrix.shard }}/8 --out results.json --probe-acl --only "' + $env:ONLY_FILES + '"'
+          ./.github/scripts/run-as-standard-user.ps1 -WorkDir "$PWD" -Command $command
         env:
           ONLY_FILES: ${{ inputs.only }}
+          F0_API_TOKEN: ${{ steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'f0' && matrix.mode == 'standard' && matrix.shard == 1 && github.run_attempt == 1 && github.token || '' }}
+          F0_RUNNER_TOOL_CACHE: ${{ runner.tool_cache }}
 
       - name: Show the result in the job summary
-        if: always()
+        if: always() && (github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy'))
         shell: pwsh
         run: |
           "### Windows ${{ matrix.mode }}, shard ${{ matrix.shard }}/8" | Add-Content $env:GITHUB_STEP_SUMMARY
           if (Test-Path results-summary.md) { Get-Content results-summary.md | Add-Content $env:GITHUB_STEP_SUMMARY } else { "No result was written." | Add-Content $env:GITHUB_STEP_SUMMARY }
 
       - name: Keep the per-file results
-        if: always()
+        if: always() && (github.event_name == 'pull_request' || (steps.f0_inputs.outcome == 'success' && steps.f0_inputs.outputs.kind == 'legacy'))
         uses: actions/upload-artifact@v4
         with:
           # One name per run attempt, so a rerun of only the failed shards keeps the earlier attempt's results; the verdict judges each shard by its latest attempt.
@@ -223,12 +338,12 @@ jobs:
           if-no-files-found: warn
 
       - name: Keep full owned-Git diagnostic evidence
-        if: always() && github.event_name == 'workflow_dispatch' && (inputs.only == '^runtime/windows_owned_git_probe\.test\.js$' || (inputs.only == '^runtime/windows_owned_git\.test\.js$' && !inputs.elevated && matrix.mode == 'standard' && matrix.shard == 1))
+        if: always() && github.event_name == 'workflow_dispatch' && steps.f0_inputs.outcome == 'success' && ((steps.f0_inputs.outputs.kind == 'f0' && matrix.mode == 'standard' && matrix.shard == 1 && github.run_attempt == 1) || (steps.f0_inputs.outputs.kind == 'legacy' && inputs.only == '^runtime/windows_owned_git_probe\.test\.js$'))
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && format('owned-git-product-standard-shard-1-attempt-{0}', github.run_attempt) || format('owned-git-probe-{0}-shard-{1}-attempt-{2}', matrix.mode, matrix.shard, github.run_attempt) }}
-          path: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && env.OWNED_GIT_PRODUCT_PATHS || env.OWNED_GIT_PROBE_PATHS }}
-          if-no-files-found: ${{ inputs.only == '^runtime/windows_owned_git\.test\.js$' && 'error' || 'warn' }}
+          name: ${{ steps.f0_inputs.outputs.kind == 'f0' && 'owned-git-f0-standard-shard-1-attempt-1' || format('owned-git-probe-{0}-shard-{1}-attempt-{2}', matrix.mode, matrix.shard, github.run_attempt) }}
+          path: ${{ steps.f0_inputs.outputs.kind == 'f0' && 'owned-git-f0-output/inventory.json' || env.OWNED_GIT_PROBE_PATHS }}
+          if-no-files-found: ${{ steps.f0_inputs.outputs.kind == 'f0' && 'error' || 'warn' }}
           retention-days: 7
 
   # One check that stands for the whole Windows suite, so a branch rule can require a single name. It judges the per-file results the
@@ -254,19 +369,39 @@ jobs:
             tests/desk/mcp/__tests__
 
       - name: Download every standard-user shard's results
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.na1_phase == '' || inputs.na1_phase == 'legacy'))
         uses: actions/download-artifact@v4
         with:
           pattern: windows-standard-shard-*
           path: shard-results
 
       - name: Fail unless every shard reported and every file passed
+        if: always()
         run: |
-          if [ "$ONLY_FILES" = '^runtime/windows_owned_git\.test\.js$' ]; then
-            if [ "${OWNED_GIT_WINDOWS_RESULT-}" != 'success' ]; then
-              exit 1
-            fi
-          fi
-          node .github/scripts/windows-suite-verdict.mjs shard-results 8 tests/desk/mcp/__tests__ "$ONLY_FILES"
+          node --input-type=module - <<'JS'
+          import { normalizeF0Selection } from "./.github/scripts/owned-git-product-io.mjs"
+          const selection = normalizeF0Selection({
+            event: process.env.F0_EVENT_NAME, only: process.env.F0_ONLY, phase: process.env.F0_PHASE,
+            elevated: process.env.F0_ELEVATED, intentOid: process.env.F0_INTENT_OID,
+            intentSha256: process.env.F0_INTENT_SHA256,
+          })
+          if (selection.kind === "invalid") process.exit(1)
+          if (selection.kind === "f0") {
+            process.exit(process.env.F0_RUN_ATTEMPT === "1" && process.env.OWNED_GIT_WINDOWS_RESULT === "success" ? 0 : 1)
+          }
+          const { verdict } = await import("./.github/scripts/windows-suite-verdict.mjs")
+          const { files, problems } = verdict("shard-results", 8, "tests/desk/mcp/__tests__", selection.only)
+          console.log(`${files} test files reported.`)
+          for (const problem of problems) console.log(`::error::${problem}`)
+          process.exit(problems.length ? 1 : 0)
+          JS
         env:
           ONLY_FILES: ${{ inputs.only }}
           OWNED_GIT_WINDOWS_RESULT: ${{ needs.windows-suite.result }}
+          F0_EVENT_NAME: ${{ github.event_name }}
+          F0_ONLY: ${{ inputs.only }}
+          F0_PHASE: ${{ inputs.na1_phase }}
+          F0_ELEVATED: ${{ inputs.elevated }}
+          F0_INTENT_OID: ${{ inputs.na1_intent_oid }}
+          F0_INTENT_SHA256: ${{ inputs.na1_intent_sha256 }}
+          F0_RUN_ATTEMPT: ${{ github.run_attempt }}

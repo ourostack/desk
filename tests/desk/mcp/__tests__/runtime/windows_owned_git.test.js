@@ -7,6 +7,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { NATIVE_TEST_NAME } from "../../../../../.github/scripts/owned-git-product-io.mjs"
+import * as f0 from "../../../../../.github/scripts/owned-git-product-io.mjs"
 
 const require = createRequire(import.meta.url)
 const core = () => require("../../../../../plugins/desk/mcp/scripts/owned-git-child.cjs")
@@ -18,6 +19,137 @@ const frame = (role, type, extra = {}, digest = null) => ({
   protocol: "desk.owned-git/1", role, type, ...binding, payloadDigest: digest, ...extra,
 })
 const hash = (v) => createHash("sha256").update(v).digest("hex")
+const fixtureBudget = { submitted: 0, files: new Set(), directories: new Set(), links: new Set() }
+function fixturePath(file) {
+  const root = process.env.DESK_TEST_RUN_DIR
+  assert.equal(typeof root, "string")
+  const absolute = path.resolve(file), relative = path.relative(path.resolve(root), absolute)
+  assert.ok(relative && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  const first = relative.split(path.sep)[0]
+  assert.ok(/^(?:nc3-assets|na1-public-model)-[0-9a-f-]{36}$/.test(first) ||
+    ["na1-registry.json", "na1-generation-frame-measurements.json"].includes(relative))
+  return absolute
+}
+function chargeFixtureWrite(file, bytes, kind = "small") {
+  const absolute = fixturePath(file), data = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
+  const caps = { small: 16384, source: 2097152, registry: 524288, measurements: 65536, payload: 4096 }
+  assert.ok(Object.hasOwn(caps, kind) && data.length <= caps[kind])
+  assert.ok(fixtureBudget.submitted + data.length <= 40894464)
+  assert.ok(fixtureBudget.files.has(absolute) || fixtureBudget.files.size < 95)
+  assert.ok(!fixtureBudget.links.has(absolute))
+  fixtureBudget.submitted += data.length
+  fixtureBudget.files.add(absolute)
+  return data
+}
+function writeFixture(file, bytes, options, kind = "small") {
+  const data = chargeFixtureWrite(file, bytes, kind)
+  fs.writeFileSync(file, data, options)
+}
+function appendFixture(file, bytes) {
+  const data = chargeFixtureWrite(file, bytes)
+  fs.appendFileSync(file, data)
+}
+function mkdirFixture(directory, options) {
+  let current = fixturePath(directory)
+  const root = path.resolve(process.env.DESK_TEST_RUN_DIR), missing = []
+  while (current !== root) {
+    if (!fs.existsSync(current)) missing.push(current)
+    else assert.equal(fs.lstatSync(current).isSymbolicLink(), false)
+    current = path.dirname(current)
+  }
+  const fresh = missing.filter((name) => !fixtureBudget.directories.has(name))
+  assert.ok(fixtureBudget.directories.size + fresh.length <= 56)
+  for (const name of fresh) fixtureBudget.directories.add(name)
+  fs.mkdirSync(directory, options)
+}
+function linkFixture(target, link) {
+  const absolute = fixturePath(link)
+  assert.equal(fixtureBudget.links.size, 0)
+  assert.equal(fixtureBudget.files.has(absolute), false)
+  fixtureBudget.links.add(absolute)
+  fs.symlinkSync(target, link, "dir")
+}
+function fixtureSource(file) {
+  assert.ok(fs.statSync(file).size <= 2097152)
+  const bytes = fs.readFileSync(file)
+  assert.ok(bytes.length <= 2097152)
+  return bytes
+}
+function f0Data() {
+  const commit = "1".repeat(40), tree = "2".repeat(40), repository = { id: 1, name: "ourostack/desk" }
+  const actor = { id: 1, login: "ari" }, ref = `refs/heads/diag/windows-owned-git-f0-${commit.slice(0, 12)}`
+  const nodeHash = "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de"
+  const paths = require("./fixtures/windows_owned_git_retention.cjs").SOURCE_PATHS
+  const sourceApproval = { schema: "na1-f0-source/1", repository, commit, tree,
+    files: paths.map((p, i) => ({ id: `S${String(i + 1).padStart(2, "0")}`, path: p, bytes: 1, sha256: hash("x") })),
+    specSha256: H, sourceReviewSha256: P, scope: "F0-only", foundation: { nodeVersion: "24.18.0", nodeSha256: nodeHash } }
+  const oidOf = (bytes) => createHash("sha1").update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest("hex")
+  const sBytes = Buffer.from(JSON.stringify(sourceApproval))
+  const sourceRef = { oid: oidOf(sBytes), sha256: hash(sBytes), bytes: sBytes.length }
+  const intent = { schema: "na1-f0-intent/1", repository, workflowId: 375820044,
+    workflowPath: ".github/workflows/desk-windows-suite.yml", phase: "f0-inventory", sourceApproval: sourceRef,
+    commit, ref, actor, nonce, notBefore: 90, expires: 120, maxAttempts: 1 }
+  const actualDBytes = Buffer.from(JSON.stringify(intent)), oid = oidOf(actualDBytes), sha256 = hash(actualDBytes)
+  const validF0Inputs = { event: "workflow_dispatch", only: "^runtime/windows_owned_git\\.test\\.js$",
+    elevated: "false", phase: "f0-inventory", intentOid: oid, intentSha256: sha256 }
+  const foundation = { systemRoot: "C:\\Windows", windir: "C:\\Windows", systemDrive: "C:",
+    psHome: "C:\\PowerShell\\7", runnerToolCache: "C:\\cache" }
+  const context = { repository, workflowId: 375820044,
+    workflowRef: `ourostack/desk/.github/workflows/desk-windows-suite.yml@${ref}`, workflowSha: commit,
+    event: "workflow_dispatch", sha: commit, ref, runId: 7, attempt: 1, actor, triggeringActor: actor,
+    matrix: { mode: "standard", shard: 1, total: 8 }, workspace: "C:\\repo", ...foundation,
+    nodeExecutable: "C:\\node\\node.exe", nodeVersion: "24.18.0" }
+  const serviceRun = { id: 7, attempt: 1, workflowId: 375820044, repositoryId: 1, headRepositoryId: 1,
+    headSha: commit, headBranch: ref.slice("refs/heads/".length), event: "workflow_dispatch", actor,
+    triggeringActor: actor, displayTitle: `NA1-F0 ${sha256}` }
+  const blob = (bytes) => Buffer.from(JSON.stringify({ sha: oidOf(bytes), node_id: "opaque",
+    size: bytes.length, url: `https://api.github.com/repos/ourostack/desk/git/blobs/${oidOf(bytes)}`,
+    content: bytes.toString("base64"), encoding: "base64" }))
+  const validDBlob = blob(actualDBytes)
+  const launchInput = { repositoryRoot: context.workspace, sourceRevision: commit, nodePath: context.nodeExecutable,
+    intentSha256: sha256, remainingMs: 300000, pwshPath: "C:\\PowerShell\\7\\pwsh.exe", foundation }
+  const exclusions = () => ({ execArgv: [], nodeOptions: undefined, nodePath: undefined, coverage: undefined,
+    compileCache: undefined, redirectWarnings: undefined, constructorHasSubscribers: false, spawnTraceHasSubscribers: false })
+  const hostCompletion = { workerExit: 0, workerExitObserved: true, workerStdoutEOF: true,
+    workerStderrEOF: true, jobActive: 0, ioReaped: true, criticalHandlesClosed: true, ownership: "closed" }
+  const child = {}, observed = { actualChild: child, closedChild: child, rootExit: 0, signal: null,
+    errorLatched: false, deadlineLatched: false }
+  const version = { major: 7, minor: 5, build: 3, revision: null }
+  const foundationRecord = { node: { version: "24.18.0", sha256: nodeHash },
+    powershell: { edition: "Core", version }, dotnet: { version: { ...version, major: 9, minor: 0, build: 0 } },
+    os: { platform: "win32", version: { ...version, major: 10, minor: 0, build: 1 } }, scope: "R0-R1-bootstrap-assumed" }
+  return { commit, tree, repository, actor, ref, nodeHash, paths, sourceApproval, sBytes, sourceRef, intent,
+    actualDBytes, oid, sha256, validF0Inputs, foundation, context, serviceRun, blob, validDBlob, launchInput,
+    exclusions, hostCompletion, child, observed, foundationRecord }
+}
+function f0PacketData(data) {
+  const catalogue = f0.getF0Catalogue(), primary = new Set(["repo", "os", "ps", "rtc", "n24"])
+  const mandatory = new Set(["node24", "ps.pwsh", "ps.sma", "ps.roslyn", "ps.utility"])
+  const collection = { basis: "fixed-catalogue-only",
+    roots: catalogue.roots.map(({ id }) => ({ id, state: primary.has(id) ? "present" : "missing",
+      reason: primary.has(id) ? "none" : "missing" })),
+    selectors: catalogue.selectors.map(({ id }) => ({ id, state: "parent-missing", names: [], reason: "parent-missing" })),
+    files: catalogue.files.map((row) => ({ id: row.id,
+      locator: primary.has(row.root) && !row.selector ? { root: row.root, parts: row.parts } : null,
+      state: mandatory.has(row.id) ? "present" : primary.has(row.root) && !row.selector ? "missing" : "parent-missing",
+      kind: row.kind, bytes: mandatory.has(row.id) ? 1 : null, sha256: mandatory.has(row.id) ? H : null,
+      reason: mandatory.has(row.id) ? "none" : primary.has(row.root) && !row.selector ? "missing" : "parent-missing" })) }
+  const source = { commitExpected: data.commit, treeExpected: data.tree, githubShaObserved: data.commit,
+    treeBasis: "controller-source-review", checkoutBasis: "trusted-actions-checkout", treeRecomputed: false,
+    files: data.sourceApproval.files.map(({ id, bytes, sha256 }) => ({ id, bytes, sha256, state: "match" })) }
+  const run = { repository: data.repository, workflowId: 375820044, runId: 7, attempt: 1, job: "windows-suite",
+    matrix: { mode: "standard", shard: 1, total: 8 }, actor: data.actor, intentSha256: data.sha256, nonce }
+  const counters = { filesVisited: 411, selectorsVisited: 22, sourceBytes: 17, fileBytes: 5,
+    stdoutBytes: 0, stderrBytes: 0, elapsedMs: 1 }
+  const host = { schema: "na1-f0-host/1", worker: { schema: "na1-f0-worker/1",
+    foundation: data.foundationRecord, collection, error: { code: "none", stage: "none", subject: null },
+    visited: { files: 411, selectors: 22, bytes: 5 } }, completion: data.hostCompletion }
+  const packet = { schema: "na1-f0-inventory/1", phase: "f0-inventory", run, source, foundation: data.foundationRecord,
+    collection, completion: { rootExit: 0, rootClose: true, ...data.hostCompletion },
+    result: { operation: "completed", catalogue: "complete" }, error: { code: "none", stage: "none", subject: null },
+    counters, claims: { qualificationTupleComplete: false, toolSemanticsApproved: false, nativeExecution: false, q1Authorized: false } }
+  return { catalogue, collection, source, run, counters, host, packet }
+}
 const input = (patch = {}) => ({ state: "complete", expectedBytes: 0, submittedBytes: 0, errorCode: null, ...patch })
 const result = () => ({ command: { state: "exited", code: 0, signal: null }, input: input() })
 const b64 = (v) => Buffer.from(JSON.stringify(v)).toString("base64")
@@ -91,6 +223,50 @@ function componentSession(onFrame = () => {}) {
 
 // Each test's assertions name an observable break, not a source-text spelling.
 test("portable codec rejects foreign replay and encoded bounds", () => {
+  const { validF0Inputs, actualDBytes, oid, sha256, validDBlob, blob } = f0Data()
+  assert.equal(f0.normalizeF0Selection({ event: "pull_request" }).kind, "legacy")
+  assert.equal(f0.normalizeF0Selection({ event: "workflow_dispatch", only: "other", elevated: "true" }).kind, "legacy")
+  assert.equal(f0.normalizeF0Selection(validF0Inputs).kind, "f0")
+  for (const patch of [{ phase: "legacy" }, { phase: "qualification" }, { phase: "spike" }, { phase: "F0-inventory" },
+    { phase: "legacy\u0000" }, { phase: "\u200b" }, { only: "other" }, { elevated: "true" },
+    { elevated: undefined }, { intentOid: `${oid}\n` }, { intentOid: oid.toUpperCase() },
+    { intentSha256: sha256.slice(1) }, { intentSha256: `${sha256}\n` }, { intentSha256: "g".repeat(64) }]) {
+    assert.equal(f0.normalizeF0Selection({ ...validF0Inputs, ...patch }).kind, "invalid")
+  }
+  for (const only of ["^RUNTIME/windows_owned_git\\.test\\.js$", "é", "\u200b"]) {
+    assert.equal(f0.normalizeF0Selection({ event: "workflow_dispatch", only, phase: "legacy" }).kind, "legacy")
+  }
+  for (const phase of ["LEGACY", "legacy\u200b", "le\u0000gacy", "legacy\u00ad", "\ufefflegacy", "ｌｅｇａｃｙ"]) {
+    assert.equal(f0.normalizeF0Selection({ event: "workflow_dispatch", only: "other", phase }).kind, "invalid")
+  }
+  for (const key of ["intentOid", "intentSha256"]) for (const value of ["\u200b", "\u00ad", "\0"]) {
+    assert.equal(f0.normalizeF0Selection({ event: "workflow_dispatch", only: "other", phase: "legacy", [key]: value }).kind, "invalid")
+  }
+  for (const only of [`${validF0Inputs.only}\u200b`, `${validF0Inputs.only}\u00ad`]) {
+    assert.equal(f0.normalizeF0Selection({ event: "workflow_dispatch", phase: "legacy", only }).kind, "legacy")
+    assert.equal(f0.normalizeF0Selection({ ...validF0Inputs, only }).kind, "invalid")
+  }
+  for (const patch of [{ phase: 0 }, { only: false }, { elevated: true }, { intentOid: `${oid.slice(0, -1)}\n` },
+    { intentSha256: `${sha256.slice(0, -1)}\n` }, { intentSha256: sha256.toUpperCase() }]) {
+    assert.equal(f0.normalizeF0Selection({ ...validF0Inputs, ...patch }).kind, "invalid")
+  }
+  assert.equal(f0.normalizeF0Selection({ event: "workflow_dispatch", phase: "legacy", intentOid: "\u200b" }).kind, "invalid")
+  assert.equal(f0.decodeF0BlobResponse(validDBlob, { oid, sha256, maxDecoded: 4096, expectedBytes: null }).ref.bytes, actualDBytes.length)
+  const response = JSON.parse(validDBlob)
+  for (const patch of [{ size: response.size + 1 }, { sha: "f".repeat(40) }, { content: "AB==" },
+    { content: "!bad" }, { encoding: "utf8" }, { extra: 1 }]) {
+    assert.throws(() => f0.decodeF0BlobResponse(Buffer.from(JSON.stringify({ ...response, ...patch })),
+      { oid, sha256, maxDecoded: 4096, expectedBytes: null }))
+  }
+  const tooBigD = Buffer.alloc(4097), tooBigResponse = blob(tooBigD)
+  assert.throws(() => f0.decodeF0BlobResponse(tooBigResponse, { oid: JSON.parse(tooBigResponse).sha,
+    sha256: hash(tooBigD), maxDecoded: 4096, expectedBytes: null }))
+  assert.throws(() => f0.decodeF0BlobResponse(validDBlob, { oid, sha256, maxDecoded: 4096, expectedBytes: actualDBytes.length + 1 }))
+  const s = f0Data()
+  assert.throws(() => f0.decodeF0BlobResponse(blob(s.sBytes), { oid: s.sourceRef.oid, sha256: s.sourceRef.sha256,
+    maxDecoded: 16384, expectedBytes: s.sBytes.length + 1 }))
+  assert.equal(driver().nativeRegistrationAllowed({ platform: "win32", native: "1", event: "workflow_dispatch",
+    mode: "standard", sha: "1".repeat(40), Hns: "1000000000000", execArgv: [`--test-name-pattern=^${NATIVE_TEST_NAME}$`] }), false)
   const c = core(), value = frame("owner", "READY", { payloadPath: "/private/payload.json" })
   const dec = c.createFrameDecoder({ role: "owner", binding, phase: "clock_accepted" })
   const bytes = c.encodeFrame(value)
@@ -123,6 +299,41 @@ test("portable codec rejects foreign replay and encoded bounds", () => {
 })
 
 test("portable preparation binding canonical tuple", () => {
+  const data = f0Data(), { packet, source, host, counters } = f0PacketData(data)
+  const encodedF0 = f0.encodeF0Inventory(packet)
+  assert.deepEqual(f0.decodeF0Inventory(encodedF0), packet)
+  assert.equal(f0.decodeF0Inventory(encodedF0).source.treeRecomputed, false)
+  assert.deepEqual(f0.decodeF0Inventory(encodedF0).source.files, source.files)
+  for (const field of ["treeActual", "nativeHeader", "semanticApproved"]) {
+    assert.throws(() => f0.encodeF0Inventory({ ...packet, [field]: true }))
+  }
+  const init = { sourceApproval: data.sourceApproval, observedIntentRef: { oid: data.oid, sha256: data.sha256,
+    bytes: data.actualDBytes.length }, intent: data.intent, run: packet.run, sourceBasis: source,
+    launch: f0.buildF0Launch(data.launchInput) }
+  const changed = source.files.map((row, i) => i ? row : { ...row, sha256: P })
+  const drifted = f0.finishF0Inventory({ init, host, observed: data.observed, sourceAfter: changed, counters })
+  assert.equal(drifted.result.operation, "failed")
+  assert.equal(drifted.error.code, "source-changed")
+  assert.notEqual(drifted.completion.ownership, "closed")
+  const limits = { zipBytes: 1048576, packetBytes: 524288, recordBytes: 65536, apiBodyBytes: 1048576,
+    centralBytes: 4096, entries: 1, depth: 16, tokens: 65536, keys: 32768, containers: 4096,
+    stringChars: 262144, phaseSeconds: 120, workingBytes: 134217728 }
+  const tools = { python: { path: "/controlled/python", sha256: H, version: "3.14.7" },
+    node: { path: "/controlled/node", sha256: P, version: "22.23.3" }, foundationReviewSha256: H,
+    helperSha256: P, adapterSha256: Q, localRepo: "/controlled/repo",
+    validatorFiles: data.sourceApproval.files.map(({ id, path, sha256 }) => ({ id, path, sha256 })) }
+  const qualification = { schema: "na1-f0-qualify-policy/1", sourceApproval: data.sourceRef, tools, limits,
+    fixtureDescriptionSha256: H }
+  assert.deepEqual(f0.projectF0QualificationPolicy(qualification), qualification)
+  assert.throws(() => f0.projectF0QualificationPolicy({ ...qualification, qualificationSha256: H }))
+  const policy = { schema: "na1-f0-reader-policy/1", repository: data.repository, workflowId: 375820044,
+    workflowPath: ".github/workflows/desk-windows-suite.yml", sourceApproval: data.sourceRef,
+    intent: { oid: data.oid, sha256: data.sha256, bytes: data.actualDBytes.length }, authorizationSha256: H,
+    dispatchSha256: P, run: { id: 7, attempt: 1, commit: data.commit, ref: data.ref, actor: data.actor },
+    artifactName: "owned-git-f0-standard-shard-1-attempt-1", tools, qualificationSha256: Q, limits }
+  assert.deepEqual(f0.projectF0ReaderPolicy(policy), policy)
+  assert.throws(() => f0.projectF0ReaderPolicy({ ...policy, qualificationSha256: null }))
+  assert.throws(() => f0.projectF0QualificationPolicy({ ...qualification, intent: policy.intent }))
   const c = core(), { preparation: p, preparationDigest: digest } = prepared(c)
   const tuple = ["desk.owned-git/1", "triage-private-git", H, Q, "1".repeat(32), "/desk",
     `/desk/.git/desk-triage/${"1".repeat(32)}/wt`, `desk-triage/${"1".repeat(32)}`, "commit", 1,
@@ -158,6 +369,73 @@ test("portable preparation binding canonical tuple", () => {
 })
 
 test("portable root authenticates nonce and capability before config", () => {
+  const data = f0Data(), launch = f0.buildF0Launch(data.launchInput)
+  const expectedNames = ["SystemRoot", "WINDIR", "SystemDrive", "PSHOME", "PSModulePath", "PSModuleAnalysisCachePath",
+    "POWERSHELL_TELEMETRY_OPTOUT", "DOTNET_EnableDiagnostics", "F0_RUNNER_TOOL_CACHE", "HOMEDRIVE", "HOMEPATH",
+    "LOGONSERVER", "PATH", "TEMP", "USERDOMAIN", "USERNAME", "USERPROFILE"]
+  assert.deepEqual(Object.keys(launch.env), expectedNames)
+  assert.equal(Object.getPrototypeOf(launch.env), null)
+  for (const name of expectedNames.slice(9)) assert.equal(launch.env[name], "")
+  assert.equal(launch.env.PSModulePath, "C:\\PowerShell\\7\\Modules")
+  assert.equal(launch.cwd, "C:\\repo")
+  assert.equal(launch.image, "C:\\PowerShell\\7\\pwsh.exe")
+  assert.deepEqual(launch.args, ["-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+    "C:\\repo\\.github\\scripts\\run-as-standard-user.ps1", "-F0Inventory", "-F0RepositoryRoot", "C:\\repo",
+    "-F0SourceRevision", data.commit, "-F0NodePath", "C:\\node\\node.exe", "-F0IntentSha256", data.sha256,
+    "-F0RemainingMs", "300000"])
+  const parent = Object.freeze({ PATH: "sentinel-path", TEMP: "sentinel-temp", USERPROFILE: "sentinel-profile" })
+  const child = {}, events = [], spawnCalls = []
+  const spawned = f0.spawnF0Child({ launch, foundation: data.foundation, readExclusions() {
+    events.push("sensor"); return data.exclusions()
+  }, spawn(...args) { events.push("spawn"); spawnCalls.push(args); return child } })
+  assert.equal(spawned, child)
+  assert.deepEqual(events, ["sensor", "spawn"])
+  assert.equal(spawnCalls.length, 1)
+  assert.equal(spawnCalls[0][2].shell, false)
+  assert.deepEqual(spawnCalls[0][2].stdio, ["ignore", "pipe", "pipe"])
+  assert.equal(Object.getPrototypeOf(spawnCalls[0][2].env), null)
+  assert.deepEqual(Object.keys(spawnCalls[0][2].env), expectedNames)
+  assert.deepEqual(parent, { PATH: "sentinel-path", TEMP: "sentinel-temp", USERPROFILE: "sentinel-profile" })
+  assert.equal("F0_API_TOKEN" in spawnCalls[0][2].env, false)
+  const mutable = { ...launch, args: [...launch.args], env: { ...launch.env } }
+  const copiedCalls = []
+  assert.equal(f0.spawnF0Child({ launch: mutable, foundation: data.foundation, readExclusions() {
+    mutable.args[0] = "changed-after-snapshot"; mutable.env.PATH = "changed-after-snapshot"
+    return data.exclusions()
+  }, spawn(...args) { copiedCalls.push(args); return child } }), child)
+  assert.equal(copiedCalls[0][1][0], "-NoLogo")
+  assert.equal(copiedCalls[0][2].env.PATH, "")
+  for (const key of ["nodeOptions", "nodePath", "coverage", "compileCache", "redirectWarnings"]) {
+    for (const value of ["", "present", null, 1]) {
+      let calls = 0
+      assert.throws(() => f0.spawnF0Child({ launch, foundation: data.foundation,
+        readExclusions: () => ({ ...data.exclusions(), [key]: value }), spawn() { calls++ } }))
+      assert.equal(calls, 0)
+    }
+  }
+  for (const patch of [{ execArgv: ["--permission"] }, { execArgv: {} }, { execArgv: new Array(1) },
+    { constructorHasSubscribers: true }, { spawnTraceHasSubscribers: true }, { spawnTraceHasSubscribers: "false" },
+    { extra: true }]) {
+    let calls = 0
+    assert.throws(() => f0.spawnF0Child({ launch, foundation: data.foundation,
+      readExclusions: () => ({ ...data.exclusions(), ...patch }), spawn() { calls++ } }))
+    assert.equal(calls, 0)
+  }
+  let getterCalls = 0, calls = 0
+  const accessor = Object.defineProperty(data.exclusions(), "coverage", { get() { getterCalls++; return undefined } })
+  assert.throws(() => f0.spawnF0Child({ launch, foundation: data.foundation, readExclusions: () => accessor,
+    spawn() { calls++ } }))
+  assert.throws(() => f0.spawnF0Child({ launch, foundation: data.foundation, readExclusions() { throw new Error("sensor") },
+    spawn() { calls++ } }))
+  const badLaunch = Object.defineProperty({ ...launch }, "image", { get() { getterCalls++; return launch.image } })
+  assert.throws(() => f0.spawnF0Child({ launch: badLaunch, foundation: data.foundation,
+    readExclusions: data.exclusions, spawn() { calls++ } }))
+  assert.equal(getterCalls, 0); assert.equal(calls, 0)
+  for (const patch of [{ TEMP: "parent" }, { PATH: undefined }, { extra: "" }, { temp: "" }]) {
+    assert.throws(() => f0.projectF0FirstHopEnv({ ...launch.env, ...patch }, data.foundation))
+  }
+  const missing = { ...launch.env }; delete missing.USERPROFILE
+  assert.throws(() => f0.projectF0FirstHopEnv(missing, data.foundation))
   const c = core(), state = c.createRootState(binding, nonce, Q)
   assert.equal("capability" in state.hello(), false)
   assert.throws(() => state.accept(frame("owner", "AUTH", { clientNonce: H, capability: Q })))
@@ -174,6 +452,58 @@ test("portable root authenticates nonce and capability before config", () => {
 })
 
 test("portable resumed ready root is not START", () => {
+  const data = f0Data(), { catalogue, collection } = f0PacketData(data)
+  assert.deepEqual([catalogue.sources.length, catalogue.roots.length, catalogue.selectors.length, catalogue.files.length],
+    [17, 17, 22, 411])
+  assert.deepEqual(catalogue.sources.map((row) => row.path), data.paths)
+  const v = ["v22c", "v22e", "v22p", "v22b", "v18c", "v18e", "v18p", "v18b"], expected = ["node20", "node22", "node24",
+    "ps.pwsh", "ps.sma", "ps.roslyn", "ps.utility", "la.os.manifest", "la.os.assembly", "la.ps.manifest", "la.ps.assembly"]
+  for (const g of ["g64", "g32"]) for (const k of ["command", "direct", "sh", "env", "msys", "gitconfig",
+    "fstab", "userfstab", "packages", "release", "bash", "mintty"]) expected.push(`git.${g}.${k}`)
+  for (const g of ["g64", "g32"]) for (const d of ["mingw", "usr"]) for (let i = 1; i <= 16; i++) expected.push(`dll.${g}.${d}.${String(i).padStart(2, "0")}`)
+  for (const id of v) for (const k of ["clang", "lld", "readobj", "profdata", "cov", "devcmd", "toolversion", "devenv"]) expected.push(`vs.${id}.${k}`)
+  for (const id of v) for (let i = 1; i <= 8; i++) expected.push(`profile.${id}.${String(i).padStart(2, "0")}`)
+  for (const id of v) for (let i = 1; i <= 8; i++) for (const k of ["cmt", "vcruntime"]) expected.push(`crt.${id}.${String(i).padStart(2, "0")}.${k}`)
+  for (let i = 1; i <= 8; i++) for (const k of ["ucrt", "kernel", "advapi"]) expected.push(`sdk.${String(i).padStart(2, "0")}.${k}`)
+  for (let i = 1; i <= 16; i++) for (const k of ["state", "catalog"]) expected.push(`instance.${String(i).padStart(2, "0")}.${k}`)
+  assert.deepEqual(catalogue.files.map((row) => row.id), expected)
+  assert.deepEqual(f0.projectF0Collection(collection), collection)
+  for (const files of [[collection.files[1], collection.files[0], ...collection.files.slice(2)],
+    [collection.files[0], ...collection.files.slice(0, -1)],
+    collection.files.map((row, i) => i ? row : { ...row, id: "foreign" })]) {
+    assert.throws(() => f0.projectF0Collection({ ...collection, files }))
+  }
+  const sixteen128ByteNames = { id: "git.g64.mingw", state: "listed",
+    names: Array.from({ length: 16 }, (_, i) => `${String(i).padStart(2, "0")}${"a".repeat(122)}.dll`), reason: "none" }
+  assert.equal(sixteen128ByteNames.names.every((name) => name.length === 128), true)
+  assert.deepEqual(f0.boundF0Selector(sixteen128ByteNames), { id: "git.g64.mingw", state: "over-limit", names: [], reason: "count-cap" })
+  assert.equal(f0.boundF0Selector({ ...sixteen128ByteNames, names: ["a.dll"] }).state, "listed")
+  const justFits = { ...sixteen128ByteNames,
+    names: Array.from({ length: 16 }, (_, i) => `${String(i).padStart(2, "0")}${"a".repeat(110)}.dll`) }
+  for (let i = 0; Buffer.byteLength(JSON.stringify(justFits)) < 2048; i = (i + 1) % 16) {
+    if (justFits.names[i].length < 128) justFits.names[i] = `a${justFits.names[i]}`
+  }
+  justFits.names.sort()
+  assert.equal(Buffer.byteLength(JSON.stringify(justFits)), 2048)
+  assert.deepEqual(f0.boundF0Selector(justFits), justFits)
+  assert.throws(() => f0.boundF0Selector({ ...sixteen128ByteNames, names: ["a.dll", "A.dll"] }))
+  const refused = structuredClone(collection)
+  refused.roots.find((row) => row.id === "g64").state = "present"
+  refused.roots.find((row) => row.id === "g64").reason = "none"
+  refused.selectors[0] = f0.boundF0Selector(sixteen128ByteNames)
+  for (const row of refused.files) if (row.id.startsWith("git.g64.")) {
+    const descriptor = catalogue.files.find((file) => file.id === row.id)
+    Object.assign(row, { locator: { root: "g64", parts: descriptor.parts }, state: "missing", reason: "missing" })
+  }
+  for (const row of refused.files) if (row.id.startsWith("dll.g64.mingw.")) Object.assign(row, { state: "not-collected", reason: "count-cap" })
+  assert.deepEqual(f0.projectF0Collection(refused), refused)
+  const incomplete = { ...f0PacketData(data).packet, collection: refused,
+    result: { operation: "completed", catalogue: "incomplete" },
+    error: { code: "catalogue", stage: "collect", subject: "git.g64.mingw" } }
+  assert.equal(f0.decodeF0Inventory(f0.encodeF0Inventory(incomplete)).result.operation, "completed")
+  const mislabeled = structuredClone(refused)
+  mislabeled.files.find((row) => row.id === "dll.g64.mingw.01").state = "slot-empty"
+  assert.throws(() => f0.projectF0Collection(mislabeled))
   const c = core(), state = authenticate(c)
   assert.equal(state.started, false)
   assert.equal(state.accept(frame("owner", "CONFIG", { path: "/payload" }, Q)), "read_payload")
@@ -185,6 +515,28 @@ test("portable resumed ready root is not START", () => {
 })
 
 test("portable payload bytes retain exact command and privacy boundaries", () => {
+  const data = f0Data(), { host } = f0PacketData(data)
+  assert.equal("rootClose" in host.completion, false); assert.equal("rootExit" in host.completion, false)
+  assert.equal(f0.composeF0Completion(host.completion, data.observed).ownership, "closed")
+  const refuses = (local, observed) => {
+    try { assert.notEqual(f0.composeF0Completion(local, observed).ownership, "closed") }
+    catch (error) { if (error.code === "ERR_ASSERTION") throw error }
+  }
+  for (const patch of [{ closedChild: {} }, { closedChild: null }, { rootExit: null }, { rootExit: 1 },
+    { signal: "SIGTERM" }, { errorLatched: true }, { deadlineLatched: true }]) refuses(host.completion, { ...data.observed, ...patch })
+  for (const patch of [{ workerExit: null }, { workerExitObserved: false }, { workerStdoutEOF: false },
+    { workerStderrEOF: false }, { jobActive: 1 }, { jobActive: null }, { ioReaped: false }, { criticalHandlesClosed: false }]) {
+    refuses({ ...host.completion, ...patch }, data.observed)
+  }
+  const body = Buffer.from(JSON.stringify(host)), framed = Buffer.alloc(body.length + 4)
+  framed.writeUInt32LE(body.length); body.copy(framed, 4)
+  const reader = f0.createF0HostFrameReader()
+  reader.push(framed.subarray(0, 3)); reader.push(framed.subarray(3))
+  assert.deepEqual(reader.end(), host)
+  for (const bytes of [framed.subarray(0, -1), Buffer.concat([framed, framed]), Buffer.concat([framed, Buffer.from([0])]),
+    Buffer.from([1, 0, 8, 0])]) {
+    assert.throws(() => { const r = f0.createF0HostFrameReader(); r.push(bytes); r.end() })
+  }
   const c = core()
   const original = payload({ args: ["-c", 'x="é"', ""], env: {
     NODE_OPTIONS: "--require hook.cjs", NODE_PATH: "/hooks", PATH: "/chosen",
@@ -399,10 +751,10 @@ async function fixture() {
   const v = await verifier()
   const root = path.join(process.env.DESK_TEST_RUN_DIR, `nc3-assets-${randomUUID()}`)
   const pub = path.join(root, "public"), realm = path.join(root, "private"), target = path.join(pub, "artifacts/owned-git/win32-x64")
-  fs.mkdirSync(target, { recursive: true }); fs.mkdirSync(realm)
-  fs.writeFileSync(path.join(root, "node"), "synthetic interpreter; NEVER execute")
-  fs.writeFileSync(path.join(target, "desk-owned-git.exe"), "synthetic owner; NEVER execute")
-  fs.writeFileSync(path.join(target, "owned-git-child.cjs"), "synthetic shim; NEVER execute")
+  mkdirFixture(target, { recursive: true }); mkdirFixture(realm)
+  writeFixture(path.join(root, "node"), "synthetic interpreter; NEVER execute")
+  writeFixture(path.join(target, "desk-owned-git.exe"), "synthetic owner; NEVER execute")
+  writeFixture(path.join(target, "owned-git-child.cjs"), "synthetic shim; NEVER execute")
   const sourceNames = ["native/windows-owned-git.c", "scripts/owned-git-child.cjs", "scripts/build-owned-git.ps1", "scripts/verify-owned-git.js"]
   const manifest = { schema: "desk.owned-git-assets/1", protocol: "desk.owned-git/1", target: "win32-x64", variant: "production",
     sourceRevision: "1".repeat(40), sources: sourceNames.map((name) => ({ path: name, sha256: H })),
@@ -411,12 +763,12 @@ async function fixture() {
     files: { owner: { path: "desk-owned-git.exe", sha256: hash("synthetic owner; NEVER execute") },
       shim: { path: "owned-git-child.cjs", sha256: hash("synthetic shim; NEVER execute") } } }
   for (const source of manifest.sources) {
-    fs.mkdirSync(path.dirname(path.join(pub, source.path)), { recursive: true })
-    fs.writeFileSync(path.join(pub, source.path), "synthetic source")
+    mkdirFixture(path.dirname(path.join(pub, source.path)), { recursive: true })
+    writeFixture(path.join(pub, source.path), "synthetic source")
     source.sha256 = hash("synthetic source")
   }
 
-  const write = () => fs.writeFileSync(path.join(target, "manifest.json"), JSON.stringify(manifest))
+  const write = () => writeFixture(path.join(target, "manifest.json"), JSON.stringify(manifest))
   write()
   return { v, root, pub, realm, target, manifest, write,
     options: { publicMcpRoot: pub, privateRealmRoot: realm, nodeExecutable: path.join(root, "node") } }
@@ -427,12 +779,12 @@ async function publicBundleFixture() {
     const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..")
     const root = path.join(process.env.DESK_TEST_RUN_DIR, `na1-public-model-${randomUUID()}`)
     const pub = path.join(root, "public"), mcp = path.join(pub, "mcp"), fixtures = path.join(pub, "fixtures")
-    const write = (name, bytes) => {
+    const write = (name, bytes, kind = "small") => {
       const file = path.join(root, name)
-      fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes)
+      mkdirFixture(path.dirname(file), { recursive: true }); writeFixture(file, bytes, undefined, kind)
       return file
     }
-    const sourceBytes = r.SOURCE_PATHS.map((name) => fs.readFileSync(path.join(repo, name)))
+    const sourceBytes = r.SOURCE_PATHS.map((name) => fixtureSource(path.join(repo, name)))
     const sources = r.SOURCE_PATHS.map((name, i) => ({ key: `S${String(i + 1).padStart(2, "0")}`,
       repositoryPath: name, sha256: hash(sourceBytes[i]), bytes: sourceBytes[i].length, hashOrigin: "ci_host_rehashed" }))
     const exeBytes = r.binaryKeys.map((name) => Buffer.from(`synthetic ${name}; NEVER EXECUTE`))
@@ -467,17 +819,17 @@ async function publicBundleFixture() {
         textSha256: "662970fac258865cfe4002ed63efa04be7a132f9319451a70ffd15233a55eb1f", textBytes: 32,
         indexedSha256: hash(indexedBytes), indexedBytes: indexedBytes.length, producerSha256: P, roundTripObserved: true },
       productionManifestSha256: hash(encoded(production)), sourceManifestSha256: hash(encoded(source)) }
-    for (let i = 0; i < 17; i++) write(r.PUBLIC_LEAVES[i], sourceBytes[i])
-    for (let i = 0; i < 4; i++) write(`public/mcp/${production.sources[i].path}`, sourceBytes[i])
+    for (let i = 0; i < 17; i++) write(r.PUBLIC_LEAVES[i], sourceBytes[i], "source")
+    for (let i = 0; i < 4; i++) write(`public/mcp/${production.sources[i].path}`, sourceBytes[i], "source")
     for (let i = 0; i < 5; i++) { write(r.PUBLIC_LEAVES[17 + i], exeBytes[i]); write(`public/fixtures/${r.binaryKeys[i]}`, exeBytes[i]) }
     write("public/mcp/artifacts/owned-git/win32-x64/desk-owned-git.exe", exeBytes[0])
-    write("public/mcp/artifacts/owned-git/win32-x64/owned-git-child.cjs", sourceBytes[1])
+    write("public/mcp/artifacts/owned-git/win32-x64/owned-git-child.cjs", sourceBytes[1], "source")
     write("public/mcp/artifacts/owned-git/win32-x64/manifest.json", encoded(production))
-    write(r.PUBLIC_LEAVES[22], sourceBytes[1])
-    for (const v of variants) write(`public/test-roots/${v.basename}`, sourceBytes[10])
-    write("public/fixtures/windows_owned_git_workload.cjs", sourceBytes[14])
-    write("public/fixtures/windows_owned_git_preload.cjs", sourceBytes[15])
-    write("public/fixtures/hooks/pre-commit", sourceBytes[14])
+    write(r.PUBLIC_LEAVES[22], sourceBytes[1], "source")
+    for (const v of variants) write(`public/test-roots/${v.basename}`, sourceBytes[10], "source")
+    write("public/fixtures/windows_owned_git_workload.cjs", sourceBytes[14], "source")
+    write("public/fixtures/windows_owned_git_preload.cjs", sourceBytes[15], "source")
+    write("public/fixtures/hooks/pre-commit", sourceBytes[14], "source")
     write("public/fixtures/source-assets.json", encoded(source))
     write("public/fixtures/fixture-assets.json", encoded(fixtureManifest))
     write("public/fixtures/na1-known-scratch/zero.txt", Buffer.from(":fe\n!na1.synthetic.zero!\n0\n1\n0\n\n"))
@@ -485,7 +837,7 @@ async function publicBundleFixture() {
     write("public/fixtures/na1-known-scratch/na1-profile-support.obj", supportBytes)
     write(r.PUBLIC_LEAVES[23], encoded(production)); write(r.PUBLIC_LEAVES[24], encoded(fixtureManifest)); write(r.PUBLIC_LEAVES[25], encoded(source))
     const node = write("public/model-node", "synthetic interpreter; NEVER EXECUTE")
-    const realm = path.join(root, "model-private"); fs.mkdirSync(realm)
+    const realm = path.join(root, "model-private"); mkdirFixture(realm)
     const v = await verifier()
     const productionAssets = await v.verifyOwnedGitAssets({ publicMcpRoot: mcp, privateRealmRoot: realm, nodeExecutable: node })
     return { r, root, mcp, fixtures, expectedSource, source, production, fixtureManifest, productionAssets, write }
@@ -621,7 +973,7 @@ test("portable manifest schema and own bytes are required", async () => {
     fixture: { ...bundle.fixtureManifest, fixtureRoot: "/forged" }, source: bundle.source }, bundle.expectedSource))
   assert.throws(() => retention.projectPublicManifests({ production: bundle.production,
     fixture: { ...bundle.fixtureManifest, sourceManifestSha256: H }, source: bundle.source }, bundle.expectedSource))
-  fs.appendFileSync(path.join(bundle.root, retention.PUBLIC_LEAVES[17]), "changed")
+  appendFixture(path.join(bundle.root, retention.PUBLIC_LEAVES[17]), "changed")
   assert.throws(() => retention.verifyPublicBundle({ publicMcpRoot: bundle.mcp, expectedSource: bundle.expectedSource }))
   const rows = retention.PUBLIC_LEAVES.slice(0, 33).map((name, i) => ({
     id: i + 1, path: name, presence: "present", bytes: 1, sha256: H,
@@ -708,11 +1060,11 @@ test("portable manifest schema and own bytes are required", async () => {
   }
   assert.throws(() => v.validateOwnedGitManifest({ ...f.manifest,
     files: { ...f.manifest.files, owner: { ...f.manifest.files.owner, sha256: [f.manifest.files.owner.sha256] } } }))
-  fs.appendFileSync(path.join(f.target, "desk-owned-git.exe"), "changed")
+  appendFixture(path.join(f.target, "desk-owned-git.exe"), "changed")
   await assert.rejects(v.verifyOwnedGitAssets(f.options))
   const second = await fixture()
   const manifestPath = path.join(second.target, "manifest.json")
-  fs.writeFileSync(manifestPath, JSON.stringify(second.manifest).replace('"variant":"production"', '"variant":"production","variant":"production"'))
+  writeFixture(manifestPath, JSON.stringify(second.manifest).replace('"variant":"production"', '"variant":"production","variant":"production"'))
   await assert.rejects(v.verifyOwnedGitAssets(second.options))
 })
 
@@ -761,8 +1113,8 @@ test("portable public root domains reject private mirror fallback", async () => 
     } })
   const modelPermit = r.modelBootstrapDecision(roleContext, observation)
   const emptyCases = driver().getNativeCaseRegistry().map((plan) => ({ ...plan, actual: null, gap: "not_admitted" }))
-  if (process.env.DESK_TEST_RUN_DIR) fs.writeFileSync(path.join(process.env.DESK_TEST_RUN_DIR, "na1-registry.json"),
-    JSON.stringify(driver().getNativeCaseRegistry(), null, 2) + "\n", { flag: "wx" })
+  if (process.env.DESK_TEST_RUN_DIR) writeFixture(path.join(process.env.DESK_TEST_RUN_DIR, "na1-registry.json"),
+    JSON.stringify(driver().getNativeCaseRegistry(), null, 2) + "\n", { flag: "wx" }, "registry")
   const classified = r.modelCollectPrivateRoles(roleContext, modelPermit, { cases: emptyCases, utilities: [] })
   assert.equal(r.getPrivateRoleRegistry().length, 99)
   assert.equal(r.getPrivateRoleRegistry().filter((row) => row.role === "preload-marker").length, 12)
@@ -939,8 +1291,8 @@ test("portable public root domains reject private mirror fallback", async () => 
   assert.throws(() => driver().encodeWorkerFrame({ schema: "desk.owned-git-case-worker/1",
     id: twoPlan.id, type: "ERROR", value: "none" }))
   assert.equal(Math.max(...frameBytes.map((b) => b.length - 4)) <= 4096, true)
-  fs.writeFileSync(path.join(process.env.DESK_TEST_RUN_DIR, "na1-generation-frame-measurements.json"),
-    JSON.stringify(frameBytes.map((b, i) => ({ type: [...sections,summary][i].type, bodyBytes: b.length - 4 }))))
+  writeFixture(path.join(process.env.DESK_TEST_RUN_DIR, "na1-generation-frame-measurements.json"),
+    JSON.stringify(frameBytes.map((b, i) => ({ type: [...sections,summary][i].type, bodyBytes: b.length - 4 }))), undefined, "measurements")
   for (const chunks of [[Buffer.concat(frameBytes)], [...Buffer.concat(frameBytes)].map((v) => Buffer.from([v]))]) {
     const assembly = driver().createGenerationAssembly({ id: twoPlan.id, deadlineNs: maxCaseD,
       budget: driver().createGenerationStagingBudget() })
@@ -1208,7 +1560,7 @@ test("portable public root domains reject private mirror fallback", async () => 
   assert.equal((await f.v.resolveOwnedGitTarget(f.options)).targetDir, f.target)
   await assert.rejects(f.v.resolveOwnedGitTarget({ publicMcpRoot: f.realm, privateRealmRoot: f.realm }))
   await assert.rejects(f.v.verifyOwnedGitAssets({ ...f.options, publicMcpRoot: f.target }))
-  fs.symlinkSync(f.realm, path.join(f.root, "mirror"), "dir")
+  linkFixture(f.realm, path.join(f.root, "mirror"))
   await assert.rejects(f.v.resolveOwnedGitTarget({ publicMcpRoot: path.join(f.root, "mirror"), privateRealmRoot: f.realm }))
 })
 
@@ -1267,6 +1619,189 @@ test("portable native state and proof validation MODEL", () => {
 })
 
 test("portable raw component driver uses product wire without adapter", async () => {
+  {
+  const fd = f0Data(), fp = f0PacketData(fd), hostBytes = Buffer.from(JSON.stringify(fp.host))
+  const hostFrame = Buffer.alloc(hostBytes.length + 4)
+  hostFrame.writeUInt32LE(hostBytes.length); hostBytes.copy(hostFrame, 4)
+  for (const kill of [() => false, () => { throw new Error("kill") }, () => true]) {
+    let now = 0n, deadline, kills = 0, persists = 0
+    const terminated = [], child = { kill() { kills++; return kill() } }
+    const owner = f0.createF0Completion({ startedNs: 0n, nowNs: () => now,
+      arm(callback, ms) { assert.equal(ms, 300000); deadline = callback; return 1 },
+      disarm() {}, persist() { persists++; throw new Error("late") }, terminate: (code) => terminated.push(code) })
+    owner.start(); owner.attach(child)
+    now = 300000000000n; deadline()
+    assert.equal(await owner.terminal, 1)
+    owner.closed(child, 0, null); owner.error("worker")
+    assert.equal(await owner.terminal, 1)
+    assert.deepEqual(terminated, [1]); assert.equal(kills, 1); assert.equal(persists, 0)
+  }
+  {
+    let now = 0n, kills = 0
+    const child = { kill() { kills++; return false } }
+    const owner = f0.createF0Completion({ startedNs: 0n, nowNs: () => now,
+      arm() { return 1 }, disarm() {}, persist() { assert.fail("late attachment publisher") }, terminate() {} })
+    owner.start()
+    now = 300000000000n
+    owner.attach(child)
+    assert.equal(await owner.terminal, 1)
+    assert.equal(kills, 1)
+  }
+  {
+    const stops = [], owner = f0.createF0Completion({ startedNs: 0n, nowNs: () => 0n,
+      arm() { return 1 }, disarm() {}, persist() { assert.fail("pre-spawn publisher") },
+      terminate: (code) => stops.push(code) })
+    owner.start(); owner.error("foundation")
+    assert.equal(await owner.terminal, 1); assert.deepEqual(stops, [1])
+  }
+  for (const failure of ["foreign-close", "duplicate-close", "error-close", "publisher"]) {
+    let persists = 0, kills = 0
+    const child = { kill() { kills++; return true } }
+    const owner = f0.createF0Completion({ startedNs: 0n, nowNs: () => 0n,
+      arm() { return 1 }, disarm() {}, terminate() {},
+      async persist() { persists++; throw new Error("publisher") } })
+    owner.start(); owner.attach(child); owner.stdout(hostFrame)
+    if (failure === "foreign-close") owner.closed({}, 0, null)
+    else if (failure === "error-close") { owner.error("worker"); owner.closed(child, 0, null) }
+    else {
+      owner.closed(child, 0, null)
+      if (failure === "duplicate-close") owner.closed(child, 0, null)
+      else await owner.publish(fp.packet)
+    }
+    assert.equal(await owner.terminal, 1)
+    assert.equal(persists, failure === "publisher" ? 1 : 0)
+    assert.ok(kills <= 1)
+  }
+  for (const early of [true, false]) {
+    const child = { kill() { return true } }, stops = []
+    let persisted = 0
+    const owner = f0.createF0Completion({ startedNs: 0n, nowNs: () => 0n,
+      arm() { return 1 }, disarm() {}, async persist(value, live) {
+        assert.equal(live(), true); assert.equal(value.result.operation, "completed"); persisted++
+        return { exitCode: 0 }
+      }, terminate: (code) => stops.push(code) })
+    owner.start(); owner.attach(child); owner.stdout(hostFrame.subarray(0, 2)); owner.stdout(hostFrame.subarray(2))
+    assert.equal(persisted, 0)
+    if (!early) owner.closed(child, 0, null)
+    await owner.publish(fp.packet)
+    assert.equal(await owner.terminal, early ? 1 : 0)
+    assert.equal(persisted, early ? 0 : 1)
+    assert.deepEqual(stops, [early ? 1 : 0])
+  }
+  {
+    let now = 0n, deadline, release, persisted = 0
+    const owner = f0.createF0Completion({ startedNs: 0n, nowNs: () => now,
+      arm(fn) { deadline = fn; return 1 }, disarm() {}, terminate() {},
+      persist: async (_, live) => { persisted++; await new Promise((resolve) => { release = resolve })
+        assert.equal(live(), false); return { exitCode: 0 } } })
+    const child = { kill() { return true } }
+    owner.start(); owner.attach(child); owner.stdout(hostFrame); owner.closed(child, 0, null)
+    const publishing = owner.publish(fp.packet)
+    await Promise.resolve(); now = 300000000000n; deadline()
+    assert.equal(await owner.terminal, 1); release(); await publishing
+    assert.equal(await owner.terminal, 1); assert.equal(persisted, 1)
+  }
+  {
+    const files = new Map(), order = []
+    const writer = f0.createF0Writer({ root: "C:\\owned\\f0", stillLive: () => true,
+      io: { async exclusiveOpen(name) {
+        assert.equal(files.has(name), false); files.set(name, [])
+        return { async write(bytes, offset, length) {
+          const count = Math.min(7, length); files.get(name).push(Buffer.from(bytes.subarray(offset, offset + count))); return count
+        }, async flush() { order.push(`flush:${name}`) }, async close() { order.push(`close:${name}`) } }
+      } } })
+    await writer.writeControl("source-approval.json", fd.sBytes)
+    await writer.writeControl("intent.json", fd.actualDBytes)
+    const result = await writer.publish(fp.packet)
+    assert.equal(result.exitCode, 0)
+    assert.deepEqual(Buffer.concat(files.get("inventory.json")), f0.encodeF0Inventory(fp.packet))
+    assert.equal(JSON.parse(Buffer.concat(files.get("result.json"))).completion, "closed")
+    assert.ok(order.indexOf("close:inventory.json") < order.indexOf("flush:result.json"))
+    await assert.rejects(writer.publish(fp.packet))
+    assert.equal(files.size, 4)
+    assert.ok([...files.values()].reduce((sum, chunks) => sum + Buffer.concat(chunks).length, 0) <= 548864)
+    let opens = 0
+    const bounded = f0.createF0Writer({ root: "C:\\owned\\f0", stillLive: () => true,
+      io: { async exclusiveOpen() { opens++; assert.fail("prewrite cap") } } })
+    await assert.rejects(bounded.writeControl("intent.json", Buffer.alloc(4097)))
+    await assert.rejects(bounded.writeControl("source-approval.json", Buffer.alloc(16385)))
+    await assert.rejects(bounded.publish({ ...fp.packet, rawError: "x".repeat(524289) }))
+    assert.equal(opens, 0)
+  }
+  for (const fault of ["write", "flush", "close"]) {
+    let opened = 0
+    const writer = f0.createF0Writer({ root: "C:\\owned\\f0", stillLive: () => true,
+      io: { async exclusiveOpen() { opened++; return {
+        async write(_, __, length) { if (fault === "write") throw new Error("private"); return length },
+        async flush() { if (fault === "flush") throw new Error("private") },
+        async close() { if (fault === "close") throw new Error("private") },
+      } } } })
+    await assert.rejects(writer.publish(fp.packet)); assert.equal(opened, 1)
+  }
+  {
+    let live = true, release, opened = 0
+    const writer = f0.createF0Writer({ root: "C:\\owned\\f0", stillLive: () => live,
+      io: { async exclusiveOpen() { opened++; return {
+        async write(_, __, length) { await new Promise((resolve) => { release = resolve }); return length },
+        async flush() {}, async close() {},
+      } } } })
+    const pending = writer.publish(fp.packet)
+    await Promise.resolve(); await Promise.resolve()
+    live = false; release(); await assert.rejects(pending); assert.equal(opened, 1)
+  }
+  const effects = [], edges = {
+    nowNs: () => 0n, nowUtc: () => 100,
+    async getBlob(oid, cap) { effects.push("blob"); assert.ok([12288, 32768].includes(cap))
+      return fd.blob(oid === fd.oid ? fd.actualDBytes : fd.sBytes) },
+    async getRun(id) { effects.push("run"); assert.equal(id, 7); return fd.serviceRun },
+    async getRunsPage(page) { effects.push("page"); assert.equal(page, 1); return { runs: [fd.serviceRun], hasNext: false } },
+    async readSource(name, cap) { effects.push("source"); assert.ok(fd.paths.includes(name)); assert.equal(cap, 2097152); return Buffer.from("x") },
+    async hashNode() { effects.push("node"); return fd.nodeHash },
+    async createFreshRoot() { effects.push("root") },
+    async writeControl(name, bytes) { effects.push(name); assert.ok(Buffer.isBuffer(bytes)) },
+  }
+  const selection = f0.normalizeF0Selection(fd.validF0Inputs)
+  for (const patch of [{ systemRoot: undefined }, { windir: undefined }, { systemDrive: undefined },
+    { systemRoot: "relative" }, { windir: "D:\\Windows" }, { systemDrive: "D:" }, { systemDrive: "C:\\e" },
+    { workspace: "/repo" }, { nodeExecutable: "/node" }, { workspace: "C:/repo" }, { nodeExecutable: "C:/node.exe" },
+    { repository: { id: 2, name: "other/repo" } }, { matrix: { mode: "elevated", shard: 1, total: 8 } }]) {
+    effects.length = 0
+    await assert.rejects(f0.initF0Inventory({ selection, context: { ...fd.context, ...patch },
+      deadlineNs: 300000000000n, edges }))
+    assert.deepEqual(effects, [])
+  }
+  const initialized = await f0.initF0Inventory({ selection, context: fd.context, deadlineNs: 300000000000n, edges })
+  assert.equal(initialized.observedIntentRef.bytes, fd.actualDBytes.length)
+  assert.deepEqual(initialized.launch, f0.buildF0Launch(fd.launchInput))
+  assert.equal(Object.keys(initialized.launch.env).length, 17)
+  assert.ok(effects.indexOf("root") > effects.indexOf("node"))
+  assert.equal(effects.filter((value) => value === "source").length, 17)
+  assert.deepEqual(f0.checkF0RunBinding({ intent: fd.intent, sourceApproval: fd.sourceApproval,
+    context: fd.context, serviceRuns: [fd.serviceRun], nowUtc: 100 }), fp.run)
+  for (const patch of [{ workflowId: 1 }, { repositoryId: 2 }, { headRepositoryId: 2 }, { headSha: "2".repeat(40) },
+    { actor: { id: 2, login: "ari" } }, { triggeringActor: { id: 1, login: "ARI" } }, { event: "push" },
+    { headBranch: "main" }, { id: 8 }, { attempt: 2 }]) {
+    assert.throws(() => f0.checkF0RunBinding({ intent: fd.intent, sourceApproval: fd.sourceApproval,
+      context: fd.context, serviceRuns: [{ ...fd.serviceRun, ...patch }], nowUtc: 100 }))
+  }
+  assert.throws(() => f0.checkF0RunBinding({ intent: fd.intent, sourceApproval: fd.sourceApproval,
+    context: fd.context, serviceRuns: [fd.serviceRun, { ...fd.serviceRun, id: 8 }], nowUtc: 100 }))
+  for (const nowUtc of [89, 121]) assert.throws(() => f0.checkF0RunBinding({ intent: fd.intent,
+    sourceApproval: fd.sourceApproval, context: fd.context, serviceRuns: [fd.serviceRun], nowUtc }))
+  const pages = []
+  await assert.rejects(f0.initF0Inventory({ selection, context: fd.context, deadlineNs: 300000000000n,
+    edges: { ...edges, getRunsPage: async (page) => { pages.push(page)
+      return { runs: page === 1 ? [fd.serviceRun] : [], hasNext: true } } } }))
+  assert.deepEqual(pages, [1, 2, 3, 4, 5])
+  await assert.rejects(f0.initF0Inventory({ selection, context: fd.context, deadlineNs: 300000000000n,
+    edges: { ...edges, hashNode: async () => P } }))
+  await assert.rejects(f0.initF0Inventory({ selection, context: fd.context, deadlineNs: 300000000000n,
+    edges: { ...edges, readSource: async () => Buffer.from("changed") } }))
+  await assert.rejects(f0.initF0Inventory({ selection, context: fd.context, deadlineNs: 300000000000n,
+    edges: { ...edges, getBlob: async () => fd.blob(Buffer.from(JSON.stringify({ ...fd.intent, nonce: P }))) } }))
+  assert.throws(() => f0.projectF0SourceApproval({ ...fd.sourceApproval, approved: true }))
+  assert.throws(() => f0.projectF0Intent({ ...fd.intent, roleSha256: H }))
+  }
   const io = await import("../../../../../.github/scripts/owned-git-product-io.mjs")
   const b2 = driver().getNativeCaseRegistry().filter((p) => driver().generationCaseAvailable(p.id) &&
     p.evidenceClass !== "A" && p.expected.generations && !["C03","C04","C05","C06","C07","C14","C15"].includes(p.id.split("-")[0]))
@@ -1569,7 +2104,7 @@ test("portable raw component driver uses product wire without adapter", async ()
   assert.deepEqual(driver().getUtilityInvocation("production-seed").argv, ["--owned-git"])
   const admissionInput = { platform: "win32", native: "1", event: "workflow_dispatch", mode: "standard",
     sha: "1".repeat(40), Hns: "120000000000", execArgv: [`--test-name-pattern=^${io.NATIVE_TEST_NAME}$`] }
-  assert.equal(driver().nativeRegistrationAllowed(admissionInput), true)
+  assert.equal(driver().nativeRegistrationAllowed(admissionInput), false)
   assert.equal(process.execArgv.some((arg) => arg.startsWith("--test-name-pattern")), true)
   for (const patch of [{ platform: "darwin" }, { native: "0" }, { event: "push" }, { mode: "elevated" },
     { sha: "" }, { execArgv: ["--test-name-pattern=^portable "] }]) {
@@ -1982,8 +2517,10 @@ test("portable raw component driver uses product wire without adapter", async ()
   capture.close("stderr"); assert.equal(capture.snapshot().dataComplete, true)
   capture.error("stderr"); assert.equal(capture.snapshot().dataComplete, false)
   const f = await fixture(), placeholder = path.join(f.realm, "payload.json")
-  fs.writeFileSync(placeholder, "")
-  const staged = d.stagePayloadFile({ payload: payload({ stdin: Buffer.from("input") }), payloadPath: placeholder, expectedPath: placeholder })
+  writeFixture(placeholder, "")
+  const stagedPayload = payload({ stdin: Buffer.from("input") })
+  chargeFixtureWrite(placeholder, core().encodePayload(stagedPayload).bytes, "payload")
+  const staged = d.stagePayloadFile({ payload: stagedPayload, payloadPath: placeholder, expectedPath: placeholder })
   assert.equal(staged.expectedBytes, 5)
   assert.deepEqual(core().parsePayloadBytes(fs.readFileSync(placeholder), staged.payloadDigest).stdin, Buffer.from("input"))
   const stagedBeforeExpiry = fs.readFileSync(placeholder)

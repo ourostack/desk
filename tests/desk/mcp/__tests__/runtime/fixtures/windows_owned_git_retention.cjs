@@ -966,6 +966,7 @@ function state(ctx, native = false) {
   const s = contexts.get(ctx)
   if (!s) fail("not_admitted")
   if (native && s.execution !== "native-windows") fail("model_origin")
+  if (native) fail("not_admitted") // F0 never supplies a native context/build/launch/emitter permit.
   return s
 }
 function createModelContext({ H: deadline, deadlineNs = deadline.toString(), binding, read = () => fail("bootstrap_missing") }) {
@@ -1067,6 +1068,7 @@ function latch(s, error, fallback = "schema") {
   return code
 }
 function createRetentionContext({ workspace, expectedRun = {}, expectedSource, allocation, H: deadline }) {
+  fail("not_admitted")
   if (process.platform !== "win32" || process.env.DESK_TEST_OWNED_GIT_NATIVE !== "1" ||
     process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.DESK_TEST_SUITE_MODE !== "standard") fail("not_admitted")
   G40(expectedSource.sourceRevision)
