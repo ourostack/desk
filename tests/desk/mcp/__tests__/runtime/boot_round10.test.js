@@ -278,16 +278,22 @@ test("withCreatedDirs removes the folders it made when mkdir reports the first o
   assert.deepEqual(await tree(root), [])
 })
 
-test("a task_archive whose rename fails leaves no empty _archive folder", async () => {
+test("a task_archive whose controlled relocation fails leaves no empty _archive folder", async () => {
   const root = await deskWithTask()
   const before = await tree(root)
-  const realRename = fs.rename
-  fs.rename = async () => { throw new Error("rename failed") }
-  try {
-    await assert.rejects(task_archive({ deskRoot: root, input: { track: "t", slug: "s", outcome: "cancelled" } }), /rename failed/u)
-  } finally {
-    fs.rename = realRename
-  }
+  const failure = new Error("controlled relocation failed")
+  let moves = 0, closes = 0
+  await assert.rejects(task_archive({
+    deskRoot: root,
+    input: { track: "t", slug: "s", outcome: "cancelled" },
+    openArchiveMove: async () => ({
+      async admit() {},
+      async move(atUse) { await atUse(); moves++; throw failure },
+      async close() { closes++ },
+    }),
+  }), error => error === failure)
+  assert.equal(moves, 1)
+  assert.equal(closes, 1)
   assert.deepEqual(await tree(root), before)
 })
 
