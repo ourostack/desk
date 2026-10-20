@@ -669,6 +669,7 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
   touch(ready,JSON.stringify({profileRoot:path.join(profile,"Profile 17"),extensionId:verified.extensionId,
     sourceDigest:verified.extensionSourceDigest,browser:{executable}}))
   fs.chmodSync(path.dirname(ready),0o700);fs.chmodSync(ready,0o600)
+  fs.chmodSync(m.state,0o700) // The real POSIX lock must observe private state beneath this Windows ACL resource model.
   const systemRoot=path.join(m.root,"owned-system"),provider=touch(path.join(systemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"),"Never executed")
   env.SystemRoot=systemRoot
   const acl=await import(pathToFileURL(path.join(mcpRoot,"src/factory/windows-acl.js")).href),batches=[]

@@ -102,6 +102,136 @@ function protectSigned(l, stateRoot, creating) {
   },Promise.resolve());
   });
 }
+function retirementGuard(request, l, resources) {
+  var native = require("./web-native-messaging.cjs"), inventory, before, retained = [];
+  var paths = [request.stateRoot,l.parent,l.root,l.configFile,path.join(l.root,l.markerName),request.selection.nativeReadyFile];
+  var identities = paths.map(function(file) { return native.fileIdentity(file); });
+  var ready = JSON.stringify(native.readPrivateJson(request.selection.nativeReadyFile));
+  function evidence(file, root) {
+    native.readPrivateJson(file,{anchor:root});
+    return {identity:native.fileIdentity(file),digest:crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex")};
+  }
+  function retainedUnchanged(root) {
+    retained.forEach(function(pin) {
+      var current = evidence(path.join(root,pin.relative),root);
+      if (current.identity !== pin.identity || current.digest !== pin.digest)
+        common.fail("cleanup_unconfirmed","Owner evidence changed during retirement");
+    });
+  }
+  function unchanged() {
+    common.marker(l.root,l.owner,false,l.markerName);
+    if (paths.some(function(file,index) { return native.fileIdentity(file) !== identities[index]; }) ||
+        JSON.stringify(native.readPrivateJson(request.selection.nativeReadyFile)) !== ready)
+      common.fail("cleanup_unconfirmed","Owner or native generation changed during discard");
+    inventory.descriptor(request.contextId);
+    retainedUnchanged(l.root);
+  }
+  return moduleImport(path.join(__dirname,"src/browser/native-owner-inventory.mjs")).then(function(module) {
+    inventory = module.createNativeOwnerInventory({browserStateRoot:request.stateRoot,cliDir:request.cliDir,
+      binding:request.selection,socketRoot:request.socketRoot});
+    unchanged();
+    return inventory.inspectOwner(request.contextId);
+  }).then(function(observed) {
+    if (!observed.configured || observed.cli === "unknown" || !observed.fingerprint)
+      common.fail("cleanup_unconfirmed","Owner evidence is unavailable before discard");
+    before = observed;
+    retained = [l.configFile,path.join(l.root,l.markerName),inventory.descriptor(request.contextId).sessionFile].map(function(file) {
+      var pin = evidence(file,l.root);
+      pin.relative = path.relative(l.root,file);
+      return pin;
+    });
+    unchanged();
+    return function(nativeResult) {
+      if (!nativeResult || nativeResult.contextId !== request.contextId || nativeResult.discarded !== true)
+        common.fail("cleanup_unconfirmed","Exact native discard disposition is unavailable");
+      resources.nativeDisposition = nativeResult;
+      unchanged();
+      return inventory.inspectOwner(request.contextId).then(function(current) {
+        if (!current.configured || current.cli !== "absent" || current.fingerprint !== before.fingerprint)
+          common.fail("cleanup_unconfirmed","Exact unchanged CLI absence is unavailable after discard");
+        unchanged();
+        return moduleImport(path.join(__dirname,"src/factory/os-protect.js"));
+      }).then(function(protection) {
+        var naming = {label:"desk_browser_context",subject:"retained browser evidence"};
+        var artifacts = path.join(request.stateRoot,"artifacts");
+        var reservation = path.join(artifacts,"signed-in-"+request.contextId+"-"+common.generateId("signed-in"));
+        var destination = path.join(reservation,"owner");
+        var artifactIdentity, reservationIdentity;
+        function destinationUnchanged() {
+          if (native.fileIdentity(request.stateRoot) !== identities[0] ||
+              native.fileIdentity(artifacts) !== artifactIdentity ||
+              native.fileIdentity(reservation) !== reservationIdentity)
+            common.fail("cleanup_unconfirmed","Retirement artifact parent changed");
+          native.privatePaths([{file:request.stateRoot,directory:true},{file:artifacts,directory:true},{file:reservation,directory:true}]);
+        }
+        return protection.assertOutsideGitWorkspace(artifacts,naming).then(function() {
+          return protection.ensureOwnerOnlyDirectory(artifacts,process.platform,naming);
+        }).then(function() {
+          return fs.promises.mkdir(reservation,{mode:448});
+        }).then(function() {
+          resources.retirementArtifactDirectory = reservation;
+          return protection.ensureOwnerOnlyDirectory(reservation,process.platform,naming);
+        }).then(function() {
+          native.privatePaths([{file:request.stateRoot,directory:true},{file:artifacts,directory:true},{file:reservation,directory:true}]);
+          artifactIdentity = native.fileIdentity(artifacts);
+          reservationIdentity = native.fileIdentity(reservation);
+          unchanged();
+          return inventory.inspectOwner(request.contextId);
+        }).then(function(current) {
+          if (!current.configured || current.cli !== "absent" || current.fingerprint !== before.fingerprint)
+            common.fail("cleanup_unconfirmed","Owner changed before evidence retirement");
+          unchanged();
+          destinationUnchanged();
+          return fs.promises.rename(l.root,destination);
+        }).then(function() {
+          resources.retiredDirectory = destination;
+          resources.previousContextDirectory = l.root;
+          resources.contextDirectory = destination;
+          resources.configFile = path.join(destination,"config","browser.json");
+          resources.disposition = "owner moved; retirement confirmation pending";
+          destinationUnchanged();
+          native.privatePath(destination,true);
+          if (native.fileIdentity(destination) !== identities[2] ||
+              native.fileIdentity(resources.configFile) !== identities[3] ||
+              native.fileIdentity(path.join(destination,l.markerName)) !== identities[4] ||
+              native.fileIdentity(request.selection.nativeReadyFile) !== identities[5] ||
+              JSON.stringify(native.readPrivateJson(request.selection.nativeReadyFile)) !== ready)
+            common.fail("cleanup_unconfirmed","Retired owner or native generation changed");
+          common.marker(destination,l.owner,false,l.markerName);
+          retainedUnchanged(destination);
+          try {
+            fs.lstatSync(l.root);
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+            resources.disposition = "discarded owner evidence retained outside active inventory; socket artifacts retained";
+            return;
+          }
+          common.fail("cleanup_unconfirmed","Active owner path reappeared after retirement");
+        });
+      });
+    };
+  });
+}
+function executeSigned(input, options, request, l, source, resources, nodePath) {
+  var retire;
+  return moduleImport(path.join(__dirname,"src/util/broker-lock.mjs")).then(function(locks) {
+    return locks.withBrokerLock(request.stateRoot,function() {
+      return Promise.resolve().then(function() {
+        common.marker(l.root,l.owner,false,l.markerName);
+        if (input.action === "discard") return retirementGuard(request,l,resources).then(function(guard) { retire = guard; });
+      }).then(function() {
+        return (options.execute || common.execute)(nodePath,
+          [path.join(__dirname,"browser-context-runtime.cjs"),JSON.stringify(request)],
+          {cwd:l.root,env:common.environment(source,l.root,l.socketDir,nodePath),mode:"signed-in"});
+      }).then(function(result) {
+        if (!result || result.isError || (input.action === "discard" ? result.state !== "discarded" : result.state !== "running"))
+          common.fail("runner_failed","Native worker did not confirm the requested operation");
+        if (!retire) return result;
+        return retire(result.result).then(function() { return result; });
+      });
+    },{name:"native-context-"+request.contextId});
+  });
+}
 function signed(input, options, isCommand) {
   var source = options.env || process.env, id = input.contextId, contextResources, runtime, selection, l, native, acl;
   var creating = input.action === "create";
@@ -154,12 +284,8 @@ function signed(input, options, isCommand) {
       stateRoot:runtime.stateRoot,root:l.root,socketDir:l.socketDir,socketRoot:path.dirname(l.socketDir),
       installed:runtime.installed,selection:selection,
       cliDir:path.join(runtime.installed.dir,"node_modules","playwright-core","lib","tools","cli-client"),args:input.args || []};
-    return (options.execute || common.execute)(runtime.nodePath,
-      [path.join(__dirname,"browser-context-runtime.cjs"),JSON.stringify(request)],
-      {cwd:l.root,env:common.environment(source,l.root,l.socketDir,runtime.nodePath),mode:"signed-in"});
+    return executeSigned(input,options,request,l,source,contextResources,runtime.nodePath);
   }).then(function(result) {
-    if (!result || result.isError || (input.action === "discard" ? result.state !== "discarded" : result.state !== "running"))
-      common.fail("runner_failed","Native worker did not confirm the requested operation");
     return {exitCode:0,payload:common.scrub({contextId:id,mode:"signed-in",state:result.state,result:result.result,contextResources:contextResources},source)};
   }).catch(function(error) {
     var payload = common.errorPayload(error);

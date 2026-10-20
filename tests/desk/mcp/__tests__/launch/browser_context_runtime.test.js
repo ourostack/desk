@@ -775,6 +775,260 @@ test("actual maintained daemon options can reach native acquisition using the st
     assert.equal(f.tabs.has(1),true)
   })
 
+  test("signed parent retires only a confirmed discarded owner and preserves its evidence and peers",async t=>{
+    const f=await signedWorkerFixture(t)
+    const before=fs.readFileSync(f.descriptor.sessionFile)
+    const peer=path.join(f.request.stateRoot,"signed-in","22222222-2222-4222-8222-222222222222")
+    f.put(path.join(peer,"retained-evidence"),"peer is untouched")
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const result=await controller.context({action:"discard",contextId:f.id},{
+      ...f.controllerOptions,
+      execute:(_node,args)=>f.run(JSON.parse(args[1])),
+    })
+    assert.equal(result.exitCode,0,JSON.stringify(result.payload))
+    assert.equal(result.payload.state,"discarded")
+    assert.equal(fs.existsSync(f.l.root),false,"confirmed terminal owner must leave active inventory")
+    const retired=result.payload.contextResources.retiredDirectory
+    assert.equal(typeof retired,"string")
+    assert.ok(retired.startsWith(path.join(f.request.stateRoot,"artifacts")+path.sep))
+    assert.deepEqual(fs.readFileSync(path.join(retired,path.relative(f.l.root,f.descriptor.sessionFile))),before)
+    assert.equal(fs.readFileSync(path.join(peer,"retained-evidence"),"utf8"),"peer is untouched")
+    assert.equal(f.tabs.has(1),true)
+    assert.deepEqual(f.methods,["context.status","context.discard"])
+    assert.deepEqual(f.requests.map(request=>request.method),["stop"])
+  })
+
+  for(const changed of ["config","session"])
+    test("signed parent reports changed "+changed+" evidence after retirement without rolling it back",async t=>{
+      const f=await signedWorkerFixture(t)
+      const target=changed==="config"?f.l.configFile:f.descriptor.sessionFile
+      const rename=fs.promises.rename.bind(fs.promises)
+      t.mock.method(fs.promises,"rename",async(from,to)=>{
+        if(from===f.l.root) {
+          const value=JSON.parse(fs.readFileSync(target))
+          value.unexpectedMutation=true
+          fs.writeFileSync(target,JSON.stringify(value))
+        }
+        return rename(from,to)
+      })
+      const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+      const result=await controller.context({action:"discard",contextId:f.id},{
+        ...f.controllerOptions,
+        execute:(_node,args)=>f.run(JSON.parse(args[1])),
+      })
+      assert.equal(result.exitCode,1,"post-move evidence changes cannot become confirmed retirement")
+      assert.equal(result.payload.code,"cleanup_unconfirmed")
+      assert.equal(fs.existsSync(f.l.root),false,"do not roll unknown state back into active inventory")
+      const retired=result.payload.contextResources.retiredDirectory
+      assert.equal(typeof retired,"string")
+      assert.equal(JSON.parse(fs.readFileSync(path.join(retired,path.relative(f.l.root,target)))).unexpectedMutation,true)
+    })
+
+  for(const changed of ["native-generation","cli-reappears","metadata","worker-error"])
+    test("signed parent retains active owner when "+changed+" prevents confirmed retirement",async t=>{
+      const f=await signedWorkerFixture(t)
+      if(changed==="worker-error")f.setNativeFailure({code:"native_context_busy",resources:{contextId:f.id,disposition:"unknown"}})
+      const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+      const result=await controller.context({action:"discard",contextId:f.id},{
+        ...f.controllerOptions,
+        async execute(_node,args) {
+          const result=await f.run(JSON.parse(args[1]))
+          if(changed==="native-generation") {
+            const ready=JSON.parse(fs.readFileSync(f.request.selection.nativeReadyFile))
+            ready.generation="33333333-3333-4333-8333-333333333333"
+            f.put(f.request.selection.nativeReadyFile,ready)
+          }
+          if(changed==="cli-reappears")f.setActive(true)
+          if(changed==="metadata") {
+            const value=JSON.parse(fs.readFileSync(f.descriptor.sessionFile))
+            value.timestamp++
+            f.put(f.descriptor.sessionFile,value)
+          }
+          return result
+        },
+      })
+      assert.equal(result.exitCode,1,JSON.stringify(result.payload))
+      assert.equal(fs.existsSync(f.l.root),true,"uncertain owner must stay in active inventory")
+      assert.equal(result.payload.contextResources.retiredDirectory,undefined)
+      assert.ok(fs.existsSync(f.descriptor.sessionFile))
+    })
+
+  test("signed parent reports the reserved artifact after a failed retirement move",async t=>{
+    const f=await signedWorkerFixture(t)
+    const rename=fs.promises.rename.bind(fs.promises)
+    t.mock.method(fs.promises,"rename",(from,to)=>{
+      if(from===f.l.root)throw Object.assign(Error("owned retirement move denied"),{code:"EACCES"})
+      return rename(from,to)
+    })
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const result=await controller.context({action:"discard",contextId:f.id},{
+      ...f.controllerOptions,
+      execute:(_node,args)=>f.run(JSON.parse(args[1])),
+    })
+    assert.equal(result.exitCode,1)
+    assert.equal(result.payload.code,"EACCES")
+    assert.equal(result.payload.contextResources.nativeDisposition.discarded,true)
+    assert.equal(fs.existsSync(f.l.root),true)
+    assert.equal(result.payload.contextResources.retiredDirectory,undefined)
+    const reservation=result.payload.contextResources.retirementArtifactDirectory
+    assert.equal(typeof reservation,"string","an unsuccessful move must not hide its retained reservation")
+    assert.deepEqual(fs.readdirSync(reservation),[])
+  })
+
+  test("signed parent refuses confirmation when the artifact reservation changes during the move",async t=>{
+    const f=await signedWorkerFixture(t)
+    const rename=fs.promises.rename.bind(fs.promises)
+    t.mock.method(fs.promises,"rename",async(from,to)=>{
+      if(from===f.l.root) {
+        const reservation=path.dirname(to)
+        await rename(reservation,reservation+"-changed")
+        await fs.promises.mkdir(reservation,{mode:0o700})
+      }
+      return rename(from,to)
+    })
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const result=await controller.context({action:"discard",contextId:f.id},{
+      ...f.controllerOptions,
+      execute:(_node,args)=>f.run(JSON.parse(args[1])),
+    })
+    assert.equal(result.exitCode,1,"a different artifact parent cannot confirm retirement")
+    assert.equal(result.payload.code,"cleanup_unconfirmed")
+    assert.equal(fs.existsSync(f.l.root),false)
+    assert.ok(fs.existsSync(result.payload.contextResources.retiredDirectory))
+  })
+
+  test("signed parent refuses unknown owner evidence before dispatching discard",async t=>{
+    const f=await signedWorkerFixture(t)
+    const metadata=JSON.parse(fs.readFileSync(f.descriptor.sessionFile))
+    metadata.timestamp=0
+    f.put(f.descriptor.sessionFile,metadata)
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    let executions=0
+    const result=await controller.context({action:"discard",contextId:f.id},{
+      ...f.controllerOptions,execute:()=>{executions++;assert.fail("unknown owner must not dispatch")},
+    })
+    assert.equal(result.exitCode,1)
+    assert.equal(result.payload.code,"cleanup_unconfirmed")
+    assert.equal(executions,0)
+    assert.deepEqual(f.methods,[])
+    assert.equal(fs.existsSync(f.l.root),true)
+  })
+
+  test("signed parent rejects a crossed native retirement result",async t=>{
+    const f=await signedWorkerFixture(t)
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const result=await controller.context({action:"discard",contextId:f.id},{
+      ...f.controllerOptions,
+      execute:()=>({state:"discarded",result:{contextId:"22222222-2222-4222-8222-222222222222",discarded:true}}),
+    })
+    assert.equal(result.exitCode,1)
+    assert.equal(result.payload.code,"cleanup_unconfirmed")
+    assert.equal(fs.existsSync(f.l.root),true)
+    assert.deepEqual(f.methods,[])
+  })
+
+  test("signed parent rechecks CLI absence after artifact reservation",async t=>{
+    const f=await signedWorkerFixture(t)
+    const mkdir=fs.promises.mkdir.bind(fs.promises)
+    t.mock.method(fs.promises,"mkdir",async(dir,...args)=>{
+      const result=await mkdir(dir,...args)
+      if(String(dir).startsWith(path.join(f.request.stateRoot,"artifacts")+path.sep))f.setActive(true)
+      return result
+    })
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const result=await controller.context({action:"discard",contextId:f.id},{
+      ...f.controllerOptions,execute:(_node,args)=>f.run(JSON.parse(args[1])),
+    })
+    assert.equal(result.exitCode,1)
+    assert.equal(result.payload.code,"cleanup_unconfirmed")
+    assert.equal(fs.existsSync(f.l.root),true)
+    assert.equal(typeof result.payload.contextResources.retirementArtifactDirectory,"string")
+    assert.equal(result.payload.contextResources.retiredDirectory,undefined)
+  })
+
+  for(const fault of ["native-generation","active-owner","stat-denied"])
+    test("signed parent refuses post-move "+fault+" uncertainty",async t=>{
+      const f=await signedWorkerFixture(t)
+      const rename=fs.promises.rename.bind(fs.promises),lstat=fs.lstatSync.bind(fs)
+      let moved=false
+      t.mock.method(fs.promises,"rename",async(from,to)=>{
+        const result=await rename(from,to)
+        if(from===f.l.root) {
+          moved=true
+          if(fault==="native-generation") {
+            const ready=JSON.parse(fs.readFileSync(f.request.selection.nativeReadyFile))
+            ready.generation="33333333-3333-4333-8333-333333333333"
+            f.put(f.request.selection.nativeReadyFile,ready)
+          }
+          if(fault==="active-owner")f.put(path.join(f.l.root,"unknown-owner"),"never remove or adopt this")
+        }
+        return result
+      })
+      t.mock.method(fs,"lstatSync",(file,...args)=>{
+        if(moved && file===f.l.root && fault==="stat-denied")
+          throw Object.assign(Error("owned post-move observation denied"),{code:"EACCES"})
+        return lstat(file,...args)
+      })
+      const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+      const result=await controller.context({action:"discard",contextId:f.id},{
+        ...f.controllerOptions,execute:(_node,args)=>f.run(JSON.parse(args[1])),
+      })
+      assert.equal(result.exitCode,1)
+      assert.equal(result.payload.code,fault==="stat-denied"?"EACCES":"cleanup_unconfirmed")
+      assert.ok(fs.existsSync(result.payload.contextResources.retiredDirectory))
+      if(fault==="active-owner")
+        assert.equal(fs.readFileSync(path.join(f.l.root,"unknown-owner"),"utf8"),"never remove or adopt this")
+    })
+
+  test("signed parent rejects malformed worker output before retirement",async t=>{
+    const f=await signedWorkerFixture(t)
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    for(const output of [null,{isError:true,state:"discarded"},{state:"running"}]) {
+      const result=await controller.context({action:"discard",contextId:f.id},{
+        ...f.controllerOptions,execute:()=>output,
+      })
+      assert.equal(result.exitCode,1)
+      assert.equal(result.payload.code,"runner_failed")
+      assert.equal(fs.existsSync(f.l.root),true)
+      assert.equal(result.payload.contextResources.retiredDirectory,undefined)
+    }
+    assert.deepEqual(f.methods,[])
+  })
+
+  test("signed parent serializes same-owner page work and terminal retirement",async t=>{
+    const f=await signedWorkerFixture(t)
+    const native=require(path.join(mcpRoot,"web-native-messaging.cjs"))
+    let release,entered,prepared
+    const held=new Promise(resolve=>{release=resolve})
+    const firstEntered=new Promise(resolve=>{entered=resolve})
+    const secondPrepared=new Promise(resolve=>{prepared=resolve})
+    const privatePath=native.privatePath
+    let preparations=0,executions=0
+    t.mock.method(native,"privatePath",(file,...args)=>{
+      const result=privatePath(file,...args)
+      if(file===f.l.socketDir && ++preparations===2)prepared()
+      return result
+    })
+    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const options={...f.controllerOptions,async execute(_node,args) {
+      executions++
+      if(executions===1){entered();await held}
+      return f.run(JSON.parse(args[1]))
+    }}
+    const first=controller.context({action:"keep",contextId:f.id},options)
+    await firstEntered
+    const second=controller.context({action:"discard",contextId:f.id},options)
+    try {
+      await secondPrepared
+      await new Promise(setImmediate)
+      assert.equal(executions,1,"same owner cannot dispatch while its other operation holds the lock")
+    } finally {release()}
+    const results=await Promise.all([first,second])
+    assert.deepEqual(results.map(result=>result.exitCode),[0,0],JSON.stringify(results))
+    assert.equal(executions,2)
+    assert.equal(fs.existsSync(f.l.root),false)
+  })
+
   for(const invalid of ["ok",{isError:true,discarded:true,closedTabIds:[7],absentTabIds:[7]}])
     test("signed socket error arm is never a stop receipt: "+JSON.stringify(invalid),async t=>{
       const f=await signedWorkerFixture(t)
@@ -1207,19 +1461,24 @@ test("two actual agent handles on one SDK connection keep independent native Cor
     assert.equal(JSON.parse(result.result.result),value)
   }
   assert.deepEqual([...f.groups.values()].map(group=>group.title).sort(),["Agent A: form comparison","Agent B: renewal research"])
-  assert.equal((await call("browser_context",{action:"discard",contextId:a.contextId})).state,"discarded")
+  const retiredA=await call("browser_context",{action:"discard",contextId:a.contextId})
+  assert.equal(retiredA.state,"discarded")
   const peer=await call("browser_command",{contextId:b.contextId,args:["eval",'() => document.querySelector("input").value']})
   assert.equal(JSON.parse(peer.result.result),"agent-b")
   assert.equal((await call("browser_context",{action:"keep",contextId:b.contextId})).state,"running")
-  assert.equal((await call("browser_context",{action:"discard",contextId:b.contextId})).state,"discarded")
-  for(const owner of [a,b]){
+  const retiredB=await call("browser_context",{action:"discard",contextId:b.contextId})
+  assert.equal(retiredB.state,"discarded")
+  for(const [owner,discarded]of [[a,retiredA],[b,retiredB]]){
     const layout=f.inventory.layout(owner.contextId)
+    assert.equal(fs.existsSync(layout.directory),false,"terminal owner leaves active inventory")
+    const directory=discarded.contextResources.retiredDirectory
+    const sessionFile=path.join(directory,path.relative(layout.directory,layout.sessionFile))
     if(process.platform==="win32"){
       const native=require(path.join(mcpRoot,"web-native-messaging.cjs"))
-      native.privatePath(layout.daemonProfilesDir,true)
-      native.readPrivateJson(layout.sessionFile,{anchor:layout.directory})
-    }else assert.equal(fs.statSync(layout.sessionFile).mode&0o077,0,"actual maintained metadata is private")
-    assert.equal(JSON.parse(fs.readFileSync(layout.sessionFile)).deskNativeErrorTransport.contextId,owner.contextId)
+      native.privatePath(path.dirname(sessionFile),true)
+      native.readPrivateJson(sessionFile,{anchor:directory})
+    }else assert.equal(fs.statSync(sessionFile).mode&0o077,0,"retained maintained metadata stays private")
+    assert.equal(JSON.parse(fs.readFileSync(sessionFile)).deskNativeErrorTransport.contextId,owner.contextId)
   }
   assert.deepEqual([...f.tabs.keys()],[1],"manual peer survives both explicit dispositions")
 })
