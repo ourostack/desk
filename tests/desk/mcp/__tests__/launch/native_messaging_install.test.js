@@ -165,6 +165,125 @@ test('native installation is an implemented explicit API, not an updater/continu
   assert.equal(installer.createNativeUpdateVerifier, undefined);
 });
 
+for (const name of ['native-host.mjs', 'native-bootstrap.mjs']) {
+  test(`native source entry ${name} is inert on import and refuses invalid CLI setup without framed stdout`, () => {
+    const entry = new URL(name, mcp);
+    const imported = childProcess.spawnSync(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(entry.href)});`],
+      { encoding: 'utf8', timeout: 5000 });
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.equal(imported.stdout, '');
+    for (const args of [[], [`chrome-extension://${'a'.repeat(32)}/`]]) {
+      const result = childProcess.spawnSync(process.execPath, [fileURLToPath(entry), ...args],
+        { encoding: 'utf8', timeout: 5000 });
+      assert.equal(result.status, args.length ? 1 : 2, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr.trim(), args.length ? 'NATIVE_HOST_FAILED' : 'NATIVE_HOST_REFUSED');
+    }
+  });
+}
+
+test('normal bootstrap can register before browser startup without freezing a browser process generation', async t => {
+  assert.equal(typeof installer.installNativeMessagingBootstrap, 'function',
+    'normal setup needs a source-owned bootstrap, not a live browser PID baked into its immutable capsule');
+  const f = await fixture(t);
+  const got = await installer.installNativeMessagingBootstrap({ env: f.options.env, homeDir: f.options.homeDir });
+  const nativeConfig = JSON.parse(await fs.readFile(path.join(got.runtimeDirectory, 'native-host.json')));
+  assert.deepEqual(Object.keys(nativeConfig).sort(), ['extensionOrigin', 'hostModule', 'runtime']);
+  assert.equal(path.basename(nativeConfig.hostModule), 'native-bootstrap.mjs');
+  const config = JSON.parse(await fs.readFile(path.join(got.runtimeDirectory, 'mcp/bootstrap-config.json')));
+  assert.equal(Object.hasOwn(config, 'expectedBrowser'), false);
+  assert.equal(config.browserOwner, (await readNativeProcess(process.pid)).owner);
+  assert.equal(config.browserExecutable, fsSync.realpathSync(process.execPath));
+  assert.equal(config.profileRoot, path.join(f.userDataDir, 'Default'));
+  await assert.rejects(fs.lstat(path.join(got.runtimeDirectory, 'mcp/provider-config.json')), { code: 'ENOENT' });
+  const binding = {
+    browserStateRoot: got.browserStateRoot, runtimeExecutable: config.runtimeExecutable,
+    browserExecutable: config.browserExecutable, browserOwner: config.browserOwner, channel: config.channel,
+    userDataDir: config.userDataDir, profileDirName: config.profileDirName, pluginDirs: config.pluginDirs, cliDir: config.cliDir,
+  };
+  const distribution = await installer.verifyNativeDistribution();
+  const asset = distribution.native.selectAsset(distribution.mcpRoot, process.platform, process.arch);
+  assert.equal(got.digest, sha(JSON.stringify({ distribution: distribution.distributionDigest, asset: asset.sha256, binding })),
+    'the exact immutable binding excludes the installer and browser process generations');
+  assert.equal(got.continuity, 'unknown', 'registration is not extension enrollment or update continuity');
+});
+
+test('normal bootstrap never accepts a caller browser generation or owner as authority', async t => {
+  assert.equal(typeof installer.installNativeMessagingBootstrap, 'function');
+  const f = await fixture(t);
+  const options = { env: f.options.env, homeDir: f.options.homeDir };
+  for (const extra of [
+    { browserProcessId: process.pid },
+    { expectedBrowser: await readNativeProcess(process.pid) },
+    { browserOwner: 'caller-selected-owner' },
+  ]) {
+    await assert.rejects(installer.installNativeMessagingBootstrap({ ...options, ...extra }),
+      { code: 'NATIVE_INSTALL_OPTIONS_INVALID' });
+  }
+  await assert.rejects(fs.lstat(path.join(f.env.DESK_BROWSER_STATE_DIR, 'native-owned')), { code: 'ENOENT' });
+});
+
+test('same-source bootstrap registration preserves retained state without rewriting its capsule', async t => {
+  assert.equal(typeof installer.installNativeMessagingBootstrap, 'function');
+  const f = await fixture(t);
+  const options = { env: f.options.env, homeDir: f.options.homeDir };
+  const first = await installer.installNativeMessagingBootstrap(options);
+  const files = ['native-host.json', 'capsule.json', 'mcp/bootstrap-config.json', 'mcp/native-bootstrap.mjs', 'mcp/native-host.mjs']
+    .map(file => path.join(first.runtimeDirectory, file))
+    .concat([first.executable, first.registration.file, path.join(first.extensionDirectory, 'background.mjs')]);
+  const before = await Promise.all(files.map(async file => {
+    const stat = await fs.lstat(file, { bigint: true });
+    return { bytes: await fs.readFile(file), ino: stat.ino, mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs };
+  }));
+  const retained = path.join(path.dirname(first.nativeReadyFile), 'unresolved-fixture.json');
+  await put(retained, { kind: 'unknown retained state, not an admission receipt' });
+  const retainedBytes = await fs.readFile(retained);
+  const second = await installer.installNativeMessagingBootstrap(options);
+  assert.equal(second.runtimeDirectory, first.runtimeDirectory);
+  assert.equal(second.continuity, 'unknown');
+  for (const [index, file] of files.entries()) {
+    const stat = await fs.lstat(file, { bigint: true });
+    assert.deepEqual(await fs.readFile(file), before[index].bytes);
+    assert.equal(stat.ino, before[index].ino);
+    assert.equal(stat.mtimeNs, before[index].mtimeNs);
+    assert.equal(stat.ctimeNs, before[index].ctimeNs);
+  }
+  assert.deepEqual(await fs.readFile(retained), retainedBytes);
+});
+
+for (const conflict of ['legacy', 'journal', 'capsule', 'source', 'registration', 'retained-incomplete']) {
+  test(`normal bootstrap preserves and refuses ${conflict} instead of adopting retained state`, async t => {
+    const f = await fixture(t), options = { env: f.env, homeDir: f.homeDir };
+    const first = await (conflict === 'legacy' ? installNativeMessaging(f.options) : installer.installNativeMessagingBootstrap(options));
+    let file, expected;
+    if (conflict === 'journal') {
+      file = path.join(first.browserStateRoot, 'native-owned/extension-update.json');
+      await put(file, { phase: 'unknown' });
+      expected = 'NATIVE_INSTALL_UNRESOLVED';
+    } else if (conflict === 'capsule' || conflict === 'source') {
+      file = conflict === 'capsule' ? path.join(first.runtimeDirectory, 'mcp/bootstrap-config.json')
+        : path.join(first.extensionDirectory, 'background.mjs');
+      await fs.appendFile(file, '\n// unknown retained bytes\n');
+      expected = 'NATIVE_RUNTIME_INTEGRITY';
+    } else if (conflict === 'registration') {
+      file = first.registration.file;
+      await fs.appendFile(file, '\nunknown retained registration\n');
+      expected = 'NATIVE_RUNTIME_INTEGRITY';
+    } else if (conflict === 'retained-incomplete') {
+      file = path.join(path.dirname(first.nativeReadyFile), 'unresolved.json');
+      await put(file, { kind: 'unknown' });
+      await fs.rename(first.registration.file, first.registration.file + '.owned-before');
+      expected = 'NATIVE_INSTALL_UNRESOLVED';
+    } else {
+      file = path.join(first.runtimeDirectory, 'mcp/provider-config.json');
+      expected = 'NATIVE_INSTALL_UNRESOLVED';
+    }
+    const before = await fs.readFile(file);
+    await assert.rejects(installer.installNativeMessagingBootstrap(options), { code: expected });
+    assert.deepEqual(await fs.readFile(file), before);
+  });
+}
+
 async function fixture(t, { channel = 'msedge', location = 'system', wrongExecutable = false, isolatedHome = false } = {}) {
   const handles = new WeakMap(), open = fs.open;
   t.mock.method(fs, 'open', async function (file, ...args) {
@@ -313,9 +432,10 @@ for (const conflict of ['journal', 'source', 'registration', 'runtime', 'capsule
   });
 }
 
-test('native: actual host-OS Go entry loads the real capsule Node entry/config and preserves framing diagnostics', { timeout: process.platform === 'win32' ? 120000 : 30000 }, async t => {
+for (const bootstrap of [false, true])
+test('native: actual host-OS Go entry loads the real capsule Node entry/config and preserves framing diagnostics'+(bootstrap?' (normal bootstrap)':''), { timeout: process.platform === 'win32' ? 120000 : 30000 }, async t => {
   const f = await fixture(t);
-  const got = await installNativeMessaging(f.options);
+  const got = await (bootstrap ? installer.installNativeMessagingBootstrap({ env: f.env, homeDir: f.homeDir }) : installNativeMessaging(f.options));
   const origin = `chrome-extension://${got.extensionId}/`;
   const child = childProcess.spawn(got.executable, [origin], { stdio: ['pipe', 'pipe', 'pipe'], env: f.env });
   const messages = [];

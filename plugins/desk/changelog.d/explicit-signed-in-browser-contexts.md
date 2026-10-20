@@ -9,3 +9,5 @@ Maintained CLI shutdown now keeps its explicit stop acknowledgement ahead of com
 Windows generation-directory and receipt ACL checks share one read-only provider request per verification fence. The private-state policy and full verification boundaries remain intact, with Node file identities bracketing each complete batch.
 
 The native CLI ready encoder preserves its fixed newline when an encoded relay capability happens to share that one-byte prefix. It still quarantines later secret continuations, refuses intervening output writes, and leaves ordinary error/log masking and output deadlines unchanged.
+
+An explicit native bootstrap setup API can register the verified host before the browser starts, without baking a live browser process into the immutable capsule. Each invocation verifies the current native process ancestry and constructs the existing full provider binding in memory. Identical verified setup preserves retained state without rewriting publication surfaces; conflicting source, legacy setup and unresolved update journals still refuse. This registers a host, not an extension, and grants no enrollment or update-continuity authority.

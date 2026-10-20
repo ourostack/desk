@@ -22,7 +22,7 @@ const GO_SOURCES = ['go.mod', 'main.go', 'private_unix.go', 'private_windows.go'
 const EXECUTION_FILES = ['background.mjs', 'context-engine.mjs', 'manifest.json', 'token.html', 'token.mjs', 'vendor/maintained.mjs'];
 const EXTENSION_FILES = [...EXECUTION_FILES, 'source-digest.mjs', 'build.mjs', 'README.md', 'vendor/LICENSE', 'vendor/PROVENANCE.md'].sort();
 const CAPSULE_FILES = [
-  'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
+  'package.json', 'native-host.mjs', 'native-bootstrap.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
   'src/browser/native-update-proof.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
@@ -153,7 +153,7 @@ async function protectFile(file, executable = false) {
   if (process.platform === 'win32') await protectWindowsPaths([{ path: file, kind: 'file', created: true }], { label: naming.label });
   else if (executable) await fs.chmod(file, 0o700);
 }
-async function checkPrivate(file, expected, executable = false, identity) {
+async function checkPrivate(file, expected, executable = false, identity, readOnly = false) {
   await checkedPath(path.dirname(file));
   const before = await fs.lstat(file, { bigint: true });
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n ||
@@ -163,7 +163,12 @@ async function checkPrivate(file, expected, executable = false, identity) {
   const bytes = await fs.readFile(file), after = await fs.lstat(file, { bigint: true });
   if (!bytes.equals(expected) || ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].some(key => before[key] !== after[key]))
     throw failure('NATIVE_RUNTIME_INTEGRITY');
-  if (process.platform === 'win32') await protectWindowsPaths([{ path: file, kind: 'file', created: false }], { label: naming.label });
+  if (process.platform === 'win32') {
+    if (readOnly) require('./web-native-messaging.cjs').privatePaths([
+      { file: path.dirname(file), directory: true }, { file, directory: false },
+    ]);
+    else await protectWindowsPaths([{ path: file, kind: 'file', created: false }], { label: naming.label });
+  }
 }
 async function writeNew(file, bytes) {
   await privateDirectory(path.dirname(file));
@@ -224,7 +229,8 @@ async function registry(location, operation, assertPublication) {
 
 // Ephemeral publication fingerprints, using the same inode/change-time basis
 // as the existing private/ACL helpers. Not a custody store or history proof.
-function publicationFence({ runtimeDirectory, files, executable, assetBytes, extensionDirectory, distribution, stateDir, input }) {
+function publicationFence({ runtimeDirectory, files, executable, assetBytes, extensionDirectory, distribution, stateDir, input,
+  configName = 'provider-config.json', retainedReadOnly = false }) {
   const entries = [
     ...[...files].map(([name, bytes]) => ({ base: runtimeDirectory, name, bytes })),
     { base: runtimeDirectory, name: path.basename(executable), bytes: assetBytes },
@@ -245,7 +251,7 @@ function publicationFence({ runtimeDirectory, files, executable, assetBytes, ext
   const client = require('./web-native-messaging.cjs');
   return () => {
     try {
-      if (sync.readdirSync(stateDir).length) throw failure('NATIVE_INSTALL_UNRESOLVED');
+      if (!retainedReadOnly && sync.readdirSync(stateDir).length) throw failure('NATIVE_INSTALL_UNRESOLVED');
       for (const [directory, pin] of directoryPins) {
         const current = sync.lstatSync(directory, { bigint: true });
         if (!current.isDirectory() || current.isSymbolicLink() || fingerprint(current) !== pin) throw Error();
@@ -256,7 +262,7 @@ function publicationFence({ runtimeDirectory, files, executable, assetBytes, ext
             !sourceBytes(entry.base, entry.name).equals(entry.bytes)) throw Error();
       }
       client.readPrivateJson(path.join(runtimeDirectory, 'native-host.json'), { maxBytes: 16384 });
-      client.readPrivateJson(path.join(runtimeDirectory, 'mcp/provider-config.json'), { maxBytes: 16384 });
+      client.readPrivateJson(path.join(runtimeDirectory, 'mcp', configName), { maxBytes: 16384 });
       if (!sourceBytes(input.browserStateRoot, 'current.json').equals(input.pointerBytes)) throw Error();
     } catch (error) {
       if (error.code === 'NATIVE_INSTALL_UNRESOLVED') throw error;
@@ -265,9 +271,11 @@ function publicationFence({ runtimeDirectory, files, executable, assetBytes, ext
   };
 }
 
-async function normalInputs(options, distribution, readNativeProcess) {
-  if (!object(options) || Object.keys(options).some(key => !['env', 'homeDir', 'browserProcessId'].includes(key)) ||
-      !Number.isSafeInteger(options.browserProcessId) || options.browserProcessId <= 0) throw failure('NATIVE_INSTALL_OPTIONS_INVALID');
+async function normalInputs(options, distribution, readNativeProcess, bootstrapMode = false) {
+  const allowed = bootstrapMode ? ['env', 'homeDir'] : ['env', 'homeDir', 'browserProcessId'];
+  if (!object(options) || Object.keys(options).some(key => !allowed.includes(key)) ||
+      (!bootstrapMode && (!Number.isSafeInteger(options.browserProcessId) || options.browserProcessId <= 0)))
+    throw failure('NATIVE_INSTALL_OPTIONS_INVALID');
   // This is the native account's home, not a later owner-isolated CLI HOME.
   const env = options.env || process.env, homeDir = options.homeDir || os.userInfo().homedir;
   const web = require('./web.cjs'), profile = require('./web-real-profile.cjs'), bootstrap = require('./bootstrap.cjs');
@@ -296,13 +304,16 @@ async function normalInputs(options, distribution, readNativeProcess) {
   const userDataDir = profile.userDataDir(declaration.channel, process.platform, env, homeDir);
   const profileDirName = profile.findProfileDir(path.join(userDataDir, 'Local State'), declaration.domain);
   if (!profileDirName || /^[.]{1,2}$/u.test(profileDirName) || /[\\/\u0000-\u001f\u007f]/u.test(profileDirName)) throw failure('NATIVE_SELECTION_MISMATCH');
-  const expectedBrowser = await readNativeProcess(options.browserProcessId);
+  const observedProcess = await readNativeProcess(bootstrapMode ? process.pid : options.browserProcessId);
   const executable = discovery.channelBrowserSelection(declaration.channel, process.platform, env,
     file => sync.existsSync(file), { nativeHome: homeDir }).executablePath;
-  if (!executable || await fs.realpath(executable) !== expectedBrowser.executable) throw failure('NATIVE_ANCESTRY_MISMATCH');
+  if (!executable) throw failure('NATIVE_ANCESTRY_MISMATCH');
+  const browserExecutable = await fs.realpath(executable);
+  if (!bootstrapMode && browserExecutable !== observedProcess.executable) throw failure('NATIVE_ANCESTRY_MISMATCH');
   const { createNativeOwnerInventory } = await import('./src/browser/native-owner-inventory.mjs');
   createNativeOwnerInventory({ browserStateRoot, cliDir, binding: {} }); // actual maintained module/type boundary, no inventory or CLI probes
-  return { env, homeDir, browserStateRoot, pointerBytes, runtimeExecutable, expectedBrowser,
+  return { env, homeDir, browserStateRoot, pointerBytes, runtimeExecutable,
+    ...(bootstrapMode ? { browserExecutable, browserOwner: observedProcess.owner, installerProcess: observedProcess } : { expectedBrowser: observedProcess }),
     channel: declaration.channel, userDataDir, profileDirName, pluginDirs, cliDir };
 }
 
@@ -325,41 +336,62 @@ export async function prepareNativeExtensionUpdate(options) {
 // Explicit setup API only. No browser command/import calls it. The separate
 // transition preflight above cannot publish/recover an unproved update.
 export async function installNativeMessaging(options) {
+  return installNativeMessagingMode(options, false);
+}
+
+export async function installNativeMessagingBootstrap(options) {
+  return installNativeMessagingMode(options, true);
+}
+
+async function installNativeMessagingMode(options, bootstrapMode) {
   try {
     const distribution = await verifyNativeDistribution();
     const { withBrokerLock } = await import('./src/util/broker-lock.mjs');
     const { readNativeProcess } = await import('./src/browser/native-host.mjs');
-    const input = await normalInputs(options, distribution, readNativeProcess);
+    const input = await normalInputs(options, distribution, readNativeProcess, bootstrapMode);
     const root = path.join(input.browserStateRoot, 'native-owned');
     await assertOutsideGitWorkspace(root, naming);
-    await privateDirectory(root);
+    if (bootstrapMode && await present(root)) {
+      await checkedPath(root);
+      require('./web-native-messaging.cjs').privatePath(root, true);
+    } else await privateDirectory(root);
     return await withBrokerLock(root, async () => {
       if ((await fs.readdir(root)).some(name => !['runtimes', 'extension', 'state', 'host-manifest.json', 'native-extension-update.lock'].includes(name)))
         throw failure('NATIVE_INSTALL_UNRESOLVED');
       if (await present(path.join(root, 'extension-update.json'))) throw failure('NATIVE_INSTALL_UNRESOLVED');
       const stateDir = path.join(root, 'state'), extensionDirectory = path.join(root, 'extension');
       await checkedPath(stateDir); await checkedPath(extensionDirectory); await checkedPath(path.join(root, 'runtimes'));
-      if (await present(stateDir) && (await fs.readdir(stateDir)).length) throw failure('NATIVE_INSTALL_UNRESOLVED');
-      const nativeReadyFile = path.join(stateDir, `native-provider-${hash(input.expectedBrowser.executable + '\0' + path.join(input.userDataDir, input.profileDirName))}.json`);
+      const retainedState = await present(stateDir) && (await fs.readdir(stateDir)).length > 0;
+      if (retainedState && !bootstrapMode) throw failure('NATIVE_INSTALL_UNRESOLVED');
+      const browserExecutable = bootstrapMode ? input.browserExecutable : input.expectedBrowser.executable;
+      const nativeReadyFile = path.join(stateDir, `native-provider-${hash(browserExecutable + '\0' + path.join(input.userDataDir, input.profileDirName))}.json`);
       const asset = distribution.native.selectAsset(distribution.mcpRoot, process.platform, process.arch);
       const assetBytes = sourceBytes(distribution.mcpRoot, path.relative(distribution.mcpRoot, asset.file).split(path.sep).join('/'));
       if (hash(assetBytes) !== asset.sha256) throw failure('NATIVE_RUNTIME_INTEGRITY');
-      const binding = { ...input, env: undefined, homeDir: undefined, pointerBytes: undefined };
+      const binding = bootstrapMode ? {
+        browserStateRoot: input.browserStateRoot, runtimeExecutable: input.runtimeExecutable, browserExecutable,
+        browserOwner: input.browserOwner, channel: input.channel, userDataDir: input.userDataDir,
+        profileDirName: input.profileDirName, pluginDirs: input.pluginDirs, cliDir: input.cliDir,
+      } : { ...input, env: undefined, homeDir: undefined, pointerBytes: undefined };
       const digest = hash(JSON.stringify({ distribution: distribution.distributionDigest, asset: asset.sha256, binding }));
       const runtimeDirectory = path.join(root, 'runtimes', digest);
       const executable = path.join(runtimeDirectory, `desk-browser-messaging${process.platform === 'win32' ? '.exe' : ''}`);
-      const nativeConfig = { runtime: input.runtimeExecutable, hostModule: path.join(runtimeDirectory, 'mcp/native-host.mjs'),
+      const configName = bootstrapMode ? 'bootstrap-config.json' : 'provider-config.json';
+      const nativeConfig = { runtime: input.runtimeExecutable,
+        hostModule: path.join(runtimeDirectory, 'mcp', bootstrapMode ? 'native-bootstrap.mjs' : 'native-host.mjs'),
         extensionOrigin: `chrome-extension://${distribution.extensionId}/` };
       const providerConfig = {
         version: 1, extensionId: distribution.extensionId, extensionOrigin: nativeConfig.extensionOrigin,
         extensionSourceDigest: distribution.extensionSourceDigest, runtimeExecutable: input.runtimeExecutable,
-        entryExecutable: executable, browserExecutable: input.expectedBrowser.executable, expectedBrowser: input.expectedBrowser,
+        entryExecutable: executable, browserExecutable,
+        ...(bootstrapMode ? { browserOwner: input.browserOwner } : { expectedBrowser: input.expectedBrowser }),
         channel: input.channel, userDataDir: input.userDataDir, profileDirName: input.profileDirName,
         profileRoot: path.join(input.userDataDir, input.profileDirName), pluginDirs: input.pluginDirs,
         nativeReadyFile, browserStateRoot: input.browserStateRoot, cliDir: input.cliDir,
       };
       const { validateNativeHostConfig } = await import('./src/browser/native-provider.mjs');
-      validateNativeHostConfig(providerConfig);
+      if (!bootstrapMode) validateNativeHostConfig(providerConfig);
+      const checkExisting = (file, bytes, executable = false) => checkPrivate(file, bytes, executable, undefined, bootstrapMode);
       const registration = registrationLocation({ platform: process.platform, channel: input.channel, userDataRoot: input.userDataDir });
       if (process.platform === 'win32') registration.file = path.join(root, 'host-manifest.json');
       const hostManifest = Buffer.from(JSON.stringify({ name: HOST, description: 'Desk native browser contexts',
@@ -372,9 +404,9 @@ export async function installNativeMessaging(options) {
       }
       if (await present(extensionDirectory)) {
         if (!same(await regularFiles(extensionDirectory), EXTENSION_FILES)) throw failure('NATIVE_EXTENSION_CONFLICT');
-        for (const [name, bytes] of distribution.extension) await checkPrivate(fileAt(extensionDirectory, name), bytes);
+        for (const [name, bytes] of distribution.extension) await checkExisting(fileAt(extensionDirectory, name), bytes);
       }
-      if (await present(registration.file)) await checkPrivate(registration.file, hostManifest);
+      if (await present(registration.file)) await checkExisting(registration.file, hostManifest);
       let registered;
       if (process.platform === 'win32') {
         registered = await registry(registration, 'read');
@@ -382,7 +414,7 @@ export async function installNativeMessaging(options) {
       }
       const files = new Map(distribution.sources);
       files.set('native-host.json', Buffer.from(JSON.stringify(nativeConfig)));
-      files.set('mcp/provider-config.json', Buffer.from(JSON.stringify(providerConfig)));
+      files.set(`mcp/${configName}`, Buffer.from(JSON.stringify(providerConfig)));
       files.set('artifact-manifest.json', distribution.artifactManifest);
       const binaryName = path.basename(executable);
       const inventory = Buffer.from(JSON.stringify({ version: 1, digest, distributionDigest: distribution.distributionDigest,
@@ -390,15 +422,28 @@ export async function installNativeMessaging(options) {
       files.set('capsule.json', inventory);
       if (await present(runtimeDirectory)) {
         if (!same(await regularFiles(runtimeDirectory), [...files.keys(), binaryName].sort())) throw failure('NATIVE_RUNTIME_INTEGRITY');
-        for (const [name, bytes] of files) await checkPrivate(fileAt(runtimeDirectory, name), bytes);
-        await checkPrivate(executable, assetBytes, true);
+        for (const [name, bytes] of files) await checkExisting(fileAt(runtimeDirectory, name), bytes);
+        await checkExisting(executable, assetBytes, true);
         const client = require('./web-native-messaging.cjs');
         client.readPrivateJson(path.join(runtimeDirectory, 'native-host.json'), { maxBytes: 16384 });
-        client.readPrivateJson(path.join(runtimeDirectory, 'mcp/provider-config.json'), { maxBytes: 16384 });
+        client.readPrivateJson(path.join(runtimeDirectory, 'mcp', configName), { maxBytes: 16384 });
       }
       if ((await verifyNativeDistribution()).distributionDigest !== distribution.distributionDigest ||
           !sourceBytes(input.browserStateRoot, 'current.json').equals(input.pointerBytes) ||
-          !same(await readNativeProcess(options.browserProcessId), input.expectedBrowser)) throw failure('NATIVE_INSTALL_INPUT_CHANGED');
+          !same(await readNativeProcess(bootstrapMode ? process.pid : options.browserProcessId),
+            bootstrapMode ? input.installerProcess : input.expectedBrowser)) throw failure('NATIVE_INSTALL_INPUT_CHANGED');
+      const result = { executable, runtimeDirectory, extensionDirectory, extensionId: distribution.extensionId,
+        extensionSourceDigest: distribution.extensionSourceDigest, registration, nativeReadyFile,
+        browserStateRoot: input.browserStateRoot, digest, continuity: 'unknown' };
+      if (bootstrapMode && await present(runtimeDirectory) && await present(extensionDirectory) &&
+          await present(registration.file) && await present(stateDir) &&
+          (process.platform !== 'win32' || registered === registration.file)) {
+        require('./web-native-messaging.cjs').privatePath(stateDir, true);
+        publicationFence({ runtimeDirectory, files, executable, assetBytes, extensionDirectory, distribution, stateDir, input,
+          configName, retainedReadOnly: true })();
+        return result;
+      }
+      if (retainedState) throw failure('NATIVE_INSTALL_UNRESOLVED');
       if (!await present(runtimeDirectory)) {
         await privateDirectory(path.dirname(runtimeDirectory));
         await fs.mkdir(runtimeDirectory, { mode: 0o700 }); // exclusive final reservation; no replacing rename
@@ -410,7 +455,7 @@ export async function installNativeMessaging(options) {
         await checkPrivate(executable, assetBytes, true);
         const client = require('./web-native-messaging.cjs');
         client.readPrivateJson(path.join(runtimeDirectory, 'native-host.json'), { maxBytes: 16384 });
-        client.readPrivateJson(path.join(runtimeDirectory, 'mcp/provider-config.json'), { maxBytes: 16384 });
+        client.readPrivateJson(path.join(runtimeDirectory, 'mcp', configName), { maxBytes: 16384 });
       }
       if (!await present(extensionDirectory)) {
         await fs.mkdir(extensionDirectory, { mode: 0o700 }); // never replace an old source directory
@@ -420,7 +465,7 @@ export async function installNativeMessaging(options) {
       await privateDirectory(stateDir);
       if (!same(await regularFiles(extensionDirectory), EXTENSION_FILES)) throw failure('NATIVE_EXTENSION_CONFLICT');
       for (const [name, bytes] of distribution.extension) await checkPrivate(fileAt(extensionDirectory, name), bytes);
-      const assertPublication = publicationFence({ runtimeDirectory, files, executable, assetBytes, extensionDirectory, distribution, stateDir, input });
+      const assertPublication = publicationFence({ runtimeDirectory, files, executable, assetBytes, extensionDirectory, distribution, stateDir, input, configName });
       assertPublication();
       await publishRegistration(registration.file, hostManifest, assertPublication);
       if (process.platform === 'win32') {
@@ -429,9 +474,7 @@ export async function installNativeMessaging(options) {
       }
       await checkPrivate(registration.file, hostManifest);
       assertPublication();
-      return { executable, runtimeDirectory, extensionDirectory, extensionId: distribution.extensionId,
-        extensionSourceDigest: distribution.extensionSourceDigest, registration, nativeReadyFile,
-        browserStateRoot: input.browserStateRoot, digest, continuity: 'unknown' };
+      return result;
     }, { name: 'native-extension-update' });
   } catch (error) {
     if (typeof error.code === 'string' && /^NATIVE_[A-Z_]+$/u.test(error.code)) throw error;

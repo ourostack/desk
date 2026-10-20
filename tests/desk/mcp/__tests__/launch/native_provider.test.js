@@ -707,6 +707,117 @@ test('client timeouts malformed responses and hostile error text retain only bou
     !JSON.stringify(error).includes(TOKEN));
 });
 
+test('normal bootstrap rebinds immutable setup to each current browser generation without granting update continuity', async t => {
+  const entry = await import(new URL('native-host.mjs', rootUrl));
+  assert.equal(typeof entry.runNativeBootstrapEntry, 'function',
+    'normal native startup must derive its exact current browser rather than retain the installation PID');
+  const f = await fixture(t);
+  await f.provider.close();
+  const host = await import(new URL('src/browser/native-host.mjs', rootUrl));
+  const configFile = await entryConfiguration(f);
+  const originalExpected = structuredClone(f.config.expectedBrowser);
+  const bootstrap = { ...f.config, browserOwner: f.config.expectedBrowser.owner };
+  delete bootstrap.expectedBrowser;
+  await put(configFile, bootstrap);
+  const before = await fs.readFile(configFile);
+  for (const browserPid of [100, 101]) {
+    const current = structuredClone(chain);
+    current[0].pid = process.pid;
+    current[1].parentPid = browserPid;
+    current[2].pid = browserPid;
+    current[2].startIdentity = `browser-generation-${browserPid}`;
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+    const requests = [];
+    const framer = host.createNativeFramer({
+      onMessage(message) {
+        requests.push(message);
+        if (message.method === 'profile.read')
+          stdin.write(host.encodeNativeMessage({ id: message.id, result: {
+            extensionId: EXTENSION, sourceDigest: SOURCE, profileToken: TOKEN,
+          } }));
+      }, onError: assert.fail,
+    });
+    stdout.on('data', bytes => framer.push(bytes));
+    let failure;
+    const running = entry.runNativeBootstrapEntry({
+      stdin, stdout, stderr, origin: f.config.extensionOrigin, configFile,
+      processReader: async pid => structuredClone(current.find(row => row.pid === pid)),
+      providerOptions: { ...f.construction, processReader: undefined },
+    });
+    const completed = running.catch(error => { failure = error; });
+    try {
+      stdin.write(host.encodeNativeMessage(f.construction.ready));
+      let binding;
+      for (let i = 0; i < 100; i++) {
+        if (failure) throw failure;
+        try { binding = JSON.parse(await fs.readFile(f.config.nativeReadyFile, 'utf8')); break; }
+        catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
+        await sleep(5);
+      }
+      assert.ok(binding, 'bootstrap publishes current-generation readiness within the original startup budget');
+      assert.deepEqual(binding.browser, current[2]);
+      let healthy = false;
+      for (let i = 0; i < 100 && !healthy; i++) {
+        if (failure) throw failure;
+        try { healthy = (await f.client.providerRequest(binding.endpoint, 'attest', {})).healthy; }
+        catch (error) { if (error.code !== 'NATIVE_UPDATE_IN_PROGRESS') throw error; }
+        if (!healthy) await sleep(5);
+      }
+      assert.equal(healthy, true);
+      await assert.rejects(f.client.providerRequest(binding.endpoint, 'prepareUpdate', {}), code('NATIVE_CONTINUITY_UNKNOWN'));
+      assert.ok(requests.every(request => request.method === 'profile.read'), 'bootstrap must not issue browser effects');
+    } finally {
+      stdin.end();
+      await completed;
+      stdout.destroy(); stderr.destroy();
+    }
+    if (failure) throw failure;
+    await assert.rejects(fs.lstat(f.config.nativeReadyFile), { code: 'ENOENT' });
+    assert.deepEqual(await fs.readFile(configFile), before, 'runtime rebinding must not rewrite immutable setup');
+  }
+  assert.deepEqual(f.config.expectedBrowser, originalExpected);
+});
+
+for (const fault of ['owner', 'entry', 'runtime', 'browser', 'source', 'extra-field', 'missing-field', 'stale-full-config', 'generation-race']) {
+  test(`normal bootstrap refuses ${fault} before readiness or browser effects`, async t => {
+    const f = await fixture(t);
+    await f.provider.close();
+    const { runNativeBootstrapEntry } = await import(new URL('native-host.mjs', rootUrl));
+    const host = await import(new URL('src/browser/native-host.mjs', rootUrl));
+    const configFile = await entryConfiguration(f);
+    const config = { ...f.config, browserOwner: f.config.expectedBrowser.owner };
+    delete config.expectedBrowser;
+    if (fault === 'owner') config.browserOwner = 'foreign-owner';
+    if (['entry', 'runtime', 'browser'].includes(fault)) config[`${fault}Executable`] = '/foreign/executable';
+    if (fault === 'source') config.extensionSourceDigest = 'd'.repeat(64);
+    if (fault === 'extra-field') config.permission = 'untrusted';
+    if (fault === 'missing-field') delete config.browserOwner;
+    if (fault === 'stale-full-config') config.expectedBrowser = f.config.expectedBrowser;
+    await put(configFile, config);
+    const before = await fs.readFile(configFile), current = structuredClone(chain);
+    current[0].pid = process.pid;
+    let reads = 0;
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough(), messages = [];
+    const framer = host.createNativeFramer({ onMessage: value => messages.push(value), onError: assert.fail });
+    stdout.on('data', bytes => framer.push(bytes));
+    const running = runNativeBootstrapEntry({ stdin, stdout, stderr, origin: f.config.extensionOrigin, configFile,
+      processReader: async pid => {
+        const row = structuredClone(current.find(value => value.pid === pid));
+        if (++reads > 6 && fault === 'generation-race' && pid === current[2].pid) row.startIdentity += ':reused';
+        return row;
+      }, providerOptions: { ...f.construction, processReader: undefined } });
+    const expected = ['extra-field', 'missing-field', 'stale-full-config'].includes(fault) ? 'NATIVE_CONFIG_INVALID'
+      : ['source', 'generation-race'].includes(fault) ? 'NATIVE_PROVIDER_START_FAILED' : 'NATIVE_ANCESTRY_MISMATCH';
+    const refused = assert.rejects(running, code(expected));
+    if (fault === 'source') stdin.write(host.encodeNativeMessage(f.construction.ready));
+    try { await refused; }
+    finally { stdin.destroy(); stdout.destroy(); stderr.destroy(); }
+    assert.ok(messages.every(message => message.event === 'diagnostic'), 'no profile RPC or effect dispatch on invalid ancestry/source');
+    await assert.rejects(fs.lstat(f.config.nativeReadyFile), { code: 'ENOENT' });
+    assert.deepEqual(await fs.readFile(configFile), before);
+  });
+}
+
 test('native entry initialization receives its own profile reply without a frame-chain deadlock', { skip: !actualCli }, async t => {
   const f = await fixture(t);
   await f.provider.close();

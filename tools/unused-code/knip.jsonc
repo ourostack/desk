@@ -95,8 +95,9 @@
         "browser-context-mcp.cjs",
         // prepareRuntime's existing src mirror imports this exact browser-only entry.
         "src/browser/context-mcp.js",
-        // The native Go entry selects this module by its verified absolute path.
+        // The native Go entry selects these modules by their verified absolute paths.
         "native-host.mjs",
+        "native-bootstrap.mjs",
         // Exact helper copied into Core/lib and entered by guarded Core source.
         "web-native-relay.cjs",
         // Exact installed template entered only by guarded native Core/Session.

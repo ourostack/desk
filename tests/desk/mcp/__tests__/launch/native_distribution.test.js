@@ -10,7 +10,7 @@ import { computeSourceDigest } from '../../../../../plugins/desk/browser-extensi
 
 const plugin = fileURLToPath(new URL('../../../../../plugins/desk/', import.meta.url));
 const closure = [
-  'package.json', 'native-host.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
+  'package.json', 'native-host.mjs', 'native-bootstrap.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
   'src/browser/native-update-proof.mjs',
   'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',

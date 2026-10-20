@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import client from './web-native-messaging.cjs';
 import { BrokerError } from './src/util/broker-error.mjs';
-import { runNativeHost, reportNativeDiagnostic, readNativeProcess } from './src/browser/native-host.mjs';
+import { runNativeHost, reportNativeDiagnostic, readNativeProcess, readNativeAncestry } from './src/browser/native-host.mjs';
 import { NativeCommandTransport } from './src/browser/native-transport.mjs';
 import { startNativeProvider, validateNativeHostConfig } from './src/browser/native-provider.mjs';
 import { createNativeUpdateProof } from './src/browser/native-update-proof.mjs';
@@ -14,6 +14,31 @@ export async function runNativeEntry({ stdin, stdout, stderr, origin,
   processReader = readNativeProcess, providerOptions = {} }) {
   if (configFile instanceof URL) configFile = fileURLToPath(configFile);
   const config = validateNativeHostConfig(client.readPrivateJson(configFile, { maxBytes: 16384 }));
+  return runConfiguredNativeEntry({ stdin, stdout, stderr, origin, config, processReader, providerOptions });
+}
+
+export async function runNativeBootstrapEntry({ stdin, stdout, stderr, origin,
+  configFile = new URL('./bootstrap-config.json', import.meta.url),
+  processReader = readNativeProcess, providerOptions = {} }) {
+  if (configFile instanceof URL) configFile = fileURLToPath(configFile);
+  const config = client.readPrivateJson(configFile, { maxBytes: 16384 });
+  const fields = ['version', 'extensionId', 'extensionOrigin', 'extensionSourceDigest', 'runtimeExecutable',
+    'entryExecutable', 'browserExecutable', 'browserOwner', 'channel', 'userDataDir', 'profileDirName',
+    'profileRoot', 'pluginDirs', 'nativeReadyFile', 'browserStateRoot', 'cliDir'];
+  if (!config || typeof config !== 'object' || Array.isArray(config) ||
+      Object.keys(config).some(key => !fields.includes(key)) || fields.some(key => !Object.hasOwn(config, key)) ||
+      typeof config.browserOwner !== 'string' || !config.browserOwner || /[\u0000-\u001f\u007f]/u.test(config.browserOwner))
+    throw new BrokerError('NATIVE_CONFIG_INVALID', 'NATIVE_CONFIG_INVALID');
+  const chain = await readNativeAncestry(process.pid, { processReader });
+  if (chain[0].executable !== config.runtimeExecutable || chain[1].executable !== config.entryExecutable ||
+      chain[2].executable !== config.browserExecutable || chain.some(row => row.owner !== config.browserOwner))
+    throw new BrokerError('NATIVE_ANCESTRY_MISMATCH', 'NATIVE_ANCESTRY_MISMATCH');
+  const { browserOwner, ...selection } = config;
+  const bound = validateNativeHostConfig({ ...selection, expectedBrowser: chain[2] });
+  return runConfiguredNativeEntry({ stdin, stdout, stderr, origin, config: bound, processReader, providerOptions });
+}
+
+async function runConfiguredNativeEntry({ stdin, stdout, stderr, origin, config, processReader, providerOptions }) {
   const proof = createNativeUpdateProof(config);
   let transport, provider, initializing, failure;
   const stopNative = () => transport?.close();
