@@ -653,7 +653,9 @@ async function direct(machine, input={action:"create",label:"Existing profile qu
   return nativeController(machine).context(input,controllerOptions(machine))
 }
 
-for(const invalidSid of [false,true])test("Windows controller wiring consumes actual ACL readback verification and normal redirected roots"+(invalidSid?" (invalid SID refuses)":" (resource model only)"),posixOnly,async()=>{
+for(const scenario of ["normal","invalid SID","unprotected existing artifacts","invalid reservation SID"])
+test("Windows controller wiring consumes actual ACL readback verification and normal redirected roots (resource model only: "+scenario+")",posixOnly,async()=>{
+  const invalidSid=scenario==="invalid SID"
   const fs=require("fs"),m=await realMachine({declare:{browser:{channel:"msedge",profileAccountDomain:"example.test"}}})
   const env={...m.launchOptions.env,LOCALAPPDATA:"Z:\\Policy Redirected",ProgramFiles:"Q:\\Programs"}
   const executable=touch(path.join(m.root,"normal-browser"),"Inert owned executable observation")
@@ -672,18 +674,30 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
   fs.chmodSync(m.state,0o700) // The real POSIX lock must observe private state beneath this Windows ACL resource model.
   const systemRoot=path.join(m.root,"owned-system"),provider=touch(path.join(systemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"),"Never executed")
   env.SystemRoot=systemRoot
-  const acl=await import(pathToFileURL(path.join(mcpRoot,"src/factory/windows-acl.js")).href),batches=[]
+  const acl=await import(pathToFileURL(path.join(mcpRoot,"src/factory/windows-acl.js")).href),batches=[],protectedPaths=new Set()
+  // Only the inventory/CLI observations are modeled; real owner evidence and ACL producer validation remain in use.
+  const owners=new Map(),closed=new Set(),artifacts=path.join(m.state,"artifacts")
+  if(scenario==="unprotected existing artifacts")fs.mkdirSync(artifacts,{mode:0o700})
   const resources={platform:"win32",files,
     importModule:async url=>{
       const actual=await import(url)
+      if(url.endsWith("/native-owner-inventory.mjs"))return{createNativeOwnerInventory:()=>({
+        descriptor:id=>({sessionFile:owners.get(id)}),
+        inspectOwner:async id=>({configured:true,cli:closed.has(id)?"absent":"running",fingerprint:id}),
+      })}
       if(!url.endsWith("/windows-acl.js"))return actual
-      return{...actual,protectWindowsPaths:(paths,options)=>acl.protectWindowsPaths(paths,{...options,env:{SystemRoot:systemRoot},
+      return{...actual,protectWindowsPaths:async(paths,options)=>{
+        const result=await acl.protectWindowsPaths(paths,{...options,env:{SystemRoot:systemRoot},
         runner:async request=>{
           assert.equal(request.executable,provider)
           const paths=JSON.parse(request.payload).paths;batches.push(paths)
           return{code:0,stdout:JSON.stringify({status:"ok",results:paths.map(entry=>({...entry,protected:true,rule_count:1,
-            owner_sid:invalidSid?"not-a-sid":"S-1-5-21-123",owner_reassigned:false}))}),stderr:""}
-        }})}
+            owner_sid:invalidSid||(scenario==="invalid reservation SID"&&path.dirname(entry.path)===artifacts)?
+              "not-a-sid":"S-1-5-21-123",owner_reassigned:false}))}),stderr:""}
+        }})
+        for(const entry of paths)protectedPaths.add(entry.path)
+        return result
+      }}
     }}
   const nativeModule={exports:{}}
   vm.runInNewContext(readFileSync(path.join(mcpRoot,"web-native-messaging.cjs"),"utf8"),{module:nativeModule,__dirname:mcpRoot,Buffer,
@@ -693,6 +707,8 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
       for(const entry of entries){
         assert.ok(existsSync(entry.file),"readonly ACL verification only observes owned paths")
         assert.equal(fs.lstatSync(entry.file).isDirectory(),entry.directory)
+        if(entry.file===artifacts||path.dirname(entry.file)===artifacts)
+          assert.ok(protectedPaths.has(entry.file),"new retirement directories require qualified ACL producer readback")
       }
       return"private"
     }}:require(name.startsWith(".")?path.join(mcpRoot,name):name)})
@@ -712,6 +728,15 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
     assert.equal(options.env.APPDATA,path.join(request.root,"home/AppData/Roaming"))
     assert.equal(options.env.ProgramFiles,undefined)
     assert.equal(options.env.SystemRoot,systemRoot)
+    if(request.operation==="create"){
+      const sessionFile=touch(path.join(request.root,".playwright","owned-model-session.json"),JSON.stringify({contextId:request.contextId}))
+      fs.chmodSync(sessionFile,0o600)
+      owners.set(request.contextId,sessionFile)
+    }
+    if(request.operation==="discard"){
+      closed.add(request.contextId)
+      return{state:"discarded",result:{contextId:request.contextId,discarded:true}}
+    }
     return{state:"running"}
   }})
   const result=await controller.context({action:"create",label:"Redirected Windows owner"},options)
@@ -728,6 +753,35 @@ for(const invalidSid of [false,true])test("Windows controller wiring consumes ac
     assert.equal((await controller.context({action:"keep",contextId:result.payload.contextId},options)).exitCode,0)
     assert.equal(batches.length,count,"existing contexts are verified, not re-protected")
     assert.equal(executions,2)
+    if(scenario!=="normal"){
+      const sessionBytes=readFileSync(owners.get(result.payload.contextId))
+      const discarded=await controller.context({action:"discard",contextId:result.payload.contextId},options)
+      assert.equal(discarded.exitCode,1)
+      if(scenario==="unprotected existing artifacts"){
+        assert.equal(discarded.payload.code,"NATIVE_PRIVATE_PATH_INVALID")
+        assert.deepEqual(fs.readdirSync(artifacts),[],"unknown existing bucket is neither repaired nor used")
+        assert.equal(batches.flat().some(entry=>entry.path===artifacts),false)
+      }else{
+        assert.match(discarded.payload.message,/usable owner SID/)
+        assert.equal(protectedPaths.has(discarded.payload.contextResources.retirementArtifactDirectory),false)
+      }
+      assert.equal(existsSync(result.payload.contextResources.contextDirectory),true)
+      assert.deepEqual(readFileSync(owners.get(result.payload.contextId)),sessionBytes,"failed retirement preserves active owner evidence")
+      return
+    }
+    for(let index=0;index<2;index++){
+      const owner=index===0?result:await controller.context({action:"create",label:"Second redirected Windows owner"},options)
+      assert.equal(owner.exitCode,0,JSON.stringify(owner))
+      const sessionBytes=readFileSync(owners.get(owner.payload.contextId))
+      const discarded=await controller.context({action:"discard",contextId:owner.payload.contextId},options)
+      assert.equal(discarded.exitCode,0,JSON.stringify(discarded))
+      const retained=discarded.payload.contextResources
+      assert.equal(existsSync(owner.payload.contextResources.contextDirectory),false)
+      assert.deepEqual(readFileSync(path.join(retained.retiredDirectory,".playwright","owned-model-session.json")),sessionBytes)
+      assert.ok(protectedPaths.has(retained.retirementArtifactDirectory))
+    }
+    assert.equal(batches.flat().filter(entry=>entry.path===artifacts).length,1,"existing artifact bucket is verified, never re-protected")
+    assert.equal(batches.flat().filter(entry=>path.dirname(entry.path)===artifacts).length,2,"each exclusive retirement reservation is protected")
   }
 })
 

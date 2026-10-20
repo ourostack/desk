@@ -157,6 +157,13 @@ function retirementGuard(request, l, resources) {
         var reservation = path.join(artifacts,"signed-in-"+request.contextId+"-"+common.generateId("signed-in"));
         var destination = path.join(reservation,"owner");
         var artifactIdentity, reservationIdentity;
+        function protectCreatedDirectory(dir, created) {
+          if (process.platform === "win32" && created) {
+            return moduleImport(path.join(__dirname,"src/factory/windows-acl.js")).then(function(acl) {
+              return acl.protectWindowsPaths([{path:dir,kind:"directory",created:true}],{label:naming.label});
+            });
+          }
+        }
         function destinationUnchanged() {
           if (native.fileIdentity(request.stateRoot) !== identities[0] ||
               native.fileIdentity(artifacts) !== artifactIdentity ||
@@ -166,11 +173,16 @@ function retirementGuard(request, l, resources) {
         }
         return protection.assertOutsideGitWorkspace(artifacts,naming).then(function() {
           return protection.ensureOwnerOnlyDirectory(artifacts,process.platform,naming);
+        }).then(function(created) {
+          return protectCreatedDirectory(artifacts,created);
         }).then(function() {
+          native.privatePath(artifacts,true);
           return fs.promises.mkdir(reservation,{mode:448});
         }).then(function() {
           resources.retirementArtifactDirectory = reservation;
           return protection.ensureOwnerOnlyDirectory(reservation,process.platform,naming);
+        }).then(function() {
+          return protectCreatedDirectory(reservation,true);
         }).then(function() {
           native.privatePaths([{file:request.stateRoot,directory:true},{file:artifacts,directory:true},{file:reservation,directory:true}]);
           artifactIdentity = native.fileIdentity(artifacts);
