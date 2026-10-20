@@ -1,3 +1,0 @@
-Desk resolves the canonical task and its actual intake proposal before handing new engineering work to its method adapter. Existing approval, continuation identity, and explicit read-only instructions remain authoritative.
-
-For the qualified Copilot main-agent payload, a passive post-skill context reinforces that same handoff after the known successful brainstorming result. It does not create tasks, classify approval, attest a plugin provider, replay startup, or change permissions. Children, unknown payloads, failed calls, and sessions without an existing Desk binding receive no context; other hosts retain their existing adapter entry.
