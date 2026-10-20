@@ -340,13 +340,24 @@ test("release setup installs both committed dependency sets before running nativ
   ], "the actual release job must establish native dependencies before acceptance, just like the PR dry run")
 })
 
+test("the shared release queue retains pending RC intent without allowing concurrent releases", () => {
+  const { workflow } = releaseWorkflow()
+  // GitHub's queue:max contract (verified 2026-10-20): one running run, up to 100 pending;
+  // FIFO by entry into the waiting group, not dispatch time; excess arrivals are canceled.
+  // Test our emitted workflow configuration, not a mock implementation of GitHub's scheduler.
+  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
+  for (const job of Object.values(workflow.jobs)) {
+    assert.equal(job.concurrency, undefined, "stage-specific/job-level groups must not bypass the shared workflow lock")
+  }
+})
+
 test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
   const { text, workflow } = releaseWorkflow()
   assert.deepEqual(workflow.on.push, { branches: ["main"], paths: ["plugins/desk/changelog.d/**"] })
   assert.ok("workflow_dispatch" in workflow.on)
   assert.match(workflow.on.schedule[0].cron, /\S/u)
   assert.deepEqual(workflow.permissions, {})
-  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false })
+  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
   assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
   assert.match(build, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
@@ -468,6 +479,40 @@ ${mark.failOn ? `case "$*" in *"${mark.failOn}"*) exit 1 ;; esac` : ""}
   return { result, calls }
 }
 const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["spoof", "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"], ["bot", "Not a release (#15)\n\nRelease Desk 3.2.0-alpha.8 only in the body"], ["bot", "Release Desk 3.2.0-alpha.1; rm -rf"], ["dev", "unreleased (#14)"]]
+
+test("actual workflow catch-up marks RC-carried PRs with their first bot release and rejects spoofed or inexact RC subjects", () => {
+  const mark = {
+    history: [
+      ["dev", "carried by first RC (#20)"],
+      ["spoof", "Release Desk 3.2.0-rc.90"],
+      ["bot", "Release Desk 3.2.0-rc.91 trailing text"],
+      ["bot", "Not a release\n\nRelease Desk 3.2.0-rc.92"],
+      ["bot", "Release Desk 3.2.0-rc.1"],
+      ["dev", "carried by next RC (#21)"],
+      ["bot", "Release Desk 3.2.0-rc.2"],
+      ["dev", "not released (#22)"],
+      ["spoof", "Release Desk 3.2.0-rc.93"],
+      ["bot", "Release Desk 3.2.0-rc.94 trailing text"],
+      ["bot", "Not another release\n\nRelease Desk 3.2.0-rc.95"],
+    ],
+    unlabeled: [[20, "carried by first RC (#20)"], [21, "carried by next RC (#21)"], [22, "not released (#22)"]],
+  }
+  const { result, calls } = markingRun({ mark })
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  const lines = calls.trim().split("\n")
+  for (const [number, version] of [[20, "3.2.0-rc.1"], [21, "3.2.0-rc.2"]]) {
+    assert.ok(lines.includes(`api --method POST repos/o/r/issues/${number}/comments --field body=Released in Desk ${version}`), calls)
+    assert.ok(lines.includes(`api --method POST repos/o/r/issues/${number}/labels --raw-field labels[]=released`), calls)
+  }
+  assert.doesNotMatch(calls, /issues\/22\/(comments|labels)/u)
+  assert.doesNotMatch(calls, /body=Released in Desk 3\.2\.0-rc\.9[0-5]/u)
+  const repeated = markingRun({ mark, commentsOn: { 20: "Released in Desk 3.2.0-rc.1", 21: "Released in Desk 3.2.0-rc.2" } })
+  assert.equal(repeated.result.status, 0, repeated.result.stdout + repeated.result.stderr)
+  assert.doesNotMatch(repeated.calls, /--method POST repos\/o\/r\/issues\/2[01]\/comments/u)
+  for (const number of [20, 21]) {
+    assert.ok(repeated.calls.includes(`api --method POST repos/o/r/issues/${number}/labels --raw-field labels[]=released`), repeated.calls)
+  }
+})
 
 test("marking labels each unlabeled released pull request with the first release after it, and skips unreleased ones", () => {
   const { result, calls } = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"], [12, "third (#12)"], [14, "unreleased (#14)"], [13, "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"]] } })
