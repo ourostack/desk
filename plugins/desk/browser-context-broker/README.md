@@ -15,6 +15,8 @@ The host overlay owns the runtime contract:
 
 Without an overlay, the same copy and `npm ci --omit=dev --ignore-scripts` steps work by hand; `desk:cdp-headed-browser` lists the exact commands. The broker's `status` then runs, and `acquire` still needs a provider.
 
+The shared error, lock and private-state primitives live inside this package, so a POSIX package copy does not need the MCP sibling to load them. MCP consumers re-export the same implementations rather than maintaining copies. Windows native ACL and process-start operations still use the existing helpers in the complete plugin's sibling `mcp/` directory; a broker-only Windows copy does not supply those helpers.
+
 The overlay also supplies the private provider, declarations, state directory, and readiness-file location. The generic Desk package does not claim those host-specific resources or mutate the operator's `PATH`.
 
 ## CDP transport bounds

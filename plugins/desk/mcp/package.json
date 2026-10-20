@@ -17,6 +17,8 @@
     "runtime:deps-pack:verify": "node scripts/verify-runtime-deps-pack.js",
     "runtime:support-matrix:generate": "node scripts/generate-runtime-support-matrix.js",
     "runtime:support-matrix:verify": "node scripts/verify-runtime-support-matrix.js",
+    "browser:messaging-assets:build": "node scripts/build-browser-messaging-assets.cjs",
+    "browser:messaging-assets:verify": "node scripts/build-browser-messaging-assets.cjs --verify",
     "artifact:vector-pack:build": "node scripts/build-vector-pack.js",
     "artifact:snapshot:build": "node scripts/build-snapshot.js",
     "artifact:snapshot:verify": "node scripts/verify-snapshot.js",

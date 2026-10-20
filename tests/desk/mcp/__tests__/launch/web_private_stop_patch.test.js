@@ -10,13 +10,19 @@ import { mcpRoot } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
 const { patchSource } = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
-const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const maintainedFixture = require("./fixtures/playwright-native-error-transport.cjs")
+const input = maintainedFixture.read()
+const maintained = readFileSync(path.resolve(maintainedFixture.cliDirectory(), "../../coreBundle.js"), "utf8")
+const stock = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + input.core
+const graceful = region(maintained, "async function gracefullyCloseAll(", "\nfunction exitHandler(").trimEnd()
 const sha = text => createHash("sha256").update(text).digest("hex")
 const flush = () => new Promise(resolve => setImmediate(resolve))
+assert.equal(sha(maintained), input.coreSha256, "cleanup helpers come from the same hash-qualified maintained input")
 
 function region(source, start, end) {
   const first = source.indexOf(start)
   assert.notEqual(first, -1)
+  assert.equal(source.indexOf(start, first + start.length), -1)
   const last = end ? source.indexOf(end, first) : source.length
   assert.notEqual(last, -1)
   return source.slice(first, last)
@@ -27,7 +33,7 @@ test("stop scheduling fixture retains the audited daemon, monitor and exit imple
     "4825ab691d6a37ee02320a678aa16dd443eca90bffbca6184ecb2b98f4664507")
   assert.equal(sha(region(stock, "async function startCliDaemonServer(", "\nasync function saveSessionFile(")),
     "b4b6608dc24505cc41c1ede77e96ae00426cd5ed52dc85652f0b933a399b4543")
-  assert.equal(sha(region(stock, "async function gracefullyCloseAll(").trimEnd()),
+  assert.equal(sha(graceful),
     "37aaa3ea12b6b1a1344cc9d7dd68b7e2d019c2e9f9fe0388cba4619ea548cf1d")
 })
 
@@ -81,7 +87,18 @@ async function daemon(exitOnClose = true) {
     async mkdir() {},
     async writeFile() {},
   }
-  const api = runInNewContext(`${patchSource(stock)}\n({ startCliDaemonServer })`, {
+  // Qualify the complete composed V4 source first, then execute its exact
+  // custody regions at the same controlled resource boundary as the old test.
+  // The maintained error fixture deliberately nests these declarations; do not
+  // invoke its unrelated backend/program initializers to expose the daemon.
+  const patched = patchSource(stock)
+  const custody = [
+    region(patched, "async function monitorSocketPath(", "\nasync function startCliDaemonServer("),
+    region(patched, "async function startCliDaemonServer(", "\nasync function saveSessionFile("),
+    region(maintained, "async function saveSessionFile(", "\nfunction formatResult("),
+    graceful,
+  ].join("\n")
+  const api = runInNewContext(`${custody}\n({ startCliDaemonServer })`, {
     process: { platform: "linux", env: {}, exit(code) { events.push("exit:" + code) } },
     setTimeout(callback, delay) {
       const timer = { callback, delay, unref() {} }
