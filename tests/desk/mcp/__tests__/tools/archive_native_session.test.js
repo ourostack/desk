@@ -805,7 +805,7 @@ test("managed-only: actual captured PowerShell parses and defines its helpers be
     "Read-Entry", "Valid-Entry", "Same-Entry"].map(name => ({ name, scriptScoped: true, beforeSetup: true })))
 })
 
-test("managed-only: fixed metadata reports preserve invalid, duplicate and misplaced AST facts without general serialization", async t => {
+test("managed-only: fixed metadata reports preserve invalid, duplicate and misplaced AST facts without general serialization", async () => {
   const names = ["Define-Native", "Build-Layout", "Build-RenameBuffer", "Refuse", "Close-Entry",
     "Read-Entry", "Valid-Entry", "Same-Entry"]
   const misplaced = "try {} catch {}\n" + names.map(name => `function ${name} {}`).join("\n")
@@ -824,7 +824,6 @@ ${body}
 `
   const parsed = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     { input: await capturedProgram(), encoding: "utf8", env: process.env, timeout: 5000 })
-  if (process.platform !== "win32" && parsed.error?.code === "ENOENT") return t.skip("PowerShell parser unavailable; not native Windows proof")
   assert.equal(parsed.status, 0, parsed.error?.code ?? parsed.stderr)
   assert.equal(parsed.error?.code, undefined)
   assert.equal(parsed.signal, null)
