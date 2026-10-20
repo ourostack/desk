@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -30,45 +32,48 @@ func fixture(t *testing.T, source string) config {
 	script := filepath.Join(dir, "host.cjs")
 	identity := filepath.Join(dir, "identity.json")
 	q, _ := json.Marshal(identity)
-	// The selected fixture records its exact generation before test work. The
-	// synchronous native-entry Run reaps this exact child before returning.
-	helper, err := filepath.Abs("../../src/readiness/process-start.js")
-	if err != nil {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		t.Fatal(err)
 	}
-	qh, _ := json.Marshal(filepath.ToSlash(helper))
-	wrapper := `let phase="load-start-reader";(async()=>{
-const {pathToFileURL}=require("node:url");
-const {readProcessStart}=await import(pathToFileURL(` + string(qh) + `));
-phase="read-start";
-const start=await readProcessStart(process.pid);
-if(!start) throw Object.assign(Error("fixture start identity unavailable"),{code:"OWNED_FIXTURE_START_UNAVAILABLE"});
-phase="write-receipt";
-require("node:fs").writeFileSync(` + string(q) + `, JSON.stringify({pid:process.pid,start}), {mode:0o600});
-phase="exercise";
-` + source + `
-})().catch(error=>{
+	expectedNonce := hex.EncodeToString(nonce[:])
+	qn, _ := json.Marshal(expectedNonce)
+	// Cmd.Run waits on its actual child handle. The receipt observes that
+	// child's exit callback; its nonce is correlation, not an OS start identity.
+	wrapper := `let phase="write-receipt";function failed(error){
 const code=typeof error.code==="string"&&/^[A-Z0-9_]+$/.test(error.code)?error.code:"UNKNOWN";
 process.stderr.write("OWNED_NATIVE_FIXTURE_FAILED "+phase+" "+code+"\n");process.exitCode=90;
-});`
+}(async()=>{
+const fs=require("node:fs"),receipt={pid:process.pid,nonce:` + string(qn) + `};
+process.once("exit",code=>{
+phase="write-exit-receipt";
+try{fs.writeFileSync(` + string(q) + `,JSON.stringify({...receipt,exitCode:code}),{mode:0o600});}
+catch(error){failed(error);}
+});
+fs.writeFileSync(` + string(q) + `,JSON.stringify(receipt),{mode:0o600});
+phase="exercise";
+` + source + `
+})().catch(failed);`
 	if err := os.WriteFile(script, []byte(wrapper), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		data, err := os.ReadFile(identity)
 		if os.IsNotExist(err) {
-			t.Log("fixture generation receipt absent; run result determines whether dispatch was refused")
+			t.Log("fixture receipt absent; run result determines whether dispatch was refused")
 			return
 		}
 		var observed struct {
-			PID   int    `json:"pid"`
-			Start string `json:"start"`
+			PID      int    `json:"pid"`
+			Nonce    string `json:"nonce"`
+			ExitCode *int   `json:"exitCode"`
 		}
-		if err != nil || json.Unmarshal(data, &observed) != nil || observed.PID <= 0 || observed.Start == "" {
-			t.Error("fixture generation evidence unavailable")
+		if err != nil || json.Unmarshal(data, &observed) != nil || observed.PID <= 0 ||
+			observed.Nonce != expectedNonce || observed.ExitCode == nil {
+			t.Error("fixture-correlated exit observation unavailable")
 			return
 		}
-		t.Logf("fixture pid=%d start=%s; exact synchronous child wait completed", observed.PID, observed.Start)
+		t.Logf("fixture pid=%d exit callback=%d; synchronous Cmd.Run child wait completed", observed.PID, *observed.ExitCode)
 	})
 	return config{Runtime: node, HostModule: script, ExtensionOrigin: allowedOrigin}
 }
@@ -201,9 +206,6 @@ func TestInheritedRuntimeInjectionIsNotForwarded(t *testing.T) {
 }
 
 func TestFilteringOnlyInjectionVariablesDoesNotRestoreInheritedEnvironment(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("owned generation fixture needs SystemRoot for the Windows start reader")
-	}
 	c := fixture(t, `if(process.env.NODE_OPTIONS||process.env.NODE_PATH)process.exit(8);`)
 	previous := os.Environ()
 	t.Cleanup(func() {

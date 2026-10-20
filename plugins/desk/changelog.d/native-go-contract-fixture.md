@@ -1,0 +1,1 @@
+Native-entry contract tests no longer require an unrelated JavaScript process-start reader before exercising Go framing and origin checks. Fixture-correlated Node exit observations complement the actual synchronous Go child-handle wait, and the filtered-empty-environment test now runs on Windows too. Production identity verification, native assets and time bounds are unchanged.
