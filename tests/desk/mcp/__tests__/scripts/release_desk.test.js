@@ -39,13 +39,13 @@ function fixture(t, version = currentDesk) {
   return root
 }
 
-function snapshot(root) {
+function snapshot(root, relativePaths = path) {
   const files = {}
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) walk(full)
-      else files[path.relative(root, full)] = readFileSync(full, "utf8")
+      else files[relativePaths.relative(root, full).split(relativePaths.sep).join("/")] = readFileSync(full, "utf8")
     }
   }
   walk(root)
@@ -53,6 +53,19 @@ function snapshot(root) {
 }
 
 const fragment = (root, name, text) => writeFileSync(path.join(root, fragmentDir, name), text)
+
+test("snapshot preservation lookups use repository-relative keys for POSIX and Windows paths", (t) => {
+  const root = fixture(t)
+  const marketplace = readFileSync(path.join(root, ".claude-plugin/marketplace.json"), "utf8")
+  const mcp = readFileSync(path.join(root, "plugins/desk/mcp/package.json"), "utf8")
+  for (const relativePaths of [path.posix, path.win32]) {
+    const files = snapshot(root, relativePaths)
+    assert.equal(files[".claude-plugin/marketplace.json"], marketplace)
+    assert.equal(files["plugins/desk/mcp/package.json"], mcp)
+    assert.equal(files["plugins/desk/changelog.d/README.md"], "How to write a fragment.\n")
+    assert.ok(Object.keys(files).every((key) => !key.includes("\\")), "snapshot keys must use repository separators")
+  }
+})
 
 test("the next alpha follows the current one and only alphas are released", () => {
   assert.equal(release.nextAlpha("3.2.0-alpha.9"), "3.2.0-alpha.10")
