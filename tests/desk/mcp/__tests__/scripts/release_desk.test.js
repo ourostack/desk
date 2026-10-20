@@ -564,14 +564,32 @@ test("marking is safe to repeat: an existing comment is not repeated, and nothin
   assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
-test("pull request CI dry-runs the release through the same script, and the CI gate waits for it", () => {
+test("pull request CI dry-runs auto and RC through the full shared helper, and the CI gate waits for both", () => {
   const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
   const job = tests.jobs["release-dry-run"]
-  assert.equal(job.name, "Release dry run")
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc"] } })
+  assert.equal(job.name, "Release dry run (${{ matrix.stage }})")
+  assert.equal(job["timeout-minutes"], 15)
+  assert.deepEqual(job.permissions, { contents: "read" })
   assert.equal(job["continue-on-error"], undefined)
   assert.equal(job.if, undefined)
-  assert.match(stepNamed(job, "Build and check the release without keeping it").run, /^scripts\/build-and-check-release\.sh --dry-run$/u)
-  assert.ok(tests.jobs["ci-gate"].needs.includes("release-dry-run"))
+  const step = stepNamed(job, "Build and check the release without keeping it")
+  assert.equal(step.env.RELEASE_STAGE, "${{ matrix.stage }}")
+  for (const stage of job.strategy.matrix.stage) {
+    // Capture the real workflow shell command's arguments only; the destructive full helper runs in CI, not here.
+    const result = spawnSync("bash", ["-c", `scripts/build-and-check-release.sh() { printf '%s\\n' "$@"; }\n${step.run}`], {
+      encoding: "utf8", env: { ...bareEnv, RELEASE_STAGE: stage },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(result.stdout.trim().split("\n"), ["--dry-run", "--stage", stage])
+  }
+  assert.deepEqual(tests.jobs["ci-gate"].needs, [
+    "browser-lifecycle-install", "private-browser-lifecycle", "desk-mcp-coverage-shards",
+    "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
+    "desk-native-windows", "unused-code",
+  ])
+  assert.equal(tests.jobs["ci-gate"].name, "CI gate")
+  assert.equal(tests.jobs["ci-gate"].if, "${{ always() }}")
   const release = stepNamed(releaseWorkflow().workflow.jobs.build, "Build and check the release").run
   assert.match(release, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
   assert.doesNotMatch(release, /--dry-run/u)
