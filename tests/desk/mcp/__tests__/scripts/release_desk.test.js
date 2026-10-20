@@ -59,7 +59,12 @@ test("snapshot preservation lookups use repository-relative keys for POSIX and W
   const marketplace = readFileSync(path.join(root, ".claude-plugin/marketplace.json"), "utf8")
   const mcp = readFileSync(path.join(root, "plugins/desk/mcp/package.json"), "utf8")
   for (const relativePaths of [path.posix, path.win32]) {
-    const files = snapshot(root, relativePaths)
+    // Translate the actual fixture paths too: POSIX relative() must not receive a Windows-native spelling.
+    const spelling = (file) => file.split(path.sep).join(relativePaths.sep)
+    const files = snapshot(root, {
+      sep: relativePaths.sep,
+      relative: (from, to) => relativePaths.relative(spelling(from), spelling(to)),
+    })
     assert.equal(files[".claude-plugin/marketplace.json"], marketplace)
     assert.equal(files["plugins/desk/mcp/package.json"], mcp)
     assert.equal(files["plugins/desk/changelog.d/README.md"], "How to write a fragment.\n")
