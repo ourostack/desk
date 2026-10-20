@@ -225,6 +225,7 @@ test("desk_doctor scopes organization findings to the caller's own crew subtree"
     writeCard(root, "desks/alice/inbox/track.md", { schema_version: 1, title: "inbox", status: "active" })
 
     // The caller's own (clean) desk.
+    const fresh = new Date().toISOString()
     writeCard(root, "desks/bob/billing-disputes/track.md", {
       schema_version: 1,
       title: "billing-disputes",
@@ -235,8 +236,8 @@ test("desk_doctor scopes organization findings to the caller's own crew subtree"
       schema_version: 1,
       title: "refund-flow-cleanup",
       status: "processing",
-      created: "2026-09-20T00:00:00Z",
-      updated: "2026-09-20T00:00:00Z",
+      created: fresh,
+      updated: fresh,
       track: "billing-disputes",
     })
 

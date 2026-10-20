@@ -268,11 +268,15 @@ jobs:
   # (scripts/build-and-check-release.sh, shared with desk-release.yml), then discards it. A pull request the release would
   # reject, or whose release tests run nothing, fails here instead of on main after the merge.
   release-dry-run:
-    name: Release dry run
+    name: Release dry run (${{ matrix.stage }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [auto, rc]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -297,7 +301,9 @@ jobs:
         run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
 
       - name: Build and check the release without keeping it
-        run: scripts/build-and-check-release.sh --dry-run
+        env:
+          RELEASE_STAGE: ${{ matrix.stage }}
+        run: scripts/build-and-check-release.sh --dry-run --stage "$RELEASE_STAGE"
 
   # Unused code cannot accumulate: knip fails the pull request on a file no entry point reaches, an export nothing imports, an unused
   # dependency or a duplicate export. Its entry points and every exception are in tools/unused-code/knip.jsonc, each with its reason.

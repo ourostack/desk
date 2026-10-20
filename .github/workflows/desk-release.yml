@@ -2,7 +2,7 @@ name: Desk release
 
 # Releases Desk from the changelog fragments merged pull requests leave in plugins/desk/changelog.d/. Pull requests
 # never bump Desk's version or edit the head of its changelog, so they do not conflict with each other; this workflow
-# takes the next alpha on every release surface, folds the pending fragments into one changelog entry and commits the
+# follows the current alpha/RC line on every release surface, folds pending fragments into one changelog entry and commits the
 # release straight to main (scripts/release-desk.cjs). Runs one at a time; a run that finds no fragment, because an
 # earlier run already released them, does nothing.
 #
@@ -32,6 +32,13 @@ on:
       - "plugins/desk/changelog.d/**"
   # The Superpowers refresh merges with the workflow token, which starts no push-triggered run, so it dispatches this.
   workflow_dispatch:
+    inputs:
+      stage:
+        description: "Release stage (auto follows the current line; rc enters or continues RC)"
+        type: choice
+        options: [auto, rc]
+        default: auto
+        required: true
   # A failed release leaves its fragments pending on main. The daily run releases whatever is still pending, so a fix
   # merged without a fragment, or a transient failure, does not strand them until the next fragment merge.
   schedule:
@@ -42,6 +49,9 @@ permissions: {}
 concurrency:
   group: desk-release
   cancel-in-progress: false
+  # Preserve pending RC/handoff intent when later auto runs arrive: one running, up to 100 waiting.
+  # GitHub queue:max orders entry into the waiting group, not dispatch time; excess arrivals are canceled.
+  queue: max
 
 jobs:
   build:
@@ -87,15 +97,17 @@ jobs:
       # release that would fail fails its pull request first.
       - name: Build and check the release
         id: release
+        env:
+          RELEASE_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}
         run: |
           set -euo pipefail
           base="$(git rev-parse HEAD)"
-          RELEASE_OUTPUT="$GITHUB_OUTPUT" RELEASE_RUN_URL="$RUN_URL" scripts/build-and-check-release.sh
+          RELEASE_OUTPUT="$GITHUB_OUTPUT" RELEASE_RUN_URL="$RUN_URL" scripts/build-and-check-release.sh --stage "$RELEASE_STAGE"
           if grep -qx 'released=true' "$GITHUB_OUTPUT"; then
             mkdir -p "$RUNNER_TEMP/desk-release"
             git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
           else
-            echo "No changelog fragment is pending; nothing to release." >> "$GITHUB_STEP_SUMMARY"
+            echo "No changelog fragment or stage transition is pending; nothing to release." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Hand the checked release commit to the push job
@@ -156,8 +168,10 @@ jobs:
           SHA: ${{ needs.build.outputs.sha }}
           BASE: ${{ needs.build.outputs.base }}
           SUMMARY: ${{ needs.build.outputs.summary }}
+          RELEASE_STAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}
         run: |
           set -euo pipefail
+          case "$RELEASE_STAGE" in auto|rc) ;; *) echo "::error::Unsupported release stage."; exit 1 ;; esac
           key="$RUNNER_TEMP/release-deploy-key"
           trap 'rm -f "$key"' EXIT
           [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::The build job handed over no valid commit."; exit 1; }
@@ -165,7 +179,7 @@ jobs:
           [ "$(git rev-parse refs/desk-release/checked)" = "$SHA" ] || { echo "::error::The release bundle does not hold the checked commit $SHA."; exit 1; }
           [ "$(git rev-list --parents -n 1 "$SHA")" = "$SHA $BASE" ] || { echo "::error::The release commit $SHA is not a single commit on $BASE."; exit 1; }
           if [ "$(git rev-parse HEAD)" != "$BASE" ]; then
-            gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main
+            gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main -f stage="$RELEASE_STAGE"
             echo "handed_off=true" >> "$GITHUB_OUTPUT"
             echo "main moved while this release was checked, so it was not pushed; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -196,7 +210,7 @@ jobs:
           # --porcelain prints one stable status line per ref: "!", the refspec, then "[rejected] (fetch first)" or
           # "[rejected] (non-fast-forward)" when main moved after the check above.
           if printf '%s\n' "$result" | grep -qE $'^!\t[0-9a-f]{40}:refs/heads/main\t\\[rejected\\] \\((fetch first|non-fast-forward)\\)$'; then
-            gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main
+            gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main -f stage="$RELEASE_STAGE"
             echo "handed_off=true" >> "$GITHUB_OUTPUT"
             echo "main moved while this release was pushed, so the push was refused; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -246,7 +260,7 @@ jobs:
             # Carried only when a release commit follows its merge commit on main. A release commit is the workflow's own: the bot's
             # exact author email, and a subject that is exactly "Release Desk <version>".
             git merge-base --is-ancestor "$commit" "$head" 2>/dev/null || continue
-            subject="$(git log --reverse --ancestry-path --format=%s --extended-regexp --author='^github-actions\[bot\] <41898282\+github-actions\[bot\]@users\.noreply\.github\.com>$' --grep='^Release Desk [0-9]' "$commit..$head" | grep -E -m 1 '^Release Desk [0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+)?$' || true)"
+            subject="$(git log --reverse --ancestry-path --format=%s --extended-regexp --author='^github-actions\[bot\] <41898282\+github-actions\[bot\]@users\.noreply\.github\.com>$' --grep='^Release Desk [0-9]' "$commit..$head" | grep -E -m 1 '^Release Desk [0-9]+\.[0-9]+\.[0-9]+(-(alpha|rc)\.[0-9]+)?$' || true)"
             [ -n "$subject" ] || continue
             version="${subject#Release Desk }"
             if [ "$created" = false ]; then
