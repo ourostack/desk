@@ -4,7 +4,7 @@
 // Releases Desk from the changelog fragments that merged pull requests left on main. A pull request that changes
 // Desk adds one fragment under plugins/desk/changelog.d/ and never touches a version surface, so parallel pull
 // requests no longer conflict on the changelog head or on the next free alpha. After a merge, the release workflow
-// runs this script on main: it takes the next alpha on every release surface, folds every pending fragment into one
+// runs this script on main: it follows the alpha/RC line on every release surface, folds every pending fragment into one
 // changelog entry, removes the fragments, and the workflow commits the result back to main. Every merged change
 // therefore still ships as a new version.
 
@@ -51,6 +51,7 @@ function replaceVersion(root, files, from, to) {
   const rewritten = files.map((file) => {
     const target = path.join(root, file);
     const text = fs.readFileSync(target, "utf8");
+    if (file.endsWith(".json")) JSON.parse(text);
     const next = text.replace(versionToken(from), to);
     if (next === text) throw new Error(`${file} does not name version ${from}; the release surface list is stale`);
     return [target, next];
@@ -62,6 +63,19 @@ function nextAlpha(version) {
   const match = /^(\d+\.\d+\.\d+-alpha\.)(\d+)$/u.exec(version);
   if (!match) throw new Error(`Desk version ${version} is not an alpha release`);
   return `${match[1]}${Number(match[2]) + 1}`;
+}
+
+function validateStage(stage) {
+  if (stage !== "auto" && stage !== "rc") throw new Error(`unsupported release stage ${stage}; use auto or rc`);
+}
+
+function nextReleaseVersion(currentVersion, stage = "auto") {
+  validateStage(stage);
+  const number = "(?:0|[1-9]\\d*)";
+  const match = new RegExp(`^(${number}\\.${number}\\.${number})-(alpha|rc)\\.(${number})$`, "u").exec(currentVersion);
+  if (!match) throw new Error(`Desk version ${currentVersion} is not a supported alpha or RC release`);
+  if (stage === "rc" && match[2] === "alpha") return `${match[1]}-rc.1`;
+  return `${match[1]}-${match[2]}.${BigInt(match[3]) + 1n}`;
 }
 
 function readJson(root, file) {
@@ -96,10 +110,14 @@ function fragmentProblem(root, file, fragmentDir = FRAGMENT_DIR) {
   return null;
 }
 
-function releaseDesk({ root, date }) {
+function releaseDesk({ root, date, stage = "auto" }) {
+  validateStage(stage);
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(date)) throw new Error(`the release date must be YYYY-MM-DD: ${date}`);
+  const from = readJson(root, DESK_MANIFEST).version;
+  const to = nextReleaseVersion(from, stage);
   const fragments = pendingFragments(root);
-  if (fragments.length === 0) return { released: false, fragments };
+  const promoting = stage === "rc" && from.includes("-alpha.");
+  if (fragments.length === 0 && !promoting) return { released: false, fragments };
   // Everything is read and checked before any file is written, so a bad fragment leaves the tree untouched.
   const bodies = fragments.map((file) => {
     const problem = fragmentProblem(root, file);
@@ -109,22 +127,24 @@ function releaseDesk({ root, date }) {
   const changelogPath = path.join(root, CHANGELOG);
   const changelog = fs.readFileSync(changelogPath, "utf8");
   if (!changelog.startsWith(CHANGELOG_HEADER)) throw new Error(`${CHANGELOG} must begin with its title`);
-  const from = readJson(root, DESK_MANIFEST).version;
-  const to = nextAlpha(from);
   const mcpVersion = readJson(root, MCP_PACKAGE).version;
+  const couplingPath = path.join(root, RELEASE_COUPLING_TEST);
+  if (!/const expectedReleaseDate = "\d{4}-\d{2}-\d{2}"/u.test(fs.readFileSync(couplingPath, "utf8"))) {
+    throw new Error(`${RELEASE_COUPLING_TEST} does not name expectedReleaseDate; the release surface list is stale`);
+  }
 
   replaceVersion(root, DESK_VERSION_FILES, from, to);
-  const couplingPath = path.join(root, RELEASE_COUPLING_TEST);
   const coupling = fs.readFileSync(couplingPath, "utf8");
   fs.writeFileSync(couplingPath, coupling.replace(/const expectedReleaseDate = "[^"]*"/u, `const expectedReleaseDate = "${date}"`));
-  fs.writeFileSync(changelogPath, `${CHANGELOG_HEADER}## ${to} — ${date}\n\n${bodies.join("\n\n")}\n\nShips \`desk-mcp@${mcpVersion}\`.\n\n${changelog.slice(CHANGELOG_HEADER.length)}`);
+  const notes = bodies.length > 0 ? bodies.join("\n\n") : "Promote the current Desk alpha to the release-candidate line; no pending changes.";
+  fs.writeFileSync(changelogPath, `${CHANGELOG_HEADER}## ${to} — ${date}\n\n${notes}\n\nShips \`desk-mcp@${mcpVersion}\`.\n\n${changelog.slice(CHANGELOG_HEADER.length)}`);
   for (const file of fragments) fs.rmSync(path.join(root, file));
   return { released: true, from, to, fragments };
 }
 
 function parseArgs(argv) {
-  const options = { date: new Date().toISOString().slice(0, 10), root: path.resolve(__dirname, "..") };
-  const values = { "--date": "date", "--root": "root" };
+  const options = { date: new Date().toISOString().slice(0, 10), root: path.resolve(__dirname, ".."), stage: "auto" };
+  const values = { "--date": "date", "--root": "root", "--stage": "stage" };
   for (let index = 0; index < argv.length; index += 2) {
     const key = values[argv[index]];
     if (!key || !argv[index + 1]) throw new Error(`unknown or incomplete argument: ${argv[index]}`);
@@ -135,7 +155,7 @@ function parseArgs(argv) {
 
 function main(argv = process.argv.slice(2), { stdout = process.stdout } = {}) {
   const options = parseArgs(argv);
-  stdout.write(`${JSON.stringify(releaseDesk({ root: path.resolve(options.root), date: options.date }), null, 2)}\n`);
+  stdout.write(`${JSON.stringify(releaseDesk({ root: path.resolve(options.root), date: options.date, stage: options.stage }), null, 2)}\n`);
   return 0;
 }
 
@@ -157,6 +177,7 @@ module.exports = {
   fragmentProblem,
   main,
   nextAlpha,
+  nextReleaseVersion,
   parseArgs,
   pendingFragments,
   releaseDesk,

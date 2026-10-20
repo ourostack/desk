@@ -26,7 +26,7 @@ const mcpVersion = JSON.parse(readRepo("plugins/desk/mcp/package.json")).version
 const fragmentDir = "plugins/desk/changelog.d"
 
 // A copy of every file a release reads or writes.
-function fixture(t) {
+function fixture(t, version = currentDesk) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-release-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   for (const file of [...release.DESK_VERSION_FILES, release.CHANGELOG, "plugins/desk/mcp/package.json"]) {
@@ -35,16 +35,17 @@ function fixture(t) {
   }
   mkdirSync(path.join(root, fragmentDir))
   writeFileSync(path.join(root, fragmentDir, "README.md"), "How to write a fragment.\n")
+  if (version !== currentDesk) release.replaceVersion(root, release.DESK_VERSION_FILES, currentDesk, version)
   return root
 }
 
-function snapshot(root) {
+function snapshot(root, relativePaths = path) {
   const files = {}
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) walk(full)
-      else files[path.relative(root, full)] = readFileSync(full, "utf8")
+      else files[relativePaths.relative(root, full).split(relativePaths.sep).join("/")] = readFileSync(full, "utf8")
     }
   }
   walk(root)
@@ -53,9 +54,99 @@ function snapshot(root) {
 
 const fragment = (root, name, text) => writeFileSync(path.join(root, fragmentDir, name), text)
 
+test("snapshot preservation lookups use repository-relative keys for POSIX and Windows paths", (t) => {
+  const root = fixture(t)
+  const marketplace = readFileSync(path.join(root, ".claude-plugin/marketplace.json"), "utf8")
+  const mcp = readFileSync(path.join(root, "plugins/desk/mcp/package.json"), "utf8")
+  for (const relativePaths of [path.posix, path.win32]) {
+    // Translate the actual fixture paths too: POSIX relative() must not receive a Windows-native spelling.
+    const spelling = (file) => file.split(path.sep).join(relativePaths.sep)
+    const files = snapshot(root, {
+      sep: relativePaths.sep,
+      relative: (from, to) => relativePaths.relative(spelling(from), spelling(to)),
+    })
+    assert.equal(files[".claude-plugin/marketplace.json"], marketplace)
+    assert.equal(files["plugins/desk/mcp/package.json"], mcp)
+    assert.equal(files["plugins/desk/changelog.d/README.md"], "How to write a fragment.\n")
+    assert.ok(Object.keys(files).every((key) => !key.includes("\\")), "snapshot keys must use repository separators")
+  }
+})
+
 test("the next alpha follows the current one and only alphas are released", () => {
   assert.equal(release.nextAlpha("3.2.0-alpha.9"), "3.2.0-alpha.10")
   assert.throws(() => release.nextAlpha("3.2.0"), /Desk version 3\.2\.0 is not an alpha release/u)
+})
+
+test("release policy follows the current line, explicitly promotes to RC, and refuses unsupported stages and versions", () => {
+  for (const [version, stage, want] of [
+    ["3.2.0-alpha.333", undefined, "3.2.0-alpha.334"],
+    ["3.2.0-alpha.333", "auto", "3.2.0-alpha.334"],
+    ["3.2.0-alpha.333", "rc", "3.2.0-rc.1"],
+    ["3.2.0-rc.1", undefined, "3.2.0-rc.2"],
+    ["3.2.0-rc.9", "rc", "3.2.0-rc.10"],
+  ]) assert.equal(release.nextReleaseVersion(version, stage), want)
+  for (const stage of ["alpha", "ga", "", null]) {
+    assert.throws(() => release.nextReleaseVersion("3.2.0-rc.1", stage), /stage/u)
+  }
+  for (const version of ["invalid", "3.2.0", "3.2.0-beta.1", "3.2.0-rc.01", "03.2.0-alpha.1", "3.2.0-alpha.1+build"]) {
+    assert.throws(() => release.nextReleaseVersion(version, "rc"), /version/u)
+  }
+})
+
+test("empty alpha promotion couples every Desk surface, leaves other plugins and MCP alone, and repeated RC dispatch is inert", (t) => {
+  const root = fixture(t, "3.2.0-alpha.333")
+  const before = snapshot(root)
+  const result = release.releaseDesk({ root, date: "2026-10-20", stage: "rc" })
+  assert.deepEqual(result, { released: true, from: "3.2.0-alpha.333", to: "3.2.0-rc.1", fragments: [] })
+  for (const file of release.DESK_VERSION_FILES) {
+    const text = readFileSync(path.join(root, file), "utf8")
+    assert.doesNotMatch(text, release.versionToken("3.2.0-alpha.333"), file)
+    assert.match(text, release.versionToken("3.2.0-rc.1"), file)
+  }
+  const marketplace = (text) => JSON.parse(text).plugins.filter((plugin) => plugin.name !== "desk")
+  assert.deepEqual(marketplace(readFileSync(path.join(root, ".claude-plugin/marketplace.json"), "utf8")), marketplace(before[".claude-plugin/marketplace.json"]))
+  assert.equal(readFileSync(path.join(root, "plugins/desk/mcp/package.json"), "utf8"), before["plugins/desk/mcp/package.json"])
+  assert.match(readFileSync(path.join(root, release.CHANGELOG), "utf8"), /^# desk plugin — changelog\n\n## 3\.2\.0-rc\.1 — 2026-10-20\n\n\S/u)
+  const promoted = snapshot(root)
+  for (const stage of ["rc", "auto"]) {
+    assert.deepEqual(release.releaseDesk({ root, date: "2026-10-21", stage }), { released: false, fragments: [] })
+    assert.deepEqual(snapshot(root), promoted)
+  }
+  fragment(root, "rc-fix.md", "A candidate fix.\n")
+  assert.deepEqual(release.releaseDesk({ root, date: "2026-10-21" }), {
+    released: true, from: "3.2.0-rc.1", to: "3.2.0-rc.2", fragments: [`${fragmentDir}/rc-fix.md`],
+  })
+  fragment(root, "another-fix.md", "Another candidate fix.\n")
+  assert.equal(release.releaseDesk({ root, date: "2026-10-21", stage: "rc" }).to, "3.2.0-rc.3")
+})
+
+test("RC promotion refuses malformed or stale surfaces and invalid stages without any write, even without fragments", (t) => {
+  for (const [breakFixture, stage, pattern] of [
+    [() => {}, "alpha", /stage/u],
+    [(root) => writeFileSync(path.join(root, "plugins/desk/.claude-plugin/plugin.json"), '{"version":"invalid"}'), "rc", /version/u],
+    [(root) => writeFileSync(path.join(root, "plugins/desk/agency.json"), "{}\n"), "rc", /stale/u],
+    [(root) => writeFileSync(path.join(root, "plugins/desk/agency.json"), '{"version":"3.2.0-alpha.333"'), "rc", /JSON/u],
+    [(root) => writeFileSync(path.join(root, release.CHANGELOG), "# Broken\n"), "rc", /title/u],
+  ]) {
+    const root = fixture(t, "3.2.0-alpha.333")
+    breakFixture(root)
+    const before = snapshot(root)
+    assert.throws(() => release.releaseDesk({ root, date: "2026-10-20", stage }), pattern)
+    assert.deepEqual(snapshot(root), before)
+  }
+  const root = fixture(t, "3.2.0")
+  const before = snapshot(root)
+  assert.throws(() => release.releaseDesk({ root, date: "2026-10-20" }), /version/u)
+  assert.deepEqual(snapshot(root), before)
+})
+
+test("a stale coupling-date surface refuses RC promotion before writing any version", (t) => {
+  const root = fixture(t, "3.2.0-alpha.333")
+  const file = path.join(root, "tests/desk/mcp/__tests__/release/release_coupling.test.js")
+  writeFileSync(file, readFileSync(file, "utf8").replace(/const expectedReleaseDate = "[^"]*"/u, 'const staleReleaseDate = "2026-10-19"'))
+  const before = snapshot(root)
+  assert.throws(() => release.releaseDesk({ root, date: "2026-10-20", stage: "rc" }), /expectedReleaseDate.*stale/u)
+  assert.deepEqual(snapshot(root), before)
 })
 
 test("with no pending fragment nothing is released and nothing changes", (t) => {
@@ -74,7 +165,7 @@ test("pending fragments become the next alpha on every surface and one changelog
   fragment(root, "zebra-fix.md", "The zebra fix.\n\nIts second paragraph.\n")
   fragment(root, "alpha-feature.md", "\nThe alpha feature, with a [link](docs/x.md).\n")
   fragment(root, "notes.txt", "not a fragment\n")
-  const next = release.nextAlpha(currentDesk)
+  const next = release.nextReleaseVersion(currentDesk)
 
   const result = release.releaseDesk({ root, date: "2026-10-01" })
   assert.deepEqual(result, {
@@ -152,12 +243,27 @@ test("the CLI takes --date and --root, prints the result and reports errors on s
   fragment(root, "cli.md", "Released from the command line.\n")
   const success = spawnSync(process.execPath, [script, "--root", root, "--date", "2026-10-02"], { encoding: "utf8", env: bareEnv })
   assert.equal(success.status, 0, success.stderr)
-  assert.equal(JSON.parse(success.stdout).to, release.nextAlpha(currentDesk))
+  assert.equal(JSON.parse(success.stdout).to, release.nextReleaseVersion(currentDesk))
   const failure = spawnSync(process.execPath, [script, "--root", root, "--date", "tomorrow"], { encoding: "utf8", env: bareEnv })
   assert.equal(failure.status, 1)
   assert.match(failure.stderr, /the release date must be YYYY-MM-DD: tomorrow/u)
   // The repository's own fragments folder keeps its instructions, and a real checkout has nothing to release by default here.
   assert.ok(existsSync(path.join(repoRoot, fragmentDir, "README.md")))
+})
+
+test("CLI stage defaults to auto, promotes with rc, and rejects invalid stage without writes", (t) => {
+  assert.equal(release.parseArgs([]).stage, "auto")
+  const root = fixture(t, "3.2.0-alpha.333")
+  const run = (stage) => spawnSync(process.execPath, [script, "--root", root, "--date", "2026-10-20", "--stage", stage], { encoding: "utf8", env: bareEnv })
+  const before = snapshot(root)
+  const invalid = run("alpha")
+  assert.equal(invalid.status, 1)
+  assert.match(invalid.stderr, /stage/u)
+  assert.deepEqual(snapshot(root), before)
+  const promoted = run("rc")
+  assert.equal(promoted.status, 0, promoted.stderr)
+  assert.equal(JSON.parse(promoted.stdout).to, "3.2.0-rc.1")
+  assert.deepEqual(JSON.parse(run("rc").stdout), { released: false, fragments: [] })
 })
 
 const releaseWorkflow = () => {
@@ -169,6 +275,62 @@ const stepNamed = (job, name) => {
   assert.ok(found, `missing step: ${name}`)
   return found
 }
+
+test("manual release stage is a choice defaulting to auto and survives both concurrent-main handoffs", () => {
+  const { workflow } = releaseWorkflow()
+  const input = { ...workflow.on.workflow_dispatch.inputs.stage }
+  delete input.description
+  assert.deepEqual(input, {
+    type: "choice", options: ["auto", "rc"], default: "auto", required: true,
+  })
+  const build = stepNamed(workflow.jobs.build, "Build and check the release")
+  const push = stepNamed(workflow.jobs.push, "Verify and push the release")
+  const expression = "${{ github.event_name == 'workflow_dispatch' && inputs.stage || 'auto' }}"
+  assert.equal(build.env.RELEASE_STAGE, expression)
+  assert.equal(push.env.RELEASE_STAGE, expression)
+  const handoffs = push.run.split("\n").filter((line) => line.includes("gh workflow run desk-release.yml"))
+  assert.equal(handoffs.length, 2)
+  for (const line of handoffs) {
+    for (const stage of ["auto", "rc"]) {
+      const result = spawnSync("bash", ["-c", `gh() { printf '%s\\n' "$@"; }\n${line}`], {
+        encoding: "utf8", env: { ...bareEnv, RELEASE_STAGE: stage, GITHUB_REPOSITORY: "fixture/desk" },
+      })
+      assert.equal(result.status, 0, result.stderr)
+      assert.deepEqual(result.stdout.trim().split("\n"), [
+        "workflow", "run", "desk-release.yml", "--repo", "fixture/desk", "--ref", "main", "-f", `stage=${stage}`,
+      ])
+    }
+  }
+})
+
+test("build stage validation and release invocation promote controlled fixtures without running destructive build cleanup", (t) => {
+  const text = sharedScript()
+  // Execute only argument parsing and the actual staging command; never the helper's git/cleanup lifecycle on this Mac.
+  const preflight = text.slice(text.indexOf("set -euo pipefail"), text.indexOf('test -z "$(git status'))
+  const invocation = text.split("\n").find((line) => line.startsWith("node scripts/release-desk.cjs "))
+  assert.ok(invocation)
+  const root = fixture(t, "3.2.0-alpha.333")
+  mkdirSync(path.join(root, "scripts"))
+  copyFileSync(script, path.join(root, "scripts/release-desk.cjs"))
+  const run = (...args) => spawnSync("bash", ["-c", `${preflight}\nrelease_json="$RELEASE_JSON"\n${invocation}`, "fixture", ...args], {
+    cwd: root, encoding: "utf8", env: { ...bareEnv, RELEASE_JSON: path.join(root, "release.json") },
+  })
+  const before = snapshot(root)
+  const invalid = run("--stage", "alpha")
+  assert.equal(invalid.status, 2, invalid.stdout + invalid.stderr)
+  assert.match(invalid.stderr, /stage/u)
+  assert.deepEqual(snapshot(root), before)
+  for (const args of [["--stage"], ["--unknown"], ["--dry-run", "extra"]]) {
+    assert.equal(run(...args).status, 2, args.join(" "))
+    assert.deepEqual(snapshot(root), before)
+  }
+  assert.equal(run().status, 0)
+  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "release.json"), "utf8")), { released: false, fragments: [] })
+  assert.equal(run("--stage", "rc").status, 0)
+  assert.equal(JSON.parse(readFileSync(path.join(root, "release.json"), "utf8")).to, "3.2.0-rc.1")
+  assert.equal(run("--stage", "rc", "--dry-run").status, 0)
+  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "release.json"), "utf8")), { released: false, fragments: [] })
+})
 
 function sharedScript() {
   return readFileSync(path.join(repoRoot, "scripts", "build-and-check-release.sh"), "utf8")
@@ -196,16 +358,27 @@ test("release setup installs both committed dependency sets before running nativ
   ], "the actual release job must establish native dependencies before acceptance, just like the PR dry run")
 })
 
+test("the shared release queue retains pending RC intent without allowing concurrent releases", () => {
+  const { workflow } = releaseWorkflow()
+  // GitHub's queue:max contract (verified 2026-10-20): one running run, up to 100 pending;
+  // FIFO by entry into the waiting group, not dispatch time; excess arrivals are canceled.
+  // Test our emitted workflow configuration, not a mock implementation of GitHub's scheduler.
+  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
+  for (const job of Object.values(workflow.jobs)) {
+    assert.equal(job.concurrency, undefined, "stage-specific/job-level groups must not bypass the shared workflow lock")
+  }
+})
+
 test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
   const { text, workflow } = releaseWorkflow()
   assert.deepEqual(workflow.on.push, { branches: ["main"], paths: ["plugins/desk/changelog.d/**"] })
   assert.ok("workflow_dispatch" in workflow.on)
   assert.match(workflow.on.schedule[0].cron, /\S/u)
   assert.deepEqual(workflow.permissions, {})
-  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false })
+  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false, queue: "max" })
   assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "announce", "report"])
   const build = stepNamed(workflow.jobs.build, "Build and check the release").run
-  assert.match(build, /scripts\/build-and-check-release\.sh$/mu)
+  assert.match(build, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
   assert.match(sharedScript(), /node scripts\/release-desk\.cjs --date/u)
   assert.match(sharedScript(), /node scripts\/check-release-integrity\.cjs/u)
   const report = workflow.jobs.report
@@ -230,7 +403,7 @@ test("the release workflow checks every release surface in a read-only job and p
   assert.doesNotMatch(JSON.stringify(build), /github\.token|secrets\./u, "the build job never receives a write credential")
   for (const job of [build, push]) assert.equal(stepNamed(job, "Check out main").with["persist-credentials"], false)
   // The release and the pull request dry run run the same script, so the checks below are the checks of both.
-  assert.match(stepNamed(build, "Build and check the release").run, /scripts\/build-and-check-release\.sh$/mu)
+  assert.match(stepNamed(build, "Build and check the release").run, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
   const checks = sharedScript()
   for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
     assert.match(checks, new RegExp(check, "u"), check)
@@ -255,7 +428,7 @@ test("the release workflow checks every release surface in a read-only job and p
   assert.doesNotMatch(verify.run, /HEAD:main/u)
   assert.match(verify.run, /::add-mask::\$credential/u)
   assert.match(verify.run, /grep -qE \$'\^!\\t\[0-9a-f\]\{40\}:refs\/heads\/main\\t.*\(fetch first\|non-fast-forward\)/u, "only git's porcelain refusal line for main counts as main having moved")
-  assert.match(verify.run, /non-fast-forward[\s\S]*gh workflow run desk-release\.yml --repo "\$GITHUB_REPOSITORY" --ref main\n\s*echo "handed_off=true"/u, "a refusal because main moved starts a release on the new main")
+  assert.match(verify.run, /non-fast-forward[\s\S]*gh workflow run desk-release\.yml --repo "\$GITHUB_REPOSITORY" --ref main -f stage="\$RELEASE_STAGE"\n\s*echo "handed_off=true"/u, "a refusal because main moved starts a release on the new main")
   // The allowlist is read, not run, from the release script, so it can never drift from the surfaces the release bumps.
   const release = require(script)
   const allowed = [...verify.run.matchAll(/sed -n '([^']+)' scripts\/release-desk\.cjs/gu)]
@@ -325,6 +498,40 @@ ${mark.failOn ? `case "$*" in *"${mark.failOn}"*) exit 1 ;; esac` : ""}
 }
 const HISTORY = [["bot", "Release Desk 3.2.0-alpha.1"], ["dev", "first (#10)"], ["dev", "second (#11)"], ["bot", "Release Desk 3.2.0-alpha.2"], ["dev", "third (#12)"], ["bot", "Release Desk 3.2.0-alpha.3"], ["spoof", "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"], ["bot", "Not a release (#15)\n\nRelease Desk 3.2.0-alpha.8 only in the body"], ["bot", "Release Desk 3.2.0-alpha.1; rm -rf"], ["dev", "unreleased (#14)"]]
 
+test("actual workflow catch-up marks RC-carried PRs with their first bot release and rejects spoofed or inexact RC subjects", () => {
+  const mark = {
+    history: [
+      ["dev", "carried by first RC (#20)"],
+      ["spoof", "Release Desk 3.2.0-rc.90"],
+      ["bot", "Release Desk 3.2.0-rc.91 trailing text"],
+      ["bot", "Not a release\n\nRelease Desk 3.2.0-rc.92"],
+      ["bot", "Release Desk 3.2.0-rc.1"],
+      ["dev", "carried by next RC (#21)"],
+      ["bot", "Release Desk 3.2.0-rc.2"],
+      ["dev", "not released (#22)"],
+      ["spoof", "Release Desk 3.2.0-rc.93"],
+      ["bot", "Release Desk 3.2.0-rc.94 trailing text"],
+      ["bot", "Not another release\n\nRelease Desk 3.2.0-rc.95"],
+    ],
+    unlabeled: [[20, "carried by first RC (#20)"], [21, "carried by next RC (#21)"], [22, "not released (#22)"]],
+  }
+  const { result, calls } = markingRun({ mark })
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  const lines = calls.trim().split("\n")
+  for (const [number, version] of [[20, "3.2.0-rc.1"], [21, "3.2.0-rc.2"]]) {
+    assert.ok(lines.includes(`api --method POST repos/o/r/issues/${number}/comments --field body=Released in Desk ${version}`), calls)
+    assert.ok(lines.includes(`api --method POST repos/o/r/issues/${number}/labels --raw-field labels[]=released`), calls)
+  }
+  assert.doesNotMatch(calls, /issues\/22\/(comments|labels)/u)
+  assert.doesNotMatch(calls, /body=Released in Desk 3\.2\.0-rc\.9[0-5]/u)
+  const repeated = markingRun({ mark, commentsOn: { 20: "Released in Desk 3.2.0-rc.1", 21: "Released in Desk 3.2.0-rc.2" } })
+  assert.equal(repeated.result.status, 0, repeated.result.stdout + repeated.result.stderr)
+  assert.doesNotMatch(repeated.calls, /--method POST repos\/o\/r\/issues\/2[01]\/comments/u)
+  for (const number of [20, 21]) {
+    assert.ok(repeated.calls.includes(`api --method POST repos/o/r/issues/${number}/labels --raw-field labels[]=released`), repeated.calls)
+  }
+})
+
 test("marking labels each unlabeled released pull request with the first release after it, and skips unreleased ones", () => {
   const { result, calls } = markingRun({ mark: { history: HISTORY, unlabeled: [[10, "first (#10)"], [11, "second (#11)"], [12, "third (#12)"], [14, "unreleased (#14)"], [13, "Release Desk 3.2.0-alpha.9 by a person using the bot name (#13)"]] } })
   assert.equal(result.status, 0, result.stderr)
@@ -357,16 +564,34 @@ test("marking is safe to repeat: an existing comment is not repeated, and nothin
   assert.doesNotMatch(none.calls, /POST|label create/u)
 })
 
-test("pull request CI dry-runs the release through the same script, and the CI gate waits for it", () => {
+test("pull request CI dry-runs auto and RC through the full shared helper, and the CI gate waits for both", () => {
   const tests = require("js-yaml").load(readRepo(".github/workflows/desk-mcp-tests.yml"))
   const job = tests.jobs["release-dry-run"]
-  assert.equal(job.name, "Release dry run")
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { stage: ["auto", "rc"] } })
+  assert.equal(job.name, "Release dry run (${{ matrix.stage }})")
+  assert.equal(job["timeout-minutes"], 15)
+  assert.deepEqual(job.permissions, { contents: "read" })
   assert.equal(job["continue-on-error"], undefined)
   assert.equal(job.if, undefined)
-  assert.match(stepNamed(job, "Build and check the release without keeping it").run, /^scripts\/build-and-check-release\.sh --dry-run$/u)
-  assert.ok(tests.jobs["ci-gate"].needs.includes("release-dry-run"))
+  const step = stepNamed(job, "Build and check the release without keeping it")
+  assert.equal(step.env.RELEASE_STAGE, "${{ matrix.stage }}")
+  for (const stage of job.strategy.matrix.stage) {
+    // Capture the real workflow shell command's arguments only; the destructive full helper runs in CI, not here.
+    const result = spawnSync("bash", ["-c", `scripts/build-and-check-release.sh() { printf '%s\\n' "$@"; }\n${step.run}`], {
+      encoding: "utf8", env: { ...bareEnv, RELEASE_STAGE: stage },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(result.stdout.trim().split("\n"), ["--dry-run", "--stage", stage])
+  }
+  assert.deepEqual(tests.jobs["ci-gate"].needs, [
+    "browser-lifecycle-install", "private-browser-lifecycle", "desk-mcp-coverage-shards",
+    "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
+    "desk-native-windows", "unused-code",
+  ])
+  assert.equal(tests.jobs["ci-gate"].name, "CI gate")
+  assert.equal(tests.jobs["ci-gate"].if, "${{ always() }}")
   const release = stepNamed(releaseWorkflow().workflow.jobs.build, "Build and check the release").run
-  assert.match(release, /scripts\/build-and-check-release\.sh$/mu)
+  assert.match(release, /scripts\/build-and-check-release\.sh --stage "\$RELEASE_STAGE"$/mu)
   assert.doesNotMatch(release, /--dry-run/u)
 })
 

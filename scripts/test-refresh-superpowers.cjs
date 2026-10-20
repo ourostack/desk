@@ -16,7 +16,7 @@ const {
   upstreamVersion,
   versionToken,
 } = require("./refresh-superpowers.cjs");
-const { DESK_VERSION_FILES, nextAlpha } = require("./release-desk.cjs");
+const { DESK_VERSION_FILES, nextAlpha, nextReleaseVersion, replaceVersion } = require("./release-desk.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const readRepoJson = (file) => JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8"));
@@ -117,7 +117,7 @@ function copyIntoFixture(root, file) {
   fs.chmodSync(target, fs.statSync(path.join(repoRoot, file)).mode & 0o777);
 }
 
-function buildFixture(tempRoot) {
+function buildFixture(tempRoot, deskVersion = currentDesk) {
   const root = path.join(tempRoot, "desk");
   for (const file of new Set([
     ...SUPERPOWERS_VERSION_FILES,
@@ -129,6 +129,7 @@ function buildFixture(tempRoot) {
   ])) {
     copyIntoFixture(root, file);
   }
+  if (deskVersion !== currentDesk) replaceVersion(root, DESK_VERSION_FILES, currentDesk, deskVersion);
 
   // The fixture upstream starts at exactly the vendored payload, with upstream's own manifest version.
   const upstreamDir = path.join(tempRoot, "upstream");
@@ -187,10 +188,10 @@ const skillFile = superpowersSource.files.find((file) => file.sourcePath === "sk
 const [major, minor] = currentSuperpowers.split(".").map(Number);
 const newerUpstream = `${major}.${minor + 1}.0`;
 
-{
+for (const fixtureDeskVersion of new Set([currentDesk, "3.2.0-alpha.9", "3.2.0-rc.7"])) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "refresh-superpowers-"));
   try {
-    const { root, upstreamDir, base, writeManifest } = buildFixture(tempRoot);
+    const { root, upstreamDir, base, writeManifest } = buildFixture(tempRoot, fixtureDeskVersion);
 
     // Nothing selected changed: no file is touched and no release is cut.
     const before = snapshot(root);
@@ -254,12 +255,12 @@ const newerUpstream = `${major}.${minor + 1}.0`;
     assert.match(readme, new RegExp(`the upstream tree is \`${tree}\``, "u"));
 
     // Desk gains a changelog fragment like any other pull request and keeps its version and changelog; the Desk
-    // release workflow takes the next alpha once the refresh merges.
+    // release workflow follows the current alpha/RC line once the refresh merges.
     assert.equal(readFixture(root, fragment), `Superpowers refresh: Desk now ships Superpowers ${newerUpstream}, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/${executableHead}) (upstream version ${newerUpstream}) copied byte for byte. Selected files: 1 changed, 1 added. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.\n`);
     for (const file of DESK_VERSION_FILES) {
       const text = readFixture(root, file);
-      assert.match(text, versionToken(currentDesk), file);
-      assert.doesNotMatch(text, versionToken(nextAlpha(currentDesk)), file);
+      assert.match(text, versionToken(fixtureDeskVersion), file);
+      assert.doesNotMatch(text, versionToken(nextReleaseVersion(fixtureDeskVersion)), file);
     }
     assert.equal(readFixture(root, "plugins/desk/CHANGELOG.md"), fs.readFileSync(path.join(repoRoot, "plugins/desk/CHANGELOG.md"), "utf8"));
 
@@ -276,7 +277,7 @@ const newerUpstream = `${major}.${minor + 1}.0`;
     assert.equal(patch.release.superpowers.to, `${major}.${minor + 1}.1`);
     assert.equal(patch.release.fragment, `plugins/desk/changelog.d/superpowers-${major}.${minor + 1}.1.md`);
     assert.match(readFixture(root, patch.release.fragment), /Selected files: 1 changed, 1 removed\./u);
-    assert.equal(JSON.parse(readFixture(root, "plugins/desk/.claude-plugin/plugin.json")).version, currentDesk);
+    assert.equal(JSON.parse(readFixture(root, "plugins/desk/.claude-plugin/plugin.json")).version, fixtureDeskVersion);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
