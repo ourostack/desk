@@ -26,9 +26,11 @@
 // The push, once the lock is held: sleep `debounceMs` (letting a burst of
 // near-simultaneous commits land before the one push this coalesces them
 // into), then loop while there is anything ahead of the upstream: push; on
-// rejection, one `git pull --rebase --autostash` retry, then one more push
-// (controller ruling 3). A failed rebase, or a still-rejected push after a
-// clean one, always ends with `git rebase --abort` so the desk is never
+// rejection, `git pull --rebase --autostash`, then one more push (controller
+// ruling 3), repeated with backoff for at most four rounds only while the
+// push is rejected because the remote moved again after the rebase
+// (ourostack/desk#234). A failed rebase, or a still-rejected push after the
+// last clean one, always ends with `git rebase --abort` so the desk is never
 // left mid-rebase, records the blocked state for `desk_status` (`tools/
 // status.js`'s `syncStatus`) and queues the detached Desk-problem filer
 // (`mcp/scripts/file-desk-problem.js`, mechanism `desk-sync`) — never
@@ -62,6 +64,8 @@ import { createGitReader } from "./git-read-worker.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
+const MAX_REBASE_ROUNDS = 4
+const REBASE_BACKOFF_MS = 250
 
 const SYNC_PUSH_SCRIPT = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
 const FILE_DESK_PROBLEM_SCRIPT = fileURLToPath(new URL("../../scripts/file-desk-problem.js", import.meta.url))
@@ -78,12 +82,17 @@ function gitEnv() {
   return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
 }
 
-function run(spawnGit, root, args) {
+function run(spawnGit, root, args, extraEnv = {}) {
   return spawnGit("git", ["-C", root, ...args], {
     encoding: "utf8",
     timeout: GIT_TIMEOUT_MS,
-    env: gitEnv(),
+    env: { ...gitEnv(), ...extraEnv },
   })
+}
+
+// A push's rejection text is read (`remoteMovedAgain`), so it must not be translated.
+function push(root, spawnGit) {
+  return run(spawnGit, root, ["push"], { LC_ALL: "C" })
 }
 
 // ---------------------------------------------------------------------------
@@ -279,10 +288,13 @@ function abortRebase(root, spawnGit) {
 }
 
 /**
- * One push attempt with the one allowed retry (controller ruling 3): a
- * rejection gets exactly one `git pull --rebase --autostash`, then one more
- * push. A failed rebase, or a push still rejected after a clean one, always
- * leaves the repo not mid-rebase — never `--force`.
+ * One push attempt with its retries (controller ruling 3): a rejection gets
+ * `git pull --rebase --autostash`, then one more push. While that push is
+ * rejected again because another clone pushed after the rebase (non-fast-
+ * forward, ourostack/desk#234), the round repeats after a jittered,
+ * doubling backoff, at most `MAX_REBASE_ROUNDS` times in all. A failed
+ * rebase, or a push still rejected after the last clean one, always leaves
+ * the repo not mid-rebase, its local commits intact — never `--force`.
  *
  * A status-0 pull is not proof the tree actually ended up clean (fix round):
  * `git pull --rebase --autostash` can exit 0 even when popping its own
@@ -293,23 +305,35 @@ function abortRebase(root, spawnGit) {
  * untracked file colliding with one the stash would restore), which leaves
  * the stash entry behind with no UU marker at all.
  */
-function pushWithRetry(root, spawnGit) {
-  if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
-  const stashBefore = stashCount(root, spawnGit)
-  const pulled = run(spawnGit, root, ["pull", "--rebase", "--autostash"])
-  if (pulled.status !== 0) {
-    const paths = conflictedPaths(root, spawnGit)
-    abortRebase(root, spawnGit)
-    return { result: "blocked", reason: "pull_rebase_failed", paths }
+async function pushWithRetry(root, spawnGit, clock) {
+  if (push(root, spawnGit).status === 0) return { result: "ok" }
+  for (let round = 1; ; round += 1) {
+    const stashBefore = stashCount(root, spawnGit)
+    const pulled = run(spawnGit, root, ["pull", "--rebase", "--autostash"])
+    if (pulled.status !== 0) {
+      const paths = conflictedPaths(root, spawnGit)
+      abortRebase(root, spawnGit)
+      return { result: "blocked", reason: "pull_rebase_failed", paths }
+    }
+    const stashConflictPaths = conflictedPaths(root, spawnGit)
+    if (stashConflictPaths.length > 0 || stashCount(root, spawnGit) > stashBefore) {
+      abortRebase(root, spawnGit)
+      return { result: "blocked", reason: "autostash_pop_conflict", paths: stashConflictPaths }
+    }
+    const pushed = push(root, spawnGit)
+    if (pushed.status === 0) return { result: "ok" }
+    // ourostack/desk#234: another clone pushing between this rebase and this push rejects it again as behind. Only
+    // that rejection earns another round, after a jittered backoff so racing workers stop colliding; any other
+    // rejection (a hook, permissions) would fail the same way again.
+    if (round >= MAX_REBASE_ROUNDS || !remoteMovedAgain(pushed.stderr)) break
+    await clock.sleep(REBASE_BACKOFF_MS * 2 ** (round - 1) + Math.floor(Math.random() * REBASE_BACKOFF_MS))
   }
-  const stashConflictPaths = conflictedPaths(root, spawnGit)
-  if (stashConflictPaths.length > 0 || stashCount(root, spawnGit) > stashBefore) {
-    abortRebase(root, spawnGit)
-    return { result: "blocked", reason: "autostash_pop_conflict", paths: stashConflictPaths }
-  }
-  if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
   abortRebase(root, spawnGit)
   return { result: "blocked", reason: "push_rejected_after_rebase", paths: [] }
+}
+
+function remoteMovedAgain(stderr) {
+  return /\((?:fetch first|non-fast-forward)\)/u.test(String(stderr))
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +492,7 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
       "--mechanism", "desk-sync",
       "--reason", safeReason,
       "--host", host,
-      "--fix-attempt", "retried once with git pull --rebase --autostash, then pushed again",
+      "--fix-attempt", "retried with git pull --rebase --autostash and pushed again, up to four rounds while the remote kept moving",
     ], { cwd: root, detached: true, stdio: "ignore", windowsHide: true, env })
     child.on("error", () => {})
     child.unref()
@@ -499,8 +523,8 @@ const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve,
 /**
  * Runs the whole worker cycle for `root`: acquire the lock (exit quietly on
  * contention), skip entirely when there is no remote or no upstream (never
- * an error — controller ruling 2), otherwise debounce, then push (with the
- * one retry) in a loop that keeps re-checking what is ahead until nothing
+ * an error — controller ruling 2), otherwise debounce, then push (with its
+ * bounded retries) in a loop that keeps re-checking what is ahead until nothing
  * is, so the lock holder never releases while a commit is left unpushed.
  * Never throws — including when the lock is refused under a node:test run
  * (`result: "test_isolation_refused"`, logged to `stderr` rather than left
@@ -538,7 +562,7 @@ export async function runPushWorker({
         updateSyncStatus(root, env, patch)
         return { result: "ok" }
       }
-      const attempt = pushWithRetry(root, spawnGit)
+      const attempt = await pushWithRetry(root, spawnGit, clock)
       if (attempt.result === "ok") {
         pushed = true
         continue

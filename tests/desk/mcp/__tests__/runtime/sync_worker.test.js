@@ -752,6 +752,77 @@ test("runPushWorker aborts the rebase defensively and reports blocked when the p
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
 })
 
+// ourostack/desk#234: another clone pushing between this worker's rebase and
+// its push rejected the push again, and the single retry gave up. `racer`
+// pushes a fresh commit from a second clone right after each of the first
+// `races` pulls, which is exactly that window.
+function racingSpawnGit(racer, races) {
+  let pulls = 0
+  let pushes = 0
+  const spawnGit = (cmd, args, opts) => {
+    const result = spawnSync(cmd, args, opts)
+    if (args.includes("push")) pushes += 1
+    if (args.includes("pull") && result.status === 0 && pulls < races) {
+      pulls += 1
+      git(racer, ["pull", "-q", "--rebase"])
+      writeFileSync(path.join(racer, `race-${pulls}.md`), `race ${pulls}\n`)
+      git(racer, ["add", "--", `race-${pulls}.md`])
+      git(racer, ["commit", "-q", "-m", `race ${pulls}`])
+      git(racer, ["push", "-q", "origin", "main"])
+    }
+    return result
+  }
+  return { spawnGit, counts: () => ({ pulls, pushes }) }
+}
+
+test("ourostack/desk#234: a push rejected again because the remote moved after the rebase is retried, and lands", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const racer = await mkClone(origin, "racer", { trackMain: true })
+  await writeAndCommit(racer, "first-race.md", "first\n", "first race")
+  git(racer, ["push", "-q", "origin", "main"])
+  await writeAndCommit(cloneA, "mine.md", "mine\n", "mine")
+
+  const { spawnGit, counts } = racingSpawnGit(racer, 2)
+  const sleeps = []
+  let filed = null
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, spawnGit,
+    clock: { sleep: (ms) => { sleeps.push(ms); return Promise.resolve() } },
+    fileProblem: (args) => { filed = args },
+  })
+  assert.deepEqual(result, { result: "ok" })
+  assert.equal(filed, null, "a race that settles is not a Desk problem")
+  assert.equal(counts().pushes, 4, "rejected, rejected after a raced rebase twice, then landed")
+  assert.equal(originCommitCount(origin), 5, "seed + first race + two raced commits + mine all reached origin")
+  assert.ok(sleeps.length >= 3 && sleeps.slice(1).every((ms) => ms > 0), "each extra rebase round backs off first")
+  assert.equal(readSyncStatus({ root: cloneA, env: process.env }).blocked, false)
+})
+
+test("ourostack/desk#234: a remote that keeps moving stops after a bounded number of rounds, with local commits intact and nothing forced", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const racer = await mkClone(origin, "racer", { trackMain: true })
+  await writeAndCommit(racer, "first-race.md", "first\n", "first race")
+  git(racer, ["push", "-q", "origin", "main"])
+  await writeAndCommit(cloneA, "mine.md", "mine\n", "mine")
+
+  const { spawnGit, counts } = racingSpawnGit(racer, Number.POSITIVE_INFINITY)
+  let filed = null
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, clock: instantClock, spawnGit,
+    fileProblem: (args) => { filed = args },
+  })
+  assert.deepEqual(result, { result: "blocked", reason: "push_rejected_after_rebase" })
+  assert.equal(filed.reason, "push_rejected_after_rebase")
+  assert.equal(counts().pushes, 1 + counts().pulls, "one push after each rebase round, and no more")
+  assert.ok(counts().pulls > 1 && counts().pulls <= 5, `bounded rebase rounds, got ${counts().pulls}`)
+  assert.equal(git(cloneA, ["log", "-1", "--format=%s"]).trim(), "mine", "the local commit is still there, rebased on top")
+  assert.equal(git(cloneA, ["status", "--porcelain"]), "")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false)
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
+  assert.doesNotMatch(git(origin, ["log", "--format=%s", "main"]), /^mine$/mu, "never force-pushed")
+  assert.equal(readSyncStatus({ root: cloneA, env: process.env }).reason, "push_rejected_after_rebase")
+})
+
 test("the loop re-checks for new commits before releasing the lock, so a commit made mid-push is not left behind", async () => {
   const { origin, cloneA } = await mkOriginWithClone()
   await writeAndCommit(cloneA, "first.md", "first\n", "first")
