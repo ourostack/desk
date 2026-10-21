@@ -236,7 +236,7 @@ test("desk_doctor scopes organization findings to the caller's own crew subtree"
       title: "refund-flow-cleanup",
       status: "processing",
       created: "2026-09-20T00:00:00Z",
-      updated: "2026-09-20T00:00:00Z",
+      updated: new Date().toISOString(),
       track: "billing-disputes",
     })
 

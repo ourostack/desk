@@ -8,7 +8,7 @@ import {
   serializeTaskContext, taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
 } from "./outbox.js"
 import {
-  checkContextAgainstFacts, contextPayloadHash, contextSource, validateContext,
+  checkContextAgainstFacts, CONTEXT_MAX_BYTES, contextPayloadHash, contextSource, validateContext,
 } from "./context-schema.js"
 import { isPlainObject, PATTERNS } from "./schema.js"
 import { stableStringify } from "./pipeline/normalize.js"
@@ -173,18 +173,25 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, previous, deadline, clo
     }
     if (cards.size === wanted.size) return { cards, incomplete: false }
     let visited = 0
+    let incomplete = false
     const unresolved = []
-    for (const task of walkTasks({ deskRoot, personPrefix, deadline, clock })) {
-      if (visited++ >= CARD_LIMIT) throw deferred()
-      if (wanted.has(jobId({ deskRemote: remote, personPrefix, track: task.track, slug: task.slug }))) inspect(task)
-      else unresolved.push(task)
-      if (cards.size === wanted.size) return { cards, incomplete: false }
+    const walkDeadline = (clock() + deadline) / 2
+    try {
+      for (const task of walkTasks({ deskRoot, personPrefix, deadline: walkDeadline, clock })) {
+        if (visited++ >= CARD_LIMIT) { incomplete = true; break }
+        if (wanted.has(jobId({ deskRemote: remote, personPrefix, track: task.track, slug: task.slug }))) inspect(task)
+        else unresolved.push(task)
+        if (cards.size === wanted.size) return { cards, incomplete: false }
+      }
+    } catch (error) {
+      if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+      incomplete = true
     }
     for (const task of unresolved) {
       inspect(task)
       if (cards.size === wanted.size) break
     }
-    return { cards, incomplete: false }
+    return { cards, incomplete }
   } catch (error) {
     if (["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) return { cards, incomplete: true }
     throw error
@@ -269,7 +276,7 @@ export async function listContextWork(env, { store }) {
 }
 
 function parseOutput(bytes) {
-  if (!(typeof bytes === "string" || Buffer.isBuffer(bytes)) || Buffer.byteLength(bytes) > 128 * 1024) return null
+  if (!(typeof bytes === "string" || Buffer.isBuffer(bytes)) || Buffer.byteLength(bytes) > CONTEXT_MAX_BYTES) return null
   try { return JSON.parse(bytes.toString("utf8")) } catch { return null }
 }
 

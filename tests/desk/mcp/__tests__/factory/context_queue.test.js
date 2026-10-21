@@ -140,6 +140,43 @@ test("bounded discovery makes progress on a found task even when other task iden
   assert.deepEqual((await queue.listContextWork(f.env, { store: STORE })).map((work) => work.job), [known])
 })
 
+for (const cutoff of ["card cap", "walk deadline"]) {
+  test(`a renamed task in the inspected prefix progresses after the discovery ${cutoff}`, async () => {
+    const f = await fixture()
+    const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+    const remote = "https://github.com/synthetic/desk.git"
+    git("init", "-qb", "main")
+    git("config", "user.email", "16390116+arimendelow@users.noreply.github.com")
+    git("config", "user.name", "Context Test")
+    git("config", "commit.gpgsign", "false")
+    git("remote", "add", "origin", remote)
+    await mkdir(join(f.desk, "sample", "old-name"), { recursive: true })
+    await writeFile(join(f.desk, "sample", "old-name", "task.md"), "---\nstatus: done\ncreated: '2026-10-01T00:00:00Z'\n---\nObserved a connection problem.\n")
+    git("add", "sample")
+    git("commit", "-qm", "create task")
+    git("mv", "sample/old-name", "sample/a-current")
+    git("commit", "-qm", "rename task")
+    const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug: "old-name" })
+    f.facts.jobs[0].job = job
+    f.facts.outcomes[0].job = job
+    f.entries[0].localJobs = [{ local: job, published: job }]
+    for (let index = 0; index < 1000; index += 1) {
+      const folder = join(f.desk, "sample", `z-${String(index).padStart(4, "0")}`)
+      await mkdir(folder, { recursive: true })
+      await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\n")
+    }
+    let elapsed = 0
+    const counts = await queue.prepareTaskContexts(f.env, {
+      ...f.options, deadline: 2000, clock: () => cutoff === "card cap" ? 0 : elapsed++,
+    })
+    assert.equal(counts.prepared, 1)
+    const [work] = await queue.listContextWork(f.env, { store: STORE })
+    assert.equal(work.job, job)
+    assert.equal(work.source.task_card.path, join(f.desk, "sample", "a-current", "task.md"))
+    assert.ok(elapsed < 2000)
+  })
+}
+
 test("the private file limit counts the actual readable serialization, not the smaller compact value", async () => {
   const f = await fixture()
   const value = Array(3500000).fill(0)

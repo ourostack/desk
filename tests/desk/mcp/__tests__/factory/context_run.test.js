@@ -1,18 +1,18 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
-import { mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { osEnv } from "../_os_env.js"
-import { factoryStateRoot, readStatus, requestEvaluation, setConsent, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { listContextWork, prepareTaskContexts, readyTaskContexts } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { indexJob } from "./_index_helper.js"
 import { contextFacts, contextRecord } from "./_context_fixture.js"
 import { contextSource } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
 import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
-import { evaluationKickDue } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
+import { evaluationKickDue, kickLoop, LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 
 const runner = await import("../../../../../plugins/desk/mcp/src/factory/context-run.js").catch((error) => {
@@ -282,6 +282,37 @@ test("triage taking the worker slot preserves a successful context phase's conti
   assert.equal(kicks[0].due, true)
   assert.deepEqual(f.phases, ["task_context"])
 })
+
+for (const trigger of ["label", "triage"]) for (const damage of ["input", "state"]) {
+  test(`a broken optional context ${damage} cannot suppress an ordinary ${trigger} kick`, async () => {
+    const f = await fixture()
+    const [work] = await listContextWork(f.env, { store: STORE })
+    if (damage === "input") await rename(work.input, `${work.input}.preserved`)
+    else await writeFile(await taskContextPath(f.env, STORE, work.job, "state.json"), "{}\n")
+    await recordStep(f.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: NOW - 3600001 })
+    const scope = { deskRoot: f.desk, personPrefix: "" }
+    if (trigger === "label") await requestEvaluation(f.env, {
+      job: "f".repeat(32), deskRoot: f.desk, requestedAt: new Date(NOW).toISOString(),
+    })
+    else await updateStatus(f.env, (status) => ({
+      ...status, triage_by_desk: { [JSON.stringify([f.desk, ""])]: {
+        at: new Date(NOW - 7200000).toISOString(), ok: true, result: "ran", eligible: 1,
+        runner: { state: "qualified" }, run: { failures_in_a_row: 0 },
+      } },
+    }))
+    const result = await kickLoop(f.env, { now: NOW, scope, spawn: () => ({ once() {}, unref() {} }) })
+    assert.equal(result.kicked, true)
+    assert.equal(result.context_held, "context_error")
+    assert.equal((await readStatus(f.env)).context_probe.result, "context_error")
+    await assert.rejects(listContextWork(f.env, { store: STORE }), /context_(?:input_missing|state_invalid)/u)
+    const locks = join(await factoryStateRoot(f.env), "locks")
+    await mkdir(locks, { recursive: true })
+    await writeFile(join(locks, LOOP_LOCK_NAME), "{}\n")
+    const locked = await kickLoop(f.env, { now: NOW, scope, spawn: () => assert.fail("the live worker lock remains authoritative") })
+    assert.equal(locked.kicked, false)
+    assert.equal(locked.reason, "worker_running")
+  })
+}
 
 test("an existing label launch retains priority and prevents a second context launch", async () => {
   const f = await fixture()
