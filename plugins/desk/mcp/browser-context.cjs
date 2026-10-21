@@ -41,6 +41,7 @@ function moduleImport(file) {
   return new Function("url","return import(url)")(require("url").pathToFileURL(file).href);
 }
 function nativeSelection(runtime, source, input) {
+  var installer;
   return Promise.resolve().then(function() {
   var profile = require("./web-real-profile.cjs"), discovery = require("./web-browser-discovery.cjs");
   var home = os.userInfo().homedir;
@@ -55,6 +56,7 @@ function nativeSelection(runtime, source, input) {
   var profileDirName = profile.findProfileDir(path.join(userDataDir,"Local State"),declaration.domain);
   if (!profileDirName) common.fail("browser_profile_unavailable","Declared existing profile is unavailable");
   return moduleImport(path.join(__dirname,"native-messaging-install.mjs")).then(function(distribution) {
+    installer = distribution;
     return distribution.verifyNativeDistribution(path.dirname(__dirname));
   }).then(function(verified) {
   var nativeReadyFile = path.join(runtime.stateRoot,"native-owned","state","native-provider-"+
@@ -62,17 +64,40 @@ function nativeSelection(runtime, source, input) {
   var client = require("./web-native-messaging.cjs");
   var selection = {channel:declaration.channel,userDataDir:userDataDir,profileDirName:profileDirName,
     nativeReadyFile:nativeReadyFile,extensionId:verified.extensionId,sourceDigest:verified.extensionSourceDigest,browserExecutable:executable};
-  var ready;
+  var ready, missing = false;
   try { ready = client.readPrivateJson(nativeReadyFile); }
   catch (error) {
-    if (error.code === "ENOENT") common.fail("NATIVE_READY_UNAVAILABLE","Existing native browser readiness is unavailable; no context was allocated");
-    throw error;
+    if (error.code !== "ENOENT") throw error;
+    missing = true;
   }
-  if (ready.profileRoot !== path.join(userDataDir,profileDirName) || ready.extensionId !== selection.extensionId ||
+  if (missing && input.action !== "create")
+    common.fail("NATIVE_READY_UNAVAILABLE","Existing native browser readiness is unavailable; no context was allocated");
+  return Promise.resolve().then(function() {
+    if (!missing) return ready;
+    // Registration/capsule setup is not extension enrollment or native health.
+    // The normal installer owns its existing lock, source and conflict checks.
+    return installer.installNativeMessagingBootstrap({env:source,homeDir:home}).then(function() {
+      try { return client.readPrivateJson(nativeReadyFile); }
+      catch (error) {
+        if (error.code === "ENOENT")
+          common.fail("NATIVE_READY_UNAVAILABLE","Native host setup did not establish enrolled browser readiness; no context was allocated");
+        throw error;
+      }
+    });
+  }).then(function(current) {
+  ready = current;
+  if (!ready || ready.profileRoot !== path.join(userDataDir,profileDirName) || ready.extensionId !== selection.extensionId ||
       ready.sourceDigest !== selection.sourceDigest || !ready.browser || ready.browser.executable !== executable)
     common.fail("NATIVE_READY_INVALID","Existing native readiness does not match the selected profile/source");
   if (input.action === "create") label(input.label);
-  return selection;
+  if (input.action !== "create") return selection;
+  // Existing C performs fresh ancestry/provider/profile admission. This record
+  // is memory-only; no owner directory, context or config exists at this point.
+  return client.attestNativeContext({version:1,contextId:common.generateId("signed-in"),
+    label:input.label,channel:selection.channel,userDataDir:selection.userDataDir,
+    profileDirName:selection.profileDirName,nativeReadyFile:selection.nativeReadyFile,
+    extensionId:selection.extensionId,sourceDigest:selection.sourceDigest},selection).then(function() { return selection; });
+  });
   });
   });
 }
