@@ -43,7 +43,7 @@ Every factual claim to a human or an agent carries an inline link to its primary
 
 ## Own the stack
 
-A helper failure does not revoke the supplied task's authority. Preserve effects; continue (`desk-problem`) without fixing or qualifying the helper. Do not spawn repair children or PRs outside approved scope, including when another controller owns repair. Respect authentication, source trust, permission denials, protected writes and conflicting writers.
+Helper faults leave task authority intact. Preserve effects (`desk-problem`). Use bounded known repairs or approved source work, not unsolicited repair children or PRs; respect repair owners. Fallbacks do not qualify helpers. Keep identity, trust, permission denials, protected writes and conflicting writers.
 
 ## Engineering work
 

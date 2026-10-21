@@ -425,10 +425,11 @@ function main() {
   ]);
 
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
-    "does not revoke the supplied task's authority",
-    "do not spawn repair children",
-    "another controller owns repair",
-    "without fixing or qualifying the helper",
+    "Helper faults leave task authority intact",
+    "bounded known repairs or approved source work",
+    "not unsolicited repair children or PRs",
+    "respect repair owners",
+    "Fallbacks do not qualify helpers",
     "permission denials",
     "`desk-problem`",
   ]);

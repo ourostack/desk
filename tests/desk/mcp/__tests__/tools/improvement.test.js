@@ -206,7 +206,7 @@ test("improvement_next claims the oldest card and answers with the authority par
   await open(w, ANDON)
   const answer = await next(w, { session: "0b3a8c34-6d3a-4c1e-9a4e-6d2f6d0a1e11" })
   assert.equal(answer.status, "claimed")
-  assert.equal(answer.authority, "This card is standing, pre-authorized work. Decide and fix under the desk's own rules: open the pull request, run the checks, and merge where the repository lets you merge and the desk's instructions say to. Ask the operator only for a true gate: spending money on their payment methods, credentials or accounts only they can act in, or an irreversible destructive action. Record every ruling in the countermeasure pull request; the card links to it.")
+  assert.equal(answer.authority, "A card is not permission to expand an ordinary task into tooling maintenance. Take it only within an authorized maintenance scope, without duplicating an existing repair owner. Then decide and fix under the desk's own rules: open the pull request, run the checks, and merge only where the task and repository permit. Ask the operator only for a true gate: spending money, user-only credentials or accounts, or an irreversible destructive action. Record rulings in the countermeasure pull request; the card links to it.")
   assert.equal(AUTHORITY, answer.authority)
   assert.match(answer.claim_id, /\S/u)
   assert.deepEqual(answer.card.evidence, [`job:${JOB}`])

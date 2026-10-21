@@ -1610,7 +1610,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["using-desk", /merge when confident wherever the repository lets you, and never report completion with the PR open/u],
     ["using-desk", /Choose each child's model deliberately/u],
     ["using-desk", /A child brief bounds the work and leaves the method to the child\. A handoff to a peer that owns its task is not a brief: say what you changed and intend to touch, what was decided, the edges and how to reach you; never tell it how to work or presume its state/u],
-    ["using-desk", /Do not spawn repair children[\s\S]+outside approved scope/u],
+    ["using-desk", /bounded known repairs or approved source work, not unsolicited repair children or PRs/u],
     ["using-desk", /AX \(agent experience\): do deterministic work deterministically; make tools easy to understand and use/u],
     ["using-desk", /HX \(human experience, formerly UX\): protect attention, understanding, control and trust/u],
     ["using-desk", /Never improve one by shifting avoidable work onto the other/u],

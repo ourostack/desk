@@ -253,20 +253,28 @@ test("Codex worker source no longer documents healthy-path copy registration", (
   }
 })
 
-test("session-start owns the Desk MCP absence prompt inherited by worker overlays", () => {
+test("session-start owns scoped Desk MCP recovery inherited by worker overlays", () => {
   const skillFolder = path.join(repoRoot, "plugins", "desk", "skills", "session-start")
   const sessionStart = `${readFileSync(path.join(skillFolder, "SKILL.md"), "utf8")}\n${readFileSync(path.join(skillFolder, "details.md"), "utf8")}`
 
   assert.match(sessionStart, /Desk MCP availability checkpoint/u)
-  assert.match(sessionStart, /this is a first run, not an outage/u)
+  assert.match(sessionStart, /`setup_required` means no desk is bound/u)
   assert.match(sessionStart, /`crew:join-crew`/u)
   assert.match(sessionStart, /every agent built on `desk:worker`/u)
   assert.match(sessionStart, /including downstream overlays like `ms-desk`/u)
-  assert.match(sessionStart, /Desk MCP is not available in this session/u)
-  assert.match(sessionStart, /Fix Desk MCP now/u)
-  assert.match(sessionStart, /Continue without reminders/u)
-  assert.match(sessionStart, /\$DESK\/AGENTS\.md/u)
-  assert.match(sessionStart, /durable task lifecycle updates, historical recall, cross-session resumption/u)
+  assert.match(sessionStart, /absent or diagnostic-only/u)
+  assert.match(sessionStart, /continue the supplied task through available authorized tools/u)
+  assert.match(sessionStart, /A missing transport is not loss of task authority/u)
+  assert.match(sessionStart, /Never describe those alternatives as proof that Desk MCP is healthy/u)
+  assert.match(sessionStart, /bounded known operational recovery and readback/u)
+  assert.match(sessionStart, /If another controller owns repair, preserve evidence for that owner without duplicating the work/u)
+  assert.match(sessionStart, /distinguish task files written, commits made, pushes confirmed and records still unsaved/u)
+  assert.match(sessionStart, /After a failed or timed-out mutation, inspect actual effects before retrying/u)
+  assert.match(sessionStart, /Preserve identity, source trust, declared protected-write scope and other writers/u)
+  assert.match(sessionStart, /without defeating redaction or a real access refusal/u)
+  assert.match(sessionStart, /A misbound root is a reason not to dispatch that mutation/u)
+  assert.match(sessionStart, /keep independent work moving/iu)
+  assert.doesNotMatch(sessionStart, /Want me to fix\/reload it now|Fix Desk MCP now|Continue without reminders/u)
 })
 
 test("global personal activation materializes worker and Desk as the default", async () => {
