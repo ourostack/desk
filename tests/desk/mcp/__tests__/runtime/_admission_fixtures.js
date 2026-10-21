@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { bootstrapPath, isolatedEnv, makeIsolatedHome, indexPath, pluginRoot } from "../launch/_mcp_handshake.js"
 import { openSession } from "../launch/_mcp_session.js"
+import { preloadArgs } from "./_readiness_failure_preload.mjs"
 
 export const HANDSHAKE_BUDGET_MS = 3000
 
@@ -79,12 +80,12 @@ export function inlineLauncherScript() {
  * Start Desk over stdio the way a host does, with the fixture's isolated environment.
  * `entry` picks the launch path: "index" (node index.js), "bootstrap" (node bootstrap.cjs, which runs index.js in its own process when this Node fits a shipped pack, or re-runs it under a Node that does) or "launcher" (the `.mcp.claude-codex.json` inline launcher). `node` is the Node that starts it.
  */
-export function startDesk(fixture, { args = [], env = {}, nodeArgs = [], entry = "index", node = process.execPath } = {}) {
+export function startDesk(fixture, { args = [], env = {}, nodeArgs = [], entry = "index", node = process.execPath, diagnostics = null } = {}) {
   // `node -e` leaves its first extra argument out of process.argv.slice(2), so the launcher gets a placeholder first, as a host's empty argument list would.
   const entryArgs = { index: [indexPath], bootstrap: [bootstrapPath], launcher: ["-e", inlineLauncherScript(), "desk-launcher"] }[entry]
   return openSession({
     command: node,
-    args: [...nodeArgs, ...entryArgs, ...args],
+    args: [...nodeArgs, ...preloadArgs(fixture, diagnostics), ...entryArgs, ...args],
     cwd: fixture.root,
     env: isolatedEnv(fixture, {
       DESK: undefined,
