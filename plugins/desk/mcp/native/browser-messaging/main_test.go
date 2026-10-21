@@ -17,6 +17,35 @@ import (
 
 const allowedOrigin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
 
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && filepath.Base(os.Args[1]) == "empty-environment-helper" {
+		if len(os.Args) != 3 || !filepath.IsAbs(os.Args[1]) || os.Args[2] != allowedOrigin {
+			os.Exit(91)
+		}
+		nonce, err := os.ReadFile(os.Args[1])
+		if err != nil || len(nonce) != 32 {
+			os.Exit(90)
+		}
+		_, options := os.LookupEnv("NODE_OPTIONS")
+		_, searchPath := os.LookupEnv("NODE_PATH")
+		data, err := json.Marshal(struct {
+			PID   int    `json:"pid"`
+			Nonce string `json:"nonce"`
+		}{os.Getpid(), string(nonce)})
+		if err != nil {
+			os.Exit(90)
+		}
+		if _, err := os.Stdout.Write(data); err != nil {
+			os.Exit(90)
+		}
+		if options || searchPath {
+			os.Exit(8)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 func fixture(t *testing.T, source string) config {
 	t.Helper()
 	node, err := exec.LookPath("node")
@@ -206,7 +235,22 @@ func TestInheritedRuntimeInjectionIsNotForwarded(t *testing.T) {
 }
 
 func TestFilteringOnlyInjectionVariablesDoesNotRestoreInheritedEnvironment(t *testing.T) {
-	c := fixture(t, `if(process.env.NODE_OPTIONS||process.env.NODE_PATH)process.exit(8);`)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	expectedNonce := hex.EncodeToString(nonce[:])
+	module := filepath.Join(t.TempDir(), "empty-environment-helper")
+	if err := os.WriteFile(module, []byte(expectedNonce), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the empty-environment boundary without requiring Node to start
+	// with no Windows runtime environment. Other cases exercise the real Node host.
+	c := config{Runtime: executable, HostModule: module, ExtensionOrigin: allowedOrigin}
 	previous := os.Environ()
 	t.Cleanup(func() {
 		os.Clearenv()
@@ -222,8 +266,17 @@ func TestFilteringOnlyInjectionVariablesDoesNotRestoreInheritedEnvironment(t *te
 	t.Setenv("NODE_PATH", "/untrusted")
 	var out, diagnostic bytes.Buffer
 	if code := run(c, []string{allowedOrigin}, bytes.NewReader(nil), &out, &diagnostic); code != 0 {
-		t.Fatalf("empty filtered environment inherited injection variables: %d", code)
+		t.Fatalf("empty filtered environment child failed: %d; %s", code, diagnostic.String())
 	}
+	var observed struct {
+		PID   int    `json:"pid"`
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &observed); err != nil || observed.PID <= 0 ||
+		observed.PID == os.Getpid() || observed.Nonce != expectedNonce {
+		t.Fatal("empty-environment child receipt did not match the owned fixture")
+	}
+	t.Logf("empty-environment fixture pid=%d; synchronous Cmd.Run child wait completed", observed.PID)
 }
 
 func TestConfigInPublicDirectoryIsRefused(t *testing.T) {
