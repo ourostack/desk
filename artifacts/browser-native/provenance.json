@@ -1,0 +1,84 @@
+{
+  "sourceCommit": "cdaf679b75c75ecaa0687d83f89d614230daec37",
+  "extensionId": "idfkhmkoaimndgacinjkjbagnnefgdel",
+  "extensionVersion": "1.1.0",
+  "extensionSourceDigest": "fa598b066d38e46f3cdebb451f6c5f8f163c13d2b18e2ca5d8aea3b42045a8cd",
+  "normalDistributionDigest": "e6b016b6aa4d42d99a8a69e340929c993bb5eff1aff2411223f9cec5d8ef33bd",
+  "archiveInventory": [
+    {
+      "name": "README.md",
+      "bytes": 15419,
+      "sha256": "b7de851d81080a1558f433769cf3aa0e087445c8f745e5f787edeb2abb079d1a"
+    },
+    {
+      "name": "background.mjs",
+      "bytes": 3079,
+      "sha256": "2d8a9fae1d919c5e0c0b82a857cd733808b33fd769581dc280e7660096910ba8"
+    },
+    {
+      "name": "build.mjs",
+      "bytes": 1494,
+      "sha256": "8139ed72325eab3c2955bbd6ccac52bee532731f1ebef9bbce6a6571ca752993"
+    },
+    {
+      "name": "context-engine.mjs",
+      "bytes": 41251,
+      "sha256": "283b1224d255dd9881df438016b7f54ce8b677356b8c5d5112a3a7e29720a035"
+    },
+    {
+      "name": "manifest.json",
+      "bytes": 1126,
+      "sha256": "06bd184b4eb3d9993a23df064173b58cd208e6f40a76cd093876266986b485aa"
+    },
+    {
+      "name": "source-digest.mjs",
+      "bytes": 157,
+      "sha256": "8269fc36d62c6b1a97b32831fbd643da889fa6fa378e231a22bebc65d2bd80a9"
+    },
+    {
+      "name": "token.html",
+      "bytes": 125,
+      "sha256": "db40ae754224329264d4b587c5ccd84b9d8aed49ed11674f9d7a5414855278a2"
+    },
+    {
+      "name": "token.mjs",
+      "bytes": 1236,
+      "sha256": "536f37dbefbc55d125ff1dddb55411811bf3f18250fbfd002aa2ed326b0116a3"
+    },
+    {
+      "name": "vendor/LICENSE",
+      "bytes": 11399,
+      "sha256": "7fab1461b41970ff376f1c9303a637076bfaaeb71cd12dd3a1c44aaf59a1a2b9"
+    },
+    {
+      "name": "vendor/PROVENANCE.md",
+      "bytes": 3389,
+      "sha256": "0645bf493c4d40a51f1f6f9f7aec826e5d835a3df8c0888de66bce9f3bb271a5"
+    },
+    {
+      "name": "vendor/maintained.mjs",
+      "bytes": 12163,
+      "sha256": "ddb50f20eeb24cb0c56e3d9fd8caef72f87859984f4e216afa018bd134616cb5"
+    }
+  ],
+  "zipSha256": "db9550e729ff9b5935bac08cec9a07d423db07ba4b093a18aab2315861ffc9fb",
+  "algorithm": "RS256",
+  "signedInputSha256": "4aa929641302b93ece9d3f145b1340ab59ba64a720fc04aaeec8e81f3900da54",
+  "crxFile": "desk-browser-1.1.0.crx",
+  "crxSha256": "56129775aec1a9192e606f05446624b016a724012668d7cc9c1bc17e75073ad0",
+  "crxBytes": 31998,
+  "status": "qualification-only-not-RC-GA-default",
+  "publisherPublicSpkiSha256": "835a7cae08cd36028d9a9106dd45634b678f14c585f6f93501908775cb498d23",
+  "verification": {
+    "packetReadback": true,
+    "publicKeyIdMatch": true,
+    "localSignature": true,
+    "exactElevenFileArchive": true,
+    "archiveTamperRefused": true,
+    "signedHeaderTamperRefused": true,
+    "browserFetch": "UNPROVED",
+    "browserInstall": "UNPROVED",
+    "enrollment": "UNPROVED",
+    "updateContinuity": "UNPROVED"
+  }
+}
