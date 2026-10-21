@@ -628,6 +628,28 @@ console.log(JSON.stringify({ released: found.length > 0, to: "9.9.9-alpha.1", fr
 }
 const runDryRun = (repo) => spawnSync("bash", ["scripts/build-and-check-release.sh", "--dry-run"], { cwd: repo.root, encoding: "utf8", env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT")) })
 
+test("RC signed browser gate propagates verification refusal for promotion and auto-RC continuation, not alpha", () => {
+  const source = readRepo("scripts/build-and-check-release.sh")
+  const begin = source.indexOf("# Signed browser artifact gate.")
+  const end = source.indexOf("# End signed browser artifact gate.")
+  assert.ok(begin > -1 && end > begin, "RC builds must contain the signed-package gate")
+  const gate = source.slice(begin, end)
+  // Execute the actual gate, substituting only its external verifier boundary.
+  // This is not the destructive full helper, nor a package-copy/signing run.
+  for (const [version, stage, status] of [
+    ["3.2.0-rc.1", "rc", 17],
+    ["3.2.0-rc.2", "auto", 17],
+    ["3.2.0-alpha.334", "auto", 0],
+  ]) {
+    const result = spawnSync("bash", ["-c",
+      `set -e\nversion="$1"\nstage="$2"\nnode() { printf '%s\\n' "$*"; return 17; }\n${gate}`,
+      "gate-test", version, stage], { cwd: repoRoot, encoding: "utf8" })
+    assert.equal(result.status, status, result.stdout + result.stderr)
+    if (status) assert.match(result.stdout, /scripts\/package-browser-native\.mjs --verify /u)
+    else assert.equal(result.stdout, "")
+  }
+})
+
 test("a dry run with no fragment pending still folds and checks a throwaway fragment, then restores the tree", () => {
   const repo = dryRunRepo({ tests: 'require("node:test")("t", () => {})\n' })
   const before = repo.head()
