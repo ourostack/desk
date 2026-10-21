@@ -53,3 +53,33 @@ into display text.
 supply `display_label`. Clearing does not issue a rename. A task card's status
 never changes the proposal's `unknown` phase into working, delivered or
 accepted.
+
+## Parent-loaded Copilot consumer
+
+`extensions/session-label/extension.mjs` is a native Copilot extension entry.
+The native discovery/installation owner must enroll it through the host's
+supported extension loader; merely installing the task-tool schema does not
+enroll an extension. There is no guessed plugin-manifest field, automatic
+global-directory write, session launcher or transcript/file poller here.
+
+The entry joins its parent process's current session, then observes live
+native tool-start/completion pairs from the configured `desk` MCP server.
+Only a matching successful main-agent result from `task_focus`, focused
+`task_create` or `task_update` can propose a name. Child markers, unmatched or
+older results, a changed session identity, unsafe text and a proposal that
+disagrees with the authored input are refused. Resuming requires a fresh
+observation; saved tool-result text is never replayed.
+
+Application uses only the native conditional `name.setAuto` operation and
+verifies exact native readback. It does not use the explicit/manual setter,
+rewrite a UUID, or change Hub or panel names. Native refusal remains
+`preserved/native_owner_refused`, not success. Missing APIs, failed readback
+and runtime errors remain explicit unavailable diagnostics. An unacknowledged
+write stops this consumer rather than issuing another write that the unknown
+operation could overtake. Tool results and task execution are unchanged.
+
+This source entry alone does not establish ordinary installed discovery or
+native validation. Those require the normal installation owner's source and
+consuming-host proof. Claude additionally requires a supported automatic
+outcome-title boundary with explicit-name preservation; a prompt-only title
+field is not a substitute.
