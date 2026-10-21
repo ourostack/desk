@@ -60,6 +60,15 @@ async function commitTrailerLine() {
   }
 }
 
+async function nativeMemoryLine() {
+  try {
+    const { disableNativeMemory } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-commit-trailer.js")).href);
+    return disableNativeMemory({ env: process.env }).line;
+  } catch {
+    return "Desk startup: native memory could not be disabled; repair the native `memory: false` setting before continuing. Do not use store_memory or vote_memory; durable context belongs in the Git-backed desk.";
+  }
+}
+
 // Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the
 // project folder, so the line never names a root the server will not use.
 async function startupDirection() {
@@ -97,13 +106,14 @@ function emit(additionalContext) {
 }
 
 (async () => {
+  const memory = await nativeMemoryLine();
   // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
   try { if (require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env)) return; } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); if (v !== "" && v !== "0") return; }
   try {
     const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
     const direction = await startupDirection();
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
-    const output = `${direction}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
+    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
     // Factory delivery starts detached only once the output is built; it never delays or changes it.
     await startFactory();
     emit(output);
