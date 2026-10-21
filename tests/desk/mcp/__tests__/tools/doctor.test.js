@@ -218,35 +218,56 @@ test("desk_doctor's organization section reports clean when there is nothing to 
   }
 })
 
-test("desk_doctor scopes organization findings to the caller's own crew subtree", async () => {
-  const root = makeRoot()
-  try {
-    // A peer's messy desk — must never surface in another caller's report.
-    writeCard(root, "desks/alice/inbox/track.md", { schema_version: 1, title: "inbox", status: "active" })
+test("desk_doctor scopes organization findings to the caller's own crew subtree", async (t) => {
+  let now = 0
+  t.mock.method(Date, "now", () => now)
+  for (const calendar of ["2001-02-03T04:05:06Z", "2026-10-20T12:00:00Z", "2099-12-31T23:59:59Z"]) {
+    now = Date.parse(calendar)
+    const fresh = new Date(now - 24 * 60 * 60 * 1000).toISOString()
+    const stale = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString()
+    const root = makeRoot()
+    try {
+      t.diagnostic(`organization scoping calendar=${calendar}`)
+      // A peer's messy desk — must never surface in another caller's report.
+      writeCard(root, "desks/alice/inbox/track.md", { schema_version: 1, title: "inbox", status: "active" })
 
-    // The caller's own (clean) desk.
-    writeCard(root, "desks/bob/billing-disputes/track.md", {
-      schema_version: 1,
-      title: "billing-disputes",
-      status: "active",
-      scope: "billing disputes and refund flows; not payroll",
-    })
-    writeCard(root, "desks/bob/billing-disputes/refund-flow-cleanup/task.md", {
-      schema_version: 1,
-      title: "refund-flow-cleanup",
-      status: "processing",
-      created: "2026-09-20T00:00:00Z",
-      updated: new Date().toISOString(),
-      track: "billing-disputes",
-    })
+      // The caller's own (clean) desk.
+      writeCard(root, "desks/bob/billing-disputes/track.md", {
+        schema_version: 1,
+        title: "billing-disputes",
+        status: "active",
+        scope: "billing disputes and refund flows; not payroll",
+      })
+      const taskPath = "desks/bob/billing-disputes/refund-flow-cleanup/task.md"
+      const task = {
+        schema_version: 1,
+        title: "refund-flow-cleanup",
+        status: "processing",
+        created: fresh,
+        updated: fresh,
+        track: "billing-disputes",
+      }
+      writeCard(root, taskPath, task)
 
-    const body = parseToolResult(
-      await callTool({ deskRoot: root, name: "desk_doctor", input: {}, person: "bob" }),
-    )
-    assert.deepEqual(body.organization, [])
-    assert.doesNotMatch(JSON.stringify(body), /alice/u)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
+      const body = parseToolResult(
+        await callTool({ deskRoot: root, name: "desk_doctor", input: {}, person: "bob" }),
+      )
+      assert.deepEqual(body.organization, [])
+      assert.doesNotMatch(JSON.stringify(body), /alice/u)
+
+      // The same caller's genuinely old task must still be reported under the unchanged 30-day rule.
+      writeCard(root, taskPath, { ...task, created: stale, updated: stale })
+      const aged = parseToolResult(
+        await callTool({ deskRoot: root, name: "desk_doctor", input: {}, person: "bob" }),
+      )
+      assert.deepEqual(aged.organization.map(({ code, path }) => ({ code, path })), [
+        { code: "stale_task", path: taskPath },
+      ])
+      assert.doesNotMatch(JSON.stringify(aged), /alice/u)
+      t.diagnostic(`calendar=${calendar}: healthy=${body.organization.length}, stale=${aged.organization.length}, peer absent`)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   }
 })
 

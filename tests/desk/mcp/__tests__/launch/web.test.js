@@ -1,25 +1,37 @@
-// Desk's default browser launcher (mcp/web.cjs), which backs the `web` MCP server.
-//
-// Every fresh Desk install gets a browser through the `web` MCP server. The launcher starts a copy of `@playwright/mcp` installed in Desk's state folder, installs it on first use, and refreshes it from the `@latest` channel in a detached process after start. Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every browser_* tool lists as unavailable and every call answers with a status, a code and a fix, mirroring `desk`'s own bootstrap. No test reaches a registry: the chosen Node's npm is a fake (`npm-cli.js` beside a link to this Node) that installs a stub package, reports a version, fails, or hangs on request, and logs every call. In-process tests inject the platform, environment, file checks, spawn and stdio, so every branch (including the Windows layouts) is measured on any host. Spawned tests run the real Claude inline launcher, the Copilot entry point and concurrent launches against a fixture plugin.
+// Explicit two-tool browser frontend, normal preparation/refresh APIs, and the
+// retained nondefault proxy API. No test reaches a registry: preparation uses
+// an owned fake npm, while real SDK handshakes restore the shipped locked pack.
+// The proxy unit adapter below is deliberately not proof of the default route.
 
 import { afterEach, test } from "node:test"
 import { strict as assert } from "node:assert"
-import { spawn, spawnSync } from "node:child_process"
+import { spawn, spawnSync,execFileSync } from "node:child_process"
 import { EventEmitter } from "node:events"
 import fs from "node:fs"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
-import { mcpRoot, pluginRoot, toolPayload } from "./_mcp_handshake.js"
+import { mcpRoot, pluginRoot, toolPayload,makeIsolatedHome,isolatedEnv } from "./_mcp_handshake.js"
 import { openSession } from "./_mcp_session.js"
 
 const require = createRequire(import.meta.url)
 const browserPath = path.join(mcpRoot, "web.cjs")
 const browser = require(browserPath)
-const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
+const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
+const legacyProxy = require(path.join(mcpRoot,"web-proxy.cjs"))
+// Retained non-default proxy unit API, not the desk-web route or its catalog.
+// Its ready/launch boundary is explicit here. Actual default SDK tests live in
+// browser_context_mcp.test.js and never delegate calls to this page proxy.
+const legacyTools = [
+  {name:"browser_navigate",description:"Owned proxy unit fixture",inputSchema:{type:"object",properties:{url:{type:"string"}}}},
+  {name:"browser_snapshot",description:"Owned proxy unit fixture",inputSchema:{type:"object",properties:{}}},
+  {name:"browser_wait_for",description:"Owned proxy unit fixture",inputSchema:{type:"object",properties:{}}},
+]
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
 
 for (const channel of ["chrome", "msedge"]) {
@@ -30,6 +42,51 @@ for (const channel of ["chrome", "msedge"]) {
     assert.deepEqual(selected, { args: channel === "chrome" ? [] : ["--browser", "msedge"], executablePath: candidate })
   })
 }
+
+for (const [channel, app] of [["chrome", "Google Chrome"], ["msedge", "Microsoft Edge"]]) {
+  test(`channel-specific ${channel} discovery uses trusted nativeHome rather than owner-isolated HOME`, () => {
+    const nativeHome = "/Users/native-browser-owner"
+    const isolatedHome = "/Users/isolated-cli-owner"
+    const native = `${nativeHome}/Applications/${app}.app/Contents/MacOS/${app}`
+    const isolated = `${isolatedHome}/Applications/${app}.app/Contents/MacOS/${app}`
+    const args = channel === "chrome" ? [] : ["--browser", "msedge"]
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", { HOME: isolatedHome },
+      file => file === native || file === isolated, { nativeHome }),
+      { args: [...args, "--executable-path", native], executablePath: native })
+  })
+
+  test(`channel-specific discovery keeps normal system/per-user macOS ${channel} order and never selects the other channel`, () => {
+    const env = { HOME: "/Users/owned-fixture" }
+    const system = `/Applications/${app}.app/Contents/MacOS/${app}`
+    const user = `/Users/owned-fixture/Applications/${app}.app/Contents/MacOS/${app}`
+    const args = channel === "chrome" ? [] : ["--browser", "msedge"]
+    assert.equal(typeof browser.channelBrowserSelection, "function")
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, () => true), { args, executablePath: system })
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, file => file === user),
+      { args: [...args, "--executable-path", user], executablePath: user })
+    assert.deepEqual(browser.channelBrowserSelection(channel, "darwin", env, file => ![system, user].includes(file)),
+      { args: [], executablePath: null })
+  })
+}
+
+test("the pure discovery module loads only itself and builtins, not the CLI/bootstrap closure", () => {
+  const modulePath = path.join(mcpRoot, "web-browser-discovery.cjs")
+  const code = `
+    const assert=require("node:assert/strict"), Module=require("node:module");
+    const source=${JSON.stringify(modulePath)}, loaded=[], load=Module._load;
+    Module._load=function(request,parent,isMain) {
+      if(parent?.filename===source) loaded.push(request);
+      return load.apply(this,arguments);
+    };
+    let helper;
+    try { helper=require(source); } finally { Module._load=load; }
+    assert.equal(typeof helper.channelBrowserSelection,"function");
+    assert.deepEqual(loaded,["path"]);
+  `
+  const got = spawnSync(process.execPath, ["--import", new URL("../_isolated_env.mjs", import.meta.url).href, "-e", code],
+    { env: process.env, encoding: "utf8" })
+  assert.equal(got.status, 0, got.stderr)
+})
 
 test("private preparation reuses the verified generation without profile acquisition", posixOnly, async () => {
   assert.equal(typeof browser.prepareBrowserRuntime, "function")
@@ -60,6 +117,12 @@ test("private preparation rejects unsupported generations and missing Node/npm",
   await assert.rejects(browser.prepareBrowserRuntime(m.options), /patch|verified/i)
   await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, exists: () => false }), /npm/i)
   await assert.rejects(browser.prepareBrowserRuntime({ ...m.options, current: { path: "/missing", version: "v1.0.0", abi: "1" } }), /Node/i)
+})
+test("normal refresh retains a primitive process-start diagnostic instead of losing a non-Error",posixOnly,async()=>{
+  const m=await refreshMachine("desk-web-primitive-resource-",{FAKE_NPM_VERSION:"0.0.82"})
+  const result=await m.refresh({spawn(){throw "Owned primitive spawn diagnostic"}})
+  assert.equal(result.ok,false)
+  assert.match(result.error,/Owned primitive spawn diagnostic/)
 })
 
 test("private preparation defaults options and fails before installation when npm is absent", async t => {
@@ -175,6 +238,8 @@ function main() {
     fs.mkdirSync(path.join(modules, "playwright-core", "lib"), { recursive: true })
     const lifecycle = ${JSON.stringify(stockLifecycle)}
     fs.writeFileSync(path.join(modules, "playwright-core", "lib", "coreBundle.js"), mode === "badlifecycle" ? lifecycle.replace("let backendPromise;", "let backendPromise = factory.promise;") : lifecycle)
+    fs.mkdirSync(path.join(modules, "playwright-core", "lib", "tools", "cli-client"), { recursive: true })
+    fs.writeFileSync(path.join(modules, "playwright-core", "lib", "tools", "cli-client", "session.js"), ${JSON.stringify(errorFixture.sessionSource)})
   }
 }
 setTimeout(main, Number(process.env.FAKE_NPM_DELAY_MS || 0))
@@ -222,6 +287,7 @@ function preinstall(state, version = "0.0.81", id = "installs/1-1-a", cli = "pro
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version, bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), cli)
   touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+  touch(path.join(modules, "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
   if (patched) playwrightPatch.apply({ dir: path.join(state, id), version, core: null })
   touch(path.join(state, "current.json"), JSON.stringify({ version, dir: id, previous: null }))
   return path.join(modules, "@playwright", "mcp", "cli.js")
@@ -301,12 +367,27 @@ function host(options) {
   const exits = []
   const kills = []
   const signals = new EventEmitter()
-  const running = browser.run({
+  const ownedNpm=[]
+  const ready=()=>browser.prepareBrowserRuntime({...options,npmSpawn:(...args)=>{
+    const child=(options.npmSpawn||spawn)(...args);ownedNpm.push(child);return child
+  }}).then(prepared=>({launch:{node:prepared.nodePath,indexFile:prepared.installed.cli,
+    args:browser.launchArgs(options.args||[],options.platform||process.platform,options.env,options.exists||existsSync,prepared.stateRoot),
+    env:browser.withNodeFirst(options.env,prepared.nodePath,options.platform||process.platform)}}),error=>({
+    retry:/still installing/.test(error.message),
+    payload:{status:"degraded",state:"degraded:"+error.code,code:error.code,summary:error.message,fix:"Call again in a minute or reconnect the desk-web MCP server"},
+  }))
+  const running = legacyProxy.serve({
+    ready:ready(),retry:ready,catalog:options.catalogFile?JSON.parse(readFileSync(options.catalogFile)).tools:legacyTools,
+    catalogVersion:options.catalogFile?JSON.parse(readFileSync(options.catalogFile)).playwrightMcpVersion:"owned unit fixture",
+    abort:()=>{for(const child of ownedNpm)browser.stopTree({platform:options.platform||process.platform,env:options.env,spawn},child,"SIGTERM")},
+    timeoutPayload:{code:"browser_not_ready",fix:"Call again in a minute"},
+    spawnPayload:error=>({code:"node_spawn_failed",summary:String(error)}),
+    exitPayload:(code,signal)=>({code:"browser_exited",summary:"Browser ended with "+(signal?"signal "+signal:"exit code "+code)}),
     stderr: { write: (text) => errors.push(text) },
     exit: (code) => exits.push(code),
     kill: (pid, signal) => kills.push(signal),
     signals,
-    ...options,
+    ...options,spawn:options.spawn||spawn,
     stdin,
     stdout,
   })
@@ -331,7 +412,9 @@ function host(options) {
 
 // Every host a test opened is ended after that test, even when an assertion threw first: stdin closes, and a stop signal ends an install or a browser that is still going. A browser child left running keeps its pipes open, and the test file's process then never exits.
 const sessions = []
+const ownedMcpSessions=[]
 afterEach(async () => {
+  for(const session of ownedMcpSessions.splice(0))await session.close()
   for (const session of sessions.splice(0)) {
     session.stdin.end()
     session.signals.emit("SIGTERM")
@@ -449,6 +532,13 @@ test("npm failures are reduced to their code and first message line", () => {
   assert.equal(browser.npmError({ stderr: "npm error code EAI_AGAIN\n", code: 1 }, "npm view"), "EAI_AGAIN")
   assert.equal(browser.npmError({ stderr: "", code: 7 }, "npm install"), "npm install exited with code 7")
   assert.equal(browser.npmError({ stderr: "spawn EMFILE", code: null }, "npm install"), "spawn EMFILE")
+  for (const key of ["sig", "SIG", "signature", "X-Amz-Signature", "X-Goog-Signature"]) {
+    const url = `https://packages.invalid/owned.tgz?scope=fixture&${key}=owned-not-a-real-signature&expiry=fixture`
+    assert.equal(browser.npmError({ stderr: `npm error code FETCH_ERROR\nnpm error request to ${url} failed\n`, code: 1 }, "npm install"),
+      "FETCH_ERROR: request to <redacted-url> failed")
+  }
+  assert.equal(browser.npmError({ stderr: "npm error request to https://packages.invalid/owned.tgz?format=public failed\n", code: 1 }, "npm install"),
+    "request to https://packages.invalid/owned.tgz?format=public failed")
 })
 
 test("the chosen Node's folder goes first on PATH, keeping the variable's own spelling", () => {
@@ -538,65 +628,38 @@ test("a lock that vanishes while it is replaced is decided by the next create", 
 
 // ---- run: the first launch installs, later launches start at once ----
 
-test("the first launch answers the handshake at once, installs meanwhile, then passes the first call to the installed browser under the chosen Node", posixOnly, async () => {
+test("cold explicit-browser preparation waits for a verified install under the chosen Node without launching a browser", posixOnly, async () => {
   const m = await machine("desk-web-first-", { env: { FAKE_NPM_VERSION: "0.0.90", FAKE_NPM_DELAY_MS: "600" } })
-  const spawns = []
-  const h = host({ ...m.options, args: ["--caps", "vision"], spawn: (file, argv, spawnOptions) => { spawns.push({ file, argv, stdio: spawnOptions.stdio, env: spawnOptions.env }); return spawn(file, argv, spawnOptions) } })
   const started = Date.now()
-  await h.handshake()
-  const list = await h.ask(2, "tools/list")
-  assert.ok(Date.now() - started < 500, "the handshake and the tool list never wait for the install")
-  assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
-  assert.equal(spawns.length, 0, "the browser has not started while npm installs")
-  const answer = await h.call(3)
-  assert.ok(Date.now() - started >= 500, "the call waited for the install")
-  assert.equal(answer.result.isError, undefined)
+  const prepared = await browser.prepareBrowserRuntime(m.options)
+  assert.ok(Date.now() - started >= 500, "preparation waits for the install, unlike the SDK handshake")
   const installed = browser.readInstalled(m.state)
   assert.equal(installed.version, "0.0.90")
-  assert.deepEqual(spawns.map(({ file, argv, stdio }) => ({ file, argv, stdio })), [{
-    file: m.install.node,
-    argv: [installed.cli, "--headless", "--isolated", "--output-dir", path.join(m.state, "output"), "--caps", "vision"],
-    stdio: ["pipe", "pipe", "pipe"],
-  }])
-  assert.equal(spawns[0].env.PATH, `${path.dirname(m.install.node)}:/usr/bin`)
-  assert.equal(spawns[0].env.npm_config_fetch_retries, undefined, "npm settings stay out of the browser's environment")
-  assert.match(answer.result.content[0].text, /^ran browser_navigate \{"url":"https:\/\/example\.com"\} \["--headless"/u)
-  assert.match(h.errors.join(""), /^\[web\] @playwright\/mcp 0\.0\.90 \(playwright-core 1\.64\.0-test\) from .*installs/u)
+  assert.equal(prepared.installed.dir,installed.dir)
+  assert.equal(prepared.nodePath,m.install.node)
+  assert.equal(prepared.stateRoot,m.state)
+  assert.equal(installed.patchRevision,4)
   const [call] = m.calls()
   assert.deepEqual(call.args.slice(0, 1).concat(call.args.slice(-3)), ["install", "--no-save", "--no-package-lock", "@playwright/mcp@latest"])
   assert.equal(call.retries, "0")
   assert.equal(call.timeout, "10000")
   assert.equal(existsSync(path.join(m.state, "refresh.lock")), false, "the lock is released")
-  assert.equal(h.read().filter((message) => message.method !== undefined).length, 0, "the host is never told the tool list changed")
-  await h.close()
-  assert.deepEqual(h.exits, [0])
 })
 
-test("a later launch starts the installed copy with no npm call, then starts the refresh", posixOnly, async () => {
+test("later explicit-browser preparation returns the verified copy without npm, then starts normal refresh", posixOnly, async () => {
   const refreshes = []
   const m = await machine("desk-web-later-", { startRefresh: (o) => refreshes.push(o), platform: "darwin" })
   const cli = preinstall(m.state)
-  const l = launch({ ...m.options, args: [] })
-  await l.ready
-  assert.equal(l.spawns[0].argv[0], cli)
+  const prepared = await browser.prepareBrowserRuntime(m.options)
+  assert.equal(prepared.installed.cli, cli)
   assert.deepEqual(m.calls(), [], "session start never waits on npm")
   assert.deepEqual(refreshes, [{ node: m.install.node, npmCli: m.install.cli, env: m.options.env }])
-  assert.match(l.errors.join(""), /@playwright\/mcp 0\.0\.81 from /u)
-  l.child.emit("exit", null, "SIGTERM")
-  await l.running
 })
 
-test("an unreachable registry fails fast with one line naming the registry, and serves the browser as degraded rather than a silent exit", posixOnly, async () => {
-  for (const [mode, registry] of [["fail", "https://registry.example/"], ["failall", "the configured npm registry"]]) {
+test("unreachable registries refuse normal runtime preparation without publishing a generation or retaining the lock", posixOnly, async () => {
+  for (const mode of ["fail","failall"]) {
     const m = await machine("desk-web-offline-", { env: { FAKE_NPM_MODE: mode } })
-    const { errors, exits, responses } = await launchDegraded(m.options, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_navigate" } }])
-    assert.deepEqual(exits, [], "never exits; the browser degrades instead")
-    assert.equal(errors.join(""), `[web] Desk could not install @playwright/mcp@latest from ${registry} (ENOTCONN: network unreachable), so the browser is unavailable; serving degraded:install_failed\n`)
-    const payload = toolPayload(responses[0])
-    assert.equal(payload.status, "degraded")
-    assert.equal(payload.state, "degraded:install_failed")
-    assert.equal(payload.code, "install_failed")
-    assert.match(payload.fix, /reconnect the desk-web MCP server/u)
+    await assert.rejects(browser.prepareBrowserRuntime(m.options),error=>error.code==="install_failed"&&/ENOTCONN: network unreachable/.test(error.message))
     assert.deepEqual(readdirSync(path.join(m.state, "installs")), [])
     assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
   }
@@ -605,26 +668,18 @@ test("an unreachable registry fails fast with one line naming the registry, and 
 test("an install that npm reports as done but left incomplete is an error, not a launch", posixOnly, async () => {
   for (const mode of ["silent", "nocli", "nobin"]) {
     const m = await machine("desk-web-incomplete-", { env: { FAKE_NPM_MODE: mode } })
-    const { errors, exits } = await launchDegraded(m.options)
-    assert.deepEqual(exits, [])
-    assert.match(errors.join(""), /\(npm install exited with code 0\)/u)
-    assert.match(errors.join(""), /serving degraded:install_failed/u)
+    await assert.rejects(browser.prepareBrowserRuntime(m.options),/npm install exited with code 0/)
   }
   const m = await machine("desk-web-stringbin-", { env: { FAKE_NPM_MODE: "stringbin" } })
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
-  await h.close()
+  const prepared=await browser.prepareBrowserRuntime(m.options)
+  assert.equal(prepared.installed.patchRevision,4)
 })
 
 test("a registry that hangs is cut off at the first-install time limit", posixOnly, async () => {
   const m = await machine("desk-web-hang-", { env: { FAKE_NPM_MODE: "hang" }, firstInstallMs: 100 })
   const started = Date.now()
-  const { errors, exits } = await launchDegraded(m.options)
+  await assert.rejects(browser.prepareBrowserRuntime(m.options),/npm install timed out/)
   assert.ok(Date.now() - started < 10000)
-  assert.deepEqual(exits, [])
-  assert.match(errors.join(""), /\(npm install timed out after 1 seconds\)/u)
 })
 
 test("an npm call that times out is ended with everything it started", posixOnly, async (t) => {
@@ -633,11 +688,11 @@ test("an npm call that times out is ended with everything it started", posixOnly
   const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
   let ended = false
   t.after(() => { if (!ended && existsSync(grandchildFile)) { const pid = Number(readFileSync(grandchildFile, "utf8")); if (alive(pid)) process.kill(pid, "SIGKILL") } })
-  const running = launchDegraded(m.options)
+  const running = browser.prepareBrowserRuntime(m.options).then(()=>assert.fail("hanging npm must refuse"),error=>error)
   const helper = Number(await until(() => (existsSync(grandchildFile) ? readFileSync(grandchildFile, "utf8") : ""), "the install to start its helper"))
   assert.equal(alive(helper), true, "the helper runs while npm is within its limit")
-  const { errors } = await running
-  assert.match(errors.join(""), /timed out/u)
+  t.diagnostic("E4_FIX_CHILD "+JSON.stringify({pid:helper,start:execFileSync("/bin/ps",["-p",String(helper),"-o","lstart="],{encoding:"utf8"}).trim()}))
+  assert.match((await running).message, /timed out/u)
   await until(() => !alive(helper), "the helper npm started to end")
   ended = true
 })
@@ -684,8 +739,7 @@ test("a Windows tree stop runs taskkill from SystemRoot and falls back to the np
 
 test("npm that cannot be spawned, or fails to start, is reported like any other install failure", posixOnly, async () => {
   const m = await machine("desk-web-npmspawn-", { npmSpawn: () => { throw new Error("spawn EMFILE") } })
-  const { errors } = await launchDegraded(m.options)
-  assert.match(errors.join(""), /from the configured npm registry \(spawn EMFILE\)/u)
+  await assert.rejects(browser.prepareBrowserRuntime(m.options),/spawn EMFILE/)
 
   const n = await machine("desk-web-npmerror-", {
     npmSpawn: () => {
@@ -696,40 +750,32 @@ test("npm that cannot be spawned, or fails to start, is reported like any other 
       return child
     },
   })
-  const { errors: errorsK } = await launchDegraded(n.options)
-  assert.match(errorsK.join(""), /\(spawn ENOENT\)/u)
+  await assert.rejects(browser.prepareBrowserRuntime(n.options),/spawn ENOENT/)
 })
 
-test("a launch that finds another session installing waits for it, holds the first call, then starts that copy", posixOnly, async () => {
+test("explicit runtime preparation waits for another installer and returns that same verified generation", posixOnly, async () => {
   const refreshes = []
   const m = await machine("desk-web-wait-", { startRefresh: (o) => refreshes.push(o) })
   mkdirSync(m.state, { recursive: true })
   writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
   setTimeout(() => { preinstall(m.state, "0.0.85", "installs/1-1-a", STUB_CLI); require("node:fs").unlinkSync(path.join(m.state, "refresh.lock")) }, 300)
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
-  assert.match(h.errors.join(""), /@playwright\/mcp 0\.0\.85/u)
+  const prepared=await browser.prepareBrowserRuntime(m.options)
+  assert.equal(prepared.installed.version,"0.0.85")
   assert.deepEqual(m.calls(), [])
   assert.equal(refreshes.length, 1)
-  await h.close()
 })
 
 test("a launch gives up when another session's install outlasts the time limit", posixOnly, async () => {
   const m = await machine("desk-web-waitlong-", { firstInstallMs: 0 })
   mkdirSync(m.state, { recursive: true })
   writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
-  const { errors } = await launchDegraded(m.options)
-  assert.match(errors.join(""), /\(another Desk session was still installing it\)/u)
+  await assert.rejects(browser.prepareBrowserRuntime(m.options),/another Desk session was still installing it/)
 })
 
 test("a state folder that cannot hold an install fails the launch and releases the lock", posixOnly, async () => {
   const m = await machine("desk-web-badstate-")
   touch(path.join(m.state, "installs"), "a file where a folder belongs")
-  const { errors, exits } = await launchDegraded(m.options)
-  assert.deepEqual(exits, [])
-  assert.match(errors.join(""), /could not start the browser: ENOTDIR.*serving degraded:launch_failed/u)
+  await assert.rejects(browser.prepareBrowserRuntime(m.options),{code:"ENOTDIR"})
   assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
 })
 
@@ -742,15 +788,12 @@ async function refreshMachine(prefix, env = {}) {
 
 test("a fresh install is lifecycle-patched before any browser process starts", posixOnly, async () => {
   const m = await machine("desk-web-patch-fresh-")
-  const h = host(m.options)
-  await h.handshake()
-  const result = await h.call(2)
-  assert.notEqual(result.result.isError, true)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 3)
+  const result = await browser.prepareBrowserRuntime(m.options)
+  assert.equal(result.nodePath,m.install.node)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   const installed = browser.readInstalled(m.state)
   const bundle = readFileSync(path.join(installed.dir, "node_modules", "playwright-core", "lib", "coreBundle.js"), "utf8")
   assert.match(bundle, /No browser session is open/)
-  await h.close()
 })
 
 test("an offline legacy install is copied and patched without changing its live generation", posixOnly, async () => {
@@ -762,16 +805,13 @@ test("an offline legacy install is copied and patched without changing its live 
   const bin = path.join(original, ".bin", "playwright-mcp")
   mkdirSync(path.dirname(bin), { recursive: true })
   symlinkSync("../@playwright/mcp/cli.js", bin)
-  const l = launch(m.options)
-  await l.ready
+  await browser.prepareBrowserRuntime(m.options)
   const installed = browser.readInstalled(m.state)
   assert.notEqual(installed.cli, cli, "a new client must use a new, patched generation")
-  assert.equal(installed.patchRevision, 3)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.equal(readFileSync(bundle, "utf8"), stockLifecycle, "a running old client keeps unmodified files")
   assert.equal(require("node:fs").readlinkSync(path.join(installed.dir, "node_modules", ".bin", "playwright-mcp")), "../@playwright/mcp/cli.js")
   assert.deepEqual(m.calls(), [], "migration is offline, not a reinstall")
-  l.child.emit("exit", 0, null)
-  await l.running
 })
 
 test("offline migration preserves a recorded reader refusal and its retry age", posixOnly, async () => {
@@ -780,27 +820,19 @@ test("offline migration preserves a recorded reader refusal and its retry age", 
   const marker = touch(path.join(m.state, "installs/1-1-a/reader-unavailable"))
   const age = new Date(Date.now() - 1000)
   utimesSync(marker, age, age)
-  const l = launch(m.options)
-  await l.ready
+  await browser.prepareBrowserRuntime(m.options)
   const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, 3)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.equal(installed.reader, true)
   assert.ok(Math.abs(installed.unavailableAt - age.getTime()) < 1)
   assert.deepEqual(m.calls(), [])
-  l.child.emit("exit", 0, null)
-  await l.running
 })
 
-test("a patch-incompatible fresh install degrades without publishing an unsafe pointer", posixOnly, async () => {
+test("a patch-incompatible fresh install refuses explicit preparation without publishing an unsafe pointer", posixOnly, async () => {
   const m = await machine("desk-web-patch-unsupported-", { env: { FAKE_NPM_MODE: "badlifecycle" } })
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.equal(answer.result.isError, true)
-  assert.equal(toolPayload(answer).code, "browser_patch_unsupported")
+  await assert.rejects(browser.prepareBrowserRuntime(m.options),{code:"browser_patch_unsupported"})
   assert.equal(existsSync(path.join(m.state, "current.json")), false)
   assert.deepEqual(m.calls().map(call => call.args[0]), ["install"], "compatibility is not a registry or operator configuration fault")
-  await h.close()
 })
 
 test("an unchanged npm version still migrates a missing lifecycle patch", posixOnly, async () => {
@@ -808,7 +840,7 @@ test("an unchanged npm version still migrates a missing lifecycle patch", posixO
   const cli = preinstall(m.state, "0.0.81", "installs/1-1-a", undefined, false)
   touch(path.join(path.dirname(path.dirname(path.dirname(cli))), "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
   assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: true })
-  assert.equal(browser.readInstalled(m.state).patchRevision, 3)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   assert.deepEqual(m.calls().map(call => call.args[0]), ["view"])
 })
 
@@ -818,72 +850,102 @@ test("a revision-one generation migrates offline without changing its live bundl
   const dir = path.join(m.state, "installs/1-1-a")
   const lib = path.join(dir, "node_modules", "playwright-core", "lib")
   const bundle = path.join(lib, "coreBundle.js")
-  const old = readFileSync(bundle, "utf8").replace('  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n', "")
+  const current = readFileSync(bundle, "utf8")
+  const start = "function createServer(name, version3, factory, transportInitialized, runHeartbeat) {"
+  const end = "\nfunction addServerListener("
+  // A genuine revision-one input: only idle-close is patched; no revision-three
+  // native regions are partially deleted and mislabelled as historical source.
+  const old = stockLifecycle.replace(stockLifecycle.slice(stockLifecycle.indexOf(start), stockLifecycle.indexOf(end)),
+    current.slice(current.indexOf(start), current.indexOf(end)))
   writeFileSync(bundle, old)
+  // Revision one predates the external Session transport as well. Pairing its
+  // Core with a revision-four Session would be an unsupported partial input.
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
   writeFileSync(path.join(lib, "desk-extension-credential.cjs"), "old generation helper")
   touch(path.join(dir, "playwright-patch.json"), JSON.stringify({
     revision: 1, mcpVersion: "0.0.81", coreVersion: null,
     bundleSha256: require("node:crypto").createHash("sha256").update(old).digest("hex"),
   }))
-  const l = launch(m.options)
-  await l.ready
+  await browser.prepareBrowserRuntime(m.options)
   const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, 3)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.notEqual(installed.cli, cli)
   assert.equal(readFileSync(bundle, "utf8"), old)
   assert.equal(readFileSync(path.join(lib, "desk-extension-credential.cjs"), "utf8"), "old generation helper")
   assert.deepEqual(m.calls(), [])
-  l.child.emit("exit", 0, null)
-  await l.running
 })
 
-test("revision-two stop custody migrates offline without mutating the live generation", posixOnly, async () => {
+for (const revision of [2, 3]) {
+test(`released revision-${revision} stop custody migrates offline without mutating the live generation`, posixOnly, async () => {
   const m = await machine("desk-web-stop-revision-", { env: { FAKE_NPM_MODE: "failall" }, startRefresh: () => {} })
   const cli = preinstall(m.state)
   const dir = path.join(m.state, "installs/1-1-a")
   const lib = path.join(dir, "node_modules", "playwright-core", "lib")
   const bundle = path.join(lib, "coreBundle.js")
   const helper = readFileSync(path.join(lib, "desk-extension-credential.cjs"))
-  let old = readFileSync(bundle, "utf8")
-  for (const [start, end] of [
-    ["async function monitorSocketPath(", "\nasync function startCliDaemonServer("],
-    ["async function startCliDaemonServer(", "\nasync function saveSessionFile("],
-  ]) {
-    const from = old.indexOf(start), to = old.indexOf(end, from)
-    const stockFrom = stockLifecycle.indexOf(start), stockTo = stockLifecycle.indexOf(end, stockFrom)
-    assert.ok(from >= 0 && to > from && stockFrom >= 0 && stockTo > stockFrom)
-    old = old.slice(0, from) + stockLifecycle.slice(stockFrom, stockTo) + old.slice(to)
+  const current = readFileSync(bundle, "utf8")
+  const start = "function createServer(name, version3, factory, transportInitialized, runHeartbeat) {"
+  const end = "\nfunction addServerListener("
+  // Genuine released predecessors: idle-close plus the credential initializer,
+  // with revision three's complete custody repair, never a partially erased V4.
+  let old = stockLifecycle.replace(stockLifecycle.slice(stockLifecycle.indexOf(start), stockLifecycle.indexOf(end)),
+    current.slice(current.indexOf(start), current.indexOf(end)))
+    .replace("  const relay = new CDPRelayServer(",
+      '  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n  const relay = new CDPRelayServer(')
+  if (revision === 3) {
+    old = old.replace("async function monitorSocketPath(socketPath) {", "async function monitorSocketPath(socketPath, deskStopping) {")
+      .replace("    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);",
+        "    const currentStat = await import_fs67.default.promises.stat(socketPath).catch(() => void 0);\n    if (deskStopping?.()) return;")
+      .replace("  const server = import_net10.default.createServer((socket) => {",
+        "  let deskStopInProgress = false;\n  const server = import_net10.default.createServer((socket) => {")
+      .replace('        if (method === "stop") {',
+        '        if (method === "stop") {\n          deskStopInProgress = !!options?.exitOnClose;')
+      .replace("    if (options?.exitOnClose)\n      gracefullyProcessExitDoNotHang(0);",
+        "    if (options?.exitOnClose && !deskStopInProgress)\n      gracefullyProcessExitDoNotHang(0);")
+      .replace("  await monitorSocketPath(socketPath);", "  await monitorSocketPath(socketPath, () => deskStopInProgress);")
+    for (const invalid of [
+      old.replace("    if (deskStopping?.()) return;\n", ""),
+      old.replace("  let deskStopInProgress = false;\n", ""),
+      old.replace("    if (deskStopping?.()) return;", "    if (deskStopping?.()) return;\n    if (deskStopping?.()) return;"),
+      old.replace('  await require("./desk-extension-credential.cjs").initialize(customUserDataDir, profileDirectory);\n', ""),
+      old.replace("!currentStat.isSocket()", "!currentStat.isSocket"),
+      old.replace("  return socketPath;", "  return null;"),
+      old.replace("async function createBrowser(config,", "async function unexpectedBrowser(config,"),
+    ]) assert.throws(() => playwrightPatch.patchSource(invalid), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
+    // A V4 browser/acquisition attached to the old custody-only daemon is not a
+    // released generation and must not enter the historical migration branch.
+    const daemonStart = "async function startCliDaemonServer(", daemonEnd = "\nasync function saveSessionFile("
+    const mixed = current.slice(0, current.indexOf(daemonStart)) +
+      old.slice(old.indexOf(daemonStart), old.indexOf(daemonEnd, old.indexOf(daemonStart))) +
+      current.slice(current.indexOf(daemonEnd, current.indexOf(daemonStart)))
+    assert.throws(() => playwrightPatch.patchSource(mixed), { code: "PLAYWRIGHT_PATCH_UNSUPPORTED" })
   }
   writeFileSync(bundle, old)
+  writeFileSync(path.join(lib, "tools/cli-client/session.js"), errorFixture.sessionSource)
   const receiptFile = path.join(dir, "playwright-patch.json")
   const receipt = JSON.parse(readFileSync(receiptFile, "utf8"))
-  receipt.revision = 2
+  receipt.revision = revision
   receipt.bundleSha256 = require("node:crypto").createHash("sha256").update(old).digest("hex")
   writeFileSync(receiptFile, JSON.stringify(receipt))
-  assert.equal(browser.readInstalled(m.state).patchRevision, 0, "the old receipt must not qualify without the stop repair")
-  const l = launch(m.options)
-  await l.ready
+  assert.equal(browser.readInstalled(m.state).patchRevision, 0, "the historical receipt must not qualify as current")
+  await browser.prepareBrowserRuntime(m.options)
   const installed = browser.readInstalled(m.state)
-  assert.equal(installed.patchRevision, 3)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.notEqual(installed.cli, cli)
   assert.equal(readFileSync(bundle, "utf8"), old)
+  assert.equal(readFileSync(path.join(lib, "tools/cli-client/session.js"), "utf8"), errorFixture.sessionSource)
   assert.deepEqual(readFileSync(path.join(lib, "desk-extension-credential.cjs")), helper)
   assert.deepEqual(m.calls(), [], "the staged repair must not require npm")
-  l.child.emit("exit", 0, null)
-  await l.running
 })
+}
 
 test("concurrent legacy clients publish one patched generation without npm", posixOnly, async () => {
   const m = await machine("desk-web-patch-concurrent-", { startRefresh: () => {} })
   preinstall(m.state, "0.0.81", "installs/1-1-a", STUB_CLI, false)
-  await Promise.all(Array.from({ length: 4 }, async () => {
-    const h = host(m.options)
-    await h.handshake()
-    assert.notEqual((await h.call(2)).result.isError, true)
-    await h.close()
-  }))
+  const prepared=await Promise.all(Array.from({ length: 4 },()=>browser.prepareBrowserRuntime(m.options)))
+  assert.equal(new Set(prepared.map(result=>result.installed.dir)).size,1)
   assert.equal(readdirSync(path.join(m.state, "installs")).length, 2)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 3)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   assert.deepEqual(m.calls(), [])
 })
 
@@ -894,14 +956,11 @@ test("a changed bundle invalidates its receipt and migrates instead of mutating 
   const changed = readFileSync(bundle, "utf8") + "\n// Owned changed package tree.\n"
   writeFileSync(bundle, changed)
   assert.equal(browser.readInstalled(m.state).patchRevision, 0)
-  const h = host(m.options)
-  await h.handshake()
-  assert.notEqual((await h.call(2)).result.isError, true)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 3)
+  await browser.prepareBrowserRuntime(m.options)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
   assert.notEqual(browser.readInstalled(m.state).cli, cli)
   assert.equal(readFileSync(bundle, "utf8"), changed)
   assert.deepEqual(m.calls(), [])
-  await h.close()
 })
 
 test("migration rejects package symlinks outside the install without reading or modifying their target", posixOnly, async () => {
@@ -910,18 +969,13 @@ test("migration rejects package symlinks outside the install without reading or 
   const outside = touch(path.join(m.root, "outside-package.txt"), "owned outside fixture")
   symlinkSync(outside, path.join(path.dirname(path.dirname(path.dirname(cli))), "outside"))
   const before = readFileSync(path.join(m.state, "current.json"), "utf8")
-  const h = host(m.options)
-  await h.handshake()
-  const answer = await h.call(2)
-  assert.equal(answer.result.isError, true)
-  assert.equal(toolPayload(answer).code, "browser_patch_failed")
+  await assert.rejects(browser.prepareBrowserRuntime(m.options),{code:"browser_patch_failed"})
   assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
   assert.equal(readFileSync(outside, "utf8"), "owned outside fixture")
   assert.deepEqual(m.calls(), [])
-  await h.close()
 })
 
-test("an incompatible refresh retains the compatible pointer and surfaces its failure on next launch", posixOnly, async () => {
+test("an incompatible refresh retains its failure record and the verified pointer used by later explicit preparation", posixOnly, async () => {
   const m = await refreshMachine("desk-web-patch-refresh-fail-", { FAKE_NPM_MODE: "badlifecycle", FAKE_NPM_VERSION: "0.0.99" })
   const cli = preinstall(m.state)
   const before = readFileSync(path.join(m.state, "current.json"), "utf8")
@@ -929,13 +983,10 @@ test("an incompatible refresh retains the compatible pointer and surfaces its fa
   assert.equal(result.ok, false)
   assert.equal(result.code, "browser_patch_unsupported")
   assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 3)
-  const l = launch({ ...m.options, startRefresh: () => {} })
-  await l.ready
-  assert.equal(l.spawns[0].argv[0], cli)
-  assert.match(l.errors.join(""), /last browser refresh failed/i)
-  l.child.emit("exit", 0, null)
-  await l.running
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
+  const prepared=await browser.prepareBrowserRuntime({...m.options,startRefresh(){}})
+  assert.equal(prepared.installed.cli,cli)
+  assert.equal(JSON.parse(readFileSync(path.join(m.state,"last-refresh.json"))).result.code,"browser_patch_unsupported")
 })
 
 test("a pruning failure cannot publish a pointer to the generation being discarded", posixOnly, async (t) => {
@@ -949,7 +1000,7 @@ test("a pruning failure cannot publish a pointer to the generation being discard
   })
   assert.equal((await m.refresh()).ok, false)
   assert.equal(readFileSync(path.join(m.state, "current.json"), "utf8"), before)
-  assert.equal(browser.readInstalled(m.state).patchRevision, 3)
+  assert.equal(browser.readInstalled(m.state).patchRevision, playwrightPatch.REVISION)
 })
 
 test("a refresh that finds the channel unchanged installs nothing", posixOnly, async () => {
@@ -1054,14 +1105,12 @@ test("a refresh fills its options from the real process", posixOnly, async () =>
 test("the launch starts the real refresh detached, and it brings the copy up to the channel", posixOnly, async () => {
   const m = await machine("desk-web-detached-", { env: { FAKE_NPM_VERSION: "0.0.87" }, startRefresh: undefined })
   preinstall(m.state, "0.0.81")
-  const l = launch(m.options)
-  await l.ready
-  assert.match(l.errors.join(""), /0\.0\.81/u, "this session starts the copy it found")
+  const prepared=await browser.prepareBrowserRuntime(m.options)
+  assert.equal(prepared.installed.version,"0.0.81","this operation retains the generation it selected")
   const record = path.join(m.state, "last-refresh.json")
   for (let tries = 0; tries < 100 && !existsSync(record); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100))
   assert.deepEqual(JSON.parse(readFileSync(record, "utf8")).result, { ok: true, version: "0.0.87", changed: true })
   assert.equal(browser.readInstalled(m.state).version, "0.0.87", "the next session starts the new release")
-  l.child.emit("exit", 0, null)
 })
 
 // ---- run: failures before any install ----
@@ -1080,26 +1129,26 @@ test("with no compatible Node the launcher names the fix and serves the browser 
   assert.match(payload.fix, /Install Node >=20\.0\.0, then reconnect the desk-web MCP server/u)
 })
 
-test("a Node with no npm beside it is named and served as degraded, never a silent exit", async () => {
+test("missing npm refuses explicit browser preparation without conflating it with the SDK handshake", async () => {
   const root = await mkTempRoot("desk-web-nonpm-")
   const node = touch(path.join(root, "bin", "node"))
-  const { errors, exits } = await launchDegraded({
+  await assert.rejects(browser.prepareBrowserRuntime({
     env: { PATH: "/usr/bin" }, platform: "linux", arch: "x64", homeDir: root, systemPrefix: root,
     current: { path: node, version: "v22.9.0", abi: "127" }, now: () => 0, probe: () => null,
-  })
-  assert.deepEqual(exits, [])
-  assert.match(errors.join(""), /has no npm beside it.*serving degraded:npm_missing/u)
+  }),error=>error.code==="npm_missing"&&/has no npm beside it/.test(error.message))
 })
 
 test("a Node that cannot be spawned is named and served as degraded, never a silent exit", posixOnly, async () => {
   const m = await machine("desk-web-spawnfail-", { startRefresh: () => {} })
-  preinstall(m.state)
-  const l = launch(m.options)
+  const l = launch({...m.options,current:{path:path.join(m.root,"old/node"),version:"v16.20.2",abi:"93"},
+    env:{...m.options.env,PATH:path.dirname(m.install.node)},
+    systemPrefix:path.dirname(path.dirname(m.install.node)),probe:()=>({version:"v22.9.0",abi:"127"})})
   await l.ready
+  assert.equal(l.spawns.length,1,"the existing normal selector chose the owned compatible Node")
   l.child.emit("error", new Error("spawn EACCES"))
   await l.running
   assert.deepEqual(l.exits, [])
-  assert.match(l.errors.join(""), /could not start it: spawn EACCES.*serving degraded:node_spawn_failed/u)
+  assert.match(l.errors.join(""), /Could not start the compatible browser frontend: spawn EACCES.*serving degraded:node_spawn_failed/u)
 })
 
 test("the degraded responder completes a full JSON-RPC handshake: initialize with and without a protocol version, ping, tools/list, an unknown method, and a line that is not JSON", async () => {
@@ -1163,15 +1212,13 @@ test("the degraded responder tolerates a stdin double with no resume method", as
   await running
 })
 
-test("anything that throws while starting is one stderr line and a degraded launch_failed, never a crash or a silent exit", async () => {
-  for (const [thrown, expected] of [
-    [new Error("disk gone"), /could not start the browser: disk gone.*serving degraded:launch_failed/u],
-    ["plain text", /could not start the browser: plain text.*serving degraded:launch_failed/u],
-  ]) {
-    const m = await machine("desk-web-throw-", { exists: () => { throw thrown } })
-    const { errors, exits } = await launchDegraded(m.options)
+test("SDK startup exceptions, including non-Errors, use the same explicit two-tool degraded responder", async () => {
+  for (const thrown of [new Error("disk gone"),"plain text"]) {
+    const env=Object.defineProperty({},"HOME",{get(){throw thrown}})
+    const { errors, exits } = await launchDegraded({env})
     assert.deepEqual(exits, [])
-    assert.match(errors.join(""), expected)
+    assert.ok(errors.join("").includes(String(thrown.message||thrown)))
+    assert.match(errors.join(""),/serving degraded:browser_frontend_unavailable/)
   }
 })
 
@@ -1180,21 +1227,16 @@ test("run fills every other option from the real process", async () => {
   const cli = preinstall(state)
   const refreshes = []
   const spawns = []
-  const child = fakeChild()
-  const running = browser.run({
+  const prepared = await browser.prepareBrowserRuntime({
     env: { PATH: path.dirname(process.execPath), HOME: "/nonexistent", DESK_NODE_SYSTEM_PREFIX: "/nonexistent-prefix", DESK_BROWSER_STATE_DIR: state },
-    spawn: (file, argv) => { spawns.push([file, argv]); setImmediate(() => child.emit("exit", 0, null)); return child },
     startRefresh: (o) => refreshes.push(o),
     exit: () => {},
     stderr: { write: () => {} },
   })
-  await running
-  assert.equal(spawns.length, 1)
-  assert.equal(spawns[0][0], process.execPath)
-  assert.equal(spawns[0][1][0], cli)
+  assert.equal(prepared.nodePath,process.execPath)
+  assert.equal(prepared.installed.cli,cli)
   assert.match(refreshes[0].npmCli, /npm-cli\.js$/u)
-  const callerArgs = process.argv.slice(2)
-  assert.deepEqual(spawns[0][1].slice(spawns[0][1].length - callerArgs.length), callerArgs)
+  assert.equal(spawns.length,0,"preparation does not launch a browser")
 })
 
 test("run finds HOME through USERPROFILE and the running system's home", async () => {
@@ -1208,7 +1250,7 @@ test("run finds HOME through USERPROFILE and the running system's home", async (
 // ---- the host configs ----
 
 test("the Claude and Copilot configs declare the web server beside Desk, never a bare playwright name", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers
   assert.deepEqual(Object.keys(claude), ["desk", "desk-web"])
   const server = claude["desk-web"]
   assert.deepEqual(Object.keys(server), ["type", "command", "args", "cwd", "env"])
@@ -1216,7 +1258,7 @@ test("the Claude and Copilot configs declare the web server beside Desk, never a
   assert.equal(server.command, "node")
   assert.equal(server.args[0], "-e")
   assert.doesNotMatch(server.args[1], /\$\{|=>|`|\?\.|\blet\s|\bconst\s/u)
-  assert.match(server.args[1], /require\(path\.join\(root, 'mcp', 'web\.cjs'\)\)\.run\(\{ args: \[\] \}\)/u)
+  assert.match(server.args[1], /require\(path\.join\(root,'mcp','web\.cjs'\)\)\.run\(\{args:\[\]\}\)/u)
   assert.equal(server.cwd, ".")
   assert.deepEqual(server.env, { DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" })
   const copilot = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.copilot.json"), "utf8")).mcpServers
@@ -1227,11 +1269,12 @@ test("the Claude and Copilot configs declare the web server beside Desk, never a
 // ---- the tool catalog never changes under the host ----
 
 test("the inline launcher's degraded tool names, the degraded catalog and the first-use catalog all list the browser's tools in one order", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
-  const inline = /var names = (\[[^\]]*\]);/u.exec(claude.args[1])
-  assert.ok(inline, "the inline launcher declares its own list of browser tool names")
-  assert.deepEqual(JSON.parse(inline[1].replace(/'/gu, '"')), browser.BROWSER_TOOL_NAMES)
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
+  const declarations=claude.args[1].split("\n").filter(line=>/^var (id|tools)=/.test(line)||/^function described\(/.test(line)).join("\n")
+  const inline=new Function(declarations+";return tools")()
+  assert.deepEqual(inline.map(tool=>tool.name), browser.BROWSER_TOOL_NAMES)
   const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8")).tools
+  assert.deepEqual(inline,snapshot,"inline fallback preserves full discoverable schemas, not just names")
   assert.deepEqual(snapshot.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
   for (const tool of snapshot) {
     assert.equal(typeof tool.description, "string", tool.name)
@@ -1239,40 +1282,35 @@ test("the inline launcher's degraded tool names, the degraded catalog and the fi
   }
 })
 
-test("a first launch answers tools/list with the same snapshot every time, and with the degraded list when no usable snapshot exists", posixOnly, async () => {
+test("retained proxy lists its explicit unit catalog consistently while default degraded tools retain the canonical two schemas", posixOnly, async () => {
   const m = await machine("desk-web-catalog-", { env: { FAKE_NPM_MODE: "fail" } })
   const h = host(m.options)
   await h.handshake()
   const first = await h.ask(2, "tools/list")
   const second = await h.ask(3, "tools/list")
   assert.deepEqual(first.result, second.result)
-  assert.deepEqual(first.result.tools, JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8")).tools)
+  assert.deepEqual(first.result.tools,legacyTools)
   assert.ok(first.result.tools.some((tool) => tool.name === "browser_navigate" && tool.inputSchema.properties.url), "real input schemas, not placeholders")
   await h.close()
 
-  const dir = await mkTempRoot("desk-web-nocatalog-")
-  for (const [name, text] of [["missing.json", null], ["empty.json", JSON.stringify({ tools: [] })], ["junk.json", "not json"]]) {
-    if (text !== null) writeFileSync(path.join(dir, name), text)
-    const n = await machine("desk-web-nocatalog-", { env: { FAKE_NPM_MODE: "fail" }, catalogFile: path.join(dir, name) })
-    const g = host(n.options)
-    await g.handshake()
-    const list = await g.ask(2, "tools/list")
-    assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
-    assert.deepEqual(list.result.tools[0].inputSchema, { type: "object", properties: {}, additionalProperties: true })
-    await g.close()
-  }
+  const input=new PassThrough(),output=new PassThrough(),read=collect(output)
+  const serving=browser.serveDegraded({stdin:input,stdout:output,payload:{code:"owned_unavailable"}})
+  input.end(JSON.stringify({jsonrpc:"2.0",id:1,method:"tools/list"})+"\n")
+  await serving
+  assert.deepEqual(read()[0].result.tools,JSON.parse(readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
 })
 
-test("a host that calls the browser while the install still runs gets the answer, never an error and never a list_changed", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-web-hostflow-")
-  const session = await openSession({ command: process.execPath, args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env: { ...fixture.env, FAKE_NPM_DELAY_MS: "1500" } })
-  assert.doesNotMatch(session.stderr(), /@playwright\/mcp 0/u, "the install is still running when the host sends the call")
-  const sent = Date.now()
-  const answer = await session.request("tools/call", { name: "browser_navigate", arguments: { url: "https://example.com" } }, { timeout: 30000 })
-  assert.ok(Date.now() - sent > 500, "the call waited for the install")
+test("actual default SDK handshake and invalid/legacy calls do not wait for or start browser installation", posixOnly, async () => {
+  const home=await makeIsolatedHome("desk-web-hostflow-")
+  const session = await openSession({ command: process.execPath, args: [path.join(mcpRoot,"web.cjs")], cwd: home.root, env: isolatedEnv(home) })
+  ownedMcpSessions.push(session)
+  const answer = await session.request("tools/call", { name: "browser_context", arguments: {action:"create"} })
   assert.equal(answer.error, undefined)
-  assert.equal(answer.result.isError, undefined)
-  assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
+  assert.equal(answer.result.isError,true)
+  assert.equal(toolPayload(answer).code,"invalid_arguments")
+  const legacy=await session.call("browser_navigate",{url:"https://example.com"})
+  assert.equal(legacy.payload.code,"unknown_tool")
+  assert.equal(existsSync(path.join(home.home,".local/state/ouroboros-skills/desk/browser")),false)
   assert.deepEqual(session.notifications, [])
   await session.close()
 })
@@ -1287,7 +1325,7 @@ test("an install that fails answers held and later calls with the code and the f
   assert.match(toolPayload(held).fix, /reconnect the desk-web MCP server/u)
   const later = await h.call(3)
   assert.equal(toolPayload(later).code, "install_failed")
-  assert.equal((await h.ask(4, "tools/list")).result.tools.length, browser.BROWSER_TOOL_NAMES.length)
+  assert.equal((await h.ask(4, "tools/list")).result.tools.length, legacyTools.length)
   await h.close()
 })
 
@@ -1542,9 +1580,11 @@ async function snapshotFile(tools, version = "9.9.9") {
   return file
 }
 
-test("the snapshot records the Playwright MCP release it came from", () => {
+test("the explicit context catalog is versioned locally rather than claiming an upstream page-tool snapshot", () => {
   const snapshot = JSON.parse(readFileSync(path.join(mcpRoot, "web-catalog.json"), "utf8"))
-  assert.match(snapshot.playwrightMcpVersion, /^\d+\.\d+\.\d+/u)
+  assert.equal(snapshot.schemaVersion,1)
+  assert.equal(Object.hasOwn(snapshot,"playwrightMcpVersion"),false)
+  assert.deepEqual(snapshot.tools.map(tool=>tool.name),["browser_context","browser_command"])
 })
 
 test("when the installed browser lists different tools, one stderr line names what was added, removed and changed, and the snapshot is still served", posixOnly, async () => {
@@ -1744,56 +1784,59 @@ test("the snapshot workflow runs daily and reports a difference as one issue", (
 
 // ---- spawned: the real entry points against a fixture plugin ----
 
-/** A fixture plugin with the real launcher files, whose only compatible Node is a wrapper that answers the version probe and otherwise runs this Node, with the fake npm beside it. */
+/** Real frontend closure plus the unchanged shipped SDK pack, under owned HOME. */
 async function fixturePlugin(prefix) {
   const root = await mkTempRoot(prefix)
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
   copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
-  for (const file of ["bootstrap.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-catalog.json"]) copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
-  // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
-  writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
-  const nodeDir = path.join(root, "home", ".nvm", "versions", "node", "v24.999.0")
-  const node = touch(path.join(nodeDir, "bin", "node"), [
-    "#!/bin/sh",
-    `exec "${process.execPath}" "$@"`,
-    "",
-  ].join("\n"))
-  chmodSync(node, 0o755)
-  touch(path.join(nodeDir, "lib", "node_modules", "npm", "bin", "npm-cli.js"), FAKE_NPM)
+  const nativeClosure = require(path.join(mcpRoot, "web-extension-credential.cjs")).nativeInventory(realpathSync(mcpRoot)).map(entry => entry.path)
+  for (const file of new Set(["bootstrap.cjs", "web-browser-discovery.cjs", "web-proxy.cjs", "web-real-profile.cjs", "web-real-tabs.cjs", "web-playwright-patch.cjs", "web-extension-credential.cjs", "web-native-relay.cjs", "web-native-error-transport.cjs", "web-catalog.json", ...nativeClosure])) {
+    mkdirSync(path.dirname(path.join(plugin, "mcp", file)), { recursive: true })
+    copyFileSync(path.join(mcpRoot, file), path.join(plugin, "mcp", file))
+  }
+  for (const entry of ["index.js","package.json","package-lock.json","config","scripts","src","artifacts",
+    "browser-context.cjs","browser-context-common.cjs","browser-context-runtime.cjs","browser-context-mcp.cjs",
+    "browser-private.cjs","private-browser-runtime.cjs"]) {
+    fs.cpSync(path.join(mcpRoot,entry),path.join(plugin,"mcp",entry),{recursive:true})
+  }
   const state = path.join(root, "state")
   const log = path.join(root, "npm.log")
-  const env = { HOME: path.join(root, "home"), PATH: "/usr/bin:/bin", DESK_NODE_SYSTEM_PREFIX: path.join(root, "none"), NODE_OPTIONS: "", DESK_BROWSER_STATE_DIR: state, FAKE_NPM_LOG: log }
+  const env = isolatedEnv({home:path.join(root,"home"),cache:path.join(root,"cache"),runtimeCache:path.join(root,"runtime-cache")},
+    {DESK_BROWSER_STATE_DIR:state,FAKE_NPM_LOG:log})
   return { root, plugin, state, log, env }
 }
 
-/** Drive a spawned launcher the way a host does (initialize, initialized, tools/list) and send the first browser call at once, while the install is still running. */
+/** Real host flow; invalid acquisition must be answered without browser setup. */
 async function firstCall({ command = process.execPath, args, env, cwd }) {
   const session = await openSession({ command, args, env, cwd })
-  const first = await session.request("tools/call", { name: "browser_navigate", arguments: { url: "https://example.com" } }, { timeout: 8000 }).catch((error) => { throw new Error(error.message + "\n" + session.stderr()) })
+  ownedMcpSessions.push(session)
+  const first = await session.request("tools/call", { name: "browser_context", arguments: {action:"create"} }, { timeout: 8000 }).catch((error) => { throw new Error(error.message + "\n" + session.stderr()) })
   return { session, first }
 }
 
-test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or the working directory, and the first call after a slow install succeeds", posixOnly, async () => {
+test("the Claude inline launcher finds the actual two-tool SDK frontend through DESK_PLUGIN_ROOT or cwd without browser installation", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-claude-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
   const { session, first } = await firstCall({ args: claude.args, cwd: fixture.root, env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin, FAKE_NPM_DELAY_MS: "1500" } })
-  assert.ok(session.handshakeMs < 1200, `the handshake took ${session.handshakeMs} ms, so it waited for the install`)
   assert.equal(first.error, undefined)
-  assert.equal(first.result.isError, undefined)
-  assert.match(first.result.content[0].text, /^ran browser_navigate \{"url":"https:\/\/example\.com"\} \["--headless","--isolated"(,"--browser","msedge"|,"--executable-path","[^"]+")?,"--output-dir","[^"]+state\/output"\]$/u)
+  assert.equal(first.result.isError, true)
+  assert.equal(toolPayload(first).code,"invalid_arguments")
   assert.deepEqual(session.notifications, [], "the host never hears that the tool list changed")
   assert.deepEqual((await session.request("tools/list")).result.tools, session.tools.result.tools, "the tool list is the same after the browser took over")
-  assert.match(session.stderr(), /\[web\] @playwright\/mcp 0\.0\.82 \(playwright-core 1\.64\.0-test\) from /u)
+  assert.deepEqual(session.tools.result.tools,JSON.parse(readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
+  assert.deepEqual(npmCalls(fixture.log),[])
+  assert.equal(existsSync(fixture.state),false)
   await session.close()
   const viaCwd = await openSession({ command: process.execPath, args: claude.args, cwd: fixture.plugin, env: { ...fixture.env, DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" } })
-  assert.match((await viaCwd.request("tools/call", { name: "browser_snapshot", arguments: {} })).result.content[0].text, /^ran browser_snapshot/u)
+  ownedMcpSessions.push(viaCwd)
+  assert.equal((await viaCwd.call("browser_snapshot",{})).payload.code,"unknown_tool")
   await viaCwd.close()
 })
 
 test("the Claude inline launcher still completes a handshake on this Node when it cannot find the plugin", async () => {
   const cwd = await mkTempRoot("desk-web-noplugin-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
   const result = spawnSync(process.execPath, claude.args, {
     cwd,
     encoding: "utf8",
@@ -1803,7 +1846,7 @@ test("the Claude inline launcher still completes a handshake on this Node when i
       { jsonrpc: "2.0", method: "notifications/initialized" },
       { jsonrpc: "2.0", id: 1, method: "ping" },
       { jsonrpc: "2.0", id: 2, method: "tools/list" },
-      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_navigate", arguments: {} } },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_context", arguments: {action:"create"} } },
       { jsonrpc: "2.0", id: "u", method: "prompts/list" },
       { jsonrpc: "2.0", id: 4, method: "initialize" },
     ].map((message) => JSON.stringify(message)).join("\n") + "\nnot json\n",
@@ -1816,27 +1859,31 @@ test("the Claude inline launcher still completes a handshake on this Node when i
   assert.deepEqual(ping.result, {})
   assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
   assert.equal(toolPayload(status).state, "degraded:plugin_root_missing")
-  assert.match(toolPayload(status).fix, /reconnect the desk-web MCP server/u)
+  assert.match(toolPayload(status).fix, /Preserve existing contexts.*reconnect desk-web/u)
   assert.equal(status.result.isError, true)
   assert.equal(unknown.error.code, -32601)
   assert.equal(bare.result.protocolVersion, "2025-06-18")
 })
 
-test("the Copilot entry point runs the launcher with its own arguments, and its first call waits for the install instead of failing", posixOnly, async () => {
+test("the Copilot entry point serves the same actual SDK schemas and never forwards legacy page globals", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-copilot-")
   const { session, first } = await firstCall({ args: [path.join(fixture.plugin, "mcp", "web.cjs"), "--caps", "pdf"], cwd: fixture.root, env: { ...fixture.env, FAKE_NPM_DELAY_MS: "1200" } })
-  assert.equal(first.result.isError, undefined)
-  assert.match(first.result.content[0].text, /--output-dir","[^"]+","--caps","pdf"\]$/u)
+  assert.equal(first.result.isError, true)
+  assert.equal(toolPayload(first).code,"invalid_arguments")
   assert.deepEqual(session.notifications, [])
   assert.deepEqual(session.tools.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
   await session.close()
-  // With the copy installed, the next launch lets the browser answer the handshake itself.
+  assert.deepEqual(npmCalls(fixture.log),[])
+  assert.equal(existsSync(fixture.state),false)
+  // Reconnect serves the same frontend, not an ambient browser session.
   const later = await openSession({ command: process.execPath, args: [path.join(fixture.plugin, "mcp", "web.cjs")], cwd: fixture.root, env: fixture.env })
-  assert.equal(later.initialize.result.serverInfo.name, "Playwright")
+  ownedMcpSessions.push(later)
+  assert.equal(later.initialize.result.serverInfo.name, "desk-web")
+  assert.deepEqual(later.tools.result.tools,session.tools.result.tools)
   await later.close()
 })
 
-test("sessions that start together install once and every one gets its first call answered", posixOnly, async () => {
+test("concurrent actual SDK frontends share normal locked restoration without any browser installation", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-concurrent-")
   const env = { ...fixture.env, FAKE_NPM_DELAY_MS: "400" }
   const runs = await Promise.all(Array.from({ length: 5 }, async () => {
@@ -1844,9 +1891,10 @@ test("sessions that start together install once and every one gets its first cal
     await session.close()
     return first
   }))
-  for (const answer of runs) assert.match(answer.result.content[0].text, /^ran browser_navigate/u)
-  assert.equal(npmCalls(fixture.log).filter((call) => call.args[0] === "install").length, 1)
-  assert.equal(readdirSync(path.join(fixture.state, "installs")).length, 1)
+  for (const answer of runs) assert.equal(toolPayload(answer).code,"invalid_arguments")
+  assert.deepEqual(npmCalls(fixture.log),[])
+  assert.equal(existsSync(fixture.state),false)
+  assert.ok(readdirSync(env.DESK_RUNTIME_CACHE_DIR).length)
 })
 
 test("an unchanged release keeps an install that has the reader and ws, or a recorded reader refusal", posixOnly, async () => {

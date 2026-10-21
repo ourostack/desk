@@ -18,12 +18,20 @@ const inside = (child, parent) => !path.relative(parent, child).startsWith("..")
 
 test("HOME and every XDG folder point into this run's temporary folder, never the real home", () => {
   assert.equal(process.env.DESK_TEST_RUN_DIR, testRun.runDir)
-  for (const name of ["HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"]) {
+  for (const name of ["HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
+    ...(process.platform === "win32" ? ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] : [])]) {
     assert.ok(inside(process.env[name], testRun.runDir), `${name}=${process.env[name]} is outside ${testRun.runDir}`)
     assert.equal(existsSync(process.env[name]), true)
   }
   assert.ok(inside(os.homedir(), testRun.runDir))
   assert.notEqual(path.resolve(os.homedir()), path.resolve(testRun.realHome))
+  if (process.platform === "win32") {
+    for (const [name, value] of Object.entries(process.env))
+      if (["USERPROFILE", "APPDATA", "LOCALAPPDATA"].includes(name.toUpperCase()))
+        assert.ok(inside(value, testRun.runDir), `${name} retained a non-fixture Windows profile path`)
+    assert.ok(path.isAbsolute(process.env.PSModuleAnalysisCachePath))
+    assert.equal(existsSync(path.dirname(process.env.PSModuleAnalysisCachePath)), true)
+  }
 })
 
 test("Desk's default state and readiness folders resolve into the run's folder", () => {

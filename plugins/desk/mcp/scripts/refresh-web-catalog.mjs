@@ -7,7 +7,7 @@
 // Options: --file <snapshot> (default mcp/web-catalog.json), --package <spec> (default @playwright/mcp@latest), --npm-cli <npm-cli.js> (default: the npm on PATH).
 // Exit codes: 0 the snapshot matches (or was rewritten), 1 --check found a difference, 2 the latest release could not be installed or asked for its tools.
 // A new release that only changes the version leaves the tools alone: --check passes and a rewrite records the new version.
-// A tool added or removed also needs BROWSER_TOOL_NAMES in web.cjs and the inline launcher's `names` list in .mcp.json updated; tests/desk/mcp/__tests__/launch/web.test.js fails until all three agree.
+// A tool added or removed also needs BROWSER_TOOL_NAMES in web.cjs and the inline launcher's `names` list in .mcp.claude-codex.json updated; tests/desk/mcp/__tests__/launch/web.test.js fails until all three agree.
 
 import { spawn, spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"

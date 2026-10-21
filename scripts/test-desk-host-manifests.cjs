@@ -197,7 +197,7 @@ function checkCodexPlugin({ repoRoot, methodId, errors, checked }) {
   if (deskPlugin.version !== activation.version) {
     errors.push("codex-plugin Desk version drift");
   }
-  if (deskPlugin.skills !== "./skills/" || deskPlugin.mcpServers !== "./.mcp.json") {
+  if (deskPlugin.skills !== "./skills/" || deskPlugin.mcpServers !== "./.mcp.claude-codex.json") {
     errors.push("codex-plugin Desk surfaces drift");
   }
   if (codex?.defaultMode !== "global-personal") {
@@ -249,7 +249,7 @@ function checkClaudePlugin({ repoRoot, methodId, errors, checked }) {
   if (!Array.isArray(deskPlugin.agents) || !deskPlugin.agents.includes("./agents/worker.md")) {
     errors.push("claude-plugin worker exposure drift");
   }
-  if (deskPlugin.skills !== "./skills/" || deskPlugin.mcpServers !== "./.mcp.json") {
+  if (deskPlugin.skills !== "./skills/" || deskPlugin.mcpServers !== "./.mcp.claude-codex.json") {
     errors.push("claude-plugin Desk surfaces drift");
   }
   // The worker agent body carries identity; a forced output style would load a second copy on the main thread.

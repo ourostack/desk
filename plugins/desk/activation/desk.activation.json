@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.0-alpha.333",
+  "version": "3.2.0-alpha.334",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.0-alpha.333",
+      "version": "3.2.0-alpha.334",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.0-alpha.333",
+        "version": "3.2.0-alpha.334",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
@@ -210,7 +210,7 @@
         "desk": {
           "launch": "plugin-bundled",
           "manualRegistration": false,
-          "configPath": ".mcp.json"
+          "configPath": ".mcp.claude-codex.json"
         }
       },
       "dependencies": {

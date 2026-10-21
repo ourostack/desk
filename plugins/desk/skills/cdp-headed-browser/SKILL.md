@@ -7,46 +7,68 @@ description: Use when qualifying browser automation or creating disposable brows
 
 > **Overlay users:** consumer overlays provide browser-specific context declarations, launch behavior, and process attestation. This skill stays generic.
 
-A persistent headed browser is useful when authentication depends on durable browser state or human interaction. Direct attachment to an arbitrary debugging endpoint is not safe, however: a port proves transport availability, not the intended profile, identity, posture, or ownership.
-
-Use the claims-based `browser-context-broker`. It matches the requested declaration conjunctively, freshly attests the process and endpoint, provisions only the requested context when needed, and exposes a lease proxy that shows only lease-owned targets.
+A signed-in browser context uses an existing declared profile without making a shared MCP connection its owner. An arbitrary debugging port, process ID, client name or group title is not ownership evidence.
 
 ## When to use it
 
-Use a brokered headed context when:
+Use an explicit signed-in context when:
 
-- The surface requires interactive authentication that cannot complete in a throwaway browser.
-- Several agents need the same persistent authenticated context while keeping their targets isolated.
-- A provider-backed persistent profile is required for the task.
+- The task needs authentication already present in the declared profile.
+- Several actual agents share a browser or MCP connection but need separate owned tabs.
+- A retained context must remain usable across turns without opening a replacement.
 
-Keep the default isolated browser when it works. Desk ships it as the `desk-web` MCP server on every install: with no `desk.browser` declaration it is headless, with an in-memory profile, started from a copy of `@playwright/mcp` that Desk installs in its state folder and keeps on the `@latest` channel. That default is always signed out, so a page that needs the operator's sign-in never works there. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
+Choose private mode explicitly for isolated, signed-out work. A missing declaration or native readiness never silently selects a headless/private fallback.
 
-## Agent-owned private browser contexts
+## Two tools, one handle per actual agent
 
-For a fresh signed-out browser that the owning agent explicitly keeps across turns and separate shell clients, use `node <installed-desk>/mcp/browser-private.cjs create`; retain the returned `contextId` and exact `resources` paths. Use `keep <context-id>` or `resume <context-id>` to check that same live context, `run <context-id> -- <playwright-cli-page-command> [arguments]` to operate it, and `discard <context-id>` to stop only it and verify session-metadata removal. Every call returns JSON; `isError` and a nonzero exit are failures, not readiness or cleanup proof. Missing/incompatible/unreachable contexts are never recreated by keep/resume/run. Session, connection, profile, configuration, browser-lifecycle and global overrides are rejected; put literal page data beginning with `-` after a second, inner `--`. Private contexts have fresh in-memory state, not anonymity or a new OS security principal. They share Desk's verified latest-channel installer but never acquire the operator's profile, change the signed-in `desk-web` route, or silently replace a failed signed-in connection. The owner-private context and short socket directories remain marked and reported after discard; deliberately exported screenshots/evidence are not erased. A failed startup/indeterminate cleanup leaves those exact resources as a visible obligation. This shell interface requires a staged Playwright generation with the maintained embedded CLI; unsupported generations fail explicitly.
+`desk-web` lists only `browser_context` and `browser_command`. Do not call the former page tools such as `browser_navigate` or `browser_close`.
 
-## The real browser profile
+1. Each actual agent, including each child sharing its parent's MCP transport, calls `browser_context` with `{"action":"create","label":"Research child: compare renewal terms"}`. Omitted mode means signed-in. Supply a useful label, not whitespace or a connection/PID-derived identity.
+2. Retain the exact returned `contextId`. Signed-in handles are plain UUIDv4 values. Private handles have the `private-` prefix. Creation generates the ID; callers cannot select it.
+3. Operate only that handle: `browser_command` with `{"contextId":"<returned-id>","args":["goto","https://example.org"]}`. Arguments are the maintained CLI's page-command grammar, not shell code or another MCP tool's arguments.
+4. Use `browser_context` with `{"action":"keep","contextId":"<returned-id>"}` or `resume` to check the same retained context. Neither creates a page, reopens a closed context nor replaces an unavailable one.
+5. Choose `discard` explicitly when that agent wants to settle its owned context. Retention does not require an approval, and a task ending, connection closing or host exiting does not force cleanup.
 
-When an installed plugin declares `desk.browser` in its `plugin.json`, `desk-web` drives that existing signed-in browser profile instead of the headless default. The declaration is `"desk": { "browser": { "channel": "msedge" | "chrome", "profileAccountDomain": "<domain>" } }`; the last declaring plugin listed wins. Desk picks the profile whose signed-in account ends in `@<domain>`, reads the Playwright Extension's connection token from it so no approval prompt appears, and starts stock Playwright MCP in extension mode. Agents configure nothing else.
+Non-create actions accept only action and explicit ID. Mode and label are create-only. There is no ambient default, last context or automatic connection-owned handle. A parent must not hand one handle to multiple children and call that independent ownership. Agent names and labels are descriptive, not security principals.
 
-**Current provisioning boundary:** the published [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) must already be available in that profile; the launcher does not install it. A `browser_extension_missing` response means Desk did not obtain a usable persisted credential, not that it proved the extension absent. Automatic extension setup is not available through this launcher, so there is no immediate automatic unblock yet. The store link is informational, not an operator installation or retry instruction. Record the blocked binding/category for an admitted agent-owned repair and stop browser calls; do not claim readiness, bypass consent or turn the gap into an operator token/export/setup chore.
+Session, profile, configuration, connection, browser-lifecycle and global overrides are rejected. Signed-in callers cannot supply raw/JSON output overrides. For literal page data beginning with a dash, use the genuine inner delimiter, for example `["fill","e4","--","--session=page-data"]`. Do not hide options in short aliases or use a shell to evade these guards.
 
-How it behaves:
+## Declared signed-in profile and readiness
 
-- All agents share the one browser. Each session's tabs sit in their own tab group, named `Playwright · <client name>` (`desk-web` when the session started while Desk was still installing the browser), and the session sees and drives only those tabs.
-- When a session connects, the extension brings the browser window to the front once.
-- Desk currently defers automatic tab deletion on exit or kill. Close only tabs you created and can still identify as current session-owned, using stock browser tools; leave unknown or foreign tabs alone. Stock `browser_close` semantics remain unchanged, and the next browser call after it may connect again in a new group. Do not claim a disconnect cleaned up every tab.
-- The connect page's address carries the token; Desk replaces it with `<token>` in everything Playwright MCP sends to the host.
+An installed plugin may declare `"desk":{"browser":{"channel":"msedge","profileAccountDomain":"example.org"}}` in its manifest. The existing selector chooses that channel and matching existing profile. The same convention supports Chrome. It does not require a particular organization or overlay.
 
-**MCP inheritance is not agent ownership.** Default parent-MCP connections can be shared by subagents, so a separate agent context does not prove a private tab group. Never close or rename tabs/groups on that assumption. Require a qualified independent connection and exact current-owned identity; shared access is degraded access, not a workaround for per-agent isolation. Copilot's qualified subset is two scoped custom children with a plugin-global parent, not a scoped root or automatic built-in-agent or Claude coverage. An installed default-headless qualification exercised that topology through the shared helper, but an earlier inline invocation shared state despite resolving the helper. Verify the actual caller and browser behavior, not merely an agent name, helper path or initialized server; see the [admission frontier](../../docs/evaluation-packet.md#b1-admit-the-four-required-seams--gono-go-before-dependent-code).
+The matching native provider must already be registered, ready and freshly attested for the distributed extension source. A missing declaration, profile, compatible generation or readiness binding is an explicit failure. The controller does not install/register an extension, read a legacy token database, reload a normal extension, change the selected browser or borrow a private context. Generic cold setup and predecessor cutover are separate, unqualified operations.
 
-**Stop after a failed first browser call.** Issue no retry or cleanup-close call, including `browser_close`: the observed stock failure path can attempt another connection. This is containment guidance, not a backend lifecycle fix.
+Creation gives each actual agent its own tab group, initially useful and inactive, in that existing `desk.browser` profile. Never activate a tab/window, launch a persistent copy of the operator profile or ask the operator to export credentials. Do not automate extension token/status pages or capture their DOM or screenshots.
 
-**Token-page qualification is not a production recipe.** The extension's status page contains its credential. Do not automate that page with automatic DOM snapshots enabled, or take an explicit DOM snapshot or screenshot there. Stream redaction does not protect stock's internal snapshot-file writes. The owned group-title qualification used the supported `--snapshot-mode none` option, evaluated only public Chrome tab/group APIs after exact ownership checks, and captured no status-page DOM or raw response. It did not change production defaults or qualify foreground-safe setup. Do not copy the test route into an operator profile while the required admission gates remain open.
+## Private mode and shell compatibility
 
-The brokered contexts below are for a provider-backed persistent profile that is not the operator's real one. They do not apply to `desk-web` in this mode.
+Use `browser_context` with `{"action":"create","mode":"private"}` for fresh in-memory signed-out state. A useful label is optional there. Private mode is isolation, not anonymity or a separate OS security principal.
 
-The broker needs an overlay provider. Today only the MS Desk overlay supplies one (managed Edge); without a provider, `acquire` fails closed (`INVALID_ARGUMENTS` with no `--config`, `INVALID_PROVIDER_CONFIG` when the config has no provider). On a personal install with no provider and no `desk.browser` declaration, reach a signed-in page by adding a separate workspace MCP server with `desk:add-workspace-mcp` that runs `@playwright/mcp@latest` with Playwright MCP's own options: `--extension` to attach to the operator's running browser through the Playwright MCP Bridge extension, or `--user-data-dir <dir>` or `--storage-state <file>` for a persistent or saved signed-in profile. Give it its own name, never `desk-web`.
+Shell clients use the same explicit controller:
+
+```text
+node <installed-desk>/mcp/browser-context.cjs create --label <useful-label>
+node <installed-desk>/mcp/browser-context.cjs create --mode private
+node <installed-desk>/mcp/browser-context.cjs keep <contextId>
+node <installed-desk>/mcp/browser-context.cjs resume <contextId>
+node <installed-desk>/mcp/browser-context.cjs run <contextId> -- <page-command> [arguments]
+node <installed-desk>/mcp/browser-context.cjs discard <contextId>
+```
+
+The existing `browser-private.cjs create|keep|resume|run|discard` shell API remains compatible. Keep its returned private handle and exact resource paths. Private absent-discard behavior is not signed-in repeat-discard behavior.
+
+## Failure and cleanup evidence
+
+`isError`, a nonzero exit or structured native error resources are failures, never readiness or cleanup receipts. Preserve the generated handle, original code/resources, related errors and separate `contextResources`. An unknown startup can already have native effects. Do not create another context as an implicit retry or close foreign/unknown tabs.
+
+Signed-in discard first checks current native status, obtains the current native disposition, then independently proves the exact maintained CLI stopped or is absent. Released transferred tabs are not absent and must survive. A successful current discard retains persistent metadata, immutable owner/config and exports; it does not archive evidence. A repeated signed-in discard is unavailable, not a fabricated idempotent success.
+
+Screenshots, exports and owner directories remain after discard in both modes. Keep/resume never reanchors a missing or incompatible daemon, rewrites its generation stamp, prunes a registry or unlinks a stale socket to manufacture absence.
+
+## Separate broker capability
+
+The broker below is a separate claims-based provider interface for an explicitly configured persistent profile. It is not the `desk-web` native controller, a signed-in fallback or automatic setup/cutover. Its aliases and leases do not replace the explicit handles above. Use it only when the task separately declares that provider-backed interface.
 
 ## Required runtime inputs
 
@@ -133,7 +155,7 @@ The persistent profile is the security-principal boundary. Leases separate targe
 
 ## Focus preservation
 
-A brokered headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects activation commands. This includes the first window a context opens: there is no first-window focus-stealing exception. The real browser profile above differs only in what the stock extension does itself: it brings the window forward once when a session connects. Agents still never activate it.
+A brokered headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects activation commands. This includes the first window a context opens: there is no first-window focus-stealing exception. The explicit signed-in native controller above has the same no-activation rule.
 
 When a new page is required, create it in the background:
 

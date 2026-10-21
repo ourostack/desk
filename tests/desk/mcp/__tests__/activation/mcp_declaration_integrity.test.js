@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { createRequire } from "node:module"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -29,11 +29,42 @@ const toolNames = { desk: TOOL_NAMES, "desk-web": BROWSER_TOOL_NAMES }
 
 // ---- the real files ----
 
+test("acquired Desk has no generic root MCP file for Agency legacy reinjection", () => {
+  assert.equal(existsSync(path.join(repoRoot, "plugins", "desk", ".mcp.json")), false,
+    "Agency's legacy plugin loader reads root .mcp.json into additional user MCP config")
+})
+
+test("native engine manifests resolve the retained payload without changing Copilot's MCP definition", () => {
+  const pluginRoot = path.join(repoRoot, "plugins", "desk")
+  for (const manifestFile of [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
+    const manifest = JSON.parse(readFileSync(path.join(pluginRoot, manifestFile), "utf8"))
+    assert.equal(manifest.name, "desk")
+    assert.equal(manifest.mcpServers, "./.mcp.claude-codex.json", manifestFile)
+    const common = JSON.parse(readFileSync(path.join(pluginRoot, manifest.mcpServers), "utf8")).mcpServers
+    assert.deepEqual(Object.keys(common).sort(), ["desk", "desk-web"])
+    for (const [name, entry] of Object.entries(common)) {
+      assert.deepEqual({ type: entry.type, command: entry.command, cwd: entry.cwd, env: entry.env },
+        { type: "stdio", command: "node", cwd: ".", env: { DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" } })
+      assert.equal(entry.args[0], "-e")
+      assert.equal(entry.args.length, 2)
+      assert.deepEqual(launcherEntryFiles(entry), [name === "desk" ? "bootstrap.cjs" : "web.cjs"])
+    }
+  }
+  const copilotManifest = JSON.parse(readFileSync(path.join(pluginRoot, "plugin.json"), "utf8"))
+  assert.equal(copilotManifest.mcpServers, "./.mcp.copilot.json")
+  assert.deepEqual(JSON.parse(readFileSync(path.join(pluginRoot, copilotManifest.mcpServers), "utf8")), {
+    mcpServers: {
+      desk: { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"], env: {} },
+      "desk-web": { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"], env: {} },
+    },
+  })
+})
+
 test("every MCP server name Desk declares, on every host and plugin, passes the name rules", () => {
   const declarations = collectMcpDeclarations({ repoRoot })
   const sources = declarations.map((entry) => entry.source)
   for (const expected of [
-    "plugins/desk/.mcp.json",
+    "plugins/desk/.mcp.claude-codex.json",
     "plugins/desk/.mcp.copilot.json",
     "plugins/desk/activation/desk.activation.json",
     "plugins/desk/.codex-plugin/plugin.json",
@@ -48,7 +79,7 @@ test("every MCP server name Desk declares, on every host and plugin, passes the 
 
 test("the Claude, Codex and Copilot declarations name the same servers and launch the same entry files", () => {
   const read = (file) => collectMcpDeclarations({ repoRoot }).find((entry) => entry.source === file)
-  const claude = read("plugins/desk/.mcp.json")
+  const claude = read("plugins/desk/.mcp.claude-codex.json")
   const copilot = read("plugins/desk/.mcp.copilot.json")
   assert.deepEqual(claude.names, ["desk", "desk-web"])
   assert.deepEqual(checkHostDeclarationParity({ claude: claude.servers, copilot: copilot.servers }), [])

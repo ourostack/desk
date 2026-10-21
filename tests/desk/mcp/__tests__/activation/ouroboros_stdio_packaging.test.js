@@ -158,7 +158,7 @@ test("Ouroboros/autonomous-agent packaging has a flattened bundle disposition", 
   assertIncludesAll(evidenceRow.source_paths, [
     "plugins/desk/README.md",
     "plugins/desk/activation/README.md",
-    "plugins/desk/.mcp.json",
+    "plugins/desk/.mcp.claude-codex.json",
     "plugins/desk/plugin.json",
     "plugins/superpowers/plugin.json",
     "plugins/plain-language/plugin.json",
@@ -228,7 +228,7 @@ test("generic stdio support matrix records an MCP-only degraded disposition", ()
     "plugin-dependency-resolution",
   ])
   assertIncludesAll(evidenceRow.source_paths, [
-    "plugins/desk/.mcp.json",
+    "plugins/desk/.mcp.claude-codex.json",
     "plugins/desk/mcp/README.md",
     "plugins/desk/activation/README.md",
   ], "generic stdio evidence source_paths")
@@ -1456,7 +1456,7 @@ test("generic stdio packaging validation rejects evidence row support drift", ()
     "test input",
   )
   genericEvidence.disposition = "supported-flattened"
-  genericEvidence.source_paths = ["plugins/desk/.mcp.json"]
+  genericEvidence.source_paths = ["plugins/desk/.mcp.claude-codex.json"]
   genericEvidence.unsupported_primitives = []
   genericEvidence.fallback_behavior = "resolves plugin dependencies and starts worker activation"
 

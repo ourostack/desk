@@ -22,6 +22,7 @@ import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
 } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
+import * as windowsAcl from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 import { nativeProbe, writePosixNodeProvider } from "./_private_state_helpers.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
@@ -64,6 +65,244 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 const DIR_ENTRY = { path: "C:\\Users\\participant\\state\\feedback", kind: "directory", created: true }
 const FILE_ENTRY = { path: "C:\\Users\\participant\\state\\feedback\\feedback.sqlite", kind: "file", created: true }
+const PRIVATE_ENTRIES = [
+  { file: DIR_ENTRY.path, directory: true },
+  { file: FILE_ENTRY.path, directory: false },
+]
+
+test("readonly verifier runs the fixed unchanged policy on every request without a repair or a decision cache", async () => {
+  const base = await mkBase()
+  try {
+    await mkProvider(base, ECHO_PROVIDER)
+    const calls = []
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({
+      env: { SystemRoot: base },
+      runner: async invocation => { calls.push(invocation); return { code: 0, stdout: "private\r", stderr: "" } },
+    })
+    await reader.verify(PRIVATE_ENTRIES)
+    await reader.verify(PRIVATE_ENTRIES)
+    assert.equal(calls.length, 2)
+    assert.deepEqual(JSON.parse(calls[0].payload), PRIVATE_ENTRIES)
+    assert.deepEqual(calls[0].args.slice(0, -1), ["-NoProfile", "-NonInteractive", "-EncodedCommand"])
+    const program = Buffer.from(calls[0].args.at(-1), "base64").toString("utf16le")
+    assert.match(program, /\$ProgressPreference = 'SilentlyContinue'/)
+    assert.ok(program.indexOf("$ProgressPreference") < program.indexOf("New-Object"),
+      "cold module preparation must not emit a progress record into the strict response transport")
+    for (const pattern of [/ReadLine/, /foreach/, /PSIsContainer/, /ReparsePoint/, /AreAccessRulesProtected/,
+      /GetCurrent/, /GetOwner/, /Count -ne 1/, /IdentityReference/, /AccessControlType/, /FullControl/])
+      assert.match(program, pattern)
+    assert.doesNotMatch(program, /ReadToEnd|Set-Acl|SetAccessControl|SetOwner|SetAccessRule|ReadAllText|ReadAllBytes|Get-Content/)
+    assert.equal(calls[0].maxOutputBytes, 16384)
+    assert.equal(calls[0].timeoutMs, 5000)
+    await reader.close()
+    await reader.close()
+    await assert.rejects(reader.verify(PRIVATE_ENTRIES), /NATIVE_PRIVATE_PATH_INVALID/)
+    assert.equal(calls.length, 2)
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly verifier validates typed bounded batches and deadlines before asking any provider", async () => {
+  const base = await mkBase()
+  try {
+    await mkProvider(base, ECHO_PROVIDER)
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base },
+      runner: () => assert.fail("invalid input reached provider") })
+    for (const entries of [null, {}, [], [null], [[]], [{}], [{ file: 3, directory: false }],
+      [{ file: "", directory: false }], [{ file: "relative", directory: true }],
+      [{ file: "C:\\secret\npath", directory: false }], [{ file: "C:\\" + "x".repeat(32768), directory: false }],
+      [{ file: FILE_ENTRY.path, directory: 1 }], [{ ...PRIVATE_ENTRIES[0], created: true }],
+      [Object.assign(Object.create({ file: FILE_ENTRY.path }), { directory: false, extra: true })],
+      [Object.assign(Object.create({ directory: false }), { file: FILE_ENTRY.path, extra: true })],
+      Array(65).fill(PRIVATE_ENTRIES[0]), Array(64).fill({ file: "C:\\" + "x".repeat(2000), directory: false })])
+      await assert.rejects(reader.verify(entries), /NATIVE_PRIVATE_PATH_INVALID/)
+    for (const due of [0, NaN, Infinity, "future", Date.now() - 1, Date.now() + 60000])
+      await assert.rejects(reader.verify(PRIVATE_ENTRIES, due), /NATIVE_PRIVATE_PATH_INVALID/)
+    await reader.close()
+    for (const timeoutMs of [0, -1, 5001, 1.5, NaN])
+      assert.throws(() => windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base }, timeoutMs }),
+        /NATIVE_PRIVATE_PATH_INVALID/)
+    for (const env of [{}, { SystemRoot: "relative" }, { SystemRoot: path.join(base, "missing") }])
+      assert.throws(() => windowsAcl.createWindowsPrivatePathVerifier({ env }), error =>
+        error.message === "NATIVE_PRIVATE_PATH_INVALID")
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly verifier accepts only its exact bounded response and never includes provider diagnostics", async () => {
+  const base = await mkBase()
+  try {
+    await mkProvider(base, ECHO_PROVIDER)
+    for (const answer of [{ code: 1, stdout: "private" }, { code: 0, stdout: "private " },
+      { code: 0, stdout: "private\njunk" }, { code: 0, stdout: "private\r\r" }, { code: 0, stdout: "" },
+      { code: 0, stdout: "PRIVATE" }, { code: 0, stdout: "private", stderr: "private SID path diagnostic" },
+      { code: 0, stdout: "private", stderr: '#< CLIXML\n<Objs><Obj S="progress"/></Objs>' }]) {
+      const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base },
+        runner: async () => ({ stderr: "", ...answer }) })
+      await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
+      await reader.close()
+    }
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base },
+      runner: async () => { throw Error("a private path or SID") } })
+    await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
+    await reader.close()
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly close waits for real stdin EOF and clean close without touching the writer session", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    const log = path.join(base, "reader-events")
+    await mkProvider(base, `
+const fs = require("node:fs")
+const readonly = Buffer.from(process.argv.at(-1), "base64").toString("utf16le").includes("Verify-Request")
+const lines = require("node:readline").createInterface({ input: process.stdin })
+lines.on("line", line => {
+  if (readonly) {
+    fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ event: "verify", pid: process.pid, entries: JSON.parse(line) }) + "\\n")
+    process.stdout.write("private\\r\\n")
+  } else {
+    const results = JSON.parse(line).paths.map(entry => ({ ...entry, owner_sid: "S-1-5-21-" + process.pid, owner_reassigned: false, protected: true, rule_count: 1 }))
+    process.stdout.write(JSON.stringify({ status: "ok", results }) + "\\n")
+  }
+})
+lines.on("close", () => { if (readonly) setTimeout(() => fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ event: "eof", pid: process.pid }) + "\\n"), 30) })
+`)
+    const env = { SystemRoot: base }
+    const writer = await protectWindowsPaths([DIR_ENTRY], { env, memoize: false, idleMs: 10000 })
+    const writerPid = pidOf(writer[0])
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env })
+    await reader.verify(PRIVATE_ENTRIES)
+    await reader.verify(PRIVATE_ENTRIES)
+    const seen = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0].pid, seen[1].pid)
+    assert.deepEqual(seen[0].entries, PRIVATE_ENTRIES)
+    assert.notEqual(seen[0].pid, writerPid)
+    await reader.close()
+    const closed = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    assert.equal(closed.at(-1).event, "eof")
+    assert.equal(isAlive(seen[0].pid), false, "close ACK is after real child close")
+    assert.equal(isAlive(writerPid), true, "readonly close did not kill the separate writer key")
+    await assert.rejects(reader.verify(PRIVATE_ENTRIES), /NATIVE_PRIVATE_PATH_INVALID/)
+    const stillServing = await protectWindowsPaths([DIR_ENTRY], { env, memoize: false })
+    assert.equal(pidOf(stillServing[0]), writerPid)
+    process.kill(writerPid, "SIGTERM")
+    assert.ok(await untilDead(writerPid), "exact owned stand-in writer cleaned up")
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly close cancels pending and queued reads without a late authorization or queued restart", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    const log = path.join(base, "reader-events")
+    await mkProvider(base, `
+const fs = require("node:fs")
+const lines = require("node:readline").createInterface({ input: process.stdin })
+lines.on("line", () => {
+  fs.appendFileSync(${JSON.stringify(log)}, process.pid + "\\n")
+  setTimeout(() => process.stdout.write("private\\n"), 100)
+})
+`)
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base } })
+    const pending = reader.verify(PRIVATE_ENTRIES)
+    const queued = reader.verify(PRIVATE_ENTRIES)
+    const outcomes = Promise.allSettled([pending, queued])
+    for (let i = 0; i < 100; i++) {
+      try { await fs.access(log); break } catch { await new Promise(resolve => setTimeout(resolve, 10)) }
+    }
+    await reader.close()
+    for (const outcome of await outcomes) {
+      assert.equal(outcome.status, "rejected")
+      assert.equal(outcome.reason.message, "NATIVE_PRIVATE_PATH_INVALID")
+    }
+    assert.equal((await fs.readFile(log, "utf8")).trim().split("\n").length, 1)
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly close refuses an unclean or stalled helper close rather than claiming absence", posixProvider, async () => {
+  for (const ending of ["process.exitCode = 3", "setInterval(() => {}, 1000)"]) {
+    const base = await mkBase()
+    try {
+      const pidFile = path.join(base, "pid")
+      await mkProvider(base, `
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+const lines = require("node:readline").createInterface({ input: process.stdin })
+lines.on("line", () => process.stdout.write("private\\n"))
+lines.on("close", () => { ${ending} })
+`)
+      const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base } })
+      await reader.verify(PRIVATE_ENTRIES)
+      await assert.rejects(reader.close(), error => error.message === "NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN")
+      await assert.rejects(reader.close(), /NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN/)
+      assert.ok(await untilDead(Number(await fs.readFile(pidFile, "utf8"))))
+    } finally { await fs.rm(base, { recursive: true, force: true }) }
+  }
+})
+
+test("readonly idle sessions close gracefully, and explicit close joins an already-started EOF", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    const log = path.join(base, "events")
+    await mkProvider(base, `
+const fs = require("node:fs")
+const lines = require("node:readline").createInterface({ input: process.stdin })
+lines.on("line", () => { fs.appendFileSync(${JSON.stringify(log)}, "request:" + process.pid + "\\n"); process.stdout.write("private\\n") })
+lines.on("close", () => { fs.appendFileSync(${JSON.stringify(log)}, "eof:" + process.pid + "\\n"); setTimeout(() => {}, 300) })
+`)
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base }, idleMs: 50 })
+    await reader.verify(PRIVATE_ENTRIES)
+    const first = Number((await fs.readFile(log, "utf8")).split("\n")[0].split(":")[1])
+    assert.ok(await untilDead(first))
+    await reader.verify(PRIVATE_ENTRIES)
+    for (let i = 0; i < 100; i++) {
+      if ((await fs.readFile(log, "utf8")).trim().split("\n").length === 4) break
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    await reader.close()
+    const events = (await fs.readFile(log, "utf8")).trim().split("\n")
+    assert.equal(events.length, 4)
+    const second = Number(events[2].split(":")[1])
+    assert.notEqual(second, first)
+    assert.equal(isAlive(second), false)
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly idle close failure blocks subsequent reads and remains an unknown explicit close", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    const log = path.join(base, "pid")
+    await mkProvider(base, `
+require("node:fs").writeFileSync(${JSON.stringify(log)}, String(process.pid))
+const lines = require("node:readline").createInterface({ input: process.stdin })
+lines.on("line", () => process.stdout.write("private\\n"))
+lines.on("close", () => { process.exitCode = 3 })
+`)
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base }, idleMs: 20 })
+    await reader.verify(PRIVATE_ENTRIES)
+    assert.ok(await untilDead(Number(await fs.readFile(log, "utf8"))))
+    await assert.rejects(reader.verify(PRIVATE_ENTRIES), /NATIVE_PRIVATE_PATH_INVALID/)
+    await assert.rejects(reader.close(), /NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN/)
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
+
+test("readonly verifier's default provider environment is still resolved rather than fabricated", async () => {
+  if (isWindows) await windowsAcl.createWindowsPrivatePathVerifier().close()
+  else assert.throws(() => windowsAcl.createWindowsPrivatePathVerifier(), /NATIVE_PRIVATE_PATH_INVALID/)
+})
+
+test("readonly provider failure is refused without diagnostics and its already-retired key cannot become a clean close", posixProvider, async () => {
+  const base = await mkBase()
+  try {
+    const pidFile = path.join(base, "pid")
+    await mkProvider(base, `
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+process.stdin.once("data", () => { process.stderr.write("private diagnostic"); process.exit(3) })
+`)
+    const reader = windowsAcl.createWindowsPrivatePathVerifier({ env: { SystemRoot: base } })
+    await assert.rejects(reader.verify(PRIVATE_ENTRIES), error => error.message === "NATIVE_PRIVATE_PATH_INVALID")
+    await assert.rejects(reader.close(), error => error.message === "NATIVE_PRIVATE_PATH_CLOSE_UNKNOWN")
+    assert.ok(await untilDead(Number(await fs.readFile(pidFile, "utf8"))))
+  } finally { await fs.rm(base, { recursive: true, force: true }) }
+})
 
 function runnerReturning(response, { code = 0, stderr = "" } = {}) {
   const calls = []

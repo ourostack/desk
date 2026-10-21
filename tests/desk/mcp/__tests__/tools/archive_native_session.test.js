@@ -726,8 +726,7 @@ test("metadata clock observations report invalid or ambiguous timing instead of 
   assert.equal(JSON.stringify(unknown).includes("PRIVATE_FIXTURE"), false)
 })
 
-test("managed-only: actual captured PowerShell parses and defines its helpers before the native setup body", async t => {
-  const script = `[Console]::Error.WriteLine('DESK_METADATA_BOUNDARY:script_entered')
+const metadataHelperScript = `[Console]::Error.WriteLine('DESK_METADATA_BOUNDARY:script_entered')
 
 $ErrorActionPreference = 'Stop'
 function Write-MetadataStage($name) {
@@ -756,13 +755,26 @@ Write-MetadataStage 'report_construction_entered'
 $report = @{ parseErrors = $errors.Count; helpers = $rows }
 Write-MetadataStage 'report_construction_returned'
 Write-MetadataStage 'json_entered'
-$json = ($report | ConvertTo-Json -Depth 5 -Compress)
+$helperJson = @()
+foreach ($helper in $report.helpers) {
+  # Names are the fixed ASCII literals above, not text taken from the parsed program.
+  if ($helper.name -cnotmatch '^(Define-Native|Build-Layout|Build-RenameBuffer|Refuse|Close-Entry|Read-Entry|Valid-Entry|Same-Entry)$' -or
+      $helper.scriptScoped -isnot [bool] -or $helper.beforeSetup -isnot [bool]) { throw 'invalid_metadata_report' }
+  $helperJson += '{"name":"' + $helper.name + '","scriptScoped":' +
+    $helper.scriptScoped.ToString().ToLowerInvariant() + ',"beforeSetup":' +
+    $helper.beforeSetup.ToString().ToLowerInvariant() + '}'
+}
+if ($report.parseErrors -isnot [int] -or $report.parseErrors -lt 0) { throw 'invalid_metadata_parse_count' }
+$json = '{"parseErrors":' + $report.parseErrors.ToString([Globalization.CultureInfo]::InvariantCulture) +
+  ',"helpers":[' + ($helperJson -join ',') + ']}'
 Write-MetadataStage 'json_returned'
 Write-MetadataStage 'stdout_entered'
 [Console]::WriteLine($json)
 Write-MetadataStage 'stdout_returned'
 Write-MetadataStage 'report_written'
 `
+test("managed-only: actual captured PowerShell parses and defines its helpers before the native setup body", async t => {
+  const script = metadataHelperScript
   const program = await capturedProgram(), wallStart = Date.now(), started = performance.now()
   const parsed = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     { input: program, encoding: "utf8", env: process.env, timeout: 5000 })
@@ -791,6 +803,47 @@ Write-MetadataStage 'report_written'
   assert.equal(report.parseErrors, 0)
   assert.deepEqual(report.helpers, ["Define-Native", "Build-Layout", "Build-RenameBuffer", "Refuse", "Close-Entry",
     "Read-Entry", "Valid-Entry", "Same-Entry"].map(name => ({ name, scriptScoped: true, beforeSetup: true })))
+})
+
+test("managed-only: fixed metadata reports preserve invalid, duplicate and misplaced AST facts without general serialization", async t => {
+  const names = ["Define-Native", "Build-Layout", "Build-RenameBuffer", "Refuse", "Close-Entry",
+    "Read-Entry", "Valid-Entry", "Same-Entry"]
+  const misplaced = "try {} catch {}\n" + names.map(name => `function ${name} {}`).join("\n")
+  const body = metadataHelperScript.replace("$program = [Console]::In.ReadToEnd()", "$program = $metadataFixture")
+  const script = `
+$ErrorActionPreference = 'Stop'
+function ConvertTo-Json { throw 'general_serializer_must_not_be_used_for_fixed_metadata' }
+$original = [Console]::In.ReadToEnd()
+$fixtures = @($original, 'function Define-Native {', ($original + [Environment]::NewLine + 'function Define-Native {}'),
+  '${misplaced}')
+foreach ($metadataFixture in $fixtures) {
+  & {
+${body}
+  }
+}
+`
+  const parsed = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    { input: await capturedProgram(), encoding: "utf8", env: process.env, timeout: 5000 })
+  if (process.platform !== "win32" && parsed.error?.code === "ENOENT") return t.skip("PowerShell parser unavailable; not native Windows proof")
+  assert.equal(parsed.status, 0, parsed.error?.code ?? parsed.stderr)
+  assert.equal(parsed.error?.code, undefined)
+  assert.equal(parsed.signal, null)
+  const reports = parsed.stdout.trim().split(/\r?\n/u).map(line => JSON.parse(line))
+  assert.equal(reports.length, 4)
+  const good = { parseErrors: 0, helpers: names.map(name => ({ name, scriptScoped: true, beforeSetup: true })) }
+  assert.deepEqual(reports[0], good)
+  assert.equal(Number.isInteger(reports[1].parseErrors), true)
+  assert.ok(reports[1].parseErrors > 0)
+  assert.deepEqual(Object.keys(reports[1]).sort(), ["helpers", "parseErrors"])
+  assert.deepEqual(reports[1].helpers, names.map(name => ({
+    name, scriptScoped: name === "Define-Native", beforeSetup: false,
+  })))
+  assert.deepEqual(reports[2], { parseErrors: 0, helpers: names.map(name => ({
+    name, scriptScoped: name !== "Define-Native", beforeSetup: name !== "Define-Native",
+  })) })
+  assert.deepEqual(reports[3], { parseErrors: 0, helpers: names.map(name => ({
+    name, scriptScoped: true, beforeSetup: false,
+  })) })
 })
 
 test("managed-only: captured emitter/layout/UTF16 buffer execute without invoking ANY emitted PInvoke", async t => {

@@ -11,7 +11,7 @@
       "disposition": "supported-native-or-flattened",
       "source_paths": [
         "plugins/desk/.claude-plugin/plugin.json",
-        "plugins/desk/.mcp.json",
+        "plugins/desk/.mcp.claude-codex.json",
         "plugins/desk/agents/worker.md",
         "plugins/desk/agents/observer.md",
         "plugins/superpowers/.claude-plugin/plugin.json",
@@ -73,7 +73,7 @@
       "source_paths": [
         "plugins/desk/README.md",
         "plugins/desk/activation/README.md",
-        "plugins/desk/.mcp.json",
+        "plugins/desk/.mcp.claude-codex.json",
         "plugins/desk/plugin.json",
         "plugins/superpowers/plugin.json",
         "plugins/plain-language/plugin.json"
@@ -89,7 +89,7 @@
       "surface": "Generic stdio MCP launch only",
       "disposition": "degraded-mcp-only",
       "source_paths": [
-        "plugins/desk/.mcp.json",
+        "plugins/desk/.mcp.claude-codex.json",
         "plugins/desk/mcp/README.md",
         "plugins/desk/activation/README.md"
       ],

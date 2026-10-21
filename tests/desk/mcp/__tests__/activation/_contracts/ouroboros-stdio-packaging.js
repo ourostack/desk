@@ -6,7 +6,7 @@ const GENERIC_STDIO_UNSUPPORTED = [
   "plugin-dependency-resolution",
 ]
 const REQUIRED_GENERIC_STDIO_EVIDENCE_SOURCES = [
-  "plugins/desk/.mcp.json",
+  "plugins/desk/.mcp.claude-codex.json",
   "plugins/desk/mcp/README.md",
   "plugins/desk/activation/README.md",
 ]

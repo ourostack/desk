@@ -882,7 +882,7 @@ export function improvementInstructions(summary) {
   if (summary.status !== "ok") return [improvementLine(summary)]
   const out = []
   if (summary.open > 0) {
-    out.push(`Improvement cards: ${improvementCountText(summary)}. An improvement card is one finding of the factory about our own tooling, with its evidence. The cards are standing, pre-authorized work: take the oldest when your foreground work allows it, this is an interactive session and the machine is under its cap, by handing it to a background subagent through improvement_next, which refuses and says why when the session or the machine's cap does not allow it. ${AUTHORITY}`)
+    out.push(`Improvement cards: ${improvementCountText(summary)}. An improvement card is one finding of the factory about our own tooling, with its evidence. This backlog is not an assignment inside the supplied task. Do not spawn unsolicited repair work; preserve evidence for the existing repair owner. ${AUTHORITY}`)
   }
   const notes = improvementNotes(summary)
   if (notes.length > 0) out.push(`Improvement cards: ${notes.join("; ")}`)
@@ -1072,7 +1072,7 @@ function buildInstructionItems(ctx) {
   )
   for (const [name, check] of Object.entries(prereqResults)) {
     if (check.ok || check.soft === true || check.reason.endsWith("_timeout")) continue
-    add(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
+    add(`Prerequisite unavailable: ${prereqAction(name, check)} Only operations depending on ${name} are affected. Do not use an unverified identity, bypass a real access denial or protected write, or claim this check passed. Continue independent authorized work through available trusted tools; preserve the diagnostic without starting unsolicited maintenance.`)
   }
   const syncLine = syncInstruction(sync, root)
   if (syncLine !== null) add(syncLine)
@@ -1243,7 +1243,7 @@ export async function bootOnce({
     // so neither field falls back to a placeholder here.
     degraded.push(`root: ${root.message}`)
     return { ...emptyResult({ status: root.status, degraded, pending, root, host }), migrations: migrationSummary, instructions: [
-      `Stop: the desk configured at ${root.path} is missing or unreadable. Restore or clone it there, or rebind through desk:first-run-bootstrap with the operator's agreement. Never use a different desk to work around this.`,
+      `Desk operations unavailable: the desk configured at ${root.path} is missing or unreadable. Never use a different desk to work around this. Continue independent authorized work through trusted available tools. Preserve the binding and diagnostic; restoration or rebinding is separate scoped work, not a prerequisite for the independent task.`,
     ] }
   }
   if (stopForMigration) {
