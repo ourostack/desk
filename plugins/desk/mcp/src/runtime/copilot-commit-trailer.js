@@ -69,9 +69,9 @@ function disableCopilotSetting({ env = process.env, home = env.HOME || env.USERP
   const subject = memory ? "native memory" : "commit trailer"
   const repair = `run \`copilot config ${KEY} false\` once, and ${sessionRule}.`
   const folder = env.COPILOT_HOME || path.join(home, ".copilot")
-  if (!isFolder(folder)) return { state: "no_copilot_home", line: memory ? `Desk startup: no Copilot settings folder was found, so native memory could not be disabled; ${repair}` : "" }
+  if (!isFolder(folder)) return { state: "no_copilot_home", line: memory ? `Desk memory: no Copilot settings folder was found, so native memory could not be disabled; ${repair}` : "" }
   const file = path.join(folder, "settings.json")
-  const unreadable = { state: "unreadable", line: `Desk startup: could not read ${file} as a JSON object, so Copilot's ${subject} setting is unchanged; ${repair}` }
+  const unreadable = { state: "unreadable", line: `${memory ? "Desk memory" : "Desk startup"}: could not read ${file} as a JSON object, so Copilot's ${subject} setting is unchanged; ${repair}` }
 
   let original
   let settings = {}
@@ -93,7 +93,7 @@ function disableCopilotSetting({ env = process.env, home = env.HOME || env.USERP
     if (relaxed[KEY] === false) return { state: "already", line: "" }
     if (relaxed[KEY] !== undefined && !memory) return { state: "kept", line: "" }
     return { state: "not_plain_json", line: memory ?
-      `Desk startup: ${file} has comments or trailing commas, so native memory could not be disabled without changing them; ${repair}` :
+      `Desk memory: ${file} has comments or trailing commas, so native memory could not be disabled without changing them; ${repair}` :
       `Desk startup: ${file} has comments or trailing commas, so Desk did not rewrite it; add \`"${KEY}": false\` to it once so Copilot stops asking for an AI co-author trailer on commits, and ${sessionRule}.` }
   }
   if (!isObject(settings)) return unreadable
@@ -108,16 +108,16 @@ function disableCopilotSetting({ env = process.env, home = env.HOME || env.USERP
     writeFileSync(temporary, `${JSON.stringify({ ...settings, [KEY]: false }, null, 2)}\n`, { mode })
     chmodSync(temporary, mode)
     // Copilot may have written the file since it was read; then leave it alone.
-    if (recheck(file) !== original) return { state: "changed", line: memory ? `Desk startup: ${file} changed during native memory repair; ${repair}` : "" }
+    if (recheck(file) !== original) return { state: "changed", line: memory ? `Desk memory: ${file} changed during native memory repair; ${repair}` : "" }
     renameSync(temporary, target)
   } catch {
     return { state: "failed", line: memory ?
-      `Desk startup: could not write ${file}, so native memory could not be disabled; ${repair}` :
+      `Desk memory: could not write ${file}, so native memory could not be disabled; ${repair}` :
       `Desk startup: could not write ${file}, so Copilot still asks for an AI co-author trailer on commits; ${repair}` }
   } finally {
     rmSync(temporary, { force: true })
   }
   return { state: "set", line: memory ?
-    `Desk startup: set \`memory: false\` in ${file}; native memory is disabled in settings. Running sessions must not use native memory tools; durable context belongs in the Git-backed desk.` :
+    `Desk memory: set \`memory: false\` in ${file}; native memory is disabled in settings. Running sessions must not use native memory tools; durable context belongs in the Git-backed desk.` :
     `Desk startup: set \`${KEY}: false\` in ${file}, so Copilot stops asking for an AI co-author trailer on commits from the next session; add none in this session either.` }
 }

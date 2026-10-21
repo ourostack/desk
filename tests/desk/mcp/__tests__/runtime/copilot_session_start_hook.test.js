@@ -57,7 +57,7 @@ test("every Desk session disables explicitly enabled native memory and injects t
     writeFileSync(settings, JSON.stringify({ memory: true, model: "x", includeCoAuthoredBy: false }))
     const { context } = start({ sessionId: `sess-memory-${attempt}`, cwd: ROOT, source: "new" }, "native-memory")
     assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, model: "x", includeCoAuthoredBy: false })
-    assert.match(context, /Never call `store_memory` or `vote_memory`/u)
+    assert.match(context, /Disable host memory: `store_memory`\/`vote_memory`/u)
     assert.match(context, /native memory/u)
   }
 })

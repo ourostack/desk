@@ -65,7 +65,7 @@ async function nativeMemoryLine() {
     const { disableNativeMemory } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-commit-trailer.js")).href);
     return disableNativeMemory({ env: process.env }).line;
   } catch {
-    return "Desk startup: native memory could not be disabled; repair the native `memory: false` setting before continuing. Do not use store_memory or vote_memory; durable context belongs in the Git-backed desk.";
+    return "Desk memory: native memory could not be disabled; repair the native `memory: false` setting before continuing. Do not use store_memory or vote_memory; durable context belongs in the Git-backed desk.";
   }
 }
 
