@@ -153,11 +153,13 @@ test('null journal is an explicit retained invalid obligation rather than a miss
   assert.equal(await fs.readFile(f.file, 'utf8'), 'null');
 });
 
-test('ordinary handoff waits behind the existing normal update lock before deciding journal absence', async () => {
+test('ordinary handoff waits behind the existing normal update lock before deciding journal absence', async t => {
   const module = await load(), f = await fixture();
-  let captured = 0, task;
+  let captured = 0, task, holderPhase = 'before-acquisition';
+  const started = Date.now();
   try {
     await withBrokerLock(path.dirname(f.file), async () => {
+      holderPhase = 'held';
       task = module.createNativeUpdateProof(f.config).onAdmitted({
         activation, recheck: async () => {},
         capture: async params => {
@@ -166,12 +168,29 @@ test('ordinary handoff waits behind the existing normal update lock before decid
             firstContextEffect: null, contextEffectSequence: 0, currentUnknownObligations: [] });
         },
         release: async params => ({ transactionId: params.transactionId, workerEpoch: ID, released: true }),
+      }).then(value => ({ value }), async error => {
+        // Observe an early rejection immediately, without swallowing it or
+        // changing acquisition/release ordering. The original failure is
+        // rethrown below. This snapshot is diagnostic only, never a retry.
+        const observed = { elapsedMs: Date.now() - started, holderPhase,
+          code: error.code, syscall: error.syscall };
+        try {
+          const metadata = await fs.lstat(path.join(path.dirname(f.file), 'native-extension-update.lock'), { bigint: true });
+          observed.lock = { directory: metadata.isDirectory(), dev: String(metadata.dev), ino: String(metadata.ino) };
+        } catch (readError) { observed.lockReadCode = readError.code; }
+        t.diagnostic('normal-update-lock-failure ' + JSON.stringify(observed));
+        return { error };
       });
 
       await new Promise(resolve => setTimeout(resolve, 30));
       assert.equal(captured, 0);
+      holderPhase = 'release-starting';
     }, { name: 'native-extension-update' });
-  } finally { await task; }
+  } finally {
+    holderPhase = 'holder-settled';
+    const outcome = await task;
+    if (outcome?.error) throw outcome.error;
+  }
   assert.equal(captured, 1);
 });
 
