@@ -57,10 +57,25 @@ accepted.
 ## Parent-loaded Copilot consumer
 
 `extensions/session-label/extension.mjs` is a native Copilot extension entry.
-The native discovery/installation owner must enroll it through the host's
-supported extension loader; merely installing the task-tool schema does not
-enroll an extension. There is no guessed plugin-manifest field, automatic
-global-directory write, session launcher or transcript/file poller here.
+The Copilot root manifest declares `"extensions": "./extensions/"`, the
+host-supported legacy plugin component path. Normal plugin acquisition
+therefore supplies the entry to native plugin discovery, with source-qualified
+identity `plugin:desk:session-label`. Merely exposing a task-tool schema is not
+enrollment.
+
+This declaration is additive, not `exclusive`: it does not suppress built-in
+or other extensions, copy a project entry to a user directory, overwrite an
+unowned file, or change native preferences. Plugin disablement, extension
+mode disablement and per-extension opt-outs remain host-owned and authoritative.
+The plugin never calls an enable/reload API on the operator's existing session.
+Normal updates retain the same extension identity and acquire its current
+plugin-relative module; there is no source pin or independent naming daemon.
+
+The current host gates extension loading on its extension feature capability.
+A launch-scoped experimental RC invocation can exercise that capability
+without a global setting change, but must not override explicit native
+extension disablement or be represented as ordinary published-channel proof.
+There is no session launcher or transcript/file poller here.
 
 The entry joins its parent process's current session, then observes live
 native tool-start/completion pairs from the configured `desk` MCP server.
