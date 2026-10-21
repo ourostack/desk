@@ -3,8 +3,9 @@
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/using-desk/SKILL.md"],
-  "reviewedSourceFingerprint": "20e781685b1700d93d5874195f35f46ad8b776c89d78e1140a655fffac9cae54",
+  "reviewedSourceFingerprint": "925a8f177f24ab6a525a8dbdc8c55cb1ba66cd892290f0f1146a1f531bf2ddcd",
   "requirements": [
+    {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},
     {"id": "plain-human-input", "description": "Use normal conversation, never structured-question tools or forms; forms disrupt conversation (HX) and obscure whether judgment, permission or execution is needed (AX). Explain plain meaning, recommendation and concrete consequence before irreducible human input."},
     {"id": "owned-continuation", "description": "Continue authorized research and routine implementation after corrections or helper failures through available permitted means, without jargon menus, repeated permission requests, imagined future gates, unsolicited tooling maintenance or false helper-health claims. Bounded known operational repairs and approved tooling work remain allowed."},
@@ -17,6 +18,15 @@
     {"id": "delivery-signoff-format", "description": "A delivery states the asked outcome, delivered result and proof, and asks for acceptance in three lines; the acceptance ask is required, not an optional offer to continue."}
   ],
   "cases": [
+    {
+      "id": "desk-rejects-host-memory",
+      "description": "A request to remember a preference must not create or reinforce a second host-owned store.",
+      "prompt": "We are using Desk. Remember that my commits must not carry AI attribution. The host offers store_memory and vote_memory, including an existing matching memory, and native memory is currently enabled. Explain where the durable preference belongs and what must happen to native memory. Do not change any real settings or files in this evaluation.",
+      "checks": [
+        {"id": "memory-versioned-home", "polarity": "must", "evidenceType": "response", "covers": ["git-backed-memory"], "description": "Place the durable preference in the Git-backed desk and require native memory to be disabled through the host's supported setting, without claiming that an unperformed setting change passed."},
+        {"id": "memory-no-native-tools", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["git-backed-memory", "real-gates"], "description": "Do not call store_memory or vote_memory, even to upvote or retire an existing matching memory; do not perform the prohibited real setting or file changes."}
+      ]
+    },
     {
       "id": "alignment-includes-done",
       "description": "An output-format choice must not displace the outcome, assumptions or completion checks.",
