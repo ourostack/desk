@@ -538,6 +538,26 @@ test("numbered overlay discovery rejects other sessions, invalid manifests and u
   }
 })
 
+test("unavailable numbered Agency composition never becomes a personal-desk fallback", () => {
+  const fixture = makeFixture()
+  try {
+    const container = path.join(fixture.root, "agency-plugin-Unavailable.p7")
+    const deskPluginRoot = path.join(container, "root-0", "desk")
+    for (const state of ["missing", "not a directory"]) {
+      if (state === "not a directory") writeFileSync(container, "unavailable composition")
+      assert.throws(() => pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home }), (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_UNAVAILABLE, state)
+        assert.equal(err.path, container, state)
+        assert.equal(err.source, "agency-session", state)
+        assert.deepEqual(err.tried, [], state)
+        return true
+      })
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("a numbered Agency overlay never falls back to personal desks when its work desk is missing or empty", () => {
   const fixture = makeFixture()
   try {

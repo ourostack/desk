@@ -217,7 +217,11 @@ export function loadedOverlayHomeDesks({ deskPluginRoot = MODULE_PLUGIN_ROOT, ho
         .filter((entry) => entry.isDirectory() && AGENCY_SOURCE_ROOT.test(entry.name))
         .map((entry) => path.join(container, entry.name))
     } catch {
-      return []
+      throw codedError(
+        `desk-mcp: Agency session composition cannot be read: ${container}. Desk does not fall back to another desk.`,
+        DESK_ROOT_UNAVAILABLE,
+        { path: container, source: "agency-session", problem: "cannot be read", tried: [] },
+      )
     }
   }
   return OVERLAY_HOME_DESKS
