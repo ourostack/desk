@@ -29,8 +29,9 @@
 
 import * as path from "node:path"
 import * as os from "node:os"
-import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync, statSync, promises as fs } from "node:fs"
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, promises as fs } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { agencySessionPluginParents } from "./agency-session.cjs"
 
 // Raised only when no source names a desk at all, as opposed to an explicit
 // root that is wrong. Hosts may treat it as "no desk yet" and start setup.
@@ -74,9 +75,6 @@ export function resolveDeskRoot(explicit, options = {}) {
 // not be recognized, and the overlay's home desk would not be consulted.
 // "Loaded" means present in this Agency session's composition, not that the
 // session's selected agent belongs to the overlay.
-const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
-const AGENCY_SOURCE_ROOT = /^root-[0-9]+$/u
-
 // Work overlays whose home-folder desk Desk may bind when nothing else binds a
 // desk, and only while that overlay is loaded in Desk's session container.
 const OVERLAY_HOME_DESKS = Object.freeze([
@@ -206,24 +204,8 @@ export function resolveDeskRootWithSource({
 // install, Claude Code, Codex, a checkout) there are none.
 export function loadedOverlayHomeDesks({ deskPluginRoot = MODULE_PLUGIN_ROOT, homeDir = os.homedir() } = {}) {
   if (!hasText(deskPluginRoot)) return []
-  const pluginParent = path.dirname(path.resolve(deskPluginRoot))
-  const numbered = AGENCY_SOURCE_ROOT.test(path.basename(pluginParent))
-  const container = numbered ? path.dirname(pluginParent) : pluginParent
-  if (!AGENCY_SESSION_CONTAINER.test(path.basename(container))) return []
-  let pluginParents = [container]
-  if (numbered) {
-    try {
-      pluginParents = readdirSync(container, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && AGENCY_SOURCE_ROOT.test(entry.name))
-        .map((entry) => path.join(container, entry.name))
-    } catch {
-      throw codedError(
-        `desk-mcp: Agency session composition cannot be read: ${container}. Desk does not fall back to another desk.`,
-        DESK_ROOT_UNAVAILABLE,
-        { path: container, source: "agency-session", problem: "cannot be read", tried: [] },
-      )
-    }
-  }
+  const pluginParents = agencySessionPluginParents(deskPluginRoot)
+  if (pluginParents === null) return []
   return OVERLAY_HOME_DESKS
     .filter(({ overlay }) => pluginParents.some((parent) => pluginDeclares(path.join(parent, overlay), overlay)))
     .map(({ overlay, folder }) => ({ source: OVERLAY_HOME_FALLBACK, overlay, path: path.join(homeDir, folder) }))

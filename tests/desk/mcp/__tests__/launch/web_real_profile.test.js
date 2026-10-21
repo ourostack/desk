@@ -168,6 +168,29 @@ test("the installed plugin folders come from the host's own plugin list", async 
 
 const DECLARES = { browser: { channel: "msedge", profileAccountDomain: "microsoft.com" } }
 
+test("numbered Agency roots expose the selected session's browser declarations in source-root order", async () => {
+  const root = await mkTempRoot("real-agency-roots-")
+  const session = path.join(root, "agency-plugin-Current.p7")
+  const desk = pluginDir(path.join(session, "root-0"), "desk", {})
+  pluginDir(path.join(session, "root-10"), "late", { browser: { channel: "chrome", profileAccountDomain: "late.example" } })
+  pluginDir(path.join(session, "root-2"), "overlay", { browser: { channel: "msedge", profileAccountDomain: "work.example" } })
+  pluginDir(path.join(root, "agency-plugin-Other.p8", "root-20"), "foreign", { browser: { channel: "chrome", profileAccountDomain: "foreign.example" } })
+  pluginDir(path.join(session, "root-30-extra"), "unselected", { browser: { channel: "chrome", profileAccountDomain: "unselected.example" } })
+  const options = { env: { COPILOT_PLUGIN_ROOT: desk }, homeDir: path.join(root, "home") }
+  assert.deepEqual(real.pluginDirs(options).map(dir => path.relative(session, dir)), [
+    path.join("root-0", "desk"), path.join("root-2", "overlay"), path.join("root-10", "late"),
+  ])
+  assert.deepEqual(real.readDeclaration(options), { state: "declared", channel: "chrome", domain: "late.example" })
+})
+
+test("an unavailable numbered Agency composition cannot silently select an undeclared browser", async () => {
+  const root = await mkTempRoot("real-agency-missing-")
+  assert.throws(() => real.readDeclaration({
+    env: { COPILOT_PLUGIN_ROOT: path.join(root, "agency-plugin-Missing.p7", "root-0", "desk") },
+    homeDir: path.join(root, "home"),
+  }), error => error.code === "DESK_ROOT_UNAVAILABLE" && error.source === "agency-session")
+})
+
 /** An Agency or Copilot session folder with `desk` and `ms-desk` side by side; ms-desk declares the browser when `declares` is true. */
 function sessionLayout(root, declares = true) {
   const session = path.join(root, "session")
