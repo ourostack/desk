@@ -141,8 +141,9 @@ test("the CLI checks context against the merged tree, not its branch's earlier f
   linked.coverage = { state: "unavailable", reasons: ["not_recorded"], omitted_events: 0 }
   const linkBase = git("rev-parse", "HEAD")
   mkdirSync(join(root, "context"), { recursive: true })
-  symlinkSync(JSON.stringify(reviewContext(linked)), contextFile)
-  git("add", "context")
+  writeFileSync(contextFile, JSON.stringify(reviewContext(linked)))
+  const linkBlob = git("hash-object", "-w", contextFile)
+  git("update-index", "--add", "--cacheinfo", `120000,${linkBlob},context/${CONTEXT_JOB}.json`)
   git("commit", "-qm", "nonregular context")
   const mode = await runValidatePrCommand({ cwd: root, argv: ["--base", linkBase, "--head", git("rev-parse", "HEAD"), "--author-association", "OWNER"] })
   assert.ok(mode.errors.some((entry) => entry.code === "context_not_regular"))
