@@ -16,7 +16,7 @@
     "mcp"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./.mcp.claude-codex.json",
   "hooks": "./hooks/hooks.json",
   "activation": {
     "codex": {

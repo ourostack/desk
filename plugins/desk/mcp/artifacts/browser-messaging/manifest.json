@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "goVersion": "1.27.1",
+  "sourceSha256": "7cc5e00f5dba03e4472322f8a349b71eb233f77cfba9039c187b079dc33deaae",
+  "assets": {
+    "darwin-arm64": {
+      "sha256": "aacd617d6c7f1acdf2499e9341a4efa83ee9e4537cdbddb1ddec0963bd5003ff"
+    },
+    "darwin-x64": {
+      "sha256": "3b59bfe3ea40cabd6afd6042b63aee234731d247921df16b8899d9d40ea8bd39"
+    },
+    "linux-arm": {
+      "sha256": "659101a33c733f7578fd22f58a9dd1d9062c51e6a66e12f915be1bf06b1935bd"
+    },
+    "linux-arm64": {
+      "sha256": "ee38b946d2255f9c616bc8ab6299115625dc135ea261bf17b1b3c114ba5baab7"
+    },
+    "linux-x64": {
+      "sha256": "98d4258bcc83d5e1acfdf187e98c2e0ac975ed8f6a34a83f08655b2a93d55c39"
+    },
+    "win32-arm64": {
+      "sha256": "49c18da3043f79e0dd47bbe8064458e6ca73fdf36ef91c3586dfe20ec38f8b4b"
+    },
+    "win32-ia32": {
+      "sha256": "5330a3b7370ca197346af3fd05ba110513b6db9fcdfc238a7635ac8fcc630cb7"
+    },
+    "win32-x64": {
+      "sha256": "7533250625485582e3c7f272f91840a689d62b80fc097409ab05510fbc5a5dac"
+    }
+  },
+  "provenance": {
+    "source": "ourostack/desk",
+    "predecessor": "60adac5ff6f14fbef6e371fa2983f84e0f7eba9f",
+    "sourceFiles": [
+      "go.mod",
+      "main.go",
+      "private_unix.go",
+      "private_windows.go"
+    ],
+    "compiler": "Go 1.27.1",
+    "goLicense": "Copyright 2009 The Go Authors.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are\nmet:\n\n   * Redistributions of source code must retain the above copyright\nnotice, this list of conditions and the following disclaimer.\n   * Redistributions in binary form must reproduce the above\ncopyright notice, this list of conditions and the following disclaimer\nin the documentation and/or other materials provided with the\ndistribution.\n   * Neither the name of Google LLC nor the names of its\ncontributors may be used to endorse or promote products derived from\nthis software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n\"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\nLIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR\nA PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT\nOWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,\nSPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\nLIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY\nTHEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
+  }
+}

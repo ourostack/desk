@@ -272,6 +272,25 @@ test("Copilot root plugin metadata exposes the observer agent beside worker", ()
   assert.equal(observer["user-invocable"], true)
 })
 
+test("Copilot enrollment resolves the bundled native label entry from additive plugin metadata", () => {
+  const deskPlugin = loadJson("plugins", "desk", "plugin.json")
+  assert.equal(deskPlugin.extensions, "./extensions/")
+  const extensionRoot = path.resolve(repoRoot, "plugins/desk", deskPlugin.extensions)
+  assert.equal(existsSync(path.join(extensionRoot, "session-label", "extension.mjs")), true)
+  assert.equal(existsSync(path.join(extensionRoot, "session-label", "consumer.mjs")), true)
+  assert.deepEqual(validateCopilotPackagingContract(currentCopilotPackagingInput()), [])
+})
+
+for (const declaration of [undefined, "./missing-extensions/", { paths: ["./extensions/"], exclusive: true }]) {
+  test(`Copilot packaging rejects missing or non-additive extension enrollment (${JSON.stringify(declaration)})`, () => {
+    const input = clone(currentCopilotPackagingInput())
+    input.deskPlugin.extensions = declaration
+    assert.deepEqual(validateCopilotPackagingContract(input), [
+      "Copilot root plugin metadata must expose additive ./extensions/ discovery",
+    ])
+  })
+}
+
 test("Copilot root packaging declares a generated flattened dependency closure", () => {
   assertFileExists(...copilotBundlePath.split("/"))
 

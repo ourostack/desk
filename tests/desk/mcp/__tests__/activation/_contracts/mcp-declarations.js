@@ -122,7 +122,7 @@ export function collectMcpDeclarations({ repoRoot }) {
 /**
  * The server names a source file spells out in code instead of reading from a declaration: TOML tables such as `[mcp_servers.desk]` and
  * `.mcp_servers.desk]`, and path arrays such as `["mcp_servers", "desk"]`. The Codex adapter writes its config tables this way, so a rename
- * in `.mcp.json` would leave it configuring a server that no longer exists.
+ * in `.mcp.claude-codex.json` would leave it configuring a server that no longer exists.
  */
 export function hardCodedServerNames(source) {
   const names = new Set()
@@ -168,7 +168,7 @@ export function launcherEntryFiles(server) {
 }
 
 /**
- * Problems where the Claude-style `.mcp.json` and the Copilot `.mcp.copilot.json` have drifted: different
+ * Problems where the Claude/Codex `.mcp.claude-codex.json` and the Copilot `.mcp.copilot.json` have drifted: different
  * server names, type or command, a Copilot launch that does not start `${COPILOT_PLUGIN_ROOT}/mcp/<file>`,
  * or a different entry file than the Claude launcher starts.
  */
@@ -177,7 +177,7 @@ export function checkHostDeclarationParity({ claude, copilot }) {
   const claudeNames = Object.keys(claude).sort()
   const copilotNames = Object.keys(copilot).sort()
   if (JSON.stringify(claudeNames) !== JSON.stringify(copilotNames)) {
-    errors.push(`server names differ: .mcp.json declares [${claudeNames.join(", ")}] but .mcp.copilot.json declares [${copilotNames.join(", ")}]`)
+    errors.push(`server names differ: .mcp.claude-codex.json declares [${claudeNames.join(", ")}] but .mcp.copilot.json declares [${copilotNames.join(", ")}]`)
   }
   for (const name of claudeNames.filter((item) => copilotNames.includes(item))) {
     for (const field of ["type", "command"]) {
@@ -190,7 +190,7 @@ export function checkHostDeclarationParity({ claude, copilot }) {
     const copilotEntry = copilotArgs.length === 1
       ? new RegExp(`^${COPILOT_ROOT_VARIABLE.replace(/[$.{}]/gu, "\\$&")}/mcp/([^/]+)$`, "u").exec(copilotArgs[0])
       : null
-    if (claudeEntries.length !== 1) errors.push(`"${name}": the .mcp.json launcher names no mcp/<file> entry (or several)`)
+    if (claudeEntries.length !== 1) errors.push(`"${name}": the .mcp.claude-codex.json launcher names no mcp/<file> entry (or several)`)
     if (copilotEntry === null) errors.push(`"${name}": the Copilot launch must be one argument, ${COPILOT_ROOT_VARIABLE}/mcp/<file>`)
     if (claudeEntries.length === 1 && copilotEntry !== null && copilotEntry[1] !== claudeEntries[0]) {
       errors.push(`"${name}": copilot launches ${copilotEntry[1]} but claude launches ${claudeEntries[0]}`)

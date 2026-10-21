@@ -210,7 +210,7 @@
         "desk": {
           "launch": "plugin-bundled",
           "manualRegistration": false,
-          "configPath": ".mcp.json"
+          "configPath": ".mcp.claude-codex.json"
         }
       },
       "dependencies": {

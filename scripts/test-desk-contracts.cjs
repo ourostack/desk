@@ -1455,8 +1455,8 @@ contract("every improvement tool named in a skill or doc is registered, and the 
 });
 requires(
   "plugins/desk/skills/curator/SKILL.md",
-  "curator works improvement cards as standing, pre-authorized work and keeps the friction pass operator-asked",
-  /^description: [^\n]*improvement_next[^\n]*\n[\s\S]+## The improvement-card routine[\s\S]+standing, pre-authorized[\s\S]+improvement_next[\s\S]+money on a human's payment method[\s\S]+credential or an account only a human can act in[\s\S]+irreversible destructive action[\s\S]+every ruling[\s\S]+countermeasure pull request[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+improvement_update[\s\S]+claim_id[\s\S]+`wont_fix`[\s\S]+`duplicate`[\s\S]+`not_reproducible`[\s\S]+## The friction backlog pass[\s\S]+only when the operator asks[\s\S]+## Process/mu,
+  "curator requires authorized maintenance scope and keeps the friction pass operator-asked",
+  /^description: [^\n]*improvement_next[^\n]*\n[\s\S]+## The improvement-card routine[\s\S]+this task's authorized scope[\s\S]+improvement_next[\s\S]+money on a human's payment method[\s\S]+credential or an account only a human can act in[\s\S]+irreversible destructive action[\s\S]+every ruling[\s\S]+countermeasure pull request[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+improvement_update[\s\S]+claim_id[\s\S]+`wont_fix`[\s\S]+`duplicate`[\s\S]+`not_reproducible`[\s\S]+## The friction backlog pass[\s\S]+only when the operator asks[\s\S]+## Process/mu,
 );
 requires(
   "plugins/desk/skills/curator/SKILL.md",
@@ -1466,7 +1466,7 @@ requires(
 requires(
   "plugins/desk/skills/session-start/details.md",
   "session-start says what each factory line asks of the agent now that the plugin runs the evaluator",
-  /## Factory lines[\s\S]+Factory evaluator:[\s\S]+the plugin labels them in the background[\s\S]+sign_in_unknown[\s\S]+disabled_would_bill[\s\S]+Improvement cards:[\s\S]+background subagent[\s\S]+improvement_next[\s\S]+_meta\/improvement\/invalid\/[\s\S]+quarantined waste labels[\s\S]+open andon issues[\s\S]+each has an improvement card[\s\S]+only when you retry[\s\S]+`ready` → start a fresh `desk:observer` subagent/u,
+  /## Factory lines[\s\S]+Factory evaluator:[\s\S]+the plugin labels them in the background[\s\S]+sign_in_unknown[\s\S]+disabled_would_bill[\s\S]+Improvement cards:[\s\S]+not an assignment[\s\S]+existing repair owner[\s\S]+quarantined waste labels[\s\S]+open andon issues[\s\S]+each has an improvement card[\s\S]+only when you retry[\s\S]+`ready` → start a fresh `desk:observer` subagent/u,
 );
 requires(
   "plugins/desk/skills/friction-management/SKILL.md",
@@ -1610,7 +1610,7 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["using-desk", /merge when confident wherever the repository lets you, and never report completion with the PR open/u],
     ["using-desk", /Choose each child's model deliberately/u],
     ["using-desk", /A child brief bounds the work and leaves the method to the child\. A handoff to a peer that owns its task is not a brief: say what you changed and intend to touch, what was decided, the edges and how to reach you; never tell it how to work or presume its state/u],
-    ["using-desk", /Our constraints can change/u],
+    ["using-desk", /bounded known repairs or approved source work, not unsolicited repair children or PRs/u],
     ["using-desk", /AX \(agent experience\): do deterministic work deterministically; make tools easy to understand and use/u],
     ["using-desk", /HX \(human experience, formerly UX\): protect attention, understanding, control and trust/u],
     ["using-desk", /Never improve one by shifting avoidable work onto the other/u],

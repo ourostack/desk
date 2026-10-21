@@ -68,6 +68,9 @@ jobs:
         shell: pwsh
         run: npm ci --prefix plugins/desk/browser-context-broker
 
+      - name: Install locked maintained browser test input
+        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
+
       - name: Show the account this job runs as
         shell: pwsh
         run: |

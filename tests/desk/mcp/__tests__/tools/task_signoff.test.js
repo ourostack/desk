@@ -638,7 +638,7 @@ const read = (relative) => readFileSync(path.join(REPO, relative), "utf8")
 
 test("every place that lists the tools lists task_signoff", () => {
   assert.match(read("plugins/desk/mcp/bootstrap.cjs"), /"task_focus", "task_signoff"/u)
-  assert.ok(JSON.parse(read("plugins/desk/.mcp.json")) && read("plugins/desk/.mcp.json").includes("'task_signoff'"))
+  assert.ok(JSON.parse(read("plugins/desk/.mcp.claude-codex.json")) && read("plugins/desk/.mcp.claude-codex.json").includes("'task_signoff'"))
   assert.ok(read("scripts/test-desk-docs.cjs").includes('"task_signoff"'))
   assert.ok(read("scripts/audit-codex-plugin-cache.cjs").includes('"task_signoff"'))
   assert.ok(read("plugins/desk/mcp/README.md").includes("`task_signoff`"))

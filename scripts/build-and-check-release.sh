@@ -3,7 +3,7 @@
 # The Desk release workflow (.github/workflows/desk-release.yml) and the release dry run in pull request CI
 # (.github/workflows/desk-mcp-tests.yml) both call this script, so the two lists of steps cannot drift apart.
 #
-#   scripts/build-and-check-release.sh [--dry-run]
+#   scripts/build-and-check-release.sh [--dry-run] [--stage auto|rc]
 #
 # Run from the repository root with the Desk MCP dependencies installed (npm ci in plugins/desk/mcp) and a clean tree.
 # Folds the pending changelog fragments with scripts/release-desk.cjs, commits the result, then checks that commit.
@@ -16,10 +16,19 @@
 set -euo pipefail
 
 dry_run=false
-case "${1:-}" in
-  "") ;;
-  --dry-run) dry_run=true ;;
-  *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
+stage=auto
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) dry_run=true; shift ;;
+    --stage)
+      [ "$#" -ge 2 ] || { echo "usage: $0 [--dry-run] [--stage auto|rc]" >&2; exit 2; }
+      stage="$2"; shift 2 ;;
+    *) echo "usage: $0 [--dry-run] [--stage auto|rc]" >&2; exit 2 ;;
+  esac
+done
+case "$stage" in
+  auto|rc) ;;
+  *) echo "unsupported release stage $stage; use auto or rc" >&2; exit 2 ;;
 esac
 
 test -z "$(git status --porcelain)" || { echo "::error::The working tree must be clean before the release is built."; exit 1; }
@@ -47,9 +56,9 @@ trap restore EXIT
 if [ "$dry_run" = true ] && [ -z "$(git ls-files 'plugins/desk/changelog.d/*.md' | grep -v '/README\.md$' || true)" ]; then
   printf 'A throwaway fragment folded by the release dry run.\n' > "$throwaway"
 fi
-node scripts/release-desk.cjs --date "$(date -u +%F)" > "$release_json"
+node scripts/release-desk.cjs --date "$(date -u +%F)" --stage "$stage" > "$release_json"
 if [ "$(node -p 'require(process.argv[1]).released' "$release_json")" != "true" ]; then
-  echo "No changelog fragment is pending; nothing to release."
+  echo "No changelog fragment or stage transition is pending; nothing to release."
   output "released=false"
   exit 0
 fi

@@ -393,11 +393,46 @@ async function capturedProgram() {
 const parserExecutable = () => process.platform === "win32" ?
   path.win32.join(process.env.SystemRoot || process.env.SYSTEMROOT || "", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "pwsh"
 
+function metadataParseFailure(result, elapsedMs) {
+  const phases = ["entered", "input_read", "parsed", "helpers_checked", "report_built"]
+  return {
+    scope: "managed_ast_only_no_native",
+    elapsedMs: Number.isFinite(elapsedMs) && elapsedMs >= 0 ? Math.round(elapsedMs) : null,
+    exitStatus: Number.isInteger(result.status) ? result.status : null,
+    signal: ["SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGINT"].includes(result.signal) ? result.signal : null,
+    spawnError: result.error ? ["ETIMEDOUT", "ENOENT", "EACCES", "EAGAIN", "ENOMEM", "ENOBUFS"].includes(result.error.code)
+      ? result.error.code : "other" : null,
+    phases: typeof result.stderr === "string" ? result.stderr.split(/\r?\n/u)
+      .filter(line => phases.some(phase => line === `DESK_AST_PHASE:${phase}`))
+      .map(line => line.slice("DESK_AST_PHASE:".length)) : [],
+  }
+}
+
+test("synthetic: managed AST failure facts retain only observed phases and allowlisted process facts", () => {
+  const facts = metadataParseFailure({
+    status: null, signal: "SIGTERM",
+    error: { code: "ETIMEDOUT", message: "PRIVATE_PATH", stack: "PRIVATE_STACK" },
+    stderr: "PRIVATE_STDERR\nDESK_AST_PHASE:entered\r\nDESK_AST_PHASE:input_read\nDESK_AST_PHASE:PRIVATE_PHASE\n",
+    stdout: "PRIVATE_STDOUT",
+  }, 5003.9)
+  assert.deepEqual(facts, { scope: "managed_ast_only_no_native", elapsedMs: 5004,
+    exitStatus: null, signal: "SIGTERM", spawnError: "ETIMEDOUT", phases: ["entered", "input_read"] })
+  assert.doesNotMatch(JSON.stringify(facts), /PRIVATE/u)
+  assert.deepEqual(metadataParseFailure({
+    status: "PRIVATE_STATUS", signal: "PRIVATE_SIGNAL", error: { code: "PRIVATE_ERROR" }, stderr: null,
+  }, NaN), { scope: "managed_ast_only_no_native", elapsedMs: null,
+    exitStatus: null, signal: null, spawnError: "other", phases: [] })
+})
+
 test("managed-only: actual captured PowerShell parses and defines its helpers before the native setup body", async t => {
   const script = `
 $ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('DESK_AST_PHASE:entered')
+$program = [Console]::In.ReadToEnd()
+[Console]::Error.WriteLine('DESK_AST_PHASE:input_read')
 $tokens = $null; $errors = $null
-$ast = [Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$tokens, [ref]$errors)
+$ast = [Management.Automation.Language.Parser]::ParseInput($program, [ref]$tokens, [ref]$errors)
+[Console]::Error.WriteLine('DESK_AST_PHASE:parsed')
 $setup = @($ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] })
 $rows = @()
 foreach ($name in @('Define-Native', 'Build-Layout', 'Build-RenameBuffer', 'Refuse', 'Close-Entry', 'Read-Entry', 'Valid-Entry', 'Same-Entry')) {
@@ -406,12 +441,17 @@ foreach ($name in @('Define-Native', 'Build-Layout', 'Build-RenameBuffer', 'Refu
   $rows += @{ name = $name; scriptScoped = $definitions.Count -eq 1
     beforeSetup = $definitions.Count -eq 1 -and $setup.Count -eq 1 -and $definitions[0].Extent.EndOffset -lt $setup[0].Extent.StartOffset }
 }
-[Console]::WriteLine((@{ parseErrors = $errors.Count; helpers = $rows } | ConvertTo-Json -Depth 5 -Compress))
+[Console]::Error.WriteLine('DESK_AST_PHASE:helpers_checked')
+$report = @{ parseErrors = $errors.Count; helpers = $rows } | ConvertTo-Json -Depth 5 -Compress
+[Console]::Error.WriteLine('DESK_AST_PHASE:report_built')
+[Console]::WriteLine($report)
 `
+  const program = await capturedProgram()
+  const started = performance.now()
   const parsed = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    { input: await capturedProgram(), encoding: "utf8", env: process.env, timeout: 5000 })
+    { input: program, encoding: "utf8", env: process.env, timeout: 5000 })
   if (process.platform !== "win32" && parsed.error?.code === "ENOENT") return t.skip("PowerShell parser unavailable; not native Windows proof")
-  assert.equal(parsed.status, 0, parsed.error?.code ?? "PowerShell AST-only parse failed")
+  assert.equal(parsed.status, 0, JSON.stringify(metadataParseFailure(parsed, performance.now() - started)))
   const report = JSON.parse(parsed.stdout)
   assert.equal(report.parseErrors, 0)
   assert.deepEqual(report.helpers, ["Define-Native", "Build-Layout", "Build-RenameBuffer", "Refuse", "Close-Entry",
