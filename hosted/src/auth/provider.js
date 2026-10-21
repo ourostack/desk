@@ -374,7 +374,7 @@ export function createProvider({
 // sends Sec-Fetch-Site on every request it makes; one that does not falls
 // back to Origin, which every browser sends on a cross-origin POST. A request
 // with neither is refused.
-function fromOwnOrigin(req, issuerOrigin) {
+export function fromOwnOrigin(req, issuerOrigin) {
   const site = req.get("sec-fetch-site");
   if (site !== undefined) return site === "same-origin";
   return req.get("origin") === issuerOrigin;

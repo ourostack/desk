@@ -11,6 +11,7 @@
 //   create(table, entity)            -> etag; throws Conflict if the row exists
 //   update(table, entity, etag)      -> etag; replaces the row only if its ETag still matches, else PreconditionFailed
 //   upsert(table, entity)            -> etag
+//   remove(table, partitionKey, rowKey) -> deletes the row; a row already gone is not an error
 //   list(table)                      -> entity[]
 // where an entity is `{ partitionKey, rowKey, ...string or boolean properties }`.
 //
@@ -234,5 +235,32 @@ export function storeOn(tables, { onStep = noop } = {}) {
     },
 
     redeemInvite,
+
+    // Turns an account's Desk access on or off, keeping its name. Returns the account, or null when there is none.
+    async setAccess(accountId, deskAccess) {
+      if (typeof deskAccess !== "boolean") throw new TypeError("deskAccess must be true or false");
+      const found = await tables.get("accounts", key(accountId, "accountId"), "");
+      if (!found) return null;
+      await tables.upsert("accounts", { ...found.entity, deskAccess });
+      return { accountId, deskAccess };
+    },
+
+    // Deletes an account and every row that names it: its identities, its unredeemed and redeemed invites, its
+    // binding and last the account itself. Access goes off first, so the account stops working at once even if a
+    // later step fails; a retry finishes the job, because the account row is the last to go. Returns false when
+    // there was no account. The desk's clone and repository are the caller's.
+    async deleteAccount(accountId) {
+      key(accountId, "accountId");
+      if ((await this.setAccess(accountId, false)) === null) return false;
+      for (const row of await tables.list("identities")) {
+        if (row.accountId === accountId) await tables.remove("identities", row.partitionKey, row.rowKey);
+      }
+      for (const row of await tables.list("invites")) {
+        if (row.accountId === accountId) await tables.remove("invites", row.partitionKey, row.rowKey);
+      }
+      await tables.remove("bindings", accountId, "");
+      await tables.remove("accounts", accountId, "");
+      return true;
+    },
   };
 }

@@ -246,6 +246,38 @@ function storeSuite(label, make) {
         await assert.rejects(store.redeemInvite({ tokenHash: bad, tid: TID, oid: "o", now: NOW }), TypeError, JSON.stringify(bad));
       }
     });
+
+    test(name("setAccess turns access off and on, keeping the name, and answers null for no account"), async () => {
+      const store = await make();
+      const { accountId } = await seed({ store, displayName: "Test account", binding: BINDING });
+      assert.deepEqual(await store.setAccess(accountId, false), { accountId, deskAccess: false });
+      assert.deepEqual(await store.getAccount(accountId), { accountId, displayName: "Test account", deskAccess: false });
+      assert.deepEqual(await store.setAccess(accountId, true), { accountId, deskAccess: true });
+      assert.equal(await store.setAccess(randomUUID(), false), null);
+      await assert.rejects(store.setAccess(accountId, "off"), TypeError);
+    });
+
+    test(name("deleteAccount removes the account and every row naming it, and nothing else"), async () => {
+      const store = await make();
+      const { accountId, tokenHash } = await seededInvite(store);
+      const who = identity();
+      await store.redeemInvite({ tokenHash, ...who, now: NOW });
+      const { token: unused } = await issueInvite({ store, accountId, now: NOW });
+      const other = await seededInvite(store);
+      const otherWho = identity();
+      await store.redeemInvite({ tokenHash: other.tokenHash, ...otherWho, now: NOW });
+
+      assert.equal(await store.deleteAccount(accountId), true);
+      assert.equal(await store.getAccount(accountId), null);
+      assert.equal(await store.getBinding(accountId), null);
+      assert.equal(await store.findIdentity(who.tid, who.oid), null);
+      assert.equal(await store.getInvite(tokenHash), null);
+      assert.equal(await store.getInvite(hashToken(unused)), null);
+      assert.equal(await store.findIdentity(otherWho.tid, otherWho.oid), other.accountId);
+      assert.deepEqual(await store.getBinding(other.accountId), BINDING);
+      assert.equal((await store.getInvite(other.tokenHash)).redeemed, true);
+      assert.equal(await store.deleteAccount(accountId), false, "a second delete finds nothing");
+    });
   });
 }
 

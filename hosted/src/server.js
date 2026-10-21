@@ -10,7 +10,9 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { githubCallbackHandler } from "./auth/github.js";
 import { entraCallbackHandler, inviteHandlers } from "./auth/entra.js";
 import { consentHandler } from "./auth/provider.js";
-import { page, sendPage } from "./auth/pages.js";
+import { accountPage, page, pageRefusedPage, sendPage, signedOutPage, signInUnavailablePage } from "./auth/pages.js";
+import { parseCookies } from "./auth/signin-cookie.js";
+import { safeNext } from "./auth/browser-session.js";
 
 // How long one deep check's result is served before the next is run.
 export const DEEP_HEALTH_TTL_MS = 10_000;
@@ -76,7 +78,11 @@ export function createDeepHealth({ discovery, store, accountIds = [], ttlMs = DE
 //
 // `deepHealth` is createDeepHealth's, with the Ouro tenant and accounts configured; without them /healthz/deep
 // answers ok, as there is nothing deeper to check.
-export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites, deepHealth, log = provider.log }) {
+//
+// `sessions` (createBrowserSession's), with `entra`, adds the gateway's own pages: GET /signin?next=<path>, which
+// signs the browser in through the Ouro tenant and returns to that path, GET /account and POST /signout. `admin`
+// (admin.js createAdmin's router) is mounted at /admin.
+export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites, deepHealth, sessions, admin, log = provider.log }) {
   const app = express();
   // Container Apps terminates TLS one hop in front of the app; the SDK's
   // rate limiters read the client address from X-Forwarded-For.
@@ -131,6 +137,8 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
     app.get("/invite/:token", handlers.landing);
     app.get("/invite", handlers.page);
   }
+  if (entra && sessions) mountSessionPages(app, { entra, sessions, log });
+  if (admin) app.use("/admin", admin);
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));
   app.all(
@@ -146,4 +154,39 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   );
 
   return app;
+}
+
+// The browser session's routes. Every page here is behind the session; one without it goes to sign in and back.
+function mountSessionPages(app, { entra, sessions, log }) {
+  const toSignIn = (res, next) => res.redirect(303, `/signin?next=${encodeURIComponent(next)}`);
+
+  app.get("/signin", (req, res) => {
+    res.setHeader("cache-control", "no-store");
+    const outcome = entra.beginPage(safeNext(typeof req.query.next === "string" ? req.query.next : undefined), parseCookies(req.headers.cookie));
+    if (!outcome.redirectTo) return sendPage(res, outcome);
+    for (const header of outcome.setCookies ?? []) res.append("set-cookie", header);
+    res.redirect(302, outcome.redirectTo);
+  });
+
+  app.get("/account", async (req, res) => {
+    res.setHeader("cache-control", "no-store");
+    let accountId;
+    try {
+      accountId = await sessions.require(req);
+      if (!accountId) return toSignIn(res, "/account");
+      const account = await sessions.account(accountId);
+      sendPage(res, accountPage({ displayName: account?.displayName, csrf: sessions.csrfToken(req) }));
+    } catch (error) {
+      log(`page failed: store_unavailable (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
+      sendPage(res, signInUnavailablePage());
+    }
+  });
+
+  app.post("/signout", express.urlencoded({ extended: false, limit: "4kb" }), (req, res) => {
+    if (!sessions.checkCsrf(req)) {
+      log("sign-out refused: csrf");
+      return sendPage(res, pageRefusedPage());
+    }
+    sendPage(res, { ...signedOutPage(), headers: { "set-cookie": sessions.clear() } });
+  });
 }

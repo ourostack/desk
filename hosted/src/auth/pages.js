@@ -63,6 +63,19 @@ export const invitePage = ({ issuer } = {}) => ({
   ),
 });
 
+// Pages of the browser session (browser-session.js).
+export const signInCancelledPage = () => page(400, "Sign-in was cancelled. Sign in again to continue.");
+export const signedOutPage = () => page(200, "You're signed out of Hosted Desk.");
+export const pageRefusedPage = () => page(403, "This change didn't come from a Hosted Desk page in this browser. Reload the page and try again.");
+// The signed-in account's page: who is signed in, and a sign-out form carrying the session's CSRF token.
+export const accountPage = ({ displayName, csrf }) => ({
+  status: 200,
+  html: document(
+    `<p>You're signed in to Hosted Desk as <strong>${escapeHtml(displayName || "your account")}</strong>.</p>` +
+      `<form method="post" action="/signout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Sign out</button></form>`,
+  ),
+});
+
 // Sends a page with headers that keep it out of frames and caches, plus any
 // `headers` the page carries.
 export function sendPage(res, { status, html, headers = {} }) {

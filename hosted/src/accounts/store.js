@@ -97,6 +97,12 @@ export function createTableStore({ endpoint, credential, clientId, timeoutMs = S
     async upsert(table, entity) {
       return call("upsert", table, async (client, options) => (await client.upsertEntity(entity, "Replace", options)).etag);
     },
+    async remove(table, partitionKey, rowKey) {
+      // 404 ResourceNotFound: already gone, which is what was asked for.
+      await call("remove", table, (client, options) => client.deleteEntity(partitionKey, rowKey, options), {
+        404: { code: "ResourceNotFound", handle: () => undefined },
+      });
+    },
     async list(table) {
       return call("list", table, async (client, options) => {
         const rows = [];
