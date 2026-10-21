@@ -73,6 +73,85 @@ export function publicationDecision(next, previous, versionFileExists) {
   return "new"
 }
 
+export async function reuseVerifiedPackage({ next, previous, versionFileExists, verify }) {
+  if (publicationDecision(next, previous, versionFileExists) !== "reuse") return null
+  return verify()
+}
+
+export function signingCommonDirectory(repo) {
+  return fs.realpathSync(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").toString().trim())
+}
+
+// Repository-local non-replay, shared by its worktrees, NOT provider exactly-once.
+// Another clone or deliberately deleted state is outside this guarantee. There
+// is no automatic retry/unlock: even an incomplete journal permanently reserves
+// the publisher + numeric version. Source/input/OUT are evidence, never the key.
+export function createSigningAttempt({ commonDirectory, publisher, extensionVersion,
+  sourceCommit, signedInputSha256, output }) {
+  assert.equal(fs.realpathSync(commonDirectory), commonDirectory)
+  assert.match(publisher.spkiSha256, /^[0-9a-f]{64}$/u)
+  assert.match(sourceCommit, /^[0-9a-f]{40}$/u)
+  assert.match(signedInputSha256, /^[0-9a-f]{64}$/u)
+  assert.ok(path.isAbsolute(output))
+  const numericVersion = version(extensionVersion).join(".")
+  const directory = path.join(commonDirectory, "browser-native-sign-attempts")
+  const journal = path.join(directory, `${publisher.spkiSha256}-${numericVersion}.json`)
+  const evidence = { publisherPublicSpkiSha256: publisher.spkiSha256, extensionVersion: numericVersion,
+    sourceCommit, signedInputSha256, output, status: "reserved" }
+  let descriptor = null
+  const close = () => {
+    if (descriptor !== null) { fs.closeSync(descriptor); descriptor = null }
+  }
+  const record = status => {
+    assert.notEqual(descriptor, null)
+    evidence.status = status
+    const bytes = Buffer.from(JSON.stringify(evidence, null, 2) + "\n")
+    let at = 0
+    while (at < bytes.length) {
+      const written = fs.writeSync(descriptor, bytes, at, bytes.length - at, at)
+      assert.ok(written > 0)
+      at += written
+    }
+    fs.ftruncateSync(descriptor, bytes.length)
+    fs.fsyncSync(descriptor)
+  }
+  const protect = async (target, kind, created) => {
+    const info = fs.lstatSync(target)
+    assert.ok(!info.isSymbolicLink() && (kind === "directory" ? info.isDirectory() : info.isFile() && info.nlink === 1))
+    if (process.platform === "win32") {
+      const { protectWindowsPaths } = await import("../plugins/desk/mcp/src/factory/windows-acl.js")
+      await protectWindowsPaths([{ path: target, kind, created }], { label: "desk_browser_package" })
+    } else {
+      assert.equal(info.uid, process.getuid())
+      assert.equal(info.mode & 0o077, 0, "private attempt paths must already be owner-only")
+    }
+  }
+  return { journal, record, close, async reserve() {
+    assert.equal(descriptor, null)
+    let created = false
+    try { fs.mkdirSync(directory, { mode: 0o700 }); created = true }
+    catch (error) { if (error.code !== "EEXIST") throw error }
+    await protect(directory, "directory", created)
+    // Atomic across processes/worktrees and numeric aliases, independent of OUT.
+    // Never overwrite/read/unlink an existing slot, including an empty one.
+    descriptor = fs.openSync(journal, "wx", 0o600)
+    try {
+      await protect(journal, "file", true)
+      record("reserved")
+      if (process.platform !== "win32") {
+        for (const parent of [directory, commonDirectory]) {
+          const fd = fs.openSync(parent, "r")
+          try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+        }
+      }
+      fs.mkdirSync(output, { mode: 0o700 })
+    } catch (error) {
+      close()
+      throw error // Preserve the journal/output; uncertainty never authorizes replay.
+    }
+  } }
+}
+
 // Library callers supply their expected PUBLIC identity explicitly. Only the CLI establishes
 // production authority, with the fixed PUBLISHER above; there is no CLI/env test-key override.
 export function validateDistribution(d, publisher) {
@@ -164,10 +243,10 @@ export function signingInput(archive, spki) {
   return Buffer.concat([Buffer.from("CRX3 SignedData\0"), little(data.length), data, archive])
 }
 export async function issueSignature(input, signDigest, { reserve, record }) {
-  reserve()
-  record("sign-issued")
+  await reserve()
+  await record("sign-issued")
   const signature = await signDigest(crypto.createHash("sha256").update(input).digest(), input)
-  record("signature-returned")
+  await record("signature-returned")
   return signature
 }
 export function encodeCrx(archive, spki, signature) {
@@ -311,11 +390,11 @@ export async function createPackage({ repo, distribution, output, signDigest, pu
     prior = validatePublicProvenance(JSON.parse(readArtifact(existingArtifacts, "provenance.json", LIMIT)))
     validateArtifactNames(fs.readdirSync(existingArtifacts), prior.extensionVersion)
   }
-  if (publicationDecision(manifest.version, prior?.extensionVersion ?? null,
-    fs.existsSync(path.join(existingArtifacts, `desk-browser-${manifest.version}.crx`))) === "reuse") {
-    await verifyPackage({ repo, distribution, artifacts: existingArtifacts, publisher })
-    return { status: "reused", sourceCommit: prior.sourceCommit, extensionId: prior.extensionId, crxSha256: prior.crxSha256 }
-  }
+  const reused = await reuseVerifiedPackage({ next: manifest.version, previous: prior?.extensionVersion ?? null,
+    versionFileExists: fs.existsSync(path.join(existingArtifacts, `desk-browser-${manifest.version}.crx`)),
+    verify: () => verifyPackage({ repo, distribution, artifacts: existingArtifacts, publisher }) })
+  if (reused) return { status: "reused", sourceCommit: reused.sourceCommit,
+    extensionId: reused.extensionId, crxSha256: reused.crxSha256 }
   assert.ok(!fs.existsSync(output), "output must be fresh")
   assert.ok(path.isAbsolute(output))
   const parent = fs.realpathSync(path.dirname(output)), root = fs.realpathSync(repo)
@@ -330,44 +409,36 @@ export async function createPackage({ repo, distribution, output, signDigest, pu
   verifyArchive(archive, distribution.extension, binding)
   const input = signingInput(archive, spki)
   assert.equal(typeof signDigest, "function")
-  // A reserved output is never replayed. Keep the attempt journal OUTSIDE the
-  // three-file public output; an uncertain external result remains recorded.
-  const journal = `${output}.attempt.json`
-  const attempt = { sourceCommit, signedInputSha256: sha(input), status: "reserved" }
-  const record = status => {
-    attempt.status = status
-    fs.writeFileSync(journal, JSON.stringify(attempt, null, 2) + "\n", { mode: 0o600 })
-  }
-  const signature = await issueSignature(input, signDigest, {
-    reserve() {
-      fs.mkdirSync(output, { mode: 0o700 })
-      fs.writeFileSync(journal, JSON.stringify(attempt, null, 2) + "\n", { flag: "wx", mode: 0o600 })
-    },
-    record,
+  const attempt = createSigningAttempt({
+    commonDirectory: signingCommonDirectory(repo), publisher, extensionVersion: manifest.version,
+    sourceCommit, signedInputSha256: sha(input), output,
   })
-  const packet = encodeCrx(archive, spki, signature)
-  const parsed = verifyCrx(packet, spki)
-  assert.deepEqual(parsed.archive, archive)
-  const proof = {
-    sourceCommit, extensionId: distribution.extensionId, extensionVersion: manifest.version,
-    extensionSourceDigest: distribution.extensionSourceDigest, normalDistributionDigest: distribution.distributionDigest,
-    archiveInventory: inventory(distribution.extension), zipSha256: sha(archive), algorithm: "RS256",
-    signedInputSha256: sha(input), crxFile: `desk-browser-${manifest.version}.crx`, crxSha256: sha(packet),
-    crxBytes: packet.length, status: "signed-package-not-installed-proof", publisherPublicSpkiSha256: publisher.spkiSha256,
-    verification: { ...VERIFIED },
-  }
-  validatePublicProvenance(proof)
-  // Inputs must still be the same committed bytes after the remote signing interval.
-  assert.equal(git(repo, "rev-parse", "HEAD").toString().trim(), sourceCommit)
-  assert.equal(git(repo, "status", "--porcelain", "--untracked-files=all").toString().trim(), "")
-  verifySourceCommit(repo, sourceCommit, distribution)
-  for (const [name, bytes] of [[proof.crxFile, packet], ["updates.xml", xml(proof.extensionId, manifest.version)],
-    ["provenance.json", JSON.stringify(proof, null, 2) + "\n"]]) {
-    fs.writeFileSync(path.join(output, name), bytes, { flag: "wx", mode: 0o600 })
-  }
-  const verified = await verifyPackage({ repo, distribution, artifacts: output, publisher })
-  record("signed-locally-verified")
-  return verified
+  try {
+    const signature = await issueSignature(input, signDigest, attempt)
+    const packet = encodeCrx(archive, spki, signature)
+    const parsed = verifyCrx(packet, spki)
+    assert.deepEqual(parsed.archive, archive)
+    const proof = {
+      sourceCommit, extensionId: distribution.extensionId, extensionVersion: manifest.version,
+      extensionSourceDigest: distribution.extensionSourceDigest, normalDistributionDigest: distribution.distributionDigest,
+      archiveInventory: inventory(distribution.extension), zipSha256: sha(archive), algorithm: "RS256",
+      signedInputSha256: sha(input), crxFile: `desk-browser-${manifest.version}.crx`, crxSha256: sha(packet),
+      crxBytes: packet.length, status: "signed-package-not-installed-proof", publisherPublicSpkiSha256: publisher.spkiSha256,
+      verification: { ...VERIFIED },
+    }
+    validatePublicProvenance(proof)
+    // Inputs must still be the same committed bytes after the remote signing interval.
+    assert.equal(git(repo, "rev-parse", "HEAD").toString().trim(), sourceCommit)
+    assert.equal(git(repo, "status", "--porcelain", "--untracked-files=all").toString().trim(), "")
+    verifySourceCommit(repo, sourceCommit, distribution)
+    for (const [name, bytes] of [[proof.crxFile, packet], ["updates.xml", xml(proof.extensionId, manifest.version)],
+      ["provenance.json", JSON.stringify(proof, null, 2) + "\n"]]) {
+      fs.writeFileSync(path.join(output, name), bytes, { flag: "wx", mode: 0o600 })
+    }
+    const verified = await verifyPackage({ repo, distribution, artifacts: output, publisher })
+    attempt.record("signed-locally-verified")
+    return verified
+  } finally { attempt.close() }
 }
 
 async function main(args) {
