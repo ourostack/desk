@@ -137,7 +137,8 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
     app.get("/invite/:token", handlers.landing);
     app.get("/invite", handlers.page);
   }
-  if (entra && sessions) mountSessionPages(app, { entra, sessions, log });
+  if (sessions && !entra?.pageSignIn) throw new Error("the browser session's pages need the Ouro tenant's sign-in built with the same sessions");
+  if (sessions) mountSessionPages(app, { entra, sessions, log });
   if (admin) app.use("/admin", admin);
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));
@@ -183,6 +184,8 @@ function mountSessionPages(app, { entra, sessions, log }) {
   });
 
   app.post("/signout", express.urlencoded({ extended: false, limit: "4kb" }), (req, res) => {
+    // With no session left (it expired, say) there is nothing to protect: the browser is signed out either way.
+    if (sessions.csrfToken(req) === null) return sendPage(res, { ...signedOutPage(), headers: { "set-cookie": sessions.clear() } });
     if (!sessions.checkCsrf(req)) {
       log("sign-out refused: csrf");
       return sendPage(res, pageRefusedPage());

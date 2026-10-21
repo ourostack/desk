@@ -44,6 +44,7 @@ test("an admin route refuses a missing, malformed, foreign or non-access token w
     expired: await adminToken(ctx, { claims: { exp: iat - 600, nbf: iat - 4000, iat: iat - 4000 } }),
     "an ID token (it carries a nonce)": await adminToken(ctx, { claims: { nonce: "n" } }),
     "without azp": await adminToken(ctx, { claims: { azp: undefined } }),
+    "app-only (no delegated scope)": await adminToken(ctx, { claims: { scp: undefined } }),
   };
   for (const [what, token] of Object.entries(bad)) {
     const refused = await adminCall(ctx, "POST", "/admin/invites", { token, body: { displayName: "x" } });
@@ -69,14 +70,17 @@ test("an invite for a new person creates their account and returns a single-use 
   for (const line of ctx.logs) assert.ok(!line.includes(inviteToken) && !line.includes("Jordan"), `log leaks: ${line}`);
 });
 
-test("an invite for an existing account is issued to it; an unknown account is 404; a bad body is 400", async (t) => {
+test("a re-invite goes to an account nobody has signed in to yet; an unknown account is 404; a bad body is 400", async (t) => {
   const ctx = await startAccountGateway(t);
   const token = await adminToken(ctx);
-  const again = await adminCall(ctx, "POST", "/admin/invites", { token, body: { accountId: ctx.accountId } });
+  const first = await adminCall(ctx, "POST", "/admin/invites", { token, body: { displayName: "Jordan" } });
+  const again = await adminCall(ctx, "POST", "/admin/invites", { token, body: { accountId: first.json.accountId } });
   assert.equal(again.status, 201);
-  assert.equal(again.json.accountId, ctx.accountId);
+  assert.equal(again.json.accountId, first.json.accountId);
+  const signedIn = await adminCall(ctx, "POST", "/admin/invites", { token, body: { accountId: ctx.accountId } });
+  assert.equal(signedIn.status, 409, "Ari has signed in, so a second invite would add a second person's sign-in");
   assert.equal((await adminCall(ctx, "POST", "/admin/invites", { token, body: { accountId: "no-such-account" } })).status, 404);
-  for (const body of [{}, { displayName: "" }, { displayName: 7 }, { displayName: "x".repeat(101) }, { accountId: "../x" }, []]) {
+  for (const body of [{}, { displayName: "" }, { displayName: 7 }, { displayName: "x".repeat(101) }, { displayName: "Jo\nrdan" }, { displayName: "Jo <x@y>" }, { accountId: "../x" }, []]) {
     assert.equal((await adminCall(ctx, "POST", "/admin/invites", { token, body })).status, 400, JSON.stringify(body));
   }
 });
@@ -136,11 +140,13 @@ test("deleting an account removes its account, identities, binding and invites, 
   const token = await adminToken(ctx);
   const created = await adminCall(ctx, "POST", "/admin/invites", { token, body: { displayName: "Jordan" } });
   const { accountId } = created.json;
+  // A second invite, still unused when the account is deleted.
+  const pending = await adminCall(ctx, "POST", "/admin/invites", { token, body: { accountId } });
+  assert.equal(pending.status, 201);
   const jordan = browser(ctx);
   await jordan.request(new URL(created.json.inviteUrl).pathname);
   await pageSignIn(ctx, jordan, { oid: NEW_OID });
   await ctx.store.putBinding(accountId, { kind: "github", repo: "jordan/desk", author: { name: "Jordan", email: `${accountId}@users.desk.ouro.bot` } });
-  const pending = await adminCall(ctx, "POST", "/admin/invites", { token, body: { accountId } });
   const deleted = await adminCall(ctx, "DELETE", `/admin/accounts/${accountId}`, { token });
   assert.equal(deleted.status, 200, deleted.text);
   assert.deepEqual(deleted.json, { accountId, deleted: true, deskRemoved: true });
@@ -172,17 +178,18 @@ test("admin calls are logged by account id only", async (t) => {
   for (const line of ctx.logs) assert.ok(!line.includes(ARI_OID) && !line.includes(token), `log leaks: ${line}`);
 });
 
-test("without the tenant's discovery loaded, admin routes answer 503", async (t) => {
+test("without the tenant's discovery loaded, admin routes answer 503 and don't send the admin to sign in again", async (t) => {
+  const ctx = await startAccountGateway(t, { discoveryDown: true });
+  assert.equal(ctx.discovery.ready(), false);
+  const refused = await adminCall(ctx, "POST", "/admin/invites", { token: await adminToken(ctx), body: { displayName: "Jordan" } });
+  assert.equal(refused.status, 503);
+  assert.equal(refused.json.error, "unavailable");
+  assert.equal(refused.headers.get("www-authenticate"), null);
+});
+
+test("a body that isn't JSON is 400, not an HTML error page", async (t) => {
   const ctx = await startAccountGateway(t);
-  ctx.discovery.stop();
-  const { createDiscovery } = await import("../src/auth/entra.js");
-  const { createAdmin, createAdminTokenVerifier } = await import("../src/admin.js");
-  const { SUBDOMAIN, CLIENT_ID } = await import("./fixtures/stub-tenant.mjs");
-  ctx.tenant.state.discoveryDown = true;
-  const down = createDiscovery({ subdomain: SUBDOMAIN, tenantId: TENANT_ID, fetch: ctx.tenant.fetch, log: () => {} });
-  await down.start();
-  t.after(() => down.stop());
-  const verifier = createAdminTokenVerifier({ discovery: down, tenantId: TENANT_ID, clientId: CLIENT_ID, fetch: ctx.tenant.fetch, now: ctx.now });
-  await assert.rejects(verifier.verify(await adminToken(ctx)), { name: "AdminUnavailable" });
-  assert.equal(typeof createAdmin, "function");
+  const response = await fetch(`${ctx.base}/admin/invites`, { method: "POST", headers: { authorization: `Bearer ${await adminToken(ctx)}`, "content-type": "application/json" }, body: "{not json" });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "bad_request");
 });

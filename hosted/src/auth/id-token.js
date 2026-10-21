@@ -145,9 +145,11 @@ export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fet
 
 // Validates an access token the tenant issued to another client (the `ouro` CLI) for the gateway's own app, as the
 // admin routes need: RS256 under the tenant's keys, the same `iss`, `aud` (the gateway's client id), `tid` and time
-// checks as an ID token, plus what makes it an access token and not an ID token: `azp` (the client it was issued to)
-// is present and `nonce` is absent. `roles` must be a list naming `role`. Entra puts app roles assigned to a person
-// in `roles`; the app's manifest must set accessTokenAcceptedVersion 2 so `iss` is the v2 issuer.
+// checks as an ID token, plus what makes it a person's access token and not an ID token or an app's own token: `azp`
+// (the client it was issued to) and `scp` (the delegated scopes, which an app-only token never has) are present and
+// `nonce` is absent. `roles` must be a list naming `role`. Entra puts app roles assigned to a person in `roles`. The
+// app must expose a delegated scope for the CLI to ask for, and its manifest must set accessTokenAcceptedVersion 2
+// so `iss` is the v2 issuer.
 //
 // Returns `{ tid, oid, azp }`; a refusal is an IdTokenError naming the failed check, without the token's claims.
 export function createAccessTokenVerifier({ issuer, clientId, tenantId, jwksUri, role, fetch = globalThis.fetch, now = Date.now, timeoutMs = JWKS_TIMEOUT_MS }) {
@@ -177,6 +179,7 @@ export function createAccessTokenVerifier({ issuer, clientId, tenantId, jwksUri,
       if (!(typeof payload.iat === "number" && payload.iat <= now() / 1000 + SKEW_SEC)) throw new IdTokenError("claim_iat");
       if (payload.nonce !== undefined) throw new IdTokenError("not_access_token");
       if (typeof payload.azp !== "string" || payload.azp === "") throw new IdTokenError("claim_azp");
+      if (typeof payload.scp !== "string" || payload.scp.trim() === "") throw new IdTokenError("claim_scp");
       if (typeof payload.oid !== "string" || payload.oid === "") throw new IdTokenError("claim_oid");
       if (!Array.isArray(payload.roles) || !payload.roles.includes(role)) throw new IdTokenError("role");
       return { tid: payload.tid, oid: payload.oid, azp: payload.azp };

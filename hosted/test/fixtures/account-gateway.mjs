@@ -22,12 +22,14 @@ export const ARI_OID = "4f6c1d2e-8b9a-4c3d-9e8f-7a6b5c4d3e2f";
 export const CLI_CLIENT_ID = "0b6f7c1e-2d3a-4b5c-8d9e-1f2a3b4c5d6e";
 
 // Starts the gateway. Ari's account exists, with his binding and his identity mapped. `ctx.logs` collects every line.
-export async function startAccountGateway(t) {
+// With `discoveryDown`, the tenant's discovery document can't be fetched, so nothing tenant-signed can be checked.
+export async function startAccountGateway(t, { discoveryDown = false } = {}) {
   let clock = START;
   const now = () => clock;
   const logs = [];
   const log = (line) => logs.push(line);
   const tenant = await stubTenant({ now });
+  tenant.state.discoveryDown = discoveryDown;
   const discovery = createDiscovery({ subdomain: SUBDOMAIN, tenantId: TENANT_ID, fetch: tenant.fetch, log });
   await discovery.start();
   const store = createMemoryStore();
@@ -121,7 +123,7 @@ export async function pageSignIn(ctx, who, { oid, next = "/account", callbackIn 
 // An access token the tenant would issue to the `ouro` CLI for the gateway's app, with app roles `roles`.
 export async function adminToken(ctx, { oid = ARI_OID, roles = ["ouro.admin"], claims = {} } = {}) {
   const iat = Math.floor(ctx.now() / 1000);
-  return ctx.tenant.idToken({ ver: "2.0", iss: ISSUER, aud: CLIENT_ID, tid: TENANT_ID, iat, nbf: iat, exp: iat + 3600, oid, azp: CLI_CLIENT_ID, roles, ...claims });
+  return ctx.tenant.idToken({ ver: "2.0", iss: ISSUER, aud: CLIENT_ID, tid: TENANT_ID, iat, nbf: iat, exp: iat + 3600, oid, azp: CLI_CLIENT_ID, scp: "desk.admin", roles, ...claims });
 }
 
 export async function adminCall(ctx, method, path, { token, body } = {}) {

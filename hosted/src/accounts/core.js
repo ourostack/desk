@@ -236,13 +236,28 @@ export function storeOn(tables, { onStep = noop } = {}) {
 
     redeemInvite,
 
-    // Turns an account's Desk access on or off, keeping its name. Returns the account, or null when there is none.
+    // Turns an account's Desk access on or off, keeping its name: a conditional update, so a concurrent change to
+    // the row is re-read rather than overwritten. Returns the account, or null when there is none.
     async setAccess(accountId, deskAccess) {
       if (typeof deskAccess !== "boolean") throw new TypeError("deskAccess must be true or false");
-      const found = await tables.get("accounts", key(accountId, "accountId"), "");
-      if (!found) return null;
-      await tables.upsert("accounts", { ...found.entity, deskAccess });
-      return { accountId, deskAccess };
+      key(accountId, "accountId");
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const found = await tables.get("accounts", accountId, "");
+        if (!found) return null;
+        try {
+          await tables.update("accounts", { ...found.entity, deskAccess }, found.etag);
+          return { accountId, deskAccess };
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed)) throw error;
+        }
+      }
+      throw new Error("the account kept changing; try again");
+    },
+
+    // Whether any identity signs in to this account.
+    async hasIdentity(accountId) {
+      key(accountId, "accountId");
+      return (await tables.list("identities")).some((row) => row.accountId === accountId);
     },
 
     // Deletes an account and every row that names it: its identities, its unredeemed and redeemed invites, its

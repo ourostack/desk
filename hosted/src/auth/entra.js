@@ -25,6 +25,7 @@ import { TTL, sealer } from "./seal.js";
 import { createIdTokenVerifier } from "./id-token.js";
 import { createSigninCookies, hostCookie, parseCookies } from "./signin-cookie.js";
 import { hashToken } from "../accounts/invites.js";
+import { safeNext } from "./browser-session.js";
 import {
   accessOffPage,
   inviteInvalidPage,
@@ -302,7 +303,7 @@ export function createEntraSignIn({
 
   // The account for this identity, redeeming the browser's invite when it is new. Returns `{ accountId, redeemed }`
   // or `{ refusal }` (a page).
-  async function accountFor({ tid, oid }, jar, clientIdForLog) {
+  async function accountFor({ tid, oid }, jar, clientIdForLog, pageOptions) {
     const known = await store.findIdentity(tid, oid);
     // An invite cookie left in a browser whose identity already has an account is dropped, so nobody signing in
     // later in that browser as a new identity can redeem it.
@@ -310,7 +311,7 @@ export function createEntraSignIn({
     const tokenHash = inviteFrom(jar);
     if (!tokenHash) {
       log(`sign-in refused: not_invited client ${clientIdForLog}`);
-      return { refusal: inviteOnlyPage() };
+      return { refusal: inviteOnlyPage(pageOptions) };
     }
     const result = await store.redeemInvite({ tokenHash, tid, oid, now: now() });
     if (result.refused === "identity_has_account") {
@@ -338,7 +339,8 @@ export function createEntraSignIn({
       return authorizeRedirect(request, jar);
     },
 
-    // A sign-in to the gateway's own pages, returning to `next` (a path browser-session.js `safeNext` accepted).
+    // A sign-in to the gateway's own pages, returning to `next` when browser-session.js `safeNext` accepts it, else
+    // to the account page.
     // Same tenant round trip and per-sign-in cookie as `begin`; the callback starts a browser session.
     beginPage(next, jar = {}) {
       if (!sessions) throw new Error("page sign-in needs the browser session");
@@ -346,10 +348,13 @@ export function createEntraSignIn({
         log("page sign-in refused: discovery_not_ready");
         return startingUpPage();
       }
-      return authorizeRedirect({ page: true, next }, jar);
+      return authorizeRedirect({ page: true, next: safeNext(next) }, jar);
     },
 
     callback,
+
+    // Whether `beginPage` works: true when the browser session is configured.
+    pageSignIn: Boolean(sessions),
   };
 
   // The tenant authorize URL for `request`, sealed into `state` with a new per-sign-in cookie's stateId.
@@ -382,7 +387,7 @@ export function createEntraSignIn({
     const signin = signins.take(pending.stateId, jar);
     if (!signin) {
       log(`sign-in refused: signin_cookie_missing client ${pending.page ? "page" : pending.clientId}`);
-      return { ...startAgainPage(), clearCookies };
+      return { ...startAgainPage({ page: pending.page === true }), clearCookies };
     }
     if (pending.page === true) return pageCallback({ code, error, signin, pending, jar, clearCookies });
     const back = new URL(pending.redirectUri);
@@ -455,13 +460,13 @@ export function createEntraSignIn({
     }
     if (!discovery.ready()) {
       log("page sign-in refused: discovery_not_ready");
-      return { ...signInUnavailablePage(), clearCookies };
+      return { ...signInUnavailablePage({ page: true }), clearCookies };
     }
     const { identity, refusal } = await identityFor(code, signin, "page", "Sign in again.");
     if (refusal) return { ...refusal, clearCookies };
     let accountId;
     try {
-      const found = await accountFor(identity, jar, "page");
+      const found = await accountFor(identity, jar, "page", { page: true });
       if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
       if (found.refusal) return { ...found.refusal, clearCookies };
       accountId = found.accountId;
@@ -472,7 +477,7 @@ export function createEntraSignIn({
       }
     } catch (failure) {
       log(`page sign-in failed: store_unavailable (${failure?.name ?? "error"})`);
-      return { ...signInUnavailablePage(), clearCookies };
+      return { ...signInUnavailablePage({ page: true }), clearCookies };
     }
     log(`page sign-in: account ${accountId}`);
     return { redirectTo: pending.next, status: 303, clearCookies, setCookies: [sessions.cookie(accountId)] };

@@ -20,6 +20,8 @@ import { randomUUID } from "node:crypto";
 export const ADMIN_ROLE = "ouro.admin";
 const ACCOUNT_ID = /^[A-Za-z0-9_.-]{1,128}$/;
 const MAX_NAME = 100;
+// A display name becomes the Git author name until GitHub is linked: no control characters or angle brackets.
+const NAME = /^[^\p{Cc}<>]+$/u;
 
 const stderrLog = (message) => process.stderr.write(`desk-hosted admin: ${message}\n`);
 
@@ -114,9 +116,12 @@ export function createAdmin({ store, verifier, issuer, forget = () => {}, onAcco
       if (accountId !== undefined) {
         if (typeof accountId !== "string" || !ACCOUNT_ID.test(accountId)) return fail(res, 400, "bad_request", "That isn't an account id.");
         if ((await store.getAccount(accountId)) === null) return fail(res, 404, "not_found", "There is no such account.");
+        // A re-invite is for a person whose first invite went unused; once someone has signed in to the account, a
+        // second invite would add a second person's sign-in to it.
+        if (await store.hasIdentity(accountId)) return fail(res, 409, "conflict", "Someone has already signed in to this account; it needs no invite.");
       } else {
         const name = typeof body.displayName === "string" ? body.displayName.trim() : "";
-        if (!name || name.length > MAX_NAME) return fail(res, 400, "bad_request", `displayName must be 1 to ${MAX_NAME} characters.`);
+        if (!name || name.length > MAX_NAME || !NAME.test(name)) return fail(res, 400, "bad_request", `displayName must be 1 to ${MAX_NAME} characters, without control characters or < >.`);
         accountId = randomUUID();
         await store.ensureTables();
         await store.putAccount({ accountId, displayName: name, deskAccess: true });

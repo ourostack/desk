@@ -48,9 +48,13 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
 
 // Pages for sign-in through the Ouro tenant and for invites.
 export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.");
-export const signInUnavailablePage = () => page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.");
-export const startAgainPage = () => page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.");
-export const inviteOnlyPage = () => page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.");
+// `{ page: true }` words a page for a sign-in to the gateway's own pages (/signin), which starts again there, not in
+// Claude.
+const again = ({ page: forPage } = {}) => (forPage ? "sign in again" : "start again from Claude");
+const Again = (options) => again(options).replace(/^s/, "S");
+export const signInUnavailablePage = (options) => page(503, `Sign-in can't be completed right now. Please try again shortly, then ${again(options)}.`);
+export const startAgainPage = (options) => page(400, `This sign-in link has expired, or it was started in another browser. ${Again(options)}.`);
+export const inviteOnlyPage = (options) => page(403, `Hosted Desk is invite-only. Open your invite link in this browser first, then ${again(options)}.`);
 export const inviteRefusedPage = () => page(403, "This invite has already been used or has expired. Ask for a new invite.");
 export const accessOffPage = () => page(403, "Desk access is turned off for this account.");
 export const noDeskPage = () => page(403, "There is no desk for this account yet on this Hosted Desk.");

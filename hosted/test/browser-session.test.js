@@ -153,6 +153,7 @@ test("invite opened in another browser shows startAgainPage and stays unused", a
   const back = await pageSignIn(ctx, laptop, { oid: NEW_OID, callbackIn: phone });
   assert.equal(back.status, 400);
   assert.match(back.text, /started in another browser/);
+  assert.match(back.text, /Sign in again/, "a page sign-in starts again at the gateway, not in Claude");
   assert.equal(sessionCookieOf(back.setCookies), undefined);
   const invite = await ctx.store.getInvite(hashToken(token));
   assert.equal(invite.redeemed, false);
@@ -160,6 +161,61 @@ test("invite opened in another browser shows startAgainPage and stays unused", a
   // The invite still works in the browser that holds it.
   const retried = await pageSignIn(ctx, phone, { oid: NEW_OID });
   assert.equal(retried.status, 303);
+});
+
+test("a page sign-in returns to the page it was started for", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const ari = browser(ctx);
+  const back = await pageSignIn(ctx, ari, { oid: ARI_OID, next: "/link/github" });
+  assert.equal(back.status, 303);
+  assert.equal(back.location, "/link/github");
+  // A caller that skips safeNext still can't send the browser off the gateway: beginPage checks `next` itself.
+  const begun = ctx.entra.beginPage("https://evil.example/", {});
+  const jar = Object.fromEntries(begun.setCookies.map((header) => header.split(";")[0].split(/=(.*)/s).slice(0, 2)));
+  const url = new URL(begun.redirectTo);
+  const outcome = await ctx.entra.callback({ code: ctx.tenant.authorize(url, { oid: ARI_OID }), state: url.searchParams.get("state"), cookies: jar });
+  assert.equal(outcome.redirectTo, "/account");
+});
+
+test("a client's sign-in that claims to be a page sign-in is still a client's sign-in", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const pending = { clientId: "client-1", redirectUri: "https://claude.ai/api/mcp/auth_callback", codeChallenge: "c", state: "s", scopes: ["desk"], aud: `${ctx.base}/mcp`, page: true, next: "/account" };
+  const begun = ctx.entra.begin(pending, {});
+  const jar = Object.fromEntries(begun.setCookies.map((header) => header.split(";")[0].split(/=(.*)/s).slice(0, 2)));
+  const url = new URL(begun.redirectTo);
+  const outcome = await ctx.entra.callback({ code: ctx.tenant.authorize(url, { oid: ARI_OID }), state: url.searchParams.get("state"), cookies: jar });
+  const back = new URL(outcome.redirectTo);
+  assert.equal(back.origin + back.pathname, "https://claude.ai/api/mcp/auth_callback");
+  assert.ok(back.searchParams.get("code"), "the client gets a code");
+  assert.equal(outcome.setCookies, undefined, "and the browser gets no session");
+});
+
+test("an invite opened in another browser than the one signing in leaves the invite unused", async (t) => {
+  const ctx = await startAccountGateway(t);
+  await ctx.store.putAccount({ accountId: "invitee-1", displayName: "Invitee", deskAccess: true });
+  const { token } = await issueInvite({ store: ctx.store, accountId: "invitee-1", now: START });
+  // The commoner case: the invite was opened on the phone, but sign-in starts and returns on the laptop.
+  const laptop = browser(ctx);
+  const phone = browser(ctx);
+  await phone.request(`/invite/${token}`);
+  const back = await pageSignIn(ctx, laptop, { oid: NEW_OID });
+  assert.equal(back.status, 403);
+  assert.match(back.text, /invite-only/);
+  assert.match(back.text, /sign in again/);
+  assert.doesNotMatch(back.text, /Claude/);
+  assert.equal((await ctx.store.getInvite(hashToken(token))).redeemed, false);
+  assert.equal(await ctx.store.findIdentity((await import("./fixtures/stub-tenant.mjs")).TENANT_ID, NEW_OID), null);
+});
+
+test("sign-out with no session left shows the signed-out page", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const ari = browser(ctx);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  const csrf = /name="csrf" value="([^"]+)"/.exec((await ari.request("/account")).text)[1];
+  ctx.advance(13 * 3600 * 1000);
+  const out = await ari.request("/signout", { method: "POST", form: { csrf } });
+  assert.equal(out.status, 200);
+  assert.match(out.text, /signed out/i);
 });
 
 test("a cancelled page sign-in shows a page, not a redirect to a client", async (t) => {
