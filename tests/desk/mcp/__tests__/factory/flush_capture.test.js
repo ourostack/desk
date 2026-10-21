@@ -93,6 +93,34 @@ test("a record alone opens an intake pull request", () => scratch(async ({ env }
   assert.deepEqual([...github.headFiles(STORE, `intake/${id}`).keys()], [`capture/${id}.json`])
 }))
 
+test("new refresh context needs the exact compatible store marker and carries its actual bytes through settlement", () => scratch(async ({ env }) => {
+  const count = (value) => ({ state: "measured", value, reasons: [] })
+  const at = iso(T0 - HOUR)
+  for (const contextJson of ['{"task_context":1}', '{"task_context":1,"loop_context":1}', '{"task_context":1,"loop_context":"1"}']) {
+    await writeStatus(env, { capture: {}, last_flush: {} })
+    const id = await setup(env, { status: {
+      loop: { health: { schema: "desk.factory.loop/1", written_at: at, improvement: { open: count(1) },
+        steps: { triage: { last_ran_at: at, stale: true } } } },
+      triage: { at, store: STORE, result: "refresh_incomplete",
+        refresh: { scan: "complete", changes: 37, written: 0, held: 37, foreign: 0, unknown: 0, deferred: 0, alarm: "triage_resource_unrecoverable" } },
+    } })
+    const github = fakeGitHub({ captureJson: READY, contextJson })
+    assert.equal((await run(env, github, { t: T0 })).result, "delivered_pr_open")
+    const sha = github.headFiles(STORE, `intake/${id}`).get(`capture/${id}.json`)
+    const bytes = github.blobs.get(sha), parsed = JSON.parse(bytes)
+    const enabled = contextJson.includes('"loop_context":1')
+    assert.equal(Object.hasOwn(parsed.loop, "triage_refresh"), enabled)
+    if (enabled) assert.equal(parsed.loop.triage_refresh, "resource_unrecoverable")
+    assert.equal((await capture(env)).sent_bytes, bytes)
+    github.mergeOpenPr()
+    await run(env, github, { t: T0 + HOUR })
+    assert.equal((await capture(env)).blob, sha)
+    const calls = github.calls.length
+    await run(env, github, { t: T0 + 2 * HOUR })
+    assert.equal(github.calls.length, calls, "a settled enriched record must not drift back to legacy bytes and trigger networking")
+  }
+}))
+
 test("no network call is made when nothing is due", () => scratch(async ({ env }) => {
   // No coverage at all sends nothing and goes nowhere. (A store that holds the record and a record sent an hour ago are the next test.)
   await setup(env, { coverage: null })

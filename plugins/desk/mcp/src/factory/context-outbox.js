@@ -17,6 +17,7 @@ import { validatePublished } from "./published-schema.js"
 import { allTasks } from "./boot-check.js"
 import { isTaskSegment, jobId } from "./binding.js"
 import { readDeskRemote, resolveJobIdentity } from "./desk-repo.js"
+import { storeAcceptsContext } from "./context-capability.js"
 
 const STATE = "desk.factory.context-state/1"
 const INPUT = "desk.factory.context-input/1"
@@ -357,21 +358,10 @@ export async function contextOnBranch(read, tree) {
   return blobs
 }
 
-async function storeReady(client, store, ref) {
-  const response = await client.api("GET", `repos/${store}/contents/context.json?ref=${encodeURIComponent(ref)}`)
-  if (response.status !== 200 || response.json?.type !== "file" || response.json.encoding !== "base64" || typeof response.json.content !== "string") return false
-  const bytes = Buffer.from(response.json.content, "base64")
-  if (bytes.length > 1024) return false
-  try {
-    const config = JSON.parse(bytes.toString("utf8"))
-    return isPlainObject(config) && Object.keys(config).join() === "task_context" && config.task_context === 1
-  } catch { return false }
-}
-
 /** Only the actual default branch acknowledges a send; only an exact owned blob can be replaced or retracted. */
 export async function prepareContextPublication(env, { store, plan, client, ref, direct, now, readMain }) {
   if (!plan.work) return []
-  const ready = direct && await storeReady(client, store, ref)
+  const ready = direct && await storeAcceptsContext(client, store, ref)
   await publicationStatus(env, store, { ready, checked_at: new Date(now).toISOString(), hold_until: ready ? null : now + DAY_MS, code: ready ? null : direct ? "context_store_not_ready" : "context_authority_unavailable" })
   const main = await readMain()
   if (main.unknown) {
@@ -381,11 +371,18 @@ export async function prepareContextPublication(env, { store, plan, client, ref,
   const items = []
   for (const entry of plan.states) {
     let state = await stateOf(env, store, entry.state.job)
+    if (state === null || (await readConsent(env)).stores[store]?.contribute !== true) continue
+    if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
+    const input = await inputOf(env, store, state, { current: false })
+    if (input === null) continue
+    const route = declared(input.desk_root)
+    const withdrawn = isFolder(input.desk_root) && route.kind === "store" &&
+      (!sameStore(route.store, store) || contextPermission(input.desk_root, store) === "not_opted_in")
     const current = main.blobs.get(`context/${state.job}.json`)
     if (typeof state.sent_sha === "string" && current === state.sent_sha) {
       state = await changePublication(env, store, state.job, (fields) => ({ ...fields, published_sha: current, pr: null }))
     }
-    if (entry.withdrawn) {
+    if (withdrawn) {
       if (!direct || state.published_sha === null) continue
       if (current === state.published_sha) items.push({
         name: `context/${state.job}.json`, path: `context/${state.job}.json`, job: state.job, basis: state.basis,
@@ -396,6 +393,9 @@ export async function prepareContextPublication(env, { store, plan, client, ref,
     }
     const item = plan.ready.find((candidate) => candidate.job === state.job)
     if (!ready || !item || (state.phase !== "ready" && !item.invalidation) || (Number.isFinite(state.hold_until) && state.hold_until > now)) continue
+    if (state.basis !== item.basis || await inputOf(env, store, state) === null) continue
+    if (!item.invalidation && (state.review_seal !== await seal(env, "review", state.basis, state.record) ||
+        item.sha !== gitBlobSha(`${JSON.stringify(state.record)}\n`))) continue
     if (current === item.sha) {
       await changePublication(env, store, state.job, (fields) => ({ ...fields, published_sha: item.sha, pr: null }))
     } else if (current === undefined || current === state.published_sha) items.push(item)

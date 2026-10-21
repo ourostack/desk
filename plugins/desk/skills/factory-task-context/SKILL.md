@@ -45,6 +45,11 @@ its activity from an unrelated task's tools, messages or elapsed time.
 
 Start with `template` from the brief; retain every source fingerprint.
 Set `privacy` to null: an author cannot approve their own wording.
+Use exactly `published`, `withheld` or `unavailable` for `state`.
+Set `state` to `published` when a safe, supported explanation is established.
+This describes the proposed record, not permission to publish it; the parent
+still requires a separate privacy review. Never use `available`, `candidate`
+or `privacy` as the record's state.
 
 - `heading`: at most 120 characters, or null when the intended outcome is
   unsupported or cannot be safely described.

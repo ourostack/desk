@@ -9,6 +9,7 @@ import { planCapture } from "../../../../../plugins/desk/mcp/src/factory/capture
 import { assembleLoop, loopAlarms, unreadAlarms } from "../../../../../plugins/desk/mcp/src/factory/loop-health.js"
 import { SLOT_MAX_AGE_HOURS, loopSlotFrom, slotFields, slotValid } from "../../../../../plugins/desk/mcp/src/factory/loop-slot.js"
 import { cardTitle } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import * as slots from "../../../../../plugins/desk/mcp/src/factory/loop-slot.js"
 
 const HOUR = 3600 * 1000
 const NOW = Date.parse("2026-10-05T12:00:00.000Z")
@@ -35,6 +36,31 @@ test("each slot key reads its own measured field of the loop record", () => {
   })
   assert.deepEqual(Object.keys(slot).filter((key) => key !== "v" && key !== "headless").sort(), [...LOOP_SLOT_COUNTS].sort())
   assert.equal(slotValid(record()), true)
+})
+
+test("specific refresh context requires a fresh matching operation for this store, not a stale-step guess", () => {
+  assert.equal(typeof slots.triageRefreshFrom, "function")
+  const at = new Date(NOW - HOUR).toISOString()
+  const triage = { at, store: "ourostack/factory", result: "refresh_incomplete",
+    refresh: { scan: "complete", changes: 37, written: 0, held: 37, foreign: 0, unknown: 0, deferred: 0, alarm: "triage_resource_unrecoverable" } }
+  const status = { triage, loop: { health: record({ steps: { triage: { last_ran_at: at, stale: true } } }) } }
+  const options = { store: "ourostack/factory", nowMs: NOW }
+  assert.equal(slots.triageRefreshFrom(status, options), "resource_unrecoverable")
+  for (const change of [
+    (value) => { delete value.triage.store },
+    (value) => { value.triage.store = "other/store" },
+    (value) => { value.triage.at = new Date(NOW - 100 * HOUR).toISOString() },
+    (value) => { value.loop.health.steps.triage.last_ran_at = new Date(NOW).toISOString() },
+    (value) => { value.triage.refresh.alarm = "PRIVATE/path" },
+  ]) {
+    const value = structuredClone(status); change(value)
+    assert.equal(slots.triageRefreshFrom(value, options), null)
+  }
+  assert.equal(Object.hasOwn(loopSlotFrom(status.loop.health, NOW), "triage_refresh"), false, "legacy slot bytes stay unchanged without a capability")
+  const slot = loopSlotFrom(status.loop.health, NOW, { triageRefresh: "resource_unrecoverable" })
+  assert.equal(slot.triage_refresh, "resource_unrecoverable")
+  assert.equal(validateCaptureBytes(`${JSON.stringify({ schema: "desk.factory.capture/1", basis: "still_on_disk", hosts: {}, loop: slot })}\n`).ok, true)
+  assert.equal(slot.triage_refresh.includes(at), false)
 })
 
 test("a field that was not measured is null, never 0", () => {

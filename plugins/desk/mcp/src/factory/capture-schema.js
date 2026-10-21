@@ -92,6 +92,7 @@ export const LOOP_SLOT_COUNTS = Object.freeze([
   "steps_stale",
 ])
 const LOOP_SLOT_CODE = "headless"
+export const TRIAGE_REFRESH_CODES = Object.freeze(["current", "incomplete", "resource_unrecoverable"])
 
 /**
  * The loop slot's rule, which is the store's `loop_slot_v1` (`check-capture.sh`), in the shape of every leaf check: reports into `errors`
@@ -116,7 +117,12 @@ export function validateLoopSlot(value, path, errors) {
   for (const [key, entry] of Object.entries(value)) {
     if (key === "v") continue
     const entryPath = joinPath(path, LOOP_TEXT.test(key) ? key : "?")
-    if (key === LOOP_SLOT_CODE) {
+    if (key === "triage_refresh") {
+      if (entry !== null && !TRIAGE_REFRESH_CODES.includes(entry)) {
+        addError(errors, "enum", entryPath)
+        sound = false
+      }
+    } else if (key === LOOP_SLOT_CODE) {
       if (entry !== null && !(typeof entry === "string" && LOOP_TEXT.test(entry))) {
         addError(errors, "pattern", entryPath)
         sound = false

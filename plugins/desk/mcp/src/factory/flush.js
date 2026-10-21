@@ -192,7 +192,7 @@ import {
 } from "./outbox.js"
 import { refreshAndon } from "./andon-watch.js"
 import { carriedAccountFault } from "./flush-health.js"
-import { CHECK_UNAVAILABLE, captureOnBranch, judge, namesRecord, planCapture, saveCheckUnavailable, saveDropped, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, sentRecord, storeAcceptsCapture } from "./capture-flush.js"
+import { CHECK_UNAVAILABLE, captureOnBranch, judge, namesRecord, planCapture, prepareCaptureContext, saveCheckUnavailable, saveDropped, saveForgotten, saveInvalid, saveNotReady, saveRefused, saveSent, saveSettled, sentRecord, storeAcceptsCapture } from "./capture-flush.js"
 import { namesTriage, planTriage, prepareTriage, recordTriageError, saveTriageRefused, saveTriageSent, triageOnBranch } from "./triage-outbox.js"
 import { isTriagePath } from "./triage-schema.js"
 import { validateLabelsBytes } from "./label-schema.js"
@@ -1297,7 +1297,9 @@ async function deliver(env, context) {
   let captureHandled = false
   if (rejections.checkUnavailable) await saveCheckUnavailable(env, store)
   if (rejections.captureRefused !== null) await saveRefused(env, store, rejections.captureRefused, now())
-  else if (capture.work) captureItem = capture.record
+  else if (capture.work) captureItem = await prepareCaptureContext(env, {
+    client, store, ref: base.sha, record: capture.record, fresh: capture.due, nowMs: now(),
+  })
   const onMain = await treeLookup(client, store, base.tree, [...pending, ...retract, ...(captureItem === null ? [] : [captureItem])])
   if (captureItem !== null) {
     // The earlier record is "pending" only while its pull request is still open.

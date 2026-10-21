@@ -143,6 +143,29 @@ test("revoking prose permission or changing the route stops a reviewed record", 
   }
 })
 
+test("final online preparation rechecks private evidence and prose permission instead of sending an earlier ready snapshot", async () => {
+  for (const change of ["log", "permission"]) {
+    const f = await prepared()
+    const accepted = await acceptedCandidate(f)
+    await queue.acceptContextPrivacy(f.env, { store: STORE, job: CONTEXT_JOB, basis: f.work.basis, bytes: json(review(accepted.payload_sha256)) })
+    const plan = await queue.planContextPublication(f.env, { ...f.options, now: Date.now() })
+    assert.equal(plan.ready.length, 1)
+    let changed = false
+    const items = await queue.prepareContextPublication(f.env, {
+      store: STORE, plan, direct: true, ref: "a".repeat(40), now: Date.now(),
+      client: { api: async () => {
+        changed = true
+        if (change === "log") await writeFile(f.entries[0].logPath, '{"synthetic":"changed during the online capability read"}\n')
+        else await writeFile(join(f.desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores: { [STORE]: false } }))
+        return { status: 200, json: { type: "file", encoding: "base64", content: Buffer.from('{"task_context":1}').toString("base64") } }
+      } },
+      readMain: async () => ({ blobs: new Map(), unknown: false }),
+    })
+    assert.equal(changed, true)
+    assert.deepEqual(items, [], change)
+  }
+})
+
 test("a task card is associated by its real job identity and changes invalidate its context input", async () => {
   assert.ok(queue)
   const f = await fixture()

@@ -49,6 +49,8 @@ async function fixture(count = 1, { ready = true, spent = 0 } = {}) {
     for (const file of options.briefPaths) {
       const brief = JSON.parse(await readFile(file, "utf8"))
       assert.ok(Array.isArray(brief.instructions) && brief.instructions.length > 30, "the runner carries the readable shipped rubric even without a host skill registration")
+      assert.ok(brief.instructions.includes('Use exactly `published`, `withheld` or `unavailable` for `state`.'),
+        "native authors need the successful state enum, not just withheld/unavailable instructions")
       const input = JSON.parse(await readFile(brief.input_file, "utf8"))
       const output = brief.phase === "candidate"
         ? { ...contextRecord(input.sources[0], brief.job), privacy: null }

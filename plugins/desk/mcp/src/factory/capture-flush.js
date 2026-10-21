@@ -36,9 +36,10 @@
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/` files.
 
 import { EMPTY_RECORD, captureFor, isCaptureInvalid } from "./capture-publish.js"
-import { CAPTURE_PATH } from "./capture-schema.js"
-import { loopSlotFrom } from "./loop-slot.js"
+import { CAPTURE_PATH, validateCaptureBytes } from "./capture-schema.js"
+import { loopSlotFrom, triageRefreshFrom } from "./loop-slot.js"
 import { gitBlobSha, readStatus, writeStatus } from "./outbox.js"
+import { storeAcceptsContext } from "./context-capability.js"
 
 const CAPTURE_FLAG = 1
 const SEND_INTERVAL_MS = 20 * 60 * 60 * 1000
@@ -59,7 +60,7 @@ const SHA = /^[0-9a-f]{40}$/u
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const timeOf = (value) => (typeof value === "string" ? Date.parse(value) : Number.NaN)
 const iso = (ms) => new Date(ms).toISOString()
-const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable", "sent_bytes", "dropped", "dropped_at", "sent_share"]
+const RECORD_KEYS = ["blob", "sent_at", "pr", "refused", "skipped", "invalid", "retry_after", "check_unavailable", "sent_bytes", "dropped", "dropped_at", "sent_share", "loop_context", "loop_context_checked_at"]
 
 /** The coverage the record may be built from: parsable `ran_at`, not in the future, under three days old; else null. */
 function freshCoverage(status, nowMs) {
@@ -134,7 +135,8 @@ export function planCapture({ status, consent, store, intakeId, nowMs, mayBeOpen
   const coverage = freshCoverage(status, nowMs)
   if (coverage === null || nowMs < timeOf(cap.retry_after)) return none
   const sentBefore = (typeof cap.blob === "string" && SHA.test(cap.blob)) || Number.isSafeInteger(cap.pr)
-  const loop = loopSlotFrom(isObject(status?.loop) ? status.loop.health : null, nowMs)
+  const loop = loopSlotFrom(isObject(status?.loop) ? status.loop.health : null, nowMs,
+    cap.loop_context === true ? { triageRefresh: triageRefreshFrom(status, { store, nowMs }) } : {})
   const made = captureFor(coverage, { store, intakeId, sentBefore, loop, contributing: contributingStores(consent) })
   if (isCaptureInvalid(made)) return { ...none, invalid: true }
   if (made === null || made.sha === cap.blob) return none
@@ -158,6 +160,21 @@ async function update(env, store, change) {
   const next = change(bookkeeping(status, store))
   const { [store]: _old, ...others } = all
   await writeStatus(env, { capture: Object.keys(next).length === 0 ? others : { ...others, [store]: next } })
+}
+
+/** Enrich only a fresh snapshot after the actual default branch advertises compatibility. Carried bytes never change. */
+export async function prepareCaptureContext(env, { client, store, ref, record, fresh, nowMs }) {
+  if (!fresh || record.empty) return record
+  const value = JSON.parse(record.bytes.toString("utf8"))
+  if (!isObject(value.loop)) return record
+  const ready = await storeAcceptsContext(client, store, ref, "loop_context")
+  await update(env, store, (cap) => ({ ...cap, loop_context: ready, loop_context_checked_at: iso(nowMs) }))
+  if (ready) value.loop.triage_refresh = triageRefreshFrom(await readStatus(env), { store, nowMs })
+  else delete value.loop.triage_refresh
+  value.loop = Object.fromEntries(Object.entries(value.loop).sort(([left], [right]) => left.localeCompare(right)))
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`, "utf8")
+  if (!validateCaptureBytes(bytes).ok) throw new Error("capture_context_invalid")
+  return { ...record, bytes, sha: gitBlobSha(bytes) }
 }
 
 const without = (cap, keys) => Object.fromEntries(Object.entries(cap).filter(([key]) => !keys.includes(key)))
