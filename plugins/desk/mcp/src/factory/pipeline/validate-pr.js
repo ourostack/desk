@@ -130,11 +130,10 @@ function validateContextChange(change, parts, trusted) {
     }
   }
   if (!Array.isArray(change.facts)) return [error("type", at)]
-  const sources = new Set(current.value.sources.map((source) => source.session))
   const facts = []
   for (const item of change.facts) {
     const match = typeof item?.path === "string" ? FACT_PATH.exec(item.path) : null
-    if (!match || !sources.has(match[2])) return [error("facts_invalid", at)]
+    if (!match) return [error("facts_invalid", at)]
     const parsed = parsePublished(item.bytes)
     if (!parsed.validation.ok || parsed.value.session.host !== match[1] || parsed.value.session.id !== match[2]) return [error("facts_invalid", at)]
     facts.push(parsed.value)
@@ -231,5 +230,9 @@ export function validatePr(input) {
       errors.push(error("duration_decreased", safePath))
     }
   }
-  return { ok: errors.length === 0, errors }
+  return {
+    ok: errors.length === 0,
+    errors: errors.map((item) => CONTEXT_PATH.test(item.path) && !item.code.startsWith("context_")
+      ? { ...item, code: `context_${item.code}` } : item),
+  }
 }

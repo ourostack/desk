@@ -10,10 +10,11 @@ import {
   taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
 } from "./outbox.js"
 import {
-  HEADLESS_TIMEOUT_MS, billingVariableBlocks, findAgentCli, probeSignIn, runHeadless,
+  HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY, billingVariableBlocks, findAgentCli, probeSignIn, runHeadless,
 } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
+import { dueStep } from "./loop-status.js"
 
 const MAX_BATCH = 8
 const DAY = 24 * 3600 * 1000
@@ -27,6 +28,35 @@ function due(work, now) {
   const last = work.state.last_attempts?.[work.phase]
   return Number.isSafeInteger(attempts) && attempts < 3 &&
     (last === undefined || (typeof last === "string" && isoDay(Date.parse(last)) < isoDay(now)))
+}
+
+async function runnableContextWork(env, status, now) {
+  const stores = Object.entries((await readConsent(env)).stores).filter(([, value]) => value.contribute === true).map(([store]) => store).sort()
+  const jobs = []
+  for (const store of stores) {
+    const readiness = status.context_publication?.[store]
+    const checked = Date.parse(readiness?.checked_at)
+    if (readiness?.ready !== true || !Number.isFinite(checked) || checked - now > 300000 || now - checked > 3 * DAY) continue
+    for (const work of await listContextWork(env, { store })) if (due(work, now)) jobs.push({ ...work, store })
+  }
+  return jobs
+}
+
+/** Read the actual eligible phases; a successful phase drains immediately, failures keep the ordinary gap. */
+export async function contextEvaluationDue(env, status, now) {
+  const at = new Date(now).getTime()
+  if (isHeadlessFactorySession(env) || billingVariableBlocks(env) ||
+      (env.DESK_FACTORY_HEADLESS_EVALUATOR !== undefined && !ON.has(env.DESK_FACTORY_HEADLESS_EVALUATOR.trim().toLowerCase()))) return false
+  const record = status?.loop?.steps?.evaluate
+  const context = status?.context_evaluation
+  const accepted = record?.last_result === "context_ran" && context?.result === "context_ran" &&
+    context.accepted > 0 && context.refused === 0 && Date.parse(context.at) >= Date.parse(record.last_ran_at)
+  const labeled = record?.last_result === "ran" && status?.evaluator?.accepted_last_step > 0
+  if (!accepted && !labeled && !dueStep(status, "evaluate", at)) return false
+  const headless = status?.evaluator?.headless
+  if (headless?.day >= isoDay(at) && headless.jobs >= MAX_HEADLESS_JOBS_PER_DAY) return false
+  if (["quota_exhausted", "window_protected", "clock_regressed"].includes(witnessedEvaluationQuota(status, at))) return false
+  return (await runnableContextWork(env, status, at)).length > 0
 }
 
 function template(work) {
@@ -69,14 +99,7 @@ export async function runTaskContextStep(env, options = {}) {
   const deadline = new Date(options.deadline).getTime()
   if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw new TypeError("runTaskContextStep: valid now and deadline required")
   const status = await readStatus(env)
-  const stores = Object.entries((await readConsent(env)).stores).filter(([, value]) => value.contribute === true).map(([store]) => store).sort()
-  const jobs = []
-  for (const store of stores) {
-    const readiness = status.context_publication?.[store]
-    const checked = Date.parse(readiness?.checked_at)
-    if (readiness?.ready !== true || !Number.isFinite(checked) || checked - now > 300000 || now - checked > 3 * DAY) continue
-    for (const work of await listContextWork(env, { store })) if (due(work, now)) jobs.push({ ...work, store })
-  }
+  const jobs = await runnableContextWork(env, status, now)
   if (jobs.length === 0) return idle("no_context_waiting")
   jobs.sort((left, right) => Number(right.phase === "privacy") - Number(left.phase === "privacy") || left.job.localeCompare(right.job))
   const selected = jobs.filter((work) => work.phase === jobs[0].phase).slice(0, MAX_BATCH)

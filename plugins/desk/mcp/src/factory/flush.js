@@ -710,7 +710,7 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
   return items.slice(0, maxItems)
 }
 
-async function readRejections(env, client, { store, head, through, labelKeys, retractPaths, capturePath, recordedPr, triagePr, contextPrs = new Set() }) {
+async function readRejections(env, client, { store, head, through, labelKeys, retractPaths, capturePath, recordedPr, triagePr }) {
   const rejected = new Set()
   const refused = new Set()
   // The first refusal that names the capture record, never a reason to quarantine facts: its pull request is a stale one (the facts go again).
@@ -744,8 +744,7 @@ async function readRejections(env, client, { store, head, through, labelKeys, re
       }
       break
     }
-    const namedContext = codes.filter((candidate) => !STALE_INTAKE_CODES.has(candidate) &&
-      (candidate.startsWith("context_") || contextPrs.has(pr.number)))
+    const namedContext = codes.filter((candidate) => !STALE_INTAKE_CODES.has(candidate) && candidate.startsWith("context_"))
     contextRefused ??= namedContext[0] ?? null
     codes = codes.filter((candidate) => !namedContext.includes(candidate))
     const named = codes.filter((candidate) => namesRecord(candidate, { onRecordedPr: pr.number === recordedPr, stale: STALE_INTAKE_CODES }))
@@ -903,7 +902,7 @@ async function openPr(client, { store, head, base, count, retracted }) {
 const deliveredBefore = (delivered) => Object.keys(delivered.blobs).length > 0 || Object.keys(delivered.retracting).length > 0 || Object.keys(delivered.retracted).length > 0 || delivered.quarantined.size > 0
 
 async function deliver(env, context) {
-  const { store, client, now, deadline, transform, maxFiles, maxBytes, progress } = context
+  const { store, client, now, deadline, transform, maxFiles, maxBytes, progress, planContexts } = context
   const nowIso = () => new Date(now()).toISOString()
   const consent = (await readConsent(env)).stores
   const record = consent[store]
@@ -970,8 +969,9 @@ async function deliver(env, context) {
   const contextSafely = async (fallback, body) => {
     try { return await body() } catch (error) {
       if (error instanceof Stop) throw error
-      progress.contextHeld = "context_error"
-      try { await recordContextError(env, store) } catch { progress.contextHeld = "context_status_error" }
+      progress.contextHeld = ["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)
+        ? "context_preparation_deferred" : "context_error"
+      try { await recordContextError(env, store, progress.contextHeld) } catch { progress.contextHeld = "context_status_error" }
       return fallback
     }
   }
@@ -1195,9 +1195,13 @@ async function deliver(env, context) {
       localJobs: local.jobs.map((job) => ({ local: job.job, published: keepIdentity ? job.job : keyedJobId(job.job, secret) })),
     }]
   })
-  const contextPlan = await contextSafely({ work: false, ready: [], states: [], prs: new Set() }, () => planContextPublication(env, {
-    store, entries: contextEntries, pluginVersion: deskVersion(), now: now(),
+  const contextPlan = await contextSafely({ work: false, ready: [], states: [], prs: new Set() }, () => planContexts(env, {
+    store, entries: contextEntries, pluginVersion: deskVersion(), now: now(), deadline: deadline - 30000, clock: now,
   }))
+  if (contextPlan.deferred) {
+    progress.contextHeld = "context_preparation_deferred"
+    await contextSafely(null, () => recordContextError(env, store, progress.contextHeld))
+  }
   // Only files with published bytes are listed, and only those of `here` sessions have them. A file without bytes is one whose record is not a regular file (its file stays where it is), a held file that stays held, or a file of a session that is not `here`.
   const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts?.session?.host}-${facts?.session?.id}.json`) ?? null }))
     .map(({ name, localBytes }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)), localSha: gitBlobSha(localBytes) }))
@@ -1275,7 +1279,7 @@ async function deliver(env, context) {
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
   // A rejected file is named back to its local key by its published path.
   const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
-  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])), capturePath: `capture/${record.intake_id}.json`, recordedPr: capture.cap.pr, triagePr: triage.state.pr, contextPrs: contextPlan.prs })
+  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys, retractPaths: new Map(retract.map((item) => [item.path, item.name])), capturePath: `capture/${record.intake_id}.json`, recordedPr: capture.cap.pr, triagePr: triage.state.pr })
   progress.rejectionsThrough = rejections.through
   progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
@@ -1416,7 +1420,7 @@ async function deliver(env, context) {
 }
 
 /** The flush with what finalize needs: the names still waiting for delivery after it. */
-async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, transform = toPublished, maxFiles = MAX_FILES, maxBytes = MAX_BYTES, anonymousLookup = anonymousGithub() }) {
+async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, transform = toPublished, maxFiles = MAX_FILES, maxBytes = MAX_BYTES, anonymousLookup = anonymousGithub(), planContexts = planContextPublication }) {
   const deadline = now() + deadlineMs
   if (!isRepo(store)) return { result: "unexpected", pending: null }
   let lock
@@ -1434,7 +1438,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
-    outcome = await deliver(env, { store, client, now, deadline, transform, maxFiles, maxBytes, progress })
+    outcome = await deliver(env, { store, client, now, deadline, transform, maxFiles, maxBytes, progress, planContexts })
   } catch (error) {
     outcome = { result: error instanceof Stop ? error.code : "unexpected" }
   }

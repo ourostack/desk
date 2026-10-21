@@ -47,6 +47,7 @@ import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
 import { evaluationQuotaOpen, quotaFor, validWitness } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus, updateStatus } from "./outbox.js"
+import { contextEvaluationDue } from "./context-run.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
 
@@ -184,9 +185,10 @@ export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl 
     const status = await readStatusImpl(env)
     const triage = triageKickDue(status, now, active)
     const reobserve = needsObservation(status, active, now)
-    if (newest === null && !triage && !reobserve) return { due: false, reason: "no_requests" }
+    const contextDue = await contextEvaluationDue(env, status, now)
+    if (newest === null && !triage && !reobserve && !contextDue) return { due: false, reason: "no_requests" }
     if (await workerRunning(root, now)) return { due: false, reason: "worker_running" }
-    const due = triage || reobserve || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
+    const due = triage || reobserve || contextDue || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
     return { due, reason: reobserve ? "triage_reobserve" : due ? "due" : "not_due", ...context, ...(reobserve ? { reobserve: true } : {}) }
   } catch {
     return { due: false, reason: "unreadable" }

@@ -59,6 +59,7 @@ import { runReconcileStep } from "./reconcile-step.js"
 import { runRouteIssuesStep } from "./route-issues.js"
 import { runRouteLocalStep } from "./route-local.js"
 import { runEvaluatorStep } from "./evaluator-step.js"
+import { contextEvaluationDue } from "./context-run.js"
 import { LOOP_LOCK_NAME, evaluateDue, kickLoop, newestRequestAt } from "./evaluate-kick.js"
 import { consumeEvaluationContinuation } from "./headless-ledger.js"
 import { runTriageStep } from "./triage-step.js"
@@ -157,7 +158,7 @@ const STEPS = Object.freeze([
     name: "evaluate", newWorkAt: newestRequestAt, held: (ctx) => ctx.slot,
     due: async (status, now, newWorkAt, env, ctx, impls) => {
       const consumed = await consumeContinuation(env, ctx, status, impls)
-      return consumed || evaluateDue(status, now, { newWorkAt })
+      return consumed || evaluateDue(status, now, { newWorkAt }) || await contextEvaluationDue(env, status, now)
     },
     run: (env, ctx, impls) => impls.evaluate(env, { pluginVersion: ctx.pluginVersion, now: ctx.now, deadline: ctx.agentDeadline(), deskRoot: ctx.deskRoot, maxRuns: 1, onChild: ctx.onChild, onChildExit: ctx.onChildExit, extendDeadline: ctx.extendDeadline }),
   },
@@ -288,6 +289,12 @@ export async function runLoopWorker(env, {
   // one only while a job the runner can run today is left within the day's ceiling (`evaluateDue`); a kick that fails changes nothing here.
   // A triage-only generation that minted a new evaluation continuation kicks once instead; never both, and never for a triage that failed.
   if (outcome.steps.evaluate === "ran" && (await swallow(async () => (await readStatusImpl(env))?.evaluator?.accepted_last_step > 0)) === true) await swallow(() => functions.kick(env, { scope: { deskRoot, personPrefix } }))
+  else if (outcome.steps.evaluate === "context_ran" && (await swallow(async () => {
+    const context = (await readStatusImpl(env))?.context_evaluation
+    return context?.accepted > 0 && context.refused === 0
+  })) === true) await swallow(() => functions.kick(env, { scope: { deskRoot, personPrefix } }))
   else if (ctx.continuation) await swallow(() => functions.kick(env, { continuation: true, scope: { deskRoot, personPrefix } }))
+  else if (ctx.slot === "slot_taken" && (await swallow(async () =>
+    contextEvaluationDue(env, await readStatusImpl(env), clock()))) === true) await swallow(() => functions.kick(env, { scope: { deskRoot, personPrefix } }))
   return outcome
 }

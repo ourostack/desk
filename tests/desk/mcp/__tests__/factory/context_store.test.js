@@ -35,6 +35,14 @@ test("numeric contribution authority alone does not authorize arbitrary public p
   assert.ok(result.errors.some((entry) => entry.code === "context_authority"))
 })
 
+test("context intake errors have their own family without changing numeric error codes", () => {
+  const wrong = change()
+  wrong.path = `context/${"f".repeat(32)}.json`
+  assert.deepEqual(validatePr({ changes: [wrong], trustedMaintainer: true }).errors, [{ code: "context_job_mismatch", path: wrong.path }])
+  const removed = { path: wrong.path, status: "removed" }
+  assert.deepEqual(validatePr({ changes: [removed] }).errors, [{ code: "context_removal", path: wrong.path }])
+})
+
 test("intake rejects stale sources, absent facts, path mismatches and modified downgrades", () => {
   const stale = change()
   const updated = contextFacts()
@@ -46,7 +54,7 @@ test("intake rejects stale sources, absent facts, path mismatches and modified d
   wrong.path = `context/${"f".repeat(32)}.json`
   const modified = change()
   modified.status = "modified"
-  for (const [input, code] of [[stale, "source_changed"], [missing, "facts_missing"], [wrong, "job_mismatch"], [modified, "previous_missing"]]) {
+  for (const [input, code] of [[stale, "context_source_changed"], [missing, "context_facts_missing"], [wrong, "context_job_mismatch"], [modified, "context_previous_missing"]]) {
     const result = validatePr({ changes: [input], trustedMaintainer: true })
     assert.ok(result.errors.some((entry) => entry.code === code), JSON.stringify(result))
   }
@@ -110,13 +118,21 @@ test("the CLI checks context against the merged tree, not its branch's earlier f
   assert.deepEqual(await validate(base), { ok: true, errors: [], maintenance: false })
   assert.equal((await validate(base, "NONE")).ok, false)
   git("switch", "-q", "main")
+  const additional = contextFacts()
+  additional.session.id = "22bc1234-1234-4abc-8abc-123456789abc"
+  writeFileSync(join(root, "facts", `${additional.session.host}-${additional.session.id}.json`), bytes(additional))
+  git("add", "facts")
+  git("commit", "-qm", "another machine contributes a session for the same job")
+  const incomplete = await validate(git("rev-parse", "HEAD"))
+  assert.equal(incomplete.maintenance, false)
+  assert.ok(incomplete.errors.some((entry) => entry.code === "context_source_set_changed"), JSON.stringify(incomplete))
   facts.intervals[0].end_ms += 1
   writeFileSync(join(root, "facts", `${facts.session.host}-${facts.session.id}.json`), bytes(facts))
   git("add", "facts")
   git("commit", "-qm", "new source")
   const refused = await validate(git("rev-parse", "HEAD"))
   assert.equal(refused.maintenance, false)
-  assert.ok(refused.errors.some((entry) => entry.code === "source_changed"))
+  assert.ok(refused.errors.some((entry) => entry.code === "context_source_changed"))
   const linked = contextRecord(facts)
   linked.state = "unavailable"
   linked.heading = null

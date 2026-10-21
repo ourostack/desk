@@ -6,8 +6,9 @@ import * as path from "node:path"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
   readConsent, readDelivered, readStatus, readTaskContextFile, setConsent, writeLocalFacts, writeStatus,
+  updateStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { acceptContextCandidate, acceptContextPrivacy, listContextWork } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
+import { acceptContextCandidate, acceptContextPrivacy, listContextWork, planContextPublication } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
 import { validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
@@ -86,6 +87,24 @@ test("numeric-only consent or an incompatible store never sends context and fact
   assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
 }))
 
+test("slow optional context preparation defers prose while ordinary numeric delivery keeps its time window", () => scratch(async (base) => {
+  const w = await world(base, { card: true })
+  let now = T0
+  const result = await w.run({
+    now: () => now, deadlineMs: 60000,
+    planContexts: (env, options) => planContextPublication(env, {
+      ...options,
+      readRemote: () => { now += 1000; return "https://github.com/synthetic/context-desk.git" },
+      resolveIdentity: ({ track, slug }) => { now += 1000; return { track, slug } },
+    }),
+  })
+  assert.equal(result.result, "delivered_pr_open")
+  assert.equal(result.context_held, "context_preparation_deferred")
+  assert.ok(now - T0 <= 2000)
+  assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
+  assert.equal(contexts(await w.files()).length, 0)
+}))
+
 test("a store with no context capability keeps reviewed prose out of its intake", () => scratch(async (base) => {
   const w = await world(base, { contextJson: null })
   await w.run()
@@ -100,7 +119,7 @@ test("a context refusal is isolated from numerical facts and retries without man
   await w.run()
   await approve(w)
   await w.run()
-  w.hub.rejectOpenPr("factory-rejected: source_changed")
+  w.hub.rejectOpenPr("factory-rejected: context_source_changed")
   await w.run()
   assert.equal(contexts(await w.files()).length, 0)
   assert.equal((await readDelivered(w.env, STORE)).quarantined.size, 0)
@@ -109,7 +128,38 @@ test("a context refusal is isolated from numerical facts and retries without man
   assert.equal(contexts(await w.files()).length, 1)
 }))
 
-test("revoking prose permission retracts only the exact context this machine actually delivered", () => scratch(async (base) => {
+for (const contextRefused of [false, true]) test(`mixed intake keeps numeric quarantine separate from context refusal: ${contextRefused}`, () => scratch(async (base) => {
+  const w = await world(base)
+  await w.run()
+  w.hub.mergeOpenPr()
+  await w.run()
+  const work = await approve(w)
+  const other = structuredClone(w.local)
+  other.session.id = "22bc1234-1234-4abc-8abc-123456789abc"
+  other.jobs[0].job = "f".repeat(32)
+  const written = await writeLocalFacts(w.env, STORE, other)
+  assert.equal(written.written, true)
+  await updateStatus(w.env, (status) => ({
+    ...status, derivations: { ...status.derivations, [written.name]: { store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk" } },
+  }))
+  await w.run()
+  const files = await w.files()
+  assert.equal(contexts(files).length, 1)
+  const otherPath = [...files.keys()].find((file) => file.startsWith("facts/") && file.includes(other.session.id))
+  assert.ok(otherPath)
+  w.hub.rejectOpenPr(`factory-rejected: duration_decreased${contextRefused ? "\nfactory-rejected: context_source_changed" : ""}`)
+  await w.run()
+  const delivered = await readDelivered(w.env, STORE)
+  assert.equal(delivered.quarantined.has(written.name), true, "the numeric refusal must quarantine the rejected facts")
+  const state = JSON.parse((await readTaskContextFile(w.env, STORE, work.job, "state.json")).toString("utf8"))
+  assert.equal(state.refusals, contextRefused ? 1 : 0)
+}))
+
+for (const stores of [
+  { [STORE]: false },
+  { "OuroStack/Factory": true, [STORE]: false },
+  { [STORE]: false, "OuroStack/Factory": true },
+]) test(`revoking prose permission retracts only owned context: ${Object.keys(stores).join(", ")}`, () => scratch(async (base) => {
   const w = await world(base)
   await w.run()
   await approve(w)
@@ -117,7 +167,7 @@ test("revoking prose permission retracts only the exact context this machine act
   w.hub.mergeOpenPr()
   await w.run()
   assert.equal(contexts(w.hub.mainFiles()).length, 1)
-  await fs.writeFile(path.join(w.desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores: { [STORE]: false } }))
+  await fs.writeFile(path.join(w.desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores }))
   await w.run()
   assert.equal(contexts(await w.files()).length, 0)
   assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)

@@ -14,13 +14,17 @@ import { isPlainObject, PATTERNS } from "./schema.js"
 import { stableStringify } from "./pipeline/normalize.js"
 import { declared, isFolder } from "./session-route.js"
 import { validatePublished } from "./published-schema.js"
-import { allTasks } from "./boot-check.js"
+import { walkTasks } from "./boot-check.js"
 import { isTaskSegment, jobId } from "./binding.js"
 import { readDeskRemote, resolveJobIdentity } from "./desk-repo.js"
 import { storeAcceptsContext } from "./context-capability.js"
 
 const STATE = "desk.factory.context-state/1"
 const INPUT = "desk.factory.context-input/1"
+const PREPARATION_MS = 2000
+const CARD_LIMIT = 1000
+const deferred = () => Object.assign(new Error("context_preparation_deferred"), { code: "context_preparation_deferred" })
+const withinBudget = (deadline, clock) => { if (clock() >= deadline) throw deferred() }
 const sha = (value) => createHash("sha256").update(stableStringify(value)).digest("hex")
 const result = (name, extra = {}) => ({ result: name, ...extra })
 const sameStore = (left, right) => typeof left === "string" && left.toLowerCase() === right.toLowerCase()
@@ -39,7 +43,8 @@ export function contextPermission(deskRoot, store) {
     const value = JSON.parse(readFileSync(file, { encoding: "utf8", flag: constants.O_RDONLY | constants.O_NOFOLLOW }))
     if (!isPlainObject(value) || Object.keys(value).sort().join() !== "schema_version,stores" || value.schema_version !== 1 ||
         !isPlainObject(value.stores) || Object.entries(value.stores).some(([key, allowed]) => !PATTERNS.prRepo.test(key) || typeof allowed !== "boolean")) return "policy_invalid"
-    return Object.entries(value.stores).some(([key, allowed]) => sameStore(key, store) && allowed === true) ? "allowed" : "not_opted_in"
+    const matches = Object.entries(value.stores).filter(([key]) => sameStore(key, store))
+    return matches.length > 0 && matches.every(([, allowed]) => allowed) ? "allowed" : "not_opted_in"
   } catch (error) {
     return error.code === "ENOENT" ? "not_opted_in" : "policy_invalid"
   }
@@ -120,51 +125,108 @@ function groupsOf(entries, store) {
   return groups
 }
 
-function taskCardIndex(deskRoot, personPrefix) {
+function taskCardIndex(deskRoot, personPrefix, { wanted, previous, deadline, clock, readRemote, resolveIdentity }) {
   const cards = new Map()
-  const remote = readDeskRemote({ deskRoot })
-  if (remote === null) return cards
-  const root = realpathSync(deskRoot)
-  const base = path.join(root, personPrefix)
-  for (const task of allTasks({ deskRoot, personPrefix }).slice(0, 1000)) {
-    if (!isTaskSegment(task.track) || !isTaskSegment(task.slug)) continue
-    const birth = resolveJobIdentity({ deskRoot, personPrefix, track: task.track, slug: task.slug })
-    const job = jobId({ deskRemote: remote, personPrefix, ...birth })
-    const candidates = [
-      path.join(base, task.track, task.slug, "task.md"),
-      path.join(base, task.track, "_archive", task.slug, "task.md"),
-      path.join(base, "_archive", task.track, task.slug, "task.md"),
-      path.join(base, "_archive", task.track, "_archive", task.slug, "task.md"),
-    ]
-    for (const file of candidates) {
-      try {
-        const stat = lstatSync(file)
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024) continue
-        const relative = path.relative(root, realpathSync(file))
-        if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue
-        const bytes = readFileSync(file, { flag: constants.O_RDONLY | constants.O_NOFOLLOW })
-        cards.set(job, { path: file, sha256: createHash("sha256").update(bytes).digest("hex") })
-        break
-      } catch (error) {
-        if (!["ENOENT", "EACCES", "EPERM", "ENOTDIR"].includes(error.code)) throw error
+  const within = () => withinBudget(deadline, clock)
+  try {
+    within()
+    const remote = readRemote({ deskRoot, deadline, clock, timeoutMs: 500 })
+    within()
+    if (remote === null) return { cards, incomplete: false }
+    const root = realpathSync(deskRoot)
+    const base = path.join(root, personPrefix)
+    const inspected = new Set()
+    const inspect = (task) => {
+      within()
+      const key = `${task.track}/${task.slug}`
+      if (!isTaskSegment(task.track) || !isTaskSegment(task.slug) || inspected.has(key)) return
+      inspected.add(key)
+      const birth = resolveIdentity({ deskRoot, personPrefix, track: task.track, slug: task.slug, deadline, clock, timeoutMs: 500 })
+      within()
+      const job = jobId({ deskRemote: remote, personPrefix, ...birth })
+      if (!wanted.has(job)) return
+      const candidates = [
+        path.join(base, task.track, task.slug, "task.md"),
+        path.join(base, task.track, "_archive", task.slug, "task.md"),
+        path.join(base, "_archive", task.track, task.slug, "task.md"),
+        path.join(base, "_archive", task.track, "_archive", task.slug, "task.md"),
+      ]
+      for (const file of candidates) {
+        within()
+        try {
+          const stat = lstatSync(file)
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024) continue
+          const relative = path.relative(root, realpathSync(file))
+          if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue
+          const bytes = readFileSync(file, { flag: constants.O_RDONLY | constants.O_NOFOLLOW })
+          within()
+          cards.set(job, { path: file, sha256: createHash("sha256").update(bytes).digest("hex") })
+          break
+        } catch (error) {
+          if (!["ENOENT", "EACCES", "EPERM", "ENOTDIR"].includes(error.code)) throw error
+        }
       }
     }
+    for (const file of previous) {
+      const segments = path.relative(base, file).split(path.sep).filter((segment) => segment !== "_archive")
+      if (segments.length === 3 && segments[2] === "task.md") inspect({ track: segments[0], slug: segments[1] })
+    }
+    if (cards.size === wanted.size) return { cards, incomplete: false }
+    let visited = 0
+    const unresolved = []
+    for (const task of walkTasks({ deskRoot, personPrefix, deadline, clock })) {
+      if (visited++ >= CARD_LIMIT) throw deferred()
+      if (wanted.has(jobId({ deskRemote: remote, personPrefix, track: task.track, slug: task.slug }))) inspect(task)
+      else unresolved.push(task)
+      if (cards.size === wanted.size) return { cards, incomplete: false }
+    }
+    for (const task of unresolved) {
+      inspect(task)
+      if (cards.size === wanted.size) break
+    }
+    return { cards, incomplete: false }
+  } catch (error) {
+    if (["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) return { cards, incomplete: true }
+    throw error
   }
-  return cards
 }
 
-export async function prepareTaskContexts(env, { store, entries, pluginVersion }) {
-  const counts = { prepared: 0, unchanged: 0, held: 0 }
+export async function prepareTaskContexts(env, {
+  store, entries, pluginVersion, deadline = Infinity, clock = Date.now, readRemote = readDeskRemote, resolveIdentity = resolveJobIdentity,
+}) {
+  const limit = Math.min(deadline, clock() + PREPARATION_MS)
+  const within = () => withinBudget(limit, clock)
+  const counts = { prepared: 0, unchanged: 0, held: 0, deferred: [] }
   if ((await readConsent(env)).stores[store]?.contribute !== true) return counts
   const cardIndexes = new Map()
-  for (const group of groupsOf(entries, store).values()) {
+  const groups = [...groupsOf(entries, store).values()]
+  for (const group of groups) {
+    within()
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
     const sources = group.entries.map((entry) => entry.facts)
     if (sources.length > 512 || new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; continue }
     const privateEvidence = group.entries.map(logEvidence)
     const deskKey = `${group.desk_root}\0${group.person_prefix}`
-    if (!cardIndexes.has(deskKey)) cardIndexes.set(deskKey, taskCardIndex(group.desk_root, group.person_prefix))
-    const taskCard = cardIndexes.get(deskKey).get(group.local_job) ?? null
+    if (!cardIndexes.has(deskKey)) {
+      const peers = groups.filter((item) => item.desk_root === group.desk_root && item.person_prefix === group.person_prefix)
+      const previous = []
+      for (const peer of peers) {
+        within()
+        const state = await stateOf(env, store, peer.job)
+        const input = state === null ? null : await inputOf(env, store, state, { current: false })
+        if (input?.desk_root === peer.desk_root && input.person_prefix === peer.person_prefix && input.task_card !== null) previous.push(input.task_card.path)
+      }
+      cardIndexes.set(deskKey, taskCardIndex(group.desk_root, group.person_prefix, {
+        wanted: new Set(peers.map((item) => item.local_job)), previous, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
+      }))
+    }
+    const index = cardIndexes.get(deskKey)
+    if (index.incomplete && !index.cards.has(group.local_job)) {
+      counts.held += 1
+      counts.deferred.push(group.job)
+      continue
+    }
+    const taskCard = index.cards.get(group.local_job) ?? null
     const basis = sha({ sources: sources.map((facts) => contextSource(facts, group.job)), private_evidence: privateEvidence, task_card: taskCard, plugin_version: pluginVersion })
     const input = {
       schema: INPUT, basis, job: group.job, local_job: group.local_job, desk_root: group.desk_root,
@@ -173,6 +235,7 @@ export async function prepareTaskContexts(env, { store, entries, pluginVersion }
     }
     if (Buffer.byteLength(serializeTaskContext(input)) > 16 * 1024 * 1024) { counts.held += 1; continue }
     const before = await stateOf(env, store, group.job)
+    within()
     if (before?.basis === basis) { counts.unchanged += 1; continue }
     await writeTaskContextFile(env, store, group.job, `input-${basis}.json`, input)
     const inputSeal = await seal(env, "input", basis, input)
@@ -258,11 +321,13 @@ export async function acceptContextPrivacy(env, { store, job, basis, bytes }) {
   return next.basis === basis && next.phase === "ready" ? result("context_accepted") : result("source_changed")
 }
 
-export async function readyTaskContexts(env, { store, entries }) {
+export async function readyTaskContexts(env, { store, entries, deadline = Infinity, clock = Date.now, skipJobs = new Set() }) {
   if ((await readConsent(env)).stores[store]?.contribute !== true) return []
   const groups = groupsOf(entries, store)
   const ready = []
   for (const job of (await listTaskContextJobs(env, store)).slice(0, 1000)) {
+    withinBudget(deadline, clock)
+    if (skipJobs.has(job)) continue
     const state = await stateOf(env, store, job)
     if (state === null || !groups.has(job)) continue
     const input = await inputOf(env, store, state)
@@ -321,11 +386,13 @@ async function publicationStatus(env, store, patch) {
 }
 
 /** Local planning only; cached negative readiness never sends an unchanged queue online every start. */
-export async function planContextPublication(env, { store, entries, pluginVersion, now }) {
-  const prepared = await prepareTaskContexts(env, { store, entries, pluginVersion })
-  const ready = await readyTaskContexts(env, { store, entries })
+export async function planContextPublication(env, { store, entries, pluginVersion, now, deadline = Infinity, clock = Date.now, ...readers }) {
+  const limit = Math.min(deadline, clock() + PREPARATION_MS)
+  const prepared = await prepareTaskContexts(env, { store, entries, pluginVersion, deadline: limit, clock, ...readers })
+  const ready = await readyTaskContexts(env, { store, entries, deadline: limit, clock, skipJobs: new Set(prepared.deferred) })
   const states = []
   for (const job of (await listTaskContextJobs(env, store)).slice(0, 1000)) {
+    withinBudget(limit, clock)
     const state = await stateOf(env, store, job)
     if (state === null) continue
     if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
@@ -345,7 +412,7 @@ export async function planContextPublication(env, { store, entries, pluginVersio
   const unsent = ready.some((item) => states.some(({ state }) => state.job === item.job &&
     state.published_sha !== item.sha && !(Number.isFinite(state.hold_until) && state.hold_until > now)))
   const unfinished = states.some(({ state }) => ["candidate", "privacy"].includes(state.phase))
-  return { work: prPending || retracting || (!held && (unsent || (stale && (unfinished || prepared.prepared > 0)))), ready, states, prs: new Set(states.map(({ state }) => state.pr).filter(Number.isSafeInteger)) }
+  return { work: prPending || retracting || (!held && (unsent || (stale && (unfinished || prepared.prepared > 0)))), ready, states, deferred: prepared.deferred.length > 0, prs: new Set(states.map(({ state }) => state.pr).filter(Number.isSafeInteger)) }
 }
 
 export async function contextOnBranch(read, tree) {
@@ -423,8 +490,8 @@ export async function saveContextRefused(env, store, plan, code, now) {
   await publicationStatus(env, store, { code, hold_until: now + DAY_MS })
 }
 
-export async function recordContextError(env, store) {
-  await publicationStatus(env, store, { code: "context_error" })
+export async function recordContextError(env, store, code = "context_error") {
+  await publicationStatus(env, store, { code })
 }
 
 export async function contextPublisherUnavailable(env, store, now) {
