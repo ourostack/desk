@@ -1,3 +1,0 @@
-Factory can publish separately consented, independently reviewed task explanations alongside its numerical evidence. The ordinary loop records supported work, prerequisite waiting, resumption and results without recalculating time, waste or acceptance. Missing or unsafe explanations remain explicitly unavailable or withheld.
-
-Context publication requires a compatible store, current source fingerprints and a separate privacy judgment. Changed evidence suppresses old wording, policy revocation retracts only an exactly owned publication, and bounded optional preparation preserves ordinary facts delivery. Compatible stores can also distinguish retained annotation-writer state from task-time collection health.

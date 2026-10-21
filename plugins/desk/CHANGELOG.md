@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.335 — 2026-10-21
+
+Factory can publish separately consented, independently reviewed task explanations alongside its numerical evidence. The ordinary loop records supported work, prerequisite waiting, resumption and results without recalculating time, waste or acceptance. Missing or unsafe explanations remain explicitly unavailable or withheld.
+
+Context publication requires a compatible store, current source fingerprints and a separate privacy judgment. Changed evidence suppresses old wording, policy revocation retracts only an exactly owned publication, and bounded optional preparation preserves ordinary facts delivery. Compatible stores can also distinguish retained annotation-writer state from task-time collection health.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.334 — 2026-10-21
 
 Explicit signed-in browser discard now moves a confirmed terminal owner's evidence out of active inventory, without deleting it or touching peer contexts. The parent waits for the worker to finish, independently checks unchanged CLI absence and the native generation, and preserves the exact owner/configuration/session evidence in a private artifact directory. Same-owner operations use the existing broker lock. Unknown disposition, changed evidence or failed moves remain explicit failures with retained-resource paths. This does not establish extension enrollment, update continuity or permission to reload a browser.
