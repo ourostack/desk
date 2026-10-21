@@ -10,6 +10,7 @@ import { listContextWork, prepareTaskContexts, readyTaskContexts } from "../../.
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { indexJob } from "./_index_helper.js"
 import { contextFacts, contextRecord } from "./_context_fixture.js"
+import { contextSource } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
 
 const runner = await import("../../../../../plugins/desk/mcp/src/factory/context-run.js").catch((error) => {
   if (error.code === "ERR_MODULE_NOT_FOUND") return null
@@ -47,7 +48,7 @@ async function fixture(count = 1, { ready = true, spent = 0 } = {}) {
   const runHeadless = async (options) => {
     for (const file of options.briefPaths) {
       const brief = JSON.parse(await readFile(file, "utf8"))
-      assert.ok(brief.instructions.length > 100, "the runner carries the shipped rubric even without a host skill registration")
+      assert.ok(Array.isArray(brief.instructions) && brief.instructions.length > 30, "the runner carries the readable shipped rubric even without a host skill registration")
       const input = JSON.parse(await readFile(brief.input_file, "utf8"))
       const output = brief.phase === "candidate"
         ? { ...contextRecord(input.sources[0], brief.job), privacy: null }
@@ -75,6 +76,77 @@ test("ordinary context runs generate then separately review, bounded to one laun
   const ledger = JSON.parse(await readFile(join(await factoryStateRoot(f.env), "agent-launch-ledger.json"), "utf8"))
   assert.equal(ledger.spent, 2)
   assert.equal(ledger.evaluate.launched, 2)
+})
+
+test("native readers receive short-line private JSON, a readable rubric and exact eligible anchor outlines", async () => {
+  const f = await fixture()
+  const facts = f.entries[0].facts
+  facts.jobs[0].agents = [0]
+  facts.jobs[0].segments = [{ start_ms: 1000, end_ms: 600000 }]
+  facts.intervals.push({ kind: "turn", agent: 0, start_ms: 700000, end_ms: 710000 })
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION })
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options,
+    runHeadless: async (options) => {
+      for (const file of options.briefPaths) {
+        const bytes = await readFile(file, "utf8")
+        const brief = JSON.parse(bytes)
+        const inputBytes = await readFile(brief.input_file, "utf8")
+        assert.ok(bytes.split("\n").length > 100)
+        assert.ok(inputBytes.split("\n").length > 100)
+        assert.ok(bytes.split("\n").every((line) => line.length < 500), "rubric lines must not become one escaped, truncated native Read line")
+        assert.ok(brief.instructions.includes("## Privacy phase"))
+        const [outline] = brief.evidence_outline
+        assert.equal(outline.session, facts.session.id)
+        assert.equal(outline.source, contextSource(facts, brief.job).sha256)
+        assert.equal(outline.session_offset_ms, facts.jobs[0].session_offset_ms)
+        assert.equal(outline.clock_origin, f.entries[0].clockOrigin)
+        assert.deepEqual(outline.shares, [[1000, 600000]])
+        assert.deepEqual(outline.intervals.map((entry) => entry.range), [[1000, 250000], [5000, 9000], [250000, 600000]])
+        assert.equal(outline.omitted_intervals, 0)
+        assert.equal(outline.omitted_shares, 0)
+      }
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(output.accepted, 1)
+})
+
+test("anchor outlines remain bounded and disclose omissions", async () => {
+  const f = await fixture()
+  const facts = f.entries[0].facts
+  facts.intervals = Array.from({ length: 100 }, (_, index) => ({
+    kind: index % 2 ? "human_wait" : "turn", agent: 0,
+    start_ms: index * 1000, end_ms: (index + 1) * 1000,
+  }))
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION })
+  await runner.runTaskContextStep(f.env, {
+    ...f.options,
+    runHeadless: async (options) => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      const [outline] = brief.evidence_outline
+      assert.ok(outline.intervals.length <= 12)
+      assert.equal(outline.omitted_intervals, 100 - outline.intervals.length)
+      assert.deepEqual(outline.intervals[0].range, [0, 1000])
+      assert.deepEqual(outline.intervals.at(-1).range, [99000, 100000])
+      return { state: "failed", cost_usd: null }
+    },
+  })
+})
+
+test("outlines never guess a share for an unplaceable task in a shared session", async () => {
+  const f = await fixture()
+  f.entries[0].facts.jobs[0].agents = [1]
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION })
+  await runner.runTaskContextStep(f.env, {
+    ...f.options,
+    runHeadless: async (options) => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      assert.deepEqual(brief.evidence_outline[0].shares, [])
+      assert.deepEqual(brief.evidence_outline[0].intervals, [])
+      return { state: "failed", cost_usd: null }
+    },
+  })
 })
 
 test("absent store capability, nested headless execution and a disabled evaluator launch nothing", async () => {

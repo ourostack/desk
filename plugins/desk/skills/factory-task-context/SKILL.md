@@ -24,6 +24,13 @@ and private `clock_origin`; subtract that origin to locate a log event on the
 session clock. `task_card`, when present, names the independently associated
 task card and its fingerprint. Raw private text and paths stay local.
 
+`instructions` is this rubric as separate readable lines. `evidence_outline`
+lists each session's source hash, private clock origin, exact own-share
+ranges and a bounded selection of eligible first, last and waiting
+intervals. Omission counts are explicit; the full snapshot remains
+authoritative. No share means no inferred ownership. An outline is a
+navigation aid, not proof of a purpose, dependency or outcome.
+
 Read the card, then search and read bounded relevant log passages. Establish
 the actual request, work, dependency, resumption and result separately.
 A card title is not proof of the original request. A tool kind does not

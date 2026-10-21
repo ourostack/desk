@@ -5,7 +5,7 @@ import { constants, lstatSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import {
   gitBlobSha, listTaskContextJobs, readConsent, readMachineSecret, readStatus, readTaskContextFile,
-  taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
+  serializeTaskContext, taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
 } from "./outbox.js"
 import {
   checkContextAgainstFacts, contextPayloadHash, contextSource, validateContext,
@@ -170,7 +170,7 @@ export async function prepareTaskContexts(env, { store, entries, pluginVersion }
       person_prefix: group.person_prefix, store,
       evaluator: { plugin_version: pluginVersion, rubric: "1" }, sources, private_evidence: privateEvidence, task_card: taskCard,
     }
-    if (Buffer.byteLength(JSON.stringify(input)) > 16 * 1024 * 1024 - 1) { counts.held += 1; continue }
+    if (Buffer.byteLength(serializeTaskContext(input)) > 16 * 1024 * 1024) { counts.held += 1; continue }
     const before = await stateOf(env, store, group.job)
     if (before?.basis === basis) { counts.unchanged += 1; continue }
     await writeTaskContextFile(env, store, group.job, `input-${basis}.json`, input)

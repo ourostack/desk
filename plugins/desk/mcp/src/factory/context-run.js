@@ -4,7 +4,7 @@ import * as path from "node:path"
 import {
   acceptContextCandidate, acceptContextPrivacy, listContextWork,
 } from "./context-outbox.js"
-import { CONTEXT_SCHEMA, contextSource } from "./context-schema.js"
+import { CONTEXT_SCHEMA, contextShare, contextSource } from "./context-schema.js"
 import {
   factoryStateRoot, readConsent, readStatus, readTaskContextFile,
   taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
@@ -36,6 +36,28 @@ function template(work) {
     sources: work.source.sources.map((facts) => contextSource(facts, work.job)),
     coverage: { state: "unavailable", reasons: ["not_recorded"], omitted_events: 0 }, privacy: null,
   }
+}
+
+function evidenceOutline(work) {
+  return work.source.sources.map((facts) => {
+    const share = contextShare(facts, work.job)
+    const eligible = facts.intervals.filter((interval) => share.some((span) => interval.start_ms >= span.start_ms && interval.end_ms <= span.end_ms))
+      .sort((left, right) => left.start_ms - right.start_ms || left.end_ms - right.end_ms)
+    const waits = eligible.filter((interval) => ["human_wait", "permission_wait", "api_retry"].includes(interval.kind))
+    const selected = new Set([...eligible.slice(0, 2), ...eligible.slice(-2), ...waits.slice(0, 4), ...waits.slice(-4)])
+    const intervals = eligible.filter((interval) => selected.has(interval))
+    const shares = share.length <= 8 ? share : [...share.slice(0, 4), ...share.slice(-4)]
+    const evidence = work.source.private_evidence.find((entry) => entry.session === facts.session.id)
+    return {
+      session: facts.session.id, source: contextSource(facts, work.job).sha256,
+      session_offset_ms: facts.jobs.find((entry) => entry.job === work.job).session_offset_ms,
+      duration_ms: facts.session.duration_ms, ended: facts.session.ended,
+      clock_origin: evidence.clock_origin, log_path: evidence.log_path,
+      shares: shares.map((span) => [span.start_ms, span.end_ms]), omitted_shares: share.length - shares.length,
+      intervals: intervals.map((interval) => ({ kind: interval.kind, range: [interval.start_ms, interval.end_ms] })),
+      omitted_intervals: eligible.length - intervals.length,
+    }
+  })
 }
 
 /** One existing-ledger launch, one phase, at most eight jobs. Labels retain priority in the caller. */
@@ -70,7 +92,7 @@ export async function runTaskContextStep(env, options = {}) {
   const reservation = await impl.reserveAgentLaunch(env, { kind: "evaluate", generation: null, now, legacyEvaluator: status.evaluator })
   if (reservation.state !== "reserved") return idle("budget_exhausted")
   const phase = selected[0].phase
-  const instructions = readFileSync(INSTRUCTIONS, "utf8")
+  const instructions = readFileSync(INSTRUCTIONS, "utf8").split(/\r?\n/u)
   const briefs = []
   const logDirs = new Set()
   let run
@@ -89,7 +111,7 @@ export async function runTaskContextStep(env, options = {}) {
       const brief = {
         schema: "desk.factory.context-brief/1", phase, job: work.job, evaluator: work.source.evaluator,
         input_file: work.input, output: await taskContextPath(env, work.store, work.job, outputName),
-        instructions, template: template(work),
+        instructions, template: template(work), evidence_outline: evidenceOutline(work),
         ...(phase === "privacy" ? { candidate: work.state.candidate, payload_sha256: work.state.candidate_hash } : {}),
       }
       const file = await writeTaskContextFile(env, work.store, work.job, `${token}.brief.json`, brief)

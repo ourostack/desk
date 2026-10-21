@@ -1479,6 +1479,8 @@ export async function jobsIndexRebuilt(env, { platform = process.platform, runne
 const CONTEXT_FILE = /^(?:state|input-[0-9a-f]{64}|[0-9a-f]{16}\.(?:brief|candidate|privacy))\.json$/u
 const CONTEXT_FILE_MAX = 16 * 1024 * 1024
 
+export const serializeTaskContext = (value) => `${JSON.stringify(value, null, 2)}\n`
+
 export async function taskContextPath(env, store, job, name) {
   requirePattern(job, PATTERNS.jobId, "job")
   requirePattern(name, CONTEXT_FILE, "name")
@@ -1488,7 +1490,7 @@ export async function taskContextPath(env, store, job, name) {
 /** Context files use the same owner-only, no-link and atomic-write policy as facts and labels. */
 export async function writeTaskContextFile(env, store, job, name, value) {
   const file = await taskContextPath(env, store, job, name)
-  const bytes = `${JSON.stringify(value)}\n`
+  const bytes = serializeTaskContext(value)
   if (Buffer.byteLength(bytes) > CONTEXT_FILE_MAX) fail("file", "context file is too large")
   await writeAtomic(await factoryStateRoot(env), file, bytes, { platform: process.platform, env })
   return file

@@ -154,7 +154,7 @@ export function contextSource(facts, job) {
   }
 }
 
-function shareOf(facts, job) {
+export function contextShare(facts, job) {
   const binding = facts.jobs.find((entry) => entry.job === job)
   if (Object.hasOwn(binding, "segments")) return binding.segments
   return !Object.hasOwn(binding, "agents") && facts.jobs.length === 1 ? [{ start_ms: 0, end_ms: facts.session.duration_ms }] : []
@@ -199,7 +199,7 @@ export function checkContextAgainstFacts(value, facts, options) {
       const item = bySession.get(ref.session)
       if (!item) continue
       const at = `events.${index}.evidence.${refIndex}`
-      const share = shareOf(item, value.job)
+      const share = contextShare(item, value.job)
       if (item.jobs.find((entry) => entry.job === value.job).session_offset_ms === null &&
           !(value.coverage.state === "partial" && value.coverage.reasons.includes("unplaced"))) addError(errors, "placement_unknown", at)
       if (["interval", "interval_start", "interval_end"].includes(ref.anchor)) {

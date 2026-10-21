@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
-import { setConsent, taskContextPath } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { serializeTaskContext, setConsent, taskContextPath, writeTaskContextFile } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { contextFacts, contextRecord, CONTEXT_JOB } from "./_context_fixture.js"
 import { osEnv } from "../_os_env.js"
 
@@ -77,6 +77,14 @@ test("preparation is source-current, idempotent and protected without publishing
   assert.equal(input.sources[0].session.id, f.facts.session.id)
   assert.equal((await queue.prepareTaskContexts(f.env, f.options)).unchanged, 1)
   assert.deepEqual(await queue.readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
+})
+
+test("the private file limit counts the actual readable serialization, not the smaller compact value", async () => {
+  const f = await fixture()
+  const value = Array(3500000).fill(0)
+  assert.ok(Buffer.byteLength(JSON.stringify(value)) < 16 * 1024 * 1024)
+  assert.ok(Buffer.byteLength(serializeTaskContext(value)) > 16 * 1024 * 1024)
+  await assert.rejects(writeTaskContextFile(f.env, STORE, CONTEXT_JOB, "0123456789abcdef.brief.json", value), /context file is too large/u)
 })
 
 test("an author's own approval is refused; a separate hash-bound privacy judgment makes context ready", async () => {
