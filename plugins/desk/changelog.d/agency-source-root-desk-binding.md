@@ -1,0 +1,1 @@
+Desk now recognizes declared work overlays in numbered Agency session source roots, so a session loading MS Desk can find its work desk without falling back to a personal desk. Flat session layouts and explicit desk bindings keep their existing behavior; discovery remains confined to the current session.

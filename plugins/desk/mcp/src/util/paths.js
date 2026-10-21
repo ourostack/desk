@@ -29,7 +29,7 @@
 
 import * as path from "node:path"
 import * as os from "node:os"
-import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, promises as fs } from "node:fs"
+import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync, statSync, promises as fs } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 // Raised only when no source names a desk at all, as opposed to an explicit
@@ -67,17 +67,18 @@ export function resolveDeskRoot(explicit, options = {}) {
 }
 
 // Agency copies every plugin a session selects into one per-session container
-// named agency-plugin-<id>.p<pid>, one folder per plugin. A plugin folder next
-// to Desk's own in that container is loaded in the same session. This relies on
-// those folders being real copies: the module path below is the real path Node
-// loaded, so a container whose desk folder were a symlink to a cache copy would
+// named agency-plugin-<id>.p<pid>, either directly or under numbered root-N
+// source folders. Plugins within that container are loaded in the same session.
+// This relies on those folders being real copies: the module path below is the
+// real path Node loaded, so a desk folder symlinked to a cache copy would
 // not be recognized, and the overlay's home desk would not be consulted.
 // "Loaded" means present in this Agency session's composition, not that the
 // session's selected agent belongs to the overlay.
 const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
+const AGENCY_SOURCE_ROOT = /^root-[0-9]+$/u
 
 // Work overlays whose home-folder desk Desk may bind when nothing else binds a
-// desk, and only while that overlay is loaded next to Desk.
+// desk, and only while that overlay is loaded in Desk's session container.
 const OVERLAY_HOME_DESKS = Object.freeze([
   Object.freeze({ overlay: "ms-desk", folder: "ms-desk" }),
 ])
@@ -200,15 +201,27 @@ export function resolveDeskRootWithSource({
 }
 
 // The home-folder desks of work overlays loaded in the same Agency session as
-// this Desk: the overlay's plugin folder sits next to Desk's own in the
-// session container and declares the overlay's name. Anywhere else (a plain
+// this Desk: the overlay declares its name and sits beside Desk, or inside a
+// numbered source root in the same session container. Anywhere else (a plain
 // install, Claude Code, Codex, a checkout) there are none.
 export function loadedOverlayHomeDesks({ deskPluginRoot = MODULE_PLUGIN_ROOT, homeDir = os.homedir() } = {}) {
   if (!hasText(deskPluginRoot)) return []
-  const container = path.dirname(path.resolve(deskPluginRoot))
+  const pluginParent = path.dirname(path.resolve(deskPluginRoot))
+  const numbered = AGENCY_SOURCE_ROOT.test(path.basename(pluginParent))
+  const container = numbered ? path.dirname(pluginParent) : pluginParent
   if (!AGENCY_SESSION_CONTAINER.test(path.basename(container))) return []
+  let pluginParents = [container]
+  if (numbered) {
+    try {
+      pluginParents = readdirSync(container, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && AGENCY_SOURCE_ROOT.test(entry.name))
+        .map((entry) => path.join(container, entry.name))
+    } catch {
+      return []
+    }
+  }
   return OVERLAY_HOME_DESKS
-    .filter(({ overlay }) => pluginDeclares(path.join(container, overlay), overlay))
+    .filter(({ overlay }) => pluginParents.some((parent) => pluginDeclares(path.join(parent, overlay), overlay)))
     .map(({ overlay, folder }) => ({ source: OVERLAY_HOME_FALLBACK, overlay, path: path.join(homeDir, folder) }))
 }
 
