@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.336 — 2026-10-21
+
+Desk now recognizes declared work overlays and browser profile declarations in numbered Agency session source roots. A session loading MS Desk can find its work desk and selected signed-in browser declaration instead of choosing personal fallbacks or missing the browser configuration. Flat session layouts and explicit desk bindings keep their existing behavior; discovery remains confined to the current session and an unreadable composition reports an error.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.335 — 2026-10-21
 
 Factory can publish separately consented, independently reviewed task explanations alongside its numerical evidence. The ordinary loop records supported work, prerequisite waiting, resumption and results without recalculating time, waste or acceptance. Missing or unsafe explanations remain explicitly unavailable or withheld.
