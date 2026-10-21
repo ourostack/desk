@@ -72,6 +72,13 @@ sha="$(git rev-parse HEAD)"
 # The checks run on the commit that will be pushed: some list tracked files, which must not include the fragments the
 # release deleted. The release commit has no pull request base, so the integrity check sees only the manifests.
 test -z "$(git status --porcelain)"
+# Signed browser artifact gate.
+# Gate the resulting version, not the requested stage: auto follows an existing RC line.
+# Verification is strictly offline and refuses absent/QA/unsigned/stale normal assets.
+case "$version" in
+  *-rc.*) node scripts/package-browser-native.mjs --verify "$PWD" ;;
+esac
+# End signed browser artifact gate.
 env -u GITHUB_BASE_REF -u DESK_RELEASE_BASE node scripts/check-release-integrity.cjs
 for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-generated-artifacts test-desk-contracts; do
   node "scripts/$check.cjs"

@@ -3,7 +3,12 @@
 Kernel plus the assignment-2/A producer amendment only. This is **not an installer, native provider,
 signed-in acquisition/controller, MCP adapter, or a promotion readiness claim**.
 Nothing in this directory installs itself into a browser or changes permissions.
-The enrolled extension public key/ID and profile-token storage key are retained.
+The approved publisher namespace is `idfkhmkoaimndgacinjkjbagnnefgdel`.
+It is separate from the earlier prototype and the maintained test extension:
+changing this public identity does not adopt profiles or copy profile tokens.
+The profile-token storage key name is unchanged, but its origin is the new publisher.
+The normal-main update URL is a publication target, not evidence that a feed is
+published or that a browser has fetched, installed or enabled this package.
 
 ## Factory and native contract
 

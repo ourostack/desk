@@ -749,14 +749,21 @@ test("malformed actual relay packets receive nonzero redacted error envelopes", 
   }
 })
 
-test("distribution keeps enrolled identity and executable bytes attest reproducibly", async () => {
+test("normal distribution uses the approved publisher namespace and maintained main feed", () => {
   const root = new URL("./", extensionUrl)
   const manifest = JSON.parse(readFileSync(new URL("manifest.json", root), "utf8"))
-  const publicHash = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32)
-  assert.equal(publicHash.replace(/[0-9a-f]/gu, c => String.fromCharCode(97 + parseInt(c, 16))), "bcejpajaingepdloiolbmbaflecgifbe")
+  const publicHash = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex")
+  assert.equal(publicHash, "835a7cae08cd36028d9a9106dd45634b678f14c585f6f93501908775cb498d23")
+  assert.equal(publicHash.slice(0, 32).replace(/[0-9a-f]/gu, c => String.fromCharCode(97 + parseInt(c, 16))), "idfkhmkoaimndgacinjkjbagnnefgdel")
+  assert.equal(manifest.version, "1.1.1")
+  assert.equal(manifest.update_url, "https://raw.githubusercontent.com/ourostack/desk/main/artifacts/browser-native/updates.xml")
   assert.equal(manifest.manifest_version, 3)
   assert.equal(manifest.background.type, "module")
   assert.ok(manifest.permissions.includes("tabGroups"))
+})
+
+test("distribution executable bytes attest reproducibly against changed-file fixtures", async () => {
+  const root = new URL("./", extensionUrl)
   const build = await import(new URL("./build.mjs", extensionUrl))
   const generated = await import(new URL("./source-digest.mjs", extensionUrl))
   assert.equal(build.computeSourceDigest(root), generated.SOURCE_DIGEST)
