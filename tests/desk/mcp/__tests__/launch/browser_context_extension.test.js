@@ -494,15 +494,53 @@ test("group readback finishes before a later page is advertised to the relay", a
   }
 })
 
-test("supported inactive owned-opener tabs are grouped before admission; active/manual tabs are not adopted", async () => {
+test("supported inactive owned-opener tabs are grouped before admission", async () => {
   const f = await kernel()
   assert.ok((await f.engine.dispatch(create())).result)
   await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
   const popup = await f.api.tabs.create({ windowId: 7, openerTabId: 10, url: "https://task.invalid/popup", active: false })
   await eventually(() => f.sockets[0].sent.find(m => m.method === "chrome.tabs.onCreated" && m.params[0].id === popup.id))
   assert.equal(f.tabs.get(popup.id).groupId, f.tabs.get(10).groupId)
-  const active = await f.api.tabs.create({ windowId: 7, openerTabId: 10, url: "https://task.invalid/user-popup", active: true })
-  assert.ok((await f.sockets[0].command("chrome.debugger.attach", [{ tabId: active.id }, "1.3"])).error)
+});
+
+// Break caught: a real app may activate its own opener child; dropping it makes
+// target discovery silently incomplete even though the context still says ready.
+test("active same-window owned-opener children are discovered and controlled without activation or peer adoption", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  assert.ok((await f.engine.dispatch(create(B, "peer"))).result)
+  await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  const child = await f.api.tabs.create({ windowId: 7, openerTabId: 10, url: "https://other-origin.invalid/child", active: true })
+  await eventually(() => f.sockets[0].sent.find(m => m.method === "chrome.tabs.onCreated" && m.params[0].id === child.id))
+  assert.equal(f.tabs.get(child.id).active, true)
+  assert.equal(f.tabs.get(child.id).groupId, f.tabs.get(10).groupId)
+  assert.equal((await f.sockets[0].command("chrome.debugger.attach", [{ tabId: child.id }, "1.3"])).error, undefined)
+  assert.equal((await f.sockets[1].command("chrome.debugger.attach", [{ tabId: child.id }, "1.3"])).error, "native_target_not_owned")
+  const manual = await f.api.tabs.create({ windowId: 7, url: "https://manual.invalid/other", active: true })
+  assert.equal((await f.sockets[0].command("chrome.debugger.attach", [{ tabId: manual.id }, "1.3"])).error, "native_target_not_owned")
+  assert.equal(f.tabs.get(manual.id).groupId, -1)
+  assert.equal((await f.engine.dispatch(request("context.status", B))).result.state, "ready")
+})
+
+// Break caught: an unsupported app-created window must be named continuity loss,
+// not a ready parent-only view, an adopted foreign window or a replacement page.
+test("owned-opener child-window boundary retains the exact child and explicitly loses continuity without replacing pages", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  assert.ok((await f.engine.dispatch(create(B, "peer"))).result)
+  const child = await f.api.tabs.create({ windowId: 9, openerTabId: 10, url: "https://other-origin.invalid/window", active: true })
+  const effects = f.effects.length
+  const status = await f.engine.dispatch(request("context.status", A))
+  assert.equal(status.result.state, "unavailable")
+  assert.deepEqual(status.result.uncertainTabs, [{ tabId: child.id, windowId: 9 }])
+  assert.equal((await f.engine.dispatch(request("context.resume", A))).error?.code, "native_context_unavailable")
+  assert.equal((await f.engine.dispatch(request("context.discard", A))).error?.code, "native_cleanup_unconfirmed")
+  assert.equal((await f.sockets[0].command("chrome.tabs.create", [{ url: "about:blank" }])).error, "native_context_unavailable")
+  assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
+  assert.equal(f.effects.length, effects, "status/resume/refused cleanup creates no replacement or browser effect")
+  assert.equal(f.tabs.get(child.id).groupId, -1)
+  assert.equal(f.tabs.has(1), true)
+  assert.equal((await f.engine.dispatch(request("context.status", B))).result.state, "ready")
 })
 
 test("sequential actual relay commands preserve results and navigation failures are not swallowed", async () => {
