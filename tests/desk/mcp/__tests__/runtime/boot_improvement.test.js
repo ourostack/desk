@@ -33,14 +33,14 @@ function boot(root, extra = {}) {
   })
 }
 
-test("improvementInstructions says what a card is, that it is standing work, when to take one and who to ask, with the exported authority paragraph", () => {
+test("improvementInstructions reports backlog without assigning ordinary sessions unsolicited maintenance", () => {
   const [text, ...rest] = improvementInstructions(summary())
   assert.equal(rest.length, 0)
   assert.match(text, /^Improvement cards: 3 open \(oldest 6 days\)\./u)
   assert.match(text, /one finding of the factory about our own tooling, with its evidence/u)
-  assert.match(text, /standing, pre-authorized work/u)
-  assert.match(text, /when your foreground work allows it, this is an interactive session and the machine is under its cap/u)
-  assert.match(text, /through improvement_next, which refuses and says why when the session or the machine's cap does not allow it/u)
+  assert.match(text, /not an assignment/u)
+  assert.match(text, /existing repair owner/u)
+  assert.doesNotMatch(text, /handing it to a background subagent|take the oldest when/u)
   assert.ok(text.endsWith(AUTHORITY), "the one authority paragraph, not a second wording")
   assert.equal(text.split(AUTHORITY).length, 2)
   assert.doesNotMatch(text, /tell the operator|offer a curator pass|run the evaluator/iu)
@@ -60,6 +60,12 @@ test("improvementInstructions carries the authority paragraph only when cards ar
   assert.ok(both[0].endsWith(AUTHORITY))
   assert.match(both[1], /^Improvement cards: 1 file was set aside as invalid/u)
   assert.match(improvementInstructions(summary({ truncated: true }))[0], /^Improvement cards: at least 3 open \(oldest 6 days among those read\)\./u)
+})
+
+test("unreadable card diagnostics never grant deletion or permission-changing authority", () => {
+  const lines = improvementInstructions(summary({ open: 0, oldest_days: null, set_aside: 1, unreadable_files: 1 }))
+  assert.match(lines.join("\n"), /preserve/u)
+  assert.doesNotMatch(lines.join("\n"), /delete|fix .*permissions|restore .*commit/u)
 })
 
 test("bootOnce carries the pickup text for open cards in an interactive session, read from the desk's own cards", async () => {

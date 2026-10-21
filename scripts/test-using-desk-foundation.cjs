@@ -425,12 +425,12 @@ function main() {
   ]);
 
   assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
-    "rule, tool or plugin we own",
-    "fix it rather than work around it or stop",
-    "creative and scrappy before declaring yourself stuck",
-    "`friction-management`",
-    "kaizen card",
-    "When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure",
+    "does not revoke the supplied task's authority",
+    "do not spawn repair children",
+    "another controller owns repair",
+    "without fixing or qualifying the helper",
+    "permission denials",
+    "`desk-problem`",
   ]);
 
   // The long forms of these two rules moved to the skills that own their procedures (round AJ size budget); the foundation keeps the rule and the pointer.

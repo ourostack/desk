@@ -80,9 +80,9 @@ For each `mode: local` repo, inspect `git status`, the current branch, local-onl
 
 A repo that is not on this machine (a `mode: remote` repo, or a recorded clone missing at its path) is handled by the instruction the boot output gives for it: follow that, and run no clone procedure of your own. `repo-handling` has the flow once boot says to clone.
 
-## Stop when a required MCP is not loaded
+## Reconcile required capabilities when an MCP is not loaded
 
-If the resumption target's mapped progress record or referenced active iteration doc (an existing `doing.md`, `investigation.md` or per-iteration doc named in the task card's `iterations.active`) declares `required_mcps:` in frontmatter, treat that list as a **hard requirement** for resuming, not a recommendation. Consume all applicable declared requirements; an explicit provider progress path does not erase the iteration's requirements.
+If the resumption target's mapped progress record or referenced active iteration doc declares `required_mcps:` in frontmatter, reconcile every entry against the capability the work needs. Consume all applicable declarations; an explicit progress path does not erase the iteration's requirements. A transport key is not itself the task's purpose.
 
 `required_mcps:` is a list of MCP keys matching aliased entries in the workspace's runtime MCP config — either under `[mcps.builtins.<alias>]` (runtime-proxied builtins) or `[mcps.servers.<alias>]` (external stdio MCPs). both namespaces are valid sources; the key just needs to be loaded at runtime. example frontmatter snippet:
 
@@ -93,26 +93,9 @@ required_mcps:
 
 **check**: for each entry in `required_mcps`, consult the runtime's loaded-MCP registry to confirm the key is currently loaded — engine-specific. (implementations may probe the harness's own loaded-MCP listing, an introspection MCP, or a tool-name-prefix scan; encode the principle, not the API.)
 
-**hard-stop**: if any required MCP key isn't loaded, **STOP at the resumption prompt before re-entering the phase**. don't start the phase, don't begin tool work, don't silently continue. print:
+**Missing transport:** report the missing key and the actual capability affected, without guessing a cause from absence alone. Determine whether an already-authorized, trusted alternative provides the same needed data or action with the required identity, scope and effect visibility. If so, resume the same task and record the alternative and its limitations in the mapped progress record; do not claim the MCP loaded or the helper repaired.
 
-1. the list of required MCP keys that are missing.
-2. the likely root cause: the runtime's workspace MCP config link absent, broken, or pointing somewhere else; or the MCP isn't declared in the workspace MCP config. reference session-start's MCP link check.
-3. a note that the agent will not proceed with this resumption until restarted with the required MCPs loaded.
-
-example stop message:
-
-```
-Required MCPs not loaded for this iteration: [analytics-store]
-
-Likely cause: workspace MCP-config link absent or broken.
-session-start will create it on the next launch if the workspace
-MCP config exists. Confirm the MCP is declared there, then restart
-the agent.
-
-Resumption paused until the required MCPs are available.
-```
-
-**why hard-stop, not recommendation**: when an iteration doc declares `required_mcps`, the planning pass already determined the work cannot proceed without those tools. letting the agent continue and discover the missing tool mid-investigation wastes operator time and contaminates the iteration's audit trail with abandoned work. session-start's MCP link check is the soft self-healing path (creates the symlink so MCPs auto-load next time); this gate is the hard requirement at the resumption boundary.
+If no permitted path provides a required capability, hold only the dependent work and name the exact gap and attempted recovery. Continue independent safe work. A required host-recovery or sole-writer condition above cannot be replaced by a convenient transport. Never bypass actual authentication or access denials, source-trust checks, protected mutations or conflicting writers. Do not create a maintenance child, tooling branch or new task because resumption encountered a missing MCP.
 
 if the iteration doc has no `required_mcps:` field, there is nothing to check here — go on and re-enter the phase.
 
