@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events"
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import {
   HEADLESS_ARGV,
@@ -138,6 +139,25 @@ test("context generation and privacy use distinct fixed prompts without changing
     assert.equal(args[args.indexOf("--max-budget-usd") + 1], "1")
   }
   assert.throws(() => HEADLESS_ARGV({ briefPaths: [], evaluationDir: "/e", logDirs: [], purpose: "SENTINEL" }), TypeError)
+})
+
+test("context children explicitly load the producer's Desk source instead of an older installed plugin", async () => {
+  const declared = path.join(os.tmpdir(), "declared Desk plugin")
+  const claude = path.join(os.tmpdir(), "Claude Desk plugin")
+  const bundled = fileURLToPath(new URL("../../../../../plugins/desk", import.meta.url))
+  for (const { env, expected } of [
+    { env: { DESK_PLUGIN_ROOT: declared, CLAUDE_PLUGIN_ROOT: claude }, expected: declared },
+    { env: { CLAUDE_PLUGIN_ROOT: claude }, expected: claude },
+    { env: {}, expected: bundled },
+  ]) {
+    for (const purpose of ["task_context", "context_privacy"]) {
+      const spawn = fakeSpawn(status(okRun))
+      assert.equal((await runHeadless(baseOpts({ env, purpose, spawn }))).state, "ran")
+      const args = spawn.calls[0].args
+      assert.ok(args.includes("--plugin-dir"), "the native child must not silently load the ambient old Desk")
+      assert.equal(path.resolve(args[args.indexOf("--plugin-dir") + 1]), expected)
+    }
+  }
 })
 
 // Fixture paths are built the way the platform builds them, and the program is named the way the platform names it.

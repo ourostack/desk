@@ -133,7 +133,8 @@ export async function runTaskContextStep(env, options = {}) {
       const outputName = `${token}.${phase}.json`
       const brief = {
         schema: "desk.factory.context-brief/1", phase, job: work.job, evaluator: work.source.evaluator,
-        input_file: work.input, output: await taskContextPath(env, work.store, work.job, outputName),
+        input_file: work.input, task_card: work.source.task_card,
+        output: await taskContextPath(env, work.store, work.job, outputName),
         instructions, template: template(work), evidence_outline: evidenceOutline(work),
         ...(phase === "privacy" ? { candidate: work.state.candidate, payload_sha256: work.state.candidate_hash } : {}),
       }

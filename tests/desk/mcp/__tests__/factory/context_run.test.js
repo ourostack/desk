@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -179,7 +180,7 @@ test("equal-start evidence is ordered by its actual endpoint in the native outli
   } })
 })
 
-test("a freshly identified task card grants only its own directory to the native reader", async () => {
+test("the native task-card handoff exposes its verified pointer and only its own directory", async () => {
   const f = await fixture(0)
   const remote = "https://github.com/synthetic/desk.git"
   const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -190,7 +191,8 @@ test("a freshly identified task card grants only its own directory to the native
   git("remote", "add", "origin", remote)
   const folder = join(f.desk, "sample", "safe")
   await mkdir(folder, { recursive: true })
-  await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nRetesting resumed after the required update.\n")
+  const card = "---\nstatus: done\n---\nRetesting resumed after the required update.\n"
+  await writeFile(join(folder, "task.md"), card)
   git("add", "sample")
   git("commit", "-qm", "create task")
   const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug: "safe" })
@@ -203,8 +205,11 @@ test("a freshly identified task card grants only its own directory to the native
     assert.equal(options.logDirs.includes(folder), true)
     assert.equal(options.logDirs.includes(f.desk), false)
     const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
-    const input = JSON.parse(await readFile(brief.input_file, "utf8"))
-    assert.equal(input.task_card.path, join(folder, "task.md"))
+    assert.deepEqual(brief.task_card, {
+      path: join(folder, "task.md"),
+      sha256: createHash("sha256").update(card).digest("hex"),
+    })
+    assert.equal(await readFile(brief.task_card.path, "utf8"), card)
     return { state: "failed", cost_usd: null }
   } })
 })

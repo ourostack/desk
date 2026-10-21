@@ -25,6 +25,7 @@ import { accessSync, constants as fsConstants, readFileSync, statSync } from "no
 import { homedir as osHomedir } from "node:os"
 import * as path from "node:path"
 
+import { deskPluginRoot } from "../package-metadata.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 
 export const HEADLESS_BUDGET_USD = 1
@@ -145,7 +146,7 @@ export function hostSupported(host) {
  * pinned argument vector, one `--add-dir` for the evaluation folder and one per
  * distinct log folder. The prompt names only the brief paths.
  */
-export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose = "labels" }) {
+export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose = "labels", pluginRoot = deskPluginRoot() }) {
   const prompts = {
     labels: "Label the waste in these evaluator briefs with desk:factory-evaluator",
     task_context: "Generate evidence-supported public task context using desk:factory-task-context, generation phase",
@@ -157,6 +158,7 @@ export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose = "l
   return [
     "-p",
     prompt,
+    ...(purpose === "labels" ? [] : ["--plugin-dir", pluginRoot]),
     "--agent",
     AGENT_NAME,
     "--output-format",
@@ -461,7 +463,7 @@ export async function runHeadless({
   const run = await runChild({
     spawn,
     cmd: launch.cmd,
-    args: [...launch.prefix, ...HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose })],
+    args: [...launch.prefix, ...HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose, pluginRoot: deskPluginRoot(env) })],
     opts: { cwd: workDir, env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
     timeoutMs,
     maxBytes: RUN_MAX_BYTES,
