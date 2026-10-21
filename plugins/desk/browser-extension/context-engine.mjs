@@ -498,9 +498,19 @@ export function createBrowserExtension(api, options = {}) {
   })
   listen(api.tabs.onCreated, tab => {
     const b = owners.get(tab.openerTabId)
-    if (!b || b.state !== "ready" || b.mutating || update || stopped || tab.active !== false ||
-        tab.windowId !== b.windowId || tab.groupId !== -1 || !/^(https?:|about:blank$)/u.test(tab.url ?? "")) return
-    // Supported opener admission is exact, current, same-window and inactive.
+    if (!b || b.state !== "ready" || b.mutating || update || stopped ||
+        tab.groupId !== -1 || !/^(https?:|about:blank$)/u.test(tab.url ?? "")) return
+    if (tab.windowId !== b.windowId) {
+      // The current group binding cannot control a different window. Name that
+      // observed child before refusing further effects; never leave a ready
+      // parent-only view or create a replacement page. This is not adoption.
+      b.state = "unavailable"
+      b.uncertainTabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId })
+      publish({ event: "context.unavailable", contextId: b.id, code: "native_child_window_unavailable" })
+      return
+    }
+    // Supported opener admission is exact, current and same-window. An app's
+    // activation of its child is not an ownership change; we never activate it.
     // A foreign/manual group member without that opener is never adopted.
     try { admit(b, tab) }
     catch {
