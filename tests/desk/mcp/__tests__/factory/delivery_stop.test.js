@@ -554,7 +554,8 @@ for (const host of ["copilot", "claude"]) for (const fault of ["delayed", "rejec
     const loader = new URL("./_factory_cli_fault.mjs", import.meta.url).href
     const registration = `import { register } from "node:module"; register(${JSON.stringify(loader)}, { data: { fault: ${JSON.stringify(fault)} } });`
     const preload = `data:text/javascript,${encodeURIComponent(registration)}`
-    const env = { ...ctx.env, NODE_OPTIONS: `${ctx.env.NODE_OPTIONS ?? ""} --import=${preload}`.trim() }
+    // Only the fault loader: a chained coverage loader would push the instrumented worker past the hook's unchanged 1.5s deadline.
+    const env = { ...ctx.env, NODE_OPTIONS: `--import=${preload}` }
     const r = spawnSync(process.execPath, [SCRIPT, host], { env, input: JSON.stringify(f.payload), encoding: "utf8", timeout: 6000 })
     assert.equal(r.error, undefined)
     assert.equal(r.signal, null)
