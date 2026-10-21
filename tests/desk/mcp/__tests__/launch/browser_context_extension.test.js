@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const extensionUrl = new URL("../../../../../plugins/desk/browser-extension/context-engine.mjs", import.meta.url)
@@ -749,17 +750,24 @@ test("malformed actual relay packets receive nonzero redacted error envelopes", 
   }
 })
 
-test("distribution keeps enrolled identity and executable bytes attest reproducibly", async () => {
+test("normal distribution binds the new unpublished qualification publisher and executable bytes reproducibly", async () => {
   const root = new URL("./", extensionUrl)
   const manifest = JSON.parse(readFileSync(new URL("manifest.json", root), "utf8"))
   const publicHash = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32)
-  assert.equal(publicHash.replace(/[0-9a-f]/gu, c => String.fromCharCode(97 + parseInt(c, 16))), "bcejpajaingepdloiolbmbaflecgifbe")
+  assert.equal(publicHash.replace(/[0-9a-f]/gu, c => String.fromCharCode(97 + parseInt(c, 16))), "idfkhmkoaimndgacinjkjbagnnefgdel")
   assert.equal(manifest.manifest_version, 3)
   assert.equal(manifest.background.type, "module")
   assert.ok(manifest.permissions.includes("tabGroups"))
   const build = await import(new URL("./build.mjs", extensionUrl))
   const generated = await import(new URL("./source-digest.mjs", extensionUrl))
   assert.equal(build.computeSourceDigest(root), generated.SOURCE_DIGEST)
+  const { verifyNativeDistribution } = await import("../../../../../plugins/desk/mcp/native-messaging-install.mjs")
+  const verified = await verifyNativeDistribution(fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url)))
+  assert.equal(verified.extensionId, "idfkhmkoaimndgacinjkjbagnnefgdel")
+  assert.equal(verified.extensionSourceDigest, generated.SOURCE_DIGEST)
+  const update = new URL(manifest.update_url)
+  assert.equal(update.origin, "https://raw.githubusercontent.com")
+  assert.match(update.pathname, /^\/ourostack\/desk\/browser-native-qualification-\d{8}\/artifacts\/browser-native\/updates\.xml$/u)
   const temp = await mkTempRoot("browser-context-integrity-")
   fixtureRoots.push(temp)
   console.log("owned kernel fixture root:", temp)

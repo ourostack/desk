@@ -3,7 +3,10 @@
 Kernel plus the assignment-2/A producer amendment only. This is **not an installer, native provider,
 signed-in acquisition/controller, MCP adapter, or a promotion readiness claim**.
 Nothing in this directory installs itself into a browser or changes permissions.
-The enrolled extension public key/ID and profile-token storage key are retained.
+The unpublished qualification publisher is `idfkhmkoaimndgacinjkjbagnnefgdel`.
+This is a new namespace, not continuity with the earlier prototype ID, adoption
+of existing profiles, or copied profile tokens. The profile-token storage key
+name is unchanged, but its browser origin is the new publisher's origin.
 
 ## Factory and native contract
 
@@ -66,7 +69,9 @@ not serialized. `leaseId` is accepted as a bounded legacy **routing tag only**.
   `ws://127.0.0.1:<port>/extension/<uuidv4>` or IPv6 loopback equivalent, no
   credentials/query/fragment. The URL is an opaque provider-issued capability,
   never printed or returned.
-- **Label:** `params.label`, same bounds; confirms the exact current group.
+- **Label:** `params.label`, same bounds; updates the context label and confirms
+  the exact current anchor group when owned anchor members still exist. A closed
+  anchor is not recreated just to label remaining child targets.
 - **Reload prepare:** both exact profile/source and a provider-issued
   64-lowercase-hex `params.updateToken`. Every current owner must be free of
   live tabs, unknown revoked/uncertain obligations, and pending effects/requests.
@@ -110,9 +115,13 @@ Creation reserves the handle before allocating an inactive blank tab in an
 existing non-incognito normal window; an incognito-only browser is refused.
 The maintained group is named/read back before its
 first-tab/initialized handshake; no physical window/tab selection is performed.
-New relay-created tabs are also inactive and in that window. Only current
-explicit admissions and inactive same-window ungrouped supported owned-opener
-HTTP(S)/blank tabs can join. A manual group move never admits a foreign member.
+New relay-created tabs are also inactive and in that window. Current owned-opener
+HTTP(S)/blank children are read back against their exact window and profile.
+Same-window children may join the named anchor group, including active children
+activated by the application; the engine never focuses them. Normal/popup
+children in another window stay in place and ungrouped. No tab/group move is
+used to turn a popup into a normal-window member. Unverifiable window readback
+retains an unavailable obligation. A manual group move never admits a foreign member.
 Moving/detaching an owned tab revokes its binding; attaching a debugger alone
 does not restore it.
 
