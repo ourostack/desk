@@ -639,9 +639,9 @@ test("a session that never reaches ready never switches a deliberate git switch 
   const configPath = writeActivation(fixture)
   git(fixture.desk, "branch", "--track", "feature", "origin/feature")
   // A launcher read-only code keeps the session degraded for its whole life.
-  const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main", "--degraded", "identity_unavailable"] })
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main", "--degraded", "identity_unavailable"], diagnostics: "initial-admission" })
   t.after(() => session.close())
-  const first = await session.statusUntil(settled)
+  const first = await withReadinessFailure(session, () => session.statusUntil(settled))
   assert.equal(first.state, "degraded:identity_unavailable")
   // Clean and equal to its upstream: the first attempt would have switched this back; every later one must not.
   git(fixture.desk, "switch", "feature")
