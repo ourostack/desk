@@ -177,6 +177,52 @@ for (const cutoff of ["card cap", "walk deadline"]) {
   })
 }
 
+test("successive bounded passes reach a renamed candidate beyond one fallback budget", async () => {
+  const f = await fixture()
+  const remote = "https://github.com/synthetic/desk.git"
+  const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug: "birth-name" })
+  f.facts.jobs[0].job = job
+  f.facts.outcomes[0].job = job
+  f.entries[0].localJobs = [{ local: job, published: job }]
+  for (let index = 0; index < 12; index += 1) {
+    const folder = join(f.desk, "sample", `current-${String(index).padStart(2, "0")}`)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\n")
+  }
+  let elapsed = 0
+  let prepared = false
+  for (let pass = 0; pass < 4; pass += 1) {
+    elapsed = 0
+    const counts = await queue.prepareTaskContexts(f.env, {
+      ...f.options, deadline: 2000, clock: () => elapsed, readRemote: () => remote,
+      resolveIdentity: ({ track, slug }) => {
+        elapsed += 200
+        return { track, slug: slug === "current-10" ? "birth-name" : slug }
+      },
+    })
+    assert.ok(elapsed <= 2000, "progress never raises the aggregate preparation allowance")
+    if (counts.prepared === 1) { prepared = true; break }
+    assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [], "unresolved identities are not guessed publishable")
+  }
+  assert.equal(prepared, true, "each bounded retry must resume discovery rather than rechecking the same prefix forever")
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.source.task_card.path, join(f.desk, "sample", "current-10", "task.md"))
+})
+
+test("invalid discovery progress cannot select evidence or create a runnable context", async () => {
+  for (const value of [
+    { schema: "desk.factory.context-discovery/1", cursor: -1 },
+    { schema: "desk.factory.context-discovery/1", cursor: 1000 },
+    { schema: "desk.factory.context-discovery/1", cursor: 0.5 },
+    { schema: "desk.factory.context-discovery/1", cursor: 0, path: "PRIVATE" },
+  ]) {
+    const f = await fixture()
+    await writeTaskContextFile(f.env, STORE, CONTEXT_JOB, "discovery.json", value)
+    await assert.rejects(queue.prepareTaskContexts(f.env, f.options), /context_discovery_invalid/u)
+    assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+  }
+})
+
 test("the private file limit counts the actual readable serialization, not the smaller compact value", async () => {
   const f = await fixture()
   const value = Array(3500000).fill(0)

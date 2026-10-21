@@ -125,14 +125,28 @@ function groupsOf(entries, store) {
   return groups
 }
 
-function taskCardIndex(deskRoot, personPrefix, { wanted, previous, deadline, clock, readRemote, resolveIdentity }) {
+// This cursor schedules search only; every candidate still needs fresh identity and path checks.
+async function discoveryCursor(env, store, job) {
+  const bytes = await readTaskContextFile(env, store, job, "discovery.json")
+  if (bytes === null) return 0
+  if (bytes.length > 256) throw new Error("context_discovery_invalid")
+  let value
+  try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_discovery_invalid") }
+  if (!isPlainObject(value) || Object.keys(value).sort().join() !== "cursor,schema" ||
+      value.schema !== "desk.factory.context-discovery/1" || !Number.isSafeInteger(value.cursor) ||
+      value.cursor < 0 || value.cursor >= CARD_LIMIT) throw new Error("context_discovery_invalid")
+  return value.cursor
+}
+
+function taskCardIndex(deskRoot, personPrefix, { wanted, previous, cursor, deadline, clock, readRemote, resolveIdentity }) {
   const cards = new Map()
+  let next = cursor
   const within = () => withinBudget(deadline, clock)
   try {
     within()
     const remote = readRemote({ deskRoot, deadline, clock, timeoutMs: 500 })
     within()
-    if (remote === null) return { cards, incomplete: false }
+    if (remote === null) return { cards, incomplete: false, cursor: 0 }
     const root = realpathSync(deskRoot)
     const base = path.join(root, personPrefix)
     const inspected = new Set()
@@ -171,7 +185,7 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, previous, deadline, clo
       const segments = path.relative(base, file).split(path.sep).filter((segment) => segment !== "_archive")
       if (segments.length === 3 && segments[2] === "task.md") inspect({ track: segments[0], slug: segments[1] })
     }
-    if (cards.size === wanted.size) return { cards, incomplete: false }
+    if (cards.size === wanted.size) return { cards, incomplete: false, cursor: 0 }
     let visited = 0
     let incomplete = false
     const unresolved = []
@@ -181,19 +195,26 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, previous, deadline, clo
         if (visited++ >= CARD_LIMIT) { incomplete = true; break }
         if (wanted.has(jobId({ deskRemote: remote, personPrefix, track: task.track, slug: task.slug }))) inspect(task)
         else unresolved.push(task)
-        if (cards.size === wanted.size) return { cards, incomplete: false }
+        if (cards.size === wanted.size) return { cards, incomplete: false, cursor: 0 }
       }
     } catch (error) {
       if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
       incomplete = true
     }
-    for (const task of unresolved) {
-      inspect(task)
+    const start = unresolved.length === 0 ? 0 : cursor % unresolved.length
+    for (let offset = 0; offset < unresolved.length; offset += 1) {
+      const index = (start + offset) % unresolved.length
+      next = index
+      try { inspect(unresolved[index]) } catch (error) {
+        if (clock() < deadline) next = (index + 1) % unresolved.length
+        throw error
+      }
+      next = (index + 1) % unresolved.length
       if (cards.size === wanted.size) break
     }
-    return { cards, incomplete }
+    return { cards, incomplete, cursor: incomplete ? next : 0 }
   } catch (error) {
-    if (["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) return { cards, incomplete: true }
+    if (["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) return { cards, incomplete: true, cursor: next }
     throw error
   }
 }
@@ -223,9 +244,15 @@ export async function prepareTaskContexts(env, {
         const input = state === null ? null : await inputOf(env, store, state, { current: false })
         if (input?.desk_root === peer.desk_root && input.person_prefix === peer.person_prefix && input.task_card !== null) previous.push(input.task_card.path)
       }
-      cardIndexes.set(deskKey, taskCardIndex(group.desk_root, group.person_prefix, {
-        wanted: new Set(peers.map((item) => item.local_job)), previous, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
-      }))
+      const progressJob = peers.map((item) => item.job).sort()[0]
+      const cursor = await discoveryCursor(env, store, progressJob)
+      const index = taskCardIndex(group.desk_root, group.person_prefix, {
+        wanted: new Set(peers.map((item) => item.local_job)), previous, cursor, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
+      })
+      cardIndexes.set(deskKey, index)
+      if (index.cursor !== cursor) await writeTaskContextFile(env, store, progressJob, "discovery.json", {
+        schema: "desk.factory.context-discovery/1", cursor: index.cursor,
+      })
     }
     const index = cardIndexes.get(deskKey)
     if (index.incomplete && !index.cards.has(group.local_job)) {
