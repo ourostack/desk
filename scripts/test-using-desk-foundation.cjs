@@ -94,6 +94,11 @@ function withStartupSandbox(body) {
     const malformed = path.join(scratch, "bad-binding.json");
     fs.writeFileSync(malformed, "{");
     const env = { ...process.env, HOME: home, USERPROFILE: home, COPILOT_HOME: path.join(home, ".copilot"), CLAUDE_PLUGIN_ROOT: pluginRoot, PLUGIN_ROOT: pluginRoot };
+    // These cases qualify the foundation and root direction, not migration or factory work.
+    const bootFixture = path.join(scratch, "quiet-boot.cjs");
+    fs.writeFileSync(bootFixture, 'module.exports = { checks: [], migrationLine: async () => "", startFactory: async () => false };');
+    env.DESK_TEST_BOOT_FIXTURE = bootFixture;
+    env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(path.join(repoRoot, "tests/desk/mcp/__tests__/_boot_fixture_preload.cjs"))}`.trim();
     for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
       delete env[key];
     }
@@ -406,8 +411,8 @@ function main() {
     "private or sensitive operational evidence, which stays outside Git",
     "(`session-resumption`)",
     "commit and push",
-    "Keep nothing durable in host memory or configuration folders",
-    "thin pointers to the desk",
+    "Disable host memory (`store_memory`/`vote_memory`)",
+    "host settings only mirror the desk",
     "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere",
     "is an optional mirror, made only when asked, that links back to the desk",
     "one durable task",
