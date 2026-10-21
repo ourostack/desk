@@ -107,6 +107,20 @@ test("resolveBootRoot: env:DESK naming a missing folder → degraded, root_unava
   assert.match(result.message, /does not exist/u)
 })
 
+test("bootOnce: missing configured Desk withholds Desk operations without stopping independent work", async () => {
+  const home = await mkTempRoot("desk-boot-scoped-missing-")
+  let synced = false
+  const result = await bootOnce({
+    env: { DESK: path.join(home, "missing") }, cwd: home, homeDir: home,
+    syncFn: async () => { synced = true; throw new Error("must not sync a missing desk") },
+  })
+  assert.equal(result.status, "degraded")
+  assert.equal(synced, false)
+  assert.match(result.instructions.join("\n"), /Continue independent authorized work/u)
+  assert.match(result.instructions.join("\n"), /Never use a different desk/u)
+  assert.doesNotMatch(result.instructions.join("\n"), /^Stop:/mu)
+})
+
 test("resolveBootRoot: an unreadable activation config → degraded, activation_config_invalid", async () => {
   const emptyHome = await mkTempRoot("desk-boot-badconfig-home-")
   const result = resolveBootRoot({
@@ -856,12 +870,15 @@ test("auth: a failure that persists is a warning with its reason, never a hard s
   }
 })
 
-test("auth: real 'not logged in' output still hard-stops, naming what gh said and the fix", async () => {
+test("auth: real 'not logged in' blocks dependent authenticated operations, not independent work", async () => {
   const root = await mkDeskWorkspace()
   const gh = ghWith((args) => (args[1] === "token" ? { code: 1, stdout: "", stderr: "no oauth token found for github.com" } : { code: 1, stdout: "", stderr: "You are not logged into any GitHub hosts. To log in, run: gh auth login\n" }))
   const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq: jqOk, ...AUTH_BOOT })
-  const stop = result.instructions.find((line) => line.startsWith("Hard stop"))
+  const stop = result.instructions.find((line) => line.startsWith("Prerequisite unavailable"))
   assert.match(stop, /gh auth login --hostname github\.com\b.*gh said: You are not logged into any GitHub hosts/u)
+  assert.match(stop, /Do not use an unverified identity/u)
+  assert.match(stop, /Continue independent authorized work/u)
+  assert.doesNotMatch(stop, /before anything else|never fall back/u)
   assert.ok(result.degraded.includes("auth: auth_stale"))
 })
 
@@ -1691,7 +1708,9 @@ test("bootOnce: prereq, sync, card and push-account problems each become one pla
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
   })
   const text = result.instructions.join("\n")
-  assert.match(text, /Hard stop: Install jq/u)
+  assert.match(text, /Prerequisite unavailable: Install jq/u)
+  assert.match(text, /Continue independent authorized work/u)
+  assert.doesNotMatch(text, /never fall back to local-only/u)
   assert.doesNotMatch(text, /auth_timeout/u)
   assert.match(text, /git sync is unresolved/u)
   assert.match(text, /Fix the frontmatter of track-a\/bad-card\/task\.md/u)
