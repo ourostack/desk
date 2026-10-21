@@ -24,6 +24,8 @@ const STORE = fixture.store
 const T0 = Date.parse("2026-10-11T12:00:00.000Z")
 const HOUR = 3600 * 1000
 const posix = process.platform !== "win32"
+// Hosted Desk (DESK_ISOLATED_HOSTED) runs only on Linux Container Apps; local Windows Desk never takes this path.
+const HOSTED_LINUX_ONLY = "hosted private-profile Git runs only on Linux Container Apps; the Windows owned-Git channel is tracked separately"
 const RESOURCE_ALARM = "triage_resource_unrecoverable"
 const hex = (n) => randomBytes(n).toString("hex")
 const slash = (p) => p.split(path.sep).join("/")
@@ -712,6 +714,10 @@ test("private triage keeps guarded nested commit message operands private before
   assert.ok(Buffer.byteLength(stressPrefix) <= 2200)
   assert.equal(JSON.parse(stressPrefix).post.nestedExit, 1)
   assert.ok(stressPrefix.includes("NESTED_RECEIPT_MARKER"))
+  if (process.platform === "win32") {
+    t.skip(HOSTED_LINUX_ONLY)
+    return
+  }
   for (const configured of [null, "nested message hooks", "relative hooks"]) {
     const w = await world()
     const desk = w.clone("nested-message-hook")
