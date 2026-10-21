@@ -14,7 +14,10 @@ const root = "/data/runtime-native";
 mkdirSync(root, { recursive: true, mode: 0o711 });
 const bare = "/data/runtime-native-remote";
 const seed = "/data/runtime-native-seed";
-for (const path of [bare, seed, "/data/runtime-native-bin"]) mkdirSync(path, { recursive: true });
+// A second desk repository, so accounts bound to different repositories each clone their own.
+const secondBare = "/data/runtime-native-second";
+const secondSeed = "/data/runtime-native-second-seed";
+for (const path of [bare, seed, secondBare, secondSeed, "/data/runtime-native-bin"]) mkdirSync(path, { recursive: true });
 function fixtureGit(cwd, args) {
   const result = spawnSync("/usr/bin/git", args, {
     cwd, encoding: "utf8",
@@ -29,13 +32,21 @@ writeFileSync(join(seed, "marker"), "synthetic marker");
 fixtureGit(seed, ["add", "."]);
 fixtureGit(seed, ["commit", "--quiet", "-m", "seed"]);
 fixtureGit(seed, ["push", "--quiet", bare, "main"]);
-fixtureGit(bare, ["config", "http.receivepack", "true"]);
-fixtureGit(bare, ["config", "uploadpack.allowFilter", "true"]);
-for (const entry of readdirSync(bare, { recursive: true })) {
-  const path = join(bare, entry);
-  chmodSync(path, statSync(path).isDirectory() ? 0o755 : 0o644);
+fixtureGit(secondBare, ["init", "--quiet", "--bare", "-b", "main"]);
+fixtureGit(secondSeed, ["init", "--quiet", "-b", "main"]);
+writeFileSync(join(secondSeed, "marker"), "second marker");
+fixtureGit(secondSeed, ["add", "."]);
+fixtureGit(secondSeed, ["commit", "--quiet", "-m", "second seed"]);
+fixtureGit(secondSeed, ["push", "--quiet", secondBare, "main"]);
+for (const remote of [bare, secondBare]) {
+  fixtureGit(remote, ["config", "http.receivepack", "true"]);
+  fixtureGit(remote, ["config", "uploadpack.allowFilter", "true"]);
+  for (const entry of readdirSync(remote, { recursive: true })) {
+    const path = join(remote, entry);
+    chmodSync(path, statSync(path).isDirectory() ? 0o755 : 0o644);
+  }
+  chmodSync(remote, 0o755);
 }
-chmodSync(bare, 0o755);
 const slowFetches = new Set();
 const http = createServer(async (req, res) => {
   const delayMode = req.headers["x-desk-timeout"];
@@ -77,6 +88,7 @@ const http = createServer(async (req, res) => {
 });
 await new Promise(resolve => http.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${http.address().port}/runtime-native-remote`;
+const secondOrigin = `http://127.0.0.1:${http.address().port}/runtime-native-second`;
 writeFileSync("/data/runtime-native-bin/git", `#!/usr/bin/env node
 const { existsSync, appendFileSync } = require("node:fs");
 const { spawn, spawnSync } = require("node:child_process");
@@ -84,17 +96,19 @@ if (existsSync("/data/runtime-native-fail") && process.argv[2] === "fetch") proc
 if (existsSync("/data/runtime-native-fail-push") && process.argv[2] === "rev-list") process.exit(1);
 appendFileSync(process.env.XDG_STATE_HOME + "/git-argv.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");
 const env = {
-  ...process.env, GIT_CONFIG_COUNT: "2",
+  ...process.env, GIT_CONFIG_COUNT: "3",
   GIT_CONFIG_KEY_0: ${JSON.stringify(`url.${origin}.insteadOf`)},
   GIT_CONFIG_VALUE_0: "https://github.com/synthetic/desk.git",
   GIT_CONFIG_KEY_1: "safe.bareRepository", GIT_CONFIG_VALUE_1: "all",
+  GIT_CONFIG_KEY_2: ${JSON.stringify(`url.${secondOrigin}.insteadOf`)},
+  GIT_CONFIG_VALUE_2: "https://github.com/synthetic/second.git",
 };
 const run = () => {
   if (process.argv[2] === "fetch" && existsSync("/data/runtime-native-slow-fetch")) {
     const fs = require("node:fs"), path = require("node:path");
     const mode = fs.readFileSync("/data/runtime-native-slow-fetch", "utf8");
     const child = spawn("/usr/bin/git", process.argv.slice(2), {
-      env: { ...env, GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_2: "http.extraHeader", GIT_CONFIG_VALUE_2: "X-Desk-Timeout: " + mode },
+      env: { ...env, GIT_CONFIG_COUNT: "4", GIT_CONFIG_KEY_3: "http.extraHeader", GIT_CONFIG_VALUE_3: "X-Desk-Timeout: " + mode },
       stdio: "inherit", detached: mode === "escaped",
     });
     import("file:///app/plugins/desk/mcp/src/readiness/process-start.js").then(async ({ readProcessStart }) => {
@@ -154,9 +168,9 @@ const manager = runtime.createAccountRuntime({
   },
 });
 await assert.rejects(manager.prepare("missing"));
-await store.putBinding("account-b", { ...binding, repo: "unverified/other" });
+await store.putAccount({ accountId: "account-b", displayName: "Synthetic", deskAccess: false });
 await assert.rejects(manager.prepare("account-b"));
-await store.putBinding("account-b", binding);
+await store.putAccount({ accountId: "account-b", displayName: "Synthetic", deskAccess: true });
 writeFileSync("/data/runtime-native-fail", "synthetic forced fetch failure");
 await assert.rejects(manager.prepare("account-a"));
 unlinkSync("/data/runtime-native-fail");
@@ -246,13 +260,16 @@ assert.match(subjects, /late desk write/, "close must drain gateway Git operatio
 await assert.rejects(manager.prepare("account-b"));
 assert.equal(readFileSync(key, "utf8"), "not a credential");
 await store.putAccount({ accountId: "account-c", displayName: "Synthetic", deskAccess: true });
-await store.putBinding("account-c", binding);
+await store.putBinding("account-c", { ...binding, repo: "synthetic/second" });
+const minted = new Set();
 const nextManager = runtime.createAccountRuntime({
   config, store, rootDir: join(root, "next-realms"),
   baseEnv: { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin" },
-  mint: async () => ({ token: "synthetic-token" }),
+  mint: async (repo) => { minted.add(repo); return { token: "synthetic-token" }; },
 });
 const c = await nextManager.prepare("account-c");
+assert.equal(c.env.GH_REPO, "synthetic/second", "an account's desk is its own binding's repository");
+assert.equal(await c.git(["show", "HEAD:marker"]), "second marker", "the clone is the account's own repository");
 assert.notEqual(c.realm.uid, a.realm.uid, "manager replacement cannot recycle a prior account's UID");
 await assert.rejects(a.git(["status"]), /closed/);
 writeFileSync("/data/runtime-native-fail-push", "synthetic failed push count");
@@ -266,6 +283,7 @@ retainedSocket.stdout.on("data", chunk => { retainedToken += chunk; });
 retainedSocket.stdin.end("protocol=https\nhost=github.com\n\n");
 assert.equal((await once(retainedSocket, "close"))[0], 0);
 assert.match(retainedToken, /synthetic-token/, "failed shutdown retains the broker rather than silently losing writes");
+assert.deepEqual([...minted], ["synthetic/second"], "tokens are minted for the account's own repository");
 unlinkSync("/data/runtime-native-fail-push");
 let timeoutCases;
 if (process.env.DESK_NATIVE_TIMEOUTS === "1") {
@@ -289,31 +307,54 @@ if (process.env.DESK_NATIVE_MAIN === "1") {
   writeFileSync(join(plugin, "mcp/package.json"), '{"type":"module"}');
   writeFileSync(join(plugin, "mcp/index.js"),
     readFileSync("/app/hosted/test/fixtures/echo-desk.js", "utf8")
-      .replace('name: "echo-desk"', 'name: `owning-uid-${process.getuid()}`'));
+      .replace('name: "echo-desk"', 'name: `owning-uid-${process.getuid()}-${process.getBuiltinModule("node:fs").readFileSync(process.env.DESK + "/marker", "utf8")}`'));
   symlinkSync("/app/plugins/desk/mcp/src", join(plugin, "mcp/src"));
+  // Two accounts bound to two repositories, neither of them DESK_REPO: each session is served from its own
+  // account's realm and clone.
   await store.putAccount({ accountId: "account-main", displayName: "Synthetic", deskAccess: true });
   await store.putBinding("account-main", binding);
+  await store.putAccount({ accountId: "account-other", displayName: "Other", deskAccess: true });
+  await store.putBinding("account-other", { ...binding, repo: "synthetic/second" });
   const discovery = JSON.parse(readFileSync("/app/hosted/test/fixtures/entra-discovery-ourobottest.json", "utf8"));
   const server = await main({
     DESK_MULTI_USER: "1", PORT: "0", PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin",
     DESK_SIGNING_KEY: "synthetic", DESK_PUBLIC_URL: "http://127.0.0.1",
     DESK_APP_ID: "1", DESK_APP_KEY_FILE: key, DESK_APP_CLIENT_ID: "synthetic", DESK_APP_CLIENT_SECRET: "synthetic",
-    DESK_REPO: binding.repo, DESK_PLUGIN_DIR: plugin, DESK_CLONE_DIR: "/data/unused-legacy-clone",
+    DESK_REPO: "synthetic/unused", DESK_PLUGIN_DIR: plugin, DESK_CLONE_DIR: "/data/unused-legacy-clone",
     DESK_ENTRA_TENANT_ID: "c12edfb6-c5ab-4bf8-b1d5-1f053311d396", DESK_ENTRA_SUBDOMAIN: "ourobottest",
     DESK_ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555", DESK_ENTRA_CLIENT_SECRET: "synthetic",
     DESK_ACCOUNTS_ENDPOINT: "https://synthetic.invalid",
   }, { store, fetch: async () => new Response(JSON.stringify(discovery), { headers: { "content-type": "application/json" } }) });
-  const token = seal("access", { clientId: "native", accountId: "account-main", authTime: Math.floor(Date.now() / 1000) }, { key: "synthetic", ttlSec: 300 });
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
-    body: JSON.stringify({
-      jsonrpc: "2.0", id: 1, method: "initialize",
-      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "native", version: "1" } },
-    }),
+  const port = server.address().port;
+  const bearer = (accountId) => seal("access", { clientId: "native", accountId, authTime: Math.floor(Date.now() / 1000) }, { key: "synthetic", ttlSec: 300 });
+  const headers = (accountId, sessionId) => ({
+    authorization: `Bearer ${bearer(accountId)}`, "content-type": "application/json", accept: "application/json, text/event-stream",
+    ...(sessionId ? { "mcp-session-id": sessionId, "mcp-protocol-version": "2025-06-18" } : {}),
   });
-  assert.equal(response.status, 200);
-  assert.match(await response.text(), /owning-uid-10003/);
+  const initialize = async (accountId) => {
+    const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST", headers: headers(accountId),
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "native", version: "1" } },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const [, uid, marker] = (await response.text()).match(/owning-uid-(\d+)-([a-z ]+marker)/) ?? [];
+    return { sessionId: response.headers.get("mcp-session-id"), uid: Number(uid), marker };
+  };
+  const mainSession = await initialize("account-main");
+  const otherSession = await initialize("account-other");
+  assert.equal(mainSession.marker, "synthetic marker");
+  assert.equal(otherSession.marker, "second marker");
+  assert.ok(mainSession.uid >= 10000 && otherSession.uid >= 10000);
+  assert.notEqual(mainSession.uid, otherSession.uid, "two accounts are served by two realms");
+  const crossed = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: "POST", headers: headers("account-other", mainSession.sessionId),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+  });
+  assert.equal(crossed.status, 403, "a session refuses a token naming another account");
+  assert.match(await crossed.text(), /another user/);
   mainRouted = true;
 }
 await new Promise(resolve => http.close(resolve));

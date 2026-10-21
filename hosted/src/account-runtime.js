@@ -192,7 +192,8 @@ export function assertAccountRuntimeBoundary(config, baseEnv = process.env) {
 
 export function createAccountRuntime({ config, store, mint, baseEnv = process.env, rootDir = "/data/realms" }) {
   assertAccountRuntimeBoundary(config, baseEnv);
-  const { repo, pluginDir, issuer } = config;
+  // Each account's desk is the repository its own binding names (verified when it was linked), not DESK_REPO.
+  const { pluginDir, issuer } = config;
   const childBaseEnv = { PATH: baseEnv.PATH, LANG: baseEnv.LANG, LC_ALL: baseEnv.LC_ALL, TZ: baseEnv.TZ };
   if (!isAbsolute(rootDir)) throw new Error("Hosted desk realm parent must be absolute.");
   protectedAncestors(rootDir);
@@ -214,7 +215,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId)) throw refused();
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
     if (closed || account?.accountId !== accountId || account.deskAccess !== true ||
-        binding?.kind !== "github" || binding.repo !== repo || !binding.author ||
+        binding?.kind !== "github" || !binding.author ||
         !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(binding.repo)) throw refused();
     const authority = JSON.stringify([binding.kind, binding.repo, binding.installationId ?? null, binding.author.name, binding.author.email]);
     if (authorities.has(accountId) && authorities.get(accountId) !== authority) throw refused();

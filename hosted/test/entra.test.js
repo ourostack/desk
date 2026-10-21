@@ -50,7 +50,7 @@ function browser() {
   };
 }
 
-async function setup({ discoveryDown = false, retryMs = 30_000 } = {}) {
+async function setup({ discoveryDown = false, retryMs = 30_000, repo = REPO } = {}) {
   let clock = START;
   const now = () => clock;
   const tenant = await stubTenant({ now });
@@ -67,7 +67,7 @@ async function setup({ discoveryDown = false, retryMs = 30_000 } = {}) {
     clientSecret: CLIENT_SECRET,
     callbackUrl: CALLBACK,
     store,
-    repo: REPO,
+    repo,
     fetch: tenant.fetch,
     now,
     log,
@@ -344,6 +344,25 @@ test("an account bound to another repository gets the no-desk page", async () =>
   const ctx = await setup();
   await identityFor(ctx, OID);
   await ctx.store.putBinding(ctx.accountId, { ...BINDING, repo: "someone/desk" });
+  const outcome = await signIn(ctx, browser(), { oid: OID });
+  assert.equal(outcome.status, 403);
+  assert.match(outcome.html, /no desk/i);
+});
+
+test("a multi-user gateway (repo null) admits an account bound to its own repository", async () => {
+  const ctx = await setup({ repo: null });
+  await identityFor(ctx, OID);
+  await ctx.store.putBinding(ctx.accountId, { ...BINDING, repo: "someone/desk" });
+  const { back, code } = codeIn(await signIn(ctx, browser(), { oid: OID }));
+  assert.equal(`${back.origin}${back.pathname}`, CLAUDE_CALLBACK);
+  assert.equal(code.accountId, ctx.accountId);
+});
+
+test("a multi-user gateway (repo null) still gives an account with no binding the no-desk page", async () => {
+  const ctx = await setup({ repo: null });
+  const accountId = "acct-without-binding";
+  await ctx.store.putAccount({ accountId, displayName: "Nobody", deskAccess: true });
+  await ctx.store.tables.create("identities", { partitionKey: TENANT_ID, rowKey: OID, accountId });
   const outcome = await signIn(ctx, browser(), { oid: OID });
   assert.equal(outcome.status, 403);
   assert.match(outcome.html, /no desk/i);
