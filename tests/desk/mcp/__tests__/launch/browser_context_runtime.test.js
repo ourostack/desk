@@ -245,16 +245,18 @@ test("actual maintained daemon options can reach native acquisition using the st
     // than attempting to attest the virtual browser's PIDs on the real host.
     t.mock.method(native,"attestNativeContext",(record,selection)=>
       module.exports.attestNativeContext(record,selection))
-    const templates = new Map()
+    const templates = new Map(),templateContexts = new Map()
     function template(name,dir=lib) {
       name=path.basename(name)
       const key=path.join(dir,name)
       if (templates.has(key)) return templates.get(key)
-      const value = require("./fixtures/native-template-loader.cjs").loadTemplate(key,{
+      const context = {
         module:{exports:{}},__dirname:dir,process:proc,Buffer,setTimeout,clearTimeout,
         require:name=>name === "fs" ? observedFs : name===path.join(mcpRoot,"web-native-messaging.cjs") ? module.exports :
           name.startsWith("./desk-") || name === path.join(dir,"desk-extension-credential.cjs") ? template(name,dir) : require(name),
-      })
+      }
+      const value = require("./fixtures/native-template-loader.cjs").loadTemplate(key,context)
+      templateContexts.set(key,context)
       templates.set(key,value);return value
     }
     const codec = template("desk-native-error-transport.cjs")
@@ -446,8 +448,13 @@ test("actual maintained daemon options can reach native acquisition using the st
     }
     const daemon=createDaemon(socketStates.get(descriptor.socketPath))
     socketStates.get(descriptor.socketPath).daemon=daemon
-    await daemon(id,browserContext,{browserName:"chromium",userDataDir:selection.userDataDir},
-      {...config,configFile:l.configFile},produced.info,{cwd:l.root},{ownership:"attached",persistent:true,exitOnClose:true})
+    const restoreGenerationDiagnostic=require("./fixtures/native-template-loader.cjs").observeNextVerifyGeneration(
+      templateContexts.get(path.join(lib,"desk-extension-credential.cjs")),
+      "signedWorkerFixture.initial-daemon",value=>t.diagnostic(JSON.stringify(value)))
+    try {
+      await daemon(id,browserContext,{browserName:"chromium",userDataDir:selection.userDataDir},
+        {...config,configFile:l.configFile},produced.info,{cwd:l.root},{ownership:"attached",persistent:true,exitOnClose:true})
+    } finally { restoreGenerationDiagnostic() }
     t.after(()=>{browserContext.removeAllListeners();proc.removeAllListeners()})
     const realLstat=fs.promises.lstat
     t.mock.method(fs.promises,"lstat",async(file,...args)=>socketStates.has(file)?
