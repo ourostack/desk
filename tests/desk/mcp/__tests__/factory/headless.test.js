@@ -126,6 +126,20 @@ test("the argv is the pinned list exactly", () => {
   ])
 })
 
+test("context generation and privacy use distinct fixed prompts without changing run protections", async () => {
+  for (const purpose of ["task_context", "context_privacy"]) {
+    const spawn = fakeSpawn(status(okRun))
+    assert.equal((await runHeadless(baseOpts({ spawn, purpose }))).state, "ran")
+    const args = spawn.calls[0].args
+    assert.ok(args[1].includes("desk:factory-task-context"))
+    assert.ok(args[1].includes(purpose === "context_privacy" ? "privacy" : "Generate"))
+    assert.ok(args.includes("--no-session-persistence"))
+    assert.equal(args[args.indexOf("--permission-mode") + 1], "dontAsk")
+    assert.equal(args[args.indexOf("--max-budget-usd") + 1], "1")
+  }
+  assert.throws(() => HEADLESS_ARGV({ briefPaths: [], evaluationDir: "/e", logDirs: [], purpose: "SENTINEL" }), TypeError)
+})
+
 // Fixture paths are built the way the platform builds them, and the program is named the way the platform names it.
 const CLI_NAME = process.platform === "win32" ? "claude.exe" : "claude"
 const at = (...parts) => path.join(...parts)

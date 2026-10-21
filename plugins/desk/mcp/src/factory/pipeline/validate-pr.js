@@ -126,7 +126,7 @@ function validateContextChange(change, parts, trusted) {
     for (const field of ["evaluator", "privacy"]) {
       const before = field === "privacy" ? previous.value.privacy.reviewer : previous.value.evaluator
       const after = field === "privacy" ? current.value.privacy.reviewer : current.value.evaluator
-      if (compareVersions(after.plugin_version, before.plugin_version) < 0) return [error("evaluator_downgrade", at)]
+      if (before !== null && after !== null && compareVersions(after.plugin_version, before.plugin_version) < 0) return [error("evaluator_downgrade", at)]
     }
   }
   if (!Array.isArray(change.facts)) return [error("type", at)]

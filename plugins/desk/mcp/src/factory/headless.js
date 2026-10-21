@@ -145,8 +145,14 @@ export function hostSupported(host) {
  * pinned argument vector, one `--add-dir` for the evaluation folder and one per
  * distinct log folder. The prompt names only the brief paths.
  */
-export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs }) {
-  const prompt = `Label the waste in these evaluator briefs with desk:factory-evaluator: ${briefPaths.join(" ")}.`
+export function HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose = "labels" }) {
+  const prompts = {
+    labels: "Label the waste in these evaluator briefs with desk:factory-evaluator",
+    task_context: "Generate evidence-supported public task context using desk:factory-task-context, generation phase",
+    context_privacy: "Independently review public task context using desk:factory-task-context, privacy phase",
+  }
+  if (!Object.hasOwn(prompts, purpose)) throw new TypeError("HEADLESS_ARGV: invalid purpose")
+  const prompt = `${prompts[purpose]}: ${briefPaths.join(" ")}.`
   const dirs = [evaluationDir, ...new Set(logDirs)]
   return [
     "-p",
@@ -425,6 +431,7 @@ export async function runHeadless({
   homedir = osHomedir,
   readFile = readFileSync,
   execPath = process.execPath,
+  purpose = "labels",
 }) {
   if (isHeadlessSession(env)) {
     return result("headless_session")
@@ -454,7 +461,7 @@ export async function runHeadless({
   const run = await runChild({
     spawn,
     cmd: launch.cmd,
-    args: [...launch.prefix, ...HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs })],
+    args: [...launch.prefix, ...HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose })],
     opts: { cwd: workDir, env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
     timeoutMs,
     maxBytes: RUN_MAX_BYTES,

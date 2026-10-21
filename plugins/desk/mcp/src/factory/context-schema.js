@@ -22,7 +22,7 @@ const UNSAFE = [
   /(?:https?:\/\/|file:|www\.|[A-Z]:\\|~\/|(?:^|\s)\/[A-Za-z])/iu,
   /[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+/u,
   /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/u,
-  /(?:gh[pousr]_|github_pat_|sk-|Bearer\s|-----BEGIN|(?:password|secret|token)\s*[:=])/iu,
+  /(?:gh[pousr]_|github_pat_|(?:^|[^A-Za-z0-9])sk-|Bearer\s|-----BEGIN|(?:password|secret|token)\s*[:=])/iu,
   /\b[0-9a-f]{24,}\b/iu,
   /(?:\+?\d[\d ().-]{8,}\d)/u,
 ]
@@ -47,7 +47,7 @@ const RANGE = customField((value, path, errors) => {
 })
 const REF_SPEC = {
   session: patternField(SESSION_ID_V4), source: patternField(SHA256),
-  anchor: enumField(["interval", "start", "end"]), range: RANGE,
+  anchor: enumField(["interval", "start", "end", "interval_start", "interval_end", "share_start", "share_end"]), range: RANGE,
 }
 const EVENT_SPEC = {
   id: patternField(/^[0-9a-f]{16}$/u),
@@ -67,13 +67,13 @@ const TOP = {
   sources: arrayField(objectField(SOURCE_SPEC), 512),
   coverage: objectField({
     state: enumField(["measured", "partial", "unavailable"]),
-    reasons: arrayField(enumField(["not_recorded", "withheld", "omitted", "unplaced"]), 4),
+    reasons: arrayField(enumField(["not_recorded", "withheld", "omitted", "unplaced", "review_pending"]), 5),
     omitted_events: rangeIntField(0, 1000000),
   }),
   privacy: nullableObjectField({
-    verdict: enumField(["approved"]),
+    verdict: enumField(["approved", "not_required"]),
     payload_sha256: patternField(SHA256),
-    reviewer: objectField(VERSION_SPEC),
+    reviewer: nullableObjectField(VERSION_SPEC),
   }),
 }
 
@@ -91,18 +91,24 @@ export function validateContext(value, { candidate = false } = {}) {
   if (Buffer.byteLength(JSON.stringify(value)) > CONTEXT_MAX_BYTES) return answer([{ code: "too_large", path: "" }])
   if (value.privacy === null) {
     if (!candidate) addError(errors, "review_missing", "privacy")
-  } else if (value.privacy.payload_sha256 !== contextPayloadHash(value)) addError(errors, "review_mismatch", "privacy")
+  } else {
+    if (value.privacy.payload_sha256 !== contextPayloadHash(value)) addError(errors, "review_mismatch", "privacy")
+    if (value.privacy.verdict === "approved" && value.privacy.reviewer === null) addError(errors, "inconsistent", "privacy")
+    if (value.privacy.verdict === "not_required" && (value.state === "published" || value.heading !== null ||
+        value.events.length > 0 || value.privacy.reviewer !== null)) addError(errors, "inconsistent", "privacy")
+  }
   const { state, reasons, omitted_events: omitted } = value.coverage
   if ((state === "measured" && (reasons.length > 0 || omitted > 0)) ||
       (state !== "measured" && reasons.length === 0) ||
       (omitted > 0 && (state !== "partial" || !reasons.includes("omitted"))) ||
       (omitted === 0 && reasons.includes("omitted"))) addError(errors, "inconsistent", "coverage")
   if (new Set(reasons).size !== reasons.length) addError(errors, "duplicate", "coverage.reasons")
+  if (reasons.includes("review_pending") && value.state !== "unavailable") addError(errors, "inconsistent", "coverage")
   if (omitted > 0 && value.events.at(-1)?.kind !== "result") addError(errors, "inconsistent", "events")
   if (value.state === "published") {
     if (value.events.length === 0 || value.sources.length === 0 || state === "unavailable") addError(errors, "inconsistent", "state")
   } else if (value.heading !== null || value.events.length > 0 || state !== "unavailable" ||
-      !reasons.includes(value.state === "withheld" ? "withheld" : "not_recorded")) addError(errors, "inconsistent", "state")
+      !(value.state === "withheld" ? reasons.includes("withheld") : reasons.includes("not_recorded") || reasons.includes("review_pending"))) addError(errors, "inconsistent", "state")
   const sources = new Map()
   for (const [index, source] of value.sources.entries()) {
     if (sources.has(source.session)) addError(errors, "duplicate", `sources.${index}`)
@@ -120,7 +126,7 @@ export function validateContext(value, { candidate = false } = {}) {
     for (const [refIndex, ref] of event.evidence.entries()) {
       const refPath = `${at}.evidence.${refIndex}`
       if (sources.get(ref.session) !== ref.source) addError(errors, "source_unmatched", refPath)
-      if ((ref.anchor === "interval") !== (ref.range !== null)) addError(errors, "inconsistent", refPath)
+      if (!["start", "end"].includes(ref.anchor) !== (ref.range !== null)) addError(errors, "inconsistent", refPath)
     }
   }
   return answer(errors)
@@ -175,14 +181,17 @@ export function checkContextAgainstFacts(value, facts, options) {
   }
   for (const [index, event] of value.events.entries()) {
     if (event.kind === "waiting" && !event.evidence.some((ref) => ref.anchor === "interval")) {
-      const paired = event.evidence.some((end) => end.anchor === "end" && event.evidence.some((start) => {
-        if (start.anchor !== "start" || start.session === end.session) return false
+      const paired = event.evidence.some((end) => ["end", "interval_end", "share_end"].includes(end.anchor) && event.evidence.some((start) => {
+        if (!["start", "interval_start", "share_start"].includes(start.anchor)) return false
         const left = bySession.get(end.session)
         const right = bySession.get(start.session)
         if (!left || !right) return false
         const from = left.jobs.find((entry) => entry.job === value.job).session_offset_ms
         const to = right.jobs.find((entry) => entry.job === value.job).session_offset_ms
-        return from === null || to === null || from + left.session.duration_ms <= to
+        const endAt = end.range === null ? left.session.duration_ms : end.range[1]
+        const startAt = start.range === null ? 0 : start.range[0]
+        if (start.session === end.session) return endAt < startAt
+        return from === null || to === null || from + endAt < to + startAt
       }))
       if (!paired) addError(errors, "evidence_unmatched", `events.${index}.evidence`)
     }
@@ -193,10 +202,12 @@ export function checkContextAgainstFacts(value, facts, options) {
       const share = shareOf(item, value.job)
       if (item.jobs.find((entry) => entry.job === value.job).session_offset_ms === null &&
           !(value.coverage.state === "partial" && value.coverage.reasons.includes("unplaced"))) addError(errors, "placement_unknown", at)
-      if (ref.anchor === "interval") {
+      if (["interval", "interval_start", "interval_end"].includes(ref.anchor)) {
         const interval = item.intervals.find((entry) => entry.start_ms === ref.range[0] && entry.end_ms === ref.range[1])
-        if (!interval || (event.kind === "waiting" && !["human_wait", "permission_wait", "api_retry"].includes(interval.kind))) addError(errors, "evidence_unmatched", at)
+        if (!interval || (ref.anchor === "interval" && event.kind === "waiting" && !["human_wait", "permission_wait", "api_retry"].includes(interval.kind))) addError(errors, "evidence_unmatched", at)
         if (!share.some((span) => ref.range[0] >= span.start_ms && ref.range[1] <= span.end_ms)) addError(errors, "outside_share", at)
+      } else if (["share_start", "share_end"].includes(ref.anchor)) {
+        if (!share.some((span) => span.start_ms === ref.range[0] && span.end_ms === ref.range[1])) addError(errors, "evidence_unmatched", at)
       } else {
         if (ref.anchor === "end" && item.session.ended !== true) addError(errors, "evidence_unmatched", at)
         const boundary = ref.anchor === "start" ? 0 : item.session.duration_ms

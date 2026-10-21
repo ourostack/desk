@@ -103,6 +103,7 @@ test("unsafe strings and unknown keys never escape through errors", () => {
   for (const text of [
     "Contact SENTINEL@example.com", "Read /Users/SENTINEL/private.txt", "Read C:\\Users\\SENTINEL\\private.txt",
     "See https://SENTINEL.example", "Token ghp_SENTINEL0123456789abcdefghijklmnopqrstuv",
+    "Key sk-ant-SENTINEL0123456789abcdefghijklmnopqrstuv",
     "Use private-org/SENTINEL", "Call +1 (555) 123-4567", "SENTINEL\u202ehidden", "<script>SENTINEL</script>",
   ]) {
     const value = record()
@@ -112,6 +113,12 @@ test("unsafe strings and unknown keys never escape through errors", () => {
   const value = record()
   value.events[0].SENTINEL = "private content"
   refuses(sign(value), "unknown_key")
+})
+
+test("ordinary task-specific wording is not mistaken for a credential prefix", () => {
+  const value = record()
+  value.events[0].explanation = "Validated task-specific checks and risk-based retesting."
+  assert.equal(context.validateContext(sign(value)).ok, true)
 })
 
 test("source and evidence identity cannot carry arbitrary strings or unlisted sources", () => {
@@ -260,4 +267,79 @@ test("omitting events cannot drop the terminal observation", () => {
   const value = record()
   value.coverage = { state: "partial", reasons: ["omitted"], omitted_events: 2 }
   refuses(sign(value), "inconsistent")
+})
+
+test("a task's recorded share boundaries can place a wait inside longer shared sessions", () => {
+  const left = facts()
+  left.jobs[0].agents = [0]
+  left.jobs[0].segments = [{ start_ms: 1000, end_ms: 250000 }]
+  left.session.ended = false
+  const right = structuredClone(left)
+  right.session.id = "4b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60"
+  right.jobs[0].session_offset_ms += 24 * 3600 * 1000
+  const value = record()
+  value.events = [event("waiting")]
+  value.events[0].evidence = [evidence("share_end", [1000, 250000]), { ...evidence("share_start", [1000, 250000]), session: right.session.id }]
+  sourced(value, [left, right])
+  assert.equal(context.checkContextAgainstFacts(value, [left, right]).ok, true)
+  value.events[0].evidence[0].range[1] -= 1
+  assert.ok(context.checkContextAgainstFacts(sign(value), [left, right]).errors.some((entry) => entry.code === "evidence_unmatched"))
+})
+
+test("recorded interval endpoints can support cross-session context without claiming an ended harness session", () => {
+  const left = facts()
+  left.session.ended = false
+  const right = structuredClone(left)
+  right.session.id = "4b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60"
+  right.jobs[0].session_offset_ms += 24 * 3600 * 1000
+  const value = record()
+  value.events = [event("waiting")]
+  value.events[0].evidence = [evidence("interval_end", [1000, 250000]), { ...evidence("interval_start", [1000, 250000]), session: right.session.id }]
+  sourced(value, [left, right])
+  assert.equal(context.checkContextAgainstFacts(value, [left, right]).ok, true)
+  right.jobs[0].session_offset_ms = left.jobs[0].session_offset_ms
+  sourced(value, [left, right])
+  assert.ok(context.checkContextAgainstFacts(value, [left, right]).errors.some((entry) => entry.code === "evidence_unmatched"))
+})
+
+test("two observed task-share endpoints can place prerequisite context without inventing a captured wait", () => {
+  const source = facts()
+  source.jobs[0].agents = [0]
+  source.jobs[0].segments = [{ start_ms: 1000, end_ms: 250000 }, { start_ms: 605000, end_ms: 1200000 }]
+  const value = record()
+  value.events = [event("waiting")]
+  value.events[0].evidence = [evidence("share_end", [1000, 250000]), evidence("share_start", [605000, 1200000])]
+  sourced(value, [source])
+  assert.equal(context.checkContextAgainstFacts(value, [source]).ok, true)
+})
+
+test("an unplaced session still cannot use reversed endpoints as evidence of a prerequisite gap", () => {
+  const source = facts()
+  source.jobs[0].session_offset_ms = null
+  const value = record()
+  value.events = [event("waiting")]
+  value.events[0].evidence = [evidence("interval_end", [1000, 250000]), evidence("interval_start", [1000, 250000])]
+  value.coverage = { state: "partial", reasons: ["unplaced"], omitted_events: 0 }
+  sourced(value, [source])
+  assert.ok(context.checkContextAgainstFacts(value, [source]).errors.some((entry) => entry.code === "evidence_unmatched"))
+})
+
+test("mechanically withdrawing stale prose does not claim an independent semantic privacy approval", () => {
+  const value = record()
+  value.state = "unavailable"
+  value.heading = null
+  value.events = []
+  value.coverage = { state: "unavailable", reasons: ["review_pending"], omitted_events: 0 }
+  value.privacy = { verdict: "not_required", payload_sha256: hash((({ privacy: _privacy, ...payload }) => payload)(value)), reviewer: null }
+  assert.equal(context.validateContext(value).ok, true)
+  value.heading = "An unreviewed replacement"
+  value.privacy.payload_sha256 = hash((({ privacy: _privacy, ...payload }) => payload)(value))
+  refuses(value, "inconsistent")
+})
+
+test("a no-review-required verdict can never carry a published explanation", () => {
+  const value = record()
+  value.privacy.verdict = "not_required"
+  value.privacy.reviewer = null
+  refuses(value, "inconsistent")
 })

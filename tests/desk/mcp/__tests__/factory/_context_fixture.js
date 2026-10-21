@@ -12,11 +12,11 @@ export function reviewContext(value) {
   value.privacy = { verdict: "approved", payload_sha256: contextPayloadHash(value), reviewer: { plugin_version: "3.2.0-alpha.1", rubric: "1" } }
   return value
 }
-export function contextRecord(facts = contextFacts()) {
-  const source = contextSource(facts, CONTEXT_JOB)
+export function contextRecord(facts = contextFacts(), job = CONTEXT_JOB) {
+  const source = contextSource(facts, job)
   return reviewContext({
     schema: "desk.factory.context/1",
-    job: CONTEXT_JOB,
+    job,
     evaluator: { plugin_version: "3.2.0-alpha.1", rubric: "1" },
     state: "published",
     heading: "Restore the device connection",

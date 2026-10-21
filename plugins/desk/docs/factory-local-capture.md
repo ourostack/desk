@@ -33,12 +33,30 @@ prose. Their contribution permission does not authorize publishing explanations.
 A compatible store advertises `{"task_context":1}` in `context.json`; that
 declaration is maintenance, never contributor data.
 
+After the operator explicitly authorizes nonsensitive prose for this desk,
+record that permission separately in `_meta/factory-context.json`:
+
+```json
+{"schema_version":1,"stores":{"ourostack/factory":true}}
+```
+
+The ordinary flush prepares public-clock inputs, and the ordinary evaluator
+uses its existing shared launch quota for generation and a separate fresh
+privacy run. Local model JSON is checked as structured data and then
+canonically serialized; only the checked public payload is reviewed and sent.
+No new daemon, provider-key billing or per-task approval prompt is added.
+Removing this prose permission stops new explanations and lets the next
+consented flush retract the exact context this machine delivered. Turning off
+numerical contribution stops network delivery altogether; it does not erase
+previously published history.
+
 Context describes the requested outcome, observed work, prerequisite-blocked
 **Waiting**, resumption and results. A waiting explanation is not a new
 measurement: it cannot turn uncaptured time into recorded work, installation
-time, avoidable waste or savings. Cross-session waits cite the earlier session's
-real end and the later session's start; they do not invent a `human_wait`
-interval. Unsupported placement stays explicitly partial and unplaced.
+time, avoidable waste or savings. Context can cite an exact recorded interval
+or job-share boundary, or the real end and start of sessions; paired episode
+endpoints do not invent a `human_wait` interval or measure the whole gap as
+waiting. Unsupported placement stays explicitly partial and unplaced.
 
 The context record has an exact schema, a public source fingerprint for each
 session, evidence anchors and an independent privacy verdict bound to the exact
@@ -47,6 +65,12 @@ waiting reasons/prerequisites/resumptions to 160 each, events to 64 and evidence
 references to eight per event; canonical bytes are limited to 128 KiB. Partial
 event lists state their omission count and retain the terminal observation.
 `published`, `withheld` and `unavailable` remain distinct.
+
+A source change can mechanically replace old wording with a prose-free
+`unavailable` record while a fresh explanation is reviewed. Its privacy verdict
+is `not_required` with a null reviewer, never a fabricated independent approval.
+That form cannot carry a heading or events; any public prose still requires the
+separate approved, hash-bound privacy judgment.
 
 The privacy verdict is a judgment, not a guarantee. Mechanical checks also
 refuse unknown fields, path/URL/contact/credential-shaped prose, stale review
