@@ -255,6 +255,9 @@ function bounded(promise, ms, label) {
     timer = setTimeout(() => reject(new Error(`${label} exceeded ${ms}ms`)), ms)
   })]).finally(() => clearTimeout(timer))
 }
+// Startup includes loading the instrumented module graph under coverage, which CI runners can take most of 6s to do;
+// every operational message keeps the 6s bound.
+const STARTUP_MS = 20000
 function next(actor, type) {
   const read = () => actor.messages.find((message) => message.type === type)
   if (read()) return Promise.resolve(read())
@@ -265,7 +268,7 @@ function next(actor, type) {
       else if (actor.exit) { actor.waiters.delete(wake); reject(new Error(`Actor ${actor.pid} exited before ${type}`)) }
     }
     actor.waiters.add(wake)
-  }), 6000, `${actor.role}:${type}`)
+  }), type === "hello" ? STARTUP_MS : 6000, `${actor.role}:${type}`)
 }
 export const actorMessage = next
 export function send(actor, value) {
