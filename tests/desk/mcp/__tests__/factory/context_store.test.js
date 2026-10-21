@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
@@ -60,6 +60,50 @@ test("intake rejects stale sources, absent facts, path mismatches and modified d
   }
 })
 
+test("context intake refuses unreadable predecessor records and malformed or mismatched source entries", () => {
+  const original = change()
+  const modified = { ...original, status: "modified", previousBytes: "{}\n" }
+  assert.ok(validatePr({ changes: [modified], trustedMaintainer: true }).errors.some((entry) => entry.code === "context_previous_invalid"))
+  const noFacts = { ...original, facts: undefined }
+  assert.ok(validatePr({ changes: [noFacts], trustedMaintainer: true }).errors.some((entry) => entry.code === "context_type"))
+  for (const item of [
+    null, { path: null }, { path: "SENTINEL.json" },
+    { ...original.facts[0], bytes: "{}\n" },
+    { ...original.facts[0], path: "facts/copilot-cli-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60.json" },
+    { ...original.facts[0], path: "facts/claude-code-22bc1234-1234-4abc-8abc-123456789abc.json" },
+  ]) {
+    const result = validatePr({ changes: [{ ...original, facts: [item] }], trustedMaintainer: true })
+    assert.ok(result.errors.some((entry) => entry.code === "context_facts_invalid"), JSON.stringify(result))
+    assert.equal(JSON.stringify(result).includes("SENTINEL"), false)
+  }
+})
+
+test("context replacements cannot downgrade either the evaluator or its independent privacy reviewer", () => {
+  const facts = contextFacts()
+  const current = contextRecord(facts)
+  for (const field of ["evaluator", "reviewer"]) {
+    const previous = contextRecord(facts)
+    if (field === "evaluator") {
+      previous.evaluator.plugin_version = "3.2.0-alpha.2"
+      reviewContext(previous)
+    } else previous.privacy.reviewer.plugin_version = "3.2.0-alpha.2"
+    const result = validatePr({ changes: [{
+      ...change(facts), status: "modified", bytes: bytes(current), previousBytes: bytes(previous),
+    }], trustedMaintainer: true })
+    assert.ok(result.errors.some((entry) => entry.code === "context_evaluator_downgrade"), JSON.stringify(result))
+  }
+  const machine = contextRecord(facts)
+  Object.assign(machine, { state: "unavailable", heading: null, events: [],
+    coverage: { state: "unavailable", reasons: ["not_recorded"], omitted_events: 0 } })
+  reviewContext(machine)
+  Object.assign(machine.privacy, { verdict: "not_required", reviewer: null })
+  for (const [before, after] of [[current, current], [machine, current], [current, machine], [machine, machine]]) {
+    assert.deepEqual(validatePr({ changes: [{
+      ...change(facts), status: "modified", bytes: bytes(after), previousBytes: bytes(before),
+    }], trustedMaintainer: true }), { ok: true, errors: [] })
+  }
+})
+
 test("build publishes a checked context in JSON and readable Markdown without changing formulas", () => {
   const { root, facts, out, contextFile } = store()
   build({ storeDir: root, outDir: out })
@@ -84,6 +128,62 @@ test("build withholds old prose when source facts change instead of presenting i
   build({ storeDir: root, outDir: out })
   assert.deepEqual(report(out).context, { state: "unavailable", reason: "source_changed", record: null })
   assert.equal(readFileSync(join(out, "jobs", `${CONTEXT_JOB}.md`), "utf8").includes("Tested the connection"), false)
+})
+
+test("checked reports distinguish withheld and unavailable explanations without inventing prose", () => {
+  for (const state of ["withheld", "unavailable"]) {
+    const { root, facts, out, contextFile } = store()
+    const value = contextRecord(facts)
+    Object.assign(value, { state, heading: null, events: [],
+      coverage: { state: "unavailable", reasons: [state === "withheld" ? "withheld" : "not_recorded"], omitted_events: 0 } })
+    writeFileSync(contextFile, bytes(reviewContext(value)))
+    build({ storeDir: root, outDir: out })
+    assert.equal(report(out).context.state, state)
+    const markdown = readFileSync(join(out, "jobs", `${CONTEXT_JOB}.md`), "utf8")
+    assert.ok(markdown.includes(state === "withheld" ? "withheld for privacy" : "explanation is not recorded"))
+    assert.equal(markdown.includes("Restore the device"), false)
+  }
+})
+
+test("checked report context retains prerequisite, optional resumption and explicit partial coverage", () => {
+  for (const resumption of [null, "Retesting resumed after the software update."]) {
+    const { root, facts, out, contextFile } = store()
+    const value = contextRecord(facts)
+    value.heading = null
+    value.events.push({
+      ...structuredClone(value.events[0]), id: "1123456789abcdef", kind: "waiting", lean: "waiting",
+      explanation: "Retesting waited for the required software update.", reason: "The software update was required.",
+      prerequisite: "Install the required software update.", resumption,
+      evidence: [{ ...value.events[0].evidence[0], range: [250000, 600000] }],
+    }, {
+      ...structuredClone(value.events[0]), id: "2123456789abcdef", kind: "result", lean: "value",
+      explanation: "Verified the device connection.", evidence: [{ ...value.events[0].evidence[0], range: [605000, 1200000] }],
+    })
+    value.coverage = { state: "partial", reasons: ["omitted"], omitted_events: 1 }
+    writeFileSync(contextFile, bytes(reviewContext(value)))
+    build({ storeDir: root, outDir: out })
+    const markdown = readFileSync(join(out, "jobs", `${CONTEXT_JOB}.md`), "utf8")
+    assert.ok(markdown.includes("Waiting (high confidence)"))
+    assert.ok(markdown.includes("Result (high confidence)"))
+    assert.ok(markdown.includes("Reason: The software update was required. Prerequisite: Install the required software update."))
+    assert.equal(markdown.includes("Resumption:"), resumption !== null)
+    assert.ok(markdown.includes("1 events omitted. Unexplained time remains unexplained."))
+  }
+})
+
+test("the build refuses a non-directory context root, unexpected entry names and mismatched job identity", () => {
+  const notDirectory = store()
+  renameSync(join(notDirectory.root, "context"), join(notDirectory.root, "context-preserved"))
+  writeFileSync(join(notDirectory.root, "context"), "not a directory")
+  assert.throws(() => build({ storeDir: notDirectory.root, outDir: notDirectory.out }), { code: "context_not_directory" })
+  const unexpected = store()
+  writeFileSync(join(unexpected.root, "context", "notes.json"), bytes(contextRecord(unexpected.facts)))
+  assert.throws(() => build({ storeDir: unexpected.root, outDir: unexpected.out }), { code: "invalid_context_entry" })
+  const mismatch = store()
+  const value = contextRecord(mismatch.facts)
+  value.job = "f".repeat(32)
+  writeFileSync(mismatch.contextFile, bytes(reviewContext(value)))
+  assert.throws(() => build({ storeDir: mismatch.root, outDir: mismatch.out }), { code: "invalid_published_context" })
 })
 
 test("invalid or linked context entries fail the build without echoing their content", () => {

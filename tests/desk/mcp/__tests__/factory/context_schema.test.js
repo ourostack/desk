@@ -70,6 +70,14 @@ test("context publishes a separately reviewed work explanation without changing 
   assert.equal(context.contextPayloadHash(value), value.privacy.payload_sha256)
 })
 
+test("evidence ranges reject malformed, nonintegral, negative and nonincreasing endpoints", () => {
+  for (const range of [{}, [], [1], [1, 2, 3], ["1", 2], [-1, 2], [0.5, 2], [2, 2], [3, 2]]) {
+    const value = record()
+    value.events[0].evidence[0].range = range
+    refuses(sign(value), "range")
+  }
+})
+
 test("withheld and unavailable explanations remain explicit and carry no prose", () => {
   assert.ok(context)
   for (const state of ["withheld", "unavailable"]) {

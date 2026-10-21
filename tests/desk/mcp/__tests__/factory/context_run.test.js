@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/p
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { osEnv } from "../_os_env.js"
-import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { listContextWork, prepareTaskContexts, readyTaskContexts } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { indexJob } from "./_index_helper.js"
@@ -14,6 +14,7 @@ import { contextSource } from "../../../../../plugins/desk/mcp/src/factory/conte
 import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-worker.js"
 import { evaluationKickDue, kickLoop, LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
+import { reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
 
 const runner = await import("../../../../../plugins/desk/mcp/src/factory/context-run.js").catch((error) => {
   if (error.code === "ERR_MODULE_NOT_FOUND") return null
@@ -139,6 +140,32 @@ test("anchor outlines remain bounded and disclose omissions", async () => {
   })
 })
 
+test("many job shares disclose omissions and missing private logs grant no log-directory access", async () => {
+  const f = await fixture()
+  f.entries[0].facts.jobs[0].agents = [0]
+  f.entries[0].facts.jobs[0].segments = Array.from({ length: 12 }, (_, index) => ({
+    start_ms: index * 100000, end_ms: (index + 1) * 100000,
+  }))
+  f.entries[0].logPath = null
+  f.entries[0].clockOrigin = null
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW })
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, runHeadless: async (options) => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      const [outline] = brief.evidence_outline
+      assert.deepEqual(outline.shares, [[0, 100000], [100000, 200000], [200000, 300000], [300000, 400000],
+        [800000, 900000], [900000, 1000000], [1000000, 1100000], [1100000, 1200000]])
+      assert.equal(outline.omitted_shares, 4)
+      assert.equal(outline.log_path, null)
+      assert.equal(outline.clock_origin, null)
+      assert.equal(options.logDirs.includes(f.root), false)
+      return { state: "failed", cost_usd: -1 }
+    },
+  })
+  assert.equal(output.refused, 1)
+  assert.equal((await readStatus(f.env)).context_evaluation.cost_usd, null)
+})
+
 test("outlines never guess a share for an unplaceable task in a shared session", async () => {
   const f = await fixture()
   f.entries[0].facts.jobs[0].agents = [1]
@@ -173,6 +200,129 @@ test("the shared exhausted launch ledger cannot be bypassed by task context", as
   assert.equal(output.launched, false)
   assert.equal(output.result, "budget_exhausted")
   assert.deepEqual(f.phases, [])
+})
+
+test("context readiness expires or refuses malformed observations instead of launching from an old capability", async () => {
+  for (const checked_at of [undefined, "invalid", new Date(NOW + 300001).toISOString(), new Date(NOW - 3 * 86400000 - 1).toISOString()]) {
+    const f = await fixture()
+    await updateStatus(f.env, (status) => ({ ...status, context_publication: { [STORE]: { ready: true, checked_at } } }))
+    const result = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: () => assert.fail("capability is not current") })
+    assert.equal(result.result, "no_context_waiting")
+    assert.equal(result.launched, false)
+    assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+  }
+  const withdrawn = await fixture()
+  await setConsent(withdrawn.env, { store: STORE, contribute: false, account: "synthetic" })
+  assert.equal((await runner.runTaskContextStep(withdrawn.env, withdrawn.options)).result, "no_context_waiting")
+})
+
+test("context phase attempt caps and malformed attempt-day metadata remain ineligible", async () => {
+  for (const [attempts, last] of [[3, undefined], [null, undefined], [0, 42], [0, new Date(NOW).toISOString()]]) {
+    const f = await fixture()
+    const [work] = await listContextWork(f.env, { store: STORE })
+    await updateTaskContextState(f.env, STORE, work.job, (state) => ({
+      ...state, attempts: { ...state.attempts, candidate: attempts },
+      last_attempts: last === undefined ? {} : { candidate: last },
+    }))
+    const result = await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: () => assert.fail("phase is ineligible") })
+    assert.equal(result.result, "no_context_waiting")
+    assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+  }
+  const f = await fixture()
+  const [work] = await listContextWork(f.env, { store: STORE })
+  await updateTaskContextState(f.env, STORE, work.job, (state) => ({
+    ...state, last_attempts: { candidate: "2026-10-20T00:00:00.000Z" },
+  }))
+  assert.equal(await runner.contextEvaluationDue(f.env, await readStatus(f.env), NOW), true)
+})
+
+test("context launch prerequisites refuse billing, missing native hosts and unknown sign-in before reservation", async () => {
+  for (const [mode, expected] of [
+    ["billing", "disabled_would_bill"], ["missing_cli", "no_agent_cli"],
+    ["unknown_sign_in", "sign_in_unknown"], ["no_credentials", "no_credentials"],
+  ]) {
+    const f = await fixture()
+    const env = mode === "billing" ? { ...f.env, ANTHROPIC_API_KEY: "synthetic" } : f.env
+    const result = await runner.runTaskContextStep(env, {
+      ...f.options, findAgentCli: () => mode === "missing_cli" ? null : "/synthetic/claude",
+      probeSignIn: async () => mode === "unknown_sign_in" ? null : { state: "no_credentials" },
+      reserveAgentLaunch: () => assert.fail("launch prerequisites did not pass"),
+      runHeadless: () => assert.fail("launch prerequisites did not pass"),
+    })
+    assert.equal(result.result, expected)
+    assert.equal(result.launched, false)
+    assert.equal(result.ok, false)
+    assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+  }
+})
+
+test("context launch keeps both deadline checks and refuses a denied reservation", async () => {
+  const f = await fixture()
+  await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options, now: "invalid" }), /valid now and deadline required/u)
+  await assert.rejects(runner.runTaskContextStep(f.env, { ...f.options, deadline: "invalid" }), /valid now and deadline required/u)
+  const early = await runner.runTaskContextStep(f.env, {
+    ...f.options, deadline: NOW + 1, probeSignIn: () => assert.fail("not enough time even before sign-in"),
+  })
+  assert.equal(early.result, "no_time_for_a_run")
+  let clock = NOW
+  const late = await runner.runTaskContextStep(f.env, {
+    ...f.options, clock: () => clock,
+    probeSignIn: async () => { clock = f.options.deadline; return { state: "subscription" } },
+    reserveAgentLaunch: () => assert.fail("sign-in consumed the remaining launch time"),
+  })
+  assert.equal(late.result, "no_time_for_a_run")
+  const denied = await runner.runTaskContextStep(f.env, {
+    ...f.options, reserveAgentLaunch: async () => ({ state: "quota_exhausted" }),
+    finishAgentLaunch: () => assert.fail("no reservation exists to finish"), runHeadless: () => assert.fail("no reservation"),
+  })
+  assert.equal(denied.result, "budget_exhausted")
+  assert.equal(denied.launched, false)
+  assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+})
+
+for (const race of ["basis", "phase", "already_attempted"]) {
+  test(`a context ${race} change after reservation cannot claim or launch the old work`, async () => {
+    const f = await fixture()
+    const [work] = await listContextWork(f.env, { store: STORE })
+    const output = await runner.runTaskContextStep(f.env, {
+      ...f.options,
+      reserveAgentLaunch: async (...args) => {
+        const reserved = await reserveAgentLaunch(...args)
+        assert.equal(reserved.state, "reserved")
+        if (race === "basis") {
+          f.entries[0].facts.intervals[0].end_ms += 1
+          await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW })
+        } else await updateTaskContextState(f.env, STORE, work.job, (state) => race === "phase"
+          ? { ...state, phase: "refused" }
+          : { ...state, last_attempts: { candidate: new Date(NOW).toISOString() } })
+        return reserved
+      },
+      runHeadless: () => assert.fail("the selected generation is no longer claimable"),
+    })
+    assert.equal(output.result, "not_started")
+    assert.equal(output.launched, false)
+    assert.equal(output.accepted, 0)
+    assert.equal(output.refused, 0)
+    assert.deepEqual(f.phases, [])
+    const ledger = JSON.parse(await readFile(join(await factoryStateRoot(f.env), "agent-launch-ledger.json"), "utf8"))
+    assert.equal(ledger.spent, 1)
+    assert.equal(ledger.evaluate.not_started, 1)
+  })
+}
+
+test("a throwing context provider closes the spent reservation as failed and cannot retry that phase today", async () => {
+  const f = await fixture()
+  await assert.rejects(runner.runTaskContextStep(f.env, {
+    ...f.options, runHeadless: async () => { throw new Error("synthetic_provider_failure") },
+  }), /synthetic_provider_failure/u)
+  const ledgerFile = join(await factoryStateRoot(f.env), "agent-launch-ledger.json")
+  const ledger = JSON.parse(await readFile(ledgerFile, "utf8"))
+  assert.equal(ledger.spent, 1)
+  assert.equal(ledger.evaluate.failed, 1)
+  assert.equal(ledger.evaluate.ran, 0)
+  assert.equal((await runner.runTaskContextStep(f.env, f.options)).result, "no_context_waiting")
+  assert.equal(JSON.parse(await readFile(ledgerFile, "utf8")).spent, 1)
+  assert.deepEqual(await readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
 })
 
 test("a failed phase is attempted at most once a day and changed sources do not reset that day", async () => {
@@ -313,6 +463,24 @@ for (const trigger of ["label", "triage"]) for (const damage of ["input", "state
     assert.equal(locked.reason, "worker_running")
   })
 }
+
+test("an unwritable context diagnostic still leaves an ordinary evaluation due with an explicit status error", async () => {
+  const f = await fixture()
+  const [work] = await listContextWork(f.env, { store: STORE })
+  await writeFile(await taskContextPath(f.env, STORE, work.job, "state.json"), "{}\n")
+  await recordStep(f.env, "evaluate", { ok: true, result: "no_jobs_waiting", now: NOW - 3600001 })
+  await requestEvaluation(f.env, { job: "f".repeat(32), deskRoot: f.desk, requestedAt: new Date(NOW).toISOString() })
+  const snapshot = await readStatus(f.env)
+  const statusFile = join(await factoryStateRoot(f.env), "status.json")
+  await rename(statusFile, `${statusFile}.preserved`)
+  await mkdir(statusFile)
+  const result = await evaluationKickDue(f.env, {
+    now: NOW, scope: { deskRoot: f.desk, personPrefix: "" }, readStatusImpl: async () => snapshot,
+  })
+  assert.equal(result.due, true)
+  assert.equal(result.reason, "due")
+  assert.equal(result.context_held, "context_status_error")
+})
 
 test("an existing label launch retains priority and prevents a second context launch", async () => {
   const f = await fixture()

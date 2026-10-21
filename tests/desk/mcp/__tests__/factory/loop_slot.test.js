@@ -63,6 +63,36 @@ test("specific refresh context requires a fresh matching operation for this stor
   assert.equal(slot.triage_refresh.includes(at), false)
 })
 
+test("refresh context distinguishes a complete current operation from each incomplete operation", () => {
+  const at = new Date(NOW - HOUR).toISOString()
+  const refresh = { scan: "complete", changes: 2, written: 2, held: 0, foreign: 0, unknown: 0, deferred: 0, alarm: null }
+  const status = (fields = {}) => ({ triage: { at, store: "OuroStack/Factory", refresh: { ...refresh, ...fields } },
+    loop: { health: { steps: { triage: { last_ran_at: at } } } } })
+  const options = { store: "ourostack/factory", nowMs: NOW }
+  assert.equal(slots.triageRefreshFrom(status(), options), "current")
+  for (const fields of [{ scan: "truncated" }, { held: 1 }, { unknown: 1 }, { deferred: 1 }]) {
+    assert.equal(slots.triageRefreshFrom(status(fields), options), "incomplete")
+  }
+  assert.equal(slots.triageRefreshFrom(status({ alarm: "triage_resource_unrecoverable" }), options), null)
+  for (const code of [null, "current", "incomplete"]) assert.equal(loopSlotFrom(record(), NOW, { triageRefresh: code }).triage_refresh, code)
+  assert.equal(Object.hasOwn(loopSlotFrom(record(), NOW, { triageRefresh: "unsupported" }), "triage_refresh"), false)
+})
+
+test("refresh context refuses missing, malformed, future and old observations before publishing a diagnosis", () => {
+  const options = { store: "ourostack/factory", nowMs: NOW }
+  const status = (at, refresh) => ({ triage: { at, store: options.store, refresh },
+    loop: { health: { steps: { triage: { last_ran_at: at } } } } })
+  const refresh = { scan: "complete", changes: 0, written: 0, held: 0, foreign: 0, unknown: 0, deferred: 0, alarm: null }
+  assert.equal(slots.triageRefreshFrom(undefined, options), null)
+  for (const at of [undefined, 1, "invalid", new Date(NOW + HOUR).toISOString(), new Date(NOW - 73 * HOUR).toISOString()]) {
+    assert.equal(slots.triageRefreshFrom(status(at, refresh), options), null)
+  }
+  for (const value of [null, [], {}, { ...refresh, scan: "invalid" }, { ...refresh, written: -1 },
+    { ...refresh, foreign: 0.5 }, { ...refresh, changes: "0" }]) {
+    assert.equal(slots.triageRefreshFrom(status(new Date(NOW).toISOString(), value), options), null)
+  }
+})
+
 test("a field that was not measured is null, never 0", () => {
   const damaged = record({
     improvement: { open: unavailable("unreadable"), claimed: { state: "partial", value: 3, reasons: ["too_many_cards"] }, shipped: { state: "measured", value: -1 }, verifying: "x", oldest_open_age_days: unavailable("none_open") },
