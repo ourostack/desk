@@ -25,6 +25,43 @@ The Stop hook gives the lookup 400 ms. After that, every source is `null` and th
 
 **A privately routed session never reaches the public store on any path, and every hold is visible.** A route is held (`store: null`, `invalid_declaration`) whenever the hook could not read the whole plugin set: a manifest or plugin folder that is missing, unreadable, linked or too large, a symlinked Copilot plugin folder, a missing or unreadable Claude Code registry, a registry that does not list the running Desk (a `claude --plugin-dir` session, whose overlays the hook cannot see), too many plugins, or a scan the deadline cut short. The unread plugin may be the overlay that declares a private store, and only it can say. Every reader reads the warned manifests again and routes to the store a manifest declares once it reads, unless that store is the public one ([store-route.js](../mcp/src/factory/store-route.js)). A reread never releases a hold to the public store, whether the manifest now declares it or an older Desk recorded it as the default: the file at that path may not be the plugin the session ran with (a Copilot plugin folder carries no version, so another plugin can take its place). Nothing infers the default store for a held session: another session's plugin scan says nothing about the plugins this one ran with (a `claude --plugin-dir` overlay, another config folder, an overlay uninstalled since), so a hold whose cause cleared without a declaration waits until the desk declares its store in `_meta/factory.json` ([held-route.js](../mcp/src/factory/held-route.js)). A registry whose Desk record is another version in the same cache folder as the running Desk (Desk updated mid-session) counts as listing it. A marker an older hook wrote with the default route and no plugins at all is read as held, because a hook that read its plugin set always lists Desk. A held marker is kept for 90 days instead of 30; the sweep counts holds in `status.json` `route_holds`, and `desk_doctor` and session start print each with its path, reason and remedy, and the number of held sessions pruned unsettled (`held_pruned`). Without a current marker, a session goes only to the store this Desk last checked positively for it, which its receipt records as `checked_route`: the flush, the derive and the sweep write it on a positive route, and nothing else does. A receipt an older Desk wrote, or none, freezes the copy on this machine. A copy kept aside while its desk folder was gone comes back once the folder resolves and the session is derived to a checked route here again.
 
+## Optional public task explanations
+
+Task context is a separate record, `context/<public-job>.json` with schema
+`desk.factory.context/1`. Numerical facts and waste labels still reject free
+prose. Their contribution permission does not authorize publishing explanations.
+A compatible store advertises `{"task_context":1}` in `context.json`; that
+declaration is maintenance, never contributor data.
+
+Context describes the requested outcome, observed work, prerequisite-blocked
+**Waiting**, resumption and results. A waiting explanation is not a new
+measurement: it cannot turn uncaptured time into recorded work, installation
+time, avoidable waste or savings. Cross-session waits cite the earlier session's
+real end and the later session's start; they do not invent a `human_wait`
+interval. Unsupported placement stays explicitly partial and unplaced.
+
+The context record has an exact schema, a public source fingerprint for each
+session, evidence anchors and an independent privacy verdict bound to the exact
+payload hash. Headings are limited to 120 characters, explanations to 240,
+waiting reasons/prerequisites/resumptions to 160 each, events to 64 and evidence
+references to eight per event; canonical bytes are limited to 128 KiB. Partial
+event lists state their omission count and retain the terminal observation.
+`published`, `withheld` and `unavailable` remain distinct.
+
+The privacy verdict is a judgment, not a guarantee. Mechanical checks also
+refuse unknown fields, path/URL/contact/credential-shaped prose, stale review
+hashes, unrelated sources and unsupported ranges, without echoing input.
+Private log paths, card text and transcript excerpts never belong in public
+evidence references. A fresh independent reviewer must establish that the
+wording is both supported and safe; a keyword scrub is not enough.
+
+Context intake initially requires a store maintainer's authenticated authority,
+in addition to the contributor's explicit prose permission. Numeric-only
+contributors cannot opt the store into arbitrary prose. The gate reads facts
+from the tree the merge actually leaves. Reports recheck source freshness and
+withhold outdated wording when the task's sources change, while keeping all
+existing measurements readable.
+
 ## Local state and commands
 
 All factory state lives at `$XDG_STATE_HOME/ouroboros-skills/desk/factory`, or `~/.local/state/ouroboros-skills/desk/factory`. The [outbox](../mcp/src/factory/outbox.js) applies the shared owner-only protections and refuses Git checkouts, symlinks and hard links. Capture, derivation and finalize callers also exclude the canonical bound desk, including unversioned desks and symlink aliases, before creating state. Direct marker reads, sweep and status use the same owned-directory, leaf-protection, 64 KiB and filename/session identity checks. The read retains the protected directory's identity, compares the opened descriptor with the post-read descriptor and current pathname, and rechecks directory/leaf identity before returning data. Leaf repair follows identity validation; corrupt/expired pruning rechecks the same owned directory and leaf rather than adopting a replacement. Markers are local bookkeeping, not published facts: paths, routing warnings and exact hook times never enter a facts file. Prompt fields, assistant text, task titles and tool arguments are not copied into markers.

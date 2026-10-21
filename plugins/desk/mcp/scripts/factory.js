@@ -75,7 +75,8 @@ import { build, jobReportUrl, storePublicPlugins, storeRecords } from "../src/fa
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
-import { factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
+import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
+import { validateContextBytes } from "../src/factory/context-schema.js"
 import { isTriagePath } from "../src/factory/triage-schema.js"
 
 export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop", "triage", "triage-qualify"])
@@ -346,6 +347,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   const errors = []
   listed.forEach((change, index) => {
     const labels = labelsPathParts(change.path)
+    const context = contextPathParts(change.path)
     if (isTriagePath(change.path)) {
       const status = statuses.get(change.path) ?? "unknown"
       // No read of symlink/submodule contents or any removed/renamed file.
@@ -361,7 +363,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
       errors.push(...validatePr({ changes: [current], trustedMaintainer: triageAuthority }).errors)
       return
     }
-    if (!isFactsPath(change.path) && labels === null && !isCapturePath(change.path)) {
+    if (!isFactsPath(change.path) && labels === null && context === null && !isCapturePath(change.path)) {
       maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
       return
@@ -370,8 +372,22 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
       errors.push(...validatePr({ changes: [change], trustedMaintainer }).errors)
       return
     }
+    if (context !== null && triageTreeEntry({ revision: tree, filePath: change.path, cwd, git })?.regular !== true) {
+      errors.push({ code: "context_not_regular", path: change.path })
+      return
+    }
     // The bytes the merge lands, and the bytes they replace on the base.
     const bytes = revisionBytes({ revision: tree, filePath: change.path, cwd, git })
+    if (context !== null) {
+      const sources = validateContextBytes(bytes).ok ? JSON.parse(bytes.toString("utf8")).sources : []
+      const current = {
+        ...change, bytes,
+        ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: base, filePath: change.path, cwd, git }) } : {}),
+        facts: sources.flatMap((source) => labeledSessionFacts({ session: source.session, listed, base, tree, cwd, git })),
+      }
+      errors.push(...validatePr({ changes: [current], trustedMaintainer }).errors)
+      return
+    }
     const current = labels === null
       ? {
           ...change,
