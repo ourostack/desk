@@ -14,6 +14,8 @@ import { runTidyStatusCli, identityCachePath } from "../../../../../plugins/desk
 
 const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/desk-git-context.js", import.meta.url)
 const fixture = () => realpathSync(mkdtempSync(path.join(tmpdir(), "desk-private-context-")))
+// Hosted Desk (DESK_ISOLATED_HOSTED) runs only on Linux Container Apps; local Windows Desk never takes this path.
+const HOSTED_LINUX_ONLY = process.platform === "win32" && "hosted private-profile Git runs only on Linux Container Apps; the Windows owned-Git channel is tracked separately"
 const privateEnv = (root) => ({ ...process.env, DESK: root, DESK_ISOLATED_HOSTED: "1", XDG_STATE_HOME: path.join(root, ".state") })
 
 test("Git helper preserves legacy bytes and only uses private cwd with real containment", async () => {
@@ -192,7 +194,7 @@ test("private tidy identity launch carries env-only root, and unsafe roots never
   }), 2)
 })
 
-test("private shared callers execute real Git, preserve staged files and retain diff-tree --root", async () => {
+test("private shared callers execute real Git, preserve staged files and retain diff-tree --root", { skip: HOSTED_LINUX_ONLY }, async () => {
   const root = fixture()
   const git = (args) => {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
