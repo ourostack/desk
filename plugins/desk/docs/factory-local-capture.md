@@ -25,6 +25,70 @@ The Stop hook gives the lookup 400 ms. After that, every source is `null` and th
 
 **A privately routed session never reaches the public store on any path, and every hold is visible.** A route is held (`store: null`, `invalid_declaration`) whenever the hook could not read the whole plugin set: a manifest or plugin folder that is missing, unreadable, linked or too large, a symlinked Copilot plugin folder, a missing or unreadable Claude Code registry, a registry that does not list the running Desk (a `claude --plugin-dir` session, whose overlays the hook cannot see), too many plugins, or a scan the deadline cut short. The unread plugin may be the overlay that declares a private store, and only it can say. Every reader reads the warned manifests again and routes to the store a manifest declares once it reads, unless that store is the public one ([store-route.js](../mcp/src/factory/store-route.js)). A reread never releases a hold to the public store, whether the manifest now declares it or an older Desk recorded it as the default: the file at that path may not be the plugin the session ran with (a Copilot plugin folder carries no version, so another plugin can take its place). Nothing infers the default store for a held session: another session's plugin scan says nothing about the plugins this one ran with (a `claude --plugin-dir` overlay, another config folder, an overlay uninstalled since), so a hold whose cause cleared without a declaration waits until the desk declares its store in `_meta/factory.json` ([held-route.js](../mcp/src/factory/held-route.js)). A registry whose Desk record is another version in the same cache folder as the running Desk (Desk updated mid-session) counts as listing it. A marker an older hook wrote with the default route and no plugins at all is read as held, because a hook that read its plugin set always lists Desk. A held marker is kept for 90 days instead of 30; the sweep counts holds in `status.json` `route_holds`, and `desk_doctor` and session start print each with its path, reason and remedy, and the number of held sessions pruned unsettled (`held_pruned`). Without a current marker, a session goes only to the store this Desk last checked positively for it, which its receipt records as `checked_route`: the flush, the derive and the sweep write it on a positive route, and nothing else does. A receipt an older Desk wrote, or none, freezes the copy on this machine. A copy kept aside while its desk folder was gone comes back once the folder resolves and the session is derived to a checked route here again.
 
+## Optional public task explanations
+
+Task context is a separate record, `context/<public-job>.json` with schema
+`desk.factory.context/1`. Numerical facts and waste labels still reject free
+prose. Their contribution permission does not authorize publishing explanations.
+A compatible store advertises `{"task_context":1}` in `context.json`; that
+declaration is maintenance, never contributor data.
+It may additionally advertise `"loop_context":1` in that same closed object.
+Only that capability permits the optional fixed-enum annotation-refresh state
+inside the capture record's loop slot; it grants no permission to publish prose.
+
+After the operator explicitly authorizes nonsensitive prose for this desk,
+record that permission separately in `_meta/factory-context.json`:
+
+```json
+{"schema_version":1,"stores":{"ourostack/factory":true}}
+```
+
+The ordinary flush prepares public-clock inputs, and the ordinary evaluator
+uses its existing shared launch quota for generation and a separate fresh
+privacy run. Local model JSON is checked as structured data and then
+canonically serialized; only the checked public payload is reviewed and sent.
+No new daemon, provider-key billing or per-task approval prompt is added.
+Removing this prose permission stops new explanations and lets the next
+consented flush retract the exact context this machine delivered. Turning off
+numerical contribution stops network delivery altogether; it does not erase
+previously published history.
+
+Context describes the requested outcome, observed work, prerequisite-blocked
+**Waiting**, resumption and results. A waiting explanation is not a new
+measurement: it cannot turn uncaptured time into recorded work, installation
+time, avoidable waste or savings. Context can cite an exact recorded interval
+or job-share boundary, or the real end and start of sessions; paired episode
+endpoints do not invent a `human_wait` interval or measure the whole gap as
+waiting. Unsupported placement stays explicitly partial and unplaced.
+
+The context record has an exact schema, a public source fingerprint for each
+session, evidence anchors and an independent privacy verdict bound to the exact
+payload hash. Headings are limited to 120 characters, explanations to 240,
+waiting reasons/prerequisites/resumptions to 160 each, events to 64 and evidence
+references to eight per event; canonical bytes are limited to 128 KiB. Partial
+event lists state their omission count and retain the terminal observation.
+`published`, `withheld` and `unavailable` remain distinct.
+
+A source change can mechanically replace old wording with a prose-free
+`unavailable` record while a fresh explanation is reviewed. Its privacy verdict
+is `not_required` with a null reviewer, never a fabricated independent approval.
+That form cannot carry a heading or events; any public prose still requires the
+separate approved, hash-bound privacy judgment.
+
+The privacy verdict is a judgment, not a guarantee. Mechanical checks also
+refuse unknown fields, path/URL/contact/credential-shaped prose, stale review
+hashes, unrelated sources and unsupported ranges, without echoing input.
+Private log paths, card text and transcript excerpts never belong in public
+evidence references. A fresh independent reviewer must establish that the
+wording is both supported and safe; a keyword scrub is not enough.
+
+Context intake initially requires a store maintainer's authenticated authority,
+in addition to the contributor's explicit prose permission. Numeric-only
+contributors cannot opt the store into arbitrary prose. The gate reads facts
+from the tree the merge actually leaves. Reports recheck source freshness and
+withhold outdated wording when the task's sources change, while keeping all
+existing measurements readable.
+
 ## Local state and commands
 
 All factory state lives at `$XDG_STATE_HOME/ouroboros-skills/desk/factory`, or `~/.local/state/ouroboros-skills/desk/factory`. The [outbox](../mcp/src/factory/outbox.js) applies the shared owner-only protections and refuses Git checkouts, symlinks and hard links. Capture, derivation and finalize callers also exclude the canonical bound desk, including unversioned desks and symlink aliases, before creating state. Direct marker reads, sweep and status use the same owned-directory, leaf-protection, 64 KiB and filename/session identity checks. The read retains the protected directory's identity, compares the opened descriptor with the post-read descriptor and current pathname, and rechecks directory/leaf identity before returning data. Leaf repair follows identity validation; corrupt/expired pruning rechecks the same owned directory and leaf rather than adopting a replacement. Markers are local bookkeeping, not published facts: paths, routing warnings and exact hook times never enter a facts file. Prompt fields, assistant text, task titles and tool arguments are not copied into markers.
@@ -468,7 +532,8 @@ uncounted: not_counted
 
 - `schema` is `desk.factory.capture/1`, and `basis` is always `still_on_disk`. `basis` is required so the share cannot be shown without its caveat.
 - `hosts` holds zero to three of `claude-code`, `copilot-cli` and `codex-cli`. A host that is `absent` on this machine, or whose in-scope total is 0, is left out. A host that could not be counted (its listing was `capped` or `unreadable`, or most of its sessions sat in a quarantine that did not settle, `held_in_quarantine`) is exactly `{ "not_counted": true }`, with no other key: never a zero and never left out. Every other entry has the eight keys above. Each count is an integer from 0 to 1,000,000, `not_in_a_desk` may be `null`, and `unverified` is a boolean. The buckets add up to `on_disk`, which is the in-scope total, not the machine's.
-- `loop` is one optional slot, the closed loop's health record, in the store's `loop_slot_v1` shape. `validateLoopSlot` is exactly as strict as the store's rule, so a record Desk accepts is one the store accepts: `v` is required and is `1`; the only other keys are the nine count keys of `LOOP_SLOT_COUNTS` in [capture-schema.js](../mcp/src/factory/capture-schema.js), each a whole number from 0 to 1,000,000 or `null` (never a boolean or a string), and `headless`, a code matching `^[a-z_]{1,32}$` or `null`; the slot is at most 512 bytes and never nested. A key the store does not know is refused here, not a week later by the store. The slot is filled from the loop's stored health record by [loop-slot.js](../mcp/src/factory/loop-slot.js), only when that record was written in the last 72 hours: the four improvement card counts (open, claimed, shipped, verifying; loop alarm cards are not in the open count, they are `loop_alarms_open`), `oldest_open_age_days` the age of the oldest open card plus the record's own age in whole days (the slot has no date, so the store's 7-day alarm is never late), `closed_confirmed_month` and `closed_unverified_month` the cards closed in the last 30 days, `loop_alarms_open` the open loop alarm cards, `steps_stale` how many steps are stale and `headless` the evaluator's state code. A number the loop could not measure (unreadable, partial, or no card to age) is `null`, never 0, a stale or missing record sends no slot, and a single value that fails the store's rule is sent as `null` while the rest of the slot goes. The empty record never carries it.
+- `loop` is the optional flat `loop_slot_v1`, at most 512 bytes. `v` is required and is `1`. The nine `LOOP_SLOT_COUNTS` keys in [capture-schema.js](../mcp/src/factory/capture-schema.js) are whole counts from 0 to 1,000,000 or `null`; `headless` is a code matching `^[a-z_]{1,32}$` or `null`. Unknown keys fail locally. [loop-slot.js](../mcp/src/factory/loop-slot.js) reads the stored health record only within 72 hours. Open, claimed, shipped and verifying exclude alarm cards; `loop_alarms_open` counts those separately. `oldest_open_age_days` includes the record's own whole-day age, so the store's seven-day alarm is not late. The two `closed_*_month` counts cover 30 days; `steps_stale` counts stale steps. Missing, partial or invalid values become `null`, never zero; a missing or stale record sends no slot. Empty capture records never carry a slot.
+- Only when the actual default branch advertises `loop_context: 1` in `context.json`, a fresh snapshot may add `triage_refresh`: `current`, `incomplete`, `resource_unrecoverable` or `null`. This code requires a recent store-matched triage operation whose timestamp matches the loop health step; the retained writer/resource-state reason comes from the actual refresh tally, never a stale-step guess. No path, operation token or raw error is published. The capability is checked before new bytes are emitted; an open intake keeps its exact sent bytes, SHA and normal settlement rules. Absent capability leaves legacy bytes unchanged.
 - The record is at most 2 KiB, in canonical bytes.
 
 The share is "of sessions still on disk" and an upper bound: a host that deleted its old transcripts is invisible here. A store's record is also self-reported: the store cannot check it, and anyone who can open an intake pull request can overwrite a capture file, so the numbers are a signal, not proof.

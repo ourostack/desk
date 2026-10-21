@@ -73,6 +73,8 @@ export function fakeGitHub({
   triageJson = null,
   // Triage batches already on the default branch: `{ "<batch>.json": bytes }`.
   mainTriage = {},
+  contextJson = null,
+  mainContext = {},
   intercept = null,
 } = {}) {
   const calls = []
@@ -136,7 +138,7 @@ export function fakeGitHub({
     }
     return putTree([...entries])
   }
-  const DATA = /^(?:facts|labels|capture|triage)\//u
+  const DATA = /^(?:facts|labels|capture|triage|context)\//u
 
   const factsEntries = Object.entries(mainFacts).map(([name, bytes]) => {
     const sha = gitBlobSha(bytes)
@@ -145,6 +147,13 @@ export function fakeGitHub({
   })
   const factsTree = putTree([...factsEntries, ...extraMainEntries])
   const rootEntries = [["README.md", { type: "blob", sha: "a".repeat(40) }], ["facts", { type: "tree", sha: factsTree }]]
+  if (Object.keys(mainContext).length > 0) {
+    rootEntries.push(["context", { type: "tree", sha: putTree(Object.entries(mainContext).map(([name, bytes]) => {
+      const sha = gitBlobSha(bytes)
+      blobs.set(sha, Buffer.from(bytes).toString("utf8"))
+      return [name, { type: "blob", sha }]
+    })) }])
+  }
   if (Object.keys(mainCapture).length > 0) {
     const captureTree = putTree(Object.entries(mainCapture).map(([name, bytes]) => {
       const sha = gitBlobSha(bytes)
@@ -226,6 +235,10 @@ export function fakeGitHub({
     if (method === "GET" && pathPart === `repos/${store}/contents/triage.json`) {
       if (triageJson === null) return httpError(404, "Not Found")
       return ok({ type: "file", encoding: "base64", content: Buffer.from(triageJson, "utf8").toString("base64") })
+    }
+    if (method === "GET" && pathPart === `repos/${store}/contents/context.json`) {
+      if (contextJson === null) return httpError(404, "Not Found")
+      return ok({ type: "file", encoding: "base64", content: Buffer.from(contextJson, "utf8").toString("base64") })
     }
     if (method === "POST" && pathPart === `repos/${store}/forks`) {
       if (!repo(forkName)) addFork(forkReadyOnCreate)
@@ -426,6 +439,9 @@ export function fakeGitHub({
     /** The store's `triage.json` changes on the default branch (a string, or `null` to remove it). */
     setTriageJson(value) {
       triageJson = value
+    },
+    setContextJson(value) {
+      contextJson = value
     },
     /** The bytes of a blob the model holds, as text. */
     blobText: (sha) => blobs.get(sha),

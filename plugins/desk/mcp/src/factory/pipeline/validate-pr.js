@@ -26,7 +26,8 @@
 // actual API-derived maintainer authority, pass its contextual gate. The
 // generic legacy retraction rule below never applies to triage.
 import { CAPTURE_PATH, validateCaptureBytes } from "../capture-schema.js"
-import { checkLabelsAgainstFacts, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
+import { CONTEXT_PATH, checkContextAgainstFacts, validateContextBytes } from "../context-schema.js"
+import { checkLabelsAgainstFacts, compareVersions, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
 import { validatePublishedBytes } from "../published-schema.js"
 import { isTriagePath, validateTriageChange } from "../triage-schema.js"
 
@@ -60,6 +61,11 @@ export function isFactsPath(value) {
 
 export function isCapturePath(value) {
   return typeof value === "string" && CAPTURE_PATH.test(value)
+}
+
+export function contextPathParts(value) {
+  const match = typeof value === "string" ? CONTEXT_PATH.exec(value) : null
+  return match === null ? null : { job: match[1] }
 }
 
 /** `{ job, session }` from an exact `labels/<job>/<session id>.json` path, else `null`. */
@@ -107,6 +113,34 @@ function validateLabelsChange(change, parts, safePath) {
   return checkLabelsAgainstFacts(current.value, parsed.value).errors.map((item) => error(item.code, safePath))
 }
 
+function validateContextChange(change, parts, trusted) {
+  const at = change.path
+  if (!trusted) return [error("context_authority", at)]
+  const current = parseBytes(change.bytes, validateContextBytes)
+  if (!current.validation.ok) return current.validation.errors.map((item) => error(item.code, at))
+  if (current.value.job !== parts.job) return [error("job_mismatch", at)]
+  if (change.status === "modified") {
+    if (change.previousBytes === undefined) return [error("previous_missing", at)]
+    const previous = parseBytes(change.previousBytes, validateContextBytes)
+    if (!previous.validation.ok) return [error("previous_invalid", at)]
+    for (const field of ["evaluator", "privacy"]) {
+      const before = field === "privacy" ? previous.value.privacy.reviewer : previous.value.evaluator
+      const after = field === "privacy" ? current.value.privacy.reviewer : current.value.evaluator
+      if (before !== null && after !== null && compareVersions(after.plugin_version, before.plugin_version) < 0) return [error("evaluator_downgrade", at)]
+    }
+  }
+  if (!Array.isArray(change.facts)) return [error("type", at)]
+  const facts = []
+  for (const item of change.facts) {
+    const match = typeof item?.path === "string" ? FACT_PATH.exec(item.path) : null
+    if (!match) return [error("facts_invalid", at)]
+    const parsed = parsePublished(item.bytes)
+    if (!parsed.validation.ok || parsed.value.session.host !== match[1] || parsed.value.session.id !== match[2]) return [error("facts_invalid", at)]
+    facts.push(parsed.value)
+  }
+  return checkContextAgainstFacts(current.value, facts).errors.map((item) => error(item.code, at))
+}
+
 // The UTC day of `now` as `YYYY-MM-DD`, or `null` when `now` is not a usable instant.
 function utcDay(now) {
   if (typeof now !== "number" || !Number.isFinite(now)) return null
@@ -136,11 +170,12 @@ export function validatePr(input) {
     const match = typeof change.path === "string" ? FACT_PATH.exec(change.path) : null
     const labels = labelsPathParts(change.path)
     const capture = isCapturePath(change.path)
+    const context = contextPathParts(change.path)
     if (isTriagePath(change.path)) {
       errors.push(...validateTriageChange({ ...change, trustedMaintainer: input.trustedMaintainer }).errors)
       continue
     }
-    if (match === null && labels === null && !capture) {
+    if (match === null && labels === null && !capture && context === null) {
       errors.push(error(change.status === "removed" ? "removal_path" : "path", `changes.${index}`))
       continue
     }
@@ -151,6 +186,11 @@ export function validatePr(input) {
     }
     if (!STATUSES.has(change.status)) {
       errors.push(error("status", safePath))
+      continue
+    }
+
+    if (context !== null) {
+      errors.push(...validateContextChange(change, context, trusted))
       continue
     }
 
@@ -190,5 +230,9 @@ export function validatePr(input) {
       errors.push(error("duration_decreased", safePath))
     }
   }
-  return { ok: errors.length === 0, errors }
+  return {
+    ok: errors.length === 0,
+    errors: errors.map((item) => CONTEXT_PATH.test(item.path) && !item.code.startsWith("context_")
+      ? { ...item, code: `context_${item.code}` } : item),
+  }
 }

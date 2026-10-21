@@ -1,16 +1,16 @@
 // The loop health record flattened to the capture record's loop slot (`loop_slot_v1` of the store; the rule is `validateLoopSlot` in `capture-schema.js`).
 //
-// The slot is counts only. Each key is read from one field of the stored `desk.factory.loop/1` record (`loop-health.js`), and only a measured Count
+// The base slot is counts only. Each key is read from one field of the stored `desk.factory.loop/1` record (`loop-health.js`), and only a measured Count
 // becomes a number: an unavailable, partial (a lower bound, not the number), damaged or missing field is `null`, the contract's "not measured",
 // never 0. `headless` is the evaluator's state code, `null` when it is not recorded for today. Nothing else is read, so no name, path, title,
-// card text or date can reach the slot, and nothing in it is per person.
+// card text or date can reach the slot, and nothing in it is per person. A compatible store may additionally receive a fixed refresh-state code.
 //
 // A record older than `SLOT_MAX_AGE_HOURS` (or dated in the future) says nothing about now, so it gives no slot. The age of the oldest open card is
 // aged by the record's own age in whole days, because the slot has no date and the store counts from the capture commit. A key whose value fails
 // the store's rule is sent as `null` and the rest of the slot goes; `slotValid` is false for it, so the measure step raises
 // `loop_alarm:capture_loop_slot`.
 
-import { LOOP_SLOT_VERSION, validateLoopSlot } from "./capture-schema.js"
+import { LOOP_SLOT_VERSION, TRIAGE_REFRESH_CODES, validateLoopSlot } from "./capture-schema.js"
 
 export const SLOT_MAX_AGE_HOURS = 72
 const HOUR_MS = 3600 * 1000
@@ -63,11 +63,28 @@ const sound = (key, value) => validateLoopSlot({ v: LOOP_SLOT_VERSION, [key]: va
  * `loopSlotFrom(record, nowMs) -> slot | null`: the slot for the capture record, or null when there is no current record. The record must be
  * a `desk.factory.loop/1` record written at most `SLOT_MAX_AGE_HOURS` ago. A key that fails the store's rule is `null`; the other keys are kept.
  */
-export function loopSlotFrom(record, nowMs) {
+export function loopSlotFrom(record, nowMs, { triageRefresh } = {}) {
   if (!isObject(record) || record.schema !== "desk.factory.loop/1") return null
   const at = typeof record.written_at === "string" ? Date.parse(record.written_at) : Number.NaN
   if (!Number.isFinite(at) || nowMs - at > SLOT_MAX_AGE_HOURS * HOUR_MS || at - nowMs > FUTURE_ALLOWANCE_MS) return null
   const fields = slotFields(record)
+  if (triageRefresh === null || TRIAGE_REFRESH_CODES.includes(triageRefresh)) fields.triage_refresh = triageRefresh
   if (fields.oldest_open_age_days !== null) fields.oldest_open_age_days += Math.max(0, Math.floor((nowMs - at) / DAY_MS))
   return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, key === "v" || sound(key, value) ? value : null]))
+}
+
+/** A current, store-matched refresh operation, never a diagnosis inferred from step age. */
+export function triageRefreshFrom(status, { store, nowMs }) {
+  const triage = status?.triage
+  const step = status?.loop?.health?.steps?.triage
+  const at = typeof triage?.at === "string" ? Date.parse(triage.at) : NaN
+  if (typeof triage?.store !== "string" || triage.store.toLowerCase() !== store.toLowerCase() ||
+      step?.last_ran_at !== triage.at || !Number.isFinite(at) ||
+      nowMs - at > SLOT_MAX_AGE_HOURS * HOUR_MS || at - nowMs > FUTURE_ALLOWANCE_MS) return null
+  const refresh = triage.refresh
+  if (!isObject(refresh) || !["complete", "truncated"].includes(refresh.scan) ||
+      !["changes", "written", "held", "foreign", "unknown", "deferred"].every((key) => Number.isSafeInteger(refresh[key]) && refresh[key] >= 0)) return null
+  if (refresh.alarm === "triage_resource_unrecoverable" && refresh.held > 0) return "resource_unrecoverable"
+  if (refresh.alarm !== null) return null
+  return refresh.scan === "complete" && refresh.held === 0 && refresh.unknown === 0 && refresh.deferred === 0 ? "current" : "incomplete"
 }

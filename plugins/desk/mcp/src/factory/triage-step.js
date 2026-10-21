@@ -597,6 +597,7 @@ export async function runTriageStep(env, { deskRoot, personPrefix = "", pluginVe
 
   const store = await swallow(() => triageStore(env, deskRoot), null)
   if (store === null) return finish(true, "no_consenting_store")
+  record.store = store
 
   // 1. The mechanical refresh, always.
   const mechanical = await swallow(() => mechanicalRefresh(env, ctx, store), null)

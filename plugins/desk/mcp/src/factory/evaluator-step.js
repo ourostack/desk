@@ -87,6 +87,7 @@ import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 
 import { acceptEvaluations, evaluatePending, requestFinishedJobs } from "./evaluate-run.js"
+import { runTaskContextStep } from "./context-run.js"
 import {
   HEADLESS_TIMEOUT_MS,
   MAX_HEADLESS_JOBS_PER_DAY,
@@ -116,7 +117,7 @@ const MACHINE_BLOCKED = new Set(["no_agent_cli", "no_credentials", "disabled_wou
 // Every state that counts toward `blocked_days`.
 const BLOCKED_DAY_STATES = new Set([...MACHINE_BLOCKED, "disabled", "budget_exhausted"])
 
-const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, requestFinishedJobs, reserveAgentLaunch, finishAgentLaunch, clock: Date.now }
+const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, requestFinishedJobs, reserveAgentLaunch, finishAgentLaunch, runTaskContextStep, clock: Date.now }
 const BRIEF_NAME = /^(claude-code|copilot-cli|codex-cli)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.brief\.json$/u
 const DAY_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/u
 
@@ -451,6 +452,18 @@ async function execute(env, { impl, root, nowMs, limitMs, maxRuns, pluginVersion
     await save()
   }
 
+  if (reserved === 0 && stop === null) {
+    await save()
+    const context = await impl.runTaskContextStep(env, {
+      pluginVersion, now: nowMs + (impl.clock() - clockStart), deadline: limitMs,
+      clock: impl.clock, runHeadless: impl.runHeadless, probeSignIn: impl.probeSignIn, findAgentCli: impl.findAgentCli,
+      reserveAgentLaunch: impl.reserveAgentLaunch, finishAgentLaunch: impl.finishAgentLaunch, onChild, onChildExit,
+    })
+    if (context.result !== "no_context_waiting") {
+      await recordStep(env, "evaluate", { ok: context.ok, result: context.result, now: nowMs })
+      return { ok: context.ok, result: context.result }
+    }
+  }
   const unsupportedOnly = ranJobs === 0 && ledger.unsupported > 0
   // Nothing ran, and a job was left only because no run would have finished in time: the step did not do its work, and says why.
   const noTime = ranJobs === 0 && ledger.deferredForTime > 0

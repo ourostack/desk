@@ -47,6 +47,7 @@ import { MAX_HEADLESS_JOBS_PER_DAY } from "./headless.js"
 import { evaluationQuotaOpen, quotaFor, validWitness } from "./headless-ledger.js"
 import { dueStep } from "./loop-status.js"
 import { factoryStateRoot, listEvaluationRequests, readStatus, updateStatus } from "./outbox.js"
+import { contextEvaluationDue } from "./context-run.js"
 
 const { isLoopEnabled } = createRequire(import.meta.url)("./loop-switch.cjs")
 
@@ -184,10 +185,23 @@ export async function evaluationKickDue(env, { now = Date.now(), readStatusImpl 
     const status = await readStatusImpl(env)
     const triage = triageKickDue(status, now, active)
     const reobserve = needsObservation(status, active, now)
-    if (newest === null && !triage && !reobserve) return { due: false, reason: "no_requests" }
-    if (await workerRunning(root, now)) return { due: false, reason: "worker_running" }
-    const due = triage || reobserve || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
-    return { due, reason: reobserve ? "triage_reobserve" : due ? "due" : "not_due", ...context, ...(reobserve ? { reobserve: true } : {}) }
+    let contextDue = false
+    let contextHeld = null
+    try {
+      contextDue = await contextEvaluationDue(env, status, now)
+    } catch {
+      contextHeld = "context_error"
+      try {
+        await updateStatus(env, (current) => ({
+          ...current, context_probe: { last_error_at: new Date(now).toISOString(), result: contextHeld },
+        }))
+      } catch { contextHeld = "context_status_error" }
+    }
+    const diagnostic = contextHeld === null ? {} : { context_held: contextHeld }
+    if (newest === null && !triage && !reobserve && !contextDue) return { due: false, reason: "no_requests", ...diagnostic }
+    if (await workerRunning(root, now)) return { due: false, reason: "worker_running", ...diagnostic }
+    const due = triage || reobserve || contextDue || evaluateDue(status, new Date(now), { newWorkAt: newest, kick: true })
+    return { due, reason: reobserve ? "triage_reobserve" : due ? "due" : "not_due", ...context, ...diagnostic, ...(reobserve ? { reobserve: true } : {}) }
   } catch {
     return { due: false, reason: "unreadable" }
   }
@@ -215,8 +229,9 @@ async function workerRunning(root, now) {
  * `execPath` are seams for tests.
  */
 export async function kickLoop(env, { now = Date.now(), spawn = nodeSpawn, execPath = process.execPath, readStatusImpl = readStatus, continuation = false, scope, updateStatusImpl = updateStatus } = {}) {
-  const { due, reason, scope: active, reobserve } = await evaluationKickDue(env, { now, readStatusImpl, continuation, scope })
-  if (!due) return { kicked: false, reason }
+  const { due, reason, scope: active, reobserve, context_held } = await evaluationKickDue(env, { now, readStatusImpl, continuation, scope })
+  const diagnostic = context_held === undefined ? {} : { context_held }
+  if (!due) return { kicked: false, reason, ...diagnostic }
   if (reobserve) {
     let requested = false
     try {
@@ -225,16 +240,16 @@ export async function kickLoop(env, { now = Date.now(), spawn = nodeSpawn, execP
         requested = true
         return { ...status, triage_reobserve: { ...status.triage_reobserve, [scopeKey(active)]: new Date(now).toISOString() } }
       })
-    } catch { return { kicked: false, reason: "unreadable" } }
-    if (!requested) return { kicked: false, reason: "not_due" }
+    } catch { return { kicked: false, reason: "unreadable", ...diagnostic } }
+    if (!requested) return { kicked: false, reason: "not_due", ...diagnostic }
   }
   try {
     const args = active === undefined ? [] : ["--desk", active.deskRoot, "--person-prefix", active.personPrefix]
     const child = await spawn(execPath, [LOOP_START_SCRIPT, ...args], { detached: true, stdio: "ignore", windowsHide: true, env })
     child.once?.("error", () => {})
     child.unref?.()
-    return { kicked: true, reason }
+    return { kicked: true, reason, ...diagnostic }
   } catch {
-    return { kicked: false, reason: "spawn_failed" }
+    return { kicked: false, reason: "spawn_failed", ...diagnostic }
   }
 }

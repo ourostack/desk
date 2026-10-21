@@ -507,3 +507,11 @@ test("allTasks lists every readable card, live and archived, with no status or a
   assert.deepEqual(allTasks({ deskRoot: desk, personPrefix: "desks/bo" }).map(({ track, slug }) => `${track}/${slug}`), ["theirs/five"])
   assert.throws(() => allTasks({ deskRoot: desk, personPrefix: "bo" }), /personPrefix/)
 }))
+
+test("task discovery checks its shared deadline while walking the desk", () => scratch(async ({ desk }) => {
+  const { allTasks } = await load()
+  for (let index = 0; index < 20; index += 1) await card(path.join(desk, `track-${index}`, "task"))
+  let elapsed = 0
+  assert.throws(() => allTasks({ deskRoot: desk, deadline: 10, clock: () => ++elapsed }), { code: "boot_check_budget" })
+  assert.ok(elapsed <= 11, "the walk must stop before traversing every track and card")
+}))

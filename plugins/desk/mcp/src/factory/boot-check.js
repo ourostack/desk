@@ -522,18 +522,30 @@ export function improvementLine(summary) {
 
 // Every task folder the desk layout allows, live and archived, in a stable order:
 // `{ track, slug, file, archived }` with `file` the card's path.
-function* cardLocations(deskRoot, alias) {
+function* cardLocations(deskRoot, alias, within = () => {}) {
   const base = alias === null ? deskRoot : path.join(deskRoot, "desks", alias)
+  const directories = (folder) => {
+    within()
+    const names = subdirectories(folder)
+    within()
+    return names
+  }
   const tracks = []
-  for (const name of subdirectories(base)) {
-    if (name === "_archive") for (const archived of subdirectories(path.join(base, name))) if (!archived.startsWith("_")) tracks.push({ dir: path.join(base, name, archived), archived: true })
+  for (const name of directories(base)) {
+    within()
+    if (name === "_archive") for (const archived of directories(path.join(base, name))) {
+      within()
+      if (!archived.startsWith("_")) tracks.push({ dir: path.join(base, name, archived), archived: true })
+    }
     if (name.startsWith("_") || (alias === null && name === "desks")) continue
     tracks.push({ dir: path.join(base, name), archived: false })
   }
   for (const trackDir of tracks) {
+    within()
     const track = path.basename(trackDir.dir)
     for (const folder of [trackDir.dir, path.join(trackDir.dir, "_archive")]) {
-      for (const slug of subdirectories(folder)) {
+      for (const slug of directories(folder)) {
+        within()
         if (slug.startsWith("_")) continue
         yield { track, slug, file: path.join(folder, slug, "task.md"), archived: trackDir.archived || folder !== trackDir.dir }
       }
@@ -569,16 +581,21 @@ function reportJobOf(head) {
  * are exact UTC timestamps or `null`, `report_unavailable` is the card's `factory_report_unavailable` text or `null`, and `report_job` is the job ID its `factory_report` link names or `null`. A person
  * prefix reads `desks/<alias>`.
  */
-export function allTasks({ deskRoot, personPrefix = "" }) {
+export function* walkTasks({ deskRoot, personPrefix = "", deadline = Infinity, clock = () => performance.now() }) {
   const alias = checkPersonPrefix(personPrefix, "allTasks")
-  const tasks = []
-  for (const { track, slug, file, archived } of cardLocations(deskRoot, alias)) {
+  const within = () => { if (clock() >= deadline) throw new BudgetExceeded() }
+  for (const { track, slug, file, archived } of cardLocations(deskRoot, alias, within)) {
+    within()
     const head = readCardHead(file)
+    within()
     if (head === null) continue
     const fields = frontmatter(head)
-    tasks.push({ track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated), report_unavailable: fields.factory_report_unavailable ?? null, report_job: reportJobOf(head) })
+    yield { track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated), report_unavailable: fields.factory_report_unavailable ?? null, report_job: reportJobOf(head) }
   }
-  return tasks
+}
+
+export function allTasks(options) {
+  return [...walkTasks(options)]
 }
 
 /** See the header. Never writes; throws only `boot_check_budget` (and caller-contract errors for a bad person prefix). */
