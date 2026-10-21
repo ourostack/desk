@@ -1,4 +1,4 @@
-// One-off failure observer for the two admission recovery cases. No timers,
+// One-off failure observer for the explicit admission recovery cases. No timers,
 // lifecycle handlers, replacement controllers/journals, or diagnostic I/O files.
 import childProcess from "node:child_process"
 import { createHash } from "node:crypto"
@@ -10,9 +10,10 @@ import { isMainThread, workerData } from "node:worker_threads"
 
 const marker = "[readiness-failure] "
 const sourceRoot = new URL("../../../../../plugins/desk/mcp/src/", import.meta.url).href
-const methods = new Set(["client", "server", "journal", "mirror", "recordChange", "markUncertain", "status", "handshake", "beginConvergence", "tools/call", "tools/list"])
+const methods = new Set(["client", "server", "journal", "mirror", "worker", "recordChange", "markUncertain", "status", "handshake", "beginConvergence", "tools/call", "tools/list"])
+const phaseNames = new Set(["inspecting_runtime_pack", "restoring_runtime_dependencies", "mirroring_source", "waiting_for_publication_lock", "building"])
 const spans = ["protect", "build", "copy", "stage", "dest", "rename"]
-const events = new Set(["cov", "unknown", "limited", "start", "send", "recv", "done", "reply", "timeout", ...spans.flatMap(name => [name + ".begin", name + ".end", name + ".ok", name + ".throw"])])
+const events = new Set(["cov", "unknown", "limited", "phase", "start", "send", "recv", "done", "reply", "timeout", ...spans.flatMap(name => [name + ".begin", name + ".end", name + ".ok", name + ".throw"])])
 const roles = new Set(["m", "w", "c", "l", "t"])
 let observer = null
 let loaderScope = null
@@ -24,7 +25,8 @@ function opaque(value) {
 
 // Passive samples only: an interval without an observation is NOT loop proof.
 function fact(role, event, method, id) {
-  if (!roles.has(role) || !events.has(event) || method !== undefined && !methods.has(method)) return null
+  if (!roles.has(role) || !events.has(event) ||
+      (event === "phase" ? !phaseNames.has(method) : method !== undefined && !methods.has(method))) return null
   const utilization = performance.eventLoopUtilization()
   return { r: role, e: event, ...(method === undefined ? {} : { m: method }),
     ...(id === undefined ? {} : { q: opaque(id) }), t: Date.now(),
@@ -40,7 +42,7 @@ export function emit(event, method, id) {
     const group = method === "status" ? "status" : "important"
     const count = observer.counts[group]++
     const limit = group === "status" ? 12 : 100
-    if (count === limit) process.stderr.write(marker + JSON.stringify(fact(observer.role, "limited", method)) + "\n")
+    if (count === limit) process.stderr.write(marker + JSON.stringify(fact(observer.role, "limited", event === "phase" ? "worker" : method)) + "\n")
     if (count >= limit) return
     process.stderr.write(marker + JSON.stringify(row) + "\n")
   } catch { /* The observation must never become an operation's error. */ }
@@ -61,6 +63,24 @@ export function observeSync(label, operation) {
 }
 
 export const isMirror = value => typeof value === "string" && value.replaceAll("\\", "/").includes("/source-mirror/")
+
+export function normalizePhase(value) {
+  if (typeof value !== "string") return null
+  if (phaseNames.has(value)) return value
+  for (const name of ["waiting_for_publication_lock", "building"]) {
+    if (value.startsWith(name + ":")) return name
+  }
+  return null
+}
+
+export function forwardPhase(onPhase, phase) {
+  try {
+    const name = normalizePhase(phase)
+    if (name === null) emit("unknown", "worker")
+    else emit("phase", name)
+  } catch { /* Observation must not replace the callback's result or error. */ }
+  return onPhase(phase)
+}
 
 function owned(url, suffix, scope) {
   try {
@@ -85,7 +105,7 @@ export function wrapControllerFork(fork, preloadURL, scope) {
 }
 
 export function preloadArgs(fixture, name) {
-  if (!["missing-root", "saved-binding"].includes(name)) return []
+  if (!["missing-root", "saved-binding", "initial-admission"].includes(name)) return []
   const url = new URL(import.meta.url)
   url.search = ""
   url.searchParams.set("case", name)
@@ -122,6 +142,12 @@ export function transformSource(url, source, scope) {
       ['await protect([{ path: staging, kind: "directory", created: true }])', protect('protect([{ path: staging, kind: "directory", created: true }])')],
       ['if (protectFile) await protectFile([{ path: temporary, kind: "file", created: true }])', "if (protectFile) " + protect('protectFile([{ path: temporary, kind: "file", created: true }])')],
     ]
+  } else if (owned(url, "runtime/admission-worker.js", scope)) {
+    name = "worker"
+    replacements = [
+      ["if (reply.phase !== undefined) return settled ? undefined : onPhase(reply.phase)",
+        "if (reply.phase !== undefined) return settled ? undefined : __rf(onPhase, reply.phase)"],
+    ]
   } else if (owned(url, "runtime/bootstrap.js", scope)) {
     name = "mirror"
     replacements = [
@@ -142,7 +168,7 @@ export function transformSource(url, source, scope) {
   let changed = source
   for (const [anchor, replacement] of replacements) changed = changed.replace(anchor, replacement)
   return {
-    source: `import { emit as __rd, observeSync as __rw, isMirror as __rm } from ${JSON.stringify(scope.helperURL)};\n__rd("cov", ${JSON.stringify(name)});\n` + changed,
+    source: `import { emit as __rd, observeSync as __rw, isMirror as __rm, forwardPhase as __rf } from ${JSON.stringify(scope.helperURL)};\n__rd("cov", ${JSON.stringify(name)});\n` + changed,
     coverage: "applied", name,
   }
 }
@@ -164,8 +190,9 @@ export async function load(url, context, nextLoad) {
 }
 
 function safeRow(row) {
-  if (!row || !roles.has(row.r) || !events.has(row.e) || row.m !== undefined && !methods.has(row.m)) return null
-  if (["cov", "unknown"].includes(row.e) && !["client", "server", "journal", "mirror"].includes(row.m)) return null
+  if (!row || !roles.has(row.r) || !events.has(row.e) ||
+      (row.e === "phase" ? !phaseNames.has(row.m) : row.m !== undefined && !methods.has(row.m))) return null
+  if (["cov", "unknown"].includes(row.e) && !["client", "server", "journal", "mirror", "worker"].includes(row.m)) return null
   if (![row.t, row.a, row.i].every(value => typeof value === "number" && Number.isFinite(value))) return null
   return { r: row.r, e: row.e, ...(row.m === undefined ? {} : { m: row.m }),
     ...(typeof row.q === "string" && /^[a-f0-9]{12}$/u.test(row.q) ? { q: row.q } : {}),
@@ -180,16 +207,22 @@ export function failurePrefix(stderr) {
   }
   rows.sort((a, b) => a.t - b.t)
   const cov = [...new Set(rows.filter(row => row.e === "cov").map(row => row.r + "/" + row.m))]
+  const phaseUnknown = String(stderr).length > 16384 || !cov.includes("m/worker") ||
+    !rows.some(row => row.e === "phase") ||
+    rows.some(row => row.e === "unknown" && row.m === "worker" || row.e === "limited" && row.m !== "status")
   const summary = { coverage_unknown: String(stderr).length > 16384 || rows.some(row => row.e === "unknown" || row.e === "limited") ||
-    ["m/client", "w/mirror", "c/server", "c/journal"].some(value => !cov.includes(value)), cov,
-    t0: rows[0]?.t ?? null, spans: [], rpc: [], truncated: String(stderr).length > 16384 || rows.some(row => row.e === "limited") }
+    ["m/client", "w/mirror", "c/server", "c/journal"].some(value => !cov.includes(value)) || phaseUnknown, cov,
+    phase_coverage_unknown: phaseUnknown,
+    t0: rows[0]?.t ?? null, phases: [], spans: [], rpc: [], truncated: String(stderr).length > 16384 || rows.some(row => row.e === "limited") }
   const starts = new Map()
   const totals = new Map()
   const requests = new Map()
   for (const row of rows) {
     const [label, action] = row.e.split(".")
     const key = row.r + "/" + label
-    if (spans.includes(label)) {
+    if (row.e === "phase") {
+      summary.phases.push([row.m, row.t - summary.t0])
+    } else if (spans.includes(label)) {
       if (action === "begin") starts.set(key, row.t)
       else if (starts.has(key)) {
         const value = totals.get(key) ?? [key, 0, 0]
@@ -218,16 +251,24 @@ export function failurePrefix(stderr) {
   summary.spans = [...totals.values(), ...[...starts].map(([key, at]) => [key, "pending", at - summary.t0])]
   const hot = value => ["recordChange", "markUncertain"].includes(value.m)
   const timelines = [...requests.values()].map(({ samples, ...value }) => value)
-  summary.rpc = timelines.filter(hot).slice(-2).concat(timelines.filter(value => !hot(value)).slice(-1))
+  summary.rpc = ["recordChange", "markUncertain"].flatMap(method => timelines.filter(value => value.m === method).slice(-1))
+    .concat(timelines.filter(value => !hot(value)).slice(-1))
   let prefix = "[readiness-failure " + JSON.stringify(summary) + "]\n"
-  while (Buffer.byteLength(prefix) > 960 && (summary.rpc.length || summary.spans.length || summary.cov.length)) {
+  while (Buffer.byteLength(prefix) > 960) {
     summary.truncated = true
     summary.coverage_unknown = true
+    summary.phase_coverage_unknown = true
     const optional = summary.rpc.findIndex(value => !hot(value))
     if (optional >= 0) summary.rpc.splice(optional, 1)
     else if (summary.spans.length) summary.spans.pop()
     else if (summary.cov.length) summary.cov.pop()
-    else summary.rpc.shift()
+    else if (summary.phases.length) summary.phases.shift()
+    else {
+      // Never discard a critical request to retain optional ELU/detail fields.
+      summary.rpc = summary.rpc.map(({ m, q, cs, sv, sr, cr, ct }) => ({ m, q, cs, sv, sr, cr, ct }))
+      prefix = "[readiness-failure " + JSON.stringify(summary) + "]\n"
+      break
+    }
     prefix = "[readiness-failure " + JSON.stringify(summary) + "]\n"
   }
   return prefix
@@ -304,7 +345,7 @@ export async function withReadinessFailure(session, operation) {
 const selected = process.execArgv.find(value => {
   try { return new URL(value).pathname === new URL(import.meta.url).pathname && new URL(value).searchParams.has("case") } catch { return false }
 })
-if (selected && ["missing-root", "saved-binding"].includes(new URL(selected).searchParams.get("case")) &&
+if (selected && ["missing-root", "saved-binding", "initial-admission"].includes(new URL(selected).searchParams.get("case")) &&
     (isMainThread || workerData?.deskAdmissionWorker === true)) {
   const preload = new URL(selected)
   const scope = { sourceRoot, cacheRoot: preload.searchParams.get("cache"), helperURL: preload.href }

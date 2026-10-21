@@ -145,7 +145,7 @@ return fixture;`
 
 test("readiness diagnostic pure: module anchors are atomic, mirror-scoped and syntax checked without execution", async () => {
   const { transformSource } = await diagnostics()
-  for (const file of ["readiness/controller-client.js", "readiness/controller-server.js", "readiness/journal.js", "runtime/bootstrap.js"]) {
+  for (const file of ["readiness/controller-client.js", "readiness/controller-server.js", "readiness/journal.js", "runtime/bootstrap.js", "runtime/admission-worker.js"]) {
     const original = readFileSync(new URL(file, diagnosticSource), "utf8")
     const url = new URL(file, diagnosticSource).href
     const changed = transformSource(url, original, diagnosticScope)
@@ -359,6 +359,100 @@ return fixture;`
   await assert.rejects(fixture("null", error), value => value === error)
 })
 
+test("readiness diagnostic pure: the third opt-in accepts only the closed existing phase vocabulary", async () => {
+  const { preloadArgs, normalizePhase } = await diagnostics()
+  const args = preloadArgs({ runtimeCache: "/unused-cache" }, "initial-admission")
+  assert.equal(args[0], "--import")
+  assert.equal(new URL(args[1]).searchParams.get("case"), "initial-admission")
+  assert.equal(typeof normalizePhase, "function")
+  for (const [value, expected] of [
+    ["inspecting_runtime_pack", "inspecting_runtime_pack"],
+    ["restoring_runtime_dependencies", "restoring_runtime_dependencies"],
+    ["mirroring_source", "mirroring_source"],
+    ["waiting_for_publication_lock:/private/raw-name", "waiting_for_publication_lock"],
+    ["building:" + "a".repeat(64), "building"],
+    ["unrecognized:/private/raw-name", null],
+    ["inspecting_runtime_pack:/private/raw-name", null],
+    [null, null],
+  ]) assert.equal(normalizePhase(value), expected)
+  assert.equal(normalizePhase({ toString() { assert.fail("raw object coerced") } }), null)
+})
+
+test("readiness diagnostic pure: worker phase forwarding preserves reads, callback result and original error", async () => {
+  const helper = await diagnostics()
+  const original = `
+function fixture(reply, settled, onPhase) {
+  if (reply.phase !== undefined) return settled ? undefined : onPhase(reply.phase)
+  return "other";
+}
+return fixture;`
+  const changed = helper.transformSource(new URL("runtime/admission-worker.js", diagnosticSource).href, original, diagnosticScope)
+  assert.equal(changed.coverage, "applied")
+  const fixture = new Function("__rd", "__rw", "__rm", "__rf", changed.source.split("\n").slice(1).join("\n"))(
+    helper.emit, helper.observeSync, helper.isMirror, helper.forwardPhase)
+  let reads = 0
+  let calls = 0
+  const raw = "building:/private/raw-name"
+  const reply = { get phase() { reads++; return raw } }
+  const result = Promise.resolve("same promise")
+  assert.equal(fixture(reply, false, function(value) {
+    calls++
+    assert.equal(this, undefined)
+    assert.equal(value, raw, "only the observation is normalized")
+    return result
+  }), result)
+  assert.equal(reads, 2)
+  assert.equal(calls, 1)
+  reads = 0
+  assert.equal(fixture(reply, true, () => assert.fail("late phase forwarded")), undefined)
+  assert.equal(reads, 1)
+  assert.equal(fixture({}, false, () => assert.fail("non-phase forwarded")), "other")
+  const error = new Error()
+  Object.defineProperty(error, "message", { get() { assert.fail("error getter read") } })
+  assert.throws(() => fixture(reply, false, () => { throw error }), value => value === error)
+})
+
+test("readiness diagnostic pure: compact phases retain both critical RPCs and mark absent or lost phase coverage", async () => {
+  const { failurePrefix } = await diagnostics()
+  const labels = ["inspecting_runtime_pack", "restoring_runtime_dependencies", "waiting_for_publication_lock",
+    "building", "mirroring_source", "waiting_for_publication_lock", "building"]
+  const cov = [["m", "client"], ["w", "mirror"], ["c", "server"], ["c", "journal"], ["m", "worker"]]
+    .map(([r, m]) => ({ r, e: "cov", m }))
+  const phases = labels.map(m => ({ r: "m", e: "phase", m }))
+  const rpc = [["recordChange", "000000000001"], ["markUncertain", "000000000002"]].flatMap(([m, q]) =>
+    [["m", "send"], ["c", "recv"], ["m", "timeout"]].map(([r, e]) => ({ r, e, m, q })))
+  const format = rows => failurePrefix(rows.map((row, index) =>
+    "[readiness-failure] " + JSON.stringify({ ...row, t: 100 + index, a: index, i: 0 })).join("\n"))
+  const parse = prefix => JSON.parse(prefix.slice("[readiness-failure ".length, -2))
+  const prefix = format([...cov, ...phases, ...rpc])
+  const summary = parse(prefix)
+  assert.ok(Buffer.byteLength(prefix) <= 960)
+  assert.equal(summary.phase_coverage_unknown, false)
+  assert.deepEqual(summary.phases.map(([phase]) => phase), labels)
+  for (const method of ["recordChange", "markUncertain"]) {
+    const value = summary.rpc.find(row => row.m === method)
+    assert.equal(typeof value.cs, "number")
+    assert.equal(typeof value.sv, "number")
+    assert.equal(typeof value.ct, "number")
+  }
+  assert.equal(parse(format([...cov, ...rpc])).phase_coverage_unknown, true)
+  const unknown = format([...cov, ...phases, { r: "m", e: "unknown", m: "worker" },
+    { r: "m", e: "phase", m: "building:/private/raw-hash" }, ...rpc])
+  assert.equal(parse(unknown).phase_coverage_unknown, true)
+  assert.doesNotMatch(unknown, /private|raw-hash/)
+  const crowded = format([...cov, ...Array.from({ length: 60 }, () => phases).flat(), ...rpc])
+  assert.ok(Buffer.byteLength(crowded) <= 960)
+  const limited = parse(crowded)
+  assert.equal(limited.phase_coverage_unknown, true)
+  assert.ok(limited.rpc.some(row => row.m === "recordChange" && typeof row.cs === "number"))
+  assert.ok(limited.rpc.some(row => row.m === "markUncertain" && typeof row.cs === "number"))
+  const anotherUncertainty = [["m", "send"], ["c", "recv"], ["m", "timeout"]]
+    .map(([r, e]) => ({ r, e, m: "markUncertain", q: "000000000003" }))
+  const repeated = parse(format([...cov, ...phases, ...rpc, ...anotherUncertainty]))
+  assert.ok(repeated.rpc.some(row => row.m === "recordChange" && typeof row.ct === "number"))
+  assert.ok(repeated.rpc.some(row => row.m === "markUncertain" && row.q === "000000000003"))
+})
+
 async function waitFor(predicate, { deadlineMs = 10000, intervalMs = 50 } = {}) {
   const deadline = Date.now() + deadlineMs
   for (;;) {
@@ -519,9 +613,11 @@ test("a deliberate git switch mid-session stays put: writes go read-only with th
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "branch", "--track", "feature", "origin/feature")
-  const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"] })
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"], diagnostics: "initial-admission" })
   t.after(() => session.close())
-  assert.equal((await session.statusUntil(settled)).state, "ready")
+  await withReadinessFailure(session, async () => {
+    assert.equal((await session.statusUntil(settled)).state, "ready")
+  })
   // Clean and equal to its upstream: at startup Desk would switch this back; mid-session it must not.
   git(fixture.desk, "switch", "feature")
   await waitFor(() => readLastStart(fixture).state === "degraded:state_branch_mismatch")
