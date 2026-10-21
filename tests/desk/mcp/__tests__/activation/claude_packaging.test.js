@@ -24,7 +24,7 @@ const supportMatrixPath = "plugins/desk/activation/support-matrix.json"
 const claudeNativeWorkerSource = "agents/worker.md"
 const expectedClaudeSourcePaths = [
   "plugins/desk/.claude-plugin/plugin.json",
-  "plugins/desk/.mcp.json",
+  "plugins/desk/.mcp.claude-codex.json",
   `plugins/desk/${claudeNativeWorkerSource}`,
   "plugins/desk/agents/observer.md",
   "plugins/superpowers/.claude-plugin/plugin.json",
@@ -257,7 +257,7 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
 
   assert.equal(deskPlugin.skills, "./skills/")
   assert.deepEqual(deskPlugin.agents, ["./agents/worker.md", "./agents/observer.md"])
-  assert.equal(deskPlugin.mcpServers, "./.mcp.json")
+  assert.equal(deskPlugin.mcpServers, "./.mcp.claude-codex.json")
   // Claude Code loads hooks/hooks.json automatically and rejects a manifest that declares it again.
   assert.equal(Object.hasOwn(deskPlugin, "hooks"), false)
   // The worker agent body is the main-thread identity; a forced output style would load a second copy.
@@ -403,13 +403,13 @@ test("Claude packaging documents its permission and capability boundary", () => 
   assert.deepEqual(claudeActivation?.mcpServers?.desk, {
     launch: "plugin-bundled",
     manualRegistration: false,
-    configPath: ".mcp.json",
+    configPath: ".mcp.claude-codex.json",
   })
 })
 
 test("Claude hook and MCP configuration stay plugin-relative and non-manual", () => {
   const hooks = loadJson("plugins", "desk", "hooks", "hooks.json")
-  const mcp = loadJson("plugins", "desk", ".mcp.json")
+  const mcp = loadJson("plugins", "desk", ".mcp.claude-codex.json")
 
   // compact: the foundation must survive context compaction, as Superpowers and Plain Language already do.
   assert.equal(hooks.hooks.SessionStart[0].matcher, "startup|resume|clear|compact")

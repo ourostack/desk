@@ -21,7 +21,7 @@
     "./agents/worker.md",
     "./agents/observer.md"
   ],
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./.mcp.claude-codex.json",
   "dependencies": [
     {
       "name": "superpowers",

@@ -59,7 +59,7 @@ test("standard SDK memory client keeps explicit handles and rejects invalid call
 })
 
 test("old-Node missing-root inline launcher preserves the exact two healthy schemas", () => {
-  const declaration = JSON.parse(fs.readFileSync(path.join(mcpRoot,"../.mcp.json"))).mcpServers["desk-web"]
+  const declaration = JSON.parse(fs.readFileSync(path.join(mcpRoot,"../.mcp.claude-codex.json"))).mcpServers["desk-web"]
   const stdin = new PassThrough()
   let stdout = ""
   const oldObject = vm.runInNewContext("Object")

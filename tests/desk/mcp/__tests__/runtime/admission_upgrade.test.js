@@ -224,7 +224,7 @@ function reexecNode() {
 const crashPaths = [
   { name: "index.js as the entry point", entry: "index" },
   { name: "bootstrap.cjs running index.js in its own process", entry: "bootstrap" },
-  { name: "the .mcp.json inline launcher running bootstrap.cjs in its own process", entry: "launcher" },
+  { name: "the .mcp.claude-codex.json inline launcher running bootstrap.cjs in its own process", entry: "launcher" },
   { name: "bootstrap.cjs re-running index.js as a child under a Node with a shipped pack", entry: "bootstrap", reexec: true },
 ]
 

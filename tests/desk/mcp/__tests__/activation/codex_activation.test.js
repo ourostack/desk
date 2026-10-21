@@ -207,7 +207,7 @@ test("Codex plugin metadata declares host-native Desk activation surfaces", () =
   const superpowersPlugin = loadJson("plugins", "superpowers", ".codex-plugin", "plugin.json")
 
   assert.equal(deskPlugin.skills, "./skills/")
-  assert.equal(deskPlugin.mcpServers, "./.mcp.json")
+  assert.equal(deskPlugin.mcpServers, "./.mcp.claude-codex.json")
   assert.equal(deskPlugin.hooks, "./hooks/hooks.json")
   assert.equal(deskPlugin.activation?.codex?.defaultMode, "global-personal")
   assert.equal(deskPlugin.activation?.codex?.artifactOwner, "desk-activation")

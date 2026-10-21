@@ -1250,7 +1250,7 @@ test("run finds HOME through USERPROFILE and the running system's home", async (
 // ---- the host configs ----
 
 test("the Claude and Copilot configs declare the web server beside Desk, never a bare playwright name", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers
   assert.deepEqual(Object.keys(claude), ["desk", "desk-web"])
   const server = claude["desk-web"]
   assert.deepEqual(Object.keys(server), ["type", "command", "args", "cwd", "env"])
@@ -1269,7 +1269,7 @@ test("the Claude and Copilot configs declare the web server beside Desk, never a
 // ---- the tool catalog never changes under the host ----
 
 test("the inline launcher's degraded tool names, the degraded catalog and the first-use catalog all list the browser's tools in one order", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
   const declarations=claude.args[1].split("\n").filter(line=>/^var (id|tools)=/.test(line)||/^function described\(/.test(line)).join("\n")
   const inline=new Function(declarations+";return tools")()
   assert.deepEqual(inline.map(tool=>tool.name), browser.BROWSER_TOOL_NAMES)
@@ -1817,7 +1817,7 @@ async function firstCall({ command = process.execPath, args, env, cwd }) {
 
 test("the Claude inline launcher finds the actual two-tool SDK frontend through DESK_PLUGIN_ROOT or cwd without browser installation", posixOnly, async () => {
   const fixture = await fixturePlugin("desk-web-claude-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
   const { session, first } = await firstCall({ args: claude.args, cwd: fixture.root, env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin, FAKE_NPM_DELAY_MS: "1500" } })
   assert.equal(first.error, undefined)
   assert.equal(first.result.isError, true)
@@ -1836,7 +1836,7 @@ test("the Claude inline launcher finds the actual two-tool SDK frontend through 
 
 test("the Claude inline launcher still completes a handshake on this Node when it cannot find the plugin", async () => {
   const cwd = await mkTempRoot("desk-web-noplugin-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-web"]
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers["desk-web"]
   const result = spawnSync(process.execPath, claude.args, {
     cwd,
     encoding: "utf8",
