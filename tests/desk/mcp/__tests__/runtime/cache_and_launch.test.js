@@ -245,12 +245,12 @@ function manifestCases(pluginRoot = deskPluginRoot) {
 function declarationCases(pluginRoot = deskPluginRoot) {
   return [
     {
-      id: "agency shared .mcp.json",
-      sourcePath: path.join(pluginRoot, ".mcp.json"),
+      id: "explicit shared .mcp.claude-codex.json",
+      sourcePath: path.join(pluginRoot, ".mcp.claude-codex.json"),
       configBaseDir: pluginRoot,
       expandTokens: ["CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"],
       resolveRelativeCwdFromConfig: false,
-      resolveServer: () => mcpServerFromConfig(path.join(pluginRoot, ".mcp.json")),
+      resolveServer: () => mcpServerFromConfig(path.join(pluginRoot, ".mcp.claude-codex.json")),
     },
     {
       id: "desk plugin.json",
@@ -295,8 +295,8 @@ function staticLaunchConfigCases() {
 function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
   return [
     {
-      id: "desk .mcp.json",
-      sourcePath: path.join(pluginRoot, ".mcp.json"),
+      id: "desk .mcp.claude-codex.json",
+      sourcePath: path.join(pluginRoot, ".mcp.claude-codex.json"),
       expectedCommand: "node",
       // An inline ES5 launcher: find the plugin through DESK_PLUGIN_ROOT or the working directory, then run the cross-platform bootstrap.
       expectedArgs: (args) => {

@@ -38,7 +38,7 @@ test("the improvement check is the last check and names the open cards, once, wi
   assert.equal(await run(env, improvementCheck), "", "no card, no line")
   await card(desk, cardKey("andon", `${STORE}#7`), 3.5)
   await card(desk, cardKey("loop_alarm", "headless_blocked"), 1)
-  assert.equal(await run(env, improvementCheck), "Desk boot pre-checks: Improvement cards: 2 open (oldest 3 days). Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next")
+  assert.equal(await run(env, improvementCheck), "Desk boot pre-checks: Improvement cards: 2 open (oldest 3 days). Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner")
 }))
 
 test("the improvement check reads a crew desk's own person folder and says an unreadable folder out loud", () => scratch(async ({ env: raw, desk }) => {

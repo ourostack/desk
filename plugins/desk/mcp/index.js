@@ -4,7 +4,7 @@
 // Spawned by consumers as a stdio MCP server. Hosts may pass `--root <path>`
 // directly, or pass/auto-discover an activation config that carries the root,
 // runtime cache, and active worker/overlay identity. Consumers wire this up via
-// the sibling `.mcp.json` declaration.
+// the sibling `.mcp.claude-codex.json` declaration.
 //
 //   node ./mcp/index.js --root ~/AgentBundles/slugger.ouro/desk
 //

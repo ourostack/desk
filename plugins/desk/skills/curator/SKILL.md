@@ -1,15 +1,15 @@
 ---
 name: curator
-description: Work an improvement card by taking the oldest one with `improvement_next` and carry it to a shipped countermeasure, as standing, pre-authorized work the operator need not ask for; handle open andon issues first. Also invoke when the operator explicitly asks to process the open friction backlog (walk each open `_friction/*.md` entry and decide encode / no-op dispositions), with phrases like "let's go through friction", "process the backlog", "curate the friction", "work the improvement cards". Do NOT invoke for appending a new friction entry (that's `friction-management`), answering questions about what's in the backlog, or discussing friction abstractly.
+description: Within an authorized maintenance task, take an improvement card with `improvement_next` and carry it to a shipped countermeasure; handle open andon issues first. Also invoke when the operator explicitly asks to process the friction backlog. Do NOT invoke merely because a helper fails during ordinary work, when another controller owns repair, for appending friction, answering backlog questions, or discussing friction abstractly.
 ---
 
 # Curator
 
-curator has two jobs. the first is the improvement-card routine: the factory's loop opens improvement cards by itself, and an agent that takes one with `improvement_next` carries it to a shipped fix. that is standing work and needs no request. the second is the friction backlog pass, which the operator asks for when the cards have built up and the signal is starting to dim. worker remains the agent; curator is a set of instructions worker follows.
+Curator has two jobs within authorized maintenance scope: the improvement-card routine and the operator-requested friction backlog pass. Automatic card creation is not authority for an ordinary user-task agent to take the card, launch a child or open a tooling PR. Respect an existing repair owner. Worker remains the agent; curator is its procedure, not a competing controller.
 
 ## The improvement-card routine
 
-an improvement card is one file on the desk under `_meta/improvement/`, opened by the factory's loop or by system friction (`docs/factory-local-capture.md`, "The improvement loop"). cards are standing, pre-authorized work: the operator has already said yes, so don't ask before taking one. `improvement_next` claims the oldest open card (or one whose claim ran out) and answers with the card, a `claim_id` and the authority text. it refuses in a noninteractive or headless session. the bounds: 1 live claim per machine, 2 new claims per machine per day, a claim lasts 4 hours. a refusal (`claim_held`, `cap_reached`, `none_open`) says why; don't hunt for card files to work around it.
+An improvement card is one file under `_meta/improvement/`, opened by the factory loop or system friction. Establish that tooling maintenance is in this task's authorized scope before taking one; no repeat approval is needed when that scope already exists. `improvement_next` claims the oldest available card and returns its `claim_id` and authority text. It refuses in a noninteractive or headless session. Existing bounds remain: 1 live claim per machine, 2 new claims per machine per day, a claim lasts 4 hours. A refusal (`claim_held`, `cap_reached`, `none_open`) says why; never hunt for card files to work around it.
 
 the authority, in short: decide and fix. a human is asked only for a true gate: money on a human's payment method, a credential or an account only a human can act in, or an irreversible destructive action. every ruling you make while working the card goes in the countermeasure pull request, and the card links to it.
 

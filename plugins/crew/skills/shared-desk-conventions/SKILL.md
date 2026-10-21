@@ -55,7 +55,7 @@ The shared repo is one git repository. It holds everyone's desks side by side, p
           task.md
           <repo-name>/
             <YYYY-MM-DD>-<slug>/
-    <other-alias>/                      # someone else's desk -- you READ it, you don't WRITE it
+    <other-alias>/                      # attributed peer desk; contributions need authority
   plugins/                              # (optional) the crew's bundled tooling source -- a shared path
 ```
 
@@ -66,9 +66,11 @@ The key identity: **`desks/<alias>/` is one person's full desk** -- everything `
 The single discipline that makes a shared workspace both powerful and safe:
 
 - **Read across everything.** Every agent READS all of `desks/*/` and all of `_shared/`. This is the superpower -- the shared brain that every agent reads, so the team gets smarter automatically and a new desk orients in minutes.
-- **Write only your own.** An agent WRITES only its owner's `desks/<alias>/`. This is the safety -- the concurrency mechanism above.
+- **Write your own by default.** Routine state belongs in the operator's `desks/<alias>/`. An explicitly authorized contribution to another desk uses the conflict-safe contribution path below; it does not become that owner's endorsement.
 
 Reads span the whole repo; writes scope to one subtree. (The desk MCP's `--person <alias>` write-prefix enforces the write side mechanically -- reads and search stay repo-wide because the indexer walks the tree recursively by filename; see `desk:session-start` for the registry-awareness side.)
+
+The home desk is an organizational default, not a universal prohibition on attributed collaboration. For an authorized cross-desk contribution, preserve the owner's existing meaning and unrelated changes, identify the contributor and source, and use the repository's established contribution path in an isolated worktree. Reconcile conflicting live writers before editing. Do not impersonate the owner, replace their perspective, or treat a contribution as agreement. A tool's actual protected-write refusal remains binding: do not change `--person`, broaden permissions or silently switch transports to defeat it. Establish a permitted contribution route before dispatch; if none exists, preserve the proposed contribution without applying the refused mutation.
 
 ## The content taxonomy -- facts vs perspectives vs decisions
 
@@ -119,9 +121,9 @@ There is **NO human review step.** The PR is a serialization primitive, not an a
 | `_shared/...` | multiple writers | auto pull-`main` → branch → write → PR → merge-now (retry if main moved) |
 | `plugins/...` | multiple writers | same conflict-safe protocol |
 | `_shared/tracks/<track>/` | multiple writers | same conflict-safe protocol |
-| `desks/<someone-else>/...` | **not yours** | **don't write** -- read-only |
+| `desks/<someone-else>/...` | attributed contribution only when authorized | conflict-safe contribution path; preserve owner meaning, never bypass protected scope |
 
-> **The test before any write:** *"is this path inside my own `desks/<alias>/`?"* Yes → direct push. No → the conflict-safe protocol (and if it's `desks/<someone-else>/`, you shouldn't be writing it at all). The agent runs this test silently; the human never thinks about it.
+> **The test before any write:** *"is this path inside my own `desks/<alias>/`?"* Yes → direct push. No → establish authority and use the conflict-safe contribution protocol. Another desk requires an authorized, attributed contribution, not a home-organization veto or silent permission expansion. The agent runs this test silently.
 
 ## Shared tracks (when several people work one effort)
 

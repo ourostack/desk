@@ -746,7 +746,7 @@ test("native: the bootstrap completes the MCP handshake on this host", async (t)
 const pluginRoot = path.resolve(mcpRoot, "..")
 
 test("the Claude and Copilot MCP configs launch node with the bootstrap", () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers.desk
   assert.equal(claude.command, "node")
   assert.equal(claude.args[0], "-e")
   // Claude Code expands ${VAR} in args; the inline launcher must not contain that form, and it must parse on very old Node too.
@@ -760,7 +760,7 @@ test("the Claude and Copilot MCP configs launch node with the bootstrap", () => 
 test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or the working directory", {
   skip: process.platform === "win32" ? "fake nodes are POSIX shell scripts" : false,
 }, async () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers.desk
   const root = await mkTempRoot("desk-bootstrap-claude-")
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
@@ -779,7 +779,7 @@ for (const major of [16, 22]) {
   test(`the Claude inline launcher still completes a handshake on Node ${major} when it cannot find the plugin`, {
     skip: nodes.has(major) ? false : `no Node ${major} is installed here`,
   }, async () => {
-    const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+    const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers.desk
     const cwd = await mkTempRoot("desk-no-plugin-cwd-")
     const result = spawnSync(nodes.get(major).executable, claude.args, {
       cwd,
@@ -911,7 +911,7 @@ test("probes share a 3 s budget and version-manager shims on PATH are never run"
 })
 
 test("the Claude inline launcher answers the handshake when bootstrap.cjs itself cannot load", async () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers.desk
   const plugin = await mkTempRoot("desk-bootstrap-broken-plugin-")
   mkdirSync(path.join(plugin, "mcp"))
   writeFileSync(path.join(plugin, "mcp", "bootstrap.cjs"), "module.exports = {\n  run: function (\n")
@@ -933,7 +933,7 @@ test("the Claude inline launcher answers the handshake when bootstrap.cjs itself
 })
 
 test("the Claude inline launcher answers the handshake when bootstrap.cjs run() rejects", async () => {
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.claude-codex.json"), "utf8")).mcpServers.desk
   const plugin = await mkTempRoot("desk-bootstrap-rejecting-plugin-")
   mkdirSync(path.join(plugin, "mcp"))
   writeFileSync(path.join(plugin, "mcp", "bootstrap.cjs"), "module.exports = { run: function () { return Promise.reject(new Error('run rejected late')) } }\n")

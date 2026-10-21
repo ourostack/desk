@@ -59,8 +59,25 @@ for (const [name, dir] of Object.entries(locations)) {
 process.env.COPILOT_HOME = path.join(home, ".copilot")
 // Desk commits only on the branch it expects (`main` unless the remote or the host says otherwise), so a fixture repository must start on `main`, whatever the machine's own default is.
 fs.writeFileSync(path.join(home, ".gitconfig"), "[init]\n\tdefaultBranch = main\n")
-// os.homedir() reads USERPROFILE on Windows.
-if (process.platform === "win32") process.env.USERPROFILE = home
+// Windows profile discovery and PowerShell must not inherit the runner's real
+// AppData paths when the suite runs as its separate standard-user account.
+if (process.platform === "win32") {
+  const windowsLocations = {
+    USERPROFILE: home,
+    APPDATA: path.join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: path.join(home, "AppData", "Local"),
+  }
+  for (const [name, dir] of Object.entries(windowsLocations)) {
+    originalMkdir(dir, { recursive: true })
+    for (const key of Object.keys(process.env))
+      if (key.toUpperCase() === name) process.env[key] = dir
+    process.env[name] = dir
+  }
+  const analysisCache = process.env.PSModuleAnalysisCachePath ??
+    path.join(os.tmpdir(), "desk-test-ps-analysis-cache", "ModuleAnalysisCache")
+  originalMkdir(path.dirname(analysisCache), { recursive: true })
+  process.env.PSModuleAnalysisCachePath = analysisCache
+}
 // Git for Windows commonly sets autocrlf and safecrlf in its system config.
 // Fixture repositories must not inherit the machine's line-ending or hook policy.
 process.env.GIT_CONFIG_NOSYSTEM = "1"

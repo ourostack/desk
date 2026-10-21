@@ -503,8 +503,8 @@ export function improvementCountText({ open, oldest_days: oldest, truncated }) {
 /** The card files only a session can repair, one phrase each, for the counts above zero. */
 export function improvementNotes({ set_aside: setAside, unreadable_files: unreadable }) {
   return [
-    ...(setAside > 0 ? [`${setAside} ${setAside === 1 ? "file was" : "files were"} set aside as invalid in the improvement folder under _meta (restore or delete ${setAside === 1 ? "it" : "them"} and commit)`] : []),
-    ...(unreadable > 0 ? [`${unreadable} card ${unreadable === 1 ? "file could not be read and was" : "files could not be read and were"} left in place (fix ${unreadable === 1 ? "its" : "their"} permissions or delete ${unreadable === 1 ? "it" : "them"} and commit)`] : []),
+    ...(setAside > 0 ? [`${setAside} ${setAside === 1 ? "file was" : "files were"} set aside as invalid in the improvement folder under _meta (preserve for the authorized repair owner)`] : []),
+    ...(unreadable > 0 ? [`${unreadable} card ${unreadable === 1 ? "file could not be read and was" : "files could not be read and were"} left in place (preserve for the authorized repair owner)`] : []),
   ]
 }
 
@@ -514,7 +514,7 @@ export function improvementLine(summary) {
   if (summary.status === "unchecked") return `Improvement cards: not checked, because ${UNCHECKED[summary.reason] ?? "this session's person is not known"}`
   if (summary.status !== "ok") return "Improvement cards: unreadable (check the improvement folder under _meta on the desk)"
   const parts = [
-    ...(summary.open > 0 ? [`${improvementCountText(summary)}. Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next`] : []),
+    ...(summary.open > 0 ? [`${improvementCountText(summary)}. Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner`] : []),
     ...improvementNotes(summary),
   ]
   return parts.length === 0 ? "" : `Improvement cards: ${parts.join("; ")}`

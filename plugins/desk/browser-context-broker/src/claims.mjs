@@ -1,14 +1,8 @@
+import { BrokerError } from './primitives/broker-error.mjs';
+export { BrokerError };
+
 const SET_CLAIMS = new Set(['posture', 'capabilities']);
 const ALLOW_LIST_CLAIMS = new Set(['identity', 'tenant']);
-
-export class BrokerError extends Error {
-  constructor(code, message, details = {}) {
-    super(message);
-    this.name = 'BrokerError';
-    this.code = code;
-    this.details = details;
-  }
-}
 
 function values(value) {
   return Array.isArray(value) ? value : [value];

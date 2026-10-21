@@ -259,6 +259,131 @@ test("a subagent's task prompt and its SendMessage resume make two subagent turn
   assert.deepEqual(findInterval(facts.intervals, (iv) => iv.kind === "human_wait" && iv.agent !== 0), [])
 })
 
+for (const kind of ["coordinator", "task-notification"]) {
+  test(`a meta ${kind} input resumes a child without counting the overnight gap as work or human attention`, async () => {
+    const prompt = (timestamp, extra = {}) => ({ type: "user", timestamp, message: { content: SENTINEL }, ...extra })
+    const reply = (timestamp) => ({ type: "assistant", timestamp, message: { id: timestamp, model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } })
+    const input = prompt("2026-09-26T08:00:01.000Z", { isMeta: true, origin: { kind } })
+    if (kind === "task-notification") input.message.content = [{ type: "text", text: SENTINEL }]
+    const root = [
+      { ...prompt("2026-09-25T08:00:00.000Z"), version: "2.1.285", origin: { kind: "human" } },
+      reply("2026-09-25T08:00:00.500Z"),
+      input,
+      reply("2026-09-26T08:00:03.000Z"),
+    ]
+    const child = [
+      prompt("2026-09-25T08:00:01.000Z"),
+      reply("2026-09-25T08:00:02.000Z"),
+      input,
+      reply("2026-09-26T08:00:02.000Z"),
+    ].map((line) => ({ ...line, isSidechain: true }))
+    const { facts } = await deriveLines(root, "complete", { "agent-resumed": child })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:02.000Z" },
+      { kind: "turn", agent: 1, start: "2026-09-26T08:00:01.000Z", end: "2026-09-26T08:00:02.000Z" },
+    ])
+    assert.equal(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 0).length, 1)
+    assert.equal(facts.human_turns.length, 1)
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "human_wait"), [])
+    assert.deepEqual(validateLocalFacts(facts).errors, [])
+    assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  })
+}
+
+test("child execution inputs exclude system injections, compactions, tool results, unknown origins and empty content", async () => {
+  const base = { timestamp: "2026-09-25T08:00:01.000Z", type: "user", isSidechain: true, isMeta: true, origin: { kind: "coordinator" }, message: { content: SENTINEL } }
+  const ignored = [
+    { promptSource: "system" },
+    { isCompactSummary: true },
+    { origin: { kind: "system" } },
+    { origin: undefined },
+    { message: { content: [] } },
+    { message: { content: [{ type: "tool_result", tool_use_id: "absent", content: SENTINEL }] } },
+  ].map((extra) => ({ ...base, ...extra }))
+  const { facts } = await deriveLines([
+    { type: "user", version: "2.1.285", timestamp: "2026-09-25T08:00:00.000Z", message: { content: SENTINEL } },
+  ], "complete", { "agent-injections": ignored })
+  assert.deepEqual(facts.intervals.filter((iv) => iv.agent === 1), [])
+})
+
+for (const kind of ["coordinator", "task-notification"]) {
+  test(`a ${kind} input during a streamed child response preserves continuous execution`, async () => {
+    const prompt = (timestamp, extra = {}) => ({ type: "user", timestamp, message: { content: SENTINEL }, ...extra })
+    const reply = (timestamp, stop_reason) => ({ type: "assistant", timestamp, message: { id: "same-stream", model: "claude-sonnet-5", stop_reason, content: [{ type: "text", text: SENTINEL }] } })
+    const { facts } = await deriveLines([
+      { ...prompt("2026-09-25T08:00:00.000Z"), version: "2.1.285" },
+      reply("2026-09-25T08:02:00.000Z", "end_turn"),
+    ], "complete", { "agent-streamed": [
+      prompt("2026-09-25T08:00:01.000Z"),
+      reply("2026-09-25T08:00:02.000Z", null),
+      prompt("2026-09-25T08:00:51.000Z", { isMeta: true, origin: { kind } }),
+      reply("2026-09-25T08:01:41.000Z", "end_turn"),
+    ] })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:01:41.000Z" },
+    ])
+  })
+}
+
+for (const mixed of [false, true]) {
+  test(`a notification during a pending child tool preserves execution${mixed ? " with the result on the notification line" : ""}`, async () => {
+    const prompt = { type: "user", timestamp: "2026-09-25T08:00:00.000Z", version: "2.1.285", message: { content: SENTINEL } }
+    const result = { type: "tool_result", tool_use_id: "running", content: SENTINEL }
+    const notification = { type: "user", timestamp: mixed ? "2026-09-25T08:01:31.000Z" : "2026-09-25T08:00:51.000Z", isMeta: true, origin: { kind: "task-notification" }, message: { content: [{ type: "text", text: SENTINEL }, ...(mixed ? [result] : [])] } }
+    const child = [
+      { ...prompt, timestamp: "2026-09-25T08:00:01.000Z" },
+      { type: "assistant", timestamp: "2026-09-25T08:00:02.000Z", message: { id: "tool", model: "claude-sonnet-5", stop_reason: "tool_use", content: [{ type: "tool_use", id: "running", name: "Bash", input: { command: "true" } }] } },
+      notification,
+      ...(!mixed ? [{ type: "user", timestamp: "2026-09-25T08:01:31.000Z", message: { content: [result] } }] : []),
+      { type: "assistant", timestamp: "2026-09-25T08:01:41.000Z", message: { id: "done", model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } },
+    ]
+    const { facts } = await deriveLines([prompt], "complete", { "agent-running": child })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:01:41.000Z" },
+    ])
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "tool" && iv.agent === 1).map(({ start, end }) => [start, end]), [
+      ["2026-09-25T08:00:02.000Z", "2026-09-25T08:01:31.000Z"],
+    ])
+  })
+}
+
+test("an untimed stopped-child resume cannot stretch the old turn overnight or read as complete coverage", async () => {
+  const prompt = (timestamp, extra = {}) => ({ type: "user", timestamp, message: { content: SENTINEL }, ...extra })
+  const reply = (timestamp) => ({ type: "assistant", timestamp, message: { id: timestamp, model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } })
+  const { facts } = await deriveLines([
+    { ...prompt("2026-09-25T08:00:00.000Z"), version: "2.1.285" },
+  ], "complete", { "agent-undated": [
+    prompt("2026-09-25T08:00:01.000Z"),
+    reply("2026-09-25T08:00:02.000Z"),
+    prompt(undefined, { isMeta: true, origin: { kind: "coordinator" } }),
+    reply("2026-09-26T08:00:02.000Z"),
+  ] })
+  assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+    { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:02.000Z" },
+  ])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "source_unreadable"))
+  assert.deepEqual(validateLocalFacts(facts).errors, [])
+})
+
+for (const knownStart of [false, true]) {
+  test(`untimed child boundaries ${knownStart ? "retain only the known prompt instant when the reply is undated" : "never invent an initial execution start"}`, async () => {
+    const prompt = { type: "user", message: { content: SENTINEL } }
+    const resume = { ...prompt, isMeta: true, origin: { kind: "coordinator" } }
+    const child = [
+      ...(knownStart ? [{ ...prompt, timestamp: "2026-09-25T08:00:01.000Z" },
+        { type: "assistant", message: { id: "undated", model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } }] : []),
+      resume,
+      { type: "assistant", timestamp: "2026-09-26T08:00:02.000Z", message: { id: "next-day", model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } },
+    ]
+    const { facts } = await deriveLines([{ ...prompt, version: "2.1.285", timestamp: "2026-09-25T08:00:00.000Z" }], "complete", { "agent-undated-boundaries": child })
+    assert.deepEqual(facts.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), knownStart ? [
+      { kind: "turn", agent: 1, start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:01.000Z" },
+    ] : [])
+    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "source_unreadable"))
+    assert.deepEqual(validateLocalFacts(facts).errors, [])
+  })
+}
+
 test("isMeta, isCompactSummary, promptSource:system/origin:task-notification, and a non-human origin.kind are all excluded from turns", async () => {
   const { facts } = await deriveFull()
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn" && iv.agent === 0)
@@ -481,11 +606,16 @@ const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
 const SUB_SESSION_ID = "2a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
 const GIT_SESSION_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
 
-async function deriveLines(lines, endReason = "prompt_input_exit") {
+async function deriveLines(lines, endReason = "prompt_input_exit", children = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-shell-git-"))
   try {
     const transcript = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
     writeFileSync(transcript, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+    for (const [name, childLines] of Object.entries(children)) {
+      const childDir = path.join(dir, GIT_SESSION_ID, "subagents")
+      mkdirSync(childDir, { recursive: true })
+      writeFileSync(path.join(childDir, `${name}.jsonl`), `${childLines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+    }
     return await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason })
   } finally {
     rmSync(dir, { recursive: true, force: true })

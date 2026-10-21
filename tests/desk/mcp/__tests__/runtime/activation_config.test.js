@@ -1,5 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
+import { createInterface } from "node:readline"
 import {
   chmodSync,
   existsSync,
@@ -14,25 +17,11 @@ import {
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { setTimeout as sleep } from "node:timers/promises"
 import { openSession } from "../launch/_mcp_session.js"
+import { mkTempRoot, recordControllers, removeRootsAfterControllers } from "../_temp_roots.js"
 
-// The writer is the readiness controller child the server forks (readiness/controller-process.js: `child.unref()`, stdio "ipc"). It is a separate process, so it is still alive when `session.close()` returns:
-// it sees the IPC channel close, runs its own close (readiness/controller-child.js) and writes the final journal entry, within its 1 s close deadline (`proc.exit(1)` after 1000 ms).
-// That is by design and bounded, not a leak: the child always exits within a second of the server. It was inferred from the code and from the journal files landing about 60 ms after `task.md` in the failing run, not from a trace of the writing process.
-// So a first removal can meet a file created after it listed the folder.
-// Node's own retries only repeat the final rmdir and never see that file, so the whole removal is run again until the folder is gone.
-async function removeFixture(root) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      rmSync(root, { recursive: true, force: true })
-      return
-    } catch (error) {
-      if (error.code !== "ENOTEMPTY" || attempt >= 50) throw error
-      await sleep(100)
-    }
-  }
-}
+// The stdio helper records live controllers for registered session roots before owner.json can disappear.
+const removeFixture = root => removeRootsAfterControllers([root])
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
@@ -54,8 +43,7 @@ function makeDesk(dir) {
   mkdirSync(path.join(dir, "_archive"), { recursive: true })
 }
 
-function makeFixture() {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-activation-config-"))
+function makeFixture(root = mkdtempSync(path.join(tmpdir(), "desk-activation-config-"))) {
   const dirs = {
     root,
     explicitRoot: path.join(root, "explicit-desk"),
@@ -76,6 +64,10 @@ function makeFixture() {
   return dirs
 }
 
+async function makeSessionFixture() {
+  return makeFixture(await mkTempRoot("desk-activation-config-"))
+}
+
 function writeActivationConfig(filePath, rootPath, extra = {}) {
   writeFileSync(
     filePath,
@@ -94,6 +86,60 @@ function requireFunction(module, name) {
   assert.equal(typeof module[name], "function", `${name} must be exported`)
   return module[name]
 }
+
+test("activation fixture cleanup retains a recorded child after its owner record disappears", async t => {
+  const fixture = await makeSessionFixture()
+  const ownerFile = path.join(fixture.root, "controlled-readiness", "owner.json")
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+import fs from "node:fs";
+import path from "node:path";
+const file = ${JSON.stringify(ownerFile)};
+fs.mkdirSync(path.dirname(file), { recursive: true });
+fs.writeFileSync(file, JSON.stringify({ owner: {
+  kind: "controller_child", pid: process.pid, process_start: null, parent_pid: process.ppid
+} }));
+process.stdin.once("data", () => {
+  fs.unlinkSync(file);
+  process.stdout.write("owner-retired\\n");
+});
+process.stdin.once("end", () => process.exit(0));
+process.stdout.write("ready\\n");
+`], { cwd: fixture.root, env: process.env, stdio: ["pipe", "pipe", "pipe"] })
+  const closed = once(child, "close")
+  const lines = createInterface({ input: child.stdout })
+  const nextLine = () => Promise.race([
+    once(lines, "line").then(([line]) => line),
+    closed.then(() => { throw new Error("controlled readiness child closed before its acknowledgement") }),
+  ])
+  let removal, finished = false
+  t.after(async () => {
+    if (!child.stdin.writableEnded) child.stdin.end()
+    await closed
+    lines.close()
+    if (removal) {
+      const result = await removal
+      if (!result.ok) throw result.error
+    } else await removeFixture(fixture.root)
+  })
+  assert.equal(await nextLine(), "ready")
+  assert.deepEqual(recordControllers(fixture.root), [child.pid], "capture this actual spawned child while its record exists")
+  const retired = nextLine()
+  child.stdin.write("retire\n")
+  assert.equal(await retired, "owner-retired")
+  assert.equal(existsSync(ownerFile), false)
+  removal = removeFixture(fixture.root).then(() => ({ ok: true }), error => ({ ok: false, error }))
+  removal.then(() => { finished = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(finished, false)
+  assert.equal(existsSync(fixture.root), true)
+  child.stdin.end()
+  const [code, signal] = await closed
+  assert.equal(code, 0)
+  assert.equal(signal, null)
+  const result = await removal
+  assert.equal(result.ok, true, result.error?.code)
+  assert.equal(existsSync(fixture.root), false)
+})
 
 function projectTried(result) {
   return result.tried.map((entry) => [entry.source, entry.path])
@@ -944,7 +990,7 @@ test("entrypoint guard handles direct launch, import, realpath fallback, and fat
 test("entrypoint stdio startup uses activation config root for real MCP tool calls", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
 }, async () => {
-  const fixture = makeFixture()
+  const fixture = await makeSessionFixture()
   try {
     writeActivationConfig(fixture.configPath, fixture.activationRoot)
     const result = await runTaskCreateThroughEntrypoint(fixture)
@@ -968,7 +1014,7 @@ test("entrypoint stdio startup uses activation config root for real MCP tool cal
 test("entrypoint stdio startup lets host/session root override activation config root", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
 }, async () => {
-  const fixture = makeFixture()
+  const fixture = await makeSessionFixture()
   try {
     writeActivationConfig(fixture.configPath, fixture.activationRoot)
     const result = await runTaskCreateThroughEntrypoint(fixture, {
@@ -1005,7 +1051,7 @@ test("entrypoint stdio startup lets host/session root override activation config
 test("entrypoint stdio startup uses relative activation runtime cache and reuses it on repeated startup", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${process.platform}-${process.arch}-node-${process.versions.modules}`,
 }, async () => {
-  const fixture = makeFixture()
+  const fixture = await makeSessionFixture()
   try {
     const activationCacheRelative = "activation-runtime-cache"
     const activationCache = path.join(fixture.root, activationCacheRelative)

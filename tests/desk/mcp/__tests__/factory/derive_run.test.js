@@ -264,7 +264,7 @@ test("a status-only update alone binds no job", () => scratch(async (ctx) => {
   assert.equal(receipt.own_activity.length, 1, "the call is still the session's own activity")
 }))
 
-test("the receipt has binding_version: 7, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
+test("the receipt has binding_version: 8, bound_by, own_activity (at most 500) and focus_disagrees", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
   const marker = await session(ctx)
   await writeCard(ctx, "track/task")
@@ -281,8 +281,8 @@ test("the receipt has binding_version: 7, bound_by, own_activity (at most 500) a
   const status = await readStatus(ctx.env)
   const receipt = status.derivations[name]
   const [job] = Object.keys(await readJobsIndex(ctx.env))
-  assert.equal(BINDING_VERSION, 7)
-  assert.equal(receipt.binding_version, 7)
+  assert.equal(BINDING_VERSION, 8)
+  assert.equal(receipt.binding_version, 8)
   assert.deepEqual(receipt.bound_by, { [job]: "focus" })
   assert.deepEqual(receipt.focus_disagrees, [job])
   // The update at two minutes in, widened by a minute each way, in milliseconds from the session's start.
@@ -462,21 +462,53 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
 
 test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
   const { deriveMarker, BINDING_VERSION } = await runner()
-  assert.equal(BINDING_VERSION, 7)
+  assert.equal(BINDING_VERSION, 8)
   const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
   const name = `claude-code-${ID}.json`
   const receipt = (await readStatus(ctx.env)).derivations[name]
   assert.equal(receipt.binding_version, BINDING_VERSION)
-  // 6 is the version before the derivers recorded stop facts, PR creation and the ask-tool waits.
-  for (const older of [undefined, 1, 2, 3, 4, 6]) {
+  for (const older of [undefined, 1, 2, 3, 4, 6, 7]) {
     const { binding_version, ...legacy } = receipt
     await writeStatus(ctx.env, { derivations: { [name]: older === undefined ? legacy : { ...legacy, binding_version: older } } })
     assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
     assert.equal((await readStatus(ctx.env)).derivations[name].binding_version, BINDING_VERSION)
     assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped", "the second sweep skips it")
   }
+}))
+
+test("the ordinary sweep repairs an unchanged ended child's version-7 execution envelope once", () => scratch(async (ctx) => {
+  const { deriveMarker, sweep } = await runner()
+  const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
+  const childDir = path.join(path.dirname(marker.log_path), ID, "subagents")
+  await fs.mkdir(childDir, { recursive: true })
+  const child = [
+    { type: "user", timestamp: "2026-09-26T08:00:01.000Z", message: { content: SENTINEL } },
+    { type: "assistant", timestamp: "2026-09-26T08:00:02.000Z", message: { model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } },
+    { type: "user", timestamp: "2026-09-26T08:00:40.000Z", isMeta: true, origin: { kind: "coordinator" }, message: { content: SENTINEL } },
+    { type: "assistant", timestamp: "2026-09-26T08:00:41.000Z", message: { model: "claude-sonnet-5", stop_reason: "end_turn", content: [{ type: "text", text: SENTINEL }] } },
+  ].map((line) => ({ ...line, isSidechain: true }))
+  await fs.writeFile(path.join(childDir, "agent-resumed.jsonl"), `${child.map((line) => JSON.stringify(line)).join("\n")}\n`)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  await deriveMarker(ctx.env, marker)
+  const name = `claude-code-${ID}.json`
+  const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name)
+  const previous = JSON.parse(await fs.readFile(file, "utf8"))
+  previous.intervals = previous.intervals.filter((iv) => iv.agent !== 1)
+  previous.intervals.push({ kind: "turn", agent: 1, start: child[0].timestamp, end: child[3].timestamp })
+  await fs.writeFile(file, JSON.stringify(previous))
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  await writeStatus(ctx.env, { derivations: { [name]: { ...receipt, binding_version: 7 } } })
+  await sweep(ctx.env, { quietMs: 0 })
+  const repaired = JSON.parse(await fs.readFile(file, "utf8"))
+  assert.deepEqual(repaired.intervals.filter((iv) => iv.kind === "turn" && iv.agent === 1), [
+    { kind: "turn", agent: 1, start: "2026-09-26T08:00:01.000Z", end: "2026-09-26T08:00:02.000Z" },
+    { kind: "turn", agent: 1, start: "2026-09-26T08:00:40.000Z", end: "2026-09-26T08:00:41.000Z" },
+  ])
+  assert.equal((await readStatus(ctx.env)).derivations[name].binding_version, 8)
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
 }))
 
 test("a current receipt still skips", () => scratch(async (ctx) => {
@@ -739,7 +771,7 @@ async function orphan(ctx, { declare = true, receiptRoot = true, cwd = ctx.desk,
   if (stale || !receiptRoot) {
     await staleReceipt(ctx, name, (receipt) => {
       if (!receiptRoot) delete receipt.desk_root
-      if (!stale) receipt.binding_version = 7
+      if (!stale) receipt.binding_version = 8
       return receipt
     })
   }
@@ -1770,7 +1802,7 @@ test("the receipt still records segments_capped_ms as before", () => scratch(asy
   await deriveMarker(ctx.env, marker)
   const receipt = (await readStatus(ctx.env)).derivations[`claude-code-${ID}.json`]
   assert.equal(Number.isInteger(receipt.segments_capped_ms) && receipt.segments_capped_ms > 0, true)
-  assert.equal(receipt.binding_version, 7)
+  assert.equal(receipt.binding_version, 8)
 }))
 
 // Capture coverage (capture-sweep.js): the sweep makes one call after the orphan pass and reports it in its summary.

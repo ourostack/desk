@@ -1,14 +1,11 @@
-// Desk's default browser: starts the Playwright MCP server from a copy installed in Desk's per-user state folder, and keeps that copy on the `@playwright/mcp@latest` channel, so every fresh Desk install has a working browser with no setup.
+// Normal maintained-browser runtime preparation, discovery and detached refresh.
+// These facades remain shared by private and signed-in explicit controllers.
+// Installs publish a verified immutable generation under the existing lock;
+// refresh never rewrites the generation of a retained daemon.
 //
-// - Session start never waits on the network once a copy is installed. The launcher starts the installed copy at once and then starts a detached refresher, which asks npm for the channel's current release and, when it differs, installs it into a new folder and switches the `current.json` pointer with an atomic rename. The next launch uses the new release, so a session is at most one launch behind the channel. There is no pinned version or commit.
-// - The first launch on a machine answers the host's handshake at once and installs the copy meanwhile; web-proxy.cjs holds browser calls until the install finishes and then passes them to Playwright MCP, so a first call waits instead of failing and the tool catalog never changes under the host. Every npm call runs with no fetch retries and a short fetch timeout, so an unreachable registry fails in seconds with a message naming the registry, instead of after minutes.
-// - Installs and refreshes run under one lock file, so sessions that start together never race: one installs while the others wait for it or, with a copy already installed, skip the refresh.
-// - Desk applies a small, exact-source Playwright lifecycle patch before publishing an install, so closing a session after failed acquisition never starts another browser. A cached stock generation migrates offline into a new folder; live generations are never edited. Unsupported upstream code cannot replace a verified generation and is reported explicitly.
-// - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
-// - Desk's default browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
-// - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
-// - A plugin's `desk.browser` declaration selects the signed-in profile and extension credential. The staged acquisition patch refreshes that credential before each new relay; web-real-tabs.cjs provides output redaction, not automatic tab cleanup. Other authenticated or persistent browser contexts use the claims-based browser context broker (desk:cdp-headed-browser).
-// - This file backs the `desk-web` MCP server Desk declares beside `desk` (its tools read `mcp__plugin_desk_desk-web__browser_navigate` and so on). Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every tool is listed as unavailable and every call answers with a `status`, a `code` and a `fix`, the same shape `desk`'s own bootstrap serves when it cannot start. The one difference: `desk` keeps `desk_status`/`desk_doctor` answering without `isError` so a resuming agent can still ask "what's wrong"; the browser has no diagnostic tool of its own, so every call here answers with `isError: true` and the fix is in the payload itself.
+// The desk-web entry now starts the browser-only standard-SDK frontend with
+// browser_context/browser_command. Handshake/list never acquire a browser.
+// There is no routable legacy page-tool proxy or signed-in/private fallback.
 //
 // Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
 
@@ -19,17 +16,14 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
-var proxy = require("./web-proxy.cjs");
-var realProfile = require("./web-real-profile.cjs");
-var credential = require("./web-extension-credential.cjs");
 var playwrightPatch = require("./web-playwright-patch.cjs");
+var browserDiscovery = require("./web-browser-discovery.cjs");
 
 var PACKAGE_NAME = "@playwright/mcp";
 var PACKAGE = PACKAGE_NAME + "@latest";
 // Installed beside Playwright MCP only when a plugin declares a real browser profile: classic-level so a real-browser launch can read the Playwright Extension's token from the profile's LevelDB (it ships prebuilt N-API binaries, so one install serves every Node), and ws for the tab-cleanup relay in web-real-tabs.cjs.
 var LEVEL_PACKAGE = "classic-level@1.4.1";
 var WS_PACKAGE = "ws@8.21.3";
-var REAL_TABS = path.join(__dirname, "web-real-tabs.cjs");
 // Left in an install folder when the reader could not be installed (for example, no prebuilt binary for this platform), so the install is not repeated at every launch.
 var READER_UNAVAILABLE = "reader-unavailable";
 // A marker this old is tried again once, because one transient npm failure should not leave a machine without the reader until the next release.
@@ -41,17 +35,8 @@ var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
 var BROWSER_CHOICE = ["--browser", "--executable-path"].concat(CONNECT);
 var REFRESH_FLAG = "--desk-web-refresh";
 var DEFAULT_PROTOCOL = "2025-06-18";
-// The tool names Playwright MCP's currently-installed channel exposes, used only so the degraded tools/list below
-// looks like the real server's. Desk tracks @playwright/mcp@latest with no pinned version (see PACKAGE above), so
-// this list can drift from a future release's; that is harmless, because every tools/call below answers with the
-// same degraded payload whatever name it is asked for.
-var BROWSER_TOOL_NAMES = [
-  "browser_click", "browser_close", "browser_console_messages", "browser_drag", "browser_drop",
-  "browser_emulate_media", "browser_evaluate", "browser_file_upload", "browser_fill_form", "browser_find",
-  "browser_handle_dialog", "browser_hover", "browser_navigate", "browser_navigate_back", "browser_network_request",
-  "browser_network_requests", "browser_press_key", "browser_resize", "browser_run_code_unsafe", "browser_select_option",
-  "browser_snapshot", "browser_tabs", "browser_take_screenshot", "browser_type", "browser_wait_for"
-];
+// Healthy and degraded entry points expose the same explicit-context catalog.
+var BROWSER_TOOL_NAMES = ["browser_context", "browser_command"];
 // npm without retries and with a short fetch timeout: an unreachable registry fails in seconds, not minutes.
 var NPM_ENV = {
   npm_config_fetch_retries: "0",
@@ -63,9 +48,7 @@ var NPM_ENV = {
 };
 // How long the first install may take. A launch with no installed copy answers the host's handshake at once and holds browser calls meanwhile (web-proxy.cjs), so this is not bound by the host's connection timeout; it stays below the proxy's hold time for a call, so a call that arrives at start still gets the browser before it gives up.
 var FIRST_INSTALL_MS = 110000;
-var CATALOG_FILE = path.join(__dirname, "web-catalog.json");
 var REFRESH_MS = 180000;
-var REGISTRY_MS = 5000;
 var WAIT_STEP_MS = 250;
 var LOCK_STALE_MS = 10 * 60 * 1000;
 // Older installs stay this long, so a long-running session never loses the files it started from.
@@ -122,51 +105,20 @@ function hasOption(args, names) {
 
 // ---- which browser ----
 
-// Where Playwright itself looks for the chrome and msedge channels, per platform.
-function browserPaths(browser, platform, env) {
-  if (platform === "win32") {
-    var roots = ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"].map(function (name) {
-      var key = Object.keys(env).filter(function (candidate) {
-        return candidate.toUpperCase() === name;
-      })[0];
-      return env[key];
-    }).filter(Boolean);
-    var tail = browser === "chrome" ? ["Google", "Chrome", "Application", "chrome.exe"] : ["Microsoft", "Edge", "Application", "msedge.exe"];
-    return roots.map(function (root) {
-      return path.win32.join.apply(path.win32, [root].concat(tail));
-    });
-  }
-  if (platform === "darwin") return ["/Applications/" + macBundle(browser)];
-  return browser === "chrome" ? ["/opt/google/chrome/chrome"] : ["/opt/microsoft/msedge/msedge"];
+var browserPaths = browserDiscovery.browserPaths;
+var channelBrowserSelection = browserDiscovery.channelBrowserSelection;
+var firstExisting = browserDiscovery.firstExisting;
+
+function browserSelection(args, platform, env, fileExists) {
+  if (hasOption(args, BROWSER_CHOICE)) return { args: [], executablePath: null };
+  var chrome = channelBrowserSelection("chrome", platform, env, fileExists);
+  return chrome.executablePath ? chrome : channelBrowserSelection("msedge", platform, env, fileExists);
 }
 
-function macBundle(browser) {
-  var app = browser === "chrome" ? "Google Chrome" : "Microsoft Edge";
-  return app + ".app/Contents/MacOS/" + app;
-}
-
-// Per-user install locations Playwright does not look in; a browser found only there is passed by path.
-function userBrowserPaths(browser, platform, env) {
-  if (platform !== "darwin" || !env.HOME) return [];
-  return [path.posix.join(env.HOME, "Applications", macBundle(browser))];
-}
-
-function firstExisting(files, fileExists) {
-  for (var index = 0; index < files.length; index += 1) {
-    if (fileExists(files[index])) return files[index];
-  }
-  return null;
-}
-
-// The browser options to add: none when the caller chose a browser or Chrome is where Playwright looks; Chrome's path when it is only in ~/Applications; Edge when only Edge is installed; none otherwise.
+// Keep legacy MCP arguments unchanged; isolated clients also need the selected
+// binary because their private environment no longer contains discovery paths.
 function browserArgs(args, platform, env, fileExists) {
-  if (hasOption(args, BROWSER_CHOICE)) return [];
-  if (firstExisting(browserPaths("chrome", platform, env), fileExists)) return [];
-  var chrome = firstExisting(userBrowserPaths("chrome", platform, env), fileExists);
-  if (chrome) return ["--executable-path", chrome];
-  if (firstExisting(browserPaths("msedge", platform, env), fileExists)) return ["--browser", "msedge"];
-  var edge = firstExisting(userBrowserPaths("msedge", platform, env), fileExists);
-  return edge ? ["--browser", "msedge", "--executable-path", edge] : [];
+  return browserSelection(args, platform, env, fileExists).args;
 }
 
 // Everything passed to Playwright MCP: Desk's defaults (unless the caller connects to a running browser), the output folder in Desk's state folder (unless the caller chose one), then the caller's own options.
@@ -322,8 +274,8 @@ function npmError(result, what) {
     if (!body || /^(syscall|errno) |^at |complete log of this run|^\d+$/.test(body)) return;
     detail = either(detail, body);
   });
-  if (detail === null) return code === null ? what + " exited with code " + result.code : code;
-  return code === null ? detail : code + ": " + detail;
+  if (detail === null) return redactSignedUrls(code === null ? what + " exited with code " + result.code : code);
+  return redactSignedUrls(code === null ? detail : code + ": " + detail);
 }
 
 function lastLine(text) {
@@ -521,8 +473,13 @@ function wait(ms) {
 }
 
 // npm's error text with any credential removed: the user and password of a registry address, and an auth token setting.
+function redactSignedUrls(text) {
+  return String(text).replace(/https?:\/\/[^\s"'<>]+/gi, function (url) {
+    return /[?&](?:sig|signature|x-amz-signature|x-goog-signature)=/i.test(url) ? "<redacted-url>" : url;
+  });
+}
 function scrub(text) {
-  return String(text)
+  return redactSignedUrls(text)
     .replace(/\/\/\S*@/g, "//<redacted>@")
     .replace(/\b(Bearer|Basic)\s+\S+/gi, "$1 <redacted>")
     .replace(/\bnpm_[A-Za-z0-9]{20,}/g, "<redacted>")
@@ -629,18 +586,8 @@ function reconnectFix(action) {
   return action + ", then reconnect the desk-web MCP server (in Claude Code run /mcp and reconnect desk-web; otherwise start a new session).";
 }
 
-function degraded(code, summary, fix) {
-  return { status: "degraded", state: "degraded:" + code, code: code, summary: summary, fix: fix };
-}
-
 function placeholderTools() {
-  return BROWSER_TOOL_NAMES.map(function (name) {
-    return {
-      name: name,
-      description: "Unavailable: the browser could not start. Call this tool for the code and the fix.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: true }
-    };
-  });
+  return require("./web-catalog.json").tools;
 }
 
 function respond(stdout, id, body) {
@@ -717,30 +664,12 @@ function serveDegraded(options) {
 
 // ---- run ----
 
-// Writes one stderr line naming what went wrong, then keeps the process alive serving the degraded handshake above
-// until the host closes stdin -- never exit(1), which left an agent with a failed server and no message it could
-// read.
-function failure(io, code, summary, fix) {
-  io.stderr.write("[web] " + summary + "; serving degraded:" + code + "\n");
-  return degraded(code, summary, fix);
-}
-
-function fail(io, code, summary, fix) {
-  return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: failure(io, code, summary, fix) });
-}
-
-// The tool list a first launch answers with before Playwright MCP is installed, and the Playwright MCP release it came from: a snapshot of Playwright MCP's own list, so the names and input schemas are the ones it exposes. Without a usable snapshot the degraded list stands in.
-function catalog(file) {
-  var snapshot = readJson(file);
-  if (snapshot && Array.isArray(snapshot.tools) && snapshot.tools.length > 0) return { tools: snapshot.tools, version: String(snapshot.playwrightMcpVersion) };
-  return { tools: placeholderTools(), version: "unknown" };
-}
-
-function start(o, io) {
+// Runtime selection and the staged installer are shared with the explicit private CLI.
+// This layer deliberately never reads a browser declaration or acquires a profile.
+function browserRuntimeTools(o, io) {
   var env = either(o.env, process.env);
   var platform = either(o.platform, process.platform);
   var fileExists = either(o.exists, exists);
-  var args = either(o.args, process.argv.slice(2));
   var homeDir = o.homeDir !== undefined ? o.homeDir : either(either(env.HOME, env.USERPROFILE), os.homedir());
   var current = either(o.current, { path: process.execPath, version: process.version, abi: process.versions.modules });
   var clock = either(o.clock, Date.now);
@@ -756,155 +685,36 @@ function start(o, io) {
     now: o.now
   });
   if (selection.node === null) {
-    return fail(io, "node_missing",
-      "Desk needs Node.js " + selection.range + " to start the browser; this one is " + current.version + ", so the browser is unavailable until a compatible Node is installed",
-      reconnectFix("Install Node " + selection.range));
+    throw Object.assign(new Error("Desk needs Node.js " + selection.range + " to start the browser; this one is " + current.version + ", so the browser is unavailable until a compatible Node is installed"),
+      { code: "node_missing", fix: reconnectFix("Install Node " + selection.range) });
   }
   var node = selection.node.path;
   var cli = npmCli(node, platform, fileExists);
   if (cli === null) {
-    return fail(io, "npm_missing",
-      "Desk found Node " + selection.node.version + " at " + node + " but it has no npm beside it, so the browser is unavailable",
-      reconnectFix("Reinstall that Node with its bundled npm"));
+    throw Object.assign(new Error("Desk found Node " + selection.node.version + " at " + node + " but it has no npm beside it, so the browser is unavailable"),
+      { code: "npm_missing", fix: reconnectFix("Reinstall that Node with its bundled npm") });
   }
   var root = stateDir(env, homeDir);
   mkdirp(root);
-  // A plugin's desk.browser setting switches the browser to the operator's real profile (web-real-profile.cjs); a caller that passes its own connection option keeps it.
-  var declaration = hasOption(args, CONNECT) ? { state: "none" } : realProfile.readDeclaration({ env: env, homeDir: homeDir, pluginDirs: o.pluginDirs });
-  if (declaration.state === "invalid") {
-    return fail(io, "browser_declaration_invalid", declaration.summary, reconnectFix("Fix the desk.browser setting in the plugin"));
-  }
-  var real = declaration.state === "declared";
-  if (real && hasOption(args, ["--browser", "--executable-path", "--profile-dir-name", "--user-data-dir"])) {
-    return fail(io, "browser_configuration_conflict",
-      "A declared browser profile conflicts with caller-supplied browser, executable, profile or user-data options, so the browser is unavailable",
-      reconnectFix("Remove those options, or the desk.browser declaration"));
-  }
   var tools = { stderr: io.stderr, spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock, platform: platform, children: [] };
-  function spawnFailure(error) {
-    return failure(io, "node_spawn_failed",
-      "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",
-      reconnectFix("Check that this Node runs, or reinstall it"));
-  }
-  // Resolves { launch } when Playwright MCP is installed and can start, or { payload } with the degraded answer when it cannot; rejects only when the state folder itself fails.
-  function prepare(got) {
-    if (!got.installed) {
-      if (got.code === "browser_patch_unsupported" || got.code === "browser_patch_failed") {
-        return { payload: failure(io, got.code, "Desk could not prepare a verified Playwright browser install: " + got.error,
-          "The browser integration needs a compatible maintained patch; Desk remains available. No browser configuration change is required.") };
-      }
-      return npm(tools, ["config", "get", "registry"], REGISTRY_MS).then(function (answer) {
-        var registry = answer.code === 0 && lastLine(answer.stdout) ? lastLine(answer.stdout) : "the configured npm registry";
-        return { retry: got.retry === true, payload: failure(io, "install_failed",
-          "Desk could not install " + PACKAGE + " from " + registry + " (" + got.error + "), so the browser is unavailable",
-          reconnectFix("Check that this machine can reach " + registry + ", or point npm at one it can reach (npm config set registry <url>)")) };
-      });
-    }
-    var installed = got.installed;
-    io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + " (Desk lifecycle patch " + installed.patchRevision + ")\n");
-    var lastRefresh = readJson(path.join(root, "last-refresh.json"));
-    if (lastRefresh && lastRefresh.result && lastRefresh.result.ok === false) {
-      io.stderr.write("[web] last browser refresh failed: " + scrub(lastRefresh.result.error) + "; keeping the verified installed generation\n");
-    }
-    // A copy installed just now is already the channel's current release.
-    if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
-    var launchEnv = withNodeFirst(env, node, platform);
-    delete launchEnv[credential.BINDING_KEY];
-    if (!real) return { launch: { node: node, indexFile: installed.cli, args: launchArgs(args, platform, env, fileExists, root), env: launchEnv } };
-    var executable = firstExisting(browserPaths(declaration.channel, platform, env).concat(userBrowserPaths(declaration.channel, platform, env)), fileExists);
-    return realProfile.connect({
-      declaration: declaration, installed: installed, executable: executable, platform: platform, env: env, homeDir: homeDir,
-      unavailable: function (code, summary, fix) { return failure(io, code, summary, fix); },
-      reconnectFix: reconnectFix, requireModule: o.requireModule, tmpdir: o.tmpdir
-    }).then(function (connection) {
-      // A profile or extension the operator can fix is tried again at the next call; an unreadable token is not, so a machine that cannot install the reader does not run npm at every call.
-      if (connection.payload) return { retry: connection.payload.code !== "browser_token_unreadable", payload: connection.payload };
-      io.stderr.write("[web] driving the " + connection.app + " profile " + connection.profile + " through the Playwright Extension\n");
-      Object.keys(connection.env).forEach(function (key) {
-        launchEnv[key] = connection.env[key];
-      });
-      // The runner and staged initializer share this generation's in-memory credential redactor.
-      return { launch: { node: node, indexFile: REAL_TABS, args: [installed.cli].concat(launchArgs(connection.args.concat(args), platform, env, fileExists, root)), env: launchEnv } };
-    });
-  }
-  var spawn = either(o.spawn, childProcess.spawn);
-  var signals = either(o.signals, process);
-  var kill = either(o.kill, process.kill);
-  function installing() {
-    return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS), real).then(prepare);
-  }
-  var snapshot = catalog(either(o.catalogFile, CATALOG_FILE));
-  function ready() {
-    return installing().then(null, function (error) {
-      return { payload: failure(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin")) };
-    });
-  }
-  if (complete(readInstalled(root), real, clock)) {
-    // An installed copy answers the host's handshake itself, so the host sees its real tool list and nothing is swapped later. A real profile that cannot connect yet (no profile, no extension) is served by the proxy below instead, which tries again at the next call.
-    return ready().then(function (outcome) {
-      if (outcome.payload) return serve(Promise.resolve(outcome));
-      return bootstrap.reexec({
-        node: node,
-        indexFile: outcome.launch.indexFile,
-        args: outcome.launch.args,
-        env: outcome.launch.env,
-        stderr: io.stderr,
-        spawn: spawn,
-        signals: signals,
-        exit: io.exit,
-        kill: kill,
-        onSpawnError: function (error) {
-          return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: spawnFailure(error) });
-        }
-      });
-    });
-  }
-  // No installed copy, or one that needs npm first (a real profile's reader or ws): answer the host at once with a stable tool list, install meanwhile, and hold calls until the browser is ready.
-  return serve(ready());
-  function serve(first) {
-    return proxy.serve({
-      stdin: io.stdin,
-      stdout: io.stdout,
-      stderr: io.stderr,
-      catalog: snapshot.tools,
-      catalogVersion: snapshot.version,
-      ready: first,
-      retry: ready,
-      abort: function () {
-        stopInstalls(tools);
-      },
-      progressMs: o.progressMs,
-      spawn: spawn,
-      signals: signals,
-      kill: kill,
-      exit: io.exit,
-      holdMs: o.holdMs,
-      closeMs: o.closeMs,
-      timeoutPayload: degraded("browser_not_ready", "Desk is still installing the browser and it did not finish in time",
-        reconnectFix("Call the browser tool again in a minute, or check that this machine can reach the npm registry")),
-      spawnPayload: function (error) {
-        return spawnFailure(error);
-      },
-      exitPayload: function (code, signal) {
-        return degraded("browser_exited", "The browser ended (" + (signal ? "signal " + signal : "exit code " + code) + ")",
-          reconnectFix("Call the browser tool again after reconnecting"));
-      }
-    });
-  }
+  return { env: env, platform: platform, fileExists: fileExists, homeDir: homeDir, clock: clock, selection: selection, node: node, cli: cli, root: root, tools: tools };
 }
 
-// Never throws or rejects: anything that goes wrong is degraded:launch_failed over the handshake above, which the
-// host reports as a connected but degraded server, never a failed one. Every option defaults to the real process.
+function prepareBrowserRuntime(o) {
+  o = o || {};
+  return Promise.resolve().then(function () {
+    var runtime = browserRuntimeTools(o, { stderr: either(o.stderr, process.stderr) });
+    return ensureInstalled(runtime.tools, runtime.root, runtime.clock() + either(o.firstInstallMs, FIRST_INSTALL_MS), false).then(function (got) {
+      if (!got.installed) throw Object.assign(new Error("Desk could not prepare a verified browser install: " + scrub(got.error)), { code: got.code || "install_failed" });
+      if (!got.fresh) either(o.startRefresh, startRefresh)({ node: runtime.node, npmCli: runtime.cli, env: runtime.env });
+      return { nodePath: runtime.node, installed: got.installed, stateRoot: runtime.root };
+    });
+  });
+}
+
+// The SDK frontend owns normal/degraded initialization, never the legacy proxy.
 function run(o) {
-  var io = { stderr: either(o.stderr, process.stderr), stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), exit: either(o.exit, process.exit) };
-  function failed(error) {
-    return fail(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin"));
-  }
-  try {
-    return start(o, io).then(null, failed);
-  } catch (error) {
-    return failed(error);
-  }
+  return require("./browser-context-mcp.cjs").run(o);
 }
 
 module.exports = {
@@ -915,11 +725,14 @@ module.exports = {
   PACKAGE: PACKAGE,
   REFRESH_FLAG: REFRESH_FLAG,
   browserArgs: browserArgs,
+  browserSelection: browserSelection,
+  channelBrowserSelection: channelBrowserSelection,
   browserPaths: browserPaths,
   launchArgs: launchArgs,
   npmCli: npmCli,
   npmError: npmError,
   readInstalled: readInstalled,
+  prepareBrowserRuntime: prepareBrowserRuntime,
   refresh: refresh,
   run: run,
   serveDegraded: serveDegraded,

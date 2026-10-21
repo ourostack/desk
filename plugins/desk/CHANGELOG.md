@@ -1,5 +1,85 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.334 — 2026-10-21
+
+Explicit signed-in browser discard now moves a confirmed terminal owner's evidence out of active inventory, without deleting it or touching peer contexts. The parent waits for the worker to finish, independently checks unchanged CLI absence and the native generation, and preserves the exact owner/configuration/session evidence in a private artifact directory. Same-owner operations use the existing broker lock. Unknown disposition, changed evidence or failed moves remain explicit failures with retained-resource paths. This does not establish extension enrollment, update continuity or permission to reload a browser.
+
+Desk's browser tools now use explicit, generated context handles: the declared signed-in profile is the default, while private browsing must be requested explicitly. The two-tool surface, `browser_context` and `browser_command`, keeps browser lifetime separate from the host session, supports retained-context resume and explicit discard, and refuses to infer ownership from connection identity, process IDs, tab titles, or group labels.
+
+The signed-in route adds a source-bound extension kernel, protected native messaging assets, profile and provider verification, and maintained Playwright command transport. Uncertain browser effects and debugger custody remain visible cleanup obligations rather than permission to adopt or close another context's tabs. Tests install a separate locked public Playwright input, and CI exercises native messaging on Linux, macOS, and Windows. These source and CI contracts do not by themselves establish installed-browser qualification or operator acceptance.
+
+The broker's shared primitives remain inside its source package, preserving standalone POSIX package installation. MCP imports retain the same class and function identities, and both native source inventories verify the exact shared implementation bytes.
+
+Maintained CLI shutdown now keeps its explicit stop acknowledgement ahead of competing context-close and socket-loss exits, including a socket observation already in flight. Natural shutdown and embedded-server behavior remain unchanged; missing acknowledgements are still failures, not inferred from absence. Signed package-download URLs are redacted from installation diagnostics.
+
+Windows generation-directory and receipt ACL checks share one read-only provider request per verification fence. The private-state policy and full verification boundaries remain intact, with Node file identities bracketing each complete batch.
+
+The native CLI ready encoder preserves its fixed newline when an encoded relay capability happens to share that one-byte prefix. It still quarantines later secret continuations, refuses intervening output writes, and leaves ordinary error/log masking and output deadlines unchanged.
+
+Add bounded native activation capture, post-admission ordinary handoff and
+retained pending-journal refusal. Capture does not establish an update
+baseline: positive origin sealing, cold enrollment and existing-profile
+migration remain unavailable rather than accepting caller assertions.
+
+The managed-only archive AST control writes its fixed report without the general JSON serialization pipeline, retaining actual PowerShell parser results and measured helper scope/order facts. Its five-second bound still includes startup and process closure. Negative fixtures cover malformed syntax, duplicate helpers and misplaced helpers. Archive implementation and native program bytes are unchanged.
+
+Test the native entry's empty filtered environment with an owned Go child on every platform, without depending on Node starting with an empty Windows environment. Keep the actual Node-host cases and inherited-injection rejection unchanged.
+
+Native-entry contract tests no longer require an unrelated JavaScript process-start reader before exercising Go framing and origin checks. Fixture-correlated Node exit observations complement the actual synchronous Go child-handle wait, and the filtered-empty-environment test now runs on Windows too. Production identity verification, native assets and time bounds are unchanged.
+
+### Fixed
+
+- Move the unchanged Claude/Codex MCP payload to an explicitly referenced engine-owned file, leaving no generic root `.mcp.json` for Agency to reinject as user configuration. Keep Copilot's native MCP definition, launch payloads and provider trust guards unchanged. Native ownership and label behavior still require receiving-host qualification.
+
+Native browser contexts now discover active same-window children opened by their owned tabs without focusing them or adopting manual/peer tabs. Unverified child-window admission explicitly makes the context unavailable and retains its exact identity instead of silently reporting a ready parent-only view or launching a replacement. Explicit existing-tab handoff is not provided by this increment.
+
+Add a parent-loaded Copilot session-label consumer for correlated successful
+own-main task results. It uses the conditional native automatic-name API,
+rechecks session identity and safe authored text, preserves native refusal,
+binds the observed host-owned Desk provider, and requires a correlated bounded
+pre-MCP ordering hook. An uncertain naming operation never bans task work.
+Native enrollment and supported-host
+qualification remain separate from task-tool proposal availability.
+The Copilot plugin declares additive native extension discovery through its
+supported legacy manifest component path; native per-ID opt-outs and other
+extensions remain untouched.
+
+Native contexts read back an owned opener child's exact window class and control normal/popup child targets in place without moving or regrouping them. The named normal-window group remains an anchor, not a requirement that popups be moved into it. Closing the anchor does not create a replacement page or lose the remaining child targets. Unverifiable, incognito or unsupported window readbacks retain explicit unavailable obligations; manual and peer tabs remain outside the context.
+
+Creating a signed-in browser context now invokes the normal native-host bootstrap when readiness is missing, then requires enrolled readiness and fresh native attestation before allocating an owner directory. A successful registration alone is not reported as browser health. Existing readiness keeps its no-installer path, while keep, resume and discard never install a replacement after readiness loss.
+
+An explicit native bootstrap setup API can register the verified host before the browser starts, without baking a live browser process into the immutable capsule. Each invocation verifies the current native process ancestry and constructs the existing full provider binding in memory. Identical verified setup preserves retained state without rewriting publication surfaces; conflicting source, legacy setup and unresolved update journals still refuse. This registers a host, not an extension, and grants no enrollment or update-continuity authority.
+
+Release tooling can explicitly promote the current alpha to an RC, including when no changelog fragments are pending. Automatic releases keep following the current alpha or RC line; repeated empty RC dispatches do nothing. Stage selection is validated and preserved when a release hands off to a newer main. The shared release queue retains up to 100 pending runs instead of replacing queued RC intent, while still allowing only one running release. Released-label catch-up recognizes exact RC release subjects from the release bot. CI schedules isolated auto and RC dry runs through the same full build-and-check sequence. Refresh-preservation checks exercise both alpha and RC Desk versions. This adds release capability only; it does not publish an RC or change installation channels or defaults.
+
+Keep the supplied task moving when a startup helper, MCP transport, save or index fails. Recovery guidance now preserves partial effects and real identity, trust and write boundaries without turning helper health into whole-task authority or an unsolicited tooling-maintenance assignment. Resumption can use an authorized equivalent capability while truthfully retaining the failed helper's status.
+
+Keep scoped helper-recovery guidance within the existing startup-context budget, while retaining bounded known operational repairs and approved tooling work. Align improvement and MCP-absence contracts with task continuation, truthful helper health, protected-write boundaries and effect readback. Refresh the reviewed collaboration source binding and generated Codex foundation fixtures from the same final source.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.333 — 2026-10-19
+
+Resolve the existing task and present its complete intake proposal before the engineering handoff, without reopening an existing go. Terminal task results now advise the owning main to use the normal archive tool before delivery, preserving the unsigned delivery packet. Archive moves retain publication failures as explicit pending work; qualified Windows NTFS archives bind a non-replacing native move to the preadmitted source handle and confirm native retirement before publication. Task tools may also return a safe, non-authoritative work-label proposal; this does not apply a native session name.
+
+Keep an explicit private-browser stop in charge of its acknowledgement while browser-close and socket-monitor callbacks run, rather than racing an unacknowledged exit. Existing browser generations receive the repair through a staged copy, without modifying a live generation.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.332 — 2026-10-17
+
+### Fixed
+
+- Factory capture keeps resumed Claude workers' execution periods separate when the host marks coordinator messages or completion notifications as meta inputs. Stopped gaps no longer become continuous work, and those inputs do not become human attention. The ordinary sweep re-derives available historical transcripts automatically.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.331 — 2026-10-17
+
+Desk adds an explicit [agent-owned private browser CLI](skills/cdp-headed-browser/SKILL.md#agent-owned-private-browser-contexts): create a fresh in-memory context, keep or resume its live page across shell clients, run page commands, and discard only that context. It shares the verified browser installer, isolates home/configuration/session and short socket paths, rejects session/profile/connection overrides, and reports failed startup or unconfirmed cleanup rather than silently recreating a browser. The existing signed-in `desk-web` route is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.330 — 2026-10-16
 
 Factory's guarded triage writer accepts the exact restrictive Git command profile used by Copilot: `safe.bareRepository=explicit`, `credential.interactive=never` and `core.fsmonitor=false`, with all three numbered slots required and optional locks allowed only as `GIT_OPTIONAL_LOCKS=0`. Unknown, partial or altered Git overrides still refuse before Git runs. A complete profile requires stable Git 2.36.0 or later in major version 2, checked by a bounded, non-repository version query of the same executable used throughout the operation, including canonical blob reads. On Windows, PATH aliases follow Node's lexicographic key selection regardless of insertion order, without rewriting the caller's environment. The original command-scoped controls remain intact for real operations and hooks; unsupported Git refuses without creating writer resources. Existing no-profile callers, hook policy, authority checks and remote acknowledgement requirements are unchanged.

@@ -18,8 +18,11 @@ import { spawnSync } from "node:child_process"
 import {
   nowIso,
   readMarkdown,
+  parseMarkdownText,
   writeMarkdown,
   patchMarkdownFrontmatter,
+  patchFrontmatterFields,
+  serializeMarkdown,
   pathExists,
   writeFileAtomic,
 } from "../util/fm.js"
@@ -38,9 +41,11 @@ import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, prRepoVerdict, recordedRepos } from "./done-evidence.js"
 import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
-import { setTaskState } from "./track-row.js"
+import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
+import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
+import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 import { focusNote } from "./task-focus.js"
@@ -49,6 +54,8 @@ import { deriveSteps, unsettledSteps } from "../desk/step-delivery.js"
 import { applyResource, cleanupAnswer, dueResources, openResources } from "../desk/resources.js"
 import { recordCleanupCard } from "../desk/cleanup-index.js"
 import { recordArchivedDisposition } from "./task-archived-resource.js"
+import { makeSessionLabelProposal } from "../runtime/session-label.js"
+import { archiveDueAnswer } from "./task-archive-due.js"
 
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 // It is also about the card only: three Copilot boot-acceptance runs (rounds P, V and W) read "pushing it in the background" as their own project commit having been pushed and reported "commit 4c90a44 pushed to the branch" with no push of the project's code run. The harness reads the phrase "is pushing it in the background" (evals/boot-acceptance/claims.mjs), so it stays.
@@ -312,8 +319,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // OPTIONAL_RUNTIME_FIELDS is a field added here in the same diff.
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
-export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource"]
+export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", ...OPTIONAL_RUNTIME_FIELDS]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -506,22 +513,6 @@ function headSha(dir, spawnGit) {
   const invocation = deskGitInvocation({ root: dir, args: ["rev-parse", "--short", "HEAD"] })
   const answer = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: 5000 })
   return answer?.status === 0 && typeof answer.stdout === "string" && answer.stdout.trim() !== "" ? answer.stdout.trim() : null
-}
-
-// task_archive moves a folder with a plain `fs.rename`, never `git mv` (see
-// task_archive's own doc comment) — but a bare `git add -- <old> <new>`
-// still stages the move as a rename (Git detects it from the deletion at
-// `<old>` plus the addition at `<new>`; no `-A` needed since both paths are
-// named explicitly), so the same stage-then-commit shape as every other
-// write tool applies here too (M4-6 Part 2). `root` is the effective
-// (person-scoped) desk root; `paths` are absolute.
-function stageAndCommitMove(root, paths, message, spawnGit) {
-  if (!isGitRepository(root, spawnGit)) return undefined
-  const relPaths = paths.map((p) => deskRelativePath(root, p))
-  const staged = stagePaths(root, relPaths, spawnGit)
-  if (!staged.ok) return { status: "failed", reason: staged.stderr }
-  const committed = commitPaths(root, relPaths, message, spawnGit)
-  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 
 async function assertArchiveSourceIsRelocationSafe({
@@ -811,6 +802,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     const note = focusNote(statusContext)
     if (note !== undefined) result.focus_note = note
   }
+  if (values.focus === true || values.display_label !== undefined) {
+    result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused: result.focused === true })
+  }
   return result
 }
 
@@ -828,6 +822,29 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
   } catch {
     return null
   }
+}
+
+async function archiveTrackPlan(trackFile, slug, status) {
+  let before
+  try { before = await fs.readFile(trackFile, "utf8") }
+  catch (error) { if (error.code === "ENOENT") return null; throw error }
+  const state = status === null ? before : setTaskState(before, slug, status) ?? before
+  const after = setTaskArchiveLinks(state, slug) ?? state
+  return after === before ? null : { file: trackFile, before, after }
+}
+
+function archivePendingAnswer(path, publication) {
+  return {
+    status: "archive_pending", path, publication,
+    commit: { status: "failed", reason: publication.reason },
+    next_action: "Keep the archived folder intact and do not repeat the directory move. Resolve the named publication or change-recording failure through its supported repair, then reconcile the same track and slug with task_archive. Do not create a replacement task or claim publication.",
+  }
+}
+
+function patchedCardText(raw, existing, fields) {
+  const data = { ...existing.data, ...fields }
+  for (const [key, value] of Object.entries(fields)) if (value === undefined) delete data[key]
+  return patchFrontmatterFields(raw, fields) ?? serializeMarkdown(data, existing.content)
 }
 
 /**
@@ -1119,7 +1136,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   // HEAD is read before the push is scheduled, so a push that rebases cannot hand back its own hash.
   const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   if (stage && !commit) schedulePush({ root: deskRoot })
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
+    { path: relPath(deskRoot, filePath) },
+    ...(trackRow === null ? [] : [{ path: relPath(deskRoot, trackRow) }]),
+  ] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   // A return asks the factory to re-derive the job's sessions, as a terminal move does; a return to a terminal status was asked for just above.
   else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
@@ -1173,6 +1193,12 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   }
   const focus = focusNote(statusContext, { track, slug })
   if (focus !== undefined) result.focus_note = focus
+  const currentFocus = statusContext.focus?.get()
+  const focused = currentFocus?.track === track && currentFocus?.slug === slug
+  if (focused || values.display_label !== undefined) {
+    result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused })
+  }
+  Object.assign(result, archiveDueAnswer({ track, slug, status: merged.status }))
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
   return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }
@@ -1217,23 +1243,47 @@ async function archivedTaskStatus(archivedFile) {
 // Returns the result fields: the filled link or the current reason, `commit` when committing the card failed, and
 // `factory_report_unchanged: true` when the answer is the one the card already records, so nothing was written or committed.
 async function refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush }) {
-  let data
+  let existing, before
   try {
-    data = (await readMarkdown(archivedFile)).data
+    before = await fs.readFile(archivedFile, "utf8")
+    existing = parseMarkdownText(before, archivedFile)
   } catch {
     return {}
   }
+  const { data } = existing
   if (!Object.hasOwn(data, "factory_report_unavailable")) return {}
   const report = await factoryReportFor({ deskRoot, person, track, slug, env })
   const fields = reportFields(report)
   // The same answer the card already records changes nothing: no write and no commit (an empty commit would read as a failed one).
   if (Object.entries(fields).every(([key, value]) => data[key] === value)) return { ...reportResult(report, false), factory_report_unchanged: true }
-  await patchMarkdownFrontmatter(archivedFile, fields)
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
-  const root = path.resolve(personPrefix(deskRoot, person))
-  const commit = stageAndCommitMove(root, [archivedFile], `task_archive: ${track}/${slug} report link`, spawnGit)
-  if (commit === undefined && isGitRepository(root, spawnGit)) schedulePush({ root: deskRoot })
-  return { ...reportResult(report, true), ...(commit === undefined ? {} : { commit }) }
+  let publication
+  try {
+    publication = await prepareArchivedCardPublication({
+      effectiveRoot: path.resolve(personPrefix(deskRoot, person)), file: archivedFile, before, spawnGit,
+    })
+    await publication.assertBefore()
+  } catch (error) {
+    return { commit: { status: "failed", reason: error.message } }
+  }
+  const expected = patchedCardText(before, existing, fields)
+  let commit, patched = false
+  try {
+    await patchMarkdownFrontmatter(publication.file, fields)
+    patched = true
+    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, archivedFile) }] })
+    commit = await publication.publish(expected, `task_archive: ${track}/${slug} report link`)
+  } catch (error) {
+    commit = { status: "failed", reason: error.message }
+  }
+  if (commit === undefined && publication.git !== null) schedulePush({ root: deskRoot })
+  if (commit === undefined) return reportResult(report, true)
+  const actual = await publication.retainedTarget()
+  return {
+    ...(patched ? reportResult(report, true) : {}),
+    commit,
+    publication: { status: actual === null ? "unknown" : "pending", reason: commit.reason, placement: actual === null ? "unknown" : "retained",
+      actual_path: actual, last_known_path: relPath(deskRoot, archivedFile) },
+  }
 }
 
 // An archive never changes the held focus: the factory credits a declared task until the next `task_focus` call, so the held focus
@@ -1262,9 +1312,9 @@ function withArchiveFocus(statusContext, target, result) {
  * Bumps a non-terminal task to `done` or `cancelled` (see below) as part of
  * the same call.
  *
- * Idempotent: if the source dir doesn't exist AND `_archive/<slug>` does,
- * returns `{ status: "already_archived" }` without staging or committing
- * anything (nothing changed). Throws if neither exists.
+ * An already-published archive is idempotent. An interrupted relocation
+ * reconciles only unchanged source HEAD/index and exact relocated bytes;
+ * anything unqualified returns `archive_pending`, never publication success.
  *
  * Evidence gate on the archive bump (the invented-completion finding): a
  * card already in a terminal status (`done` or `cancelled`) archives as-is,
@@ -1282,16 +1332,13 @@ function withArchiveFocus(statusContext, target, result) {
  * closes, and it must fail the same way a bare `task_update` to `done`
  * does, not silently fall back to fabricating a completion.
  *
- * On a Git desk, stages the move (a plain `fs.rename`, never `git mv`) with
- * `git add -- <source> <destination>` — Git detects the rename itself from
- * the deletion and the addition, no `-A` needed — then commits exactly those
- * two paths (M4-6 Part 2). A commit failure never loses the archive: it
- * comes back as `commit: { status: "failed", reason }` on the result,
- * omitted entirely on a normal, silent success or on a non-Git desk.
+ * A Git archive admits clean companions and vacant HEAD/index destination
+ * paths before moving, then commits only the qualified staged bytes. A
+ * failed publication retains the folder and returns its actual pending path.
  *
- * Returns: { status: "archived" | "already_archived", path, commit? }
+ * Returns: { status: "archived" | "already_archived" | "archive_pending", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, statusContext = {}, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault, fetchFn, moveArchive, openArchiveMove = openArchiveMoveDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -1319,6 +1366,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     )
   }
 
+  const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
   const target = (segments) =>
     resolveWriteTarget({ deskRoot, person, segments })
   const srcDir = await target([track, slug])
@@ -1328,23 +1376,43 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
 
   const srcExists = await pathExists(srcDir)
   const dstExists = await pathExists(archiveDir)
+  let relocated = false
+  let retainedStatus = null
+  let sourceCardBytes = null
 
   if (!srcExists && dstExists) {
-    const archivedStatus = await archivedTaskStatus(archivedFile)
-    const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
-    let pending = null
-    try {
-      pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
-    } catch {
-      // Missing or unreadable legacy cards retain the existing idempotent archive result.
+    retainedStatus = await archivedTaskStatus(archivedFile)
+    const publication = await archivePublicationState({ effectiveRoot, srcDir, archiveDir, spawnGit })
+    if (publication.status === "pending" && (retainedStatus === null || TERMINAL_STATUSES.has(retainedStatus))) {
+      relocated = true
+      if (await pathExists(archivedFile)) sourceCardBytes = await fs.readFile(archivedFile)
+    } else if (publication.status === "pending" || publication.status === "unknown") {
+      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
+      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), publication))
+    } else {
+      const refilled = await refillArchivedReport({ deskRoot, person, track, slug, env, archivedFile, readiness, spawnGit, schedulePush })
+      if (refilled.commit) return withArchiveFocus(statusContext, { track, slug }, {
+        ...refilled, ...archivePendingAnswer(relPath(deskRoot, archivedFile),
+          refilled.publication ?? { status: "pending", reason: refilled.commit.reason }),
+      })
+      let pending = null
+      try {
+        pending = pendingDeliveryAnswer((await readMarkdown(archivedFile)).data, slug)
+      } catch {
+        // Missing or unreadable legacy cards retain the existing idempotent archive result.
+      }
+      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
+        { path: relPath(deskRoot, srcDir), operation: "delete" },
+        { path: relPath(deskRoot, archiveDir), operation: "write" },
+      ] })
+      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
+      return withArchiveFocus(statusContext, { track, slug }, {
+        status: "already_archived",
+        path: relPath(deskRoot, archivedFile),
+        ...refilled,
+        ...pending,
+      })
     }
-    await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
-    return withArchiveFocus(statusContext, { track, slug }, {
-      status: "already_archived",
-      path: relPath(deskRoot, archivedFile),
-      ...refilled,
-      ...pending,
-    })
   }
   if (!srcExists && !dstExists) {
     throw new Error(
@@ -1369,7 +1437,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   // neither.
   let archiveBump = null
   if (await pathExists(srcFile)) {
-    const sourceCard = await readMarkdown(srcFile)
+    sourceCardBytes = await fs.readFile(srcFile)
+    const sourceCard = parseMarkdownText(sourceCardBytes.toString("utf8"), srcFile)
     if (!TERMINAL_STATUSES.has(sourceCard.data.status)) {
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
@@ -1392,72 +1461,129 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     }
   }
 
-  await assertArchiveSourceIsRelocationSafe({
-    srcDir,
-    srcFile,
-    archiveDir,
-  })
-
-  // Move the dir. fs.rename is atomic on the same filesystem.
-  await withCreatedDirs(path.dirname(archiveDir), () => fs.rename(srcDir, archiveDir))
-  // A directory move invalidates both subtrees, including companion documents.
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
-    { path: relPath(deskRoot, srcDir), operation: "delete" },
-    { path: relPath(deskRoot, archiveDir), operation: "write" },
-  ] })
-
-  // Bump task status per the decision above (and refresh `updated`) if not
-  // already terminal.
-  await target([track, "_archive", slug])
-  const filePath = await target([track, "_archive", slug, "task.md"])
-  let finalStatus = null
-  let cardBody = ""
-  let delivered = null
-  let report = null
-  if (await pathExists(filePath)) {
-    const existing = await readMarkdown(filePath)
-    finalStatus = existing.data.status
-    cardBody = existing.content
-    delivered = pendingDeliveryAnswer(existing.data, slug)
-    // Patch only the fields this archive changes (`status:`, `updated:`, the record, `evidence:` and the report link fields) in place:
-    // every other byte of the card — quoting, date formats, block scalars, key order — survives.
-    const patchFields = {}
-    if (archiveBump) {
-      const { updated } = archiveBump
-      // Every status change the archive makes keeps the card's record, the cancel bump included.
-      Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
-      if (archiveBump.status === "done") {
-        patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
-        delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
-        report = await factoryReportFor({ deskRoot, person, track, slug, env })
-      }
-      finalStatus = archiveBump.status
-    }
-    // A card that records why it has no report link is asked again whenever it is archived, so archiving never makes the reason permanent.
-    if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable")) report = await factoryReportFor({ deskRoot, person, track, slug, env })
-    if (report !== null) Object.assign(patchFields, reportFields(report))
-    if (Object.keys(patchFields).length > 0) {
-      await patchMarkdownFrontmatter(filePath, patchFields)
-      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-    }
-    // The cells Desk derived in the done check are written into the archived card, so it does not close over a stale state.
-    if (archiveBump?.derived !== undefined && (await writeDerivedCells(filePath, archiveBump.derived))) await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+  if (sourceCardBytes !== null && !(await fs.readFile(relocated ? archivedFile : srcFile)).equals(sourceCardBytes))
+    throw new Error("task_archive: the card changed during completion preflight; nothing was moved")
+  if (!relocated) await assertArchiveSourceIsRelocationSafe({ srcDir, srcFile, archiveDir })
+  const trackPlan = await archiveTrackPlan(await target([track, "track.md"]), slug, archiveBump?.status ?? null)
+  let prepared, moveSession, sessionClosed = false
+  const closeSession = async () => {
+    if (!moveSession || sessionClosed) return
+    sessionClosed = true
+    await moveSession.close()
   }
+  const attachCleanup = error => {
+    if (Object.isExtensible(error)) {
+      try { error.native_close_failure = "archive native cleanup unconfirmed" } catch { /* Preserve the first error. */ }
+    }
+  }
+  let moved = relocated
+  let published = false
+  try {
+    if (!relocated && moveArchive === undefined)
+      moveSession = await openArchiveMove({ source: srcDir, destination: archiveDir })
+    try {
+      prepared = await prepareArchiveState({ effectiveRoot, srcDir, archiveDir, srcFile, trackPlan, spawnGit, relocated })
+    } catch (error) {
+      if (!relocated) throw error
+      await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: retainedStatus })
+      return withArchiveFocus(statusContext, { track, slug }, archivePendingAnswer(relPath(deskRoot, archivedFile), {
+        status: "unknown", reason: error.message,
+      }))
+    }
+    await withCreatedDirs(path.dirname(archiveDir), async () => {
+      if (relocated) await prepared.atUse()
+      else {
+        if (moveSession) {
+          await moveSession.admit()
+          await moveSession.move(() => prepared.atUse())
+        } else await moveArchive(srcDir, archiveDir, () => prepared.atUse())
+        moved = true
+        await closeSession()
+      }
+    }, {
+      shouldCleanup(error) {
+        if (error.archiveMove?.released && error.archiveMove.retirement !== "confirmed") {
+          error.created_parents = "retained_until_native_retirement_resolved"
+          return false
+        }
+        return true
+      },
+    })
+    await prepared.afterMove()
+    await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
+      { path: relPath(deskRoot, srcDir), operation: "delete" },
+      { path: relPath(deskRoot, archiveDir), operation: "write" },
+    ] })
 
-  // Stage + commit the move (and any status bump above, already on disk by
-  // now) last, once every write this call makes is in place (M4-6 Part 2).
-  const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
-  const commit = stageAndCommitMove(effectiveRoot, [srcDir, archiveDir], `task_archive: ${track}/${slug}`, spawnGit)
-  if (commit === undefined && isGitRepository(effectiveRoot, spawnGit)) schedulePush({ root: deskRoot })
-
-  await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
-  const result = { status: "archived", path: relPath(deskRoot, filePath) }
-  if (commit) result.commit = commit
-  if (delivered !== null) Object.assign(result, delivered)
-  Object.assign(result, reportResult(report, archiveBump?.status !== "done"))
-  // Archiving finishes the card, so every due resource row is listed, as for a task_update that finishes it.
-  Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
-  return withArchiveFocus(statusContext, { track, slug }, result)
+    const filePath = await target([track, "_archive", slug, "task.md"])
+    let finalStatus = null
+    let cardBody = ""
+    let delivered = null
+    let report = null
+    if (await pathExists(filePath)) {
+      if (sourceCardBytes === null || !(await fs.readFile(filePath)).equals(sourceCardBytes))
+        throw new Error("task_archive: card changed after admission; outside edits were retained")
+      const raw = sourceCardBytes.toString("utf8"), existing = parseMarkdownText(raw, filePath)
+      finalStatus = existing.data.status
+      cardBody = existing.content
+      delivered = pendingDeliveryAnswer(existing.data, slug)
+      const patchFields = {}
+      if (archiveBump) {
+        const { updated } = archiveBump
+        Object.assign(patchFields, { status: archiveBump.status, updated, ...archiveBump.record })
+        if (archiveBump.status === "done") {
+          patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
+          delivered = deliveryAnswer({ data: existing.data, slug, ref: archiveBump.evidence.ref })
+          report = await factoryReportFor({ deskRoot, person, track, slug, env })
+        }
+        finalStatus = archiveBump.status
+      }
+      if (report === null && Object.hasOwn(existing.data, "factory_report_unavailable"))
+        report = await factoryReportFor({ deskRoot, person, track, slug, env })
+      if (report !== null) Object.assign(patchFields, reportFields(report))
+      let expected = raw
+      if (Object.keys(patchFields).length > 0) {
+        expected = patchedCardText(expected, existing, patchFields)
+        await patchMarkdownFrontmatter(filePath, patchFields)
+        await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+      }
+      if (archiveBump?.derived !== undefined) {
+        const [head] = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?/u.exec(expected)
+        const derived = setDerived(expected.slice(head.length), archiveBump.derived.changes)
+        if (derived.written.length > 0) expected = head + derived.body
+        if (await writeDerivedCells(filePath, archiveBump.derived))
+          await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+      }
+      await prepared.cardWritten(expected)
+    }
+    if (trackPlan) {
+      await prepared.assertTrack()
+      await writeFileAtomic(trackPlan.file, trackPlan.after)
+      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, trackPlan.file) }] })
+    }
+    const commit = await prepared.publish(`task_archive: ${track}/${slug}`)
+    published = prepared.git !== null && commit === undefined
+    if (published) schedulePush({ root: deskRoot })
+    await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
+    const result = commit
+      ? archivePendingAnswer(relPath(deskRoot, filePath), { status: "pending", reason: commit.reason })
+      : { status: "archived", path: relPath(deskRoot, filePath) }
+    if (!commit) {
+      if (delivered !== null) Object.assign(result, delivered)
+      Object.assign(result, reportResult(report, archiveBump?.status !== "done"))
+    }
+    Object.assign(result, cleanupAnswer(dueResources(cardBody, { status: finalStatus })))
+    return withArchiveFocus(statusContext, { track, slug }, result)
+  } catch (error) {
+    try { await closeSession() } catch { attachCleanup(error) }
+    if (!prepared || !Object.isExtensible(error)) throw error
+    throw await qualifyArchiveFailure(error, {
+      effectiveRoot, srcDir, archiveDir, sourceIdentity: prepared.snapshot.get("").identity, moved, published,
+    })
+  } finally {
+    // Success and error paths already attempted close; also cover an early return.
+    await closeSession()
+  }
 }
 
 // The write, stage, commit and finalize helpers `task_signoff` uses, so a sign-off goes through the same path as `task_update`.

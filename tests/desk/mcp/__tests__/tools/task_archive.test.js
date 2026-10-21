@@ -309,7 +309,9 @@ test("task_archive reports a commit failure without losing the move", async () =
     schedulePush: (opts) => calls.push(opts),
   })
 
-  assert.equal(result.status, "archived", "the move itself is never lost to a commit failure")
+  assert.equal(result.status, "archive_pending", "the retained move is not reported as published")
+  assert.equal(result.path, "t/_archive/book-flights/task.md")
+  assert.equal(result.publication.status, "pending")
   assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
@@ -326,7 +328,9 @@ test("task_archive reports a staging failure without losing the move", async () 
 
   const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, spawnGit })
 
-  assert.equal(result.status, "archived", "the move itself is never lost to a staging failure")
+  assert.equal(result.status, "archive_pending", "the retained move is not reported as published")
+  assert.equal(result.path, "t/_archive/book-flights/task.md")
+  assert.equal(result.publication.status, "pending")
   assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
   assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
 })

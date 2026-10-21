@@ -66,6 +66,11 @@ export async function readMarkdown(filePath) {
     }
     throw err
   }
+  return parseMarkdownText(raw, filePath)
+}
+
+/** Parse one already-captured card version without rereading the file. */
+export function parseMarkdownText(raw, filePath) {
   const parsed = parseCard(raw, filePath)
   return { data: parsed.data, content: parsed.content }
 }
@@ -242,7 +247,7 @@ function collectionFollows(patched, from) {
  *
  * Returns `null` — the caller's cue to fall back to a full parse + re-dump
  * instead — when `rawText` has no `---`-fenced frontmatter to patch at
- * all, or when a field this call means to patch appears more than once at
+ * all, when the mapping uses flow syntax, or when a field this call means to patch appears more than once at
  * top level: guessing which occurrence was meant risks silently patching
  * the one YAML itself will then ignore, since the last one wins on parse.
  *
@@ -258,6 +263,8 @@ export function patchFrontmatterFields(rawText, fields) {
   if (lines[0] !== "---") return null
   const end = lines.indexOf("---", 1)
   if (end === -1) return null
+  const first = lines.slice(1, end).find((line) => !/^\s*(?:#|$)/u.test(line)) ?? ""
+  if (first.trimStart().startsWith("{")) return null
 
   const remaining = new Map(Object.entries(fields))
   const patched = lines.slice(0, end)

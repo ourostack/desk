@@ -1,6 +1,6 @@
-// Desk's browser in the operator's real profile (mcp/web-real-profile.cjs and its use in mcp/web.cjs).
-//
-// When a plugin declares `desk.browser`, `desk-web` runs stock Playwright MCP in extension mode against the operator's own signed-in browser profile, through web-real-tabs.cjs, which closes the session's tabs when it ends (tested in web_real_tabs.test.js). These tests never script a browser, never start one and never read a real profile: the filesystem (temporary folders), the LevelDB reader and the child processes are all injected. The token is a made-up string, and every test that could leak it checks the command lines and the host's output for it.
+// Retained non-MCP profile reader APIs plus explicit-context declaration/native
+// readiness preflight. No default page-MCP/token route remains. All profile and
+// OS observations are owned fixtures; no test reads a real browser profile.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -9,14 +9,19 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
+import vm from "node:vm"
+import os from "node:os"
+import {pathToFileURL} from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
+const { loadTemplate } = require("./fixtures/native-template-loader.cjs")
 const browser = require(path.join(mcpRoot, "web.cjs"))
 const real = require(path.join(mcpRoot, "web-real-profile.cjs"))
 const playwrightPatch = require(path.join(mcpRoot, "web-playwright-patch.cjs"))
-const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8")
+const errorFixture = require("./fixtures/playwright-native-error-transport.cjs").read()
+const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecycle.cjs", import.meta.url), "utf8") + errorFixture.core
 const TOKEN = "tok-9f3a-never-print-me"
 const posixOnly = { skip: process.platform === "win32" ? "the fixture Node is a POSIX link" : false }
 
@@ -24,7 +29,9 @@ test("unbound launches clear an inherited private profile binding", posixOnly, a
   const machine = await realMachine({ declare: null })
   machine.launchOptions.env.DESK_BROWSER_PROFILE_DIR = path.join(machine.root, "foreign")
   const result = await direct(machine)
-  assert.equal(result[0].options.env.DESK_BROWSER_PROFILE_DIR, undefined)
+  assert.equal(result.exitCode,1)
+  assert.equal(result.payload.code,"browser_declaration_unavailable")
+  assert.equal(existsSync(path.join(machine.state,"signed-in")),false)
 })
 
 test("profile token reads reject missing or malformed extension identities before touching the profile", async () => {
@@ -573,6 +580,7 @@ async function realMachine(options = {}) {
   touch(path.join(modules, "@playwright", "mcp", "package.json"), JSON.stringify({ name: "@playwright/mcp", version: "0.0.83", bin: { "playwright-mcp": "cli.js" } }))
   touch(path.join(modules, "@playwright", "mcp", "cli.js"), "")
   touch(path.join(modules, "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+  touch(path.join(modules, "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
   playwrightPatch.apply({ dir: path.join(state, id), version: "0.0.83", core: null })
   if (options.reader !== false) {
     touch(path.join(modules, "classic-level", "package.json"), JSON.stringify({ name: "classic-level" }))
@@ -588,7 +596,8 @@ async function realMachine(options = {}) {
   const levelEntries = { entries: options.entries ?? [[tokenKey(), latin(TOKEN)]] }
   const spawns = []
   const launchOptions = {
-    env: { PATH: "/usr/bin", DESK_BROWSER_STATE_DIR: state },
+    env: { PATH: "/usr/bin", HOME:home, DESK_BROWSER_STATE_DIR: state,
+      DESK_PLUGIN_ROOT:dirs[0]||path.join(root,"no-declaration","desk") },
     platform: "darwin",
     arch: "arm64",
     homeDir: home,
@@ -604,30 +613,203 @@ async function realMachine(options = {}) {
     spawn: childStub(spawns),
     ...options.launch,
   }
-  return { root, state, base, spawns, launchOptions, levelEntries }
+  return { root,home, state, base, spawns, launchOptions, levelEntries }
 }
 
-/** The launcher with an installed copy, which hands stdio straight to the child: records each spawn and ends it at once. */
-async function direct(machine, extra = {}) {
-  const spawns = []
-  await browser.run({
-    ...machine.launchOptions,
-    spawn: (file, argv, options) => {
-      const child = new EventEmitter()
-      spawns.push({ file, argv, options })
-      setImmediate(() => child.emit("exit", 0, null))
-      return child
-    },
-    signals: new EventEmitter(),
-    kill: () => {},
-    stderr: { write: () => {} },
-    exit: () => {},
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    ...extra,
-  })
-  return spawns
+// Actual controller with only normal account/executable observations scoped to
+// owned fixtures. It never substitutes a native client or grants readiness.
+function canonicalCjs(file,context) {
+  return loadTemplate(path.join(mcpRoot,file),context)
 }
+function nativeController(machine,resources={}) {
+  const module={exports:{}},actualFs=require("fs"),observed=Object.create(actualFs)
+  const executable=touch(path.join(machine.root,"observed-edge"),"Owned inert executable observation")
+  observed.statSync=(file,...args)=>{
+    if(resources.files?.has(String(file)))return actualFs.statSync(resources.files.get(String(file)),...args)
+    if(String(file)===EDGE){
+      if(machine.launchOptions.exists(EDGE))return{isFile:()=>true}
+      throw Object.assign(Error("Owned browser unavailable"),{code:"ENOENT"})
+    }
+    return actualFs.statSync(file,...args)
+  }
+  observed.realpathSync=(file,...args)=>resources.files?.has(String(file))?actualFs.realpathSync(resources.files.get(String(file)),...args):
+    String(file)===EDGE?executable:actualFs.realpathSync(file,...args)
+  const context={module,__dirname:mcpRoot,process:{...process,platform:resources.platform||"darwin"},Buffer,
+    require:name=>name==="./browser-context-common.cjs"&&resources.common?resources.common:
+      name==="./web-native-messaging.cjs"&&resources.native?resources.native:
+      name==="fs"?observed:name==="os"?{...os,userInfo:()=>({...os.userInfo(),homedir:machine.home})}:
+      require(name.startsWith(".")?path.join(mcpRoot,name):name),
+    Function:function(...args){
+      if(args.length===2&&args[0]==="url"&&args[1]==="return import(url)")return resources.importModule||((url)=>import(url))
+      return Function(...args)
+    },
+  }
+  return canonicalCjs("browser-context.cjs",context)
+}
+function controllerOptions(machine,extra={}) {
+  return {...machine.launchOptions,...extra,prepareBrowserRuntime:()=>browser.prepareBrowserRuntime({...machine.launchOptions,...extra})}
+}
+async function direct(machine, input={action:"create",label:"Existing profile qualification"}) {
+  return nativeController(machine).context(input,controllerOptions(machine))
+}
+
+for(const scenario of ["normal","invalid SID","unprotected existing artifacts","invalid reservation SID"])
+test("Windows controller wiring consumes actual ACL readback verification and normal redirected roots (resource model only: "+scenario+")",posixOnly,async()=>{
+  const invalidSid=scenario==="invalid SID"
+  const fs=require("fs"),m=await realMachine({declare:{browser:{channel:"msedge",profileAccountDomain:"example.test"}}})
+  const env={...m.launchOptions.env,LOCALAPPDATA:"Z:\\Policy Redirected",ProgramFiles:"Q:\\Programs"}
+  const executable=touch(path.join(m.root,"normal-browser"),"Inert owned executable observation")
+  const profile=path.join(m.root,"normal-profile")
+  touch(path.join(profile,"Local State"),JSON.stringify({profile:{info_cache:{"Profile 17":{user_name:"owner@example.test"}}}}))
+  const discovery=require(path.join(mcpRoot,"web-browser-discovery.cjs"))
+  const candidate=discovery.browserPaths("msedge","win32",env).find(file=>file.startsWith("Z:"))
+  assert.ok(candidate,"actual pure selector exposes the redirected per-user executable")
+  const files=new Map([[candidate,executable],[real.userDataDir("msedge","win32",env,m.home),profile]])
+  const verified=await(await import(pathToFileURL(path.join(mcpRoot,"native-messaging-install.mjs")).href)).verifyNativeDistribution(path.dirname(mcpRoot))
+  const ready=path.join(m.state,"native-owned/state/native-provider-"+
+    require("crypto").createHash("sha256").update(executable+"\0"+path.join(profile,"Profile 17")).digest("hex")+".json")
+  const chain=[0,1,2].map((i)=>({pid:820003-i,parentPid:820002-i,startIdentity:"owned-Windows-resource-"+i,
+    owner:String(process.getuid()),executable:i===2?executable:path.join(m.root,"native-resource-"+i)}))
+  const readyRecord={version:1,generation:"33333333-3333-4333-8333-333333333333",
+    endpoint:"http://127.0.0.1:38123/provider/"+"c".repeat(64),
+    profileRoot:path.join(profile,"Profile 17"),extensionId:verified.extensionId,
+    sourceDigest:verified.extensionSourceDigest,browser:chain[2],chain}
+  touch(ready,JSON.stringify(readyRecord))
+  fs.chmodSync(path.dirname(ready),0o700);fs.chmodSync(ready,0o600)
+  fs.chmodSync(m.state,0o700) // The real POSIX lock must observe private state beneath this Windows ACL resource model.
+  const systemRoot=path.join(m.root,"owned-system"),provider=touch(path.join(systemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"),"Never executed")
+  env.SystemRoot=systemRoot
+  const acl=await import(pathToFileURL(path.join(mcpRoot,"src/factory/windows-acl.js")).href),batches=[],protectedPaths=new Set()
+  // Only the inventory/CLI observations are modeled; real owner evidence and ACL producer validation remain in use.
+  const owners=new Map(),closed=new Set(),artifacts=path.join(m.state,"artifacts")
+  if(scenario==="unprotected existing artifacts")fs.mkdirSync(artifacts,{mode:0o700})
+  const resources={platform:"win32",files,
+    importModule:async url=>{
+      const actual=await import(url)
+      if(url.endsWith("/native-owner-inventory.mjs"))return{createNativeOwnerInventory:()=>({
+        descriptor:id=>({sessionFile:owners.get(id)}),
+        inspectOwner:async id=>({configured:true,cli:closed.has(id)?"absent":"running",fingerprint:id}),
+      })}
+      if(!url.endsWith("/windows-acl.js"))return actual
+      return{...actual,protectWindowsPaths:async(paths,options)=>{
+        const result=await acl.protectWindowsPaths(paths,{...options,env:{SystemRoot:systemRoot},
+        runner:async request=>{
+          assert.equal(request.executable,provider)
+          const paths=JSON.parse(request.payload).paths;batches.push(paths)
+          return{code:0,stdout:JSON.stringify({status:"ok",results:paths.map(entry=>({...entry,protected:true,rule_count:1,
+            owner_sid:invalidSid||(scenario==="invalid reservation SID"&&path.dirname(entry.path)===artifacts)?
+              "not-a-sid":"S-1-5-21-123",owner_reassigned:false}))}),stderr:""}
+        }})
+        for(const entry of paths)protectedPaths.add(entry.path)
+        return result
+      }}
+    }}
+  const nativeModule={exports:{}}
+  vm.runInNewContext(readFileSync(path.join(mcpRoot,"web-native-messaging.cjs"),"utf8"),{module:nativeModule,__dirname:mcpRoot,Buffer,setTimeout,clearTimeout,
+    process:{...process,platform:"win32",env:{SystemRoot:systemRoot}},
+    require:name=>name==="http"?{request(_options,callback){
+      const request=new EventEmitter();request.destroy=()=>{}
+      request.end=bytes=>queueMicrotask(()=>{
+        const envelope=JSON.parse(bytes)
+        assert.equal(envelope.operation,"attest")
+        assert.deepEqual(envelope.payload,{})
+        const response=new EventEmitter();response.statusCode=200;response.destroy=()=>{}
+        callback(response)
+        response.emit("data",Buffer.from(JSON.stringify({ok:true,result:{healthy:true,
+          generation:readyRecord.generation,profileRoot:readyRecord.profileRoot,extensionId:readyRecord.extensionId,
+          sourceDigest:readyRecord.sourceDigest,chain}})))
+        response.emit("end")
+      })
+      return request
+    }}:name==="./web-native-private-path.cjs"?{verify:(entries,root)=>{
+      assert.equal(root,systemRoot)
+      for(const entry of entries){
+        assert.ok(existsSync(entry.file),"readonly ACL verification only observes owned paths")
+        assert.equal(fs.lstatSync(entry.file).isDirectory(),entry.directory)
+        if(entry.file===artifacts||path.dirname(entry.file)===artifacts)
+          assert.ok(protectedPaths.has(entry.file),"new retirement directories require qualified ACL producer readback")
+      }
+      return"private"
+    }}:require(name.startsWith(".")?path.join(mcpRoot,name):name)})
+  const actualAttest=nativeModule.exports.attestNativeContext
+  nativeModule.exports.attestNativeContext=(record,selection)=>actualAttest(record,selection,{
+    readAncestry:async pid=>{
+      assert.equal(pid,chain[0].pid)
+      return structuredClone(chain)
+    },
+  })
+  resources.native=nativeModule.exports
+  resources.common=canonicalCjs("browser-context-common.cjs",{module:{exports:{}},__dirname:mcpRoot,process:{...process,platform:"win32"},
+    Buffer,require:name=>require(name.startsWith(".")?path.join(mcpRoot,name):name)})
+  const controller=nativeController(m,resources),socketRoot=path.join(m.root,"sockets")
+  fs.mkdirSync(socketRoot,{mode:0o700})
+  let executions=0
+  const options=controllerOptions(m,{env,socketRoot,execute:async(_node,args,options)=>{
+    executions++
+    const request=JSON.parse(args[1]),config=JSON.parse(readFileSync(path.join(request.root,"config/browser.json")))
+    assert.equal(request.selection.browserExecutable,executable)
+    assert.equal(request.selection.userDataDir,profile)
+    assert.equal(Object.keys(config.deskNativeContext).length,9)
+    assert.equal(options.env.LOCALAPPDATA,path.join(request.root,"home/AppData/Local"))
+    assert.equal(options.env.APPDATA,path.join(request.root,"home/AppData/Roaming"))
+    assert.equal(options.env.ProgramFiles,undefined)
+    assert.equal(options.env.SystemRoot,systemRoot)
+    if(request.operation==="create"){
+      const sessionFile=touch(path.join(request.root,".playwright","owned-model-session.json"),JSON.stringify({contextId:request.contextId}))
+      fs.chmodSync(sessionFile,0o600)
+      owners.set(request.contextId,sessionFile)
+    }
+    if(request.operation==="discard"){
+      closed.add(request.contextId)
+      return{state:"discarded",result:{contextId:request.contextId,discarded:true}}
+    }
+    return{state:"running"}
+  }})
+  const result=await controller.context({action:"create",label:"Redirected Windows owner"},options)
+  if(invalidSid){
+    assert.equal(result.exitCode,1)
+    assert.match(result.payload.message,/usable owner SID/)
+    assert.equal(executions,0)
+  }else{
+    assert.equal(result.exitCode,0,JSON.stringify(result))
+    const paths=batches.flat().map(entry=>entry.path)
+    assert.ok(paths.some(file=>file.endsWith("home/AppData/Local")))
+    assert.ok(paths.includes(path.join(result.payload.contextResources.contextDirectory,"config/browser.json")))
+    const count=batches.length
+    assert.equal((await controller.context({action:"keep",contextId:result.payload.contextId},options)).exitCode,0)
+    assert.equal(batches.length,count,"existing contexts are verified, not re-protected")
+    assert.equal(executions,2)
+    if(scenario!=="normal"){
+      const sessionBytes=readFileSync(owners.get(result.payload.contextId))
+      const discarded=await controller.context({action:"discard",contextId:result.payload.contextId},options)
+      assert.equal(discarded.exitCode,1)
+      if(scenario==="unprotected existing artifacts"){
+        assert.equal(discarded.payload.code,"NATIVE_PRIVATE_PATH_INVALID")
+        assert.deepEqual(fs.readdirSync(artifacts),[],"unknown existing bucket is neither repaired nor used")
+        assert.equal(batches.flat().some(entry=>entry.path===artifacts),false)
+      }else{
+        assert.match(discarded.payload.message,/usable owner SID/)
+        assert.equal(protectedPaths.has(discarded.payload.contextResources.retirementArtifactDirectory),false)
+      }
+      assert.equal(existsSync(result.payload.contextResources.contextDirectory),true)
+      assert.deepEqual(readFileSync(owners.get(result.payload.contextId)),sessionBytes,"failed retirement preserves active owner evidence")
+      return
+    }
+    for(let index=0;index<2;index++){
+      const owner=index===0?result:await controller.context({action:"create",label:"Second redirected Windows owner"},options)
+      assert.equal(owner.exitCode,0,JSON.stringify(owner))
+      const sessionBytes=readFileSync(owners.get(owner.payload.contextId))
+      const discarded=await controller.context({action:"discard",contextId:owner.payload.contextId},options)
+      assert.equal(discarded.exitCode,0,JSON.stringify(discarded))
+      const retained=discarded.payload.contextResources
+      assert.equal(existsSync(owner.payload.contextResources.contextDirectory),false)
+      assert.deepEqual(readFileSync(path.join(retained.retiredDirectory,".playwright","owned-model-session.json")),sessionBytes)
+      assert.ok(protectedPaths.has(retained.retirementArtifactDirectory))
+    }
+    assert.equal(batches.flat().filter(entry=>entry.path===artifacts).length,1,"existing artifact bucket is verified, never re-protected")
+    assert.equal(batches.flat().filter(entry=>path.dirname(entry.path)===artifacts).length,2,"each exclusive retirement reservation is protected")
+  }
+})
 
 /** Run the launcher against a host over streams, for the answers it serves itself. */
 function session(machine, extra = {}) {
@@ -641,16 +823,10 @@ function session(machine, extra = {}) {
   })
   const stderr = []
   const exits = []
-  const running = browser.run({
-    ...machine.launchOptions,
-    stderr: { write: (text) => stderr.push(String(text)) },
-    exit: (code) => exits.push(code),
-    kill: () => {},
-    signals: new EventEmitter(),
-    ...extra,
-    stdin,
-    stdout,
-  })
+  const controller=nativeController(machine),options=controllerOptions(machine,extra)
+  const running=import(pathToFileURL(path.join(mcpRoot,"src/browser/context-mcp.js")).href).then(frontend=>
+    frontend.startContextMcpServer({tools:require(path.join(mcpRoot,"web-catalog.json")).tools,
+      controller:{context:input=>controller.context(input,options),command:input=>controller.command(input,options)},stdin,stdout}))
   const wait = async (check, what) => {
     for (let i = 0; i < 3000; i += 1) {
       const found = check()
@@ -667,41 +843,40 @@ function session(machine, extra = {}) {
       api.send({ id, method, params })
       return api.reply(id)
     },
-    handshake: () => api.ask(1, "initialize", HOST_INIT),
-    call: (id, name = "browser_navigate") => api.ask(id, "tools/call", { name, arguments: {} }),
-    close: () => { stdin.end(); return running },
+    handshake: async () => {const result=await api.ask(1,"initialize",HOST_INIT);api.send({method:"notifications/initialized"});return result},
+    call: (id, name = "browser_context",args={action:"create",label:"Existing profile qualification"}) => api.ask(id, "tools/call", { name, arguments:args }),
+    close: async () => { stdin.end(); const server=await running;await server.close() },
   }
   return api
 }
 
 const textOf = (message) => message.result.content[0].text
 
-test("with no declaration the browser is exactly what it was: headless, isolated, and no token", posixOnly, async () => {
+test("without a declaration default signed-in creation refuses before allocating an owner, never falls back headless", posixOnly, async () => {
   const machine = await realMachine({ declare: null })
-  const [spawned] = await direct(machine)
-  assert.deepEqual(spawned.argv.slice(1, 3), ["--headless", "--isolated"])
-  assert.match(spawned.argv[0], /@playwright\/mcp\/cli\.js$/u)
-  assert.equal(spawned.argv.includes("--extension"), false)
-  assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
-  assert.equal(spawned.options.stdio, "inherit")
+  const result=await direct(machine)
+  assert.equal(result.exitCode,1)
+  assert.equal(result.payload.code,"browser_declaration_unavailable")
+  assert.equal(existsSync(path.join(machine.state,"signed-in")),false)
+  assert.equal(machine.spawns.length,0)
 })
 
-test("a caller's own connection option keeps the browser as the caller asked, without reading any declaration", posixOnly, async () => {
+test("caller connection configuration is not an implicit alternative to the explicit context contract", posixOnly, async () => {
   const machine = await realMachine()
-  const [spawned] = await direct(machine, { args: ["--cdp-endpoint", "http://127.0.0.1:9222"], pluginDirs: () => { throw new Error("must not look") } })
-  assert.deepEqual(spawned.argv.slice(1, 3), ["--output-dir", path.join(machine.state, "output")])
-  assert.ok(spawned.argv.includes("--cdp-endpoint"))
-  assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, undefined)
+  const result=await direct(machine,{action:"create",label:"Owned explicit task",endpoint:"http://127.0.0.1:9222"})
+  assert.equal(result.payload.code,"invalid_arguments")
+  assert.equal(machine.spawns.length,0)
 })
 
-test("a declared profile starts stock Playwright MCP in extension mode through the tab-cleanup runner, with the token only in the environment", posixOnly, async () => {
+test("a declared profile and legacy token do not bypass missing native readiness or start a stock MCP fallback", posixOnly, async () => {
   const machine = await realMachine()
-  const [spawned] = await direct(machine, { args: ["--caps", "vision"] })
-  const cli = path.join(machine.state, "installs", "1-1-a", "node_modules", "@playwright", "mcp", "cli.js")
-  assert.deepEqual(spawned.argv, [REAL_TABS, cli, "--output-dir", path.join(machine.state, "output"), "--extension", "--browser", "msedge", "--user-data-dir", machine.base, "--profile-dir-name", "Profile 4", "--caps", "vision"])
-  assert.equal(spawned.options.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, TOKEN)
-  assert.equal(spawned.options.stdio, "inherit", "the host talks to Playwright MCP directly")
-  assert.equal(spawned.argv.join(" ").includes(TOKEN), false)
+  const result=await direct(machine)
+  // The inert retained-reader fixture is not a qualified normal native
+  // installation. Automatic setup must preserve its real installer refusal.
+  assert.equal(result.payload.code,"NATIVE_INSTALL_REFUSED")
+  assert.equal(machine.spawns.length,0)
+  assert.equal(existsSync(path.join(machine.state,"signed-in")),false)
+  assert.equal(JSON.stringify(result).includes(TOKEN),false)
 })
 
 test("a declared profile refuses competing browser paths and profiles before connecting", posixOnly, async () => {
@@ -709,9 +884,9 @@ test("a declared profile refuses competing browser paths and profiles before con
     const machine = await realMachine()
     const host = session(machine, { args })
     await host.handshake()
-    const response = await host.call(2)
+    const response = await host.call(2,"browser_command",{contextId:"11111111-1111-4111-8111-111111111111",args:["snapshot",...args]})
     assert.equal(response.result.isError, true, "conflicting browser arguments must not reach a page tool")
-    assert.equal(JSON.parse(textOf(response)).code, "browser_configuration_conflict")
+    assert.equal(JSON.parse(textOf(response)).code, "reserved_option")
     assert.equal(machine.spawns.length, 0)
     await host.close()
   }
@@ -721,12 +896,12 @@ test("a browser that is not installed is one degraded line on the first call", p
   const machine = await realMachine({ edge: false })
   const host = session(machine)
   await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_not_installed")
+  assert.equal(JSON.parse(textOf(await host.call(2))).code, "NATIVE_BROWSER_UNAVAILABLE")
   assert.equal(machine.spawns.length, 0)
   await host.close()
 })
 
-test("a missing extension is one clear line on the first call, then works once it is installed, with no reconnect", posixOnly, async () => {
+test("missing native readiness remains unavailable after a legacy token appears; the same SDK connection never retries a legacy route", posixOnly, async () => {
   const machine = await realMachine({ entries: [] })
   const host = session(machine)
   const handshake = await host.handshake()
@@ -734,14 +909,11 @@ test("a missing extension is one clear line on the first call, then works once i
   const first = await host.call(2)
   assert.equal(first.result.isError, true)
   const payload = JSON.parse(textOf(first))
-  assert.equal(payload.code, "browser_extension_missing")
-  assert.ok(payload.fix.includes(real.INSTALL_URL))
+  assert.equal(payload.code,"NATIVE_INSTALL_REFUSED")
   assert.equal(machine.spawns.length, 0)
   machine.levelEntries.entries = [[tokenKey(), latin(TOKEN)]]
-  assert.equal(textOf(await host.call(3)), "ran browser_navigate")
-  assert.equal(machine.spawns.length, 1)
-  assert.equal(machine.spawns[0].argv[0], REAL_TABS)
-  assert.equal(machine.spawns[0].env.PLAYWRIGHT_MCP_EXTENSION_TOKEN, TOKEN)
+  assert.equal(JSON.parse(textOf(await host.call(3))).code,"NATIVE_INSTALL_REFUSED")
+  assert.equal(machine.spawns.length,0)
   await host.close()
   assert.equal(host.raw.join("").includes(TOKEN), false)
 })
@@ -751,19 +923,20 @@ test("a declared profile that is not there names what was looked for", posixOnly
   const host = session(machine)
   await host.handshake()
   const payload = JSON.parse(textOf(await host.call(2)))
-  assert.equal(payload.code, "browser_profile_not_found")
-  assert.match(payload.summary, /@microsoft\.com/u)
+  assert.equal(payload.code, "browser_profile_unavailable")
+  assert.equal(existsSync(path.join(machine.state,"signed-in")),false)
   assert.equal(machine.spawns.length, 0)
   await host.close()
 })
 
-test("a declaration that cannot be used degrades the whole server with a code that names the manifest", posixOnly, async () => {
+test("an invalid declaration refuses signed-in creation without changing SDK availability or allocating an owner", posixOnly, async () => {
   const machine = await realMachine({ declare: { browser: { channel: "netscape", profileAccountDomain: "microsoft.com" } } })
   const host = session(machine)
   await host.handshake()
   const payload = JSON.parse(textOf(await host.call(2)))
-  assert.equal(payload.code, "browser_declaration_invalid")
-  assert.match(payload.summary, /plugin\.json/u)
+  assert.equal(payload.code, "browser_declaration_unavailable")
+  const tools=await host.ask(3,"tools/list")
+  assert.deepEqual(tools.result.tools.map(tool=>tool.name),["browser_context","browser_command"])
   await host.close()
   assert.equal(machine.spawns.length, 0)
 })
@@ -771,7 +944,7 @@ test("a declaration that cannot be used degrades the whole server with a code th
 /** A fake npm for installs: `install` writes Playwright MCP, and the reader and ws too unless `readerFails`; with `allFail` nothing installs. */
 function installNpm(calls, options = {}) {
   return (file, argv) => {
-    calls.push(argv.slice(1))
+    calls.push(Array.from(argv).slice(1))
     const child = new EventEmitter()
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
@@ -786,6 +959,7 @@ function installNpm(calls, options = {}) {
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.84", bin: { "playwright-mcp": "cli.js" } }))
       touch(path.join(prefix, "node_modules", "@playwright", "mcp", "cli.js"), "")
       touch(path.join(prefix, "node_modules", "playwright-core", "lib", "coreBundle.js"), stockLifecycle)
+      touch(path.join(prefix, "node_modules", "playwright-core", "lib", "tools/cli-client/session.js"), errorFixture.sessionSource)
       if (withReader) touch(path.join(prefix, "node_modules", "classic-level", "package.json"), "{}")
       if (argv.includes("ws@8.21.3")) touch(path.join(prefix, "node_modules", "ws", "package.json"), '{"version":"8.21.3"}')
       child.emit("close", 0)
@@ -794,19 +968,28 @@ function installNpm(calls, options = {}) {
   }
 }
 
-test("a declaration installs the token reader and ws in the same npm call as Playwright MCP, replacing an install without them, while the proxy answers the host", posixOnly, async () => {
+// Preserve the retained non-MCP reader producer's own unit contract directly.
+// It is not reachable by native desk-web calls and is never used as a fallback.
+async function prepareLegacyReader(machine,extra={}) {
+  const module={exports:{}},errors=[]
+  const scope={module,__dirname:mcpRoot,process,Buffer,setTimeout,clearTimeout,
+    require:name=>require(name.startsWith(".")?path.join(mcpRoot,name):name)}
+  canonicalCjs("web.cjs",scope)
+  const runtime=scope.browserRuntimeTools({...machine.launchOptions,...extra},{stderr:{write:text=>errors.push(text)}})
+  const result=await scope.ensureInstalled(runtime.tools,runtime.root,runtime.clock()+110000,true)
+  return{...result,errors}
+}
+
+test("retained non-MCP reader preparation installs reader and ws together without starting a page-tool route", posixOnly, async () => {
   const machine = await realMachine({ reader: false })
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls) })
-  await host.handshake()
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
-  await host.close()
-  const [spawned] = machine.spawns
+  const prepared=await prepareLegacyReader(machine,{npmSpawn:installNpm(calls)})
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].slice(-3), ["@playwright/mcp@latest", "classic-level@1.4.1", "ws@8.21.3"])
-  assert.equal(spawned.argv[0], REAL_TABS)
-  assert.match(spawned.argv[1], /installs\/.*\/node_modules\/@playwright\/mcp\/cli\.js$/u)
-  assert.notEqual(path.dirname(path.dirname(path.dirname(path.dirname(spawned.argv[1])))), path.join(machine.state, "installs", "1-1-a"))
+  assert.equal(prepared.installed.reader,true)
+  assert.equal(prepared.installed.ws,true)
+  assert.notEqual(prepared.installed.dir,path.join(machine.state,"installs","1-1-a"))
+  assert.equal(machine.spawns.length,0)
   assert.equal(JSON.stringify(calls).includes(TOKEN), false)
 })
 
@@ -814,12 +997,9 @@ test("a legacy real-profile generation migrates safely before acquiring its miss
   const machine = await realMachine({ reader: false })
   writeFileSync(path.join(machine.state, "installs/1-1-a/playwright-patch.json"), "null")
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls) })
-  await host.handshake()
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
-  await host.close()
+  await prepareLegacyReader(machine,{npmSpawn:installNpm(calls)})
   const installed = browser.readInstalled(machine.state)
-  assert.equal(installed.patchRevision, 2)
+  assert.equal(installed.patchRevision, playwrightPatch.REVISION)
   assert.equal(installed.reader, true)
   assert.equal(installed.ws, true)
   assert.equal(calls.length, 1)
@@ -829,19 +1009,14 @@ test("a legacy real-profile generation migrates safely before acquiring its miss
 test("a reader that cannot be installed leaves the browser installed and marked, and the real profile answers that the token cannot be read", posixOnly, async () => {
   const machine = await realMachine({ reader: false, launch: { requireModule: undefined } })
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls, { readerFails: true }) })
-  await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  await prepareLegacyReader(machine,{npmSpawn:installNpm(calls,{readerFails:true})})
   assert.deepEqual(calls.map((call) => call.slice(-3).join(" ")), ["@playwright/mcp@latest classic-level@1.4.1 ws@8.21.3", "--no-save --no-package-lock @playwright/mcp@latest"])
   const installed = browser.readInstalled(machine.state)
   assert.equal(installed.reader, true, "the marked install counts as having been tried")
   assert.equal(existsSync(path.join(installed.dir, "reader-unavailable")), true)
-  await host.close()
-  const again = session(machine, { npmSpawn: installNpm(calls, { allFail: true }) })
-  await again.handshake()
-  assert.equal(JSON.parse(textOf(await again.call(2))).code, "browser_token_unreadable")
+  await prepareLegacyReader(machine,{npmSpawn:installNpm(calls,{allFail:true})})
   assert.equal(calls.length, 2, "a later launch does not install again")
-  await again.close()
+  assert.equal(machine.spawns.length,0)
 })
 
 /** A machine whose install has the reader marked unavailable, `ageMs` ago. */
@@ -859,21 +1034,16 @@ const DAY = 24 * 60 * 60 * 1000
 test("a marker younger than a day is not retried", posixOnly, async () => {
   const machine = await markedMachine(DAY - 60 * 60 * 1000)
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls) })
-  await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  const prepared=await prepareLegacyReader(machine,{npmSpawn:installNpm(calls)})
+  assert.equal(prepared.installed.reader,true)
   assert.deepEqual(calls, [])
-  await host.close()
 })
 
 test("a marker older than a day is retried once, and the reader installs when npm works now", posixOnly, async () => {
   const machine = await markedMachine(DAY + 60 * 1000)
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls), requireModule: () => levelStub([[tokenKey(), latin(TOKEN)]]) })
-  await host.handshake()
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
-  await host.close()
-  assert.equal(machine.spawns[0].argv[0], REAL_TABS)
+  await prepareLegacyReader(machine,{npmSpawn:installNpm(calls)})
+  assert.equal(machine.spawns.length,0)
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].slice(-3), ["@playwright/mcp@latest", "classic-level@1.4.1", "ws@8.21.3"])
   const installed = browser.readInstalled(machine.state)
@@ -884,46 +1054,36 @@ test("a marker older than a day is retried once, and the reader installs when np
 test("a retry that fails again writes a fresh marker, and a retry that cannot install anything keeps the working install", posixOnly, async () => {
   const machine = await markedMachine(2 * DAY)
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls, { readerFails: true }) })
-  await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  await prepareLegacyReader(machine,{npmSpawn:installNpm(calls,{readerFails:true})})
   assert.equal(calls.length, 2)
   const installed = browser.readInstalled(machine.state)
   assert.notEqual(installed.dir, path.join(machine.state, "installs", "1-1-a"))
   assert.ok(Date.now() - statSync(path.join(installed.dir, "reader-unavailable")).mtimeMs < DAY, "the marker was rewritten")
-  await host.close()
 
   const down = await markedMachine(2 * DAY)
   const downCalls = []
-  const offline = session(down, { npmSpawn: installNpm(downCalls, { allFail: true }) })
-  await offline.handshake()
-  assert.equal(JSON.parse(textOf(await offline.call(2))).code, "browser_token_unreadable", "the old install still starts")
+  const offline=await prepareLegacyReader(down,{npmSpawn:installNpm(downCalls,{allFail:true})})
+  assert.equal(offline.installed.dir,path.join(down.state,"installs","1-1-a"))
   assert.equal(downCalls.length, 2)
   assert.equal(browser.readInstalled(down.state).dir, path.join(down.state, "installs", "1-1-a"))
-  await offline.close()
 })
 
 test("a stale marker does not make a launch wait for another session's install", posixOnly, async () => {
   const machine = await markedMachine(2 * DAY)
   touch(path.join(machine.state, "refresh.lock"), JSON.stringify({ pid: process.pid, at: Date.now() }))
   const calls = []
-  const host = session(machine, { npmSpawn: installNpm(calls) })
-  await host.handshake()
-  assert.equal(JSON.parse(textOf(await host.call(2))).code, "browser_token_unreadable")
+  const prepared=await prepareLegacyReader(machine,{npmSpawn:installNpm(calls)})
   assert.deepEqual(calls, [])
-  assert.match(host.stderr.join(""), /another Desk session is installing; keeping the install without the connection reader/u)
-  await host.close()
+  assert.match(prepared.errors.join(""), /another Desk session is installing; keeping the install without the connection reader/u)
 })
 
 test("when the reader cannot be installed the existing install is kept and npm's reason goes to stderr without credentials", posixOnly, async () => {
   const machine = await realMachine({ reader: false })
   const noise = "npm error code E401 auth failed for https://me:hunter2@registry.example/ _authToken=abc123 Authorization: Bearer bearer111 and Basic basic222 leaked npm_abcdefghijklmnopqrstuvwxyz0123 here GET https://registry.example/x?token=query333&ok=1 and ?password=query444 end https://u:p@ss/word@registry.example/pkg\n"
-  const host = session(machine, { npmSpawn: installNpm([], { allFail: true, noise }) })
-  await host.handshake()
-  assert.equal(textOf(await host.call(2)), "ran browser_navigate")
-  await host.close()
-  assert.equal(machine.spawns[0].argv[0], REAL_TABS, "the kept install still starts with its token, read by the injected reader")
-  const err = host.stderr.join("")
+  const prepared=await prepareLegacyReader(machine,{npmSpawn:installNpm([],{allFail:true,noise})})
+  assert.equal(prepared.installed.dir,path.join(machine.state,"installs","1-1-a"))
+  assert.equal(machine.spawns.length,0,"reader preparation never starts a browser")
+  const err = prepared.errors.join("")
   assert.match(err, /could not install the connection reader \(.*\); keeping the install without it/u)
   assert.equal(/hunter2|abc123|me:|bearer111|basic222|npm_abcdef|query333|query444|p@ss|ss\/word/u.test(err), false)
   assert.match(err, /ok=1/u)

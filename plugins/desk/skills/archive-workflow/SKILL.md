@@ -17,6 +17,8 @@ when a task is done — merged or set aside — i slide it toward the back of th
 
 ## Archive a task
 
+When a task result carries `archive_due: { track, slug }`, the owning main agent uses that key with the normal `task_archive` MCP tool before final delivery, not the shell move/commit sequence below. The tool owns its evidence checks, track link, readiness journal and exact Git publication. Inspect its actual answer: a refusal or `archive_pending` remains unresolved and names the retained path or repair action. The cue is advice, not proof that a move happened or authority over another agent's work; preserve the existing unsigned delivery packet.
+
 1. move the entire task directory to the track's `_archive/`:
    ```bash
    mv $DESK/<track>/<task> $DESK/<track>/_archive/<task>
