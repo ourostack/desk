@@ -668,8 +668,13 @@ test("Windows controller wiring consumes actual ACL readback verification and no
   const verified=await(await import(pathToFileURL(path.join(mcpRoot,"native-messaging-install.mjs")).href)).verifyNativeDistribution(path.dirname(mcpRoot))
   const ready=path.join(m.state,"native-owned/state/native-provider-"+
     require("crypto").createHash("sha256").update(executable+"\0"+path.join(profile,"Profile 17")).digest("hex")+".json")
-  touch(ready,JSON.stringify({profileRoot:path.join(profile,"Profile 17"),extensionId:verified.extensionId,
-    sourceDigest:verified.extensionSourceDigest,browser:{executable}}))
+  const chain=[0,1,2].map((i)=>({pid:820003-i,parentPid:820002-i,startIdentity:"owned-Windows-resource-"+i,
+    owner:String(process.getuid()),executable:i===2?executable:path.join(m.root,"native-resource-"+i)}))
+  const readyRecord={version:1,generation:"33333333-3333-4333-8333-333333333333",
+    endpoint:"http://127.0.0.1:38123/provider/"+"c".repeat(64),
+    profileRoot:path.join(profile,"Profile 17"),extensionId:verified.extensionId,
+    sourceDigest:verified.extensionSourceDigest,browser:chain[2],chain}
+  touch(ready,JSON.stringify(readyRecord))
   fs.chmodSync(path.dirname(ready),0o700);fs.chmodSync(ready,0o600)
   fs.chmodSync(m.state,0o700) // The real POSIX lock must observe private state beneath this Windows ACL resource model.
   const systemRoot=path.join(m.root,"owned-system"),provider=touch(path.join(systemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"),"Never executed")
@@ -700,9 +705,23 @@ test("Windows controller wiring consumes actual ACL readback verification and no
       }}
     }}
   const nativeModule={exports:{}}
-  vm.runInNewContext(readFileSync(path.join(mcpRoot,"web-native-messaging.cjs"),"utf8"),{module:nativeModule,__dirname:mcpRoot,Buffer,
+  vm.runInNewContext(readFileSync(path.join(mcpRoot,"web-native-messaging.cjs"),"utf8"),{module:nativeModule,__dirname:mcpRoot,Buffer,setTimeout,clearTimeout,
     process:{...process,platform:"win32",env:{SystemRoot:systemRoot}},
-    require:name=>name==="./web-native-private-path.cjs"?{verify:(entries,root)=>{
+    require:name=>name==="http"?{request(_options,callback){
+      const request=new EventEmitter();request.destroy=()=>{}
+      request.end=bytes=>queueMicrotask(()=>{
+        const envelope=JSON.parse(bytes)
+        assert.equal(envelope.operation,"attest")
+        assert.deepEqual(envelope.payload,{})
+        const response=new EventEmitter();response.statusCode=200;response.destroy=()=>{}
+        callback(response)
+        response.emit("data",Buffer.from(JSON.stringify({ok:true,result:{healthy:true,
+          generation:readyRecord.generation,profileRoot:readyRecord.profileRoot,extensionId:readyRecord.extensionId,
+          sourceDigest:readyRecord.sourceDigest,chain}})))
+        response.emit("end")
+      })
+      return request
+    }}:name==="./web-native-private-path.cjs"?{verify:(entries,root)=>{
       assert.equal(root,systemRoot)
       for(const entry of entries){
         assert.ok(existsSync(entry.file),"readonly ACL verification only observes owned paths")
@@ -712,6 +731,13 @@ test("Windows controller wiring consumes actual ACL readback verification and no
       }
       return"private"
     }}:require(name.startsWith(".")?path.join(mcpRoot,name):name)})
+  const actualAttest=nativeModule.exports.attestNativeContext
+  nativeModule.exports.attestNativeContext=(record,selection)=>actualAttest(record,selection,{
+    readAncestry:async pid=>{
+      assert.equal(pid,chain[0].pid)
+      return structuredClone(chain)
+    },
+  })
   resources.native=nativeModule.exports
   resources.common=canonicalCjs("browser-context-common.cjs",{module:{exports:{}},__dirname:mcpRoot,process:{...process,platform:"win32"},
     Buffer,require:name=>require(name.startsWith(".")?path.join(mcpRoot,name):name)})
@@ -845,7 +871,9 @@ test("caller connection configuration is not an implicit alternative to the expl
 test("a declared profile and legacy token do not bypass missing native readiness or start a stock MCP fallback", posixOnly, async () => {
   const machine = await realMachine()
   const result=await direct(machine)
-  assert.equal(result.payload.code,"NATIVE_READY_UNAVAILABLE")
+  // The inert retained-reader fixture is not a qualified normal native
+  // installation. Automatic setup must preserve its real installer refusal.
+  assert.equal(result.payload.code,"NATIVE_INSTALL_REFUSED")
   assert.equal(machine.spawns.length,0)
   assert.equal(existsSync(path.join(machine.state,"signed-in")),false)
   assert.equal(JSON.stringify(result).includes(TOKEN),false)
@@ -881,10 +909,10 @@ test("missing native readiness remains unavailable after a legacy token appears;
   const first = await host.call(2)
   assert.equal(first.result.isError, true)
   const payload = JSON.parse(textOf(first))
-  assert.equal(payload.code, "NATIVE_READY_UNAVAILABLE")
+  assert.equal(payload.code,"NATIVE_INSTALL_REFUSED")
   assert.equal(machine.spawns.length, 0)
   machine.levelEntries.entries = [[tokenKey(), latin(TOKEN)]]
-  assert.equal(JSON.parse(textOf(await host.call(3))).code,"NATIVE_READY_UNAVAILABLE")
+  assert.equal(JSON.parse(textOf(await host.call(3))).code,"NATIVE_INSTALL_REFUSED")
   assert.equal(machine.spawns.length,0)
   await host.close()
   assert.equal(host.raw.join("").includes(TOKEN), false)

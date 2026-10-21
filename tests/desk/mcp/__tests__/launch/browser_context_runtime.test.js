@@ -240,6 +240,11 @@ test("actual maintained daemon options can reach native acquisition using the st
         processReader:async current=>structuredClone(chain.find(row=>row.pid===current)),
       })})},
     })
+    // The normal parent now uses C before allocating a new owner. Give it the
+    // same actual C code / owned ancestry+HTTP resources as the worker, rather
+    // than attempting to attest the virtual browser's PIDs on the real host.
+    t.mock.method(native,"attestNativeContext",(record,selection)=>
+      module.exports.attestNativeContext(record,selection))
     const templates = new Map()
     function template(name,dir=lib) {
       name=path.basename(name)
