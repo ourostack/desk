@@ -5,7 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { main, readConfig } from "../src/main.js";
+import { deskRepoOf, main, readConfig } from "../src/main.js";
 import { serveTokens } from "../src/token-socket.js";
 
 const base = { DESK_SIGNING_KEY: "synthetic" };
@@ -18,6 +18,17 @@ test("multi-user gate preserves legacy defaults and rejects ambiguous or identit
     assert.throws(() => readConfig({ ...base, DESK_MULTI_USER: value }), /DESK_MULTI_USER/);
   }
   assert.throws(() => readConfig({ ...base, DESK_MULTI_USER: "1" }), /Ouro account identity/);
+});
+
+test("only a multi-user gateway lifts DESK_REPO from admission", () => {
+  const identity = {
+    DESK_ENTRA_TENANT_ID: "11111111-2222-3333-4444-555555555555", DESK_ENTRA_SUBDOMAIN: "synthetic",
+    DESK_ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555", DESK_ENTRA_CLIENT_SECRET: "synthetic",
+    DESK_ACCOUNTS_ENDPOINT: "https://synthetic.invalid",
+  };
+  assert.equal(deskRepoOf(readConfig({ ...base, DESK_REPO: "owner/desk" })), "owner/desk");
+  assert.equal(deskRepoOf(readConfig({ ...base, ...identity, DESK_REPO: "owner/desk", DESK_MULTI_USER: "0" })), "owner/desk");
+  assert.equal(deskRepoOf(readConfig({ ...base, ...identity, DESK_REPO: "owner/desk", DESK_MULTI_USER: "1" })), null);
 });
 
 test("token socket readiness includes final private mode and requested ownership; listen failure rejects", async () => {

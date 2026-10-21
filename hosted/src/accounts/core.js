@@ -57,7 +57,7 @@ const TOKEN_HASH = /^[A-Za-z0-9_-]{43}$/;
 // and can't be `.` or `..`.
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/;
-const validRepo = (repo) => {
+export const validRepo = (repo) => {
   const parts = typeof repo === "string" ? repo.split("/") : [];
   return parts.length === 2 && OWNER.test(parts[0]) && REPO_NAME.test(parts[1]) && parts[1] !== "." && parts[1] !== "..";
 };

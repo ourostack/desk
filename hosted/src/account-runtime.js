@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertGatewayKernelBoundary, createUidAllocator, isolatedDeskEnv, isolationArgs } from "./isolation.js";
 import { serviceHandle } from "./service-lifetime.js";
+import { validRepo } from "./accounts/core.js";
 
 const HELPER = fileURLToPath(new URL("./realm-helper.js", import.meta.url));
 const allocateUid = createUidAllocator();
@@ -192,8 +193,10 @@ export function assertAccountRuntimeBoundary(config, baseEnv = process.env) {
 
 export function createAccountRuntime({ config, store, mint, baseEnv = process.env, rootDir = "/data/realms" }) {
   assertAccountRuntimeBoundary(config, baseEnv);
-  // Each account's desk is the repository its own binding names (verified when it was linked), not DESK_REPO.
-  const { pluginDir, issuer } = config;
+  // Each account's desk is the repository its own binding names, not DESK_REPO. A binding to any repository other
+  // than DESK_REPO (which the operator configured) must name the App installation it was verified through, which
+  // every token mint then checks; and a repository serves one account at a time in this replica.
+  const { repo: configuredRepo, pluginDir, issuer } = config;
   const childBaseEnv = { PATH: baseEnv.PATH, LANG: baseEnv.LANG, LC_ALL: baseEnv.LC_ALL, TZ: baseEnv.TZ };
   if (!isAbsolute(rootDir)) throw new Error("Hosted desk realm parent must be absolute.");
   protectedAncestors(rootDir);
@@ -207,6 +210,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   const preparing = new Map();
   const prepared = new Map();
   const preservationFailures = new Map();
+  const claims = new Map();
   let closed = false;
   let closing;
 
@@ -215,11 +219,14 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId)) throw refused();
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
     if (closed || account?.accountId !== accountId || account.deskAccess !== true ||
-        binding?.kind !== "github" || !binding.author ||
-        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(binding.repo)) throw refused();
+        binding?.kind !== "github" || !binding.author || !validRepo(binding.repo) ||
+        (binding.installationId === undefined && binding.repo !== configuredRepo)) throw refused();
+    const claim = binding.repo.toLowerCase();
+    if (claims.has(claim) && claims.get(claim) !== accountId) throw refused();
     const authority = JSON.stringify([binding.kind, binding.repo, binding.installationId ?? null, binding.author.name, binding.author.email]);
     if (authorities.has(accountId) && authorities.get(accountId) !== authority) throw refused();
     authorities.set(accountId, authority);
+    claims.set(claim, accountId);
     if (prepared.has(accountId)) return prepared.get(accountId);
     if (preparing.has(accountId)) return preparing.get(accountId);
     const pending = provision(accountId, structuredClone(binding));
@@ -273,7 +280,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
         broker.on("message", message => {
           if (message.ready) resolve();
           if (message.mint) {
-            Promise.resolve().then(() => mint(binding.repo)).then(
+            Promise.resolve().then(() => mint(binding.repo, binding.installationId)).then(
               ({ token }) => { if (broker.connected) broker.send({ token, id: message.mint }, () => {}); },
               () => { if (broker.connected) broker.send({ error: "Desk token unavailable.", id: message.mint }, () => {}); },
             );

@@ -1,1 +1,3 @@
 Multi-user hosted Desk serves each signed-in account from the repository its own binding names, in its own realm, instead of requiring every binding to name the gateway's single `DESK_REPO`. Sign-in admission, the GitHub fallback and realm preparation all follow the account's binding; a single-desk gateway still admits only `DESK_REPO`. The native Linux job now runs the gateway end to end with two accounts on two repositories and checks that a session refuses another account's token.
+
+A binding to any repository other than `DESK_REPO` must record the GitHub App installation it was verified through, and every token mint checks that the repository is still served by that installation. Within one gateway, a repository serves one account at a time.

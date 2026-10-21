@@ -76,6 +76,15 @@ test("installationToken asks for a repository-scoped token and caches it until f
   assert.equal(github.calls.length, 4);
 });
 
+test("installationToken with a binding's installationId refuses a repository served by another installation", async () => {
+  const clock = { now: Date.parse("2026-10-08T12:00:00Z") };
+  const github = fakeGitHub(clock);
+  const options = { appId: "1", privateKeyPem: PEM, repo: "arimendelow/desk", fetch: github.fetch, now: () => clock.now };
+  await assert.rejects(installationToken({ ...options, installationId: 999 }), /installation/);
+  assert.equal(github.calls.filter(({ url }) => url.endsWith("/access_tokens")).length, 0, "no token is minted from the other installation");
+  assert.equal((await installationToken({ ...options, installationId: 777 })).token, "ghs_token1");
+});
+
 test("installationToken shares one request between concurrent callers", async () => {
   const clock = { now: Date.parse("2026-10-08T12:00:00Z") };
   const github = fakeGitHub(clock);

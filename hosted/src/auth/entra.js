@@ -9,7 +9,7 @@
 // 2. `callback` requires that cookie, exchanges the code with `client_secret_post` and the verifier, validates the
 //    ID token against that cookie's nonce (id-token.js), and maps `(tid, oid)` to an Ouro `accountId` in the
 //    accounts store, redeeming the browser's invite cookie when the identity is new. It then checks that the
-//    account's Desk access is on and that its binding names this gateway's desk, and mints our own code carrying
+//    account's Desk access is on and that it has a desk (admissionRefusal), and mints our own code carrying
 //    `accountId` and `authTime`: the moment this callback accepted a fresh ID token, not the token's `auth_time`,
 //    which Entra's rolling session keeps old.
 //

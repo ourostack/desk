@@ -134,9 +134,10 @@ const binding = {
   kind: "github", repo: "synthetic/desk", installationId: 123,
   author: { name: "Synthetic", email: "synthetic@users.noreply.github.com" },
 };
-for (const accountId of ["account-a", "account-b"]) {
+// One repository serves one account at a time, so account-b's desk is the second repository.
+for (const [accountId, repo] of [["account-a", binding.repo], ["account-b", "synthetic/second"]]) {
   await store.putAccount({ accountId, displayName: "Synthetic", deskAccess: true });
-  await store.putBinding(accountId, binding);
+  await store.putBinding(accountId, { ...binding, repo });
 }
 const config = { identity: {}, repo: binding.repo, pluginDir: "/app/plugins/desk", appKeyFile: key };
 if (process.env.DESK_NATIVE_SERVICES === "1") {
@@ -162,12 +163,17 @@ assert.throws(() => runtime.createAccountRuntime({ config, store, rootDir: join(
 chmodSync(key, 0o600);
 const manager = runtime.createAccountRuntime({
   config, store, rootDir: join(root, "realms"), baseEnv: { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin", DESK_SIGNING_KEY: "secret" },
-  mint: async (repo) => {
-    assert.equal(repo, "synthetic/desk");
+  mint: async (repo, installationId) => {
+    assert.ok(["synthetic/desk", "synthetic/second"].includes(repo));
+    assert.equal(installationId, binding.installationId, "every mint names the binding's installation");
     return { token: "synthetic-token" };
   },
 });
 await assert.rejects(manager.prepare("missing"));
+// A binding to a repository other than the configured desk must name the installation it was verified through.
+await store.putAccount({ accountId: "account-unverified", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-unverified", { kind: "github", repo: "synthetic/third", author: binding.author });
+await assert.rejects(manager.prepare("account-unverified"), /authority/);
 await store.putAccount({ accountId: "account-b", displayName: "Synthetic", deskAccess: false });
 await assert.rejects(manager.prepare("account-b"));
 await store.putAccount({ accountId: "account-b", displayName: "Synthetic", deskAccess: true });
@@ -175,6 +181,10 @@ writeFileSync("/data/runtime-native-fail", "synthetic forced fetch failure");
 await assert.rejects(manager.prepare("account-a"));
 unlinkSync("/data/runtime-native-fail");
 const [a, again, b] = await Promise.all([manager.prepare("account-a"), manager.prepare("account-a"), manager.prepare("account-b")]);
+// A repository already serving one account refuses a second account.
+await store.putAccount({ accountId: "account-duplicate", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-duplicate", { ...binding, repo: "Synthetic/Desk" });
+await assert.rejects(manager.prepare("account-duplicate"), /authority/);
 assert.equal(a, again);
 assert.equal(a.realm.uid, 10000, "failed preparation reserves, rather than recycling, its UID");
 assert.notEqual(a.realm.uid, b.realm.uid);
@@ -235,6 +245,8 @@ assert.equal(code, 0);
 assert.equal(child.kill("SIGKILL"), false, "closed child generation cannot signal a replacement");
 await store.putBinding("account-a", { ...binding, author: { ...binding.author, name: "Changed" } });
 await assert.rejects(manager.prepare("account-a"), /authority/);
+await store.putBinding("account-a", { ...binding, repo: "synthetic/third" });
+await assert.rejects(manager.prepare("account-a"), /authority/, "a prepared account's repository cannot change");
 await store.putBinding("account-a", binding);
 await store.putAccount({ accountId: "account-a", displayName: "Synthetic", deskAccess: false });
 await assert.rejects(manager.prepare("account-a"));
@@ -255,8 +267,11 @@ const pushed = spawnSync("/usr/bin/setpriv", isolationArgs({
 }), { env: a.env, encoding: "utf8" });
 assert.equal(pushed.status, 0, pushed.stderr);
 const subjects = fixtureGit(bare, ["log", "--format=%s"]);
+const secondSubjects = fixtureGit(secondBare, ["log", "--format=%s"]);
 assert.match(subjects, /owned desk write/);
-assert.match(subjects, /late desk write/, "close must drain gateway Git operations before its final push");
+assert.match(secondSubjects, /late desk write/, "close must drain gateway Git operations before its final push");
+assert.doesNotMatch(subjects, /late desk write/, "each account pushes only to its own repository");
+assert.doesNotMatch(secondSubjects, /owned desk write/, "each account pushes only to its own repository");
 await assert.rejects(manager.prepare("account-b"));
 assert.equal(readFileSync(key, "utf8"), "not a credential");
 await store.putAccount({ accountId: "account-c", displayName: "Synthetic", deskAccess: true });

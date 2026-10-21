@@ -393,7 +393,7 @@ export async function main(env = process.env, deps = {}) {
     // Prepare a realm only after an authenticated account opens a session.
     const runtime = createAccountRuntime({
       config, store: parts?.store, baseEnv: env,
-      mint: (repo) => installationToken({ appId: config.appId, privateKeyPem: readFileSync(config.appKeyFile, "utf8"), repo }),
+      mint: (repo, installationId) => installationToken({ appId: config.appId, privateKeyPem: readFileSync(config.appKeyFile, "utf8"), repo, installationId }),
     });
     if (config.appReady) {
       relay = createRelay({
