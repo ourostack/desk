@@ -4,8 +4,17 @@ import { attachCopilotSessionLabels } from "./consumer.mjs"
 // The native extension owner discovers this entry before the session starts.
 // Never start/resume an independent SDK client or request sensitive variables.
 try {
-  const session = await joinSession()
-  const consumer = await attachCopilotSessionLabels({
+  let consumer
+  const session = await joinSession({
+    hooks: {
+      onPreMcpToolCall: async (input, invocation) => {
+        // This supported hook awaits only the bounded display drain. Naming
+        // can become unavailable; task execution and inherited policy remain.
+        try { await consumer?.beforeMcpToolCall(input, invocation) } catch {}
+      },
+    },
+  })
+  consumer = await attachCopilotSessionLabels({
     session,
     expectedSessionId: process.env.SESSION_ID,
     onState: (state) => {

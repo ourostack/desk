@@ -1,11 +1,14 @@
 import "../_isolated_env.mjs"
 import assert from "node:assert/strict"
 import { test } from "node:test"
+import { readFileSync, promises as fs } from "node:fs"
+import path from "node:path"
 import { makeSessionLabelProposal } from "../../../../../plugins/desk/mcp/src/runtime/session-label.js"
 import { attachCopilotSessionLabels } from "../../../../../plugins/desk/extensions/session-label/consumer.mjs"
 const task = { track: "engineering", slug: "workflow-review" }
 const other = { track: "engineering", slug: "browser-boundary" }
 const expectedSessionId = "owned-main-session"
+const artifactVersion = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/plugin.json", import.meta.url), "utf8")).version
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 const deferred = () => {
   let resolve
@@ -22,6 +25,9 @@ function runtime({ manual = false } = {}) {
     on: (listener) => { handler = listener; return () => { handler = undefined } },
     rpc: {
       metadata: { snapshot: async () => ({ sessionId: expectedSessionId, workingDirectory: "/owned" }) },
+      mcp: { listConfigured: async () => ({ servers: [
+        { name: "desk", source: "plugin", sourcePlugin: "desk", sourcePluginVersion: artifactVersion },
+      ] }) },
       name: {
         get: async () => ({ name }),
         set: async () => { throw Error("manual setter must never be used") },
@@ -40,7 +46,8 @@ function start(id = "call-a", { tool = "task_focus", args = task, ...extra } = {
   return {
     id: `${id}-start`, parentId: null, timestamp: "2026-10-20T23:00:00.000Z",
     type: "tool.execution_start",
-    data: { toolCallId: id, toolName: `desk-${tool}`, mcpServerName: "desk", mcpToolName: tool, arguments: args },
+    data: { toolCallId: id, toolName: `desk-${tool}`, mcpServerName: "desk", mcpConfigSource: "plugin",
+      mcpTransport: "stdio", mcpToolName: tool, arguments: args },
     ...extra,
   }
 }
@@ -65,8 +72,20 @@ async function attach(fake = runtime(), options = {}) {
   return { ...fake, consumer }
 }
 
-async function observe(fixture, begin = start(), end = complete()) {
+async function admit(fixture, begin) {
   fixture.emit(begin)
+  await fixture.consumer.beforeMcpToolCall({
+    sessionId: expectedSessionId, toolCallId: begin.data.toolCallId,
+    serverName: begin.data.mcpConfigServerName ?? begin.data.mcpServerName,
+    toolName: begin.data.mcpToolName, arguments: begin.data.arguments,
+    ...(begin.agentId !== undefined ? { agentId: begin.agentId } : {}),
+    ...(begin.data.agentId !== undefined ? { agentId: begin.data.agentId } : {}),
+    ...(begin.data.parentToolCallId !== undefined ? { parentAgentId: begin.data.parentToolCallId } : {}),
+  }, { sessionId: expectedSessionId })
+}
+
+async function observe(fixture, begin = start(), end = complete()) {
+  await admit(fixture, begin)
   fixture.emit(end)
   await fixture.consumer.waitForIdle()
 }
@@ -136,8 +155,8 @@ for (const mutation of ["foreign-server", "unmatched-result", "failed-result", "
 
 test("a newer main task start makes an old completion stale; a duplicate completion cannot reapply", async () => {
   const f = await attach()
-  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
-  f.emit(start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }))
+  await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }))
   f.emit(complete())
   f.emit(complete("call-b", { identity: other, label: "Browser boundary qualification" }))
   f.emit(complete("call-b", { identity: other, label: "Browser boundary qualification" }))
@@ -147,8 +166,8 @@ test("a newer main task start makes an old completion stale; a duplicate complet
 
 test("standalone clear invalidates a pending proposal without calling any native setter", async () => {
   const f = await attach()
-  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
-  f.emit(start("clear", { args: { clear: true } }))
+  await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("clear", { args: { clear: true } }))
   f.emit(complete())
   f.emit({ ...complete("clear"), data: { toolCallId: "clear", success: true, result: { content: '{"status":"cleared"}' } } })
   await f.consumer.waitForIdle()
@@ -209,7 +228,7 @@ test("a pending metadata check cannot apply after disposal", async () => {
   const f = await attach()
   const gate = deferred()
   f.session.rpc.metadata.snapshot = () => gate.promise
-  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
   f.emit(complete())
   await tick()
   const stopping = f.consumer.dispose()
@@ -237,10 +256,10 @@ test("a timed-out older write fences a newer task instead of letting the unknown
     calls.push(summary)
     return gate.promise
   }
-  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
   f.emit(complete())
   await tick()
-  f.emit(start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }))
+  await admit(f, start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }))
   f.emit(complete("call-b", { identity: other, label: "Browser boundary qualification" }))
   await f.consumer.waitForIdle()
   assert.deepEqual(calls, ["Workflow promotion review"])
@@ -283,7 +302,7 @@ test("a runtime without the advertised metadata RPC is negotiated as unavailable
 
 test("native resume discards prior observations and requires a newly correlated task result", async () => {
   const f = await attach()
-  f.emit(start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
   f.emit({ type: "session.resume", data: {} })
   f.emit(complete("old"))
   await f.consumer.waitForIdle()
@@ -295,7 +314,7 @@ test("native resume discards prior observations and requires a newly correlated 
 
 test("native shutdown releases the observer before another task result can write", async () => {
   const f = await attach()
-  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
   f.emit({ type: "session.shutdown", data: {} })
   f.emit(complete())
   await f.consumer.waitForIdle()
@@ -309,7 +328,7 @@ for (const stage of ["apply", "readback"]) {
     const gate = deferred()
     if (stage === "apply") f.session.rpc.name.setAuto = () => gate.promise
     else f.session.rpc.name.get = () => gate.promise
-    f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
     f.emit(complete())
     await tick()
     f.emit(start("clear", { args: { clear: true } }))
@@ -324,7 +343,7 @@ test("a superseded failing metadata check cannot overwrite the next observation'
   const f = await attach(runtime(), { onState: (state) => states.push(state) })
   let reject
   f.session.rpc.metadata.snapshot = () => new Promise((_, fail) => { reject = fail })
-  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await admit(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
   f.emit(complete())
   await tick()
   f.emit(start("clear", { args: { clear: true } }))
@@ -373,4 +392,224 @@ test("failed readback after an acknowledged write is unavailable, not a claim th
   await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
   assert.equal(f.name(), "Workflow promotion review")
   assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_api_failed" })
+})
+
+for (const source of ["user", undefined]) {
+  test(`name-only Desk lookalike with ${source ?? "missing"} native event provenance cannot mutate a name`, async () => {
+    const f = await attach()
+    const begin = start("call-a", { args: { ...task, display_label: "Workflow promotion review" } })
+    if (source === undefined) delete begin.data.mcpConfigSource
+    else begin.data.mcpConfigSource = source
+    await observe(f, begin)
+    assert.equal(f.name(), null)
+    assert.deepEqual(f.writes, [])
+  })
+}
+
+for (const mutation of ["user-source", "foreign-plugin", "different-artifact", "missing-host-binding"]) {
+  test(`host-derived ${mutation} provider is unavailable for naming despite a matching alias`, async () => {
+    const fake = runtime()
+    const server = { name: "desk", source: "plugin", sourcePlugin: "desk", sourcePluginVersion: artifactVersion }
+    if (mutation === "user-source") { server.source = "user"; delete server.sourcePlugin }
+    if (mutation === "foreign-plugin") server.sourcePlugin = "other"
+    if (mutation === "different-artifact") server.sourcePluginVersion = "0.0.0-foreign"
+    if (mutation === "missing-host-binding") delete fake.session.rpc.mcp.listConfigured
+    else fake.session.rpc.mcp.listConfigured = async () => ({ servers: [server] })
+    const f = await attach(fake)
+    await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    assert.equal(f.name(), null)
+    assert.deepEqual(f.writes, [])
+    assert.equal(f.consumer.getState().code, "provider_binding_unavailable")
+  })
+}
+
+test("replacing the admitted provider after attachment cannot redirect a name write", async () => {
+  const f = await attach()
+  f.session.rpc.mcp.listConfigured = async () => ({ servers: [{ name: "desk", source: "user" }] })
+  await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  assert.equal(f.name(), null)
+  assert.deepEqual(f.writes, [])
+  assert.equal(f.consumer.getState().code, "provider_binding_unavailable")
+})
+
+test("an in-memory user-config lookalike cannot replace the host-owned Desk provider", async () => {
+  const f = await attach()
+  const begin = start("call-a", { args: { ...task, display_label: "Workflow promotion review" } })
+  begin.data.mcpTransport = "memory"
+  begin.data.mcpConfigSource = "user"
+  await observe(f, begin)
+  assert.equal(f.name(), null)
+  assert.deepEqual(f.writes, [])
+})
+
+test("transport alone is not an ownership policy for an otherwise bound host-owned provider", async () => {
+  const f = await attach()
+  const begin = start("call-a", { args: { ...task, display_label: "Workflow promotion review" } })
+  begin.data.mcpTransport = "memory"
+  await observe(f, begin)
+  assert.equal(f.name(), "Workflow promotion review")
+})
+
+test("awaited pre-MCP ordering drains the native mutation before the next focus effect", async () => {
+  const f = await attach()
+  const gate = deferred()
+  const nativeWrite = f.session.rpc.name.setAuto
+  let currentTask = task
+  const effects = []
+  f.session.rpc.name.setAuto = async (input) => {
+    await gate.promise
+    effects.push({ name: input.summary, focus: currentTask })
+    return nativeWrite(input)
+  }
+  f.emit(start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await f.consumer.beforeMcpToolCall?.({
+    sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+    toolCallId: "old", arguments: { ...task, display_label: "Workflow promotion review" },
+  }, { sessionId: expectedSessionId })
+  f.emit(complete("old"))
+  await tick()
+  f.emit(start("clear", { args: { clear: true } }))
+  const before = f.consumer.beforeMcpToolCall?.({
+    sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+    toolCallId: "clear", arguments: { clear: true },
+  }, { sessionId: expectedSessionId }) ?? Promise.resolve()
+  const actualClear = before.then(() => { currentTask = null })
+  await tick()
+  const focusWhileWritePending = currentTask
+  gate.resolve()
+  await actualClear
+  await f.consumer.waitForIdle()
+  assert.equal(focusWhileWritePending, task)
+  assert.deepEqual(effects, [{ name: "Workflow promotion review", focus: task }])
+  assert.equal(currentTask, null)
+  assert.equal(f.name(), "Workflow promotion review")
+})
+
+test("notification-only results without a supported pre-MCP receipt cannot mutate the native name", async () => {
+  const f = await attach()
+  f.emit(start("unadmitted", { args: { ...task, display_label: "Workflow promotion review" } }))
+  f.emit(complete("unadmitted"))
+  await f.consumer.waitForIdle()
+  assert.equal(f.name(), null)
+  assert.deepEqual(f.writes, [])
+  assert.equal(f.consumer.getState().code, "native_ordering_unavailable")
+})
+
+for (const orderingBudgetMs of [5, Infinity]) {
+  test(`a stalled name write with budget ${orderingBudgetMs} cannot ban the next task effect`, async () => {
+    const f = await attach(runtime(), { timeoutMs: 2000, orderingBudgetMs })
+    const gate = deferred()
+    const nativeWrite = f.session.rpc.name.setAuto
+    f.session.rpc.name.setAuto = async (input) => { await gate.promise; return nativeWrite(input) }
+    await admit(f, start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
+    f.emit(complete("old"))
+    await tick()
+    let watchdog
+    const workRoot = await fs.mkdtemp(path.join(process.env.DESK_TEST_RUN_DIR, "naming-work-continues-"))
+    const workResult = path.join(workRoot, "result.txt")
+    try {
+      const output = await Promise.race([
+        f.consumer.beforeMcpToolCall({
+          sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+          toolCallId: "new", arguments: other,
+        }, { sessionId: expectedSessionId }),
+        new Promise((_, reject) => { watchdog = setTimeout(() => reject(Error("naming stranded task execution")), 2500) }),
+      ])
+      assert.equal(output, undefined, "no deny decision or MCP metadata rewrite")
+      await fs.writeFile(workResult, "authorized work completed\n")
+      assert.equal(await fs.readFile(workResult, "utf8"), "authorized work completed\n")
+      assert.equal(f.consumer.getState().code, "native_apply_uncertain")
+    } finally {
+      clearTimeout(watchdog)
+      gate.resolve()
+      await f.consumer.waitForIdle()
+    }
+    // No claim of cancellation: an already-submitted write can settle late.
+    // It must stay unavailable, not claim current naming or block work.
+    assert.equal(f.name(), "Workflow promotion review")
+    assert.equal(f.consumer.getState().code, "native_apply_uncertain")
+    assert.equal(await fs.readFile(workResult, "utf8"), "authorized work completed\n")
+  })
+}
+
+test("a native pre-MCP receipt may arrive before the native start notification", async () => {
+  const f = await attach()
+  await f.consumer.beforeMcpToolCall({
+    sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+    toolCallId: "call-a", arguments: { ...task, display_label: "Workflow promotion review" },
+  }, { sessionId: expectedSessionId })
+  f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  f.emit(complete())
+  await f.consumer.waitForIdle()
+  assert.equal(f.name(), "Workflow promotion review")
+})
+
+for (const missing of ["tool-call-id", "own-session", "root-origin"]) {
+  test(`a pre-MCP hook lacking ${missing} cannot authorize a native name mutation`, async () => {
+    const f = await attach()
+    const input = {
+      sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+      toolCallId: "call-a", arguments: { ...task, display_label: "Workflow promotion review" },
+    }
+    if (missing === "tool-call-id") delete input.toolCallId
+    if (missing === "own-session") input.sessionId = "foreign"
+    if (missing === "root-origin") input.agentId = "child"
+    f.emit(start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+    await f.consumer.beforeMcpToolCall(input, { sessionId: expectedSessionId })
+    f.emit(complete())
+    await f.consumer.waitForIdle()
+    assert.equal(f.name(), null)
+    assert.deepEqual(f.writes, [])
+  })
+}
+
+test("a newer awaited pre-MCP hook invalidates old results even before its start notification arrives", async () => {
+  const f = await attach()
+  await admit(f, start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
+  await f.consumer.beforeMcpToolCall({
+    sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+    toolCallId: "clear", arguments: { clear: true },
+  }, { sessionId: expectedSessionId })
+  // The new request may now execute; its start notification can be delayed.
+  f.emit(complete("old"))
+  await f.consumer.waitForIdle()
+  assert.equal(f.name(), null)
+  assert.deepEqual(f.writes, [])
+})
+
+test("a queued old proposal cannot mutate the name after the next native start", async () => {
+  const f = await attach()
+  await admit(f, start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
+  f.emit(complete("old"))
+  await admit(f, start("new", { args: { ...other, display_label: "Browser boundary qualification" } }))
+  f.emit(complete("new", { identity: other, label: "Browser boundary qualification" }))
+  await f.consumer.waitForIdle()
+  assert.deepEqual(f.writes, ["Browser boundary qualification"])
+})
+
+test("disposal while host ownership is being rechecked cannot mutate the name", async () => {
+  const f = await attach()
+  const gate = deferred()
+  f.session.rpc.mcp.listConfigured = () => gate.promise
+  await admit(f, start("old", { args: { ...task, display_label: "Workflow promotion review" } }))
+  f.emit(complete("old"))
+  await tick()
+  const stopping = f.consumer.dispose()
+  gate.resolve({ servers: [{ name: "desk", source: "plugin", sourcePlugin: "desk", sourcePluginVersion: artifactVersion }] })
+  await stopping
+  assert.equal(f.name(), null)
+  assert.deepEqual(f.writes, [])
+})
+
+test("a failed host ownership read makes only naming unavailable and returns control to the caller", async () => {
+  const fake = runtime()
+  fake.session.rpc.mcp.listConfigured = async () => { throw Error("private provider details") }
+  const f = await attach(fake)
+  const result = await f.consumer.beforeMcpToolCall({
+    sessionId: expectedSessionId, serverName: "desk", toolName: "task_focus",
+    toolCallId: "next", arguments: task,
+  }, { sessionId: expectedSessionId })
+  assert.equal(result, undefined)
+  assert.equal(f.consumer.getState().code, "provider_binding_unavailable")
+  assert.equal(f.name(), null)
 })
