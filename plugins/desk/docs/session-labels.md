@@ -70,6 +70,21 @@ older results, a changed session identity, unsafe text and a proposal that
 disagrees with the authored input are refused. Resuming requires a fresh
 observation; saved tool-result text is never replayed.
 
+The currently observed provider-discovery route is the host-owned Desk
+plugin. Naming requires host-reported plugin ownership matching this acquired
+Desk artifact and consistent native event provenance; the
+alias `desk` alone is insufficient. Other agent/activation providers need
+equivalent qualified ownership evidence. Missing evidence makes naming
+unavailable, not Desk access or assigned work unauthorized.
+
+The supported asynchronous pre-MCP hook must correlate each observation.
+It drains earlier naming work before the outgoing task request, with a
+maximum one-second wait. If the wait expires, naming stops and reports
+uncertainty; the MCP request still continues unchanged. The helper never
+returns a permission decision, changes request metadata or waits indefinitely.
+An already-submitted uncertain native write cannot be claimed cancelled or
+current: that is an explicit naming limitation, not a reason to ban task work.
+
 Application uses only the native conditional `name.setAuto` operation and
 verifies exact native readback. It does not use the explicit/manual setter,
 rewrite a UUID, or change Hub or panel names. Native refusal remains
@@ -81,5 +96,7 @@ operation could overtake. Tool results and task execution are unchanged.
 This source entry alone does not establish ordinary installed discovery or
 native validation. Those require the normal installation owner's source and
 consuming-host proof. Claude additionally requires a supported automatic
-outcome-title boundary with explicit-name preservation; a prompt-only title
-field is not a substitute.
+route that truthfully reflects initial/resumed and changed work while
+preserving explicit names and session identity. A custom mod setter is not
+mandatory if a supported built-in, normal prompt or resume mechanism
+actually fulfills that outcome; declarations alone do not qualify it.

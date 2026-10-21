@@ -1,4 +1,5 @@
 import { makeSessionLabelProposal } from "../../mcp/src/runtime/session-label.js"
+import { readFileSync } from "node:fs"
 
 const unavailable = (code) => ({ state: "unavailable", code })
 const mainEvent = (event) => event.agentId === undefined &&
@@ -13,11 +14,13 @@ function toolResult(result) {
 // The session handle is obtained only through the host's parent-loaded
 // joinSession(). Nothing is recovered from transcripts, card titles or disk.
 export async function attachCopilotSessionLabels({
-  session, expectedSessionId, serverName = "desk", timeoutMs = 2000, onState = () => {},
+  session, expectedSessionId, serverName = "desk", timeoutMs = 2000, orderingBudgetMs = 1000, onState = () => {},
 }) {
   let state = unavailable("awaiting_task_observation")
   let revision = 0
   let pending = null
+  let admission = null
+  let providerAdmitted = false
   let stopped = false
   let unsubscribe = () => {}
   let queue = Promise.resolve()
@@ -26,27 +29,72 @@ export async function attachCopilotSessionLabels({
     // A failed display observer must not affect task execution or naming.
     try { onState({ ...state }) } catch {}
   }
-  const bounded = async (operation) => {
+  const bounded = async (operation, budgetMs = timeoutMs) => {
     let timer
     try {
       return await Promise.race([
         operation(),
         new Promise((_, reject) => {
-          timer = setTimeout(() => reject(Object.assign(Error("native_timeout"), { code: "NATIVE_TIMEOUT" })), timeoutMs)
+          timer = setTimeout(() => reject(Object.assign(Error("native_timeout"), { code: "NATIVE_TIMEOUT" })), budgetMs)
         }),
       ])
     } finally { clearTimeout(timer) }
+  }
+  // This is the provider shape observed in the normally configured, locally
+  // acquired Desk-plugin host. Other activation/agent owners are not denied
+  // Desk access: absent equivalent host ownership, only naming is unavailable.
+  const boundProvider = async () => {
+    if (typeof session.rpc?.mcp?.listConfigured !== "function") return false
+    try {
+      const owner = JSON.parse(readFileSync(new URL("../../plugin.json", import.meta.url), "utf8"))
+      const servers = (await bounded(() => session.rpc.mcp.listConfigured())).servers
+        .filter((server) => server.name === serverName)
+      return servers.length === 1 && servers[0].source === "plugin" &&
+        servers[0].sourcePlugin === owner.name && servers[0].sourcePluginVersion === owner.version
+    } catch { return false }
   }
   const active = (observation) => !stopped && observation.revision === revision
   const dispose = async () => {
     stopped = true
     revision++
     pending = null
+    admission = null
     unsubscribe()
     await queue
   }
+  const beforeMcpToolCall = async (input, invocation) => {
+    if (stopped || !providerAdmitted || input?.sessionId !== expectedSessionId ||
+        invocation?.sessionId !== expectedSessionId || input.agentId !== undefined ||
+        input.parentAgentId !== undefined || input.serverName !== serverName ||
+        !taskTools.has(input.toolName)) return
+    if (typeof input.toolCallId !== "string") return
+    admission = null
+    if (pending?.id !== input.toolCallId) {
+      revision++
+      pending = null
+    }
+    try {
+      const budget = Number.isFinite(orderingBudgetMs) ? Math.max(1, Math.min(1000, orderingBudgetMs)) : 1000
+      await bounded(() => queue, budget)
+    } catch {
+      // A display failure is never a permission decision or a work ban. Stop
+      // naming, make uncertainty explicit, and let the MCP request continue.
+      stopped = true
+      revision++
+      pending = null
+      admission = null
+      unsubscribe()
+      publish(unavailable("native_apply_uncertain"))
+      return
+    }
+    if (stopped) return
+    admission = { id: input.toolCallId, tool: input.toolName }
+    if (pending?.id === admission.id && pending.tool === admission.tool) pending.admitted = true
+    // Deliberately no metaToUse or permission output.
+  }
   const consumer = {
     dispose,
+    beforeMcpToolCall,
     waitForIdle: () => queue,
     getState: () => ({ ...state }),
   }
@@ -76,11 +124,22 @@ export async function attachCopilotSessionLabels({
       return consumer
     }
   } catch (error) { failure(error); return consumer }
+  if (!await boundProvider()) {
+    publish(unavailable("provider_binding_unavailable"))
+    return consumer
+  }
+  providerAdmitted = true
 
   const apply = async (observation, proposal) => {
     if (!active(observation)) return
     let applying = false
     try {
+      const providerKnown = await boundProvider()
+      if (!active(observation)) return
+      if (!providerKnown) {
+        publish(unavailable("provider_binding_unavailable"))
+        return
+      }
       const identity = await bounded(() => session.rpc.metadata.snapshot())
       if (!active(observation)) return
       if (identity.sessionId !== expectedSessionId || session.sessionId !== expectedSessionId) {
@@ -111,6 +170,7 @@ export async function attachCopilotSessionLabels({
     if (event.type === "session.resume") {
       revision++
       pending = null
+      admission = null
       publish(unavailable("awaiting_task_observation"))
       return
     }
@@ -118,14 +178,26 @@ export async function attachCopilotSessionLabels({
     if (event.type === "tool.execution_start") {
       if ((data?.mcpConfigServerName ?? data?.mcpServerName) !== serverName ||
           !taskTools.has(data.mcpToolName) || typeof data.toolCallId !== "string") return
+      if (data.mcpConfigSource !== "plugin") {
+        publish(unavailable("provider_binding_unavailable"))
+        return
+      }
       revision++
-      pending = { revision, id: data.toolCallId, tool: data.mcpToolName, args: { ...data.arguments } }
+      pending = {
+        revision, id: data.toolCallId, tool: data.mcpToolName, args: { ...data.arguments },
+        admitted: admission?.id === data.toolCallId && admission.tool === data.mcpToolName,
+      }
       return
     }
     if (event.type !== "tool.execution_complete" || !pending || data?.toolCallId !== pending.id) return
     const observation = pending
     pending = null
+    if (admission?.id === observation.id) admission = null
     if (data.success !== true) return
+    if (!observation.admitted) {
+      publish(unavailable("native_ordering_unavailable"))
+      return
+    }
     const result = toolResult(data.result)
     if (result?.status !== taskTools.get(observation.tool)) return
     if (observation.tool === "task_create" && result.focused !== true) return
