@@ -209,6 +209,95 @@ test("successive bounded passes reach a renamed candidate beyond one fallback bu
   assert.equal(work.source.task_card.path, join(f.desk, "sample", "current-10", "task.md"))
 })
 
+test("successive bounded passes refresh every previous association rather than repeating its prefix", async () => {
+  const f = await fixture()
+  const remote = "https://github.com/synthetic/desk.git"
+  const template = f.entries[0]
+  f.entries.length = 0
+  for (let index = 0; index < 5; index += 1) {
+    const slug = `task-${index}`
+    const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug })
+    const facts = contextFacts()
+    facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    facts.jobs[0].job = job
+    facts.outcomes[0].job = job
+    f.entries.push({ ...template, facts, localJobs: [{ local: job, published: job }] })
+    const folder = join(f.desk, "sample", slug)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nOriginal observation.\n")
+  }
+  const options = {
+    ...f.options, readRemote: () => remote, resolveIdentity: ({ track, slug }) => ({ track, slug }),
+  }
+  assert.equal((await queue.prepareTaskContexts(f.env, options)).prepared, 5)
+  for (let index = 0; index < 5; index += 1) {
+    await writeFile(join(f.desk, "sample", `task-${index}`, "task.md"), "---\nstatus: done\n---\nRetesting resumed.\n")
+  }
+  const refreshed = new Set()
+  for (let pass = 0; pass < 3; pass += 1) {
+    let elapsed = 0
+    await queue.prepareTaskContexts(f.env, {
+      ...options, deadline: 2000, clock: () => elapsed,
+      resolveIdentity: ({ track, slug, deadline, timeoutMs }) => {
+        assert.ok(deadline <= 1000)
+        assert.equal(timeoutMs, 500)
+        elapsed += 200
+        return { track, slug }
+      },
+    })
+    assert.ok(elapsed <= 2000)
+    for (const work of await queue.listContextWork(f.env, { store: STORE })) refreshed.add(work.job)
+  }
+  assert.equal(refreshed.size, 5, "the fifth prior card must eventually get a fresh identity and source hash")
+})
+
+test("a previous association Git timeout cannot starve later prior and renamed candidates", async () => {
+  const f = await fixture()
+  const remote = "https://github.com/synthetic/desk.git"
+  const entries = []
+  const jobs = []
+  for (const [index, slug] of ["a-failing", "b-valid", "birth-name"].entries()) {
+    const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug })
+    const facts = contextFacts()
+    facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    facts.jobs[0].job = job
+    facts.outcomes[0].job = job
+    jobs.push(job)
+    entries.push({ ...f.entries[0], facts, localJobs: [{ local: job, published: job }] })
+    if (index === 2) continue
+    const folder = join(f.desk, "sample", slug)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nOriginal observation.\n")
+  }
+  const options = {
+    ...f.options, entries: entries.slice(0, 2), readRemote: () => remote,
+    resolveIdentity: ({ track, slug }) => ({ track, slug }),
+  }
+  assert.equal((await queue.prepareTaskContexts(f.env, options)).prepared, 2)
+  for (const slug of ["a-failing", "b-valid", "z-renamed"]) {
+    const folder = join(f.desk, "sample", slug)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nRetesting resumed.\n")
+  }
+  for (let pass = 0; pass < 3; pass += 1) {
+    let elapsed = 0
+    await queue.prepareTaskContexts(f.env, {
+      ...options, entries, deadline: 2000, clock: () => elapsed,
+      resolveIdentity: ({ track, slug, deadline, timeoutMs }) => {
+        assert.ok(deadline <= 1000)
+        assert.equal(timeoutMs, 500)
+        elapsed += slug === "a-failing" ? 500 : 200
+        if (slug === "a-failing") throw Object.assign(new Error("git_deadline"), { code: "git_deadline" })
+        return { track, slug: slug === "z-renamed" ? "birth-name" : slug }
+      },
+    })
+    assert.ok(elapsed <= 2000)
+  }
+  const work = await queue.listContextWork(f.env, { store: STORE })
+  assert.deepEqual(work.map((item) => item.job).sort(), jobs.slice(1).sort(), "unvalidated first card stays held while later work progresses")
+  assert.equal(work.find((item) => item.job === jobs[2]).source.task_card.path, join(f.desk, "sample", "z-renamed", "task.md"))
+})
+
 test("invalid discovery progress cannot select evidence or create a runnable context", async () => {
   for (const value of [
     { schema: "desk.factory.context-discovery/1", cursor: -1 },
@@ -352,7 +441,7 @@ test("a task card is associated by its real job identity and changes invalidate 
       return resolveJobIdentity(options)
     },
   })).unchanged, 1)
-  assert.deepEqual(resolved, ["sample/safe"], "recheck the sealed association instead of resolving every unrelated card again")
+  assert.deepEqual(resolved, ["sample/safe"], "prioritize the nominal candidate without resolving every unrelated card again")
 })
 
 test("changed private evidence invalidates review even before the next preparation pass", async () => {

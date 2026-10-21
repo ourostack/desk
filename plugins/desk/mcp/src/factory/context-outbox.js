@@ -138,7 +138,7 @@ async function discoveryCursor(env, store, job) {
   return value.cursor
 }
 
-function taskCardIndex(deskRoot, personPrefix, { wanted, previous, cursor, deadline, clock, readRemote, resolveIdentity }) {
+function taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock, readRemote, resolveIdentity }) {
   const cards = new Map()
   let next = cursor
   const within = () => withinBudget(deadline, clock)
@@ -181,35 +181,31 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, previous, cursor, deadl
         }
       }
     }
-    for (const file of previous) {
-      const segments = path.relative(base, file).split(path.sep).filter((segment) => segment !== "_archive")
-      if (segments.length === 3 && segments[2] === "task.md") inspect({ track: segments[0], slug: segments[1] })
-    }
-    if (cards.size === wanted.size) return { cards, incomplete: false, cursor: 0 }
     let visited = 0
     let incomplete = false
+    const nominal = []
     const unresolved = []
     const walkDeadline = (clock() + deadline) / 2
     try {
       for (const task of walkTasks({ deskRoot, personPrefix, deadline: walkDeadline, clock })) {
         if (visited++ >= CARD_LIMIT) { incomplete = true; break }
-        if (wanted.has(jobId({ deskRemote: remote, personPrefix, track: task.track, slug: task.slug }))) inspect(task)
+        if (wanted.has(jobId({ deskRemote: remote, personPrefix, track: task.track, slug: task.slug }))) nominal.push(task)
         else unresolved.push(task)
-        if (cards.size === wanted.size) return { cards, incomplete: false, cursor: 0 }
       }
     } catch (error) {
       if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
       incomplete = true
     }
-    const start = unresolved.length === 0 ? 0 : cursor % unresolved.length
-    for (let offset = 0; offset < unresolved.length; offset += 1) {
-      const index = (start + offset) % unresolved.length
+    const candidates = nominal.concat(unresolved)
+    const start = candidates.length === 0 ? 0 : cursor % candidates.length
+    for (let offset = 0; offset < candidates.length; offset += 1) {
+      const index = (start + offset) % candidates.length
       next = index
-      try { inspect(unresolved[index]) } catch (error) {
-        if (clock() < deadline) next = (index + 1) % unresolved.length
+      try { inspect(candidates[index]) } catch (error) {
+        if (clock() < deadline) next = (index + 1) % candidates.length
         throw error
       }
-      next = (index + 1) % unresolved.length
+      next = (index + 1) % candidates.length
       if (cards.size === wanted.size) break
     }
     return { cards, incomplete, cursor: incomplete ? next : 0 }
@@ -237,17 +233,10 @@ export async function prepareTaskContexts(env, {
     const deskKey = `${group.desk_root}\0${group.person_prefix}`
     if (!cardIndexes.has(deskKey)) {
       const peers = groups.filter((item) => item.desk_root === group.desk_root && item.person_prefix === group.person_prefix)
-      const previous = []
-      for (const peer of peers) {
-        within()
-        const state = await stateOf(env, store, peer.job)
-        const input = state === null ? null : await inputOf(env, store, state, { current: false })
-        if (input?.desk_root === peer.desk_root && input.person_prefix === peer.person_prefix && input.task_card !== null) previous.push(input.task_card.path)
-      }
       const progressJob = peers.map((item) => item.job).sort()[0]
       const cursor = await discoveryCursor(env, store, progressJob)
       const index = taskCardIndex(group.desk_root, group.person_prefix, {
-        wanted: new Set(peers.map((item) => item.local_job)), previous, cursor, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
+        wanted: new Set(peers.map((item) => item.local_job)), cursor, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
       })
       cardIndexes.set(deskKey, index)
       if (index.cursor !== cursor) await writeTaskContextFile(env, store, progressJob, "discovery.json", {
