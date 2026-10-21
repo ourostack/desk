@@ -9,6 +9,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { isNativeError } = require("node:util").types;
+const intrinsicStackGetter = Object.getOwnPropertyDescriptor(new Error(), "stack").get;
 const root = path.resolve(__dirname, "../../../../../../plugins/desk/mcp");
 const names = {
   "browser-context.cjs": "browser-context.cjs",
@@ -56,4 +58,86 @@ function loadTemplate(runtimeFile, context) {
   return context.module.exports;
 }
 
-module.exports = { loadTemplate };
+// One-shot observation at the existing VM global seam. Never retries or
+// changes the verifier's result/refusal, and never projects arbitrary errors.
+function observeNextVerifyGeneration(context, phase, diagnostic) {
+  const actual = context.verifyGeneration;
+  assert.equal(typeof actual, "function");
+  assert.equal(typeof diagnostic, "function");
+  const codes = new Set([
+    "NATIVE_CODE_UNAVAILABLE", "NATIVE_CODE_CHANGED", "NATIVE_PRIVATE_PATH_INVALID",
+    "NATIVE_DISCOVERY_INPUTS_UNAVAILABLE", "ENOENT", "EACCES", "EPERM", "EIO",
+    "ETIMEDOUT", "EINTR", "EMFILE", "ENFILE", "ENOTDIR", "EISDIR",
+    "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+  ]);
+  const signals = new Set(["SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP", "SIGSEGV", "SIGPIPE"]);
+  const guardFiles = new Map([
+    ["web-extension-credential.cjs", "plugins/desk/mcp/web-extension-credential.cjs"],
+    ["web-playwright-patch.cjs", "plugins/desk/mcp/web-playwright-patch.cjs"],
+  ]);
+  function data(error, key) {
+    if (error === null || (typeof error !== "object" && typeof error !== "function")) return undefined;
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(error, key);
+      return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+    } catch { return undefined; }
+  }
+  function record(error) {
+    const code = data(error, "code"), status = data(error, "status"), signal = data(error, "signal");
+    let stack = data(error, "stack");
+    // V8 can expose its genuine Error stack as an accessor, including across
+    // VM realms. Use only our captured intrinsic, never error.stack's getter.
+    // Refuse accessor-backed formatting inputs rather than running user code.
+    function plainHeader(key) {
+      let object = error;
+      try {
+        for (let depth = 0; object && depth < 4; depth++, object = Object.getPrototypeOf(object)) {
+          const descriptor = Object.getOwnPropertyDescriptor(object, key);
+          if (descriptor) return Object.hasOwn(descriptor, "value") &&
+            (typeof descriptor.value === "string" || descriptor.value === undefined);
+        }
+      } catch {}
+      return false;
+    }
+    if (stack === undefined && intrinsicStackGetter && isNativeError(error) &&
+        plainHeader("name") && plainHeader("message")) {
+      try { stack = Reflect.apply(intrinsicStackGetter, error, []); } catch {}
+    }
+    let guard = { file: "unknown", line: "unknown" };
+    if (typeof stack === "string") {
+      for (const frame of stack.slice(0, 16384).split("\n")) {
+        if (!/^\s*at\s/.test(frame)) continue;
+        const match = /[/\\](web-extension-credential\.cjs|web-playwright-patch\.cjs):([1-9][0-9]{0,4})(?::[1-9][0-9]{0,4})?\)?\s*$/.exec(frame);
+        if (match) {
+          guard = { file: guardFiles.get(match[1]), line: Number(match[2]) };
+          break;
+        }
+      }
+    }
+    return {
+      setupPhase: phase === "signedWorkerFixture.initial-daemon" ? phase : "unknown",
+      originalCode: codes.has(code) ? code : "unknown",
+      status: Number.isInteger(status) && status >= -2147483648 && status <= 4294967295 ? status : "unknown",
+      signal: signals.has(signal) ? signal : "unknown",
+      guard,
+    };
+  }
+  let armed = true;
+  function restore() {
+    armed = false;
+    if (context.verifyGeneration === observed) context.verifyGeneration = actual;
+  }
+  function observed(...args) {
+    if (!armed) return Reflect.apply(actual, this, args);
+    restore(); // Exactly the next invocation, including nested calls.
+    try { return Reflect.apply(actual, this, args); }
+    catch (error) {
+      try { diagnostic(record(error)); } catch {}
+      throw error; // Preserve identity even for malformed errors or failed sinks.
+    }
+  }
+  context.verifyGeneration = observed;
+  return restore;
+}
+
+module.exports = { loadTemplate, observeNextVerifyGeneration };
