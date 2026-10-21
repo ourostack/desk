@@ -263,7 +263,7 @@ test("actual maintained daemon options can reach native acquisition using the st
     const scope = codec.forDaemon({...config,configFile:l.configFile},id)
     assert.equal(codec.sessionStamp(scope).sourceGeneration,generation)
     const chain = [1,2,3].map((n,i)=>({pid:810003-i,parentPid:810002-i,startIdentity:"F-owned-"+n,owner:String(process.getuid?.()||"fixture"),executable:i===2?app:path.join(root,"native-"+n)}))
-    let active=true, error, wire, nativeFailure, acknowledged="ok",provider,nativeResponse,stopEffect
+    let active=true, error, wire, nativeFailure, acknowledged="ok",provider,nativeResponse,stopEffect,nativeStatusEffect,launchFinalEffect
     const socketStates=new Map([[descriptor.socketPath,{...descriptor,id,get active(){return active},set active(value){active=value}}]])
     const methods=[],requests=[],replies=[]
     const observedHttp = {request(_options,cb) {
@@ -277,6 +277,7 @@ test("actual maintained daemon options can reach native acquisition using the st
         try {
           if(nativeFailure)throw nativeFailure
           value=await provider.invoke(operation,payload)
+          if(operation==="dispatch"&&payload.method==="context.status"&&nativeStatusEffect)await nativeStatusEffect(value)
           if(operation==="dispatch"&&payload.method==="context.discard"&&nativeResponse)value=nativeResponse(value)
           if(options.selfExit && operation==="dispatch" && payload.method==="context.discard")
             socketStates.get(inventory.layout(payload.contextId).socketPath).active=false
@@ -329,8 +330,9 @@ test("actual maintained daemon options can reach native acquisition using the st
       const previousNative=coreNativeProcess.stdout,previousNativeError=coreNativeProcess.stderr
       proc.stdout=coreNativeProcess.stdout={write:(bytes,callback)=>{
         recordLaunch("stdout-write",{bytes:Buffer.byteLength(bytes),pidField:/"pid"\s*:/.test(String(bytes))})
-        queueMicrotask(()=>{
+        queueMicrotask(async()=>{
           recordLaunch("stdout-delivery",{listeners:child.stdout.listenerCount("data")})
+          if(launchFinalEffect&&/"stage"\s*:\s*"launch\.ready"/.test(String(bytes))){recordLaunch("post-launch-effect");await launchFinalEffect()}
           child.stdout.emit("data",Buffer.from(bytes))
         })
         callback?.();return true
@@ -689,7 +691,7 @@ test("actual maintained daemon options can reach native acquisition using the st
       freshRegistry()
       return op
     }
-    return {root,l,id,descriptor,request,inventory,codec,scope,methods,requests,replies,put,launchCalls,tabs,groups,browsers,advance,
+    return {root,l,id,descriptor,request,inventory,codec,scope,methods,requests,replies,put,launchCalls,launchTrace,tabs,groups,browsers,advance,
       async transfer(tabId) {
         tabs.get(tabId).groupId=999
         api.tabs.onUpdated.emit(tabId,{groupId:999},{...tabs.get(tabId)})
@@ -713,6 +715,8 @@ test("actual maintained daemon options can reach native acquisition using the st
       setRelated:value=>{related=value},setWire:value=>{wire=value},setActive:value=>{active=value},
       setNativeFailure:value=>{nativeFailure=value},setAck:value=>{acknowledged=value},
       setNativeResponse:value=>{nativeResponse=value},setStopEffect:value=>{stopEffect=value},
+      setNativeStatusEffect:value=>{nativeStatusEffect=value},setLaunchFinalEffect:value=>{launchFinalEffect=value},
+      setWorkerRecoveryIntent:value=>{proc.env.DESK_BROWSER_RECOVERY_CONTEXT=value},
       setWorkerPlatform:value=>{proc.platform=value},
       newClientGeneration() {
         const newer={dir:path.join(root,"new-selected-generation"),version:"owned-F-next",core:null}
@@ -1292,6 +1296,60 @@ for(const missing of [false,true])test("explicit resume refuses "+(missing?"a mi
   assert.deepEqual(f.methods,["context.status"])
   assert.ok(fs.existsSync(f.descriptor.sessionFile))
   assert.equal(f.tabs.has(1),true)
+})
+
+for(const change of ["binding","intent"])test("explicit resume refuses "+change+" changes after native status admission",async t=>{
+  const f=await signedWorkerFixture(t,{nativeAcquisition:true})
+  await f.browsers[0].close()
+  await new Promise(setImmediate)
+  f.setActive(false)
+  f.setNativeStatusEffect(()=>{
+    if(change==="intent")f.setWorkerRecoveryIntent(f.id)
+    else {
+      const config=JSON.parse(fs.readFileSync(f.l.configFile,"utf8"))
+      config.deskNativeContext.label="concurrent owner edit"
+      f.put(f.l.configFile,config)
+    }
+  })
+  await assert.rejects(f.run({operation:"resume"}),{code:change==="binding"?"NATIVE_OWNER_BINDING_MISMATCH":"NATIVE_CONFIG_INVALID"})
+  assert.equal(f.launchCalls.length,0)
+  assert.equal(f.tabs.size,2)
+  assert.deepEqual(f.requests,[])
+})
+
+for(const change of ["cli-exits","binding-changes"])test("explicit resume rejects an unconfirmed acquired owner: "+change,async t=>{
+  const f=await signedWorkerFixture(t,{nativeAcquisition:true})
+  await f.browsers[0].close()
+  await new Promise(setImmediate)
+  f.setActive(false)
+  f.setLaunchSuccess()
+  f.setLaunchFinalEffect(async()=>{
+    if(change==="cli-exits"){
+      await f.browsers.at(-1).close()
+      f.setActive(false)
+    }else {
+      const config=JSON.parse(fs.readFileSync(f.l.configFile,"utf8"))
+      config.deskNativeContext.label="changed after acquisition"
+      f.put(f.l.configFile,config)
+    }
+  })
+  await assert.rejects(f.run({operation:"resume"}),{code:change==="cli-exits"?"NATIVE_OWNER_BINDING_MISMATCH":"NATIVE_ERROR_TRANSPORT_UNCONFIRMED"})
+  assert.equal(f.launchTrace.filter(event=>event.phase==="post-launch-effect").length,1)
+  assert.equal(f.launchCalls.length,1)
+  assert.equal(f.tabs.size,2)
+  assert.deepEqual(f.requests,[])
+})
+
+test("explicit resume rejects malformed native status without launching or replaying pages",async t=>{
+  const f=await signedWorkerFixture(t,{nativeAcquisition:true})
+  await f.browsers[0].close()
+  await new Promise(setImmediate)
+  f.setActive(false)
+  f.setNativeStatusEffect(value=>{delete value.debuggerCustody})
+  await assert.rejects(f.run({operation:"resume"}),{code:"native_context_unavailable"})
+  assert.equal(f.launchCalls.length,0)
+  assert.equal(f.tabs.size,2)
+  assert.deepEqual(f.requests,[])
 })
 
 test("signed worker refuses a malformed actual help schema by name before parsing page argv",async t=>{
