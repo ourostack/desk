@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -357,4 +357,122 @@ test("in-memory public artifact allowlist cannot publish private receipt, journa
     "extension.zip", "extension", "desk-browser-1.1.1.crx/private"]) {
     assert.throws(() => p.validateArtifactNames([...publicFiles, name], "1.1.1"))
   }
+})
+
+// R1 fixtures create only empty output directories and private journal bytes.
+// No Git fixture, extension/package/runtime payload, receipt or remote signer.
+function journalFixture() {
+  const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "browser-sign-journal-")))
+  const commonDirectory = path.join(scratch, "common")
+  mkdirSync(commonDirectory)
+  return { scratch, commonDirectory, publisher: { spkiSha256: "a".repeat(64) },
+    extensionVersion: "1.1.1", sourceCommit: "1".repeat(40),
+    output: path.join(scratch, "OUT1"), signedInputSha256: hash(Buffer.from("first input")) }
+}
+
+test("journal-only R1 uncertain signing blocks OUT2, changed source/input and numeric version aliases", async () => {
+  const p = await api()
+  const f = journalFixture()
+  const first = p.createSigningAttempt(f)
+  let signatures = 0
+  await assert.rejects(() => p.issueSignature(Buffer.from("first input"), async () => {
+    assert.equal(JSON.parse(readFileSync(first.journal)).status, "sign-issued",
+      "persist the external-operation boundary before entering the signer")
+    signatures++
+    throw new Error("external result unknown")
+  }, first), /external result unknown/u)
+  first.close()
+  const recorded = JSON.parse(readFileSync(first.journal))
+  assert.equal(recorded.status, "sign-issued")
+  assert.equal(recorded.output, f.output)
+  assert.equal(recorded.sourceCommit, "1".repeat(40))
+  assert.equal(recorded.signedInputSha256, hash(Buffer.from("first input")))
+  assert.ok(existsSync(f.output), "retain the uncertain output, not just a pathname")
+  for (const [i, change] of [
+    {},
+    { sourceCommit: "2".repeat(40), signedInputSha256: hash(Buffer.from("changed input")) },
+    { extensionVersion: "1.1.1.0" },
+  ].entries()) {
+    const attempt = p.createSigningAttempt({ ...f, ...change, output: path.join(f.scratch, `OUT${i + 2}`) })
+    const input = Buffer.from(change.signedInputSha256 ? "changed input" : "first input")
+    await assert.rejects(() => p.issueSignature(input, async () => {
+      signatures++
+      return Buffer.from("must not sign again")
+    }, attempt), error => error.code === "EEXIST")
+    attempt.close()
+    assert.equal(existsSync(path.join(f.scratch, `OUT${i + 2}`)), false)
+  }
+  assert.equal(signatures, 1)
+  assert.deepEqual(JSON.parse(readFileSync(first.journal)), recorded, "never replace or unlock the first attempt")
+  if (process.platform !== "win32") {
+    assert.equal(lstatSync(path.dirname(first.journal)).mode & 0o777, 0o700)
+    assert.equal(lstatSync(first.journal).mode & 0o777, 0o600)
+  }
+})
+
+test("journal-only R1 racing reservations issue exactly one signature and preserve the winner", async () => {
+  const p = await api()
+  const f = journalFixture()
+  const attempts = [f, { ...f, extensionVersion: "1.1.1.0", output: path.join(f.scratch, "OUT2"),
+    sourceCommit: "2".repeat(40) }].map(options => p.createSigningAttempt(options))
+  let signatures = 0
+  const results = await Promise.allSettled(attempts.map(attempt =>
+    p.issueSignature(Buffer.from("first input"), async () => {
+      signatures++
+      await new Promise(resolve => setImmediate(resolve))
+      return Buffer.from("synthetic signature")
+    }, attempt)))
+  attempts.forEach(attempt => attempt.close())
+  assert.equal(signatures, 1)
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1)
+  assert.equal(results.filter(result => result.status === "rejected" && result.reason.code === "EEXIST").length, 1)
+  const recorded = JSON.parse(readFileSync(attempts[0].journal))
+  assert.equal(recorded.status, "signature-returned")
+  assert.equal([f.output, path.join(f.scratch, "OUT2")].filter(existsSync).length, 1)
+})
+
+test("journal-only R1 a later numeric version has its own reservation without unlocking the first", async () => {
+  const p = await api()
+  const f = journalFixture()
+  for (const ver of ["1.1.1", "1.1.2"]) {
+    const attempt = p.createSigningAttempt({ ...f, extensionVersion: ver, output: path.join(f.scratch, ver) })
+    await p.issueSignature(Buffer.from("first input"), async () => Buffer.from("synthetic signature"), attempt)
+    attempt.close()
+    assert.equal(JSON.parse(readFileSync(attempt.journal)).extensionVersion, `${ver}.0`)
+  }
+  const retry = p.createSigningAttempt({ ...f, output: path.join(f.scratch, "retry") })
+  await assert.rejects(() => p.issueSignature(Buffer.from("first input"),
+    async () => assert.fail("no automatic retry after success"), retry), error => error.code === "EEXIST")
+  retry.close()
+})
+
+test("in-memory R1 shared anchor resolves identically from linked checkout and Git common directory", async () => {
+  const p = await api()
+  const common = p.signingCommonDirectory(repository)
+  assert.equal(p.signingCommonDirectory(common), common)
+  assert.equal(realpathSync(common), common)
+})
+
+test("in-memory R1 verified existing version is reused without reservation or signing; verification failure refuses", async () => {
+  const p = await api()
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
+  const spki = publicKey.export({ type: "spki", format: "der" })
+  const archive = Buffer.from("synthetic existing archive")
+  const packet = p.encodeCrx(archive, spki, sign("sha256", p.signingInput(archive, spki), privateKey))
+  const prior = { sourceCommit: "1".repeat(40), crxSha256: hash(packet) }
+  let verifications = 0
+  const verify = async () => {
+    verifications++
+    assert.deepEqual(p.verifyCrx(packet, spki).archive, archive)
+    return prior
+  }
+  assert.equal(await p.reuseVerifiedPackage({ next: "1.1.1", previous: "1.1.1",
+    versionFileExists: true, verify }), prior)
+  assert.equal(verifications, 1)
+  const broken = Buffer.from(packet)
+  broken[broken.length - 1] ^= 1
+  await assert.rejects(() => p.reuseVerifiedPackage({ next: "1.1.1", previous: "1.1.1",
+    versionFileExists: true, verify: async () => p.verifyCrx(broken, spki) }))
+  assert.equal(await p.reuseVerifiedPackage({ next: "1.1.2", previous: "1.1.1",
+    versionFileExists: false, verify: async () => assert.fail("new version must not reuse the old package") }), null)
 })
