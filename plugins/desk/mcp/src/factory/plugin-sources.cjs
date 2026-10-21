@@ -4,6 +4,7 @@
 // `mcp/src` so every caller imports them by name, whichever plugin root the server runs from.
 const fs = require("node:fs");
 const path = require("node:path");
+const { agencySessionPluginParents } = require("../util/agency-session.cjs");
 
 const MAX_INPUT = 1024 * 1024;
 
@@ -165,17 +166,20 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
   const sourceLate = () => performance.now() > sourceDeadline;
   if (host === "copilot") {
     // opendir bounds the enumeration as well as the number of file reads.
-    const dir = fs.opendirSync(path.dirname(pluginRoot));
-    try {
-      let entry;
-      let scanned = 0;
-      while ((entry = dir.readSync()) !== null) {
-        if (++scanned > 128 || dirs.length === 64) { hold("too_many_plugins"); break; }
-        // A plugin installed as a link to its folder is a plugin too: the route reads it through the link, and a link that does not resolve
-        // to a folder holds the route (`store-route.js`).
-        if (entry.isDirectory() || entry.isSymbolicLink()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
-      }
-    } finally { dir.closeSync(); }
+    const parents = agencySessionPluginParents(pluginRoot) ?? [path.dirname(pluginRoot)];
+    let scanned = 0;
+    scan: for (const parent of parents) {
+      const dir = fs.opendirSync(parent);
+      try {
+        let entry;
+        while ((entry = dir.readSync()) !== null) {
+          if (++scanned > 128 || dirs.length === 64) { hold("too_many_plugins"); break scan; }
+          // A plugin installed as a link to its folder is a plugin too: the route reads it through the link, and a link that does not resolve
+          // to a folder holds the route (`store-route.js`).
+          if (entry.isDirectory() || entry.isSymbolicLink()) dirs.push(path.join(parent, entry.name));
+        }
+      } finally { dir.closeSync(); }
+    }
     // Agency sessions copy their plugins from Agency's cache; plain Copilot installs them from a marketplace.
     const agency = path.join(home, ".local", "agency", "plugins", "sessions") + path.sep;
     const underAgency = path.resolve(pluginRoot).startsWith(agency);
