@@ -9,7 +9,7 @@
 // 2. `callback` requires that cookie, exchanges the code with `client_secret_post` and the verifier, validates the
 //    ID token against that cookie's nonce (id-token.js), and maps `(tid, oid)` to an Ouro `accountId` in the
 //    accounts store, redeeming the browser's invite cookie when the identity is new. It then checks that the
-//    account's Desk access is on and that its binding names this gateway's desk, and mints our own code carrying
+//    account's Desk access is on and that it has a desk (admissionRefusal), and mints our own code carrying
 //    `accountId` and `authTime`: the moment this callback accepted a fresh ID token, not the token's `auth_time`,
 //    which Entra's rolling session keeps old.
 //
@@ -208,9 +208,10 @@ async function bindingOf(store, accountId) {
   }
 }
 
-// Whether a signed-in account may have a code: its Desk access is on and its binding names this gateway's desk.
-// Returns the page that refuses it, or null. Throws when the store can't answer. Shared by the Ouro tenant's
-// sign-in and the GitHub fallback.
+// Whether a signed-in account may have a code: its Desk access is on and it has a desk. `repo` is the one desk a
+// single-desk gateway serves (DESK_REPO), which the binding must name; null on a multi-user gateway, where each
+// account's binding names its own desk. Returns the page that refuses it, or null. Throws when the store can't
+// answer. Shared by the Ouro tenant's sign-in and the GitHub fallback.
 export async function admissionRefusal({ store, accountId, repo, clientId, log = stderrLog }) {
   const account = await store.getAccount(accountId);
   if (!account?.deskAccess) {
@@ -218,7 +219,7 @@ export async function admissionRefusal({ store, accountId, repo, clientId, log =
     return accessOffPage();
   }
   const binding = await bindingOf(store, accountId);
-  if (binding?.kind !== "github" || binding.repo !== repo) {
+  if (binding?.kind !== "github" || (repo !== null && binding.repo !== repo)) {
     log(`sign-in refused: no_desk account ${accountId} client ${clientId}`);
     return noDeskPage();
   }
@@ -227,9 +228,10 @@ export async function admissionRefusal({ store, accountId, repo, clientId, log =
 
 // `key` or `keys` is the signing-key ring the provider uses. `discovery` is createDiscovery's; `verifier` defaults
 // to an ID-token verifier built from it once it has loaded. `store` is the accounts store (findIdentity,
-// redeemInvite, getAccount, getBinding). `repo` is the one desk this gateway serves (DESK_REPO). `sessions`, when
-// set, is createBrowserSession's: it enables `beginPage`, a sign-in to the gateway's own pages, whose callback starts
-// a browser session instead of sending a code to a client. `now()` is the clock in milliseconds.
+// redeemInvite, getAccount, getBinding). `repo` is the one desk this gateway serves (DESK_REPO), or null on a
+// multi-user gateway (admissionRefusal). `sessions`, when set, is createBrowserSession's: it enables `beginPage`, a
+// sign-in to the gateway's own pages, whose callback starts a browser session instead of sending a code to a client.
+// `now()` is the clock in milliseconds.
 export function createEntraSignIn({
   key,
   keys,
@@ -248,9 +250,10 @@ export function createEntraSignIn({
   now = Date.now,
   log = stderrLog,
 }) {
-  for (const [name, value] of Object.entries({ tenantId, clientId, clientSecret, callbackUrl, repo })) {
+  for (const [name, value] of Object.entries({ tenantId, clientId, clientSecret, callbackUrl })) {
     if (typeof value !== "string" || value === "") throw new Error(`createEntraSignIn needs ${name}`);
   }
+  if (repo !== null && (typeof repo !== "string" || repo === "")) throw new Error("createEntraSignIn needs repo, or null on a multi-user gateway");
   const { sealed, unsealed } = sealer({ key, keys, now });
   const signins = cookies ?? createSigninCookies({ key, keys, now });
   let idTokens = verifier ?? null;

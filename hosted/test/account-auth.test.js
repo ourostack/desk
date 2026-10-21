@@ -70,7 +70,7 @@ function browser() {
   };
 }
 
-async function setup({ githubSignIn = true, github = fakeGitHub(), cutoff = CUTOFF } = {}) {
+async function setup({ githubSignIn = true, github = fakeGitHub(), cutoff = CUTOFF, repo = REPO } = {}) {
   let clock = START;
   const now = () => clock;
   const tenant = await stubTenant({ now });
@@ -88,7 +88,7 @@ async function setup({ githubSignIn = true, github = fakeGitHub(), cutoff = CUTO
     clientSecret: CLIENT_SECRET,
     callbackUrl: `${GATEWAY}/oauth/entra/callback`,
     store,
-    repo: REPO,
+    repo,
     fetch: tenant.fetch,
     now,
     log,
@@ -102,7 +102,7 @@ async function setup({ githubSignIn = true, github = fakeGitHub(), cutoff = CUTO
     entra,
     accounts,
     store,
-    repo: REPO,
+    repo,
     legacy,
     now,
     log,
@@ -352,6 +352,25 @@ test("a GitHub fallback sign-in for an account with Desk access off gets a 403 p
   const outcome = await githubSignIn(ctx);
   assert.equal(outcome.status, 403);
   assert.match(outcome.html, /access is turned off/);
+});
+
+test("a single-desk gateway's GitHub fallback gives an account bound to another repository the no-desk page", async () => {
+  const ctx = await setup();
+  await ctx.store.putBinding(ctx.accountId, { ...BINDING, repo: "someone/desk" });
+  const outcome = await githubSignIn(ctx);
+  assert.equal(outcome.status, 403);
+  assert.match(outcome.html, /no desk/i);
+});
+
+test("a multi-user gateway's GitHub fallback (repo null) admits an account bound to its own repository", async () => {
+  const ctx = await setup({ repo: null });
+  await ctx.store.putBinding(ctx.accountId, { ...BINDING, repo: "someone/desk" });
+  const outcome = await githubSignIn(ctx);
+  assert.ok(outcome.redirectTo, `fallback gave a page: ${outcome.status} ${outcome.html}`);
+});
+
+test("createProvider and createEntraSignIn refuse an empty repo; only null means multi-user", async () => {
+  await assert.rejects(setup({ repo: "" }), /repo/);
 });
 
 // ---- the account check ----
