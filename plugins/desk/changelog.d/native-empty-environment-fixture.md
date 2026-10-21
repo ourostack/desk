@@ -1,1 +1,0 @@
-Test the native entry's empty filtered environment with an owned Go child on every platform, without depending on Node starting with an empty Windows environment. Keep the actual Node-host cases and inherited-injection rejection unchanged.
