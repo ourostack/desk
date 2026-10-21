@@ -4,7 +4,7 @@
 // Prints one JSON line. Exit 0: created. 2: refused because the folder is already a desk (nothing written). 1: error. 64: usage.
 // first-run-bootstrap's fresh-create step and hosted GitHub linking both call this, so the desk layout lives here only.
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { deskGitInvocation, isolatedDeskRoot } from "../src/runtime/desk-git-context.js"
@@ -43,71 +43,115 @@ function readme(owner) {
   return `# ${title}\n\nThis is a [Desk](https://github.com/ourostack/desk) workspace: tracks of tasks, friction and lessons that agents keep between sessions. Desk's tools write here; edit cards through them rather than by hand.\n`
 }
 
-// Existing entries stay first and in their order; only the missing desk entries are appended.
+// Existing entries stay first and in their order, and keep the file's own line ending; only the missing desk entries are appended.
 function gitignoreText(existing) {
+  const eol = existing.includes("\r\n") ? "\r\n" : "\n"
   const present = new Set(existing.split(/\r?\n/))
   const missing = DESK_GITIGNORE.filter((entry) => !present.has(entry))
   if (!missing.length) return null
-  const base = existing && !existing.endsWith("\n") ? `${existing}\n` : existing
-  return `${base}${missing.join("\n")}\n`
+  const base = existing && !existing.endsWith("\n") ? `${existing}${eol}` : existing
+  return `${base}${missing.join(eol)}${eol}`
 }
 
-// Git's own messages can quote the folder; hand back only what is relative to the desk.
-function scrub(text, root) {
+// Every spelling Git or Node may use for the root, longest first, including Git for Windows' forward slashes.
+export function spellingsOf(...roots) {
+  return [...new Set(roots.flatMap((root) => [root, root.replaceAll("\\", "/")]))].sort((x, y) => y.length - x.length)
+}
+
+// Git and Node messages can quote the folder; hand back only what is relative to the desk.
+function scrub(text, spellings) {
   let out = String(text).trim().split("\n")[0]
-  for (const spelling of new Set([realpathSync(root), root])) out = out.split(spelling).join(".")
+  for (const spelling of spellings) out = out.split(spelling).join(".")
   return out
 }
+
+const NODE_FS = { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync }
 
 /**
  * Write the solo desk template into `root` and commit exactly those paths.
  * Returns `{status:"created", commit, files}`, `{status:"refused", reason}` or `{status:"error", step, message}`; every path in it is desk-relative.
+ * A hosted root must already exist inside the realm desk (a cloned repository). Every failure after the checks puts the folder and the index back as they were, so a rerun starts clean.
  */
-export function initDesk({ root, owner, env, spawn = spawnSync }) {
+export function initDesk({ root, owner, env, spawn = spawnSync, fs = NODE_FS }) {
+  let spellings = spellingsOf(root)
+  const error = (step, message) => ({ status: "error", step, message: scrub(message, spellings) })
   if (env.DESK_ISOLATED_HOSTED === "1") {
     try {
       isolatedDeskRoot(root, env)
-    } catch (error) {
-      return { status: "error", step: "git", message: error.message }
+    } catch (refusal) {
+      return error("root", refusal.message)
     }
   }
-  if (existsSync(root) && !statSync(root).isDirectory()) return { status: "error", step: "root", message: "the desk root is not a folder" }
-  if (isDeskWorkspace(root)) return { status: "refused", reason: "already_a_desk" }
-  if (existsSync(path.join(root, "_meta")) || existsSync(path.join(root, "_archive"))) return { status: "refused", reason: "desk_folders_present" }
+  try {
+    if (fs.existsSync(root) && !fs.statSync(root).isDirectory()) return error("root", "the desk root is not a folder")
+    if (isDeskWorkspace(root)) return { status: "refused", reason: "already_a_desk" }
+    if (fs.existsSync(path.join(root, "_meta")) || fs.existsSync(path.join(root, "_archive"))) return { status: "refused", reason: "desk_folders_present" }
+    fs.mkdirSync(root, { recursive: true })
+    spellings = spellingsOf(root, fs.realpathSync(root))
+  } catch (failure) {
+    return error("root", failure.message)
+  }
 
   const run = (args) => {
     const invocation = deskGitInvocation({ root, args, env })
     return spawn("git", invocation.args, { ...invocation.options, env, encoding: "utf8" })
   }
-  mkdirSync(root, { recursive: true })
-  const gitDir = path.join(root, ".git")
-  if (!existsSync(gitDir)) {
-    const init = run(["init", "-q"])
-    if (init.status !== 0) return { status: "error", step: "init", message: scrub(init.stderr, root) }
+  // A commit needs an identity; checking first means a missing one never leaves a half-made desk behind.
+  for (const ident of ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"]) {
+    const check = run(["var", ident])
+    if (check.status !== 0) return error("identity", check.stderr)
   }
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    const init = run(["init", "-q"])
+    if (init.status !== 0) return error("init", init.stderr)
+  }
+  if (run(["rev-parse", "-q", "--verify", "MERGE_HEAD"]).status === 0) return error("merge", "a merge is in progress; finish or abort it first")
+  // A pathspec commit takes a file's whole working copy, so the owner's own uncommitted .gitignore edits would ride along.
+  const ignoreState = run(["status", "--porcelain", "--", ".gitignore"]).stdout
+  if (ignoreState && !ignoreState.startsWith("??")) return error("gitignore", ".gitignore has uncommitted changes; commit or stash them first")
 
   const files = []
-  const ignorePath = path.join(root, ".gitignore")
-  const ignore = gitignoreText(existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "")
-  if (ignore !== null) {
-    writeFileSync(ignorePath, ignore)
-    files.push(".gitignore")
+  const undo = []
+  const rollBack = () => {
+    for (const step of undo.reverse()) step()
   }
-  if (!existsSync(path.join(root, "README.md"))) {
-    writeFileSync(path.join(root, "README.md"), readme(owner))
-    files.push("README.md")
-  }
-  for (const folder of ["_archive", "_meta"]) {
-    mkdirSync(path.join(root, folder))
-    writeFileSync(path.join(root, folder, ".gitkeep"), "")
-    files.push(`${folder}/.gitkeep`)
+  try {
+    const ignorePath = path.join(root, ".gitignore")
+    const before = fs.existsSync(ignorePath) ? fs.readFileSync(ignorePath, "utf8") : null
+    const ignore = gitignoreText(before ?? "")
+    if (ignore !== null) {
+      fs.writeFileSync(ignorePath, ignore)
+      undo.push(() => (before === null ? fs.rmSync(ignorePath) : fs.writeFileSync(ignorePath, before)))
+      files.push(".gitignore")
+    }
+    if (!fs.readdirSync(root).some((name) => /^readme(\..*)?$/i.test(name))) {
+      const readmePath = path.join(root, "README.md")
+      fs.writeFileSync(readmePath, readme(owner))
+      undo.push(() => fs.rmSync(readmePath))
+      files.push("README.md")
+    }
+    for (const folder of ["_archive", "_meta"]) {
+      const dir = path.join(root, folder)
+      fs.mkdirSync(dir)
+      undo.push(() => fs.rmSync(dir, { recursive: true }))
+      fs.writeFileSync(path.join(dir, ".gitkeep"), "")
+      files.push(`${folder}/.gitkeep`)
+    }
+  } catch (failure) {
+    rollBack()
+    return error("write", failure.message)
   }
 
-  const add = run(["add", "--", ...files])
-  if (add.status !== 0) return { status: "error", step: "add", message: scrub(add.stderr, root) }
+  // Forced, so an owner's ignore rule such as `_*` cannot drop the files that give the desk its shape.
+  const add = run(["add", "-f", "--", ...files])
   // A pathspec commit takes only these paths, so anything the owner already staged stays staged and out of this commit.
-  const commit = run(["commit", "-q", "-m", "Start the desk", "--", ...files])
-  if (commit.status !== 0) return { status: "error", step: "commit", message: scrub(commit.stderr, root) }
+  const commit = add.status === 0 ? run(["commit", "-q", "-m", "Start the desk", "--", ...files]) : add
+  if (commit.status !== 0) {
+    // A reset unstages what this run added: a path in HEAD gets its committed entry back, and a new path (even on an unborn branch) leaves the index.
+    run(["reset", "-q", "--", ...files])
+    rollBack()
+    return error(add.status === 0 ? "commit" : "add", commit.stderr)
+  }
   const head = run(["rev-parse", "HEAD"])
   return { status: "created", commit: head.stdout.trim(), files }
 }
@@ -130,6 +174,15 @@ export async function main({ argv, env, cwd, write }) {
   return EXIT[result.status]
 }
 
+// argv[1] can be absent, or a label such as the hosted loader's "desk-builtin", which is never this file.
+function isThisScript(argv1, moduleUrl) {
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Run `main` when this module is the script Node was asked to run, and report whether it did.
  * A hosted realm launches built-in scripts through a loader that keeps their path off the command line (deskScriptInvocation).
@@ -137,7 +190,7 @@ export async function main({ argv, env, cwd, write }) {
  */
 export async function runIfMain({ moduleUrl, argv, env, cwd, out, run = main }) {
   const builtin = env.DESK_ISOLATED_HOSTED === "1" && env.DESK_BUILTIN_SCRIPT === moduleUrl
-  if (!builtin && realpathSync(argv[1] ?? ".") !== realpathSync(fileURLToPath(moduleUrl))) return false
+  if (!builtin && !isThisScript(argv[1], moduleUrl)) return false
   process.exitCode = await run({ argv: argv.slice(2), env, cwd, write: (text) => out.write(text) })
   return true
 }
