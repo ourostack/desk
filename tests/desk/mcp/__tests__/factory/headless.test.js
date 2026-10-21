@@ -9,6 +9,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import * as headless from "../../../../../plugins/desk/mcp/src/factory/headless.js"
 
 import {
   HEADLESS_ARGV,
@@ -158,6 +159,158 @@ test("context children explicitly load the producer's Desk source instead of an 
       assert.equal(path.resolve(args[args.indexOf("--plugin-dir") + 1]), expected)
     }
   }
+})
+
+test("a relative source with spaces resolves in the producer, not the child's scratch cwd", async () => {
+  const relative = path.join("relative source", "Desk plugin")
+  const expected = path.resolve(relative)
+  const spawn = fakeSpawn(status(okRun))
+  assert.equal((await runHeadless(baseOpts({
+    env: { DESK_PLUGIN_ROOT: relative }, purpose: "task_context", spawn,
+  }))).state, "ran")
+  const call = spawn.calls[0]
+  const selected = call.args[call.args.indexOf("--plugin-dir") + 1]
+  assert.equal(path.resolve(call.opts.cwd, selected), expected)
+})
+
+test("legacy labels do not inspect an unused plugin-root declaration", async () => {
+  const spawn = fakeSpawn(status(okRun))
+  assert.equal((await runHeadless(baseOpts({ env: { DESK_PLUGIN_ROOT: 5 }, spawn }))).state, "ran")
+  assert.equal(spawn.calls[0].args.includes("--plugin-dir"), false)
+})
+
+const SOURCE_VERSION = "3.2.0-alpha.1"
+const sourceDetails = (version = SOURCE_VERSION, source = "desk@inline", skills = "factory-evaluator, factory-task-context") =>
+  `desk ${version}\n  Description: Synthetic Desk\n  Source: ${source}\n\nComponent inventory\n  Skills (2)  ${skills}\n  Agents (0)\n  Hooks (0)\n  MCP servers (0)\n  LSP servers (0)\n`
+function sourceFixture() {
+  const pluginRoot = mkdtempSync(path.join(os.tmpdir(), "desk-source-check-"))
+  const row = { id: "desk@inline", version: SOURCE_VERSION, scope: "session", enabled: true, installPath: pluginRoot }
+  const options = baseOpts({ pluginRoot, pluginVersion: SOURCE_VERSION })
+  return { row, options }
+}
+async function qualify(options) {
+  assert.equal(typeof headless.qualifyHeadlessSource, "function", "context sources need effective native qualification")
+  return headless.qualifyHeadlessSource(options)
+}
+
+test("native source qualification checks the effective winner without a prompt or model session", async () => {
+  const { row, options } = sourceFixture()
+  const spawn = fakeSpawn([status([row]), finish(sourceDetails())])
+  const children = [], exited = []
+  assert.deepEqual(await qualify({
+    ...options, spawn, env: { HOME: "/signed-in", CLAUDE_CONFIG_DIR: "/configured", NODE_OPTIONS: "private" },
+    onChild: (pid) => children.push(pid), onChildExit: (pid) => exited.push(pid),
+  }), { state: "qualified" })
+  assert.deepEqual(children, [4000, 4001])
+  assert.deepEqual(exited, children)
+  for (const [index, call] of spawn.calls.entries()) {
+    assert.equal(call.cmd, "/bin/claude")
+    assert.equal(call.opts.cwd, "/scratch/run")
+    assert.deepEqual(call.opts.env, { HOME: "/signed-in", CLAUDE_CONFIG_DIR: "/configured", DESK_FACTORY_HEADLESS: "1" })
+    assert.deepEqual(call.opts.stdio, ["ignore", "pipe", "pipe"])
+    assert.deepEqual(call.args, [
+      "--plugin-dir", options.pluginRoot,
+      "--add-dir", "/e/job1", "--add-dir", "/l/a", "--add-dir", "/l/b",
+      "--permission-mode", "dontAsk", "plugin", ...(index === 0 ? ["list", "--json"] : ["details", "desk"]),
+    ], "a nonvariadic flag must terminate --add-dir before the metadata subcommand")
+    assert.equal(call.args.includes("-p"), false)
+    assert.equal(call.args.includes("--print"), false)
+  }
+})
+
+test("native source qualification refuses a missing, disabled, ambiguous or mismatched inline source", async () => {
+  const { row, options } = sourceFixture()
+  for (const rows of [
+    [], null, {}, [row, row], [{ ...row, id: "desk@ourostack" }], [{ ...row, enabled: false }],
+    [{ ...row, enabled: "true" }], [{ ...row, scope: "user" }], [{ ...row, version: "3.2.0-alpha.0" }],
+    [{ ...row, installPath: os.tmpdir() }], [{ ...row, installPath: 5 }],
+    [{ ...row, installPath: path.join(options.pluginRoot, "missing") }],
+  ]) {
+    const spawn = fakeSpawn([status(rows), finish(sourceDetails())])
+    assert.deepEqual(await qualify({ ...options, spawn }), { state: "source_unqualified" })
+    assert.equal(spawn.calls.length, 1, "a bad inventory must not progress to another child")
+  }
+})
+
+test("an enabled inline list entry cannot hide a different effective source or missing task-context skill", async () => {
+  const { row, options } = sourceFixture()
+  for (const details of [
+    sourceDetails(SOURCE_VERSION, "desk@managed"),
+    sourceDetails("3.2.0-alpha.0"),
+    sourceDetails(SOURCE_VERSION, "desk@inline", "factory-evaluator, factory-task-context-extra"),
+    sourceDetails().replace("Skills (2)", "Skills (3)"),
+    sourceDetails().replace("Skills (2)", "Skills (unknown)"),
+    sourceDetails().replace("  Skills (2)  factory-evaluator, factory-task-context", "  Skills (0)"),
+    sourceDetails().replace("  Source: desk@inline", "  Source: desk@inline\n  Source: desk@managed"),
+    `${sourceDetails()}\ndesk ${SOURCE_VERSION}\n`,
+    sourceDetails().replace(`desk ${SOURCE_VERSION}\n`, `Description: desk ${SOURCE_VERSION}\n`),
+    sourceDetails().replace("  Agents (0)", "  Skills (1)  factory-task-context\n  Agents (0)"),
+    "not supported",
+    "",
+  ]) {
+    assert.deepEqual(await qualify({ ...options, spawn: fakeSpawn([status([row]), finish(details)]) }),
+      { state: "source_unqualified" })
+  }
+})
+
+test("source metadata failures stay bounded and return no CLI output, path or error text", async () => {
+  const { row, options } = sourceFixture()
+  for (const script of [finish("private malformed"), finish("x".repeat(70000)), status([row], 1),
+    "throw-enoent", "throw-other", (child) => child.emit("error", new Error("private error"))]) {
+    assert.deepEqual(await qualify({ ...options, spawn: fakeSpawn(script) }), { state: "source_unqualified" })
+  }
+  for (const [script, hung] of [[finish("x".repeat(70000)), false], [finish(sourceDetails(), 1), false], [() => {}, true]]) {
+    const spawn = fakeSpawn([status([row]), script])
+    assert.deepEqual(await qualify({ ...options, spawn, timeoutMs: 20 }), { state: "source_unqualified" })
+    if (hung) assert.deepEqual(spawn.calls[1].child.kills, ["SIGKILL"])
+  }
+})
+
+test("source qualification resolves Windows shims through the same native launch path", async () => {
+  const { row, options } = sourceFixture()
+  const spawn = fakeSpawn([status([row]), finish(sourceDetails())])
+  assert.deepEqual(await qualify({
+    ...options, cli: "C:\\bin\\claude.cmd", platform: "win32", execPath: "C:\\node.exe",
+    readFile: () => JSON.stringify({ bin: "cli.js" }), spawn,
+  }), { state: "qualified" })
+  assert.equal(spawn.calls[0].cmd, "C:\\node.exe")
+  assert.equal(spawn.calls[0].args[0], "C:\\bin\\node_modules\\@anthropic-ai\\claude-code\\cli.js")
+})
+
+test("source qualification refuses an unlaunchable shim without starting a process", async () => {
+  const { options } = sourceFixture()
+  const spawn = fakeSpawn(status([]))
+  assert.deepEqual(await qualify({
+    ...options, cli: "C:\\bin\\claude.cmd", platform: "win32", readFile: () => "invalid", spawn,
+  }), { state: "source_unqualified" })
+  assert.equal(spawn.calls.length, 0)
+})
+
+test("source qualification rejects nested, billable or unidentifiable launches before any metadata child", async () => {
+  const { options } = sourceFixture()
+  for (const overrides of [
+    { pluginRoot: "" }, { pluginVersion: "" }, { env: { DESK_FACTORY_HEADLESS: "1" } },
+    { env: { ANTHROPIC_API_KEY: "synthetic" } },
+  ]) {
+    const spawn = fakeSpawn(status([]))
+    assert.deepEqual(await qualify({ ...options, ...overrides, spawn }), { state: "source_unqualified" })
+    assert.equal(spawn.calls.length, 0)
+  }
+  assert.deepEqual(await qualify({ ...options, timeoutMs: 0 }), { state: "source_unqualified" })
+  assert.deepEqual(await probeSignIn({ cli: "/must-not-start", env: { ANTHROPIC_API_KEY: "synthetic" } }),
+    { state: "disabled_would_bill" })
+  assert.equal((await runHeadless({ env: { DESK_FACTORY_HEADLESS: "1" } })).state, "headless_session")
+})
+
+test("a context model uses the qualified frozen root even if its caller environment changes", async () => {
+  const spawn = fakeSpawn(status(okRun))
+  const pluginRoot = path.resolve("qualified plugin")
+  const output = await runHeadless(baseOpts({
+    spawn, purpose: "task_context", pluginRoot, env: { DESK_PLUGIN_ROOT: "changed plugin" },
+  }))
+  assert.equal(output.state, "ran")
+  const args = spawn.calls[0].args
+  assert.equal(args[args.indexOf("--plugin-dir") + 1], pluginRoot)
 })
 
 // Fixture paths are built the way the platform builds them, and the program is named the way the platform names it.

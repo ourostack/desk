@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
+import { deskPluginRoot, deskVersion } from "../package-metadata.js"
 import {
   acceptContextCandidate, acceptContextPrivacy, listContextWork,
 } from "./context-outbox.js"
@@ -10,7 +11,7 @@ import {
   taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile,
 } from "./outbox.js"
 import {
-  HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY, billingVariableBlocks, findAgentCli, probeSignIn, runHeadless,
+  HEADLESS_TIMEOUT_MS, MAX_HEADLESS_JOBS_PER_DAY, billingVariableBlocks, findAgentCli, probeSignIn, qualifyHeadlessSource, runHeadless,
 } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
 import { finishAgentLaunch, reserveAgentLaunch, witnessedEvaluationQuota } from "./headless-ledger.js"
@@ -21,7 +22,7 @@ const DAY = 24 * 3600 * 1000
 const ON = new Set(["1", "true", "on", "yes"])
 const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10)
 const idle = (result, ok = true) => ({ ok, result, launched: false, accepted: 0, refused: 0 })
-const INSTRUCTIONS = new URL("../../../skills/factory-task-context/SKILL.md", import.meta.url)
+const sourceVersionMatches = (work, version) => work.source.evaluator.plugin_version === version
 
 function due(work, now) {
   const attempts = work.state.attempts?.[work.phase]
@@ -56,7 +57,8 @@ export async function contextEvaluationDue(env, status, now) {
   const headless = status?.evaluator?.headless
   if (headless?.day >= isoDay(at) && headless.jobs >= MAX_HEADLESS_JOBS_PER_DAY) return false
   if (["quota_exhausted", "window_protected", "clock_regressed"].includes(witnessedEvaluationQuota(status, at))) return false
-  return (await runnableContextWork(env, status, at)).length > 0
+  const version = deskVersion(env)
+  return version !== null && (await runnableContextWork(env, status, at)).some((work) => sourceVersionMatches(work, version))
 }
 
 function template(work) {
@@ -92,15 +94,21 @@ function evidenceOutline(work) {
 
 /** One existing-ledger launch, one phase, at most eight jobs. Labels retain priority in the caller. */
 export async function runTaskContextStep(env, options = {}) {
-  const impl = { runHeadless, probeSignIn, findAgentCli, reserveAgentLaunch, finishAgentLaunch, clock: Date.now, ...options }
+  const impl = { runHeadless, probeSignIn, qualifyHeadlessSource, findAgentCli, reserveAgentLaunch, finishAgentLaunch, clock: Date.now, ...options }
   if (isHeadlessFactorySession(env)) return idle("headless_session", false)
   if (env.DESK_FACTORY_HEADLESS_EVALUATOR !== undefined && !ON.has(env.DESK_FACTORY_HEADLESS_EVALUATOR.trim().toLowerCase())) return idle("disabled")
   const now = options.now === undefined ? impl.clock() : new Date(options.now).getTime()
   const deadline = new Date(options.deadline).getTime()
   if (!Number.isFinite(now) || !Number.isFinite(deadline)) throw new TypeError("runTaskContextStep: valid now and deadline required")
   const status = await readStatus(env)
-  const jobs = await runnableContextWork(env, status, now)
-  if (jobs.length === 0) return idle("no_context_waiting")
+  const waiting = await runnableContextWork(env, status, now)
+  if (waiting.length === 0) return idle("no_context_waiting")
+  const version = deskVersion(env)
+  if (version === null) return idle("context_source_unavailable", false)
+  const pluginRoot = deskPluginRoot(env)
+  if (options.pluginVersion !== undefined && options.pluginVersion !== version) return idle("context_source_mismatch", false)
+  const jobs = waiting.filter((work) => sourceVersionMatches(work, version))
+  if (jobs.length === 0) return idle("context_source_stale")
   jobs.sort((left, right) => Number(right.phase === "privacy") - Number(left.phase === "privacy") || left.job.localeCompare(right.job))
   const selected = jobs.filter((work) => work.phase === jobs[0].phase).slice(0, MAX_BATCH)
   if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) return idle("no_time_for_a_run", false)
@@ -112,13 +120,40 @@ export async function runTaskContextStep(env, options = {}) {
   const signIn = await impl.probeSignIn({ cli, env, onChild: impl.onChild, onChildExit: impl.onChildExit })
   if (signIn?.state !== "subscription") return idle(signIn?.state ?? "sign_in_unknown", false)
   if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) return idle("no_time_for_a_run", false)
+  let instructions
+  try {
+    instructions = readFileSync(path.join(pluginRoot, "skills", "factory-task-context", "SKILL.md"), "utf8").split(/\r?\n/u)
+  } catch (error) {
+    if (error.code === "ENOENT") return idle("context_source_unavailable", false)
+    throw error
+  }
+  const root = await factoryStateRoot(env)
+  const workDir = path.join(root, "scratch", "context")
+  await fs.mkdir(workDir, { recursive: true, mode: 0o700 })
+  const selectedDirs = new Set(selected.map((work) => path.dirname(work.input)))
+  for (const work of selected) {
+    for (const entry of work.source.private_evidence) if (entry.log_path !== null) selectedDirs.add(path.dirname(entry.log_path))
+    if (work.source.task_card !== null) selectedDirs.add(path.dirname(work.source.task_card.path))
+  }
+  const sourceOptions = {
+    env, cli, pluginRoot, pluginVersion: version, workDir,
+    evaluationDir: path.dirname(selected[0].input), logDirs: [...selectedDirs],
+    onChild: impl.onChild, onChildExit: impl.onChildExit,
+  }
+  const qualify = async (options) => {
+    const remaining = deadline - impl.clock()
+    return remaining > 0 && (await impl.qualifyHeadlessSource({ ...options, timeoutMs: remaining }))?.state === "qualified"
+  }
+  if (!await qualify(sourceOptions)) return idle("context_source_unqualified", false)
+  if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) return idle("no_time_for_a_run", false)
   const reservation = await impl.reserveAgentLaunch(env, { kind: "evaluate", generation: null, now, legacyEvaluator: status.evaluator })
   if (reservation.state !== "reserved") return idle("budget_exhausted")
   const phase = selected[0].phase
-  const instructions = readFileSync(INSTRUCTIONS, "utf8").split(/\r?\n/u)
   const briefs = []
   const logDirs = new Set()
   let run
+  let requested = false
+  let sourceQualified = true
   try {
     for (const work of selected) {
       const token = randomBytes(8).toString("hex")
@@ -144,21 +179,29 @@ export async function runTaskContextStep(env, options = {}) {
       logDirs.add(path.dirname(file))
       briefs.push({ ...work, file, outputName })
     }
-    const root = await factoryStateRoot(env)
-    const workDir = path.join(root, "scratch", "context")
-    await fs.mkdir(workDir, { recursive: true, mode: 0o700 })
-    run = briefs.length === 0 ? { state: "not_started", cost_usd: null } : await impl.runHeadless({
-      env, job: { host: "claude-code" }, briefPaths: briefs.map((brief) => brief.file),
-      purpose: phase === "privacy" ? "context_privacy" : "task_context",
-      evaluationDir: path.dirname(briefs[0].file), logDirs: [...logDirs], workDir, cli, signIn,
-      onChild: impl.onChild, onChildExit: impl.onChildExit,
-    })
+    run = { state: "not_started", cost_usd: null }
+    if (briefs.length > 0) {
+      const actualSourceOptions = { ...sourceOptions, evaluationDir: path.dirname(briefs[0].file), logDirs: [...logDirs] }
+      sourceQualified = await qualify(actualSourceOptions)
+      if (!sourceQualified) run = { state: "context_source_unqualified", cost_usd: null }
+      else if (impl.clock() + HEADLESS_TIMEOUT_MS > deadline) run = { state: "no_time_for_a_run", cost_usd: null }
+      else {
+        requested = true
+        run = await impl.runHeadless({
+          env, job: { host: "claude-code" }, briefPaths: briefs.map((brief) => brief.file),
+          purpose: phase === "privacy" ? "context_privacy" : "task_context",
+          evaluationDir: actualSourceOptions.evaluationDir, logDirs: actualSourceOptions.logDirs, workDir, cli, signIn, pluginRoot,
+          onChild: impl.onChild, onChildExit: impl.onChildExit,
+        })
+        sourceQualified = await qualify(actualSourceOptions)
+      }
+    }
   } finally {
-    await impl.finishAgentLaunch(env, { token: reservation.token, state: run?.state === "ran" ? "ran" : briefs.length === 0 ? "not_started" : "failed", now: impl.clock() })
+    await impl.finishAgentLaunch(env, { token: reservation.token, state: run?.state === "ran" ? "ran" : !requested ? "not_started" : "failed", now: impl.clock() })
   }
   let accepted = 0
   let refused = 0
-  if (run.state === "ran") {
+  if (run.state === "ran" && sourceQualified) {
     for (const work of briefs) {
       const bytes = await readTaskContextFile(env, work.store, work.job, work.outputName)
       const checked = await (phase === "privacy" ? acceptContextPrivacy : acceptContextCandidate)(env, {
@@ -168,7 +211,11 @@ export async function runTaskContextStep(env, options = {}) {
       else refused += 1
     }
   } else refused = briefs.length
-  const output = { ok: run.state === "ran" && refused === 0, result: run.state === "ran" ? "context_ran" : run.state, launched: briefs.length > 0, accepted, refused }
+  const output = {
+    ok: sourceQualified && run.state === "ran" && refused === 0,
+    result: !sourceQualified ? "context_source_unqualified" : run.state === "ran" ? "context_ran" : run.state,
+    launched: requested, accepted, refused,
+  }
   await updateStatus(env, (current) => ({
     ...current,
     context_evaluation: {

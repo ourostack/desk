@@ -21,7 +21,7 @@
 // desk, and tools limited to read, search and write.
 
 import { spawn as nodeSpawn } from "node:child_process"
-import { accessSync, constants as fsConstants, readFileSync, statSync } from "node:fs"
+import { accessSync, constants as fsConstants, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir as osHomedir } from "node:os"
 import * as path from "node:path"
 
@@ -398,6 +398,67 @@ export async function probeSignIn({ cli, env, spawn = nodeSpawn, timeoutMs = PRO
   return { state: "subscription" }
 }
 
+function effectiveContextSource(text, version) {
+  const lines = text.replace(/\r\n/gu, "\n").trim().split("\n")
+  if (lines[0] !== `desk ${version}` || lines.filter((line) => /^desk(?:\s|$)/u.test(line.trim())).length !== 1) return false
+  const sources = lines.filter((line) => /^\s*Source:/u.test(line))
+  if (sources.length !== 1 || sources[0].trim() !== "Source: desk@inline") return false
+  const inventory = lines.indexOf("Component inventory")
+  const skills = lines.map((line, index) => ({ line, index })).filter(({ line }) => /^\s*Skills\b/u.test(line))
+  if (inventory < 0 || lines.lastIndexOf("Component inventory") !== inventory || skills.length !== 1 || skills[0].index <= inventory) return false
+  const match = /^  Skills \((\d+)\)(?:  (.+))?$/u.exec(skills[0].line)
+  if (match === null) return false
+  const names = match[2]?.split(",").map((name) => name.trim()) ?? []
+  return names.length === Number(match[1]) && new Set(names).size === names.length && names.includes("factory-task-context")
+}
+
+/** Model-free pre/post compatibility checks, not an attestation from the model's own process. */
+export async function qualifyHeadlessSource({
+  cli, env, pluginRoot, pluginVersion, evaluationDir, logDirs, workDir,
+  spawn = nodeSpawn, timeoutMs = PROBE_TIMEOUT_MS, onChild, onChildExit,
+  platform = process.platform, readFile = readFileSync, execPath = process.execPath,
+}) {
+  const refused = { state: "source_unqualified" }
+  if (!nonEmptyString(pluginRoot) || !nonEmptyString(pluginVersion) || isHeadlessSession(env) || billingVariableBlocks(env)) return refused
+  const launch = resolveLaunch({ cli, platform, readFile, execPath })
+  if (launch === null) return refused
+  const args = [
+    ...launch.prefix, "--plugin-dir", pluginRoot,
+    ...[evaluationDir, ...new Set(logDirs)].flatMap((dir) => ["--add-dir", dir]),
+    // --add-dir is variadic; this flag keeps the metadata command out of its values.
+    "--permission-mode", "dontAsk",
+  ]
+  const started = Date.now()
+  const metadata = async (command) => {
+    const remaining = Math.min(timeoutMs, PROBE_TIMEOUT_MS) - (Date.now() - started)
+    if (remaining <= 0) return null
+    const run = await runChild({
+      spawn, cmd: launch.cmd, args: [...args, "plugin", ...command],
+      opts: { cwd: workDir, env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
+      timeoutMs: remaining, maxBytes: PROBE_MAX_BYTES, onChild, onChildExit,
+    })
+    return run.kind === "closed" && run.code === 0 && !run.truncated ? run.stdout : null
+  }
+  const list = await metadata(["list", "--json"])
+  let rows
+  try {
+    rows = JSON.parse(list)
+  } catch {
+    return refused
+  }
+  if (!Array.isArray(rows)) return refused
+  const inline = rows.filter((row) => row?.id === "desk@inline")
+  if (inline.length !== 1 || inline[0].scope !== "session" || inline[0].enabled !== true ||
+      inline[0].version !== pluginVersion || !nonEmptyString(inline[0].installPath)) return refused
+  try {
+    if (realpathSync(inline[0].installPath) !== realpathSync(pluginRoot)) return refused
+  } catch {
+    return refused
+  }
+  const details = await metadata(["details", "desk"])
+  return details !== null && effectiveContextSource(details, pluginVersion) ? { state: "qualified" } : refused
+}
+
 const result = (state, cost_usd = null, detail = null) => ({ state, cost_usd, detail })
 
 /**
@@ -434,6 +495,7 @@ export async function runHeadless({
   readFile = readFileSync,
   execPath = process.execPath,
   purpose = "labels",
+  pluginRoot,
 }) {
   if (isHeadlessSession(env)) {
     return result("headless_session")
@@ -463,7 +525,9 @@ export async function runHeadless({
   const run = await runChild({
     spawn,
     cmd: launch.cmd,
-    args: [...launch.prefix, ...HEADLESS_ARGV({ briefPaths, evaluationDir, logDirs, purpose, pluginRoot: deskPluginRoot(env) })],
+    args: [...launch.prefix, ...HEADLESS_ARGV({
+      briefPaths, evaluationDir, logDirs, purpose, pluginRoot: purpose === "labels" ? undefined : pluginRoot ?? deskPluginRoot(env),
+    })],
     opts: { cwd: workDir, env: childEnvironment(env), stdio: ["ignore", "pipe", "pipe"] },
     timeoutMs,
     maxBytes: RUN_MAX_BYTES,
