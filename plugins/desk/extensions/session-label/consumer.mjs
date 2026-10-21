@@ -51,7 +51,7 @@ export async function attachCopilotSessionLabels({
     getState: () => ({ ...state }),
   }
   const failure = (error, applying = false) => {
-    if (error?.code === "NATIVE_TIMEOUT" && applying) {
+    if (applying && error?.code !== -32601) {
       // An unacknowledged write may still complete. Do not issue another
       // automatic write that it could overtake, or claim a retry was safe.
       stopped = true
@@ -89,6 +89,7 @@ export async function attachCopilotSessionLabels({
       }
       applying = true
       const result = await bounded(() => session.rpc.name.setAuto({ summary: proposal.text }))
+      applying = false
       if (!active(observation)) return
       if (result?.applied !== true) {
         publish({ state: "preserved", code: "native_owner_refused" })
@@ -100,7 +101,7 @@ export async function attachCopilotSessionLabels({
         ? { state: "applied", code: "native_readback_verified" }
         : unavailable("native_readback_mismatch"))
     } catch (error) {
-      if ((applying && error?.code === "NATIVE_TIMEOUT") || active(observation)) failure(error, applying)
+      if ((applying && error?.code !== -32601) || active(observation)) failure(error, applying)
     }
   }
 
