@@ -33,6 +33,8 @@ function event() {
 function fixture() {
   let nextTab = 10, nextGroup = 50
   const tabs = new Map([[1, { id: 1, windowId: 7, groupId: -1, active: true, url: "https://manual.invalid/" }]])
+  const windows = new Map([[7, { id: 7, type: "normal", incognito: false, focused: false }]])
+  const windowReads = []
   const groups = new Map()
   const sockets = []
   const effects = []
@@ -54,11 +56,20 @@ function fixture() {
         api.tabs.onCreated.emit({ ...tab })
         return { ...tab }
       },
-      async group({ groupId, tabIds }) {
+      async group({ groupId, tabIds, createProperties }) {
         if (hooks.group) await hooks.group()
+        const windowId = groupId === undefined ? createProperties?.windowId ?? hooks.currentWindowId ?? 7 : groups.get(groupId)?.windowId
+        if (windows.get(windowId)?.type !== "normal" ||
+            tabIds.some(id => windows.get(tabs.get(id)?.windowId)?.type !== "normal"))
+          throw new Error("Only normal windows support tab/group moves")
         const id = groupId ?? nextGroup++
-        if (!groups.has(id)) groups.set(id, { id, windowId: 7, title: "", color: "grey" })
+        if (!groups.has(id)) groups.set(id, { id, windowId, title: "", color: "grey" })
         for (const tabId of tabIds) {
+          if (tabs.get(tabId).windowId !== windowId) {
+            const oldWindowId = tabs.get(tabId).windowId
+            Object.assign(tabs.get(tabId), { windowId })
+            api.tabs.onDetached.emit(tabId, { oldWindowId })
+          }
           Object.assign(tabs.get(tabId), { groupId: id })
           api.tabs.onUpdated.emit(tabId, { groupId: id }, { ...tabs.get(tabId) })
         }
@@ -68,10 +79,12 @@ function fixture() {
       async remove(id) {
         await hooks.remove?.(id)
         if (!tabs.has(id)) throw new Error("No tab")
+        const removed = tabs.get(id)
         tabs.delete(id)
+        if (removed.groupId >= 0 && ![...tabs.values()].some(t => t.groupId === removed.groupId)) groups.delete(removed.groupId)
         if (debuggerBindings.delete(id)) api.debugger.onDetach.emit({ tabId: id }, "target_closed")
         effects.push(["remove", id])
-        api.tabs.onRemoved.emit(id, { windowId: 7, isWindowClosing: false })
+        api.tabs.onRemoved.emit(id, { windowId: removed.windowId, isWindowClosing: false })
       },
       async update() { throw new Error("Physical activation/update is not allowed") },
       async ungroup() { throw new Error("Generic ungroup is not allowed") },
@@ -86,7 +99,13 @@ function fixture() {
       async query() { throw new Error("Global title scan is not allowed") },
     },
     windows: {
-      async getAll() { return [{ id: 7, type: "normal" }] },
+      async getAll() { return [...windows.values()].map(w => ({ ...w })) },
+      async get(id) {
+        windowReads.push(id)
+        await hooks.windowGet?.(id)
+        if (!windows.has(id)) throw new Error("No window")
+        return { ...windows.get(id) }
+      },
       async update() { throw new Error("Physical focus is not allowed") },
       async create() { throw new Error("Window creation is not allowed") },
     },
@@ -142,7 +161,7 @@ function fixture() {
       return eventually(() => this.sent.find(m => m.id === id))
     }
   }
-  return { api, tabs, groups, sockets, effects, hooks, messages, Socket, debuggerBindings, nativeCalls, nativePorts }
+  return { api, tabs, windows, windowReads, groups, sockets, effects, hooks, messages, Socket, debuggerBindings, nativeCalls, nativePorts }
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -524,11 +543,14 @@ test("active same-window owned-opener children are discovered and controlled wit
 
 // Break caught: an unsupported app-created window must be named continuity loss,
 // not a ready parent-only view, an adopted foreign window or a replacement page.
-test("owned-opener child-window boundary retains the exact child and explicitly loses continuity without replacing pages", async () => {
+test("unverified owned-opener child window retains the exact child and explicitly loses continuity without replacing pages", async () => {
   const f = await kernel()
+  f.windows.set(9, { id: 9, type: "popup", incognito: false, focused: false })
+  f.hooks.windowGet = async () => { throw new Error("Window readback unavailable") }
   assert.ok((await f.engine.dispatch(create())).result)
   assert.ok((await f.engine.dispatch(create(B, "peer"))).result)
   const child = await f.api.tabs.create({ windowId: 9, openerTabId: 10, url: "https://other-origin.invalid/window", active: true })
+  await flush()
   const effects = f.effects.length
   const status = await f.engine.dispatch(request("context.status", A))
   assert.equal(status.result.state, "unavailable")
@@ -539,6 +561,65 @@ test("owned-opener child-window boundary retains the exact child and explicitly 
   assert.equal((await f.engine.dispatch(request("extension.reload", undefined, { updateToken: UPDATE }))).error?.code, "native_update_effects_pending")
   assert.equal(f.effects.length, effects, "status/resume/refused cleanup creates no replacement or browser effect")
   assert.equal(f.tabs.get(child.id).groupId, -1)
+  assert.equal(f.tabs.has(1), true)
+  assert.equal((await f.engine.dispatch(request("context.status", B))).result.state, "ready")
+})
+
+// Break caught: the default/current window is not necessarily the selected
+// anchor window; implicit grouping may move a tab and change its identity fence.
+test("new anchor grouping explicitly targets its selected normal window rather than the focused peer window", async () => {
+  const f = await kernel()
+  f.windows.set(8, { id: 8, type: "normal", incognito: false, focused: true })
+  f.hooks.currentWindowId = 8
+  const created = await f.engine.dispatch(create())
+  assert.equal(created.result?.state, "ready")
+  assert.equal(f.tabs.get(10).windowId, 7)
+  assert.equal(f.groups.get(created.result.groupId).windowId, 7)
+  assert.equal(f.windows.get(8).focused, true)
+})
+
+for (const type of ["normal", "popup"]) test(`owned ${type} child-window target is read back and controlled in place without moving or regrouping it`, async () => {
+  const f = await kernel()
+  f.windows.set(9, { id: 9, type, incognito: false, focused: false })
+  assert.ok((await f.engine.dispatch(create())).result)
+  assert.ok((await f.engine.dispatch(create(B, "peer"))).result)
+  await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  const child = await f.api.tabs.create({ windowId: 9, openerTabId: 10, url: "https://first-origin.invalid/child", active: true })
+  await eventually(() => f.sockets[0].sent.find(m => m.method === "chrome.tabs.onCreated" && m.params[0].id === child.id))
+  assert.ok(f.windowReads.includes(9), "window class must come from exact API readback")
+  assert.equal(f.tabs.get(child.id).windowId, 9)
+  assert.equal(f.tabs.get(child.id).groupId, -1)
+  assert.equal((await f.sockets[0].command("chrome.debugger.attach", [{ tabId: child.id }, "1.3"])).error, undefined)
+  await flush() // The actual maintained on-attach callback must not try illegal grouping.
+  assert.equal((await f.engine.dispatch(request("context.status", A))).result.state, "ready")
+  const target = await f.sockets[0].command("chrome.debugger.sendCommand", [{ tabId: child.id }, "Target.getTargetInfo"])
+  f.hooks.command = async (address, method, params) => {
+    if (method === "Page.navigate") {
+      f.tabs.get(address.tabId).url = params.url
+      f.api.tabs.onUpdated.emit(address.tabId, { url: params.url }, { ...f.tabs.get(address.tabId) })
+      return { frameId: "owned-frame" }
+    }
+    return { targetInfo: { targetId: `target-${address.tabId}`, type: "page" } }
+  }
+  assert.equal((await f.sockets[0].command("chrome.debugger.sendCommand",
+    [{ tabId: child.id }, "Page.navigate", { url: "https://second-origin.invalid/continued" }])).error, undefined)
+  const after = await f.sockets[0].command("chrome.debugger.sendCommand", [{ tabId: child.id }, "Target.getTargetInfo"])
+  assert.equal(after.result.targetInfo.targetId, target.result.targetInfo.targetId)
+  assert.equal(f.tabs.get(child.id).url, "https://second-origin.invalid/continued")
+  assert.equal(f.tabs.get(child.id).windowId, 9)
+  assert.equal(f.tabs.get(child.id).groupId, -1)
+  assert.equal(f.windows.get(9).focused, false)
+  assert.equal((await f.sockets[1].command("chrome.debugger.attach", [{ tabId: child.id }, "1.3"])).error, "native_target_not_owned")
+  await f.api.tabs.remove(10)
+  const count = f.tabs.size
+  assert.equal((await f.engine.dispatch(request("context.resume", A))).result.state, "ready")
+  assert.equal((await f.engine.dispatch(request("context.label", A, { label: "continued child" }))).result.state, "ready")
+  assert.equal(f.tabs.size, count, "closing the anchor never creates a replacement")
+  assert.equal((await f.engine.dispatch(request("context.status", B))).result.state, "ready")
+  assert.equal(f.tabs.has(1), true)
+  const discarded = await f.engine.dispatch(request("context.discard", A))
+  assert.deepEqual(discarded.result.closedTabIds, [child.id])
+  assert.equal(f.tabs.has(child.id), false)
   assert.equal(f.tabs.has(1), true)
   assert.equal((await f.engine.dispatch(request("context.status", B))).result.state, "ready")
 })

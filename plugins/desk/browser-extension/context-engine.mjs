@@ -265,8 +265,8 @@ export function createBrowserExtension(api, options = {}) {
     }
     return { tab, record }
   }
-  function admit(b, tab) {
-    if (!integer(tab?.id) || tab.windowId !== b.windowId || owners.has(tab.id) || debuggerCustody.has(tab.id) ||
+  function admit(b, tab, expectedWindowId = b.windowId) {
+    if (!integer(tab?.id) || !integer(tab.windowId) || tab.windowId !== expectedWindowId || owners.has(tab.id) || debuggerCustody.has(tab.id) ||
         !Number.isSafeInteger(tab.groupId) || tab.groupId < -1) throw fail("native_tab_admission_failed")
     b.tabs.set(tab.id, { windowId: tab.windowId, groupId: tab.groupId, grouping: false, groupUnknown: false, attached: false, sessions: new Set() })
     owners.set(tab.id, b)
@@ -280,11 +280,13 @@ export function createBrowserExtension(api, options = {}) {
         (groupId !== undefined && groupId !== b.groupId)) throw fail("native_target_not_owned")
     const tabId = tabIds[0]
     const { record } = await own(b, tabId)
+    if (record.windowId !== b.windowId) throw fail("native_group_not_owned")
     const obligation = { tabId, windowId: record.windowId, priorGroupId: record.groupId, state: "pending" }
     b.groupingObligations.set(tabId, obligation)
     record.grouping = true
     try {
-      const id = await api.tabs.group({ tabIds: [tabId], ...(groupId === undefined ? {} : { groupId }) })
+      const id = await api.tabs.group({ tabIds: [tabId], ...(groupId === undefined ?
+        { createProperties: { windowId: b.windowId } } : { groupId }) })
       if (!Number.isSafeInteger(id) || id < 0 || (b.groupId !== null && id !== b.groupId) || !current(b, tabId, record))
         throw fail("native_group_unconfirmed")
       b.groupId = id
@@ -500,19 +502,10 @@ export function createBrowserExtension(api, options = {}) {
     const b = owners.get(tab.openerTabId)
     if (!b || b.state !== "ready" || b.mutating || update || stopped ||
         tab.groupId !== -1 || !/^(https?:|about:blank$)/u.test(tab.url ?? "")) return
-    if (tab.windowId !== b.windowId) {
-      // The current group binding cannot control a different window. Name that
-      // observed child before refusing further effects; never leave a ready
-      // parent-only view or create a replacement page. This is not adoption.
-      b.state = "unavailable"
-      b.uncertainTabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId })
-      publish({ event: "context.unavailable", contextId: b.id, code: "native_child_window_unavailable" })
-      return
-    }
-    // Supported opener admission is exact, current and same-window. An app's
-    // activation of its child is not an ownership change; we never activate it.
+    // Reserve the exact opener child before fallible window/profile readback.
+    // The named normal group is an anchor, not authority to move a popup.
     // A foreign/manual group member without that opener is never adopted.
-    try { admit(b, tab) }
+    try { admit(b, tab, tab.windowId) }
     catch {
       b.state = "unavailable"
       b.uncertainTabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId })
@@ -522,11 +515,16 @@ export function createBrowserExtension(api, options = {}) {
     b.admitting.add(tab.id)
     track(b, async () => {
       await own(b, tab.openerTabId)
-      await b.group._addTabToGroup(tab.id)
+      const window = await api.windows.get(tab.windowId)
+      if (window.id !== tab.windowId || window.incognito === true || !["normal", "popup"].includes(window.type))
+        throw fail("native_child_window_unavailable")
+      await own(b, tab.id)
+      if (tab.windowId === b.windowId) await b.group._addTabToGroup(tab.id)
       b.admitting.delete(tab.id)
       b.connection.attachTab((await own(b, tab.id)).tab)
     }).catch(() => {
       b.state = "unavailable"
+      b.uncertainTabs.set(tab.id, { tabId: tab.id, windowId: tab.windowId })
       publish({ event: "context.unavailable", contextId: b.id, code: "native_opener_admission_failed" })
     })
   })
@@ -588,6 +586,12 @@ export function createBrowserExtension(api, options = {}) {
         b.connection = connection
         const style = components.uniqueGroupStyle(b.label, [...bindings.values()].filter(other => other !== b && other.group).map(other => other.group.groupStyle))
         b.group = new components.ConnectedTabGroup(connection, tab, b.label, { ...style, title: b.label }, id => owners.get(id) !== b)
+        const anchorAttached = connection.ontabattached
+        connection.ontabattached = tabId => {
+          // Maintain the real anchor's normal grouping behavior. An exact
+          // child in another normal/popup window stays in place, ungrouped.
+          if (owners.get(tabId) === b && b.tabs.get(tabId)?.windowId === b.windowId) anchorAttached(tabId)
+        }
         b.group.onclose = () => {
           if (b.state !== "unavailable") b.state = "disconnected"
           publish({ event: "context.disconnected", contextId: b.id })
@@ -685,7 +689,8 @@ export function createBrowserExtension(api, options = {}) {
     if (b.mutating || b.pending || update) throw fail("native_context_busy")
     b.mutating = true
     try {
-      await scopedApi(b).tabGroups.update(b.groupId, { ...b.group.groupStyle, title: params.label })
+      if ([...b.tabs.values()].some(record => record.windowId === b.windowId && record.groupId === b.groupId))
+        await scopedApi(b).tabGroups.update(b.groupId, { ...b.group.groupStyle, title: params.label })
       if (b.state !== "ready" || b.revoked.size) throw fail("native_context_ownership_changed")
       b.label = params.label
       b.group.groupStyle.title = params.label
