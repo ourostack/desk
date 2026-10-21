@@ -44,7 +44,7 @@ Every factual claim to a human or an agent carries an inline link to its primary
 
 ## Own the stack
 
-When a rule, tool or plugin we own gets in the way, fix it rather than work around it or stop. Be creative and scrappy before declaring yourself stuck; record friction with `friction-management` for a kaizen card. Our constraints can change. When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure.
+A helper failure does not revoke the supplied task's authority. Preserve effects; continue (`desk-problem`) without fixing or qualifying the helper. Do not spawn repair children or PRs outside approved scope, including when another controller owns repair. Respect authentication, source trust, permission denials, protected writes and conflicting writers.
 
 ## Engineering work
 
