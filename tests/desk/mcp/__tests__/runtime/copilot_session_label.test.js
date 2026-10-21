@@ -202,7 +202,7 @@ test("runtime errors produce a bounded diagnostic without echoing errors or auth
   const f = await attach()
   f.session.rpc.name.setAuto = async () => { throw Error("private details must not be logged") }
   await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
-  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_api_failed" })
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_apply_uncertain" })
 })
 
 test("a pending metadata check cannot apply after disposal", async () => {
@@ -331,4 +331,46 @@ test("a superseded failing metadata check cannot overwrite the next observation'
   reject(Error("superseded failure"))
   await f.consumer.waitForIdle()
   assert.deepEqual(states, [])
+})
+
+test("an unacknowledged transport failure fences subsequent native mutations, not just diagnostics", async () => {
+  const f = await attach()
+  const applyNative = f.session.rpc.name.setAuto
+  let requests = 0
+  let finishUnknownWrite
+  f.session.rpc.name.setAuto = async (input) => {
+    requests++
+    if (requests === 1) {
+      finishUnknownWrite = () => applyNative(input)
+      throw Object.assign(Error("connection lost after request submission"), { code: "ECONNRESET" })
+    }
+    return applyNative(input)
+  }
+  await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  const stateAfterFailure = f.consumer.getState()
+  await observe(f, start("call-b", { args: { ...other, display_label: "Browser boundary qualification" } }),
+    complete("call-b", { identity: other, label: "Browser boundary qualification" }))
+  const nameBeforeUnknownWriteSettles = f.name()
+  await finishUnknownWrite()
+  assert.deepEqual(f.writes, ["Workflow promotion review"])
+  assert.equal(requests, 1)
+  assert.equal(nameBeforeUnknownWriteSettles, null)
+  assert.equal(f.name(), "Workflow promotion review")
+  assert.equal(stateAfterFailure.code, "native_apply_uncertain")
+})
+
+test("a definite missing-method rejection has no delayed native effect and is not misreported as applied", async () => {
+  const f = await attach()
+  f.session.rpc.name.setAuto = async () => { throw Object.assign(Error("method unavailable"), { code: -32601 }) }
+  await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "unsupported_runtime" })
+  assert.equal(f.name(), null)
+})
+
+test("failed readback after an acknowledged write is unavailable, not a claim that the write never happened", async () => {
+  const f = await attach()
+  f.session.rpc.name.get = async () => { throw Object.assign(Error("readback disconnected"), { code: "ECONNRESET" }) }
+  await observe(f, start("call-a", { args: { ...task, display_label: "Workflow promotion review" } }))
+  assert.equal(f.name(), "Workflow promotion review")
+  assert.deepEqual(f.consumer.getState(), { state: "unavailable", code: "native_api_failed" })
 })
