@@ -321,6 +321,7 @@ test("actual maintained daemon options can reach native acquisition using the st
       })
     function virtualSpawn(_node,args) {
       recordLaunch("session-spawn")
+      coreNativeProcess.env = { ...proc.env }
       const child=new EventEmitter()
       child.stdout=new EventEmitter();child.stdout.destroy=()=>{};child.unref=()=>{};child.pid=810017
       const program=utils.program.createCommand()
@@ -439,7 +440,7 @@ test("actual maintained daemon options can reach native acquisition using the st
         import_fs67:{default:actorFs},import_path63:{default:path},
         import_net10:{default:{createServer:callback=>{
           const server=new EventEmitter()
-          server.listen=(_file,cb)=>{recordLaunch("daemon-listen");state.accept=callback;cb()}
+          server.listen=(_file,cb)=>{recordLaunch("daemon-listen");state.accept=callback;state.active=true;cb()}
           return server
         }}},
         SocketConnection:actualSocket.SocketConnection,decorateServer(){},monitorSocketPath:async()=>{},
@@ -1255,15 +1256,42 @@ test("signed page result without maintained text is unconfirmed, not a ready or 
   assert.equal(f.tabs.has(7),true)
 })
 
-test("keep and resume refuse an absent CLI before asking native resume, without replacing its retained group",async t=>{
+test("keep and commands refuse an absent CLI without replacing its retained group",async t=>{
   const f=await signedWorkerFixture(t)
   f.setActive(false)
-  for(const operation of ["keep","resume","run"]) {
+  for(const operation of ["keep","run"]) {
     await assert.rejects(f.run({operation,args:["snapshot"]}),{code:"context_absent"})
   }
   assert.deepEqual(f.methods,[])
   assert.ok(f.tabs.has(7))
   assert.ok(fs.existsSync(f.descriptor.sessionFile))
+})
+
+test("explicit resume recovers a disconnected signed worker without replacing its pages or replaying actions",async t=>{
+  const f=await signedWorkerFixture(t,{nativeAcquisition:true})
+  const tabs=plain([...f.tabs.values()])
+  await f.browsers[0].close()
+  await new Promise(setImmediate)
+  f.setActive(false)
+  f.setLaunchSuccess()
+  const result=await f.run({operation:"resume"})
+  assert.equal(result.state,"running")
+  assert.equal(result.result.recovered,true)
+  assert.equal(result.result.previousCommandOutcome,"unknown")
+  assert.deepEqual(plain([...f.tabs.values()]),tabs)
+  assert.equal(f.launchCalls.length,1)
+  assert.equal((await f.inventory.inspectOwner(f.id)).cli,"active")
+  assert.deepEqual(f.requests,[],"recovery does not replay a page command")
+})
+
+for(const missing of [false,true])test("explicit resume refuses "+(missing?"a missing":"a still-live")+" native binding before CLI replacement",async t=>{
+  const f=await signedWorkerFixture(t,{skipNative:missing})
+  f.setActive(false)
+  await assert.rejects(f.run({operation:"resume"}),{code:"native_context_unavailable"})
+  assert.equal(f.launchCalls.length,0)
+  assert.deepEqual(f.methods,["context.status"])
+  assert.ok(fs.existsSync(f.descriptor.sessionFile))
+  assert.equal(f.tabs.has(1),true)
 })
 
 test("signed worker refuses a malformed actual help schema by name before parsing page argv",async t=>{

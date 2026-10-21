@@ -199,7 +199,8 @@ export async function startNativeProvider({ config: supplied, ready, chain: supp
     if (phase !== 'open') throw fail('NATIVE_UPDATE_IN_PROGRESS');
     if (Object.hasOwn(payload.params, 'profileToken') || Object.hasOwn(payload.params, 'sourceDigest'))
       throw fail('NATIVE_REQUEST_INVALID');
-    const mutating = ['context.create', 'context.label', 'context.discard'].includes(payload.method);
+    const mutating = ['context.create', 'context.label', 'context.discard'].includes(payload.method) ||
+      (payload.method === 'context.resume' && Object.hasOwn(payload.params, 'relayUrl'));
     const epoch = mutating ? advanceContext(payload.contextId) : undefined;
     if (mutating) contexts.set(payload.contextId, { disposition: 'unknown', generation });
     try {

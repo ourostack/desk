@@ -415,6 +415,71 @@ test("ordinary disconnect and worker restart retain groups and never replace mis
   assert.equal(f.tabs.size, 2)
 })
 
+test("explicit relay recovery preserves exact tabs and group while fencing the retired connection", async () => {
+  const f = await kernel()
+  const made = await f.engine.dispatch(create())
+  assert.ok(made.result)
+  assert.ok((await f.engine.dispatch(create(B, "peer work"))).result)
+  const old = f.sockets[0]
+  await old.command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  old.close()
+  await flush()
+  assert.equal((await f.engine.dispatch(request("context.status", A))).result.pendingEffects, 0)
+  const before = f.effects.filter(([effect]) => ["create", "remove"].includes(effect))
+  const resumed = await f.engine.dispatch(request("context.resume", A, { relayUrl: endpoint }))
+  assert.equal(resumed.result?.state, "ready", JSON.stringify(resumed))
+  assert.equal(resumed.result.groupId, made.result.groupId)
+  assert.deepEqual(resumed.result.tabs, [{ tabId: 10, windowId: 7 }])
+  assert.deepEqual(f.effects.filter(([effect]) => ["create", "remove"].includes(effect)), before)
+  assert.ok((await f.engine.dispatch(request("context.resume", B))).result)
+  assert.equal(f.tabs.get(1).active, true)
+  const recovered = f.sockets[2]
+  assert.ok((await recovered.command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])).result)
+  old.input({ id: crypto.randomUUID(), method: "chrome.tabs.remove", params: [10] })
+  await flush()
+  assert.equal(f.tabs.has(10), true)
+  assert.equal(f.debuggerBindings.has(10), true)
+})
+
+test("relay recovery refuses a live connection, a missing binding and uncertain page effects", async () => {
+  const f = await kernel()
+  assert.ok((await f.engine.dispatch(create())).result)
+  assert.ok((await f.engine.dispatch(request("context.resume", A, { relayUrl: endpoint }))).error)
+  assert.ok((await f.engine.dispatch(request("context.resume", B, { relayUrl: endpoint }))).error)
+  const socket = f.sockets[0]
+  await socket.command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  f.hooks.command = () => { throw new Error("effect response lost") }
+  assert.ok((await socket.command("chrome.debugger.sendCommand", [{ tabId: 10 }, "Runtime.evaluate", { expression: "submit()" }])).error)
+  socket.close()
+  await flush()
+  assert.ok((await f.engine.dispatch(request("context.resume", A, { relayUrl: endpoint }))).error)
+  assert.equal(f.sockets.length, 1)
+  assert.equal(f.tabs.size, 2)
+})
+
+test("relay recovery keeps an owned popup in its original window across two interruptions", async () => {
+  const f = await kernel()
+  f.windows.set(9, { id: 9, type: "popup", incognito: false, focused: false })
+  assert.ok((await f.engine.dispatch(create())).result)
+  await f.sockets[0].command("chrome.debugger.attach", [{ tabId: 10 }, "1.3"])
+  const child = await f.api.tabs.create({ windowId: 9, openerTabId: 10, url: "https://task.invalid/popup", active: false })
+  await eventually(() => f.sockets[0].sent.find(m => m.method === "chrome.tabs.onCreated" && m.params[0].id === child.id))
+  for (let attempt = 0; attempt < 2; ++attempt) {
+    f.sockets.at(-1).close()
+    await flush()
+    const resumed = await f.engine.dispatch(request("context.resume", A, { relayUrl: endpoint }))
+    assert.equal(resumed.result?.state, "ready", JSON.stringify(resumed))
+    assert.deepEqual(resumed.result.tabs, [{ tabId: 10, windowId: 7 }, { tabId: child.id, windowId: 9 }])
+    const relay = f.sockets.at(-1)
+    assert.ok(relay.sent.some(m => m.method === "chrome.tabs.onCreated" && m.params[0].id === child.id))
+    assert.ok((await relay.command("chrome.debugger.attach", [{ tabId: child.id }, "1.3"])).result)
+    assert.equal(f.tabs.get(child.id).groupId, -1)
+    assert.equal(f.tabs.get(child.id).windowId, 9)
+    assert.equal(f.tabs.get(1).active, true)
+  }
+  assert.equal(f.tabs.size, 3)
+})
+
 test("explicit discard confirms only exact current owned tabs and preserves peers", async () => {
   const f = await kernel()
   assert.ok((await f.engine.dispatch(create())).result)
