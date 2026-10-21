@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
-import { captureOnBranch, contributingStores, judge, sentRecord, sharesOf } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
+import { captureOnBranch, contributingStores, judge, prepareCaptureContext, sentRecord, sharesOf } from "../../../../../plugins/desk/mcp/src/factory/capture-flush.js"
 import { CAPTURE_INVALID, EMPTY_RECORD, captureFor } from "../../../../../plugins/desk/mcp/src/factory/capture-publish.js"
 import { coverageNow } from "../../../../../plugins/desk/mcp/src/factory/capture-sweep.js"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
@@ -59,6 +59,27 @@ const run = (env, github, clock, extra = {}) => flush(env, { store: STORE, runne
 const expected = (coverage, intakeId, over = {}) => captureFor(coverage, { store: STORE, intakeId, sentBefore: false, contributing: 1, ...over })
 const apiCalls = (github, method, pattern) => github.calls.filter((call) => call.args[0] === "api" && call.args[call.args.indexOf("--method") + 1] === method && pattern.test(call.args.find((arg) => /^repos\//u.test(arg)) ?? ""))
 const capture = async (env) => (await readStatus(env)).capture?.[STORE]
+
+test("capture context leaves carried, empty and legacy-without-loop snapshots byte-identical without a capability request", async () => {
+  const client = { api: () => assert.fail("unchanged bytes need no compatibility read") }
+  for (const [fresh, empty, bytes] of [[false, false, "not parsed"], [true, true, "not parsed"],
+    [true, false, '{"schema":"desk.factory.capture/1","basis":"still_on_disk","hosts":{}}\n']]) {
+    const record = { bytes: Buffer.from(bytes), empty }
+    assert.equal(await prepareCaptureContext({}, { client, store: STORE, ref: "main", record, fresh, nowMs: T0 }), record)
+    assert.equal(record.bytes.toString("utf8"), bytes)
+  }
+})
+
+test("capture enrichment refuses a malformed loop instead of presenting invalid capture bytes as ready", () => scratch(async ({ env }) => {
+  await setup(env)
+  const bytes = Buffer.from('{"schema":"desk.factory.capture/1","basis":"still_on_disk","hosts":{},"loop":{"v":2}}\n')
+  const record = { bytes, empty: false, sha: gitBlobSha(bytes) }
+  const client = { api: async () => ({ status: 200,
+    json: { type: "file", encoding: "base64", content: Buffer.from('{"task_context":1,"loop_context":1}').toString("base64") } }) }
+  await assert.rejects(prepareCaptureContext(env, { client, store: STORE, ref: "main", record, fresh: true, nowMs: T0 }), /capture_context_invalid/u)
+  assert.equal(record.bytes, bytes)
+  assert.equal(record.sha, gitBlobSha(bytes))
+}))
 
 test("a changed record is sent in the same intake pull request as facts and under capture/<intake_id>.json", () => scratch(async ({ env }) => {
   const id = await setup(env, { facts: 2 })

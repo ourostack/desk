@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { promises as fs } from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import * as path from "node:path"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
@@ -18,7 +19,7 @@ import { STORE, scratch } from "./_session_helpers.js"
 
 const T0 = Date.parse("2026-10-21T00:00:00.000Z")
 const json = (value) => `${JSON.stringify(value)}\n`
-async function world(w, { prose = true, contextJson = '{"task_context":1}', push = true, card = false } = {}) {
+async function world(w, { prose = true, contextJson = '{"task_context":1}', push = true, card = false, deskVisibility = "private" } = {}) {
   const git = (...args) => execFileSync("git", args, { cwd: w.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
   git("init", "-qb", "main")
   git("remote", "add", "origin", "https://github.com/synthetic/context-desk.git")
@@ -42,7 +43,7 @@ async function world(w, { prose = true, contextJson = '{"task_context":1}', push
   const written = await writeLocalFacts(w.env, STORE, local)
   assert.equal(written.written, true)
   await writeStatus(w.env, { derivations: { [written.name]: { store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk" } } })
-  const hub = fakeGitHub({ store: STORE, account: "synthetic", push, contextJson, visibility: { "synthetic/context-desk": "private", "ourostack/desk": "public" } })
+  const hub = fakeGitHub({ store: STORE, account: "synthetic", push, contextJson, visibility: { "synthetic/context-desk": deskVisibility, "ourostack/desk": "public" } })
   const run = (extra = {}) => flush(w.env, { store: STORE, runner: hub.runner, anonymousLookup: hub.anonymousLookup, now: () => T0, ...extra })
   const files = async () => hub.headFiles(STORE, `intake/${(await readConsent(w.env)).stores[STORE].intake_id}`)
   return { ...w, hub, local, name: written.name, job: local.jobs[0].job, cardFile, run, files }
@@ -79,6 +80,32 @@ test("ordinary flush stages public evidence, publishes reviewed context, and ack
   assert.equal(after.pr, null)
 }))
 
+test("settled unchanged context neither reopens its intake nor rewrites its accepted publication record", () => scratch(async (base) => {
+  const w = await world(base)
+  await w.run()
+  const work = await approve(w)
+  await w.run()
+  w.hub.mergeOpenPr()
+  assert.equal((await w.run()).result, "nothing_pending")
+  const before = await readTaskContextFile(w.env, STORE, work.job, "state.json")
+  const pulls = w.hub.pulls.length
+  assert.equal((await w.run()).result, "nothing_pending")
+  assert.equal(w.hub.pulls.length, pulls)
+  assert.deepEqual(await readTaskContextFile(w.env, STORE, work.job, "state.json"), before)
+}))
+
+test("a public desk's private source mapping uses the same keyed job identity as its numerical publication", () => scratch(async (base) => {
+  const w = await world(base, { deskVisibility: "public" })
+  assert.equal((await w.run()).result, "delivered_pr_open")
+  const [work] = await listContextWork(w.env, { store: STORE })
+  assert.notEqual(work.job, w.job)
+  assert.equal(work.source.local_job, w.job)
+  assert.equal(work.source.sources[0].jobs[0].job, work.job)
+  const facts = [...await w.files()].filter(([name]) => name.startsWith("facts/")).map(([, sha]) => JSON.parse(w.hub.blobs.get(sha)))
+  assert.equal(facts[0].jobs[0].job, work.job)
+  assert.equal(JSON.stringify(facts).includes(w.job), false)
+}))
+
 test("numeric-only consent or an incompatible store never sends context and facts still go", () => scratch(async (base) => {
   const w = await world(base, { prose: false })
   assert.equal((await w.run()).result, "delivered_pr_open")
@@ -103,6 +130,69 @@ test("slow optional context preparation defers prose while ordinary numeric deli
   assert.ok(now - T0 <= 2000)
   assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
   assert.equal(contexts(await w.files()).length, 0)
+}))
+
+for (const code of ["context_preparation_deferred", "boot_check_budget", "git_deadline", "EIO"]) {
+  test(`optional context ${code} failure stays visible while numerical facts are delivered`, () => scratch(async (base) => {
+    const w = await world(base)
+    let planned = false
+    const result = await w.run({ planContexts: () => {
+      planned = true
+      throw Object.assign(new Error("SENTINEL private preparation failure"), { code })
+    } })
+    assert.equal(planned, true)
+    assert.equal(result.result, "delivered_pr_open")
+    assert.equal(result.context_held, code === "EIO" ? "context_error" : "context_preparation_deferred")
+    assert.equal(JSON.stringify(result).includes("SENTINEL"), false)
+    assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
+    assert.equal(contexts(await w.files()).length, 0)
+  }))
+}
+
+test("a failed context diagnostic write cannot turn numerical delivery into a context failure", (t) => scratch(async (base) => {
+  const w = await world(base)
+  const rename = fs.rename
+  let diagnostic = false, failed = false
+  t.mock.method(fs, "rename", async (from, to, ...args) => {
+    if (diagnostic && !failed && path.basename(String(to)) === "status.json") {
+      failed = true
+      throw Object.assign(new Error("synthetic_diagnostic_write"), { code: "EIO" })
+    }
+    return rename(from, to, ...args)
+  })
+  syncBuiltinESMExports()
+  try {
+    const result = await w.run({ planContexts: () => { diagnostic = true; throw new Error("synthetic_context_failure") } })
+    assert.equal(failed, true)
+    assert.equal(result.result, "delivered_pr_open")
+    assert.equal(result.context_held, "context_status_error")
+    assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports() }
+}))
+
+test("a real flush cancellation remains a cancellation rather than an optional-context hold", () => scratch(async (base) => {
+  const originalError = globalThis.Error
+  const observed = []
+  let subject
+  // Observe the actual private cancellation type without fabricating a lookalike error.
+  globalThis.Error = new Proxy(originalError, { construct(target, args, newTarget) {
+    const value = Reflect.construct(target, args, newTarget)
+    observed.push(value)
+    return value
+  } })
+  try { subject = await import("../../../../../plugins/desk/mcp/src/factory/flush.js?context-cancellation-observation") }
+  finally { globalThis.Error = originalError }
+  assert.equal((await subject.chooseAccount({ store: STORE, now: () => T0, deadlineMs: -1,
+    runner: () => assert.fail("an expired operation cannot reach the transport") })).result, "deadline")
+  const cancellation = observed.find((error) => error.code === "deadline")
+  assert.ok(cancellation)
+  const w = await world(base)
+  const result = await subject.flush(w.env, { store: STORE, runner: w.hub.runner, anonymousLookup: w.hub.anonymousLookup,
+    now: () => T0, planContexts: () => { throw cancellation } })
+  assert.equal(result.result, "deadline")
+  assert.equal(result.context_held, undefined)
+  assert.equal(w.hub.pulls.length, 0)
+  assert.equal(await w.files(), null)
 }))
 
 test("a store with no context capability keeps reviewed prose out of its intake", () => scratch(async (base) => {

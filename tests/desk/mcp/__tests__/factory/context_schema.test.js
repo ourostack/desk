@@ -78,6 +78,106 @@ test("evidence ranges reject malformed, nonintegral, negative and nonincreasing 
   }
 })
 
+test("text types, missing review and absent independent reviewers cannot form published context", () => {
+  const typed = record()
+  typed.heading = 42
+  refuses(sign(typed), "type")
+  const unreviewed = record()
+  unreviewed.privacy = null
+  refuses(unreviewed, "review_missing")
+  const missingReviewer = record()
+  missingReviewer.privacy.reviewer = null
+  refuses(missingReviewer, "inconsistent")
+  for (const value of [null, 1, {}, new Uint8Array([1])]) {
+    assert.deepEqual(context.validateContextBytes(value), { ok: false, errors: [{ code: "type", path: "" }] })
+  }
+})
+
+test("the structured byte ceiling applies even when every individual field and list is bounded", () => {
+  const value = record()
+  value.events = Array.from({ length: 64 }, (_, index) => ({
+    ...event("waiting"), id: index.toString(16).padStart(16, "0"),
+    explanation: "x".repeat(240), reason: "x".repeat(160), prerequisite: "x".repeat(160), resumption: "x".repeat(160),
+    evidence: Array.from({ length: 8 }, () => evidence()),
+  }))
+  sign(value)
+  assert.ok(Buffer.byteLength(JSON.stringify(value)) > 128 * 1024)
+  refuses(value, "too_large")
+})
+
+test("coverage reasons cannot be duplicated or use pending review to justify published prose", () => {
+  const duplicate = record()
+  duplicate.coverage = { state: "partial", reasons: ["unplaced", "unplaced"], omitted_events: 0 }
+  refuses(sign(duplicate), "duplicate")
+  const pending = record()
+  pending.coverage = { state: "partial", reasons: ["review_pending"], omitted_events: 0 }
+  refuses(sign(pending), "inconsistent")
+  for (const mutate of [
+    (value) => { value.events = [] },
+    (value) => { value.sources = [] },
+    (value) => { value.coverage = { state: "unavailable", reasons: ["not_recorded"], omitted_events: 0 } },
+  ]) {
+    const value = record()
+    mutate(value)
+    refuses(sign(value), "inconsistent")
+  }
+})
+
+test("work and result events cannot smuggle waiting fields or mismatched anchor-range forms", () => {
+  for (const field of ["lean", "reason", "prerequisite", "resumption"]) {
+    const value = record()
+    value.events[0][field] = field === "lean" ? "waiting" : "Unexpected waiting detail."
+    refuses(sign(value), "inconsistent")
+  }
+  for (const [anchor, range] of [["interval", null], ["start", [1000, 250000]], ["end", [1000, 250000]]]) {
+    const value = record()
+    Object.assign(value.events[0].evidence[0], { anchor, range })
+    refuses(sign(value), "inconsistent")
+  }
+})
+
+test("source fingerprints require actual bound facts and retain the legacy absent-outcomes case", () => {
+  assert.throws(() => context.contextSource({}, JOB), /valid bound published facts required/u)
+  assert.throws(() => context.contextSource(facts(), "f".repeat(32)), /valid bound published facts required/u)
+  const legacy = facts()
+  delete legacy.outcomes
+  const before = JSON.stringify(legacy)
+  assert.match(context.contextSource(legacy, JOB).sha256, /^[0-9a-f]{64}$/u)
+  assert.equal(JSON.stringify(legacy), before)
+  assert.equal(context.checkContextAgainstFacts({}, []).ok, false)
+  assert.deepEqual(context.checkContextAgainstFacts(record(), null), { ok: false, errors: [{ code: "type", path: "sources" }] })
+  const source = facts()
+  const value = sourced(record(), [source])
+  source.intervals = null
+  assert.ok(context.checkContextAgainstFacts(value, [source]).errors.some((entry) => entry.code === "facts_invalid"))
+})
+
+test("a prerequisite cannot pair endpoints from a source that failed the actual facts read", () => {
+  const left = facts(), right = facts()
+  right.session.id = "22bc1234-1234-4abc-8abc-123456789abc"
+  const value = record()
+  value.events = [event("waiting")]
+  value.events[0].evidence = [evidence("end", null), { ...evidence("start", null), session: right.session.id }]
+  sourced(value, [left, right])
+  for (const available of [[left], [right]]) {
+    const result = context.checkContextAgainstFacts(value, available)
+    assert.ok(result.errors.some((entry) => entry.code === "facts_missing"))
+    assert.ok(result.errors.some((entry) => entry.code === "evidence_unmatched"))
+  }
+})
+
+test("session start and end anchors outside the task's own share remain unavailable", () => {
+  const source = facts()
+  source.jobs[0].agents = [0]
+  source.jobs[0].segments = [{ start_ms: 1000, end_ms: 250000 }]
+  for (const anchor of ["start", "end"]) {
+    const value = record()
+    value.events[0].evidence = [evidence(anchor, null)]
+    sourced(value, [source])
+    assert.ok(context.checkContextAgainstFacts(value, [source]).errors.some((entry) => entry.code === "outside_share"))
+  }
+})
+
 test("withheld and unavailable explanations remain explicit and carry no prose", () => {
   assert.ok(context)
   for (const state of ["withheld", "unavailable"]) {

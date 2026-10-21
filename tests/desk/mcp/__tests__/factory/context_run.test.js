@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -15,6 +16,7 @@ import { runLoopWorker } from "../../../../../plugins/desk/mcp/src/factory/loop-
 import { evaluationKickDue, kickLoop, LOOP_LOCK_NAME } from "../../../../../plugins/desk/mcp/src/factory/evaluate-kick.js"
 import { recordStep } from "../../../../../plugins/desk/mcp/src/factory/loop-status.js"
 import { reserveAgentLaunch } from "../../../../../plugins/desk/mcp/src/factory/headless-ledger.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 
 const runner = await import("../../../../../plugins/desk/mcp/src/factory/context-run.js").catch((error) => {
   if (error.code === "ERR_MODULE_NOT_FOUND") return null
@@ -166,6 +168,47 @@ test("many job shares disclose omissions and missing private logs grant no log-d
   assert.equal((await readStatus(f.env)).context_evaluation.cost_usd, null)
 })
 
+test("equal-start evidence is ordered by its actual endpoint in the native outline", async () => {
+  const f = await fixture()
+  f.entries[0].facts.intervals.unshift({ kind: "tool", agent: 0, tool: "shell", outcome: "error", start_ms: 1000, end_ms: 2000 })
+  await prepareTaskContexts(f.env, { store: STORE, entries: f.entries, pluginVersion: VERSION, clock: () => NOW })
+  await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async (options) => {
+    const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    assert.deepEqual(brief.evidence_outline[0].intervals.slice(0, 2).map((entry) => entry.range), [[1000, 2000], [1000, 250000]])
+    return { state: "failed", cost_usd: null }
+  } })
+})
+
+test("a freshly identified task card grants only its own directory to the native reader", async () => {
+  const f = await fixture(0)
+  const remote = "https://github.com/synthetic/desk.git"
+  const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  git("init", "-qb", "main")
+  git("config", "user.email", "16390116+arimendelow@users.noreply.github.com")
+  git("config", "user.name", "Context Test")
+  git("config", "commit.gpgsign", "false")
+  git("remote", "add", "origin", remote)
+  const folder = join(f.desk, "sample", "safe")
+  await mkdir(folder, { recursive: true })
+  await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nRetesting resumed after the required update.\n")
+  git("add", "sample")
+  git("commit", "-qm", "create task")
+  const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug: "safe" })
+  const facts = contextFacts()
+  facts.jobs[0].job = job
+  facts.outcomes[0].job = job
+  const entries = [{ facts, deskRoot: f.desk, personPrefix: "", localJobs: [{ local: job, published: job }], logPath: null, clockOrigin: null }]
+  assert.equal((await prepareTaskContexts(f.env, { store: STORE, entries, pluginVersion: VERSION, clock: () => NOW })).prepared, 1)
+  await runner.runTaskContextStep(f.env, { ...f.options, runHeadless: async (options) => {
+    assert.equal(options.logDirs.includes(folder), true)
+    assert.equal(options.logDirs.includes(f.desk), false)
+    const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+    const input = JSON.parse(await readFile(brief.input_file, "utf8"))
+    assert.equal(input.task_card.path, join(folder, "task.md"))
+    return { state: "failed", cost_usd: null }
+  } })
+})
+
 test("outlines never guess a share for an unplaceable task in a shared session", async () => {
   const f = await fixture()
   f.entries[0].facts.jobs[0].agents = [1]
@@ -280,6 +323,39 @@ test("context launch keeps both deadline checks and refuses a denied reservation
   assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
 })
 
+test("headless default options stay inert and an omitted now uses the supplied clock", async () => {
+  assert.equal((await runner.runTaskContextStep({ DESK_FACTORY_HEADLESS: "1" })).result, "headless_session")
+  const f = await fixture()
+  const options = { ...f.options, findAgentCli: () => null }
+  delete options.now
+  assert.equal((await runner.runTaskContextStep(f.env, options)).result, "no_agent_cli")
+})
+
+test("a genuine later ledger observation blocks a stale-clock caller before another reservation", async () => {
+  const f = await fixture()
+  const reserved = await reserveAgentLaunch(f.env, {
+    kind: "evaluate", generation: null, now: NOW + 3600000, legacyEvaluator: (await readStatus(f.env)).evaluator,
+  })
+  assert.equal(reserved.state, "reserved")
+  const status = await readStatus(f.env)
+  assert.equal(await runner.contextEvaluationDue(f.env, status, NOW), false)
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, reserveAgentLaunch: () => assert.fail("the recorded witness already forbids another launch"),
+  })
+  assert.equal(output.result, "budget_exhausted")
+  assert.equal(output.launched, false)
+  assert.equal(JSON.parse(await readFile(join(await factoryStateRoot(f.env), "agent-launch-ledger.json"), "utf8")).spent, 1)
+})
+
+test("a successful numerical-label phase can make context due without waiting through the ordinary gap", async () => {
+  const f = await fixture()
+  await recordStep(f.env, "evaluate", { ok: true, result: "ran", now: NOW })
+  await updateStatus(f.env, (status) => ({ ...status, evaluator: { ...status.evaluator, accepted_last_step: 1 } }))
+  assert.equal(await runner.contextEvaluationDue(f.env, await readStatus(f.env), NOW), true)
+  await updateStatus(f.env, (status) => ({ ...status, evaluator: { ...status.evaluator, accepted_last_step: 0 } }))
+  assert.equal(await runner.contextEvaluationDue(f.env, await readStatus(f.env), NOW), false)
+})
+
 for (const race of ["basis", "phase", "already_attempted"]) {
   test(`a context ${race} change after reservation cannot claim or launch the old work`, async () => {
     const f = await fixture()
@@ -360,6 +436,14 @@ test("the ordinary evaluator step advances context when no labels consumed its l
   assert.equal((await runEvaluatorStep(f.env, options)).result, "context_ran")
   assert.equal((await runEvaluatorStep(f.env, options)).result, "context_ran")
   assert.equal((await readyTaskContexts(f.env, { store: STORE, entries: f.entries })).length, 1)
+})
+
+test("an empty context queue preserves the ordinary evaluator's no-jobs result", async () => {
+  const f = await fixture(0)
+  assert.deepEqual(await runEvaluatorStep(f.env, {
+    ...f.options, maxRuns: 1, runHeadless: () => assert.fail("neither labels nor context need a launch"),
+  }), { ok: true, result: "no_jobs_waiting" })
+  assert.deepEqual(f.phases, [])
 })
 
 test("ordinary kicks and separate workers drain context generation and privacy with no label request or triage trigger", async () => {

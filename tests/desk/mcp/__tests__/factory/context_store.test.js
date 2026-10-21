@@ -6,7 +6,8 @@ import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { runValidatePrCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { build } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
-import { validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
+import { renderJobMarkdown } from "../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { contextPathParts, validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 import { contextFacts, contextRecord, reviewContext, CONTEXT_JOB } from "./_context_fixture.js"
 
 const bytes = (value) => `${JSON.stringify(value)}\n`
@@ -33,6 +34,13 @@ test("a trusted intake accepts reviewed context only against its actual bound fa
 test("numeric contribution authority alone does not authorize arbitrary public prose", () => {
   const result = validatePr({ changes: [change()], trustedMaintainer: false })
   assert.ok(result.errors.some((entry) => entry.code === "context_authority"))
+})
+
+test("context routing rejects nonpaths and does not relabel arbitrary maintenance as contributor context", () => {
+  for (const path of [null, 42, [], {}]) assert.equal(contextPathParts(path), null)
+  const result = validatePr({ changes: [{ path: "notes.json", status: "added", bytes: "{}\n" }], trustedMaintainer: false })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((entry) => entry.code === "path"))
 })
 
 test("context intake errors have their own family without changing numeric error codes", () => {
@@ -62,6 +70,9 @@ test("intake rejects stale sources, absent facts, path mismatches and modified d
 
 test("context intake refuses unreadable predecessor records and malformed or mismatched source entries", () => {
   const original = change()
+  const invalid = validatePr({ changes: [{ ...original, bytes: "{}\n" }], trustedMaintainer: true })
+  assert.equal(invalid.ok, false)
+  assert.ok(invalid.errors.every((entry) => entry.code.startsWith("context_")))
   const modified = { ...original, status: "modified", previousBytes: "{}\n" }
   assert.ok(validatePr({ changes: [modified], trustedMaintainer: true }).errors.some((entry) => entry.code === "context_previous_invalid"))
   const noFacts = { ...original, facts: undefined }
@@ -118,6 +129,19 @@ test("build publishes a checked context in JSON and readable Markdown without ch
   assert.deepEqual(after.clocks, before.clocks)
   const markdown = readFileSync(join(out, "jobs", `${CONTEXT_JOB}.md`), "utf8")
   assert.ok(markdown.includes("Tested the connection and recorded the observed behavior."))
+})
+
+test("legacy stores without a context folder still render the same task without optional labels or context", () => {
+  const { root, out } = store()
+  renameSync(join(root, "context"), join(root, "context-preserved"))
+  build({ storeDir: root, outDir: out })
+  const value = report(out)
+  assert.equal(value.context, undefined)
+  assert.equal(value.formulas.sessions.value.bound, 1)
+  assert.equal(value.formulas.sessions.value.timeline, 1)
+  const markdown = renderJobMarkdown({ timeline: value.timeline, formulas: value.formulas, clocks: value.clocks })
+  assert.ok(markdown.startsWith(`# Job ${CONTEXT_JOB}`))
+  assert.equal(markdown.includes("## Task context"), false)
 })
 
 test("build withholds old prose when source facts change instead of presenting it as current", () => {
@@ -247,4 +271,34 @@ test("the CLI checks context against the merged tree, not its branch's earlier f
   git("commit", "-qm", "nonregular context")
   const mode = await runValidatePrCommand({ cwd: root, argv: ["--base", linkBase, "--head", git("rev-parse", "HEAD"), "--author-association", "OWNER"] })
   assert.ok(mode.errors.some((entry) => entry.code === "context_not_regular"))
+})
+
+test("the CLI validates context replacements against regular merged facts and ignores unrelated facts-folder entries", async () => {
+  const { root, facts, contextFile } = store()
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  git("init", "-qb", "main")
+  git("config", "user.email", "16390116+arimendelow@users.noreply.github.com")
+  git("config", "user.name", "Context Test")
+  git("config", "commit.gpgsign", "false")
+  const factsFile = `facts/${facts.session.host}-${facts.session.id}.json`
+  writeFileSync(join(root, "facts", "notes.txt"), "Unrelated public maintenance record.\n")
+  writeFileSync(contextFile, bytes(contextRecord(facts)))
+  git("add", "facts", "context")
+  git("commit", "-qm", "base with reviewed context")
+  const base = git("rev-parse", "HEAD")
+  git("switch", "-qc", "candidate")
+  const replacement = contextRecord(facts)
+  replacement.heading = "Verify the device connection"
+  writeFileSync(contextFile, bytes(reviewContext(replacement)))
+  git("add", "context")
+  git("commit", "-qm", "replace reviewed context")
+  const head = git("rev-parse", "HEAD")
+  const validate = (tip) => runValidatePrCommand({ cwd: root, argv: ["--base", tip, "--head", head, "--author-association", "OWNER"] })
+  assert.deepEqual(await validate(base), { ok: true, errors: [], maintenance: false })
+  git("switch", "-q", "main")
+  const blob = git("hash-object", "-w", factsFile)
+  git("update-index", "--cacheinfo", `120000,${blob},${factsFile}`)
+  git("commit", "-qm", "nonregular facts entry")
+  const refused = await validate(git("rev-parse", "HEAD"))
+  assert.ok(refused.errors.some((entry) => entry.code === "context_facts_invalid"), JSON.stringify(refused))
 })
