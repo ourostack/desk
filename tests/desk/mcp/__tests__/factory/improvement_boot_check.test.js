@@ -214,10 +214,10 @@ test("the card read is inside the check's budget for 200 cards, and past the dea
 
 test("the improvement line has the planned wording, says nothing when no card is open, and never hides an unreadable folder", () => {
   const ok = { status: "ok", open: 3, oldest_days: 6, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 }
-  assert.equal(improvementLine(ok), "Improvement cards: 3 open (oldest 6 days). Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next")
-  assert.equal(improvementLine({ ...ok, open: 1, oldest_days: 1 }), "Improvement cards: 1 open (oldest 1 day). Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next")
-  assert.equal(improvementLine({ ...ok, oldest_days: null }), "Improvement cards: 3 open. Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next")
-  assert.equal(improvementLine({ ...ok, truncated: true }), "Improvement cards: at least 3 open (oldest 6 days among those read). Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next")
+  assert.equal(improvementLine(ok), "Improvement cards: 3 open (oldest 6 days). Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner")
+  assert.equal(improvementLine({ ...ok, open: 1, oldest_days: 1 }), "Improvement cards: 1 open (oldest 1 day). Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner")
+  assert.equal(improvementLine({ ...ok, oldest_days: null }), "Improvement cards: 3 open. Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner")
+  assert.equal(improvementLine({ ...ok, truncated: true }), "Improvement cards: at least 3 open (oldest 6 days among those read). Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner")
   assert.equal(improvementLine({ ...ok, open: 0, oldest_days: null }), "")
   assert.equal(improvementLine({ ...ok, open: 0, oldest_days: null, open_keys: ["andon:x#1"] }), "")
   assert.equal(improvementLine({ status: "unreadable", open: 0, oldest_days: null, open_keys: [], truncated: false, set_aside: 0, unreadable_files: 0 }), "Improvement cards: unreadable (check the improvement folder under _meta on the desk)")
@@ -231,12 +231,12 @@ test("the improvement line has the planned wording, says nothing when no card is
 
 test("set-aside and unreadable card files are counted in the line, with the one repair only a session can make", () => {
   const base = { status: "ok", open: 0, oldest_days: null, open_keys: [], truncated: false, set_aside: 2, unreadable_files: 0 }
-  assert.equal(improvementLine(base), "Improvement cards: 2 files were set aside as invalid in the improvement folder under _meta (restore or delete them and commit)")
-  assert.equal(improvementLine({ ...base, set_aside: 1 }), "Improvement cards: 1 file was set aside as invalid in the improvement folder under _meta (restore or delete it and commit)")
-  assert.equal(improvementLine({ ...base, set_aside: 0, unreadable_files: 2 }), "Improvement cards: 2 card files could not be read and were left in place (fix their permissions or delete them and commit)")
-  assert.equal(improvementLine({ ...base, set_aside: 0, unreadable_files: 1 }), "Improvement cards: 1 card file could not be read and was left in place (fix its permissions or delete it and commit)")
+  assert.equal(improvementLine(base), "Improvement cards: 2 files were set aside as invalid in the improvement folder under _meta (preserve for the authorized repair owner)")
+  assert.equal(improvementLine({ ...base, set_aside: 1 }), "Improvement cards: 1 file was set aside as invalid in the improvement folder under _meta (preserve for the authorized repair owner)")
+  assert.equal(improvementLine({ ...base, set_aside: 0, unreadable_files: 2 }), "Improvement cards: 2 card files could not be read and were left in place (preserve for the authorized repair owner)")
+  assert.equal(improvementLine({ ...base, set_aside: 0, unreadable_files: 1 }), "Improvement cards: 1 card file could not be read and was left in place (preserve for the authorized repair owner)")
   const both = improvementLine({ ...base, open: 4, oldest_days: 2, unreadable_files: 1 })
-  assert.equal(both, "Improvement cards: 4 open (oldest 2 days). Standing, pre-authorized work: when your foreground work allows, hand the oldest to a background subagent through improvement_next; 2 files were set aside as invalid in the improvement folder under _meta (restore or delete them and commit); 1 card file could not be read and was left in place (fix its permissions or delete it and commit)")
+  assert.equal(both, "Improvement cards: 4 open (oldest 2 days). Backlog only: do not start unsolicited maintenance during the supplied task; respect the existing repair owner; 2 files were set aside as invalid in the improvement folder under _meta (preserve for the authorized repair owner); 1 card file could not be read and was left in place (preserve for the authorized repair owner)")
 })
 
 test("the evaluator line says how long ago the oldest unlabeled job finished, and when that is past the 1-hour target", () => {
