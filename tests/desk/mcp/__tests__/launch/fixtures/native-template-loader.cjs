@@ -9,8 +9,6 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { isNativeError } = require("node:util").types;
-const intrinsicStackGetter = Object.getOwnPropertyDescriptor(new Error(), "stack").get;
 const root = path.resolve(__dirname, "../../../../../../plugins/desk/mcp");
 const names = {
   "browser-context.cjs": "browser-context.cjs",
@@ -84,25 +82,9 @@ function observeNextVerifyGeneration(context, phase, diagnostic) {
   }
   function record(error) {
     const code = data(error, "code"), status = data(error, "status"), signal = data(error, "signal");
-    let stack = data(error, "stack");
-    // V8 can expose its genuine Error stack as an accessor, including across
-    // VM realms. Use only our captured intrinsic, never error.stack's getter.
-    // Refuse accessor-backed formatting inputs rather than running user code.
-    function plainHeader(key) {
-      let object = error;
-      try {
-        for (let depth = 0; object && depth < 4; depth++, object = Object.getPrototypeOf(object)) {
-          const descriptor = Object.getOwnPropertyDescriptor(object, key);
-          if (descriptor) return Object.hasOwn(descriptor, "value") &&
-            (typeof descriptor.value === "string" || descriptor.value === undefined);
-        }
-      } catch {}
-      return false;
-    }
-    if (stack === undefined && intrinsicStackGetter && isNativeError(error) &&
-        plainHeader("name") && plainHeader("message")) {
-      try { stack = Reflect.apply(intrinsicStackGetter, error, []); } catch {}
-    }
+    // Only an existing own data-string stack is observable. Even a captured
+    // intrinsic accessor can execute the thrown realm's prepareStackTrace.
+    const stack = data(error, "stack");
     let guard = { file: "unknown", line: "unknown" };
     if (typeof stack === "string") {
       for (const frame of stack.slice(0, 16384).split("\n")) {

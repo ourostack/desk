@@ -450,7 +450,8 @@ test("actual maintained daemon options can reach native acquisition using the st
     socketStates.get(descriptor.socketPath).daemon=daemon
     const restoreGenerationDiagnostic=require("./fixtures/native-template-loader.cjs").observeNextVerifyGeneration(
       templateContexts.get(path.join(lib,"desk-extension-credential.cjs")),
-      "signedWorkerFixture.initial-daemon",value=>t.diagnostic(JSON.stringify(value)))
+      "signedWorkerFixture.initial-daemon",
+      value=>t.diagnostic("DESK_NATIVE_GENERATION_DIAGNOSTIC_V1 "+JSON.stringify(value)))
     try {
       await daemon(id,browserContext,{browserName:"chromium",userDataDir:selection.userDataDir},
         {...config,configFile:l.configFile},produced.info,{cwd:l.root},{ownership:"attached",persistent:true,exitOnClose:true})

@@ -42,7 +42,8 @@ test("GivenSuccess_WhenObserved_VerificationRunsOnceAndPreservesReceiverArgument
 test("GivenRefusal_WhenObserved_ExactSameErrorRethrowsWithSafePhaseAndGuardAttribution",()=>{
   const error=Object.assign(new Error("injected-secret-message"),{
     code:"NATIVE_PRIVATE_PATH_INVALID",status:2,signal:null,
-    stack:"Error: injected-secret-message\n"+
+  })
+  Object.defineProperty(error,"stack",{value:"Error: injected-secret-message\n"+
       "    at assertPrivateGeneration (C:\\private-secret\\web-extension-credential.cjs:562:12)\n"+
       "    at caller (C:\\private-secret\\unrelated.cjs:88:1)",
   })
@@ -169,18 +170,40 @@ test("GivenMalformedFrameAndNumericFields_WhenObserved_NoUnboundedValuesEscape",
   }
 })
 
-test("GivenNativeVmErrorStackAccessor_WhenObserved_KnownGuardSurvivesWithoutRawStack",()=>{
+test("GivenNativeVmErrorStackAccessor_WhenObserved_GuardRemainsUnknownWithoutFormatting",()=>{
   const error=vm.runInNewContext('new Error("VM_PRIVATE_MESSAGE")',{},
     {filename:"C:\\private-vm-path\\web-extension-credential.cjs"})
   error.code="NATIVE_CODE_UNAVAILABLE"
   const context=memoryContext(()=>{throw error}),events=[]
   observer(context,phase,value=>events.push(value))
   assert.strictEqual(thrownBy(()=>context.binding()),error)
-  assert.equal(events[0].guard.file,"plugins/desk/mcp/web-extension-credential.cjs")
-  assert.equal(events[0].guard.line,1)
+  assert.deepEqual(events[0].guard,{file:"unknown",line:"unknown"})
   assert.equal(JSON.stringify(events).includes("VM_PRIVATE"),false)
   assert.equal(JSON.stringify(events).includes("private-vm-path"),false)
 })
+
+for(const mode of ["returns","throws"]) test(
+  "GivenForeignFormatter_"+mode+"_WhenObserved_NoFormatterExecutesAndSameErrorRethrows",()=>{
+    const context=vm.createContext({mode})
+    vm.runInContext(
+      'globalThis.formatCalls=0;Error.prepareStackTrace=()=>{formatCalls++;'+
+      'if(mode==="throws")throw new Error("PRIVATE_FORMATTER");return "PRIVATE_FORMATTED_STACK"};'+
+      'globalThis.refusal=Object.assign(new Error("PRIVATE_MESSAGE"),{code:"EPERM"});'+
+      'function verifyGeneration(){throw refusal}',context,
+      {filename:"memory-only/web-extension-credential.cjs"})
+    const error=context.refusal,original=context.verifyGeneration,events=[]
+    assert.equal(context.formatCalls,0)
+    observer(context,phase,value=>events.push(value))
+    assert.equal(context.formatCalls,0)
+    assert.strictEqual(thrownBy(()=>context.verifyGeneration()),error)
+    assert.equal(context.formatCalls,0,"observation must not invoke the thrown realm's formatter")
+    assert.strictEqual(context.verifyGeneration,original)
+    assert.deepEqual(events,[{
+      setupPhase:phase,originalCode:"EPERM",status:"unknown",signal:"unknown",
+      guard:{file:"unknown",line:"unknown"},
+    }])
+    assert.equal(JSON.stringify(events).includes("PRIVATE"),false)
+  })
 
 test("GivenNativeErrorWithInjectedStackOrMessageGetter_WhenObserved_NoGetterExecutes",()=>{
   for(const field of ["stack","message"]){
