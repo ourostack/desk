@@ -2,12 +2,159 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { writeFileSync } from "node:fs"
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { main, parseArgs, resolveStartupStateBranch } from "../../../../../plugins/desk/mcp/index.js"
+import { resolveAdmissionInputs } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
+import { recordCopilotSession } from "../../../../../plugins/desk/mcp/src/runtime/copilot-session.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { osEnv } from "../_os_env.js"
+
+// Keep root resolution, the hook record, admission and protocol projection real.
+// Only the worker/import scheduling boundary is held so no clock race can bless
+// an obsolete no-root outcome while a fresh attempt is still in progress.
+async function freshHostStatus(t, pauseAt) {
+  const base = realpathSync(await mkTempRoot("fresh-host-status-"))
+  t.diagnostic(`fresh host status fixture: ${base}`)
+  const home = path.join(base, "home")
+  const cwd = path.join(base, "plugin-cwd")
+  const workspace = path.join(base, "workspace")
+  for (const dir of [home, cwd, path.join(workspace, "_meta"), path.join(workspace, "_archive")]) {
+    mkdirSync(dir, { recursive: true })
+  }
+  const env = osEnv({
+    HOME: home, XDG_STATE_HOME: path.join(base, "state"), XDG_CACHE_HOME: path.join(base, "cache"),
+    COPILOT_AGENT_SESSION_ID: "own-fresh-status",
+  })
+  const input = new PassThrough(), output = new PassThrough()
+  const replies = new Map()
+  let pending = "", nextId = 0
+  output.on("data", (chunk) => {
+    pending += chunk
+    let newline
+    while ((newline = pending.indexOf("\n")) >= 0) {
+      const message = JSON.parse(pending.slice(0, newline))
+      pending = pending.slice(newline + 1)
+      if (replies.has(message.id)) {
+        const reply = replies.get(message.id)
+        replies.delete(message.id)
+        reply(message.result)
+      }
+    }
+  })
+  const rpc = (method, params) => new Promise((resolve) => {
+    const id = ++nextId
+    replies.set(id, resolve)
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
+  })
+  const call = async (name, args = {}) => {
+    const response = await rpc("tools/call", { name, arguments: args })
+    assert.notEqual(response.isError, true, JSON.stringify(response))
+    return JSON.parse(response.content[0].text)
+  }
+  let resolved, importing, releaseResolution, releaseRuntime
+  const resolutionStarted = new Promise((resolve) => { resolved = resolve })
+  const runtimeStarted = new Promise((resolve) => { importing = resolve })
+  const resolutionGate = new Promise((resolve) => { releaseResolution = resolve })
+  const runtimeGate = new Promise((resolve) => { releaseRuntime = resolve })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const handle = await main({
+    argv: [], env, cwd, homeDir: home, input, output,
+    stderr: { write() {} }, runtimeInspector: null,
+    readinessPolicy: { semantic: "unsupported" },
+    offload: async (job) => {
+      assert.equal(job.kind, "resolve")
+      const value = resolveAdmissionInputs(job.input)
+      if (!value.rootError && pauseAt === "resolution") {
+        resolved()
+        await resolutionGate
+      }
+      return value
+    },
+    runtimeImporter: async () => {
+      importing()
+      await runtimeGate
+      // Teardown releases the held import only after closing the front door.
+      // No ready runtime, controller or fabricated read result is needed.
+      return {}
+    },
+  })
+  t.after(async () => {
+    input.end()
+    releaseResolution()
+    releaseRuntime()
+    await handle.closed
+  })
+  await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fixture", version: "1" } })
+  await rpc("tools/list", {})
+  await handle.admission.idle()
+  assert.equal(handle.admission.snapshot().code, "no_desk_root")
+  return {
+    handle, workspace, call,
+    publish() {
+      assert.equal(recordCopilotSession({
+        sessionId: env.COPILOT_AGENT_SESSION_ID, folder: workspace, source: "new", env,
+      }), true)
+    },
+    async retry() {
+      // Drive the normal first backoff, not a manual boot or gated search.
+      t.mock.timers.tick(1000)
+      if (pauseAt === "resolution") await resolutionStarted
+      if (pauseAt === "runtime") await runtimeStarted
+      if (pauseAt === null) await handle.admission.idle()
+    },
+  }
+}
+
+test("fresh own-host evidence does not project stale setup while root verification is pending", async (t) => {
+  const f = await freshHostStatus(t, "resolution")
+  f.publish()
+  assert.equal((await f.call("desk_doctor", { format: "preview" })).runtime_state, "diagnostic")
+  await f.retry()
+  const status = await f.call("desk_status")
+  assert.equal(status.state, "admitting", JSON.stringify(status))
+  assert.equal(status.code, undefined, "compact status omits an absent failure code")
+  assert.equal(status.root.path, null, "resolution is pending, not an admitted destination")
+  assert.doesNotMatch(JSON.stringify(status), /first-run-bootstrap|no_desk_root|exporting DESK/u)
+})
+
+test("fresh own-host status names the resolved root while runtime import is still pending", async (t) => {
+  const f = await freshHostStatus(t, "runtime")
+  f.publish()
+  assert.equal((await f.call("desk_doctor", { format: "preview" })).runtime_state, "diagnostic")
+  await f.retry()
+  assert.equal(f.handle.session.context.root.root, f.workspace)
+  const status = await f.call("desk_status", { detail: true })
+  assert.equal(status.state, "admitting", JSON.stringify(status))
+  assert.equal(status.code, null)
+  assert.equal(status.root.path, f.workspace)
+  assert.equal(status.root.source, "host-project")
+  assert.equal(status.admission.writes, "refused")
+  assert.doesNotMatch(JSON.stringify(status), /first-run-bootstrap|no_desk_root|exporting DESK/u)
+})
+
+test("doctor does not repeat stale no-root advice while own-host resolution is pending", async (t) => {
+  const f = await freshHostStatus(t, "resolution")
+  f.publish()
+  await f.retry()
+  const doctor = await f.call("desk_doctor")
+  assert.equal(doctor.state, "admitting", JSON.stringify(doctor))
+  assert.equal(doctor.code, null)
+  assert.equal(doctor.admission.writes, "refused")
+  assert.doesNotMatch(JSON.stringify(doctor), /first-run-bootstrap|no_desk_root|exporting DESK/u)
+})
+
+test("a fresh session with no own-host workspace still reports setup honestly", async (t) => {
+  const f = await freshHostStatus(t, null)
+  await f.retry()
+  const status = await f.call("desk_status")
+  assert.equal(status.state, "setup_required")
+  assert.equal(status.code, "no_desk_root")
+  assert.equal(status.root.path, null)
+  assert.equal(status.write_scope.mode, null)
+  assert.match(JSON.stringify(status), /first-run-bootstrap/u)
+})
 
 test("--state-branch is parsed, and the activation config's desk.state_branch is the fallback", async () => {
   assert.equal(parseArgs(["--state-branch", "main"]).stateBranch, "main")
