@@ -1125,27 +1125,37 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
   let delayedPolicyProbe = false
   let pushCalls = 0
   const steps = []
+  const gitTrace = []
+  const observe = (args, child) => {
+    const entry = { args, stdout: "", stderr: "", exitCode: null, signal: null }
+    gitTrace.push(entry)
+    child.stdout.on("data", chunk => { entry.stdout = `${entry.stdout}${chunk}`.slice(-8192) })
+    child.stderr.on("data", chunk => { entry.stderr = `${entry.stderr}${chunk}`.slice(-8192) })
+    child.once("error", error => { entry.error = error.message })
+    child.once("close", (code, signal) => { entry.exitCode = code; entry.signal = signal })
+    return child
+  }
   let reachedPush
   const pushStarted = new Promise(resolve => { reachedPush = resolve })
   const slowPush = (command, args, options) => {
     if (!delayedPolicyProbe && args[2] === "config" && args[3] === "--get-all") {
       delayedPolicyProbe = true
-      return spawnGit(process.execPath, ["-e", `
+      return observe(args, spawnGit(process.execPath, ["-e", `
         const { spawn } = require("node:child_process");
         setTimeout(() => {
           const child = spawn(${JSON.stringify(command)}, ${JSON.stringify(args)}, { stdio: "inherit", windowsHide: true });
           child.on("error", error => { console.error(error); process.exitCode = 1; });
           child.on("exit", code => { process.exitCode = code ?? 1; });
         }, 1100);
-      `], options)
+      `], options))
     }
     if (args[2] === "push") {
       pushCalls++
       const child = spawnGit(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], options)
       reachedPush(child)
-      return child
+      return observe(args, child)
     }
-    return spawnGit(command, args, options)
+    return observe(args, spawnGit(command, args, options))
   }
   t.mock.timers.enable({ apis: ["setTimeout"] })
   try {
@@ -1154,7 +1164,7 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
       git: { platform: "win32", aclRunner, spawn: slowPush, timeoutMs: 1000, onStep: name => steps.push(name) },
     })
     const observed = await Promise.race([pushStarted, pending])
-    assert.ok(Number.isInteger(observed.pid), JSON.stringify({ state: observed.state }))
+    assert.ok(Number.isInteger(observed.pid), JSON.stringify({ state: observed.state, delayedPolicyProbe, pushCalls, steps, gitTrace }))
     let settled = false
     pending.then(() => { settled = true })
     t.mock.timers.tick(999)
