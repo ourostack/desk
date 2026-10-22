@@ -22,6 +22,7 @@ export async function startReadinessController({
   exitRelease = defaultExitRelease,
   ownProcessStart = readOwnProcessStart,
   bindBeforeProcessStart = process.platform === "win32",
+  prepareRootSync,
   supervisor,
 } = {}) {
   validateControllerEndpoint(endpoint)
@@ -295,16 +296,31 @@ export async function startReadinessController({
   let socket = null
   try {
     socket = controllerSocketIdentity(endpoint)
+    const ownerFile = path.join(stateDir, "owner.json")
+    const record = {
+      schema_version: 1, identity, owner, endpoint, socket,
+      ...(supervisor ? { supervisor } : {}),
+      ...(prepareRootSync === undefined ? {} : { startup: { started_at: new Date().toISOString() } }),
+    }
+    const published = `${JSON.stringify(record, null, 2)}\n`
     writeFileSync(
-      path.join(stateDir, "owner.json"),
-      `${JSON.stringify({ schema_version: 1, identity, owner, endpoint, socket, ...(supervisor ? { supervisor } : {}) }, null, 2)}\n`,
+      ownerFile,
+      published,
       { encoding: "utf8", mode: 0o600 },
     )
+    // Only the bind winner prepares. Its published owner prevents takeover while synchronous setup runs before readiness.
+    if (prepareRootSync !== undefined) {
+      if (prepareRootSync() !== undefined) throw new TypeError("Controller root preparation must finish synchronously without returning a value")
+      if (readFileSync(ownerFile, "utf8") !== published)
+        throw Object.assign(new Error("Controller ownership changed during root preparation"), { code: "controller_owner_changed" })
+      delete record.startup
+      writeFileSync(ownerFile, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
+    }
   } catch (error) {
     try {
       await closeServer(server, stateDir, owner)
     } catch {
-      // Preserve the publication failure; stale cleanup is recoverable on the next election.
+      // Preserve the startup failure; stale cleanup is recoverable on the next election.
     }
     throw error
   }
