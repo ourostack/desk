@@ -253,9 +253,7 @@ export async function runIsolationCases({ config, store, binding, root }) {
     assert.doesNotMatch(card, /local_only/, `task_create recorded a clone outside the desk as local-only: ${card}`);
     const done = await session.call("task_update", { track: "neighbor-probe", slug, status: "done", evidence: { kind: "commit", ref: bBefore.head } });
     assert.equal(done.isError, true, `commit evidence from a clone outside the desk must be refused: ${done.text}`);
-    // The hosted Git guard refuses before any spawn, so the clone vouches for nothing and the commit doesn't count;
-    // the Git log below proves no Git ran there.
-    assert.match(done.text, /does not count/, `commit evidence from a clone outside the desk is refused as not one of the card's: ${done.text}`);
+    assert.match(done.text, /Desk Git context refused/, "the hosted Git guard refuses before any spawn");
     refusals.push(done.text);
   }
   assert.equal((await session.call("desk_status")).isError, false, "cards naming clones outside the desk do not break A's status");

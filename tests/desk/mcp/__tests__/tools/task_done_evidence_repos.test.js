@@ -454,6 +454,7 @@ test("in an isolated hosted realm a card naming a clone outside the desk can sti
   process.env.DESK_ISOLATED_HOSTED = "1"
   try {
     const ref = "https://github.com/acme/widgets/pull/9"
+    await assert.rejects(done(root, { kind: "commit", ref: (await makeClone("acme/widgets")).pushed }), /Desk Git context refused/, "commit evidence must look inside the clone, which the guard refuses")
     await task_create({ deskRoot: root, input: { track: "t", slug: "stepped", title: "S", status: "processing", repos: [{ name: "acme/widgets", local_path: clone, mode: "local" }] } })
     await task_update({ deskRoot: root, input: { track: "t", slug: "stepped", step: { id: "api", depends_on: [], repo: "acme/widgets", state: "in progress", evidence: ref } } })
     assert.match(await fs.readFile(path.join(root, "t", "stepped", "task.md"), "utf8"), /pull\/9/u)

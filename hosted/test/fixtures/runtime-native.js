@@ -437,10 +437,14 @@ if (process.env.DESK_NATIVE_MAIN === "1") {
   await store.putAccount({ accountId: "account-other", displayName: "Other", deskAccess: true });
   await store.putBinding("account-other", { ...binding, repo: "synthetic/second" });
   const discovery = JSON.parse(readFileSync("/app/hosted/test/fixtures/entra-discovery-ourobottest.json", "utf8"));
+  // The session-start recheck signs an App JWT, so this gateway needs a key that signs (a throwaway one).
+  const { generateKeyPairSync } = await import("node:crypto");
+  const appKey = join(root, "main-app-key");
+  writeFileSync(appKey, generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }), { mode: 0o600 });
   const server = await main({
     DESK_MULTI_USER: "1", PORT: "0", PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin",
     DESK_SIGNING_KEY: "synthetic", DESK_PUBLIC_URL: "http://127.0.0.1",
-    DESK_APP_ID: "1", DESK_APP_KEY_FILE: key, DESK_APP_CLIENT_ID: "synthetic", DESK_APP_CLIENT_SECRET: "synthetic",
+    DESK_APP_ID: "1", DESK_APP_KEY_FILE: appKey, DESK_APP_CLIENT_ID: "synthetic", DESK_APP_CLIENT_SECRET: "synthetic",
     DESK_REPO: "synthetic/unused", DESK_PLUGIN_DIR: plugin, DESK_CLONE_DIR: "/data/unused-legacy-clone",
     DESK_ENTRA_TENANT_ID: "c12edfb6-c5ab-4bf8-b1d5-1f053311d396", DESK_ENTRA_SUBDOMAIN: "ourobottest",
     DESK_ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555", DESK_ENTRA_CLIENT_SECRET: "synthetic",
