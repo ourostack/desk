@@ -63,7 +63,7 @@ async function open(url, account) {
 const works = async (url, sessionId, account) => (await post(url, echo(2), { sessionId, account })).status === 200;
 
 test("a 4th session for one account is refused with a message naming 3, and the other 3 keep working", async (t) => {
-  const { url, relay } = await start(t, { maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: MINUTE });
+  const { url, relay } = await start(t, { maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 10 * MINUTE });
   const sessions = [await open(url, A), await open(url, A), await open(url, A)];
   const fourth = await post(url, initialize, { account: A });
   assert.equal(fourth.status, 429);
@@ -73,14 +73,46 @@ test("a 4th session for one account is refused with a message naming 3, and the 
   assert.equal(relay.size(), 3);
 });
 
-test("at the per-account limit, that account's own session idle past minIdleOwnMs is reaped for the new one", async (t) => {
-  const { url, clock } = await start(t, { maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: MINUTE });
+test("at the per-account limit, the account's own session quiet for minIdleOwnMs gives way; one quiet for less does not", async (t) => {
+  const { url, clock } = await start(t, { maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 10 * MINUTE });
   const oldest = await open(url, A);
   clock.now += 2 * MINUTE;
   const others = [await open(url, A), await open(url, A)];
+  // Two minutes between turns is ordinary use: the 4th is refused and nothing is evicted.
+  assert.equal((await post(url, initialize, { account: A })).status, 429);
+  assert.ok(await works(url, others[0], A));
+  assert.ok(await works(url, others[1], A));
+  // Quiet for 10 minutes, the oldest was most likely left behind: it gives way to the new session.
+  clock.now += 9 * MINUTE;
   const fourth = await open(url, A);
   assert.equal((await post(url, echo(3), { sessionId: oldest, account: A })).status, 404);
   for (const sessionId of [...others, fourth]) assert.ok(await works(url, sessionId, A));
+});
+
+test("a session waiting on a Desk call is never reaped, however long it has been waiting", async (t) => {
+  const { url, clock } = await start(t, { maxSessions: 12, maxPerAccount: 1, minIdleOwnMs: MINUTE, callTimeoutMs: 60 * MINUTE });
+  const busy = await open(url, A);
+  const hang = post(url, { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "hang", arguments: {} } }, { sessionId: busy, account: A });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  clock.now += 30 * MINUTE;
+  assert.equal((await post(url, initialize, { account: A })).status, 429);
+  hang.catch(() => {});
+});
+
+test("a full gateway refuses with a plain message", async (t) => {
+  const { url } = await start(t, { maxSessions: 1, maxPerAccount: 3, minIdleOwnMs: MINUTE, minIdleForeignMs: 10 * MINUTE });
+  await open(url, B);
+  const refused = await post(url, initialize, { account: A });
+  assert.equal(refused.status, 503);
+  assert.equal(refused.messages[0].error.message, "Hosted Desk is full right now. Please try again in a few minutes.");
+});
+
+test("by default the relay never reaps another account's session, however long it has been quiet", async (t) => {
+  const { url, clock } = await start(t, { maxSessions: 1 });
+  const b = await open(url, B);
+  clock.now += 24 * 60 * MINUTE;
+  assert.equal((await post(url, initialize, { account: A })).status, 503);
+  assert.ok(await works(url, b, B));
 });
 
 test("at the total limit, a new session reaps its own account's oldest idle session before another account's older one", async (t) => {
@@ -168,5 +200,46 @@ test("shutdown closes every realm at once; one push failure is logged by account
 
 test("a multi-user gateway's relay allows 3 sessions per account and 12 in all", async () => {
   const { MULTI_USER_LIMITS } = await import("../src/main.js");
-  assert.deepEqual(MULTI_USER_LIMITS, { maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 60_000, minIdleForeignMs: 600_000 });
+  assert.deepEqual(MULTI_USER_LIMITS, { maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 600_000, minIdleForeignMs: 600_000 });
+});
+
+test("shutdown closes prepared realms at once, closes a realm still being prepared once it is ready, and stops waiting at the deadline", async () => {
+  const { closeAll } = await import("../src/account-runtime.js");
+  const order = [];
+  const realm = (accountId) => ({ close: async () => { order.push(`close ${accountId}`); } });
+  const prepared = new Map([["acct-a", realm("acct-a")]]);
+  let finishB;
+  const preparingB = new Promise((resolve) => { finishB = () => { prepared.set("acct-b", realm("acct-b")); resolve(); }; });
+  const never = new Promise(() => {});
+  const preparing = new Map([["acct-b", preparingB], ["acct-c", never]]);
+  const lines = [];
+  const closing = closeAll({ prepared, preparing, deadline: Date.now() + 300, write: (line) => lines.push(line) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["close acct-a"], "a prepared realm's close does not wait for a preparation");
+  finishB();
+  const failed = await closing;
+  assert.deepEqual(order, ["close acct-a", "close acct-b"]);
+  assert.deepEqual(failed, []);
+  assert.match(lines.join("\n"), /account acct-c was still being prepared at the shutdown deadline/);
+});
+
+test("a push gets at most 65 s, and only the time left before the shutdown deadline", async () => {
+  const { pushBudget } = await import("../src/account-runtime.js");
+  assert.equal(pushBudget(1_000, Infinity), 65_000);
+  assert.equal(pushBudget(1_000, 31_000), 30_000);
+  assert.equal(pushBudget(1_000, 900), 0);
+});
+
+test("without a shutdown deadline, close waits for every preparation", async () => {
+  const { closeAll } = await import("../src/account-runtime.js");
+  const prepared = new Map();
+  let finish;
+  const preparing = new Map([["acct-b", new Promise((resolve) => { finish = resolve; })]]);
+  const closed = [];
+  const closing = closeAll({ prepared, preparing, deadline: Infinity, write: () => {} });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  prepared.set("acct-b", { close: async () => { closed.push("acct-b"); } });
+  finish();
+  await closing;
+  assert.deepEqual(closed, ["acct-b"]);
 });

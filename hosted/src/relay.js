@@ -42,14 +42,15 @@ function ownerOf(auth) {
 // Ouro account, `maxPerAccount` of its own. A new session past either limit
 // may close an idle session (one not waiting on Desk) to make room: the
 // account's own least recently used one idle for `minIdleOwnMs`, then, at the
-// total limit only, another account's oldest one idle for `minIdleForeignMs`.
-// A gateway without accounts reaps any idle session, as it always has.
+// total limit only, another account's oldest one idle for `minIdleForeignMs`
+// (by default never). A gateway without accounts reaps any idle session, as it
+// always has.
 export function createRelay({
   spawnDesk,
   maxSessions = 4,
   maxPerAccount = Infinity,
   minIdleOwnMs = 0,
-  minIdleForeignMs = 10 * 60_000,
+  minIdleForeignMs = Infinity,
   idleMs = 30 * 60_000,
   callTimeoutMs = 200_000,
   killAfterMs = 10_000,
@@ -231,7 +232,10 @@ export function createRelay({
       log(`refused a new session for ${owner.label}: it has ${maxPerAccount} open`);
       return refuse(res, 429, -32000, `You already have ${maxPerAccount} Desk sessions open, the most one account can have at once. Close Desk in another app or chat, or try again in a minute.`);
     }
-    if (full === "busy") return refuse(res, 503, -32000, "Service Unavailable: every session is busy");
+    if (full === "busy") {
+      log(`refused a new session: the gateway is full (${sessions.size} open, ${starting} starting)`);
+      return refuse(res, 503, -32000, "Hosted Desk is full right now. Please try again in a few minutes.");
+    }
     // The Desk child starts before the transport sees the initialize, so it
     // is ready for the first message; a spawn still in progress holds its slot.
     const id = randomUUID();

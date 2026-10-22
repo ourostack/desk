@@ -283,8 +283,13 @@ export function createGatewayAdmin({ config, parts, relay, runtime, fetch = glob
 }
 
 // A multi-user gateway's relay (spec item 20): 3 sessions per account and 12 in all on a 2 vCPU / 4 GiB replica. A
-// person's own session quiet for a minute may give way to their new one; another account's only after 10 minutes.
-export const MULTI_USER_LIMITS = Object.freeze({ maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 60_000, minIdleForeignMs: 600_000 });
+// session quiet for 10 minutes was most likely left behind, so it may give way to a new one, the same account's
+// first; one in use never does, so a 4th app in use is refused rather than evicting another.
+export const MULTI_USER_LIMITS = Object.freeze({ maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 600_000, minIdleForeignMs: 600_000 });
+
+// Every desk's shutdown push must finish within this long of SIGTERM: Container Apps kills the replica after its
+// 90 s termination grace period (provision.sh), and the token brokers still need a few seconds after the pushes.
+export const SHUTDOWN_PUSH_DEADLINE_MS = 80_000;
 
 // The ouro CLI's admin sign-in settings, published on a multi-user gateway that has them.
 const adminDiscoveryOf = (config) => {
@@ -515,6 +520,7 @@ export async function main(env = process.env, deps = {}) {
   let githubLink = null;
   let push;
   let closeTokenSocket;
+  let shutdownStartedAt;
   // The Ouro tenant comes first, so a tenant naming another issuer stops the start before the clone.
   const parts = config.identity ? await startIdentity(config, deps) : null;
   if (parts) checkLegacyAccounts({ store: parts.store, accountIds: parts.accountIds });
@@ -543,7 +549,7 @@ export async function main(env = process.env, deps = {}) {
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
       });
       relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink, hooks }), ...MULTI_USER_LIMITS });
-      push = () => runtime.close();
+      push = () => runtime.close({ deadline: (shutdownStartedAt ?? Date.now()) + SHUTDOWN_PUSH_DEADLINE_MS });
     }
     admin = createGatewayAdmin({ config, parts, relay, runtime, fetch: deps.fetch });
   } else if (config.appReady) {
@@ -596,6 +602,7 @@ export async function main(env = process.env, deps = {}) {
 
   let stopping = null;
   const shutdown = () => {
+    shutdownStartedAt ??= Date.now();
     sweep?.stop();
     parts?.discovery.stop();
     stopping ??= stopGateway({ server, relay, pushDesk: push, closeTokenSocket }).then(

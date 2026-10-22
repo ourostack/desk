@@ -40,6 +40,35 @@ export async function closeRealms(entries, write = runtimeLog) {
   return failed;
 }
 
+// A push's time: its usual 65 s, or less when the shutdown deadline is nearer. Zero means there is no time left.
+export function pushBudget(now, deadline, max = 65_000) {
+  return Math.max(0, Math.min(max, deadline - now));
+}
+
+// The shutdown close: realms already prepared close at once, without waiting for a preparation still under way (a
+// clone can take minutes); a preparation that finishes before `deadline` has its realm closed then. One still running
+// at the deadline is logged and left: it is a fresh clone that no session has written to yet.
+export async function closeAll({ prepared, preparing, deadline, write = runtimeLog }) {
+  const first = new Set(prepared.values());
+  const now = closeRealms([...prepared].map(([accountId, value]) => ({ accountId, value })), write);
+  const late = (async () => {
+    const pending = [...preparing];
+    if (pending.length === 0) return [];
+    let timer;
+    const done = new Set();
+    pending.forEach(([accountId, promise]) => promise.then(() => done.add(accountId), () => done.add(accountId)));
+    const settled = Promise.allSettled(pending.map(([, promise]) => promise));
+    // Without a deadline (Infinity, which setTimeout would treat as 1 ms), wait for every preparation.
+    await (Number.isFinite(deadline)
+      ? Promise.race([settled, new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); })])
+      : settled);
+    clearTimeout(timer);
+    for (const [accountId] of pending) if (!done.has(accountId)) write(`account ${accountId} was still being prepared at the shutdown deadline; nothing of it was closed`);
+    return closeRealms([...prepared].filter(([, value]) => !first.has(value)).map(([accountId, value]) => ({ accountId, value })), write);
+  })();
+  return [...(await now), ...(await late)];
+}
+
 function protectedKey(path) {
   protectedAncestors(path);
   const stat = lstatSync(path);
@@ -277,6 +306,8 @@ export function createAccountRuntime({
   const releaseFailures = new Map();
   let closed = false;
   let closing;
+  // When the shutdown's pushes must be done by (closeAll); every push in the meantime gets only the time left.
+  let shutdownDeadline = Infinity;
 
   async function prepare(accountId) {
     if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
@@ -420,8 +451,12 @@ export function createAccountRuntime({
       return run({ action: "git", args });
     };
     const push = async () => {
-      const deadline = Date.now() + 65_000;
-      await run({ action: "push", pluginDir }, 65_000);
+      const budget = pushBudget(Date.now(), shutdownDeadline);
+      if (budget === 0) {
+        throw Object.assign(new Error("Desk writes were not pushed before the shutdown deadline."), { code: "DESK_PUSH_UNPRESERVED", quiescent: true });
+      }
+      const deadline = Date.now() + budget;
+      await run({ action: "push", pluginDir }, budget);
       const remaining = deadline - Date.now();
       if (remaining <= 0 || (await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, remaining)).trim()) {
         throw Object.assign(new Error("Desk writes were not verified pushed after operation retirement."), {
@@ -544,11 +579,15 @@ export function createAccountRuntime({
     prepare,
     release,
     purgeAccount,
-    close() {
+    close({ deadline = Infinity } = {}) {
       closed = true;
+      shutdownDeadline = Math.min(shutdownDeadline, deadline);
       closing ??= (async () => {
-        await Promise.allSettled([...preparing.values()]);
-        const results = await closeRealms([...prepared].map(([accountId, value]) => ({ accountId, value })), write);
+        const results = await closeAll({ prepared, preparing, deadline: shutdownDeadline, write });
+        const logged = new Set(results.map(({ accountId }) => accountId));
+        for (const [accountId, { error }] of preservationFailures) {
+          if (!logged.has(accountId)) write(`DESK WRITES MAY NOT BE PUSHED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"}); its realm is preserved on disk`);
+        }
         const failed = new Set([
           ...results.map(({ error }) => error),
           ...[...preservationFailures.values()].map(({ error }) => error),
