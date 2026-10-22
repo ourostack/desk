@@ -122,6 +122,10 @@ function fakeFetch(dir) {
     }
     if (path === `identity/authenticationEventsFlows/${FLOW}/conditions/applications/includeApplications`) {
       if (method === "GET") return answer(200, { value: dir.flowApps.filter((appId) => !(dir.flowLag[appId] > 0 && dir.flowLag[appId]--)).map((appId) => ({ appId })) });
+      if (dir.flowRefusals > 0) {
+        dir.flowRefusals -= 1;
+        return answer(400, { error: { code: "AADB2C", message: `AADB2C: The application id ${body.appId} is invalid` } });
+      }
       if (dir.flowApps.includes(body.appId)) return answer(409, { error: { code: "ObjectConflict", message: "The application already exists in the flow" } });
       dir.flowApps.push(body.appId);
       dir.flowLag[body.appId] = dir.flowLagOnCreate ?? 0;
@@ -272,6 +276,7 @@ test("a create that a lagging read misses is not an error: the service principal
   dir.spLagOnCreate = 2;
   dir.flowLagOnCreate = 2;
   dir.spRefusals = 1;
+  dir.flowRefusals = 2;
   const { logs } = await go(dir);
   assert.equal(dir.sps.filter((sp) => sp.appId === dir.apps.find((app) => app.displayName === CLI_APP_NAME).appId).length, 1);
   assert.ok(logs.some((line) => /already done/.test(line)), logs.join("\n"));

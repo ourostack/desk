@@ -25,8 +25,9 @@ const GRAPH = "https://graph.microsoft.com/v1.0/";
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PASSES = 20;
 const LAG_MS = 5_000;
-// What Graph answers while a new app, service principal or role isn't visible everywhere yet.
-const LAG = /Request_ResourceNotFound|does not exist|was not found|does not reference a valid application|HTTP 404|\(404\)/i;
+// What Graph answers while a new app, service principal or role isn't visible everywhere yet. A user flow refuses a
+// new service principal's app id as invalid for about 30 seconds (provision-identity.mjs SP_LAG).
+const LAG = /Request_ResourceNotFound|does not exist|was not found|does not reference a valid application|application id .*invalid|HTTP 404|\(404\)/i;
 // A create Graph had already applied before a lagging read missed it.
 const DONE = /already exists|ObjectConflict|conflicting object|HTTP 409|\(409\)/i;
 
