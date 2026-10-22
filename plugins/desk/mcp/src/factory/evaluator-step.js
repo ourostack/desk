@@ -95,6 +95,7 @@ import {
   findAgentCli,
   hostSupported,
   probeSignIn,
+  qualifyHeadlessSource,
   runHeadless,
 } from "./headless.js"
 import { isHeadlessFactorySession } from "./headless-flag.js"
@@ -117,7 +118,7 @@ const MACHINE_BLOCKED = new Set(["no_agent_cli", "no_credentials", "disabled_wou
 // Every state that counts toward `blocked_days`.
 const BLOCKED_DAY_STATES = new Set([...MACHINE_BLOCKED, "disabled", "budget_exhausted"])
 
-const DEFAULT_SEAMS = { runHeadless, probeSignIn, findAgentCli, processAlive, requestFinishedJobs, reserveAgentLaunch, finishAgentLaunch, runTaskContextStep, clock: Date.now }
+const DEFAULT_SEAMS = { runHeadless, probeSignIn, qualifyHeadlessSource, findAgentCli, processAlive, requestFinishedJobs, reserveAgentLaunch, finishAgentLaunch, runTaskContextStep, clock: Date.now }
 const BRIEF_NAME = /^(claude-code|copilot-cli|codex-cli)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.brief\.json$/u
 const DAY_TEXT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/u
 
@@ -457,6 +458,7 @@ async function execute(env, { impl, root, nowMs, limitMs, maxRuns, pluginVersion
     const context = await impl.runTaskContextStep(env, {
       pluginVersion, now: nowMs + (impl.clock() - clockStart), deadline: limitMs,
       clock: impl.clock, runHeadless: impl.runHeadless, probeSignIn: impl.probeSignIn, findAgentCli: impl.findAgentCli,
+      qualifyHeadlessSource: impl.qualifyHeadlessSource,
       reserveAgentLaunch: impl.reserveAgentLaunch, finishAgentLaunch: impl.finishAgentLaunch, onChild, onChildExit,
     })
     if (context.result !== "no_context_waiting") {
