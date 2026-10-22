@@ -34,6 +34,11 @@
 //       key-id=<new> previous-key-id=<old>, restarts the app, and deletes the old credential only once the gateway's
 //       startup line logs the new secret's fingerprint; a rerun finishes a rotation the gateway hadn't confirmed yet
 //       Run it once at a time: each run's credential has its own display name and the run touches only that one.
+//   ... --admin-api [--dry-run]
+//       reconciles only the admin API (admin-api.mjs): the gateway app's desk.admin scope and ouro.admin role, the
+//       ouro-cli public client, and the role for exactly the record's adminApi.admins. It signs in as the
+//       ouro-identity-admin app from the keychain, so az needn't be signed in to the tenant. A full run does the
+//       same at its end once the record names adminApi.admins.
 //
 // Secrets move only inside this process: read with `--query value -o tsv`,
 // trimmed of az's one trailing newline, and written through a child's stdin or
@@ -59,6 +64,7 @@ import { defaultRunner, trimOneNewline } from "./runner.mjs";
 import { issueInvite, seed } from "../src/accounts/invites.js";
 import { buildAppYaml, checkWritten, isKeyVaultFillFailure, keyVaultFillFailure, writeAppYaml } from "./app-yaml.mjs";
 import { ADMIN_APP_NAME, ADMIN_ROLES, adminKeychainService, createAdminGraph, readAdminSecret, storeAdminSecret } from "./admin-graph.mjs";
+import { reconcileAdminApi } from "./admin-api.mjs";
 import {
   APPS_RESOURCE_GROUP,
   ARI,
@@ -883,6 +889,23 @@ async function reconcile(ctx) {
   throw new Error("The reconcile did not settle after 30 passes.");
 }
 
+// The admin API through the admin app: the full run's graph when it has one, else the keychain's secret.
+async function adminApi(ctx) {
+  const { record } = ctx;
+  if (!record.tenant?.id || !record.adminApp?.appId) throw new Error(`identity-${ctx.env}.json names no tenant or ${ADMIN_APP_NAME} app yet; run provision-identity.mjs --env ${ctx.env} first.`);
+  let graph = ctx.adminGraph;
+  if (!graph) {
+    const secret = await readAdminSecret({ runner: ctx.runner, tenantId: record.tenant.id, appId: record.adminApp.appId });
+    if (!secret) throw new Error(`The keychain has no ${ADMIN_APP_NAME} secret (${adminKeychainService(record.tenant.id)}); run provision-identity.mjs --env ${ctx.env} to make one.`);
+    graph = createAdminGraph({ tenantId: record.tenant.id, appId: record.adminApp.appId, secret, fetch: ctx.fetch, sleep: ctx.sleep });
+  }
+  const result = await reconcileAdminApi({ graph, record, log: ctx.log, sleep: ctx.sleep, dryRun: ctx.dryRun });
+  if (result && !ctx.dryRun) {
+    ctx.record = { ...ctx.record, ...result };
+    saveRecord(ctx.record, ctx.recordDir);
+  }
+}
+
 // --- Apple key import --------------------------------------------------------------------------------------------
 
 // Apple names each downloaded key AuthKey_<Key ID>.p8; the .p8 itself holds no Key ID.
@@ -1312,10 +1335,11 @@ export function parseFlags(argv) {
       rotate: { type: "string" },
       emergency: { type: "boolean", default: false },
       "browser-context": { type: "string" },
+      "admin-api": { type: "boolean", default: false },
     },
   });
   environment(values.env);
-  const actions = ["apple-key-file", "seed-ari", "invite-ari", "copy-app-secrets", "clear-app-secrets", "migrate", "rotate"].filter((name) => values[name] !== undefined && values[name] !== false);
+  const actions = ["apple-key-file", "seed-ari", "invite-ari", "copy-app-secrets", "clear-app-secrets", "migrate", "rotate", "admin-api"].filter((name) => values[name] !== undefined && values[name] !== false);
   if (actions.length > 1) throw new Error(`Run one action at a time; got ${actions.map((name) => `--${name}`).join(", ")}.`);
   if (values.migrate !== undefined && values.migrate !== "client-key") throw new Error("Only --migrate client-key exists.");
   if (values.rotate !== undefined && values.rotate !== "signing-key" && values.rotate !== "entra-secret") throw new Error("Only --rotate signing-key and --rotate entra-secret exist.");
@@ -1337,6 +1361,7 @@ export function parseFlags(argv) {
       browserContext: values["browser-context"],
       appleKeyId: values["apple-key-id"],
       emergency: values.emergency,
+      adminApi: values["admin-api"],
     },
   };
 }
@@ -1371,8 +1396,10 @@ export async function run({
   if (flags.migrate === "client-key") return migrateClientKey(ctx);
   if (flags.rotate === "signing-key") return flags.emergency ? emergencyRotate(ctx) : rotate(ctx);
   if (flags.rotate === "entra-secret") return rotateEntraSecret(ctx);
+  if (flags.adminApi) return adminApi(ctx);
   try {
     await reconcile(ctx);
+    if (ctx.record.adminApi?.admins) await adminApi(ctx);
   } catch (error) {
     // Seeding needs only the accounts store, so a stop on a later step (Apple under outcome B) doesn't block it.
     if (flags.seedAri && error instanceof Stop && ctx.record.storage?.id) await seedAri(ctx);

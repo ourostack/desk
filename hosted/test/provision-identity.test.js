@@ -568,7 +568,7 @@ test("every subcommand's errors and logs hold no secret fixture", async (t) => {
 test("the command line takes the plan's flags", () => {
   assert.deepEqual(parseFlags(["--env", "test", "--dry-run", "--apple-key-file", "/k.p8", "--apple-key-slot", "a", "--keep-file"]), {
     env: "test",
-    flags: { dryRun: true, appleKeyFile: "/k.p8", appleKeySlot: "a", keepFile: true, seedAri: false, inviteAri: false, copyAppSecrets: false, clearAppSecrets: false, migrate: undefined, rotate: undefined, browserContext: undefined, appleKeyId: undefined, emergency: false },
+    flags: { dryRun: true, appleKeyFile: "/k.p8", appleKeySlot: "a", keepFile: true, seedAri: false, inviteAri: false, copyAppSecrets: false, clearAppSecrets: false, migrate: undefined, rotate: undefined, browserContext: undefined, appleKeyId: undefined, emergency: false, adminApi: false },
   });
   assert.equal(parseFlags(["--env", "prod", "--migrate", "client-key"]).flags.migrate, "client-key");
   assert.throws(() => parseFlags(["--env", "test", "--migrate", "signing-key"]), /--migrate client-key/);

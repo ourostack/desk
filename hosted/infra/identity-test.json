@@ -66,5 +66,10 @@
     "name": "kv-ouro-identity-261e0b",
     "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.KeyVault/vaults/kv-ouro-identity-261e0b",
     "entraClientSecret": "entra-client-secret-test"
+  },
+  "adminApi": {
+    "admins": [
+      "4850d5fc-552c-4b0d-88a3-2d0329bf4b25"
+    ]
   }
 }
