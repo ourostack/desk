@@ -68,7 +68,14 @@ function describeRepos(repos) {
 }
 
 function git(spawnGit, dir, args) {
-  const invocation = deskGitInvocation({ root: dir, args })
+  let invocation
+  try {
+    invocation = deskGitInvocation({ root: dir, args })
+  } catch {
+    // An isolated hosted realm runs Git only inside its own desk (DESK_GIT_CONTEXT_REFUSED). A clone outside it reads as
+    // one Git can't answer for, so evidence falls back to the recorded repo name, as for a clone that isn't on disk.
+    return null
+  }
   const result = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result?.status === 0 && typeof result.stdout === "string" ? result.stdout : null
 }
