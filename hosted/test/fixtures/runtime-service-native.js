@@ -79,9 +79,10 @@ export async function runServiceCases({ config, store, binding, root, originSubj
   ];
   console.log(JSON.stringify({ serviceNativeProvenance: nativePaths.map(path => ({ path, sha256: createHash("sha256").update(readFileSync(path)).digest("hex") })) }));
   const accounts = ["service-a", "service-b"];
-  for (const accountId of accounts) {
+  // One repository serves one account at a time, so the neighbor's desk is the second repository.
+  for (const [accountId, repo] of [[accounts[0], binding.repo], [accounts[1], "synthetic/second"]]) {
     await store.putAccount({ accountId, displayName: "Synthetic", deskAccess: true });
-    await store.putBinding(accountId, binding);
+    await store.putBinding(accountId, { ...binding, repo });
   }
   const manager = createAccountRuntime({
     config, store, rootDir: join(root, "service-realms"),
@@ -95,7 +96,11 @@ export async function runServiceCases({ config, store, binding, root, originSubj
   const first = await connect(a);
   const second = await connect(a);
   const neighbor = await connect(b);
-  await Promise.all([first.call("desk_status"), second.call("desk_status"), neighbor.call("desk_status")]);
+  // Realm UIDs have no passwd entry; Desk's readiness must still reach ready for each of them.
+  const statuses = await Promise.all([first.call("desk_status"), second.call("desk_status"), neighbor.call("desk_status")]);
+  const states = statuses.map(result => JSON.parse(result.content.find(part => part.type === "text").text).state);
+  console.log(JSON.stringify({ passwdlessDeskStatus: states }));
+  assert.deepEqual(states, ["ready", "ready", "ready"], "readiness reaches ready for a UID with no passwd entry");
   const processes = [];
   for (const pid of readdirSync("/proc").filter(name => /^\d+$/.test(name))) {
     try {

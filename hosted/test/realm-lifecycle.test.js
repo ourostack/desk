@@ -31,7 +31,7 @@ async function setup(t, { holdPush = false, holdBroker = false } = {}) {
   const brokerEntered = deferred();
   const services = new Set();
   const preservationFailures = new Map();
-  const state = { push: 0, brokerClose: 0, purge: 0, failure: undefined, stopped: false };
+  const state = { push: 0, brokerClose: 0, purge: 0, failure: undefined, stopped: false, order: [] };
   const preserve = (error, child) => {
     state.failure = error;
     state.stopped = true;
@@ -40,8 +40,9 @@ async function setup(t, { holdPush = false, holdBroker = false } = {}) {
   const lifecycle = createRealmLifecycle({
     services, operations: new Set(), failure: () => preservationFailures.get("unit")?.error, preserve,
     stop: () => { state.stopped = true; },
-    async push() { state.push++; if (holdPush) await pushGate.promise; },
+    async push() { state.order.push("push"); state.push++; if (holdPush) await pushGate.promise; },
     async closeBroker() {
+      state.order.push("broker-closed");
       state.brokerClose++;
       brokerEntered.resolve();
       if (holdBroker) await brokerGate.promise;
@@ -250,4 +251,22 @@ test("the lifecycle seam refuses new service registration once close has started
     f.pushGate.resolve();
     await closing;
   }
+});
+
+test("close waits for every service to retire before the push, and pushes before the broker closes", async t => {
+  const f = await setup(t);
+  const live = await f.service({ buffered: false, protocolClosed: false, retired: false });
+  const closing = f.lifecycle.close();
+  await turn();
+  await turn();
+  assert.deepEqual(live.guardian.signals, ["SIGTERM"], "close asks the service to stop");
+  assert.deepEqual(f.state.order, [], "nothing is pushed while a service may still write");
+  live.guardian.emit("message", { serviceClosed: true, code: 0, signal: null });
+  live.guardian.emit("message", { retired: true, quiescent: true });
+  live.guardian.connected = false;
+  live.guardian.exitCode = 0;
+  live.guardian.emit("disconnect");
+  live.guardian.emit("close", 0);
+  await closing;
+  assert.deepEqual(f.state.order, ["push", "broker-closed"], "the push follows retirement, and the broker outlives the push");
 });
