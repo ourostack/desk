@@ -306,6 +306,29 @@ test("a rescue with no time left before the deadline runs nothing and says so", 
   assert.match(lines.join("\n"), /DESK WRITES NOT RESCUED for account acct-a \(no time left\)/);
 });
 
+test("the processes still running as a realm's UID are read from /proc, by any of their UIDs, without zombies", async () => {
+  const { uidProcesses } = await import("../src/account-runtime.js");
+  const status = { "10": "PPid:\t1\nUid:\t10001\t10001\t10001\t10001\n", "11": "PPid:\t1\nUid:\t1000\t1000\t1000\t1000\n", "12": "PPid:\t10\nUid:\t1000\t10001\t1000\t1000\n", "14": "State:\tZ (zombie)\nPPid:\t1\nUid:\t10001\t10001\t10001\t10001\n" };
+  const proc = {
+    list: () => ["10", "11", "12", "13", "14", "self"],
+    read: (path) => {
+      const pid = path.split("/").at(-2);
+      if (!(pid in status)) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      return status[pid];
+    },
+  };
+  assert.deepEqual(uidProcesses(10001, proc), [{ pid: 10, ppid: 1 }, { pid: 12, ppid: 10 }]);
+  assert.deepEqual(uidProcesses(10002, proc), []);
+});
+
+test("a realm counts as still running only for processes outside its token broker's tree", async () => {
+  const { othersRunning } = await import("../src/account-runtime.js");
+  const processes = [{ pid: 20, ppid: 1 }, { pid: 22, ppid: 21 }, { pid: 21, ppid: 20 }, { pid: 30, ppid: 1 }, { pid: 31, ppid: 30 }];
+  assert.deepEqual(othersRunning(processes, 20), [30, 31]);
+  assert.deepEqual(othersRunning(processes.slice(0, 3), 20), []);
+  assert.deepEqual(othersRunning(processes, null), [20, 22, 21, 30, 31]);
+});
+
 test("without a shutdown deadline, close waits for every preparation", async () => {
   const { closeAll } = await import("../src/account-runtime.js");
   const prepared = new Map();

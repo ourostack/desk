@@ -120,13 +120,19 @@ export async function runTimeoutCases({ config, store, binding, root, waitForSlo
   assert.match(escapedPreparation.after.fetchHead, /^[0-9a-f]{40}\s/m, "the real escaped fetch writes its result after rejection");
   assert.equal(escapedPreparation.after.cloneExists, true);
   assert.equal(escapedPreparation.after.socketExists, true);
-  await assert.rejects(manager.prepare("deadline-c"), /quiescen|preserv/i);
+  // The escaped fetch has finished, so nothing of deadline-c's uncertain realm runs but its broker: the next
+  // preparation empties it and starts afresh instead of refusing the account until the replica restarts.
+  assert.equal(escapedPreparation.after.actorAlive, false, "the escaped fetch has exited");
+  const recoveredC = await manager.prepare("deadline-c");
+  assert.notEqual(recoveredC.realm.root, escapedPreparation.realm.root);
+  assert.equal((await probe(escapedPreparation.realm, escapedPreparation.env)).cloneExists, false, "the uncertain realm was emptied once nothing of it ran");
+  await recoveredC.close();
   const retried = await manager.prepare("deadline-b");
   assert.equal(retried.realm.uid, plainPreparation.realm.uid);
   await retried.close();
-  await assert.rejects(manager.close(), /preserv|shutdown/i);
+  await manager.close();
   clearTimeout(bound);
-  return { defaultDeadlineMs: 60_000, lateCommitPrevented: true, fetchRetiredBeforePurge: true, escapedFetchPreservationRetained: true };
+  return { defaultDeadlineMs: 60_000, lateCommitPrevented: true, fetchRetiredBeforePurge: true, escapedFetchPreservationRetained: true, recoveredAfterPreservation: true };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

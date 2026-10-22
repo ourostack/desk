@@ -186,9 +186,18 @@ const timer = setInterval(() => {
     assert.equal(closeResult.ok, false, "unretired service activity must reject close");
     assert.equal(atClose.socket, true, "unproven retirement retains the broker");
     await assert.rejects(a.close(), /quiescen|preserv/i);
-    await assert.rejects(manager.prepare("service-a"), /quiescen|preserv/i);
+    // While the writer still runs, the person gets a plain message to try again, not a lockout.
+    await assert.rejects(manager.prepare("service-a"), error => error.code === "DESK_SESSION_REFUSED" && /still finishing/.test(error.message));
     await pause(21_000);
     assert.equal(inspect(a).finished, true, "retained writer eventually finishes without lost evidence");
+    // Once nothing but its token broker runs as the realm's UID, the next session pushes the retained realm's
+    // writes, empties it and starts a fresh realm.
+    const recovered = await manager.prepare("service-a");
+    assert.notEqual(recovered, a);
+    assert.notEqual(recovered.realm.root, a.realm.root);
+    assert.equal(asDesk(a, `import fs from "node:fs"; console.log(fs.existsSync(process.env.DESK));`).trim(), "false", "the recovered realm's clone was emptied");
+    assert.ok(originSubjects().includes("detached service late write"), "the late write reached origin");
+    await recovered.close();
   } else {
     assert.equal(atClose.finished, true, "service quiescence must precede final push and broker close");
     assert.equal(atClose.pushed, true, "final origin must contain the real detached service write");
@@ -196,9 +205,8 @@ const timer = setInterval(() => {
   }
   await neighbor.call("desk_status");
   await neighbor.client.close();
-  if (unproven) await assert.rejects(manager.close(), /preserv|shutdown/i);
-  else await manager.close();
-  console.log(JSON.stringify({ serviceFinalState: { a: inspect(a), b: inspect(b), originRefs: originRefs() } }));
+  await manager.close();
+  console.log(JSON.stringify({ serviceFinalState: { a: unproven ? "recovered and emptied" : inspect(a), b: inspect(b), originRefs: originRefs() } }));
   clearTimeout(bound);
-  return { actualMcp: true, sqlite: true, automaticSync: true, unproven, detachedWritePreserved: true, sameRealmSessions: 2, neighborUnaffected: true };
+  return { actualMcp: true, sqlite: true, automaticSync: true, unproven, detachedWritePreserved: true, recoveredAfterPreservation: unproven, sameRealmSessions: 2, neighborUnaffected: true };
 }

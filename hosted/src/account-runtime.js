@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmdirSync, statfsSync } from "node:fs";
+import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statfsSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertGatewayKernelBoundary, createUidAllocator, isolatedDeskEnv, isolationArgs } from "./isolation.js";
@@ -12,6 +12,40 @@ const allocateUid = createUidAllocator();
 const refused = () => new Error("Hosted desk account authority is unavailable or changed.");
 // Session start passes this message to the person (relay.js).
 const stillSaving = () => Object.assign(new Error("Hosted Desk is still saving the last changes of your previous desk. Try again in a few minutes."), { code: "DESK_SESSION_REFUSED" });
+
+// Refused while a realm whose operation outlived its retirement still has something running; the next session
+// tries again (spec item 20's capacity rules don't apply: this is the account's own earlier work).
+const stillFinishing = () => Object.assign(new Error("Hosted Desk is still finishing your last session's work. Try again in a few minutes."), { code: "DESK_SESSION_REFUSED" });
+
+// The processes of `uid` other than `keep` and its descendants.
+export function othersRunning(processes, keep) {
+  const kept = new Set(keep === null || keep === undefined ? [] : [keep]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const { pid, ppid } of processes) if (!kept.has(pid) && kept.has(ppid)) { kept.add(pid); grew = true; }
+  }
+  return processes.filter(({ pid }) => !kept.has(pid)).map(({ pid }) => pid);
+}
+
+// The processes running with `uid` as any of their real, effective, saved or filesystem UIDs, as { pid, ppid }. A
+// zombie runs nothing, so it doesn't count.
+export function uidProcesses(uid, { procDir = "/proc", list = readdirSync, read = readFileSync } = {}) {
+  const pids = [];
+  for (const name of list(procDir)) {
+    if (!/^\d+$/.test(name)) continue;
+    let status;
+    try {
+      status = read(join(procDir, name, "status"), "utf8");
+    } catch {
+      continue;
+    }
+    const ids = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(status);
+    if (ids && !/^State:\s+Z/m.test(status) && ids.slice(1).some(id => Number(id) === uid)) {
+      pids.push({ pid: Number(name), ppid: Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]) });
+    }
+  }
+  return pids;
+}
 
 // Refused when the realm disk is too full for another clone (spec item 20); session start passes it to the person.
 const diskFull = () => Object.assign(new Error("Hosted Desk is short of disk space, so it can't set up your desk right now. Please try again later."), { code: "DESK_SESSION_REFUSED" });
@@ -314,6 +348,7 @@ export function assertAccountRuntimeBoundary(config, baseEnv = process.env) {
 export function createAccountRuntime({
   config, store, mint, baseEnv = process.env, rootDir = "/data/realms",
   diskUsage = (path) => diskUsedFraction(path), diskLimit = 0.8, log: write = runtimeLog,
+  running = uidProcesses,
 }) {
   assertAccountRuntimeBoundary(config, baseEnv);
   // Each account's desk is the repository its own binding names, not DESK_REPO. A binding to any repository other
@@ -332,7 +367,10 @@ export function createAccountRuntime({
   const authorities = new Map();
   const preparing = new Map();
   const prepared = new Map();
+  // Accounts whose realm could not be proved quiescent: { error, child, recover }. The next preparation calls
+  // recover, which succeeds once nothing but the realm's token broker runs as its UID.
   const preservationFailures = new Map();
+  const recovering = new Map();
   const claims = new Map();
   // Accounts deleted while this replica runs: never prepared again, even by a preparation already reading the store.
   const deleted = new Set();
@@ -350,8 +388,37 @@ export function createAccountRuntime({
   // When the shutdown's pushes must be done by (closeAll); every push in the meantime gets only the time left.
   let shutdownDeadline = Infinity;
 
+  // Retries a realm that could not be proved quiescent: once nothing of it runs, its writes are pushed, it is
+  // emptied as its own UID and the account is prepared afresh. Until then the person gets a plain message to try
+  // again. Concurrent calls share one attempt.
+  async function recoverPreservation(accountId) {
+    const entry = preservationFailures.get(accountId);
+    if (closed) throw entry.error;
+    let attempt = recovering.get(accountId);
+    if (!attempt) {
+      attempt = (async () => {
+        let recovered = false;
+        try {
+          recovered = (await entry.recover?.()) === true;
+        } catch (error) {
+          write(`could not recover account ${accountId}'s realm yet (${typeof error?.code === "string" ? error.code : "error"})`);
+        }
+        if (!recovered || preservationFailures.get(accountId) !== entry) return false;
+        preservationFailures.delete(accountId);
+        if (prepared.get(accountId)?.realm === entry.realm) prepared.delete(accountId);
+        authorities.delete(accountId);
+        for (const [claim, owner] of claims) if (owner === accountId) claims.delete(claim);
+        bump(accountId);
+        write(`recovered account ${accountId}'s realm: its writes were pushed and it was emptied`);
+        return true;
+      })().finally(() => recovering.delete(accountId));
+      recovering.set(accountId, attempt);
+    }
+    if (!(await attempt)) throw stillFinishing();
+  }
+
   async function prepare(accountId) {
-    if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+    if (preservationFailures.has(accountId)) await recoverPreservation(accountId);
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId) || deleted.has(accountId)) throw refused();
     // The realm of an earlier binding could not be released yet: try again before following the new binding.
     if (releaseFailures.has(accountId)) {
@@ -434,16 +501,19 @@ export function createAccountRuntime({
     const operations = new Set();
     let stopped = false;
     let broker;
+    let cloned = false;
+    let pushWithheld = false;
+    const preserve = (error, child) => {
+      stopped = true;
+      preservationFailures.set(accountId, { error, child, realm, recover: () => recover() });
+    };
     const run = (job, timeoutMs) => {
       const child = launch(realm, env, job);
       child.stderr.pipe(process.stderr, { end: false });
       const done = completion(child, timeoutMs, true);
       operations.add(done);
       done.then(() => operations.delete(done), error => {
-        if (error.quiescent !== true) {
-          stopped = true;
-          preservationFailures.set(accountId, { error, child });
-        }
+        if (error.quiescent !== true) preserve(error, child);
         operations.delete(done);
       });
       return done;
@@ -453,6 +523,22 @@ export function createAccountRuntime({
       const done = completion(broker, 5_000);
       broker.kill("SIGTERM");
       await done;
+    };
+    // After a preservation failure: false while anything but the token broker (a helper and its worker) still runs
+    // as the realm's UID.
+    // Otherwise pushes the clone's writes (unless they were withheld), closes the broker and empties the root.
+    const recover = async () => {
+      const brokerPid = broker && broker.exitCode === null && broker.signalCode === null ? broker.pid : null;
+      if (othersRunning(running(uid), brokerPid).length > 0) return false;
+      if (cloned && !pushWithheld) {
+        const deadline = Date.now() + 65_000;
+        await run({ action: "push", pluginDir }, 65_000);
+        if ((await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, Math.max(1, deadline - Date.now()))).trim()) return false;
+      }
+      await closeBroker();
+      await run({ action: "purge" });
+      try { rmdirSync(realm.root); } catch {}
+      return true;
     };
     try {
       await run({ action: "init" });
@@ -472,6 +558,7 @@ export function createAccountRuntime({
         });
       });
       await run({ action: "clone", repo: binding.repo });
+      cloned = true;
     } catch (error) {
       if (preservationFailures.has(accountId)) throw error;
       await closeBroker();
@@ -521,10 +608,7 @@ export function createAccountRuntime({
     const lifecycle = createRealmLifecycle({
       services: children, operations,
       failure: () => preservationFailures.get(accountId)?.error,
-      preserve(error, child) {
-        stopped = true;
-        preservationFailures.set(accountId, { error, child });
-      },
+      preserve,
       stop: () => { stopped = true; },
       push, closeBroker, purgeRoot: () => run({ action: "purge" }),
     });
@@ -551,8 +635,14 @@ export function createAccountRuntime({
       },
       close: lifecycle.close,
       purge: lifecycle.purge,
-      discard: lifecycle.discard,
-      withholdPush: lifecycle.withholdPush,
+      discard(...args) {
+        pushWithheld = true;
+        return lifecycle.discard(...args);
+      },
+      withholdPush(...args) {
+        pushWithheld = true;
+        return lifecycle.withholdPush(...args);
+      },
     });
     return value;
   }
