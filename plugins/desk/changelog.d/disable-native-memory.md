@@ -1,1 +1,0 @@
-Desk's versioned foundation forbids native harness memory stores. Copilot startup forces its native memory setting off even after re-enablement, so instructions and preferences stay in the Git-backed desk. Settings repair failures are reported without overwriting commented or malformed files.
