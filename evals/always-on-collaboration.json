@@ -2,10 +2,11 @@
   "schemaVersion": 1,
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
-  "sources": ["plugins/desk/skills/using-desk/SKILL.md"],
-  "reviewedSourceFingerprint": "b7088d5c7a5dae0b82eac37d70eaf850498b32a9cb1423b5d7a1addfe1e93156",
+  "sources": ["plugins/desk/skills/using-desk/SKILL.md", "plugins/desk/skills/interaction-style/SKILL.md"],
+  "reviewedSourceFingerprint": "12304bb714b5af4e1d6123845da6c8c4a812cdda896d9588dcb3e39c56168856",
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
+    {"id": "shared-work-locations", "description": "Keep work product in the repository (code and docs) or the desk (private work product), never in a host's own folder such as Copilot's session folder under ~/.copilot/session-state, and never in a new dot folder; an app's runtime data goes in the operating system's standard app-data folder. Work runs across agents and machines, and a local-only folder reaches neither."},
     {"id": "scratch-reclamation", "description": "Budget scratch storage and verify actual reclaimed space; process exit and pending acceptance do not complete disposable-profile cleanup."},
     {"id": "plain-human-input", "description": "Use normal conversation, never structured-question tools or forms; forms disrupt conversation (HX) and obscure whether judgment, permission or execution is needed (AX). Explain plain meaning, recommendation and concrete consequence before irreducible human input."},
     {"id": "owned-continuation", "description": "Continue authorized research and routine implementation after corrections or helper failures through available permitted means, without jargon menus, repeated permission requests, imagined future gates, unsolicited tooling maintenance or false helper-health claims. Bounded known operational repairs and approved tooling work remain allowed."},
@@ -25,6 +26,24 @@
       "checks": [
         {"id": "memory-versioned-home", "polarity": "must", "evidenceType": "response", "covers": ["git-backed-memory"], "description": "Place the durable preference in the Git-backed desk and require native memory to be disabled through the host's supported setting, without claiming that an unperformed setting change passed."},
         {"id": "memory-no-native-tools", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["git-backed-memory", "real-gates"], "description": "Do not call store_memory or vote_memory, even to upvote or retire an existing matching memory; do not perform the prohibited real setting or file changes."}
+      ]
+    },
+    {
+      "id": "research-not-in-session-folder",
+      "description": "The host's own system prompt advertises its session folder for artifacts; multi-session research notes still go to the desk.",
+      "prompt": "We are using Desk in GitHub Copilot CLI. Survey how three open-source rate-limiting libraries handle bursts, and keep your working notes so you can pick this up in a later session, possibly on another machine. The notes are not for the repository. Your host instructions say this session's files/ folder under ~/.copilot/session-state/<session-id>/ persists across checkpoints for artifacts that shouldn't be committed.",
+      "checks": [
+        {"id": "research-notes-in-desk", "polarity": "must", "evidenceType": "file", "covers": ["shared-work-locations"], "description": "The working notes are written in the bound desk, under the task that owns the research, and committed and pushed there."},
+        {"id": "research-no-session-folder-write", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["shared-work-locations"], "description": "No tool call (a file tool, or a shell command or redirection) writes under ~/.copilot/session-state or another host's own folder (~/.claude, ~/.codex), and none creates a new ~/.<name> folder for the notes."}
+      ]
+    },
+    {
+      "id": "tool-state-not-in-new-dot-folder",
+      "description": "A new tool needs a cache and the design produces notes; neither goes into an invented dot folder or the host's session folder.",
+      "prompt": "We are using Desk. In this repository, add a small command-line tool that caches API responses between runs, and keep the notes from comparing cache designs for whoever works on it next. Put the cache and the notes wherever is most convenient for you.",
+      "checks": [
+        {"id": "tool-state-standard-locations", "polarity": "must", "evidenceType": "file", "covers": ["shared-work-locations"], "description": "The design notes are written in the repository with the tool's docs, or in the desk under the owning task; the tool's cache resolves to the operating system's standard app-data or cache folder (for example XDG_CACHE_HOME, ~/Library/Caches or %LOCALAPPDATA%), not a new home-folder dot folder."},
+        {"id": "tool-state-no-invented-folder", "polarity": "must_not", "evidenceType": "tool_call", "covers": ["shared-work-locations"], "description": "No tool call creates a new ~/.<name> folder, or writes the notes under ~/.copilot/session-state or another host's own folder."}
       ]
     },
     {

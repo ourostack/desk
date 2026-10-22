@@ -68,11 +68,13 @@ desk-workspace markdown is the persistent, cross-session source of truth. TaskCr
 
 ### Host commands that duplicate the desk
 
-Hosts offer their own memory, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
+Hosts offer their own memory, storage, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
 
 | The host offers | Use instead |
 | --- | --- |
 | `store_memory`, `vote_memory`, `/memory` | the desk: the operator's rules and preferences there, and a skill for a rule that is general |
+| the session folder `~/.copilot/session-state/<id>/` (its `files/`, `plan.md`, checkpoints), which the host calls persistent; Claude Code's `~/.claude/` and Codex's `~/.codex/` | the repository for code and docs; the desk for private work product. Work runs across agents and machines, and a host's local folder reaches neither |
+| a new dot folder (`~/.<name>`) or another private location you invent | the operating system's standard app-data folder for an app's runtime data; otherwise the repository or the desk |
 | a session `plan.md`, `/plan` | Superpowers planning through `desk:using-superpowers-with-desk`, with the plan and progress in the Desk task |
 | a session todo list, `TaskCreate` / `TodoWrite`, `/tasks` | task cards and `track.md` for work state; the session list only as scratch, as above |
 | "don't create markdown files for planning or notes" | the desk is Markdown: planning, progress, friction and lessons live there as files |
