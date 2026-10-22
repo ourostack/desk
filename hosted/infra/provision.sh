@@ -228,9 +228,10 @@ properties:
     secrets:
 $secrets_yaml
   template:
-    # Shutdown stops every Desk child (up to 10 s) and then runs Desk's own
-    # push of any unpushed desk writes (up to 60 s) before the gateway exits.
-    terminationGracePeriodSeconds: 90
+    # Shutdown stops every Desk child (up to 12 s), then pushes every desk,
+    # with a rescue push for any that fail, all within 80 s of SIGTERM, and
+    # then closes the token broker (up to 5 s) before the gateway exits.
+    terminationGracePeriodSeconds: 120
     scale:
       minReplicas: $MIN_REPLICAS
       maxReplicas: 1

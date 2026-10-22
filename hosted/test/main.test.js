@@ -19,6 +19,7 @@ import {
   deskPushArgs,
   pushDesk,
   stopGateway,
+  RELAY_CLOSE_DEADLINE_MS,
   startAccountSweep,
   checkLegacyAccounts,
   createAuthorLookup,
@@ -178,6 +179,24 @@ test("shutdown stops new connections, then every Desk child, then pushes the des
     "token socket closed",
     "connections closed",
   ]);
+});
+
+test("shutdown pushes every desk even when a Desk session never reports close", async () => {
+  const order = [];
+  const started = Date.now();
+  await stopGateway({
+    server: { close: () => order.push("server stops accepting"), closeAllConnections: () => order.push("connections closed") },
+    relay: { close: () => new Promise(() => order.push("children stopping")) },
+    relayCloseMs: 50,
+    pushDesk: async () => order.push("Desk push"),
+    closeTokenSocket: () => order.push("token socket closed"),
+  });
+  assert.ok(Date.now() - started < 2_000, "the relay's wait is bounded");
+  assert.deepEqual(order, ["server stops accepting", "children stopping", "Desk push", "token socket closed", "connections closed"]);
+});
+
+test("shutdown waits about twelve seconds for Desk sessions by default", () => {
+  assert.equal(RELAY_CLOSE_DEADLINE_MS, 12_000);
 });
 
 test("shutdown before the GitHub App is set up only stops the server", async () => {

@@ -288,7 +288,7 @@ export function createGatewayAdmin({ config, parts, relay, runtime, fetch = glob
 export const MULTI_USER_LIMITS = Object.freeze({ maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 600_000, minIdleForeignMs: 600_000 });
 
 // Every desk's shutdown push must finish within this long of SIGTERM: Container Apps kills the replica after its
-// 90 s termination grace period (provision.sh), and the token brokers still need a few seconds after the pushes.
+// 120 s termination grace period (provision.sh), and the token brokers still need a few seconds after the pushes.
 export const SHUTDOWN_PUSH_DEADLINE_MS = 80_000;
 
 // The ouro CLI's admin sign-in settings, published on a multi-user gateway that has them.
@@ -502,9 +502,24 @@ export async function pushDesk({ dir, args, env, git, timeoutMs = 60_000, retryM
 // sessions, every Desk child stopped, then Desk's own push of whatever the
 // clone still holds, and only then the token socket that push authenticates
 // through.
-export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket }) {
+//
+// The wait for Desk children is bounded: a multi-user session's stop is a
+// message to its realm's supervisor, which a wedged or stopped supervisor never
+// answers, and every realm's push must still run before Container Apps kills
+// the replica.
+export const RELAY_CLOSE_DEADLINE_MS = 12_000;
+
+export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket, relayCloseMs = RELAY_CLOSE_DEADLINE_MS }) {
   server.close();
-  await relay?.close();
+  if (relay) {
+    let timer;
+    const closed = await Promise.race([
+      relay.close().then(() => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), relayCloseMs); }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) log(`Desk sessions did not all close within ${relayCloseMs / 1000} s; pushing the desks anyway`);
+  }
   await push?.();
   await closeTokenSocket?.();
   server.closeAllConnections();

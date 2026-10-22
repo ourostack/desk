@@ -195,7 +195,8 @@ test("shutdown closes every realm at once; one push failure is logged by account
   assert.equal(lines.length, 1);
   assert.match(lines[0], /acct-b/);
   assert.match(lines[0], /DESK_PUSH_UNPRESERVED/);
-  assert.match(lines[0], /kept/);
+  assert.doesNotMatch(lines[0], /kept on disk/, "the container's disk does not outlive the replica");
+  assert.match(lines[0], /lost when this replica stops/);
   assert.doesNotMatch(lines.join("\n"), /acct-a|acct-c/);
 });
 
@@ -231,6 +232,112 @@ test("a push gets at most 65 s, and only the time left before the shutdown deadl
   assert.equal(pushBudget(1_000, Infinity), 65_000);
   assert.equal(pushBudget(1_000, 31_000), 30_000);
   assert.equal(pushBudget(1_000, 900), 0);
+});
+
+test("a failed shutdown push leaves the last seconds before the deadline for a rescue push", async () => {
+  const { pushBudget, RESCUE_RESERVE_MS } = await import("../src/account-runtime.js");
+  assert.equal(RESCUE_RESERVE_MS, 10_000);
+  assert.equal(pushBudget(1_000, 81_000 - RESCUE_RESERVE_MS), 65_000);
+  assert.equal(pushBudget(1_000, 41_000 - RESCUE_RESERVE_MS), 30_000);
+});
+
+test("a rescue pushes unpushed desk writes to a new branch, which no newer commit can reject", async () => {
+  const { rescueDeskWrites } = await import("../src/account-runtime.js");
+  const calls = [];
+  const lines = [];
+  const run = async (job, timeoutMs) => {
+    calls.push({ args: job.args, timeoutMs });
+    return job.args[0] === "rev-list" ? "abc123\n" : "";
+  };
+  const branch = await rescueDeskWrites({
+    run, accountId: "acct-a", deadline: 50_000, now: () => 45_000, stamp: () => "20261022T034500Z-1a2b3c4d", write: line => lines.push(line),
+  });
+  assert.equal(branch, "desk-rescue/20261022T034500Z-1a2b3c4d");
+  assert.deepEqual(calls.map(call => call.args), [
+    ["rebase", "--abort"],
+    ["rev-list", "@{u}..HEAD"],
+    ["push", "--quiet", "origin", "HEAD:refs/heads/desk-rescue/20261022T034500Z-1a2b3c4d"],
+  ]);
+  assert.ok(calls.every(call => call.timeoutMs > 0 && call.timeoutMs <= 5_000), "the rescue gets only the time left");
+  assert.ok(calls.flatMap(call => call.args).every(arg => !arg.includes("acct-a")), "no account id on any argv");
+  assert.match(lines.join("\n"), /DESK WRITES RESCUED for account acct-a: pushed to branch desk-rescue\/20261022T034500Z-1a2b3c4d/);
+});
+
+test("a rescue with nothing unpushed pushes nothing and says nothing needed saving", async () => {
+  const { rescueDeskWrites } = await import("../src/account-runtime.js");
+  const calls = [];
+  const branch = await rescueDeskWrites({
+    run: async (job) => { calls.push(job.args); return ""; }, accountId: "acct-a", deadline: Infinity, write: () => {},
+  });
+  assert.equal(branch, "");
+  assert.deepEqual(calls, [["rebase", "--abort"], ["rev-list", "@{u}..HEAD"]]);
+});
+
+test("a rescue still pushes when the unpushed count can't be read, within 10 s without a deadline", async () => {
+  const { rescueDeskWrites } = await import("../src/account-runtime.js");
+  const timeouts = [];
+  const branch = await rescueDeskWrites({
+    run: async (job, timeoutMs) => { timeouts.push(timeoutMs); if (job.args[0] !== "push") throw new Error("no rebase, no upstream"); return ""; },
+    accountId: "acct-a", deadline: Infinity, stamp: () => "s", write: () => {},
+  });
+  assert.equal(branch, "desk-rescue/s");
+  assert.ok(timeouts.every(ms => ms === 10_000));
+});
+
+test("a failed rescue is logged by account and doesn't throw", async () => {
+  const { rescueDeskWrites } = await import("../src/account-runtime.js");
+  const lines = [];
+  const branch = await rescueDeskWrites({
+    run: async (job) => { if (job.args[0] === "push") throw Object.assign(new Error("offline"), { code: "DESK_OPERATION_FAILED" }); return "abc\n"; },
+    accountId: "acct-a", deadline: Infinity, stamp: () => "s", write: line => lines.push(line),
+  });
+  assert.equal(branch, null);
+  assert.match(lines.join("\n"), /DESK WRITES NOT RESCUED for account acct-a \(DESK_OPERATION_FAILED\)/);
+});
+
+test("a rescue with no time left before the deadline runs nothing and says so", async () => {
+  const { rescueDeskWrites } = await import("../src/account-runtime.js");
+  const lines = [];
+  let ran = false;
+  const branch = await rescueDeskWrites({
+    run: async () => { ran = true; return ""; }, accountId: "acct-a", deadline: 1_000, now: () => 1_000, write: line => lines.push(line),
+  });
+  assert.equal(branch, null);
+  assert.equal(ran, false);
+  assert.match(lines.join("\n"), /DESK WRITES NOT RESCUED for account acct-a \(no time left\)/);
+});
+
+test("the processes still running as a realm's UID are read from /proc, by any of their UIDs, without zombies that are truly gone", async () => {
+  const { uidProcesses } = await import("../src/account-runtime.js");
+  const status = {
+    "10": "PPid:\t1\nUid:\t10001\t10001\t10001\t10001\n",
+    "11": "PPid:\t1\nUid:\t1000\t1000\t1000\t1000\n",
+    "12": "PPid:\t10\nUid:\t1000\t10001\t1000\t1000\n",
+    "14": "State:\tZ (zombie)\nPPid:\t1\nThreads:\t1\nUid:\t10001\t10001\t10001\t10001\n",
+    // The gateway's own unreaped child: its last messages may not have been read yet.
+    "15": "State:\tZ (zombie)\nPPid:\t500\nThreads:\t1\nUid:\t10001\t10001\t10001\t10001\n",
+    // A leader whose other threads still run.
+    "16": "State:\tZ (zombie)\nPPid:\t1\nThreads:\t3\nUid:\t10001\t10001\t10001\t10001\n",
+  };
+  const proc = {
+    list: () => ["10", "11", "12", "13", "14", "15", "16", "self"],
+    ownPid: 500,
+    read: (path) => {
+      const pid = path.split("/").at(-2);
+      if (!(pid in status)) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      return status[pid];
+    },
+  };
+  assert.deepEqual(uidProcesses(10001, proc), [{ pid: 10, ppid: 1 }, { pid: 12, ppid: 10 }, { pid: 15, ppid: 500 }, { pid: 16, ppid: 1 }]);
+  assert.deepEqual(uidProcesses(10002, proc), []);
+});
+
+test("a realm counts as still running only for processes outside its token broker's tree", async () => {
+  const { othersRunning } = await import("../src/account-runtime.js");
+  const processes = [{ pid: 20, ppid: 1 }, { pid: 22, ppid: 21 }, { pid: 21, ppid: 20 }, { pid: 30, ppid: 1 }, { pid: 31, ppid: 30 }];
+  assert.deepEqual(othersRunning(processes, 20), [30, 31]);
+  assert.deepEqual(othersRunning(processes.slice(0, 3), 20), []);
+  assert.deepEqual(othersRunning(processes, null), [20, 22, 21, 30, 31]);
 });
 
 test("without a shutdown deadline, close waits for every preparation", async () => {

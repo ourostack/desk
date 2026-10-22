@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmdirSync, statfsSync } from "node:fs";
+import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statfsSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertGatewayKernelBoundary, createUidAllocator, isolatedDeskEnv, isolationArgs } from "./isolation.js";
@@ -12,6 +12,42 @@ const allocateUid = createUidAllocator();
 const refused = () => new Error("Hosted desk account authority is unavailable or changed.");
 // Session start passes this message to the person (relay.js).
 const stillSaving = () => Object.assign(new Error("Hosted Desk is still saving the last changes of your previous desk. Try again in a few minutes."), { code: "DESK_SESSION_REFUSED" });
+
+// Refused while a realm whose operation outlived its retirement still has something running; the next session
+// tries again (spec item 20's capacity rules don't apply: this is the account's own earlier work).
+const stillFinishing = () => Object.assign(new Error("Hosted Desk is still finishing your last session's work. Try again in a few minutes."), { code: "DESK_SESSION_REFUSED" });
+
+// The processes of `uid` other than `keep` and its descendants.
+export function othersRunning(processes, keep) {
+  const kept = new Set(keep === null || keep === undefined ? [] : [keep]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const { pid, ppid } of processes) if (!kept.has(pid) && kept.has(ppid)) { kept.add(pid); grew = true; }
+  }
+  return processes.filter(({ pid }) => !kept.has(pid)).map(({ pid }) => pid);
+}
+
+// The processes running with `uid` as any of their real, effective, saved or filesystem UIDs, as { pid, ppid }. A
+// zombie runs nothing, so it doesn't count, unless it is the gateway's own child (its last messages may not have
+// been read yet) or a thread-group leader whose other threads still run.
+export function uidProcesses(uid, { procDir = "/proc", list = readdirSync, read = readFileSync, ownPid = process.pid } = {}) {
+  const pids = [];
+  for (const name of list(procDir)) {
+    if (!/^\d+$/.test(name)) continue;
+    let status;
+    try {
+      status = read(join(procDir, name, "status"), "utf8");
+    } catch {
+      continue;
+    }
+    const ids = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(status);
+    if (!ids || !ids.slice(1).some(id => Number(id) === uid)) continue;
+    const ppid = Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]);
+    const gone = /^State:\s+Z/m.test(status) && ppid !== ownPid && Number(/^Threads:\s+(\d+)/m.exec(status)?.[1] ?? 1) <= 1;
+    if (!gone) pids.push({ pid: Number(name), ppid });
+  }
+  return pids;
+}
 
 // Refused when the realm disk is too full for another clone (spec item 20); session start passes it to the person.
 const diskFull = () => Object.assign(new Error("Hosted Desk is short of disk space, so it can't set up your desk right now. Please try again later."), { code: "DESK_SESSION_REFUSED" });
@@ -25,8 +61,9 @@ export function diskUsedFraction(path, statfs = statfsSync) {
 }
 
 // Closes every prepared realm at once: each retires its services and pushes its own writes as its own UID, so one
-// slow or failing push neither delays nor stops another's. A realm whose close failed is logged by account and kept
-// on disk, writes and all. Returns the failures.
+// slow or failing push neither delays nor stops another's. A realm whose close failed is logged by account; its
+// realm is on the container's own disk, so writes that its rescue push did not save are lost with the replica.
+// Returns the failures.
 export async function closeRealms(entries, write = runtimeLog) {
   const results = await Promise.allSettled(entries.map(({ value }) => value.close()));
   const failed = [];
@@ -34,7 +71,7 @@ export async function closeRealms(entries, write = runtimeLog) {
     if (result.status === "fulfilled") return;
     const { accountId } = entries[index];
     const code = typeof result.reason?.code === "string" ? result.reason.code : (result.reason?.name ?? "error");
-    write(`DESK WRITES NOT PUSHED for account ${accountId} (${code}); its realm is kept on disk`);
+    write(`DESK WRITES NOT PUSHED for account ${accountId} (${code}); any not saved to a rescue branch are lost when this replica stops`);
     failed.push({ accountId, error: result.reason });
   });
   return failed;
@@ -43,6 +80,46 @@ export async function closeRealms(entries, write = runtimeLog) {
 // A push's time: its usual 65 s, or less when the shutdown deadline is nearer. Zero means there is no time left.
 export function pushBudget(now, deadline, max = 65_000) {
   return Math.max(0, Math.min(max, deadline - now));
+}
+
+// The end of the shutdown window kept for a rescue push when the desk's own push fails.
+export const RESCUE_RESERVE_MS = 10_000;
+
+const rescueStamp = () => `${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}-${randomUUID().slice(0, 8)}`;
+
+// After a failed shutdown push, pushes the desk's HEAD to a new branch `desk-rescue/<UTC time>-<random>` on the
+// account's own repository. A new branch can't be rejected by a newer commit on the desk's branch, and the person
+// can see it and merge it. Its name carries no account id, so no argv does. A rebase a killed push left half done is
+// aborted first, so HEAD is the desk's branch with every unpushed commit. Never throws: returns the branch, "" when
+// nothing needed saving, or null when the rescue failed, which it logs by account.
+export async function rescueDeskWrites({ run, accountId, deadline, now = Date.now, stamp = rescueStamp, write = runtimeLog }) {
+  const left = () => Math.min(RESCUE_RESERVE_MS, deadline - now());
+  if (!(left() > 0)) {
+    write(`DESK WRITES NOT RESCUED for account ${accountId} (no time left)`);
+    return null;
+  }
+  try {
+    await run({ action: "git", args: ["rebase", "--abort"] }, left());
+  } catch {
+    // No rebase was under way.
+  }
+  let ahead = true;
+  try {
+    ahead = Boolean((await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, left())).trim());
+  } catch {
+    // The count can't be read: push anyway rather than risk losing writes.
+  }
+  if (!ahead) return "";
+  const branch = `desk-rescue/${stamp()}`;
+  try {
+    if (!(left() > 0)) throw Object.assign(new Error("no time left"), { code: "no time left" });
+    await run({ action: "git", args: ["push", "--quiet", "origin", `HEAD:refs/heads/${branch}`] }, left());
+  } catch (error) {
+    write(`DESK WRITES NOT RESCUED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"})`);
+    return null;
+  }
+  write(`DESK WRITES RESCUED for account ${accountId}: pushed to branch ${branch} on its desk repository`);
+  return branch;
 }
 
 // The shutdown close: realms already prepared close at once, without waiting for a preparation still under way (a
@@ -279,6 +356,7 @@ export function assertAccountRuntimeBoundary(config, baseEnv = process.env) {
 export function createAccountRuntime({
   config, store, mint, baseEnv = process.env, rootDir = "/data/realms",
   diskUsage = (path) => diskUsedFraction(path), diskLimit = 0.8, log: write = runtimeLog,
+  running = uidProcesses,
 }) {
   assertAccountRuntimeBoundary(config, baseEnv);
   // Each account's desk is the repository its own binding names, not DESK_REPO. A binding to any repository other
@@ -297,7 +375,10 @@ export function createAccountRuntime({
   const authorities = new Map();
   const preparing = new Map();
   const prepared = new Map();
+  // Accounts whose realm could not be proved quiescent: { error, child, recover }. The next preparation calls
+  // recover, which succeeds once nothing but the realm's token broker runs as its UID.
   const preservationFailures = new Map();
+  const recovering = new Map();
   const claims = new Map();
   // Accounts deleted while this replica runs: never prepared again, even by a preparation already reading the store.
   const deleted = new Set();
@@ -315,8 +396,37 @@ export function createAccountRuntime({
   // When the shutdown's pushes must be done by (closeAll); every push in the meantime gets only the time left.
   let shutdownDeadline = Infinity;
 
+  // Retries a realm that could not be proved quiescent: once nothing of it runs, its writes are pushed, it is
+  // emptied as its own UID and the account is prepared afresh. Until then the person gets a plain message to try
+  // again. Concurrent calls share one attempt.
+  async function recoverPreservation(accountId) {
+    const entry = preservationFailures.get(accountId);
+    if (closed) throw entry.error;
+    let attempt = recovering.get(accountId);
+    if (!attempt) {
+      attempt = (async () => {
+        let recovered = false;
+        try {
+          recovered = (await entry.recover?.()) === true;
+        } catch (error) {
+          write(`could not recover account ${accountId}'s realm yet (${typeof error?.code === "string" ? error.code : "error"})`);
+        }
+        if (!recovered || preservationFailures.get(accountId)?.realm !== entry.realm) return false;
+        preservationFailures.delete(accountId);
+        if (prepared.get(accountId)?.realm === entry.realm) prepared.delete(accountId);
+        authorities.delete(accountId);
+        for (const [claim, owner] of claims) if (owner === accountId) claims.delete(claim);
+        bump(accountId);
+        write(`recovered account ${accountId}'s realm: its writes were pushed and it was emptied`);
+        return true;
+      })().finally(() => recovering.delete(accountId));
+      recovering.set(accountId, attempt);
+    }
+    if (!(await attempt)) throw stillFinishing();
+  }
+
   async function prepare(accountId) {
-    if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+    if (preservationFailures.has(accountId)) await recoverPreservation(accountId);
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId) || deleted.has(accountId)) throw refused();
     // The realm of an earlier binding could not be released yet: try again before following the new binding.
     if (releaseFailures.has(accountId)) {
@@ -399,16 +509,33 @@ export function createAccountRuntime({
     const operations = new Set();
     let stopped = false;
     let broker;
-    const run = (job, timeoutMs) => {
+    let cloned = false;
+    let pushWithheld = false;
+    // Set when a push was verified after the realm stopped taking work, or a recovery saved its writes: nothing is
+    // left to push.
+    let saved = false;
+    // Set once a recovery emptied the realm; a late failure report about it changes nothing.
+    let recovered = false;
+    // Every process the gateway started in this realm, until Node has seen it close.
+    const live = new Set();
+    const start = job => {
       const child = launch(realm, env, job);
+      live.add(child);
+      child.once("close", () => live.delete(child));
+      return child;
+    };
+    const preserve = (error, child) => {
+      if (recovered) return;
+      stopped = true;
+      preservationFailures.set(accountId, { error, child, realm, recover: () => recover(), rescue: () => rescueAtShutdown() });
+    };
+    const run = (job, timeoutMs) => {
+      const child = start(job);
       child.stderr.pipe(process.stderr, { end: false });
       const done = completion(child, timeoutMs, true);
       operations.add(done);
       done.then(() => operations.delete(done), error => {
-        if (error.quiescent !== true) {
-          stopped = true;
-          preservationFailures.set(accountId, { error, child });
-        }
+        if (error.quiescent !== true) preserve(error, child);
         operations.delete(done);
       });
       return done;
@@ -419,9 +546,54 @@ export function createAccountRuntime({
       broker.kill("SIGTERM");
       await done;
     };
+    // Nothing of the realm runs but its token broker (a helper and its worker): every process the gateway started
+    // in it has closed, and nothing else runs as its UID.
+    const quiet = () => {
+      if ([...live].some(child => child !== broker)) return false;
+      const brokerPid = broker && broker.exitCode === null && broker.signalCode === null ? broker.pid : null;
+      return othersRunning(running(uid), brokerPid).length === 0;
+    };
+    const unsaved = () => cloned && !pushWithheld && !saved;
+    // After a preservation failure: false while anything else of the realm runs. Otherwise saves the clone's writes
+    // (its own push, or a rescue branch when that fails), closes the broker and empties the root.
+    const recover = async () => {
+      if (!quiet()) return false;
+      if (unsaved()) {
+        const budget = pushBudget(Date.now(), shutdownDeadline);
+        if (budget === 0) return false;
+        const deadline = Date.now() + budget;
+        await run({ action: "git", args: ["rebase", "--abort"] }, Math.min(RESCUE_RESERVE_MS, budget)).catch(() => {});
+        try {
+          await run({ action: "push", pluginDir }, budget);
+          saved = !(await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, Math.max(1, deadline - Date.now()))).trim();
+        } catch {
+          // The rescue below saves them instead.
+        }
+        if (!saved) saved = (await rescueDeskWrites({ run, accountId, deadline: Math.min(shutdownDeadline, Date.now() + RESCUE_RESERVE_MS), write })) !== null;
+        if (!saved) return false;
+      }
+      await closeBroker();
+      await run({ action: "purge" });
+      recovered = true;
+      try {
+        rmdirSync(realm.root);
+      } catch (error) {
+        if (error.code !== "ENOENT") write(`account ${accountId}'s emptied realm root could not be removed (${error.code ?? "error"}); it stays on this replica's disk`);
+      }
+      return true;
+    };
+    // At shutdown, a realm that could not be proved quiescent and whose work has since stopped gets a rescue push.
+    const rescueAtShutdown = async () => {
+      if (recovered || !unsaved()) return;
+      if (!quiet()) {
+        write(`account ${accountId}'s realm still has work running at shutdown; its writes are not rescued`);
+        return;
+      }
+      if (await rescueDeskWrites({ run, accountId, deadline: shutdownDeadline, write }) !== null) saved = true;
+    };
     try {
       await run({ action: "init" });
-      broker = launch(realm, env, { action: "broker" });
+      broker = start({ action: "broker" });
       broker.stderr.pipe(process.stderr, { end: false });
       await new Promise((resolve, reject) => {
         broker.once("error", reject);
@@ -437,6 +609,7 @@ export function createAccountRuntime({
         });
       });
       await run({ action: "clone", repo: binding.repo });
+      cloned = true;
     } catch (error) {
       if (preservationFailures.has(accountId)) throw error;
       await closeBroker();
@@ -456,8 +629,9 @@ export function createAccountRuntime({
       }
       return run({ action: "git", args });
     };
-    const push = async () => {
-      const budget = pushBudget(Date.now(), shutdownDeadline);
+    const deskPush = async () => {
+      // At shutdown, the window's last seconds are kept for a rescue push.
+      const budget = pushBudget(Date.now(), shutdownDeadline - (closed ? RESCUE_RESERVE_MS : 0));
       if (budget === 0) {
         throw Object.assign(new Error("Desk writes were not pushed before the shutdown deadline."), { code: "DESK_PUSH_UNPRESERVED", quiescent: true });
       }
@@ -469,14 +643,24 @@ export function createAccountRuntime({
           code: "DESK_PUSH_UNPRESERVED", quiescent: true,
         });
       }
+      if (stopped) saved = true;
+    };
+    // A shutdown push that failed with nothing left running in the realm gets a rescue push; the push still counts
+    // as failed, so the shutdown reports it.
+    const push = async () => {
+      try {
+        await deskPush();
+      } catch (error) {
+        if (closed && error?.quiescent === true && !preservationFailures.has(accountId)) {
+          await rescueDeskWrites({ run, accountId, deadline: shutdownDeadline, write });
+        }
+        throw error;
+      }
     };
     const lifecycle = createRealmLifecycle({
       services: children, operations,
       failure: () => preservationFailures.get(accountId)?.error,
-      preserve(error, child) {
-        stopped = true;
-        preservationFailures.set(accountId, { error, child });
-      },
+      preserve,
       stop: () => { stopped = true; },
       push, closeBroker, purgeRoot: () => run({ action: "purge" }),
     });
@@ -490,7 +674,7 @@ export function createAccountRuntime({
               arg === "-C" || arg.startsWith("--root"))) {
           throw new Error("Hosted desk launch arguments must contain public context only.");
         }
-        const guardian = launch(realm, env, { action: "launch", args });
+        const guardian = start({ action: "launch", args });
         return lifecycle.service(guardian);
       },
       git,
@@ -503,8 +687,14 @@ export function createAccountRuntime({
       },
       close: lifecycle.close,
       purge: lifecycle.purge,
-      discard: lifecycle.discard,
-      withholdPush: lifecycle.withholdPush,
+      discard(...args) {
+        pushWithheld = true;
+        return lifecycle.discard(...args);
+      },
+      withholdPush(...args) {
+        pushWithheld = true;
+        return lifecycle.withholdPush(...args);
+      },
     });
     return value;
   }
@@ -590,9 +780,18 @@ export function createAccountRuntime({
       shutdownDeadline = Math.min(shutdownDeadline, deadline);
       closing ??= (async () => {
         const results = await closeAll({ prepared, preparing, deadline: shutdownDeadline, write });
+        // A recovery under way finishes within the deadline; a preserved realm whose work has stopped gets a rescue.
+        let timer;
+        const bounded = work => Number.isFinite(shutdownDeadline)
+          ? Promise.race([work, new Promise(resolve => { timer = setTimeout(resolve, Math.max(0, shutdownDeadline - Date.now())); })])
+          : work;
+        await bounded(Promise.allSettled([...recovering.values()]));
+        clearTimeout(timer);
+        await bounded(Promise.allSettled([...preservationFailures.values()].map(entry => entry.rescue?.())));
+        clearTimeout(timer);
         const logged = new Set(results.map(({ accountId }) => accountId));
         for (const [accountId, { error }] of preservationFailures) {
-          if (!logged.has(accountId)) write(`DESK WRITES MAY NOT BE PUSHED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"}); its realm is preserved on disk`);
+          if (!logged.has(accountId)) write(`DESK WRITES MAY NOT BE PUSHED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"}); its writes are only on this replica's disk, which is lost when it stops`);
         }
         const failed = new Set([
           ...results.map(({ error }) => error),

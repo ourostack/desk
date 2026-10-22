@@ -153,7 +153,7 @@ jobs:
           docker version > native-runtime-evidence/docker-version.txt
           cp hosted/test/fixtures/runtime-native.Dockerfile native-runtime-evidence/fixture-context/Dockerfile
           cp hosted/test/fixtures/runtime-{native,child,timeout-native,service-native}.js native-runtime-evidence/fixture-context/
-          cp hosted/test/fixtures/isolation-e2e-native.js native-runtime-evidence/fixture-context/
+          cp hosted/test/fixtures/isolation-e2e-native.js hosted/test/fixtures/legacy-native.js native-runtime-evidence/fixture-context/
           cp hosted/test/fixtures/echo-desk.js hosted/test/fixtures/entra-discovery-ourobottest.json native-runtime-evidence/fixture-context/
           sha256sum hosted/Dockerfile .dockerignore hosted/package-lock.json plugins/desk/mcp/package-lock.json \
             hosted/src/account-runtime.js hosted/src/realm-helper.js hosted/src/service-lifetime.js hosted/src/service-output.js \
@@ -183,16 +183,20 @@ jobs:
 
       # Cases run sequentially against one real production build. A failure is
       # retained and makes the step red; subsequent cases still supply evidence.
-      - name: Qualify actual MCP services, unchanged I1 deadlines, multi-account routing and two-account isolation
+      - name: Qualify actual MCP services, unchanged I1 deadlines, multi-account routing, two-account isolation and the single-desk gateway
         run: |
           failed=0
-          for mode in services unproven i1 main isolation; do
+          for mode in services unproven i1 main isolation legacy; do
+            multi=1
+            script=runtime-native.js
+            state=/data/runtime-native
             case "$mode" in
               services) flags=(-e DESK_NATIVE_SERVICES=1) ;;
               unproven) flags=(-e DESK_NATIVE_SERVICES=1 -e DESK_SERVICE_UNPROVEN=1) ;;
               i1) flags=(-e DESK_NATIVE_TIMEOUTS=1) ;;
               main) flags=(-e DESK_NATIVE_MAIN=1) ;;
               isolation) flags=(-e DESK_NATIVE_ISOLATION=1) ;;
+              legacy) flags=(); multi=0; script=legacy-native.js; state=/data/legacy-native-desk ;;
             esac
             evidence="native-runtime-evidence/$mode"
             mkdir -p "$evidence"
@@ -200,8 +204,8 @@ jobs:
             if docker run --name "$name" --platform linux/amd64 \
               --network none --cpus 2 --memory 4g --memory-swap 4g \
               --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
-              -e DESK_MULTI_USER=1 "${flags[@]}" desk-hosted-native:qualification \
-              node /app/hosted/test/fixtures/runtime-native.js > "$evidence/stdout.log" 2> "$evidence/stderr.log"; then
+              -e DESK_MULTI_USER="$multi" "${flags[@]}" desk-hosted-native:qualification \
+              node "/app/hosted/test/fixtures/$script" > "$evidence/stdout.log" 2> "$evidence/stderr.log"; then
               status=0
             else
               status=$?
@@ -211,7 +215,7 @@ jobs:
             if ! docker inspect "$name" > "$evidence/container.json" 2> "$evidence/inspect.stderr"; then
               failed=1
             fi
-            if ! docker cp "$name:/data/runtime-native" - > "$evidence/state.tar" 2> "$evidence/state.stderr"; then
+            if ! docker cp "$name:$state" - > "$evidence/state.tar" 2> "$evidence/state.stderr"; then
               failed=1
             fi
             printf '%s: exit %s\n' "$mode" "$status" >> "$GITHUB_STEP_SUMMARY"
