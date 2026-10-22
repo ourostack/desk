@@ -49,6 +49,10 @@ if (joined.includes("containerapp env show")) {
   if (joined.includes("--query id")) console.log("/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/env");
   else if (joined.includes("defaultDomain")) console.log("blueflower-44af4710.eastus2.azurecontainerapps.io");
   else console.log("verification-id");
+} else if (joined.includes("containerapp show") && process.env.FAKE_SHOW_THROTTLED === "1") {
+  // A read that fails for a reason other than "not found", such as throttling.
+  console.error("ERROR: (TooManyRequests) Too many requests. Please retry.");
+  process.exit(1);
 } else if (joined.includes("containerapp show")) {
   if (!existsSync(appFile)) {
     console.error("ERROR: (ResourceNotFound) The Resource was not found.");

@@ -186,7 +186,11 @@ not_found() { grep -qiE "ResourceNotFound|was not found|could not be found" <<<"
 # DESK_MULTI_USER=1 on an app that doesn't exist yet: the record must be complete and pass the gateway's checks
 # before anything here writes (the staging identity, its role, the first image, the app), because the setting
 # joins only through the update that adds the Ouro settings. An app that exists is checked by app-yaml.mjs.
-if [[ "${DESK_MULTI_USER:-}" == 1 ]] && ! early_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)" && not_found "$early_error"; then
+if [[ "${DESK_MULTI_USER:-}" == 1 ]] && ! early_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)"; then
+  if ! not_found "$early_error"; then
+    printf 'Could not read Container App %s:\n%s\n' "$APP" "$early_error" >&2
+    exit 1
+  fi
   if [[ -f "$IDENTITY_FILE" ]]; then
     node "$APP_YAML" --require-identity --identity-record "$IDENTITY_FILE"
   else

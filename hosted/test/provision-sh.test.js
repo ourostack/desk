@@ -546,6 +546,10 @@ test("DESK_MULTI_USER=1 without a complete identity record is refused before any
   const refused = runProvision(t, { env: { STAGE: "staging", DESK_MULTI_USER: "1" }, record: badEndpoint, expectFailure: true });
   assert.deepEqual(writes(refused.argv), []);
   assert.match(refused.output, /storage\.endpoint must be/);
+  // An app that can't be read is never taken for absent: the gate stops instead of falling through (re-review m1).
+  const throttled = runProvision(t, { env: { STAGE: "staging", DESK_MULTI_USER: "1", FAKE_SHOW_THROTTLED: "1", FAKE_NO_STAGING_IDENTITY: "1" }, expectFailure: true });
+  assert.deepEqual(writes(throttled.argv), []);
+  assert.match(throttled.output, /Could not read Container App ouro-desk-hosted-staging/);
 });
 
 test("an app already holding DESK_MULTI_USER=1 without Ouro settings is refused with both ways out (review m3)", (t) => {
