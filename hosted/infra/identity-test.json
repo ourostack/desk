@@ -66,5 +66,18 @@
     "name": "kv-ouro-identity-261e0b",
     "id": "/subscriptions/261e0bf1-934d-41ab-9295-229b0d254418/resourceGroups/rg-ouro-identity/providers/Microsoft.KeyVault/vaults/kv-ouro-identity-261e0b",
     "entraClientSecret": "entra-client-secret-test"
+  },
+  "adminApi": {
+    "admins": [
+      "4850d5fc-552c-4b0d-88a3-2d0329bf4b25"
+    ],
+    "scope": "api://dde1f13f-10b1-4346-b403-5f454d7c2fc8/desk.admin",
+    "scopeId": "ac1e467b-e81b-418e-a588-b6edc8cdf4fe",
+    "roleId": "e3a25780-801e-4a1f-90a7-74ee1f27651c"
+  },
+  "cliApp": {
+    "appId": "20a65c9b-2fe5-45c1-8af9-79b4e22b958c",
+    "objectId": "d4ac02fd-89fd-46a0-a20f-115ba94f6118",
+    "servicePrincipalId": "28ea7e71-191d-4b1b-a3c3-8ebab8bccc8d"
   }
 }

@@ -347,10 +347,11 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 
 | Piece | Name | What it does |
 | --- | --- | --- |
-| Gateway app registration | `ouro-desk-hosted`, in each tenant | The app the gateway signs people in as. Its 12-month client secret lives in Key Vault. |
+| Gateway app registration | `ouro-desk-hosted`, in each tenant | The app the gateway signs people in as. Its 12-month client secret lives in Key Vault. It also exposes the delegated scope `desk.admin` at `api://<appId>` and defines the user app role `ouro.admin`, which the admin routes require ([Admin API](#admin-api)). |
+| CLI client | `ouro-cli`, in each tenant | The public client `ouro desk` signs in with, on the loopback redirect `http://127.0.0.1/callback` (any port). The gateway app preauthorizes it for `desk.admin`, so sign-in shows no consent page, and the user flow includes it. |
 | User flow | `Ouro sign-in` (prod), `Ouro sign-in (test)` (test) | Offers the email code and Apple to the gateway app. |
 | Apple provider | Sign in with Apple | Signs people in with Apple, using one of the tenant's two Apple keys. Graph gives it a GUID id in an external tenant (`apple.providerId` in the record), not B2C's `Apple-Managed-OIDC`, so the scripts find it by its type. |
-| Admin app | `ouro-identity-admin`, in each tenant | The scripts call Graph as this app, on your machine, for what `az` can't reach: the Apple provider, the user flow and the email one-time-code policy. `provision-identity.mjs` grants it four Graph application roles, one for each kind of call it makes: `IdentityProvider.ReadWrite.All` (the Apple provider), `EventListener.ReadWrite.All` (the user flow), `Policy.ReadWrite.AuthenticationMethod` (the email code) and `Application.ReadWrite.All` (the user flow's app link and the gateway secret's expiry). The apps the 2026-10-11 spike made in both tenants also hold `IdentityUserFlow.ReadWrite.All`, `Policy.ReadWrite.AuthenticationFlows`, `User.Read.All` and `AuditLog.Read.All`; the script never removes a role, so those stay until someone removes them by hand. Its secret is only in your macOS keychain. |
+| Admin app | `ouro-identity-admin`, in each tenant | The scripts call Graph as this app, on your machine, for what `az` can't reach: the Apple provider, the user flow and the email one-time-code policy. `provision-identity.mjs` grants it four Graph application roles, one for each kind of call it makes: `IdentityProvider.ReadWrite.All` (the Apple provider), `EventListener.ReadWrite.All` (the user flow), `Policy.ReadWrite.AuthenticationMethod` (the email code) and `Application.ReadWrite.All` (the user flow's app link, the gateway secret's expiry and the [admin API](#admin-api)). The apps the 2026-10-11 spike made in both tenants also hold `IdentityUserFlow.ReadWrite.All`, `Policy.ReadWrite.AuthenticationFlows`, `User.Read.All` and `AuditLog.Read.All`; the script never removes a role, so those stay until someone removes them by hand. Its secret is only in your macOS keychain. |
 | Automation app | `ouro-identity-automation`, in each tenant | The identity checks sign in to the tenant as this app, through a federated credential with no secret. It holds Graph's `IdentityProvider.ReadWrite.All` and `Application.Read.All`. |
 | Key Vault | `kv-ouro-identity-261e0b`, in resource group `rg-ouro-identity` | Holds the gateway's Entra client secret and the Apple keys, with access granted per secret. It was made with the tenants; the scripts never create it. |
 | Accounts store | Storage accounts `stouroaccounts261e0b` (prod) and `stouroacctstest261e0b` (test) | Tables `accounts`, `identities`, `invites` and `bindings`. Shared keys are off, so it is reached only through Entra roles. |
@@ -370,7 +371,18 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 | `--migrate client-key` | Copies the signing key into the client key, checked by fingerprint. |
 | `--rotate signing-key` | Test only in v1b-1. Rotates the signing key with a 30-day overlap ([Rotate the signing key](#rotate-the-signing-key)). |
 | `--rotate signing-key --emergency` | For a leaked signing key, in production too: new signing and client keys, no previous key ([If the signing key leaks](#if-the-signing-key-leaks)). |
+| `--admin-api` | Reconciles only the [admin API](#admin-api), as the admin app from the keychain, so `az` needn't be signed in to the tenant. Run it after a full run. |
 | `--rotate entra-secret` | Rotates the gateway's Entra client secret, deleting the old credential only once the gateway shows the new one ([Rotate the gateway's Entra client secret](#rotate-the-gateways-entra-client-secret)). |
+
+### Admin API
+
+`ouro desk invite`, `access` and `delete-account` call the gateway's admin routes with a delegated access token for the scope `api://<gateway appId>/desk.admin`, and the routes refuse every token without the app role `ouro.admin`. `hosted/infra/admin-api.mjs` keeps this in place through the admin app's Graph token:
+
+- the gateway app's `desk.admin` scope (a user scope, because the role is what grants admin), its `ouro.admin` role for users, its identifier URI `api://<appId>` and v2 access tokens;
+- the CLI client `ouro-cli`, its service principal, its preauthorization for the scope and its place in the user flow. An external tenant's users can't consent to anything, so the CLI asks for `desk.admin` alone, never `openid` or `offline_access`. It is not a fallback public client, so device-code and password sign-ins can't get an admin token. Once the record has `cliApp`, the client is read by its object id, so another app given its name is never adopted;
+- the role for exactly the users listed in the record's `adminApi.admins` (Entra user object ids): a missing assignment is made, and an assignment for anyone else is removed, but only once every listed admin holds the role, so a mistyped id never leaves the tenant without an admin.
+
+The scope and role ids are fixed in the script, the same in both tenants. A scope or role with the same name and another id stops the run before any write. After a run the record gains `cliApp` and the full `adminApi` (the scope URI and both ids), which the gateway and the CLI need. To make someone an admin, add their user object id to `adminApi.admins` in `identity-<env>.json` and run `node hosted/infra/provision-identity.mjs --env <env> --admin-api`.
 
 ### az sign-ins
 
