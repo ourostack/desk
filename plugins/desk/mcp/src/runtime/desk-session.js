@@ -24,6 +24,7 @@ import { deskSkill } from "./skills.js"
 import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
+import { GATE_WAIT_MS } from "./gate-wait.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
@@ -55,7 +56,6 @@ const STATUS_DETAIL_MS = 120
 const STATUS_BUDGET_MS = 90
 // How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
 const STATUS_RUN_LIMIT_MS = 10000
-const GATE_WAIT_MS = 10000
 // How many background attempts that start between a gated call's own admission check and its dispatch it joins before refusing.
 const GATE_REJOINS = 3
 const GATE_RETRY = Symbol("gate retry")
@@ -1325,8 +1325,8 @@ export function createDeskSession(deps) {
       admission: {
         state: snapshot.state,
         code: snapshot.code,
-        // An admission attempt is running now: tool calls wait for it (GATE_WAIT_MS), so the compact answer says Desk is still starting even when the last attempt settled ready.
-        running: !disposed && admission.running,
+        // The session's first admission is still running (no attempt has settled yet): every tool call waits for it, so the compact answer says Desk is still starting. A re-check of an admitted desk is not a start.
+        starting: !disposed && admission.snapshot().state === "admitting",
         summary: snapshot.summary,
         blockers: snapshot.blockers,
         attempts: snapshot.attempts,

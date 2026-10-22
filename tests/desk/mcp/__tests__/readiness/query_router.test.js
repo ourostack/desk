@@ -324,7 +324,9 @@ test("semantic request without a controller returns the alpha semantic scope ref
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.capability, "semantic")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.match(result.diagnostic.message, /not current/u)
+  assert.match(result.diagnostic.detail, /not connected to Desk's search controller/u)
+  assert.equal(result.diagnostic.message, "Meaning-based search is not available right now.")
+  assert.equal(result.fix, "Retry in about a minute; if it keeps failing, call desk_status. desk_search answers now with exact-word matches.")
 })
 
 test("semantic request defaults to an invalid semantic request", async () => {
@@ -351,7 +353,7 @@ test("semantic request with no positive deadline uses the waited barrier result"
   const result = await router.semantic({ kind: "similar", path: "track/work/task.md" })
   assert.equal(convergence, 1)
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "semantic remained unavailable")
+  assert.equal(result.diagnostic.detail, "semantic remained unavailable")
 })
 
 test("semantic barrier exceptions become semantic capability diagnostics", async () => {
@@ -366,7 +368,7 @@ test("semantic barrier exceptions become semantic capability diagnostics", async
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "query_embedding_failed")
-  assert.equal(result.diagnostic.message, "query embedding probe failed")
+  assert.equal(result.diagnostic.detail, "query embedding probe failed")
 })
 
 test("semantic barrier exceptions without codes use the semantic unavailable diagnostic", async () => {
@@ -381,7 +383,7 @@ test("semantic barrier exceptions without codes use the semantic unavailable dia
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "semantic probe threw without code")
+  assert.equal(result.diagnostic.detail, "semantic probe threw without code")
 })
 
 test("semantic barrier string failures use semantic-unavailable string diagnostics", async () => {
@@ -395,7 +397,7 @@ test("semantic barrier string failures use semantic-unavailable string diagnosti
   })
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "semantic string failure")
+  assert.equal(result.diagnostic.detail, "semantic string failure")
 })
 
 test("semantic proof without a durable snapshot reports missing lexical proof", async () => {
@@ -414,7 +416,7 @@ test("semantic proof without a durable snapshot reports missing lexical proof", 
   const result = await router.semantic({ deskRoot: root, kind: "similar", path: "track/work/task.md" })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "generation_unproven")
-  assert.match(result.diagnostic.message, /current.*lexical generation.*not proven/u)
+  assert.match(result.diagnostic.detail, /current.*lexical generation.*not proven/u)
 })
 
 test("semantic proof still rejects a genuinely mismatched active embedding specification", async (t) => {
@@ -430,7 +432,7 @@ test("semantic proof still rejects a genuinely mismatched active embedding speci
   })
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.match(result.diagnostic.message, /embedding specification.*does not match/u)
+  assert.match(result.diagnostic.detail, /embedding specification.*does not match/u)
   assert.deepEqual(f.used, [])
 })
 
@@ -449,7 +451,7 @@ test("semantic proof rejects snapshots with missing vectors", async (t) => {
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.equal(result.status, "error")
-  assert.equal(result.diagnostic.message, "Semantic vectors are incomplete for the proven generation.")
+  assert.equal(result.diagnostic.detail, "Semantic vectors are incomplete for the proven generation.")
 })
 
 test("semantic proof rejects unavailable query embedding diagnostics", async (t) => {
@@ -474,7 +476,7 @@ test("semantic proof rejects unavailable query embedding diagnostics", async (t)
     path: "track/work/task.md",
   })
   assert.equal(result.status, "error")
-  assert.equal(result.diagnostic.message, "Query embedding is not available for the active semantic generation.")
+  assert.equal(result.diagnostic.detail, "Query embedding is not available for the active semantic generation.")
 })
 
 test("lexical search records a semantic deadline while preserving direct fallback", async () => {
@@ -672,7 +674,7 @@ test("semantic deadline failures are returned as semantic deadline diagnostics",
   })
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.diagnostic.reason, "semantic_deadline")
-  assert.match(result.diagnostic.message, /did not become current/u)
+  assert.match(result.diagnostic.detail, /did not become current/u)
 })
 
 test("semantic indexed evaluation preserves artifact tombstone failures", async (t) => {
@@ -703,7 +705,7 @@ test("semantic backend unavailability is converted to the typed capability diagn
   assert.equal(result.status, "error")
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "backend vector read unavailable")
+  assert.equal(result.diagnostic.detail, "backend vector read unavailable")
 })
 
 test("semantic backend unavailability without a note uses the standard semantic diagnostic", async (t) => {
@@ -721,7 +723,7 @@ test("semantic backend unavailability without a note uses the standard semantic 
   })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "Semantic serving is unavailable for this request.")
+  assert.equal(result.diagnostic.detail, "Semantic serving is unavailable for this request.")
 })
 
 test("semantic backend exceptions are converted without leaking partial results", async (t) => {
@@ -739,7 +741,7 @@ test("semantic backend exceptions are converted without leaking partial results"
   assert.equal(result.status, "error")
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "backend exploded")
+  assert.equal(result.diagnostic.detail, "backend exploded")
 })
 
 test("semantic backend exceptions without codes use semantic-unavailable diagnostics", async (t) => {
@@ -757,7 +759,7 @@ test("semantic backend exceptions without codes use semantic-unavailable diagnos
   })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "plain semantic failure")
+  assert.equal(result.diagnostic.detail, "plain semantic failure")
 })
 
 test("semantic backend string failures use semantic-unavailable string diagnostics", async (t) => {
@@ -774,7 +776,7 @@ test("semantic backend string failures use semantic-unavailable string diagnosti
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "semantic string backend failure")
+  assert.equal(result.diagnostic.detail, "semantic string backend failure")
 })
 
 for (const invalidKind of [undefined, null, "", "timeline", "thread"]) {

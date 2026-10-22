@@ -7,7 +7,7 @@ import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline, SEMANTIC
 import { indexedThread } from "../tools/thread.js"
 
 function semanticScopeError() {
-  return semanticCapabilityError("semantic_unavailable", "Semantic serving is not current for the active generation.")
+  return semanticCapabilityError("semantic_unavailable", "This session is not connected to Desk's search controller.")
 }
 
 function readinessError(reason, message) {
@@ -17,12 +17,20 @@ function readinessError(reason, message) {
   }
 }
 
-function semanticCapabilityError(reason, message) {
+// What desk_recall and desk_similar say when they cannot answer: plain words and what to do, with the technical reason kept in `diagnostic.reason` and `diagnostic.detail`.
+const SEMANTIC_UNAVAILABLE = "Meaning-based search is not available right now."
+const SEMANTIC_FIX = "Retry in about a minute; if it keeps failing, call desk_status. desk_search answers now with exact-word matches."
+
+function semanticCapabilityError(reason, detail) {
   return {
     status: "error", code: "required_capability_unavailable", capability: "semantic",
-    diagnostic: { reason, message },
+    diagnostic: { reason, message: SEMANTIC_UNAVAILABLE, detail },
+    fix: SEMANTIC_FIX,
   }
 }
+
+// Another Desk build's controller on this desk wrote the shared search index after this controller converged. Old builds cannot be changed to step aside, so this controller reconciles the index again; vectors still valid under the same embedding specification are kept.
+const INDEX_RECLAIM_REASON = "index_written_by_other_controller"
 
 function isSemanticKind(kind) {
   return kind === "recall" || kind === "similar"
@@ -192,6 +200,8 @@ export function createQueryRouter({
       snapshot,
       lexicalProven,
       semanticProven,
+      // The controller says it is current and certain, yet the index was last written under another journal: another controller (another Desk build on this desk) wrote it since.
+      reclaimable: currentAndCertain && snapshot !== null && !lexicalProven && snapshot.cursor?.journal_id !== fence.cursor.journal_id,
       proven: semanticRequired ? semanticProven : lexicalProven,
       owner: observed.owner?.token,
       observed,
@@ -250,6 +260,8 @@ export function createQueryRouter({
           }
           before = await serviceProof(request)
           diagnostic = before.diagnostic
+          // Exact-word search does not wait: it reads the files now, and the controller reconciles the index for the next query.
+          if (before.reclaimable) await cancellable(() => controller.markUncertain(INDEX_RECLAIM_REASON), signal)
         }
       }
     } catch (error) {
@@ -293,15 +305,25 @@ export function createQueryRouter({
     return { ...result, readiness_diagnostic: diagnostic }
   }
 
+  async function reclaimIndex(request) {
+    await cancellable(() => controller.markUncertain(INDEX_RECLAIM_REASON), request.signal)
+    await withDeadline(
+      () => cancellable(() => controller.barrier({ capability: "semantic", wait: true }), request.signal),
+      semanticDeadlineMs,
+      "semantic_deadline",
+      "Semantic convergence did not become current before the deadline.",
+    )
+  }
+
   async function semantic(request = {}) {
     const { signal } = request
     signal?.throwIfAborted()
     lastProof = null
     if (!isSemanticKind(request.kind)) {
-      return semanticCapabilityError(
-        "invalid_request",
-        'Semantic requests must set kind to "recall" or "similar".',
-      )
+      return {
+        status: "error", code: "required_capability_unavailable", capability: "semantic",
+        diagnostic: { reason: "invalid_request", message: 'Semantic requests must set kind to "recall" or "similar".' },
+      }
     }
     await currentIdentity(request)
     if (!controller || !semanticBackend) {
@@ -314,6 +336,12 @@ export function createQueryRouter({
         return semanticCapabilityError(barrier.reason ?? "semantic_unavailable", barrier.message ?? "Semantic serving is not current for the active generation.")
       }
       before = await serviceProof(request, { semanticRequired: true })
+      if (!before.semanticProven && before.reclaimable) {
+        before.snapshot.db.close()
+        before = null
+        await reclaimIndex(request)
+        before = await serviceProof(request, { semanticRequired: true })
+      }
       if (!before.semanticProven) {
         return semanticCapabilityError(before.semanticDiagnostic.reason, before.semanticDiagnostic.message)
       }

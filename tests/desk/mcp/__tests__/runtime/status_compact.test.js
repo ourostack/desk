@@ -213,39 +213,18 @@ test("desk_status declares its two optional inputs: detail, and has_instructions
   assert.deepEqual(TOOL_INPUT_SCHEMAS.desk_status.required, [])
 })
 
-test("desk_status does not say ready while admission is still running", async (t) => {
-  // The ready session is revalidating: tool calls wait for that and refuse with `admitting` if it outlasts their wait.
-  const since = new Date(Date.now() - 3000).toISOString()
-  const compact = compactStatus({ ...ready, detail_pending: true, admission: { summary: "ok", blockers: [], running: true, phase: "resolving_inputs", phase_since: since } })
-  assert.equal(compact.state, "admitting")
-  assert.doesNotMatch(compact.summary, /\bready\b/u)
-  assert.match(compact.summary, /^Desk is still starting/u)
-  assert.match(compact.summary, /about 10 s/u, "it says how long to wait")
-  assert.match(compact.summary, /resolving_inputs/u, "it names the step it is on")
-  assert.match(compact.fix, /desk_status and desk_skill answer at once/u)
-  assert.match(compact.fix, /task reads and updates and exact-word search \(desk_search\)/u, "it says which tools work meanwhile")
-  assert.match(compact.fix, /refused with code admitting, retry it in about 10 s/u)
-  assert.ok(!("detail_pending" in compact), "only a ready desk is called ready")
-  // A session that has not finished its first admission says the same.
-  const first = compactStatus({ status: "admitting", state: "admitting", admission: { summary: "Desk is starting: the handshake is complete and admission is running in the background.", blockers: [], running: true, phase: "loading_runtime", phase_since: since } })
-  assert.match(first.summary, /^Desk is still starting/u)
-  assert.equal(first.fix, compact.fix)
-  // Once admission finishes the same desk is ready again.
-  assert.equal(compactStatus({ ...ready, admission: { summary: "ok", blockers: [], running: false } }).state, "ready")
-
-  // The session's own answer while a ready session revalidates its destination.
+// A session built on the fake runtime above whose destination check can be held or slowed after the first admission.
+async function revalidatingSession(t, { resolve }) {
   const base = await mkTempRoot("desk-status-starting-")
   const root = path.join(base, "desk")
   mkdirSync(root, { recursive: true })
-  let blocked = false
-  let release = () => {}
   const session = createDeskSession({
     args: { person: null },
     deskStateDir: path.join(base, "state"),
     readinessStateHome: path.join(base, "readiness"),
     stderr: { write() {} },
     resolveInputs: async () => {
-      if (blocked) await new Promise((resolve) => { release = resolve })
+      await resolve()
       return {
         root: { root, source: "explicit-root" },
         activation: { activationStatus: null, readinessPolicy: { lexical: "required", semantic: "unsupported", write_authority: "workspace", authority_provider: null, root: "workspace" }, stateBranch: null },
@@ -258,14 +237,53 @@ test("desk_status does not say ready while admission is still running", async (t
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
     hung: { probe: async () => ({ state: "refused" }) },
   })
-  t.after(async () => { release(); await session.dispose() })
-  await session.admission.refresh({ force: true })
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).state, "ready")
-  blocked = true
-  const waiting = session.callTool({ name: "task_update" })
+  t.after(() => session.dispose())
+  return session
+}
+
+test("desk_status does not say ready while admission is still running", async (t) => {
+  // The first admission: every tool call waits for it, so the desk is still starting.
+  const since = new Date(Date.now() - 3000).toISOString()
+  const first = compactStatus({ status: "admitting", state: "admitting", admission: { summary: "Desk is starting: the handshake is complete and admission is running in the background.", blockers: [], starting: true, phase: "loading_runtime", phase_since: since } })
+  assert.equal(first.state, "admitting")
+  assert.equal(first.summary, "Desk is still starting (loading Desk, 3 s so far). Call desk_status again in about 10 s.")
+  assert.equal(first.fix, "desk_status and desk_skill answer at once. Every other Desk tool waits up to 10 s for startup: task reads and updates and exact-word search (desk_search) need only the desk's files, so they run as soon as startup finishes, and meaning-based search (desk_recall, desk_similar) can take longer to catch up. If startup is still running after 10 s, the call is refused with code admitting; retry it then.")
+  assert.ok(!("detail_pending" in first), "only a ready desk is called ready")
+  // Each step is named in plain words, or not at all.
+  const step = (phase, extra = {}) => compactStatus({ status: "admitting", admission: { starting: true, phase, ...extra } }).summary
+  assert.equal(step("resolving_inputs"), "Desk is still starting (finding this session's desk). Call desk_status again in about 10 s.")
+  assert.equal(step("connecting_controller", { phase_since: "not a date" }), "Desk is still starting (connecting to the search controller). Call desk_status again in about 10 s.")
+  assert.equal(step("some_future_step"), "Desk is still starting. Call desk_status again in about 10 s.")
+  assert.equal(step(null), "Desk is still starting. Call desk_status again in about 10 s.")
+  // An admitted desk that re-admits after a change keeps its own words: it is not starting.
+  const again = compactStatus({ status: "admitting", state: "admitting", summary: "Desk is verifying this session's destination; operations wait for resolution.", fix: "Call desk_status, then retry once destination verification completes.", admission: { starting: false } })
+  assert.equal(again.summary, "Desk is verifying this session's destination; operations wait for resolution.")
+  assert.equal(again.fix, "Call desk_status, then retry once destination verification completes.")
+
+  // The session's own first answer, while its first destination check is still running.
+  let release = () => {}
+  let hold = true
+  const session = await revalidatingSession(t, { resolve: () => hold && new Promise((resolve) => { release = resolve }) })
+  t.after(() => release())
+  session.start()
   const starting = payload(await session.callTool({ name: "desk_status" }))
-  assert.equal(starting.state, "admitting", "a tool call is waiting on admission, so the desk is not ready")
-  assert.match(starting.summary, /^Desk is still starting/u)
+  assert.equal(starting.state, "admitting")
+  assert.match(starting.summary, /^Desk is still starting \(finding this session's desk/u)
+  hold = false
   release()
-  await waiting
+  await session.admission.idle()
+  assert.equal(payload(await session.callTool({ name: "desk_status" })).state, "ready")
+})
+
+test("a ready session whose background re-check is slow still reports ready", async (t) => {
+  let slow = false
+  const session = await revalidatingSession(t, { resolve: () => slow && new Promise((resolve) => setTimeout(resolve, 150)) })
+  await session.admission.refresh({ force: true })
+  slow = true
+  for (let call = 0; call < 3; call += 1) {
+    const status = payload(await session.callTool({ name: "desk_status" }))
+    assert.equal(status.state, "ready", "a re-check of an admitted desk is not a start")
+    assert.doesNotMatch(status.summary, /still starting/u)
+  }
+  await session.admission.idle()
 })

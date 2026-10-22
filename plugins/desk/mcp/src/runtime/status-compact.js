@@ -9,28 +9,44 @@
 
 import { shellQuote } from "../util/shell-quote.js"
 import { healthWord, syncDegradation } from "./health.js"
+import { GATE_WAIT_MS } from "./gate-wait.js"
 
 const DETAIL_POINTER =
   "Call desk_status with { detail: true } for the full payload (index, snapshots, vector packs, admission internals), or desk_doctor for diagnostics and repairs."
 
 function stateWord(payload) {
-  // A ready session that is admitting again (revalidating its destination, re-electing its controller) is not ready: every tool call except desk_status and desk_skill waits for that admission, and is refused with `admitting` if it outlasts the call's wait.
-  if (payload.status === "ok") return payload.admission?.running === true ? "admitting" : "ready"
+  if (payload.status === "ok") return "ready"
   if (payload.status === "setup_required") return "setup_required"
   if (payload.status === "admitting" || payload.state === "admitting") return "admitting"
   return "degraded"
 }
 
-// The wait a tool call allows admission before it refuses with `admitting` (GATE_WAIT_MS in desk-session.js).
-const STARTING_WAIT = "10 s"
-const STARTING_FIX = `desk_status and desk_skill answer at once. Every other Desk tool waits up to ${STARTING_WAIT} for startup and then runs: task reads and updates and exact-word search (desk_search) need only the desk's files, so they work as soon as startup finishes, while meaning-based search (desk_recall, desk_similar) can take longer to catch up. If a call is refused with code admitting, retry it in about ${STARTING_WAIT}.`
+// The wait a tool call allows a running admission before it refuses with `admitting`.
+const STARTING_WAIT = `${GATE_WAIT_MS / 1000} s`
+const STARTING_FIX = `desk_status and desk_skill answer at once. Every other Desk tool waits up to ${STARTING_WAIT} for startup: task reads and updates and exact-word search (desk_search) need only the desk's files, so they run as soon as startup finishes, and meaning-based search (desk_recall, desk_similar) can take longer to catch up. If startup is still running after ${STARTING_WAIT}, the call is refused with code admitting; retry it then.`
+// The admission steps (setPhase / onPhase names) in words an agent can pass on.
+const LOADING = "loading Desk"
+const STEP_WORDS = {
+  resolving_inputs: "finding this session's desk",
+  loading_runtime: LOADING,
+  inspecting_runtime_pack: LOADING,
+  restoring_runtime_dependencies: LOADING,
+  waiting_for_publication_lock: LOADING,
+  building: LOADING,
+  mirroring_source: LOADING,
+  importing_runtime: LOADING,
+  inspecting_state_branch: "checking the desk's Git branch",
+  admitting_authority: "checking write access",
+  verifying_authority: "checking write access",
+  connecting_controller: "connecting to the search controller",
+  checking_semantic_readiness: "waiting for meaning-based search",
+}
 
 function startingSummary(admission) {
-  const since = Date.parse(admission?.phase_since ?? "")
-  const step = typeof admission?.phase === "string" && admission.phase !== ""
-    ? ` (step: ${admission.phase}${Number.isFinite(since) ? `, ${Math.max(0, Math.round((Date.now() - since) / 1000))} s so far` : ""})`
-    : ""
-  return `Desk is still starting${step}. Call desk_status again in about ${STARTING_WAIT}.`
+  const words = Object.hasOwn(STEP_WORDS, admission.phase ?? "") ? STEP_WORDS[admission.phase] : null
+  const since = Date.parse(admission.phase_since ?? "")
+  const elapsed = Number.isFinite(since) ? `, ${Math.max(0, Math.round((Date.now() - since) / 1000))} s so far` : ""
+  return `Desk is still starting${words === null ? "" : ` (${words}${elapsed})`}. Call desk_status again in about ${STARTING_WAIT}.`
 }
 
 function line(value) {
@@ -105,6 +121,8 @@ export function compactStatus(payload) {
   // A desk that is otherwise ready is degraded by a failed sync, exactly as the boot script reports it.
   const state = base === "ready" ? healthWord(syncProblem === null ? [] : [syncProblem]) : base
   const search = payload.readiness?.state ?? "not_checked"
+  // Only the session's first admission is a start; a desk that re-admits after a change keeps its own summary and fix.
+  const starting = base === "admitting" && payload.admission?.starting === true
   // Desk is ready, but the runtime's status detail missed this call's short budget: the root, search and sync fields below are empty because they are not loaded yet, not because there is no desk.
   const detailPending = state === "ready" && payload.detail_pending === true
   // The other ways a ready desk answers without its root, each with its own cause, so the empty fields are never read as "no desk".
@@ -113,10 +131,10 @@ export function compactStatus(payload) {
   const readySummary = detailPending ? (payload.root?.path ? DETAIL_PENDING_ROOTED_SUMMARY : DETAIL_PENDING_SUMMARY) : statusError !== null ? statusErrorSummary(statusError) : noDetail ? NO_DETAIL_SUMMARY : "Desk is ready."
   const compact = {
     state,
-    summary: state === "ready" ? readySummary : base === "admitting" ? startingSummary(payload.admission) : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
+    summary: state === "ready" ? readySummary : starting ? startingSummary(payload.admission) : (base === "ready" ? "Desk works, but the last sync failed." : (payload.admission?.summary ?? payload.summary ?? "Desk is not ready.")),
     degraded: state === "ready" ? [] : whyNotReady(payload, syncProblem, base === "ready"),
     ...(state === "ready" || !payload.code ? {} : { code: payload.code }),
-    ...(state === "ready" ? {} : base === "admitting" ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
+    ...(state === "ready" ? {} : starting ? { fix: STARTING_FIX } : base === "ready" ? { fix: `Retry the sync: git -C ${shellQuote(payload.root?.path ?? "<desk>")} pull --rebase --autostash. Work continues on local state until it succeeds.` } : (payload.fix ? { fix: payload.fix } : {})),
     ...(typeof payload.onboarding_skill === "string" ? { onboarding_skill: payload.onboarding_skill } : {}),
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),
