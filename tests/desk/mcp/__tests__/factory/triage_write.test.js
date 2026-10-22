@@ -1087,7 +1087,7 @@ test("foreign_or_vanished_operation_records", async () => {
   assert.equal((await publish(a)).state, "busy")
 })
 
-test("windows_platform_paths_use_tree_kill_and_acl_protection", async () => {
+test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
   const w = await world()
   const a = w.clone("a")
   const systemRoot = path.join(w.base, "fake-system-root")
@@ -1103,15 +1103,72 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async () => {
     }
   }
   const env = { ...a.env, SystemRoot: systemRoot }
+  let spawnGit = spawn
+  if (posix && Object.hasOwn(env, "GIT_CONFIG_COUNT")) {
+    // Simulated Windows lookup resolves .exe to the real Git; its children retain the host's native PATH.
+    const realGit = realpathSync(spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim())
+    const bin = path.join(w.base, "windows-git")
+    await fs.mkdir(bin)
+    await fs.symlink(realGit, path.join(bin, "git.exe"))
+    const hostPath = env.PATH
+    env.PATH = bin
+    spawnGit = (command, args, options) => spawn(command, args, {
+      ...options, env: { ...options.env, PATH: hostPath },
+    })
+  }
   const file = await writeProtectedTriageFile(env, ["basis", "x.json"], "{}\n", { platform: "win32", runner: aclRunner })
   assert.ok(protectedPaths.includes(file))
-  const result = await publish({ ...a, env }, { git: { platform: "win32", aclRunner } })
+  const result = await publish({ ...a, env }, { git: { platform: "win32", aclRunner, spawn: spawnGit } })
   assert.equal(result.state, "acknowledged", JSON.stringify(result))
   // On Windows a timed-out call is ended with its process tree (taskkill /T); here the stand-in push ends by itself, so the call
   // settles either way and is never taken for a refused push.
-  const slowPush = (command, args, options) => (args[2] === "push" ? spawn(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], options) : spawn(command, args, options))
-  const timed = await publish({ ...a, env }, { review: { ...AGENT, protected_result: hex(16) }, git: { platform: "win32", aclRunner, spawn: slowPush, timeoutMs: 1000 } })
-  assert.equal(timed.state, "unacknowledged")
+  let delayedPolicyProbe = false
+  let pushCalls = 0
+  const steps = []
+  let reachedPush
+  const pushStarted = new Promise(resolve => { reachedPush = resolve })
+  const slowPush = (command, args, options) => {
+    if (!delayedPolicyProbe && args[2] === "config" && args[3] === "--get-all") {
+      delayedPolicyProbe = true
+      return spawnGit(process.execPath, ["-e", `
+        const { spawn } = require("node:child_process");
+        setTimeout(() => {
+          const child = spawn(${JSON.stringify(command)}, ${JSON.stringify(args)}, { stdio: "inherit", windowsHide: true });
+          child.on("error", error => { console.error(error); process.exitCode = 1; });
+          child.on("exit", code => { process.exitCode = code ?? 1; });
+        }, 1100);
+      `], options)
+    }
+    if (args[2] === "push") {
+      pushCalls++
+      const child = spawnGit(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], options)
+      reachedPush(child)
+      return child
+    }
+    return spawnGit(command, args, options)
+  }
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  try {
+    const pending = publish({ ...a, env }, {
+      review: { ...AGENT, protected_result: hex(16) },
+      git: { platform: "win32", aclRunner, spawn: slowPush, timeoutMs: 1000, onStep: name => steps.push(name) },
+    })
+    const observed = await Promise.race([pushStarted, pending])
+    assert.ok(Number.isInteger(observed.pid), JSON.stringify({ state: observed.state }))
+    let settled = false
+    pending.then(() => { settled = true })
+    t.mock.timers.tick(999)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(settled, false, "the push has not reached its unchanged one-second deadline")
+    t.mock.timers.tick(1)
+    const timed = await pending
+    assert.equal(timed.state, "unacknowledged", JSON.stringify(timed))
+    assert.equal(delayedPolicyProbe, true)
+    assert.equal(pushCalls, 1, "an unknown push outcome must not be retried")
+    assert.equal(steps.includes("pushed"), false, "the unchanged timeout must fire before a successful push response")
+  } finally {
+    t.mock.timers.reset()
+  }
   assert.ok(protectedPaths.some((p) => p.endsWith(".json") && p.includes(`${path.sep}basis${path.sep}`)))
 })
 
