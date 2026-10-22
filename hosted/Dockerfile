@@ -24,9 +24,9 @@ WORKDIR /app
 
 # Dependencies first, so a source-only change reuses these layers.
 COPY plugins/desk/mcp/package.json plugins/desk/mcp/package-lock.json plugins/desk/mcp/
-RUN npm ci --omit=dev --prefix plugins/desk/mcp
+RUN npm ci --omit=dev --no-audit --no-fund --prefix plugins/desk/mcp
 COPY hosted/package.json hosted/package-lock.json hosted/
-RUN npm ci --omit=dev --prefix hosted
+RUN npm ci --omit=dev --no-audit --no-fund --prefix hosted
 
 COPY plugins/desk plugins/desk
 COPY hosted hosted
