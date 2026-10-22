@@ -312,6 +312,21 @@ await store.putAccount({ accountId: "account-e", displayName: "Synthetic", deskA
 await store.putBinding("account-e", { ...binding, repo: "synthetic/third" });
 const e = await nextManager.prepare("account-e");
 assert.equal(await e.git(["show", "HEAD:marker"]), "third marker", "the deleted account's repository is released");
+// A new clone is refused, with a message the person can read, while the realm disk is over 80% used; nothing is
+// claimed or cloned for it.
+const fullLog = [];
+const fullManager = runtime.createAccountRuntime({
+  config, store, rootDir: join(root, "full-realms"),
+  baseEnv: { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin" },
+  mint: async () => ({ token: "synthetic-token" }),
+  diskUsage: () => 0.81, log: line => fullLog.push(line),
+});
+await store.putAccount({ accountId: "account-full", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-full", { ...binding, repo: "synthetic/full" });
+await assert.rejects(fullManager.prepare("account-full"), error => error.code === "DESK_SESSION_REFUSED" && /disk space/.test(error.message));
+assert.deepEqual(readdirSync(join(root, "full-realms")), [], "a refused clone leaves no realm");
+assert.match(fullLog.join("\n"), /REALM DISK FULL: 81% used, over 80%; refused a new clone for account account-full/);
+await fullManager.close();
 // A suspended binding (GitHub no longer gives write access) is refused before any realm work.
 await store.putAccount({ accountId: "account-suspended", displayName: "Synthetic", deskAccess: true });
 await store.putBinding("account-suspended", { ...binding, repo: "synthetic/suspended", suspended: true });

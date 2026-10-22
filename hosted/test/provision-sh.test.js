@@ -458,3 +458,18 @@ test("round N-1 m3: a cutoff that isn't about 14 days after releasedAt is writte
   assert.match(output, /WARNING: .*legacyCutoff .* is 2 days after releasedAt/);
   assert.ok(!/WARNING: .*legacyCutoff/.test(runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") }).output));
 });
+
+test("a record with the admin CLI app and admin API scope passes both to the gateway; one without passes neither", (t) => {
+  const record = {
+    ...completeRecord("test"),
+    cliApp: { appId: "20a65c9b-2fe5-45c1-8af9-79b4e22b958c" },
+    adminApi: { scope: "api://55555555-5555-5555-5555-555555555555/desk.admin" },
+  };
+  const withAdmin = JSON.parse(runProvision(t, { app: shown, env: { STAGE: "staging" }, record }).documents[0]);
+  const value = (app, name) => envOf(app).find((entry) => entry.name === name)?.value;
+  assert.equal(value(withAdmin, "DESK_ADMIN_CLIENT_ID"), "20a65c9b-2fe5-45c1-8af9-79b4e22b958c");
+  assert.equal(value(withAdmin, "DESK_ADMIN_SCOPE"), "api://55555555-5555-5555-5555-555555555555/desk.admin");
+  const without = JSON.parse(runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") }).documents[0]);
+  assert.equal(value(without, "DESK_ADMIN_CLIENT_ID"), undefined);
+  assert.equal(value(without, "DESK_ADMIN_SCOPE"), undefined);
+});

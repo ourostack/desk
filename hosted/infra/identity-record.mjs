@@ -170,6 +170,11 @@ export function identitySettings(record, { githubSignIn = "on" } = {}) {
     DESK_GITHUB_LOGINS: `${record.ari.githubUserId}=${record.ari.githubLogin}`,
   };
   if (record.legacyCutoff) setEnv.DESK_LEGACY_CUTOFF = record.legacyCutoff;
+  // The ouro CLI's admin sign-in, once provision-identity --admin-api has recorded it.
+  if (record.cliApp?.appId && record.adminApi?.scope) {
+    setEnv.DESK_ADMIN_CLIENT_ID = record.cliApp.appId;
+    setEnv.DESK_ADMIN_SCOPE = record.adminApi.scope;
+  }
   return {
     setEnv,
     secretRefs: { DESK_ENTRA_CLIENT_SECRET: ENTRA_SECRET_REF },

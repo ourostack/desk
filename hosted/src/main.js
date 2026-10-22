@@ -282,6 +282,17 @@ export function createGatewayAdmin({ config, parts, relay, runtime, fetch = glob
   });
 }
 
+// A multi-user gateway's relay (spec item 20): 3 sessions per account and 12 in all on a 2 vCPU / 4 GiB replica. A
+// person's own session quiet for a minute may give way to their new one; another account's only after 10 minutes.
+export const MULTI_USER_LIMITS = Object.freeze({ maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 60_000, minIdleForeignMs: 600_000 });
+
+// The ouro CLI's admin sign-in settings, published on a multi-user gateway that has them.
+const adminDiscoveryOf = (config) => {
+  const { identity } = config;
+  if (!config.multiUser || !identity?.adminCli) return undefined;
+  return { tenantId: identity.tenantId, subdomain: identity.subdomain, clientId: identity.adminCli.clientId, scope: identity.adminCli.scope };
+};
+
 // The provider and the Express app. `parts` is startIdentity's, or absent on a gateway without the Ouro tenant, which
 // then serves exactly what it always has.
 export function buildGateway({ config, relay, parts, admin, githubLink, log: write }) {
@@ -307,7 +318,7 @@ export function buildGateway({ config, relay, parts, admin, githubLink, log: wri
     invites: parts?.invites,
     deepHealth: parts?.deepHealth,
     ...(parts?.sessions ? { sessions: parts.sessions } : {}),
-    ...(admin ? { admin } : {}),
+    ...(admin ? { admin, adminDiscovery: adminDiscoveryOf(config) } : {}),
     ...(githubLink ? { githubLink } : {}),
   });
   return { provider, app };
@@ -531,7 +542,7 @@ export async function main(env = process.env, deps = {}) {
         onLinked: hooks.onLinked,
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
       });
-      relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink, hooks }) });
+      relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink, hooks }), ...MULTI_USER_LIMITS });
       push = () => runtime.close();
     }
     admin = createGatewayAdmin({ config, parts, relay, runtime, fetch: deps.fetch });
