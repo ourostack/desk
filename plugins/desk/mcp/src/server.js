@@ -136,7 +136,12 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
       watcher,
       prepareRootSync: () => {
         ensureStateIgnored(deskRoot)
-        ensureCardGuard(deskRoot)
+        const guard = ensureCardGuard(deskRoot)
+        if (guard?.state === "failed") {
+          throw Object.assign(new Error(`Workspace card-guard preparation failed: ${guard.reason}`), {
+            code: "controller_workspace_preparation_failed",
+          })
+        }
       },
       handlers: {
         async beginConvergence({ eventCursor, journal }) {

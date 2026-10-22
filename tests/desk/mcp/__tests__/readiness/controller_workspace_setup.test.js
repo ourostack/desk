@@ -1,22 +1,108 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
-import { fork, spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { fork, spawn, spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { startControllerProcess } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
-import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { connectOrStartController, socketTakeoverGuards } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
-import { HOOK_MARKER } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
-import { controllerStartTimeoutMs } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
+import { ensureCardGuard, HOOK_MARKER, installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
+import { controllerStartTimeoutMs, readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { killAndWait } from "../_kill_and_wait.js"
 
 function git(root, args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 5000 })
   assert.equal(result.status, 0, result.stderr)
   return result.stdout
+}
+
+async function startupGuardFixture(t) {
+  const root = await mkTempRoot("controller-startup-guard-")
+  let options, running, sleeper
+  const client = await connectOrStartController({
+    root, stateHome: path.join(root, "state"), ephemeral: true,
+    startController: async value => {
+      options = value
+      running = await startReadinessController(value)
+      return running
+    },
+  })
+  const ownerFile = path.join(options.stateDir, "owner.json")
+  const original = readFileSync(ownerFile, "utf8")
+  const sockets = new Set()
+  t.after(async () => {
+    if (existsSync(ownerFile)) writeFileSync(ownerFile, original)
+    for (const socket of sockets) socket.destroy()
+    await client.close()
+    if (sleeper) await killAndWait(sleeper)
+  })
+  sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" })
+  await new Promise((resolve, reject) => { sleeper.once("spawn", resolve); sleeper.once("error", reject) })
+  const processStart = await readProcessStart(sleeper.pid)
+  assert.equal(typeof processStart, "string", "the startup allowance requires actual process-generation verification")
+  const record = JSON.parse(original)
+  record.owner.pid = sleeper.pid
+  record.owner.process_start = processStart
+  record.startup = { started_at: new Date().toISOString() }
+  writeFileSync(ownerFile, JSON.stringify(record))
+  const listeners = running.server.listeners("connection")
+  running.server.removeAllListeners("connection")
+  let connections = 0
+  return {
+    ...options, ownerFile, record,
+    connections: () => connections,
+    observe(callback) {
+      running.server.on("connection", socket => {
+        sockets.add(socket)
+        socket.on("error", () => socket.destroy())
+        socket.once("close", () => sockets.delete(socket))
+        connections++
+        if (callback(connections)) for (const listener of listeners) listener(socket)
+      })
+    },
+  }
+}
+
+const posixStartup = process.platform === "win32" ? "Windows uses bind-collision election, not the POSIX owner-before-bind guard" : false
+
+test("verified preparation waits past an unanswered probe and joins without changing ownership", { skip: posixStartup }, async t => {
+  const f = await startupGuardFixture(t)
+  const before = readFileSync(f.ownerFile, "utf8")
+  f.observe(connection => connection > 1)
+  assert.equal(await socketTakeoverGuards[process.platform](f), true)
+  assert.ok(f.connections() >= 2, "a later real handshake must succeed after the unanswered probe")
+  assert.equal(readFileSync(f.ownerFile, "utf8"), before)
+})
+
+for (const change of ["corrupt", "token", "pid", "endpoint", "process-start", "ready", "different-endpoint"]) {
+  test(`startup allowance stops for ${change} without reclaiming or waiting out a stale startup`, { skip: posixStartup }, async t => {
+    const f = await startupGuardFixture(t)
+    const mutate = () => {
+      const record = structuredClone(f.record)
+      if (change === "corrupt") writeFileSync(f.ownerFile, "{corrupt")
+      else {
+        if (change === "token") record.owner.token = "changed-owner-token"
+        if (change === "pid") record.owner.pid = process.pid
+        if (change === "endpoint" || change === "different-endpoint") record.endpoint += ".foreign"
+        if (change === "process-start") record.owner.process_start += "-changed"
+        if (change === "ready") delete record.startup
+        writeFileSync(f.ownerFile, JSON.stringify(record))
+      }
+    }
+    if (change === "different-endpoint") mutate()
+    f.observe(connection => {
+      if (connection === 1 && change !== "different-endpoint") mutate()
+      return false
+    })
+    await assert.rejects(socketTakeoverGuards[process.platform](f), { code: "controller_owner_unresponsive" })
+    assert.equal(f.connections(), change === "corrupt" || change === "different-endpoint" ? 1 : 2,
+      "changed startup state must fall back to the ordinary single hung-owner handshake")
+    assert.equal(existsSync(f.endpoint), true, "a live owner is never reclaimed")
+  })
 }
 
 test("cold real Git preparation admits a concurrent process before bounded status and durable acknowledgements", async (t) => {
@@ -52,6 +138,51 @@ test("cold real Git preparation admits a concurrent process before bounded statu
     };
     syncBuiltinESMExports();
   `)
+  const peerEntry = path.join(base, "joining-session.mjs")
+  const clientUrl = new URL("../../../../../plugins/desk/mcp/src/readiness/controller-client.js", import.meta.url).href
+  writeFileSync(peerEntry, `
+    import { connectOrStartController } from ${JSON.stringify(clientUrl)};
+    import { startReadinessController } from ${JSON.stringify(new URL("./controller-server.js", clientUrl).href)};
+    import { readFileSync } from "node:fs";
+    process.once("message", async ({ identity, stateHome, ownerFile }) => {
+      let client;
+      try {
+        const observedPreparing = Boolean(JSON.parse(readFileSync(ownerFile, "utf8")).startup);
+        client = await connectOrStartController({
+          root: identity.root, protocolVersion: identity.protocol_version,
+          lexicalContract: identity.lexical_contract, semanticContract: identity.semantic_contract,
+          stateHome, ephemeral: true,
+          startController: options => startReadinessController({
+            ...options,
+            prepareRootSync() { throw new Error("a joining session must not prepare another controller"); },
+          }),
+        });
+        process.send({ type: "result", accepted: true, observedPreparing, owner: (await client.status()).owner, pid: process.pid });
+      } catch (error) {
+        process.send({ type: "result", accepted: false, code: error.code, message: error.message });
+      } finally {
+        await client?.close();
+        process.disconnect();
+      }
+    });
+    process.send({ type: "loaded" });
+  `)
+  const peer = fork(peerEntry, [], { execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"] })
+  const peerExit = new Promise(resolve => peer.once("exit", resolve))
+  t.after(async () => {
+    if (peer.exitCode === null && peer.signalCode === null) peer.kill("SIGTERM")
+    await peerExit
+  })
+  const peerResult = new Promise(resolve => {
+    peer.on("message", message => { if (message.type === "result") resolve(message) })
+    peer.once("error", error => resolve({ accepted: false, code: error.code, message: error.message }))
+    peer.once("exit", code => resolve({ accepted: false, message: `joining session exited ${code} without a result` }))
+  })
+  await new Promise((resolve, reject) => {
+    peer.on("message", message => { if (message.type === "loaded") resolve() })
+    peer.once("error", reject)
+    peer.once("exit", code => reject(new Error(`joining session exited ${code} before loading`)))
+  })
   let launchOptions
   const starting = server.connectOrStartController({
     deskRoot: root, stateHome: path.join(base, "state"), ephemeral: true,
@@ -73,40 +204,7 @@ test("cold real Git preparation admits a concurrent process before bounded statu
   }
   const ownerFile = path.join(launchOptions.stateDir, "owner.json")
   const preparingOwner = JSON.parse(readFileSync(ownerFile, "utf8"))
-  const peerEntry = path.join(base, "joining-session.mjs")
-  const clientUrl = new URL("../../../../../plugins/desk/mcp/src/readiness/controller-client.js", import.meta.url).href
-  writeFileSync(peerEntry, `
-    import { connectOrStartController } from ${JSON.stringify(clientUrl)};
-    const identity = ${JSON.stringify(launchOptions.identity)};
-    let client;
-    try {
-      client = await connectOrStartController({
-        root: identity.root, protocolVersion: identity.protocol_version,
-        lexicalContract: identity.lexical_contract, semanticContract: identity.semantic_contract,
-        stateHome: ${JSON.stringify(path.join(base, "state"))}, ephemeral: true,
-        startController() { throw new Error("a joining session must not prepare another controller"); },
-      });
-      process.send({ accepted: true, owner: (await client.status()).owner, pid: process.pid });
-    } catch (error) {
-      process.send({ accepted: false, code: error.code, message: error.message });
-    } finally {
-      await client?.close();
-      process.disconnect();
-    }
-  `)
-  const peer = fork(peerEntry, [], { execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"] })
-  const peerExit = new Promise(resolve => peer.once("exit", resolve))
-  t.after(async () => {
-    if (peer.exitCode === null && peer.signalCode === null) peer.kill("SIGTERM")
-    await peerExit
-  })
-  const peerResult = new Promise((resolve, reject) => {
-    peer.once("message", resolve)
-    peer.once("error", reject)
-    peer.once("exit", code => {
-      if (code !== 0) reject(new Error(`joining session exited ${code}`))
-    })
-  })
+  peer.send({ identity: launchOptions.identity, stateHome: path.join(base, "state"), ownerFile })
   const client = await starting
   let convergence
   try {
@@ -122,6 +220,7 @@ test("cold real Git preparation admits a concurrent process before bounded statu
     assert.notEqual(status.owner.pid, process.pid)
     const joined = await peerResult
     assert.equal(joined.accepted, true, JSON.stringify(joined))
+    assert.equal(joined.observedPreparing, true, "the independent session must enter during preparation, not after readiness")
     assert.notEqual(joined.pid, process.pid)
     assert.notEqual(joined.pid, status.owner.pid)
     assert.equal(joined.owner.pid, status.owner.pid, "both actual processes must use the single elected controller")
@@ -203,6 +302,69 @@ test("finishing preparation refuses a replaced owner record without overwriting 
     await controller?.close()
   }
 })
+
+test("a real failed card-guard installation refuses readiness and can recover after confirmed repair", async t => {
+  const root = await mkTempRoot("controller-preparation-soft-failure-")
+  mkdirSync(path.join(root, "_meta"))
+  mkdirSync(path.join(root, "_archive"))
+  git(root, ["init", "-b", "main"])
+  const hooks = path.join(root, ".managed-hooks")
+  writeFileSync(hooks, "owned obstruction, not a hooks directory")
+  git(root, ["config", "core.hooksPath", hooks])
+  assert.equal(ensureCardGuard(root).state, "failed", "exercise the real helper's soft failure, not a thrown callback double")
+  let options, unexpected, recovered
+  const request = {
+    deskRoot: root, stateHome: path.join(root, "state"), ephemeral: true,
+    policy: { semantic: "unsupported" },
+    controllerLauncher: value => {
+      options = value
+      return server.startControllerRuntime(value)
+    },
+  }
+  t.after(async () => { await unexpected?.close(); await recovered?.close() })
+  await assert.rejects(server.connectOrStartController(request).then(client => {
+    unexpected = client
+    return client
+  }), { code: "controller_workspace_preparation_failed" })
+  assert.equal(existsSync(path.join(options.stateDir, "owner.json")), false)
+  if (process.platform !== "win32") assert.equal(existsSync(options.endpoint), false)
+  assert.equal(readFileSync(hooks, "utf8"), "owned obstruction, not a hooks directory")
+  renameSync(hooks, `${hooks}.held`)
+  mkdirSync(hooks)
+  recovered = await server.connectOrStartController(request)
+  assert.equal(recovered.accepted, true)
+  assert.ok(readFileSync(path.join(hooks, "pre-commit"), "utf8").includes(HOOK_MARKER))
+  assert.equal(ensureCardGuard(root), null, "only successful preparation is cached before later index opening")
+  await recovered.close()
+  recovered = await server.connectOrStartController(request)
+  assert.equal(recovered.accepted, true, "cached successful preparation remains a valid startup")
+})
+
+for (const kind of ["no-git", "tracked-hooks"]) {
+  test(`controller preparation preserves the legitimate ${kind} helper outcome`, async t => {
+    const root = await mkTempRoot(`controller-preparation-${kind}-`)
+    mkdirSync(path.join(root, "_meta"))
+    mkdirSync(path.join(root, "_archive"))
+    let hook
+    if (kind === "tracked-hooks") {
+      git(root, ["init", "-b", "main"])
+      mkdirSync(path.join(root, ".hooks"))
+      hook = path.join(root, ".hooks", "pre-commit")
+      writeFileSync(hook, "owned tracked hook must remain unchanged")
+      git(root, ["config", "core.hooksPath", ".hooks"])
+      git(root, ["add", ".hooks/pre-commit"])
+    }
+    assert.equal(installCardGuard(root).state, kind === "no-git" ? "skipped" : "tracked")
+    const client = await server.connectOrStartController({
+      deskRoot: root, stateHome: path.join(root, "state"), ephemeral: true,
+      policy: { semantic: "unsupported" }, controllerLauncher: server.startControllerRuntime,
+    })
+    t.after(() => client.close())
+    assert.equal(client.accepted, true)
+    assert.equal(ensureCardGuard(root), null)
+    if (hook) assert.equal(readFileSync(hook, "utf8"), "owned tracked hook must remain unchanged")
+  })
+}
 
 for (const kind of ["throw", "async-return"]) {
   test(`preparation ${kind} refuses readiness and releases only its owned rendezvous`, async () => {
