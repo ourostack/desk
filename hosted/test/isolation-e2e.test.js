@@ -67,6 +67,8 @@ async function csrfFor({ who }) {
   return decode(csrfOf((await who.request("/link/github")).text));
 }
 
+// A tampered installation id inside one account's own sealed choice is covered by github-link.test.js ("forged
+// installation id is refused"); these cases carry another account's choice or repository into a session.
 test("forged installation id or repo at linking is refused: one account's GitHub choice cannot bind in another's session", async (t) => {
   const ctx = await twoAccounts(t);
   const ariChooser = await linkAs(ctx, ctx.ari, ARI);
@@ -88,6 +90,8 @@ test("forged installation id or repo at linking is refused: one account's GitHub
     method: "POST", form: { action: "choose", csrf: decode(csrfOf(jordanChooser.text)), choice: decode(fieldOf(jordanChooser.text, "choice")), repo: "ari/desk" },
   });
   assert.equal(forged.status, 403, forged.text);
+  assert.match(forged.text, /isn(&#39;|')t one you can link/, "refused as not offered, not for a missing CSRF token");
+  assert.ok(ctx.logs.some((line) => /link refused: not_offered account/.test(line)), ctx.logs.join("\n"));
 
   assert.equal(await ctx.store.getBinding(ctx.jordan.accountId), null, "Jordan has no binding");
   assert.equal(await ctx.store.getBinding(ctx.ari.accountId), null, "nothing was bound for Ari by Jordan's requests");

@@ -100,7 +100,7 @@ const { spawn, spawnSync } = require("node:child_process");
 if (existsSync("/data/runtime-native-fail") && process.argv[2] === "fetch") process.exit(1);
 if (existsSync("/data/runtime-native-fail-push") && process.argv[2] === "rev-list") process.exit(1);
 appendFileSync(process.env.XDG_STATE_HOME + "/git-argv.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");
-try { appendFileSync(process.env.XDG_STATE_HOME + "/git-calls.jsonl", JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }) + "\\n"); } catch {}
+appendFileSync(process.env.XDG_STATE_HOME + "/git-calls.jsonl", JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }) + "\\n");
 const env = {
   ...process.env, GIT_CONFIG_COUNT: "4",
   GIT_CONFIG_KEY_0: ${JSON.stringify(`url.${origin}.insteadOf`)},

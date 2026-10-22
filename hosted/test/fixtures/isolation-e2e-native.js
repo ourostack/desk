@@ -112,7 +112,13 @@ async function connect(desk, answers) {
 }
 
 export async function runIsolationCases({ config, store, binding, root }) {
-  const bound = setTimeout(() => { console.error("Isolation native fixture exceeded 150 seconds."); process.exit(1); }, 150_000);
+  const cases = {};
+  let running = "setup";
+  const step = name => { running = name; console.error(`isolation case: ${name}`); };
+  const bound = setTimeout(() => {
+    console.error(`Isolation native fixture exceeded 150 seconds during ${running}; finished: ${Object.keys(cases).join(", ") || "none"}.`);
+    process.exit(1);
+  }, 150_000);
   // A GitHub API for the App's own calls: every synthetic repository is on installation 123.
   const githubCalls = [];
   const fetch = async (input, init = {}) => {
@@ -142,32 +148,37 @@ export async function runIsolationCases({ config, store, binding, root }) {
   chmodSync(PROBE, 0o644);
   chmodSync(TARGET, 0o644);
   const bBefore = await probeIn(b, "state");
-  const neighbor = [b.realm.root, basename(b.realm.root), "iso-b", "synthetic/second"];
-  const cases = {};
+  // What A must never be told unless its own request said it: B's realm, its folder, account, repository and user.
+  // (The realms folder itself is not B's: desk_status reports A's own root, which lies inside it.)
+  const neighbor = [b.realm.root, basename(b.realm.root), "iso-b", "synthetic/second", `desk-${b.realm.uid}`];
 
   // 1. Forged installation or repository. A binding naming an installation GitHub doesn't serve the repository from
   // gets no token; a binding naming another account's repository gets no realm; A's own token still works.
+  step("forged installation or repository");
   const credential = desk => inRealm(desk, ["/app/hosted/bin/git-credential-desk.js", "get"], "protocol=https\nhost=github.com\n\n");
   const own = await credential(a);
   assert.equal(own.code, 0, own.stderr);
   assert.match(own.stdout, /^username=x-access-token\npassword=ghs_isolation_\d+\n$/);
   await store.putAccount({ accountId: "iso-forged-installation", displayName: "Synthetic", deskAccess: true });
   await store.putBinding("iso-forged-installation", { ...binding, repo: "synthetic/third", installationId: 999 });
+  // The realm prepares only because the fixture's loopback remote never asks for credentials; in production the clone
+  // itself would ask the token socket first and fail the same way the explicit request below does.
   const forgedDesk = await manager.prepare("iso-forged-installation");
-  const minted = githubCalls.filter(call => call.startsWith("POST")).length;
+  const before = githubCalls.length;
   const forged = await credential(forgedDesk);
+  const asked = githubCalls.slice(before);
   assert.notEqual(forged.code, 0, "a forged installation gets no token");
   assert.doesNotMatch(forged.stdout, /password=/);
   assert.match(forged.stderr, /Desk token unavailable/);
-  assert.ok(githubCalls.includes("GET /repos/synthetic/third/installation"), githubCalls.join("\n"));
-  assert.equal(githubCalls.filter(call => call.startsWith("POST")).length, minted, "no token was requested for the forged installation");
+  assert.deepEqual(asked, ["GET /repos/synthetic/third/installation"], "the App checked the installation and requested no token");
   await store.putAccount({ accountId: "iso-forged-repo", displayName: "Synthetic", deskAccess: true });
   await store.putBinding("iso-forged-repo", { ...binding, repo: "synthetic/second", installationId: INSTALLATION });
   await assert.rejects(manager.prepare("iso-forged-repo"), /authority/);
   assert.equal((await credential(b)).code, 0, "B's desk keeps working");
-  cases.forgedInstallationOrRepo = { ownToken: true, forgedInstallationRefused: true, forgedRepoRefused: true };
+  cases.forgedInstallationOrRepo = { ownToken: true, forgedInstallationAsked: asked, forgedRepoRefused: true };
 
   // 6. Kernel boundary of A's actual launched process.
+  step("kernel");
   const kernel = await probeIn(a, "kernel");
   assert.equal(kernel.uid, a.realm.uid);
   for (const field of ["CapInh", "CapPrm", "CapEff", "CapAmb"]) assert.equal(kernel[field], "0000000000000000", field);
@@ -176,6 +187,7 @@ export async function runIsolationCases({ config, store, binding, root }) {
   cases.kernel = kernel;
 
   // 4. B's token socket, clone and realm are closed to A; A's own socket works.
+  step("reach");
   const reach = await probeIn(a, "reach");
   assert.equal(reach.ownSocket, "connected");
   assert.equal(reach.neighborSocket, "EACCES");
@@ -190,13 +202,21 @@ export async function runIsolationCases({ config, store, binding, root }) {
   // The service cases assert readiness itself; here the status only has to answer.
   assert.equal((await session.call("desk_status")).isError, false);
 
-  // 2. desk_save into B, by a relative escape and by an absolute path.
-  const escape = relative(a.env.DESK, join(b.env.DESK, "_shared", "escape.md"));
+  // 2. desk_save into B, by a relative escape and by an absolute path. Each is refused by desk_save's own path rule
+  // (not by the kernel, whose error would name an absolute path), and the error adds no path beyond the request's.
+  step("desk_save");
+  const escape = relative(a.env.DESK, join(b.env.DESK, "_shared", "probe.md"));
   assert.match(escape, /^\.\.\//);
-  for (const path of [escape, join(b.env.DESK, "_shared", "absolute.md"), "../../outside.md", "_shared/../../outside.md"]) {
+  for (const [path, reason] of [
+    [escape, /climbs out of its folder with `\.\.`/],
+    [join(b.env.DESK, "_shared", "probe.md"), /give the path relative to the desk root/],
+    ["../../probe.md", /climbs out of its folder with `\.\.`/],
+    ["_shared/../../probe.md", /climbs out of its folder with `\.\.`/],
+  ]) {
     const saved = await session.call("desk_save", { files: [{ path, content: "not yours\n" }], message: "reach the neighbor" });
     assert.equal(saved.isError, true, `desk_save ${path} must be refused: ${saved.text}`);
-    assert.match(saved.text, /outside|escape|absolute|relative|within the desk/i, `desk_save ${path} is refused for its path: ${saved.text}`);
+    assert.match(saved.text, reason, `desk_save ${path} is refused by its path rule: ${saved.text}`);
+    if (!path.startsWith("/")) assert.doesNotMatch(saved.text, /\/data\//, `desk_save ${path} names an absolute path: ${saved.text}`);
   }
   // A's own write still works, so the refusals above are about the path, not a broken session.
   {
@@ -205,31 +225,43 @@ export async function runIsolationCases({ config, store, binding, root }) {
   }
   cases.deskSave = answers.filter(answer => answer.name === "desk_save").map(answer => answer.text);
 
-  // 3. A card whose local_path is B's clone: commit evidence is refused, and no Git runs anywhere but A's desk.
+  // 3. A card whose local_path is B's clone: commit evidence is refused, and no Git runs anywhere but A's desk. A second
+  // card points at a clone outside A's desk that A *can* read (the fixture's seed repository), so a missing guard would
+  // show up as a logged Git call there; a spawn into B's unreadable clone fails at chdir before the log could see it.
+  step("local_path");
+  const readable = "/data/runtime-native-seed";
   const callsBefore = (await probeIn(a, "git-calls")).length;
   const track = await session.call("track_create", { slug: "neighbor-probe", title: "Neighbor probe", scope: "isolation fixture; not real work" });
   assert.equal(track.isError, false, track.text);
-  const created = await session.call("task_create", {
-    track: "neighbor-probe", slug: "reach-neighbor-clone", title: "Reach the neighbor's clone", status: "processing",
-    repos: [{ name: "synthetic/second", local_path: b.env.DESK, mode: "local", url: "https://github.com/synthetic/second" }],
-  });
-  assert.equal(created.isError, false, created.text);
-  const done = await session.call("task_update", {
-    track: "neighbor-probe", slug: "reach-neighbor-clone", status: "done", evidence: { kind: "commit", ref: bBefore.head },
-  });
-  assert.equal(done.isError, true, `commit evidence from B's clone must be refused: ${done.text}`);
-  // The hosted Git guard refuses before any spawn; a spawn into B's unreadable clone would only fail later, so this
-  // pins the refusal to the guard.
-  assert.match(done.text, /Desk Git context refused/);
-  assert.equal((await session.call("desk_status")).isError, false, "a card naming B's clone does not break A's status");
+  const cards = [
+    ["reach-neighbor-clone", [
+      { name: "synthetic/second", local_path: b.env.DESK, mode: "local", url: "https://github.com/synthetic/second" },
+      // Without a url, task_create would probe the clone for a local-only repo.
+      { name: "neighbor-local", local_path: b.env.DESK, mode: "local" },
+    ]],
+    ["reach-readable-clone", [{ name: "seed", local_path: readable, mode: "local" }]],
+  ];
+  const refusals = [];
+  for (const [slug, repos] of cards) {
+    const created = await session.call("task_create", { track: "neighbor-probe", slug, title: "Reach a clone outside the desk", status: "processing", repos });
+    assert.equal(created.isError, false, created.text);
+    assert.doesNotMatch(created.text, /local_only/, `task_create recorded a clone outside the desk as local-only: ${created.text}`);
+    const done = await session.call("task_update", { track: "neighbor-probe", slug, status: "done", evidence: { kind: "commit", ref: bBefore.head } });
+    assert.equal(done.isError, true, `commit evidence from a clone outside the desk must be refused: ${done.text}`);
+    assert.match(done.text, /Desk Git context refused/, "the hosted Git guard refuses before any spawn");
+    refusals.push(done.text);
+  }
+  assert.equal((await session.call("desk_status")).isError, false, "cards naming clones outside the desk do not break A's status");
   const calls = (await probeIn(a, "git-calls")).slice(callsBefore);
+  assert.ok(calls.some(call => call.cwd === a.env.DESK), "the Git log is live: Desk's own commits were logged");
   const outside = calls.filter(call => call.cwd !== a.env.DESK && !call.cwd.startsWith(`${a.env.DESK}/`));
   assert.deepEqual(outside, [], "Desk ran Git outside A's desk");
-  assert.ok(!calls.some(call => call.argv.some(arg => arg.includes(b.realm.root))), "no Git argument names B's realm");
-  cases.localPath = { refused: done.text, gitCalls: calls.length, outsideDesk: outside.length };
+  assert.ok(!calls.some(call => call.argv.some(arg => arg.includes(b.realm.root) || arg.includes(readable))), "no Git argument names a clone outside A's desk");
+  cases.localPath = { refusals, gitCalls: calls.length, outsideDesk: outside.length };
 
-  // 5. Error text. No answer names B unless A's own request did, none shows B's content, and none shows A's or B's
-  // absolute realm path except as A itself wrote it in the request.
+  // 5. Error text. No answer names B unless A's own request did, none shows B's content, and no error shows an absolute
+  // path unless A's request contained one.
+  step("error text");
   await session.call("desk_thread", { path: "../../missing.md" });
   await session.call("task_focus", { track: "neighbor-probe", slug: "../../iso-b" });
   for (const answer of answers) {
@@ -237,8 +269,8 @@ export async function runIsolationCases({ config, store, binding, root }) {
       if (!answer.request.includes(secret)) assert.ok(!answer.text.includes(secret), `${answer.name} named B (${secret}) unprompted: ${answer.text}`);
     }
     assert.ok(!answer.text.includes("second marker"), `${answer.name} showed B's content`);
-    if (answer.isError && !answer.request.includes(a.realm.root)) {
-      assert.ok(!answer.text.includes(a.realm.root), `${answer.name} error names an absolute realm path: ${answer.text}`);
+    if (answer.isError && !answer.request.includes("/data/")) {
+      assert.doesNotMatch(answer.text, /\/data\//, `${answer.name} error names an absolute path: ${answer.text}`);
     }
   }
   cases.errors = { answers: answers.length, errors: answers.filter(answer => answer.isError).length };
@@ -248,6 +280,5 @@ export async function runIsolationCases({ config, store, binding, root }) {
   assert.deepEqual(bAfter, bBefore, "B's desk is unchanged");
   await manager.close();
   clearTimeout(bound);
-  console.log(JSON.stringify({ isolationCases: cases }));
-  return { forged: true, kernel: true, reach: true, deskSave: true, localPath: true, errors: true };
+  return cases;
 }
