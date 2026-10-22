@@ -395,6 +395,9 @@ assert.notEqual(c.realm.uid, a.realm.uid, "manager replacement cannot recycle a 
 await assert.rejects(a.git(["status"]), /closed/);
 writeFileSync("/data/runtime-native-fail-push", "synthetic failed push count");
 await assert.rejects(nextManager.close(), /shutdown/);
+// The failed shutdown push was followed by a rescue push to a new branch on the account's own repository.
+assert.match(fixtureGit(secondBare, ["for-each-ref", "--format=%(refname)", "refs/heads/desk-rescue/"]), /^refs\/heads\/desk-rescue\/\d{8}T\d{6}Z-[0-9a-f]{8}$/m,
+  "a failed shutdown push is rescued to a desk-rescue branch");
 const retainedSocket = spawn("/usr/bin/setpriv", isolationArgs({
   uid: c.realm.uid, command: process.execPath,
   args: ["/app/hosted/bin/git-credential-desk.js", "get"],
@@ -486,7 +489,7 @@ await new Promise(resolve => http.close(resolve));
 console.log(JSON.stringify({
   passed: true, accounts: 2, ownCwd: true, owningUidGit: true, socketOwnership: true,
   signalBoundary: true, immutableAuthority: true, retry: true, shutdownPush: true,
-  uidNeverRecycled: true, shutdownFailureSurfaced: true, failedPushSocketRetained: true,
+  uidNeverRecycled: true, shutdownFailureSurfaced: true, failedPushSocketRetained: true, failedPushRescued: true,
   mainRouted,
   timeoutCases,
   retainedRoots: readdirSync(join(root, "realms")).map(name => join(root, "realms", name)),

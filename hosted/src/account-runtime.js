@@ -25,8 +25,9 @@ export function diskUsedFraction(path, statfs = statfsSync) {
 }
 
 // Closes every prepared realm at once: each retires its services and pushes its own writes as its own UID, so one
-// slow or failing push neither delays nor stops another's. A realm whose close failed is logged by account and kept
-// on disk, writes and all. Returns the failures.
+// slow or failing push neither delays nor stops another's. A realm whose close failed is logged by account; its
+// realm is on the container's own disk, so writes that its rescue push did not save are lost with the replica.
+// Returns the failures.
 export async function closeRealms(entries, write = runtimeLog) {
   const results = await Promise.allSettled(entries.map(({ value }) => value.close()));
   const failed = [];
@@ -34,7 +35,7 @@ export async function closeRealms(entries, write = runtimeLog) {
     if (result.status === "fulfilled") return;
     const { accountId } = entries[index];
     const code = typeof result.reason?.code === "string" ? result.reason.code : (result.reason?.name ?? "error");
-    write(`DESK WRITES NOT PUSHED for account ${accountId} (${code}); its realm is kept on disk`);
+    write(`DESK WRITES NOT PUSHED for account ${accountId} (${code}); any not saved to a rescue branch are lost when this replica stops`);
     failed.push({ accountId, error: result.reason });
   });
   return failed;
@@ -43,6 +44,40 @@ export async function closeRealms(entries, write = runtimeLog) {
 // A push's time: its usual 65 s, or less when the shutdown deadline is nearer. Zero means there is no time left.
 export function pushBudget(now, deadline, max = 65_000) {
   return Math.max(0, Math.min(max, deadline - now));
+}
+
+// The end of the shutdown window kept for a rescue push when the desk's own push fails.
+export const RESCUE_RESERVE_MS = 10_000;
+
+const rescueStamp = () => `${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}-${randomUUID().slice(0, 8)}`;
+
+// After a failed shutdown push, pushes the desk's HEAD to a new branch `desk-rescue/<UTC time>-<random>` on the
+// account's own repository. A new branch can't be rejected by a newer commit on the desk's branch, and the person
+// can see it and merge it. Its name carries no account id, so no argv does. Never throws: returns the branch, or null
+// when nothing needed saving or the rescue failed, which it logs by account.
+export async function rescueDeskWrites({ run, accountId, deadline, now = Date.now, stamp = rescueStamp, write = runtimeLog }) {
+  const left = () => Math.min(RESCUE_RESERVE_MS, deadline - now());
+  if (!(left() > 0)) {
+    write(`DESK WRITES NOT RESCUED for account ${accountId} (no time left)`);
+    return null;
+  }
+  let ahead = true;
+  try {
+    ahead = Boolean((await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, left())).trim());
+  } catch {
+    // The count can't be read: push anyway rather than risk losing writes.
+  }
+  if (!ahead) return null;
+  const branch = `desk-rescue/${stamp()}`;
+  try {
+    if (!(left() > 0)) throw Object.assign(new Error("no time left"), { code: "no time left" });
+    await run({ action: "git", args: ["push", "--quiet", "origin", `HEAD:refs/heads/${branch}`] }, left());
+  } catch (error) {
+    write(`DESK WRITES NOT RESCUED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"})`);
+    return null;
+  }
+  write(`DESK WRITES RESCUED for account ${accountId}: pushed to branch ${branch} on its desk repository`);
+  return branch;
 }
 
 // The shutdown close: realms already prepared close at once, without waiting for a preparation still under way (a
@@ -456,8 +491,9 @@ export function createAccountRuntime({
       }
       return run({ action: "git", args });
     };
-    const push = async () => {
-      const budget = pushBudget(Date.now(), shutdownDeadline);
+    const deskPush = async () => {
+      // At shutdown, the window's last seconds are kept for a rescue push.
+      const budget = pushBudget(Date.now(), shutdownDeadline - (closed ? RESCUE_RESERVE_MS : 0));
       if (budget === 0) {
         throw Object.assign(new Error("Desk writes were not pushed before the shutdown deadline."), { code: "DESK_PUSH_UNPRESERVED", quiescent: true });
       }
@@ -468,6 +504,18 @@ export function createAccountRuntime({
         throw Object.assign(new Error("Desk writes were not verified pushed after operation retirement."), {
           code: "DESK_PUSH_UNPRESERVED", quiescent: true,
         });
+      }
+    };
+    // A shutdown push that failed with nothing left running in the realm gets a rescue push; the push still counts
+    // as failed, so the shutdown reports it.
+    const push = async () => {
+      try {
+        await deskPush();
+      } catch (error) {
+        if (closed && error?.quiescent === true && !preservationFailures.has(accountId)) {
+          await rescueDeskWrites({ run, accountId, deadline: shutdownDeadline, write });
+        }
+        throw error;
       }
     };
     const lifecycle = createRealmLifecycle({
@@ -592,7 +640,7 @@ export function createAccountRuntime({
         const results = await closeAll({ prepared, preparing, deadline: shutdownDeadline, write });
         const logged = new Set(results.map(({ accountId }) => accountId));
         for (const [accountId, { error }] of preservationFailures) {
-          if (!logged.has(accountId)) write(`DESK WRITES MAY NOT BE PUSHED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"}); its realm is preserved on disk`);
+          if (!logged.has(accountId)) write(`DESK WRITES MAY NOT BE PUSHED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"}); its writes are only on this replica's disk, which is lost when it stops`);
         }
         const failed = new Set([
           ...results.map(({ error }) => error),
