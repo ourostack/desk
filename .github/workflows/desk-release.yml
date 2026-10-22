@@ -53,6 +53,12 @@ concurrency:
   # GitHub queue:max orders entry into the waiting group, not dispatch time; excess arrivals are canceled.
   queue: max
 
+# npm's advisory audit gates nothing here and, when the registry's audit endpoint stalls, holds each install for
+# about seven minutes; tests/desk/mcp/__tests__/ci/npm_install_no_audit.test.js keeps it off.
+env:
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+
 jobs:
   build:
     name: Build and check the Desk release

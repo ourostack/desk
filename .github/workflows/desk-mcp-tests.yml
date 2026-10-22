@@ -77,6 +77,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# npm's advisory audit gates nothing here and, when the registry's audit endpoint stalls, holds each install for
+# about seven minutes; tests/desk/mcp/__tests__/ci/npm_install_no_audit.test.js keeps it off.
+env:
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+
 jobs:
   browser-lifecycle-install:
     name: Browser latest-channel lifecycle
