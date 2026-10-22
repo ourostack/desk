@@ -413,7 +413,7 @@ function main() {
     "commit and push",
     "Disable host memory (`store_memory`/`vote_memory`)",
     "host settings only mirror the desk",
-    "Keep no work in a host's session folder or a new dot folder; other agents and machines never see it.",
+    "keep no work in host session or new `~/.<name>` folders",
     "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere",
     "is an optional mirror, made only when asked, that links back to the desk",
     "one durable task",

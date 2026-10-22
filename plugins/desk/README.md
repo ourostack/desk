@@ -127,7 +127,7 @@ Questions still belong in ordinary chat. Claude's Desk agent definitions declare
 
 ## Host folders
 
-Work goes to the repository or the desk, never a host's own folder or a new dot folder: agents work across sessions and machines, and work kept on one machine is lost to the rest. Copilot's system prompt offers its session folder, `~/.copilot/session-state/<id>/files/`, for artifacts. The launcher can refuse Copilot's file tools there with `--deny-tool="write($HOME/.copilot/session-state/*/files/**)"`, next to `--excluded-tools=ask_user`; the shell is not covered. See [the session folder on Copilot CLI](docs/agent-files.md#the-session-folder-on-copilot-cli).
+Work goes to the repository or the desk, never a host's own folder or a new dot folder: agents work across sessions and machines, and work kept on one machine is lost to the rest. Copilot's system prompt offers its session folder, `~/.copilot/session-state/<id>/files/`, for artifacts. The launcher can refuse Copilot's file tools there with `--deny-tool="write(${COPILOT_HOME:-$HOME/.copilot}/session-state/*/files/**)"`, next to `--excluded-tools=ask_user`; the shell is not covered. See [the session folder on Copilot CLI](docs/agent-files.md#the-session-folder-on-copilot-cli).
 
 ## what desk gives an agent
 

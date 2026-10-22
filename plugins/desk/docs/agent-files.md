@@ -40,24 +40,24 @@ The launch owner must carry this flag through the supported native invocation, i
 
 There is no existing Desk-owned production Copilot launcher or exclusion-policy consumer in this package. `mcp/src/activation/copilot-bundle.js` builds `launch` metadata containing only the agent source and MCP declaration; `activation/desk.activation.json` entrypoints identify source paths, not native argv; `agency.json` declares acquisition dependencies. The startup hooks run after the host has launched. The exact external integration seam is Agency's `agency copilot [OPTIONS] [EXTRA_ARGS]...`: its installed help identifies `EXTRA_ARGS` as arguments forwarded to the underlying engine and lists `--excluded-tools`. The owner of that invocation must add `--excluded-tools=ask_user` to those forwarded arguments for new session generations. This is not an automatic Desk activation change. The repository's `evals/boot-acceptance/copilot.mjs` does own an evaluation-only `copilotFlags()` builder, but it is not a shipped consumer launch path.
 
+The root package carries generated flattened Superpowers metadata for Copilot-compatible hosts. Desk + Superpowers and the declared companion closure must be loaded from the admitted roots; metadata alone is not runtime proof. The existing overlay keeps its own worker instead of launching the standalone agent above.
+
+The root plugin also registers a Desk-owned `sessionStart` hook. Copilot executes that hook with the installed plugin root, and the hook reads `skills/using-desk/SKILL.md` at runtime to emit the canonical foundation as `additionalContext`; `worker.agent.md` does not carry a copied foundation body.
+
 #### The session folder on Copilot CLI
 
 Copilot keeps a folder per session, `~/.copilot/session-state/<id>/` (under `COPILOT_HOME` when that is set), and its system prompt tells the agent that the folder's `files/` "persists across checkpoints for artifacts that shouldn't be committed". Work kept there is lost to every other agent and machine. Desk sends it to the repository or the desk instead (`interaction-style`, "Host commands that duplicate the desk"). The same launch owner can make that structural with a native permission rule, next to the `ask_user` exclusion:
 
 ```bash
-copilot --agent desk:worker --excluded-tools=ask_user --deny-tool="write($HOME/.copilot/session-state/*/files/**)"
+copilot --agent desk:worker --excluded-tools=ask_user --deny-tool="write(${COPILOT_HOME:-$HOME/.copilot}/session-state/*/files/**)"
 ```
 
-Checked with Copilot CLI 1.0.100 on macOS on October 22, 2026, with `--allow-all-tools` and `COPILOT_HOME` set to a scratch profile: the rule refused the agent's `create` under `files/` ("denied due to the following rules"), while Copilot's own writes of the session's `events.jsonl`, `workspace.yaml` and `checkpoints/`, and the agent's writes elsewhere, went on. Its limits:
+Checked with Copilot CLI 1.0.100 on macOS on October 22, 2026, with `--allow-all-tools` and a scratch profile reached both through `COPILOT_HOME` and through the default `$HOME/.copilot`, using the command above: the rule refused the agent's `create` under `files/` ("denied due to the following rules"), while Copilot's own writes of the session's `events.jsonl`, `workspace.yaml` and `checkpoints/`, and the agent's writes elsewhere, went on. Its limits:
 
-- The path must be absolute and end in `/**`. `write(<folder>)` without it refused nothing.
+- The path must end in `/**`: `write(<folder>)` without it refused nothing. Keep it absolute; `copilot help permissions` says a relative path matches by trailing path components. The bash and zsh form above follows `COPILOT_HOME` and keeps the glob for Copilot.
 - `write` rules cover Copilot's file tools, not the shell: `echo text > <files folder>/x.md` still writes. The instruction is the only guard there. Desk adds no tool-call hook for it, because its hooks stay at its own boundaries ([README](../README.md#the-card-guard)), and a hook reading command text would miss a path built in a variable.
 - `copilot help config` lists no setting for denied tools, so neither a Desk hook nor a settings file can add the rule after launch; only the launcher can.
 - A Windows path and an Agency-forwarded launch are unverified.
-
-The root package carries generated flattened Superpowers metadata for Copilot-compatible hosts. Desk + Superpowers and the declared companion closure must be loaded from the admitted roots; metadata alone is not runtime proof. The existing overlay keeps its own worker instead of launching the standalone agent above.
-
-The root plugin also registers a Desk-owned `sessionStart` hook. Copilot executes that hook with the installed plugin root, and the hook reads `skills/using-desk/SKILL.md` at runtime to emit the canonical foundation as `additionalContext`; `worker.agent.md` does not carry a copied foundation body.
 
 ### Codex CLI / Codex App
 
