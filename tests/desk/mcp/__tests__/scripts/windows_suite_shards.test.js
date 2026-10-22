@@ -69,7 +69,9 @@ test("the checked-in table plans eight shards inside the budget: none over 30 mi
   const mean = plan.reduce((n, s) => n + s.seconds, 0) / plan.length
   const worst = Math.max(...plan.map((s) => s.seconds))
   assert.ok(worst <= 30 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
-  assert.ok(worst <= mean * 1.1, `the longest shard (${Math.round(worst)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
+  // One file cannot be split, so a shard holding a single file may sit above the mean; a shard of several files may not.
+  for (const shard of plan.filter((s) => s.files.length > 1))
+    assert.ok(shard.seconds <= mean * 1.1, `a shard of ${shard.files.length} files (${Math.round(shard.seconds)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
   // The per-file limit is 30 minutes; a file near it cannot be balanced away and needs its own fix.
   assert.ok(Math.max(...Object.values(real.files)) < 25 * 60, "a single file is near the 30 minute limit")
 })
