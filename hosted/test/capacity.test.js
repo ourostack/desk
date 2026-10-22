@@ -69,6 +69,7 @@ test("a 4th session for one account is refused with a message naming 3, and the 
   assert.equal(fourth.status, 429);
   assert.match(fourth.messages[0].error.message, /\b3\b/);
   assert.match(fourth.messages[0].error.message, /session/i);
+  assert.match(fourth.messages[0].error.message, /a few minutes/);
   for (const sessionId of sessions) assert.ok(await works(url, sessionId, A));
   assert.equal(relay.size(), 3);
 });
@@ -217,6 +218,8 @@ test("shutdown closes prepared realms at once, closes a realm still being prepar
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(order, ["close acct-a"], "a prepared realm's close does not wait for a preparation");
   finishB();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(order, ["close acct-a", "close acct-b"], "a preparation that finishes is closed then, not at the deadline");
   const failed = await closing;
   assert.deepEqual(order, ["close acct-a", "close acct-b"]);
   assert.deepEqual(failed, []);

@@ -230,7 +230,7 @@ export function createRelay({
     const full = makeRoom(owner);
     if (full === "account") {
       log(`refused a new session for ${owner.label}: it has ${maxPerAccount} open`);
-      return refuse(res, 429, -32000, `You already have ${maxPerAccount} Desk sessions open, the most one account can have at once. Close Desk in another app or chat, or try again in a minute.`);
+      return refuse(res, 429, -32000, `You already have ${maxPerAccount} Desk sessions open, the most one account can have at once. Close Desk in another app or chat, or try again in a few minutes.`);
     }
     if (full === "busy") {
       log(`refused a new session: the gateway is full (${sessions.size} open, ${starting} starting)`);

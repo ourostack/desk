@@ -54,17 +54,23 @@ export async function closeAll({ prepared, preparing, deadline, write = runtimeL
   const late = (async () => {
     const pending = [...preparing];
     if (pending.length === 0) return [];
+    const settledIds = new Set();
+    const closes = [];
+    // Each preparation's realm is closed as soon as that preparation finishes.
+    const tracked = pending.map(([accountId, promise]) => promise.then(() => {}, () => {}).then(() => {
+      settledIds.add(accountId);
+      const value = prepared.get(accountId);
+      if (value && !first.has(value)) closes.push(closeRealms([{ accountId, value }], write));
+    }));
+    const settled = Promise.allSettled(tracked);
     let timer;
-    const done = new Set();
-    pending.forEach(([accountId, promise]) => promise.then(() => done.add(accountId), () => done.add(accountId)));
-    const settled = Promise.allSettled(pending.map(([, promise]) => promise));
     // Without a deadline (Infinity, which setTimeout would treat as 1 ms), wait for every preparation.
     await (Number.isFinite(deadline)
       ? Promise.race([settled, new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); })])
       : settled);
     clearTimeout(timer);
-    for (const [accountId] of pending) if (!done.has(accountId)) write(`account ${accountId} was still being prepared at the shutdown deadline; nothing of it was closed`);
-    return closeRealms([...prepared].filter(([, value]) => !first.has(value)).map(([accountId, value]) => ({ accountId, value })), write);
+    for (const [accountId] of pending) if (!settledIds.has(accountId)) write(`account ${accountId} was still being prepared at the shutdown deadline; nothing of it was closed`);
+    return (await Promise.all(closes)).flat();
   })();
   return [...(await now), ...(await late)];
 }
