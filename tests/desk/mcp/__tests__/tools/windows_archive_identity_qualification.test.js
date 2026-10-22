@@ -99,7 +99,8 @@ function fakeNative(options = {}) {
 }
 const input = { source, nodeBaseline: nodeStat, admittedIdentity }
 // These two controls parse/reflect only; production native archive deadlines are unchanged.
-const metadataOnlyTimeoutMs = 10_000
+// PowerShell cold start on a busy CI runner can exceed several seconds.
+const metadataOnlyTimeoutMs = 60_000
 
 test("synthetic: PowerShell AST keeps metadata helpers script-scoped before use", async t => {
   const f = fakeNative()
