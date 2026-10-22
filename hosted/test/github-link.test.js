@@ -16,6 +16,9 @@ const JORDAN_OID = "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d";
 const JORDAN = { id: 4242, login: "jordan-dev", name: "Jordan Q", email: "jordan@example.com" };
 const DESK_REPO = "jordan-dev/desk";
 const INSTALLATION = 777001;
+// Ari's binding as the account gateway seeds it (fixtures/account-gateway.mjs BINDING): no GitHub user.
+const ARI_REPO = "arimendelow/desk";
+const ARI_INSTALLATION = 12345678;
 
 const DESK_FILES = ["_meta", "_archive"];
 
@@ -23,7 +26,7 @@ const DESK_FILES = ["_meta", "_archive"];
 // no binding yet. `initDesk` stands in for running desk-init.js in the account's realm.
 async function startLinking(t, { repos = { [DESK_REPO]: { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES } }, user, initDesk } = {}) {
   const appId = Math.floor(Math.random() * 1e9);
-  const github = fakeGitHub({ user: user ?? JORDAN, repos, appId });
+  const github = fakeGitHub({ user: user ?? JORDAN, repos: { [ARI_REPO]: { installationId: ARI_INSTALLATION, collaborators: {}, files: DESK_FILES }, ...repos }, appId });
   const inits = [];
   const linked = [];
   const ctx = await startAccountGateway(t, {
@@ -298,12 +301,43 @@ test("permission revoked suspends at next session start and shows relink page", 
   assert.equal(await link.recheckBinding({ accountId: ctx.jordanId }), "suspended");
 });
 
-test("a binding the operator seeded (no GitHub user) and an account with no binding are not rechecked against GitHub", async (t) => {
+test("an account with no binding is not rechecked against GitHub", async (t) => {
   const ctx = await startLinking(t);
   const calls = ctx.github.state.calls.length;
-  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.accountId }), "ok", "Ari's seeded binding");
   assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "none");
   assert.equal(ctx.github.state.calls.length, calls);
+});
+
+test("a binding the operator seeded (no GitHub user) is rechecked against the App: uninstalled or moved suspends it, reinstalled restores it", async (t) => {
+  const ctx = await startLinking(t);
+  const calls = ctx.github.state.calls.length;
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.accountId }), "ok", "Ari's seeded binding, still installed");
+  assert.ok(ctx.github.state.calls.slice(calls).some((call) => call.path === `/repos/${ARI_REPO}/installation`), "the App's installation was read");
+  const installed = ctx.github.state.repos[ARI_REPO];
+  delete ctx.github.state.repos[ARI_REPO];
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.accountId }), "suspended", "the App uninstalled from it");
+  assert.equal((await ctx.store.getBinding(ctx.accountId)).suspended, true);
+  ctx.github.state.repos[ARI_REPO] = { ...installed, installationId: ARI_INSTALLATION + 1 };
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.accountId }), "suspended", "another installation now serves it");
+  ctx.github.state.repos[ARI_REPO] = installed;
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.accountId }), "ok");
+  assert.equal((await ctx.store.getBinding(ctx.accountId)).suspended, undefined);
+  assert.equal((await ctx.store.getBinding(ctx.accountId)).githubUserId, undefined, "it stays a seeded binding");
+});
+
+test("a recheck never overwrites a link made while it ran", async (t) => {
+  const ctx = await startLinking(t, { repos: { [DESK_REPO]: { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES }, "jordan-dev/notes": { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES } } });
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  const old = await ctx.store.getBinding(ctx.jordanId);
+  ctx.github.state.repos[DESK_REPO].collaborators["jordan-dev"] = "read";
+  let relinked = false;
+  ctx.github.state.onCall = async (path) => {
+    if (relinked || !path.endsWith("/permission")) return;
+    relinked = true;
+    await ctx.store.putBinding(ctx.jordanId, { ...old, repo: "jordan-dev/notes" });
+  };
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "ok", "the new link is the one rechecked");
+  assert.deepEqual(await ctx.store.getBinding(ctx.jordanId), { ...old, repo: "jordan-dev/notes" }, "and it is neither suspended nor replaced by the old one");
 });
 
 test("our App's own failures and GitHub's rate limits are 'try again', never a suspension", async (t) => {
@@ -328,7 +362,7 @@ test("session start: a suspended desk is refused with the relink message, GitHub
   const ctx = await startLinking(t);
   assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
   assert.equal(await ctx.link.sessionRefusal(ctx.jordanId), null);
-  assert.equal(await ctx.link.sessionRefusal(ctx.accountId), null, "Ari's seeded binding starts without a GitHub call");
+  assert.equal(await ctx.link.sessionRefusal(ctx.accountId), null, "Ari's seeded binding starts while the App is installed on it");
   ctx.github.state.down = true;
   assert.match(await ctx.link.sessionRefusal(ctx.jordanId), /Try again/);
   ctx.github.state.down = false;
@@ -349,6 +383,45 @@ test("one repository is one account's desk whatever its case; a suspended bindin
   assert.equal(linked.status, 200, linked.text);
 });
 
+test("a repository another account has just claimed can't be linked, even before that account's binding is written", async (t) => {
+  const ctx = await startLinking(t);
+  const other = randomUUID();
+  assert.deepEqual(await ctx.store.claimRepo(DESK_REPO, other, { now: ctx.now() }), { claimed: true });
+  const refused = await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO);
+  assert.equal(refused.status, 409, refused.text);
+  assert.equal(await ctx.store.getBinding(ctx.jordanId), null);
+});
+
+test("linking another repository frees the old one at once; a rolled-back init frees the new one", async (t) => {
+  const ctx = await startLinking(t, { repos: { [DESK_REPO]: { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES }, "jordan-dev/notes": { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES }, "jordan-dev/empty": { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: [] } }, initDesk: () => ({ status: "error", step: "commit" }) });
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/notes")).status, 200);
+  const other = randomUUID();
+  assert.deepEqual(await ctx.store.claimRepo(DESK_REPO, other, { now: ctx.now() }), { claimed: true }, "the old repository is free at once");
+  const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/empty");
+  const failed = await ctx.jordan.request("/link/github", { method: "POST", form: { action: "init", csrf: decode(csrfOf(offer.text)), pick: decode(fieldOf(offer.text, "pick")) } });
+  assert.equal(failed.status, 502);
+  assert.equal((await ctx.store.getBinding(ctx.jordanId)).repo, "jordan-dev/notes", "the previous binding is back");
+  assert.deepEqual(await ctx.store.claimRepo("jordan-dev/empty", other, { now: ctx.now() }), { claimed: true }, "the rolled-back repository is free");
+  assert.deepEqual(await ctx.store.claimRepo("jordan-dev/notes", other, { now: ctx.now() + 60 * 60_000 }), { heldBy: ctx.jordanId }, "the restored one is still Jordan's");
+});
+
+test("a suspended binding whose repository has since become another account's desk stays suspended when access returns", async (t) => {
+  const ctx = await startLinking(t);
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  ctx.github.state.repos[DESK_REPO].collaborators["jordan-dev"] = "read";
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "suspended");
+  const other = randomUUID();
+  ctx.advance(10 * 60_000);
+  assert.deepEqual(await ctx.store.claimRepo(DESK_REPO, other, { now: ctx.now() }), { claimed: true }, "a suspended binding no longer holds its repository");
+  await ctx.store.putBinding(other, { kind: "github", repo: DESK_REPO, installationId: INSTALLATION, author: { name: "x", email: "1+x@users.noreply.github.com" } });
+  ctx.github.state.repos[DESK_REPO].collaborators["jordan-dev"] = "write";
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "taken");
+  assert.equal((await ctx.store.getBinding(ctx.jordanId)).suspended, true);
+  assert.match(await ctx.link.sessionRefusal(ctx.jordanId), /another Hosted Desk account/);
+  assert.match(await ctx.link.sessionRefusal(ctx.jordanId), new RegExp(`${GATEWAY}/link/github`));
+});
+
 test("a failed init never erases a binding it couldn't read, and tells the runtime after a rollback", async (t) => {
   const ctx = await startLinking(t, { repos: { "jordan-dev/notes": { installationId: INSTALLATION, collaborators: { "jordan-dev": "admin" }, files: [] } }, initDesk: () => ({ status: "error", step: "commit" }) });
   const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/notes");
@@ -364,6 +437,31 @@ test("a failed init never erases a binding it couldn't read, and tells the runti
   assert.equal(failed.status, 502);
   assert.equal(await ctx.store.getBinding(ctx.jordanId), null);
   assert.deepEqual(ctx.linked, [ctx.jordanId], "the runtime hears about the rollback");
+});
+
+test("an invited person is led from the invite to sign-in and on to linking GitHub, and the account page links there too", async (t) => {
+  const ctx = await startLinking(t);
+  const { issueInvite } = await import("../src/accounts/invites.js");
+  const inviteeId = randomUUID();
+  await ctx.store.putAccount({ accountId: inviteeId, displayName: "Sam Invitee", deskAccess: true });
+  const { token } = await issueInvite({ store: ctx.store, accountId: inviteeId, now: ctx.now() });
+  const sam = browser(ctx);
+  const landed = await sam.request(`/invite/${token}`);
+  assert.equal(landed.status, 303);
+  const invitePage = await sam.request(landed.location);
+  assert.equal(invitePage.status, 200);
+  const href = decode(invitePage.text.match(/<a href="([^"]+)">/)?.[1] ?? "");
+  assert.equal(href, "/signin?next=/link/github", invitePage.text);
+  assert.ok(invitePage.text.indexOf("/link/github") < invitePage.text.indexOf("custom connector"), "linking comes before connecting Claude");
+  const url = new URL(href, GATEWAY);
+  const back = await pageSignIn(ctx, sam, { oid: "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f", next: url.searchParams.get("next") });
+  assert.equal(back.status, 303, back.text);
+  assert.equal(back.location, "/link/github");
+  const linkPage = await sam.request(back.location);
+  assert.equal(linkPage.status, 200);
+  assert.match(linkPage.text, /No GitHub desk is linked/);
+  const account = await sam.request("/account");
+  assert.match(account.text, /<a href="\/link\/github">/);
 });
 
 test("createGitHubLink refuses an App id that isn't a number", () => {

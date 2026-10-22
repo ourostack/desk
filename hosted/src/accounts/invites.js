@@ -12,7 +12,9 @@ export function newInvite() {
   return { token, tokenHash: hashToken(token) };
 }
 
-// Creates an account with Desk access on and its binding. `accountId` may be given to re-run a seed idempotently.
+// Creates an account that doesn't exist yet, with Desk access on and its binding. `accountId` may be given to restore
+// a recorded id; seeding a live account again would overwrite its access and binding (provision-identity.mjs seeds
+// only a missing account).
 export async function seed({ store, displayName, binding, accountId = randomUUID() }) {
   await store.ensureTables();
   await store.putAccount({ accountId, displayName, deskAccess: true });

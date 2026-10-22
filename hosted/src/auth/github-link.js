@@ -4,9 +4,11 @@
 // of the "Ouro Desk" App's installations their user token can see (GET /user/installations and each one's
 // repositories), they can push to it, and, read again with the App's installation token, the App's installation for
 // it is the one listed and the collaborator permission is write, maintain or admin. One repository is one account's
-// desk. The binding keeps the GitHub user id and login, never the user token: that is used inside the callback and
-// dropped. Each Desk session start rechecks the binding with the installation token (`sessionRefusal`): a binding
-// whose access GitHub says is gone is suspended, and refused, until a later recheck passes or the person links again.
+// desk, claimed atomically in the store (claimRepo) before the binding is written. The binding keeps the GitHub user id
+// and login, never the user token: that is used inside the callback and dropped. Each Desk session start rechecks the
+// binding with the installation token (`sessionRefusal`): a binding whose access GitHub says is gone is suspended, and
+// refused, until a later recheck passes or the person links again. A binding the operator seeded names no GitHub
+// user, so its recheck asks only whether the App's installation still serves the repository.
 //
 // The pages, all behind the browser session (browser-session.js):
 //   GET  /link/github                     what is linked, and a form to link (again)
@@ -20,7 +22,7 @@ import { sealer } from "./seal.js";
 import { authorizeUrlFor, exchangeCode, readUser } from "./github.js";
 import { escapeHtml, htmlPage, page, pageRefusedPage, sendPage, signInUnavailablePage } from "./pages.js";
 import { installationToken } from "../github-app.js";
-import { validRepo } from "../accounts/core.js";
+import { PreconditionFailed, validRepo } from "../accounts/core.js";
 
 const API = "https://api.github.com";
 export const LINK_PATH = "/link/github";
@@ -42,6 +44,11 @@ const stderrLog = (message) => process.stderr.write(`desk-hosted link: ${message
 // What a Desk session start tells a person whose binding is suspended.
 export const suspendedMessage = (issuer) =>
   `Your GitHub desk link is suspended: GitHub no longer gives you write access to the repository, or the Ouro Desk app was removed from it. Link it again at ${new URL(LINK_PATH, issuer).href}`;
+// ...and one whose repository became another account's desk while it was suspended.
+export const takenMessage = (issuer) =>
+  `Your GitHub desk link is suspended: while it was, the repository became the desk of another Hosted Desk account. Link another repository at ${new URL(LINK_PATH, issuer).href}`;
+// How many times a recheck reads the binding again after it changed mid-recheck (a relink, say).
+const RECHECK_ATTEMPTS = 3;
 
 const noreply = ({ githubUserId, login }) => `${githubUserId}+${login}@users.noreply.github.com`;
 
@@ -149,15 +156,38 @@ export function createGitHubLink({
     return { kind: "github", repo, installationId, githubUserId, login, author: { name: account?.displayName || login, email: noreply({ githubUserId, login }) } };
   }
 
-  // Records the binding after the final checks. `checked` is verify's answer when the caller already has it. Returns
+  // Records the binding after the final checks: the repository is claimed for the account first, so of two accounts
+  // linking one repository only one can. `checked` is verify's answer when the caller already has it. Returns
   // `{ binding, token }` or `{ refused }`.
   async function link(accountId, pick, checked) {
     checked ??= await verify(pick);
     if (checked.refused) return { refused: checked.refused };
-    if (await store.repoBoundElsewhere(pick.repo, accountId)) return { refused: "bound_elsewhere", status: 409 };
+    if ((await store.claimRepo(pick.repo, accountId, { now: now() })).heldBy) return { refused: "bound_elsewhere", status: 409 };
     const binding = await bindingFor(accountId, pick);
     await store.putBinding(accountId, binding);
     return { binding, token: checked.token };
+  }
+
+  // The account's binding before a relink, or null for none or one this gateway can't read; throws the store's error.
+  async function previousBinding(accountId) {
+    try {
+      return await store.getBinding(accountId);
+    } catch (error) {
+      if (error?.name === "StoreError") throw error;
+      return null;
+    }
+  }
+
+  // Frees `released` once the account's binding names `kept` instead, so another account can link it at once. A
+  // failure only delays that: a claim stops holding once CLAIM_GRACE_MS has passed and the binding names another
+  // repository.
+  async function release(accountId, released, kept) {
+    if (!released || released.toLowerCase() === kept?.toLowerCase()) return;
+    try {
+      await store.releaseRepo(released, accountId);
+    } catch {
+      log(`claim release failed: account ${accountId}`);
+    }
   }
 
   // The plan's linkGitHub: links `repo` for `accountId` when `userToken`'s installations offer it with push access.
@@ -167,8 +197,10 @@ export function createGitHubLink({
     if (!offered) return { refused: "github_unconfirmed" };
     const candidate = offered.candidates.find((c) => c.repo === repo);
     if (!candidate) return { refused: "not_offered" };
+    const previous = await previousBinding(accountId);
     const linked = await link(accountId, { ...candidate, githubUserId: offered.user.id, login: offered.user.login });
     if (linked.refused) return { refused: linked.refused };
+    await release(accountId, previous?.repo, repo);
     onLinked(accountId);
     return { binding: linked.binding };
   }
@@ -191,38 +223,57 @@ export function createGitHubLink({
     return { user: { id: user.id, login: user.login }, candidates };
   }
 
-  // Desk session start: "ok" (linked and still allowed, or a binding the operator seeded, which names no GitHub
-  // user), "suspended" (GitHub says the App or the person lost access; recorded on the binding), "unavailable"
-  // (GitHub didn't answer; nothing recorded, try again) or "none" (no binding). Throws when the store can't answer.
+  // Desk session start: "ok" (linked and still allowed), "suspended" (GitHub says the App or the person lost access;
+  // recorded on the binding), "taken" (access is back, but while the binding was suspended its repository became
+  // another account's desk; it stays suspended), "unavailable" (GitHub didn't answer; nothing recorded, try again) or
+  // "none" (no binding). A binding the operator seeded names no GitHub user, so only the App's installation is
+  // checked for it. Every write is conditional on the binding read: one that changed meanwhile (a relink in the
+  // browser) is never overwritten, and the new one is rechecked instead. Throws when the store can't answer.
   async function recheckBinding({ accountId }) {
-    const binding = await store.getBinding(accountId);
-    if (!binding) return "none";
-    if (binding.githubUserId === undefined) return "ok";
-    let allowed;
-    let login = binding.login;
-    try {
-      const token = await tokenFor(binding.repo, binding.installationId);
-      // A login can be renamed; the id can't.
-      login = (await get(`/user/${binding.githubUserId}`, token))?.login ?? login;
-      allowed = await canPush(binding.repo, login, token);
-    } catch (error) {
-      if (!accessGone(error)) {
-        log(`recheck unavailable: account ${accountId}`);
-        return "unavailable";
+    for (let attempt = 0; attempt < RECHECK_ATTEMPTS; attempt++) {
+      const entry = await store.getBindingEntry(accountId);
+      if (!entry) return "none";
+      const { binding, etag } = entry;
+      let allowed;
+      let login = binding.login;
+      try {
+        const token = await tokenFor(binding.repo, binding.installationId);
+        if (binding.githubUserId === undefined) {
+          allowed = true;
+        } else {
+          // A login can be renamed; the id can't.
+          login = (await get(`/user/${binding.githubUserId}`, token))?.login ?? login;
+          allowed = await canPush(binding.repo, login, token);
+        }
+      } catch (error) {
+        if (!accessGone(error)) {
+          log(`recheck unavailable: account ${accountId}`);
+          return "unavailable";
+        }
+        allowed = false;
       }
-      allowed = false;
+      try {
+        if (!allowed) {
+          if (!binding.suspended) await store.replaceBinding(accountId, { ...binding, suspended: true }, etag);
+          log(`binding suspended: account ${accountId}`);
+          return "suspended";
+        }
+        if (binding.suspended && (await store.claimRepo(binding.repo, accountId, { now: now() })).heldBy) {
+          log(`binding taken: account ${accountId}`);
+          return "taken";
+        }
+        if (binding.suspended || login !== binding.login) {
+          const { suspended: _suspended, ...rest } = binding;
+          await store.replaceBinding(accountId, { ...rest, login }, etag);
+          onLinked(accountId);
+        }
+        return "ok";
+      } catch (error) {
+        if (!(error instanceof PreconditionFailed)) throw error;
+      }
     }
-    if (!allowed) {
-      if (!binding.suspended) await store.putBinding(accountId, { ...binding, suspended: true });
-      log(`binding suspended: account ${accountId}`);
-      return "suspended";
-    }
-    if (binding.suspended || login !== binding.login) {
-      const { suspended: _suspended, ...rest } = binding;
-      await store.putBinding(accountId, { ...rest, login });
-      onLinked(accountId);
-    }
-    return "ok";
+    log(`recheck unavailable: account ${accountId} (the binding kept changing)`);
+    return "unavailable";
   }
 
   // Session start's one call: null when the account's desk may start, else the message to refuse the session with.
@@ -230,6 +281,7 @@ export function createGitHubLink({
   async function sessionRefusal(accountId) {
     const state = await recheckBinding({ accountId });
     if (state === "suspended") return suspendedMessage(issuer);
+    if (state === "taken") return takenMessage(issuer);
     if (state === "unavailable") return "GitHub didn't answer while Hosted Desk checked your desk link. Try again in a minute.";
     return null;
   }
@@ -353,7 +405,10 @@ export function createGitHubLink({
       if (checked.refused) return finish(res, accountId, pick, checked);
       if (await store.repoBoundElsewhere(pick.repo, accountId)) return finish(res, accountId, pick, { refused: "bound_elsewhere" });
       if (!(await isDesk(pick.repo, checked.token))) return sendPage(res, offerPage(pick, csrf));
-      return finish(res, accountId, pick, await link(accountId, pick, checked));
+      const previous = await previousBinding(accountId);
+      const linked = await link(accountId, pick, checked);
+      if (!linked.refused) await release(accountId, previous?.repo, pick.repo);
+      return finish(res, accountId, pick, linked);
     }
     if (action === "init" || action === "decline") {
       const pick = unsealed(PICK_KIND, req.body?.pick);
@@ -381,12 +436,14 @@ export function createGitHubLink({
     }
     if (result?.status === "created" || result?.reason === "already_a_desk") {
       log(`linked: account ${accountId} (desk init ${result.status})`);
+      await release(accountId, previous?.repo, pick.repo);
       onLinked(accountId);
       return sendPage(res, linkedPage(pick.repo, result.status === "created"));
     }
     try {
       if (previous) await store.putBinding(accountId, previous);
       else await store.removeBinding(accountId);
+      await release(accountId, pick.repo, previous?.repo);
     } catch (error) {
       log(`link failed: desk_init rollback_failed account ${accountId}`);
       throw error;

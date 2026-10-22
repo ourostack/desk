@@ -366,6 +366,7 @@ test("a multi-user gateway (repo null) still gives an account with no binding th
   const outcome = await signIn(ctx, browser(), { oid: OID });
   assert.equal(outcome.status, 403);
   assert.match(outcome.html, /no desk/i);
+  assert.match(outcome.html, /<a href="\/link\/github">/, "it links to where the person links a GitHub desk");
 });
 
 test("an account with no binding gets the no-desk page", async () => {
@@ -375,6 +376,7 @@ test("an account with no binding gets the no-desk page", async () => {
   const outcome = await signIn(ctx, browser(), { oid: OID });
   assert.equal(outcome.status, 403);
   assert.match(outcome.html, /no desk/i);
+  assert.doesNotMatch(outcome.html, /link\/github/, "a single-desk gateway has no GitHub linking");
 });
 
 test("a store that can't answer refuses the sign-in with a try-again page", async () => {

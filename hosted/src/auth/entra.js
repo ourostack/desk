@@ -193,7 +193,8 @@ export function createInvites({ key, keys, store, issuer, now = Date.now, log = 
       log(`invite opened: account ${invite.accountId}`);
       return { redirectTo: "/invite", headers: NO_REFERRER, setCookies: [hostCookie(INVITE_COOKIE, sealed("invite", { tokenHash }, lifeSec), lifeSec)] };
     },
-    page: () => ({ ...invitePage({ issuer }), headers: NO_REFERRER }),
+    // `linkGitHub`: the gateway links GitHub desks (pages.js invitePage).
+    page: ({ linkGitHub = false } = {}) => ({ ...invitePage({ issuer, linkGitHub }), headers: NO_REFERRER }),
   };
 }
 
@@ -221,7 +222,7 @@ export async function admissionRefusal({ store, accountId, repo, clientId, log =
   const binding = await bindingOf(store, accountId);
   if (binding?.kind !== "github" || (repo !== null && binding.repo !== repo)) {
     log(`sign-in refused: no_desk account ${accountId} client ${clientId}`);
-    return noDeskPage();
+    return noDeskPage({ link: repo === null });
   }
   return null;
 }
@@ -512,8 +513,8 @@ export function entraCallbackHandler(entra, { log = stderrLog } = {}) {
   };
 }
 
-// The Express routes GET /invite/:token and GET /invite.
-export function inviteHandlers(invites) {
+// The Express routes GET /invite/:token and GET /invite. `linkGitHub`: the gateway links GitHub desks.
+export function inviteHandlers(invites, { linkGitHub = false } = {}) {
   return {
     async landing(req, res) {
       res.setHeader("cache-control", "no-store");
@@ -524,7 +525,7 @@ export function inviteHandlers(invites) {
       res.redirect(303, outcome.redirectTo);
     },
     page(_req, res) {
-      sendPage(res, invites.page());
+      sendPage(res, invites.page({ linkGitHub }));
     },
   };
 }

@@ -97,10 +97,11 @@ export function createTableStore({ endpoint, credential, clientId, timeoutMs = S
     async upsert(table, entity) {
       return call("upsert", table, async (client, options) => (await client.upsertEntity(entity, "Replace", options)).etag);
     },
-    async remove(table, partitionKey, rowKey) {
-      // 404 ResourceNotFound: already gone, which is what was asked for.
-      await call("remove", table, (client, options) => client.deleteEntity(partitionKey, rowKey, options), {
+    async remove(table, partitionKey, rowKey, etag) {
+      // 404 ResourceNotFound: already gone, which is what was asked for. 412: `etag` no longer matches.
+      await call("remove", table, (client, options) => client.deleteEntity(partitionKey, rowKey, etag === undefined ? options : { ...options, etag }), {
         404: { code: "ResourceNotFound", handle: () => undefined },
+        412: { handle: () => { throw new PreconditionFailed(table); } },
       });
     },
     async list(table) {

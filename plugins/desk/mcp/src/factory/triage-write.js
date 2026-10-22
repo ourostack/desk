@@ -148,7 +148,7 @@ async function runGit(ctx, cwd, args, env = ctx.childEnv, outputLimit = Infinity
     let child
     try {
       const invocation = cwd === null
-        ? { args: ["--version"], options: { cwd: path.parse(ctx.deskRoot).root } }
+        ? { args, options: { cwd: path.parse(ctx.deskRoot).root } }
         : deskGitInvocation({ root: cwd, args, env })
       child = ctx.spawn(ctx.executable ?? "git", invocation.args, { ...invocation.options, env, stdio: ["ignore", "pipe", "pipe"], detached: posix, windowsHide: true })
     } catch {

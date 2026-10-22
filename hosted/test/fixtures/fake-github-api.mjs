@@ -14,6 +14,8 @@ export function fakeGitHub({ user, repos = {}, appId } = {}) {
     const auth = init.headers?.authorization ?? init.headers?.Authorization ?? "";
     const bearer = auth.replace(/^Bearer /, "");
     state.calls.push({ method, path: url.pathname, bearer });
+    // `onCall(path)`, when set, runs before each answer: a test's way to change something mid-request.
+    await state.onCall?.(url.pathname);
     if (state.down) throw new TypeError("fetch failed");
     if (url.href === "https://github.com/login/oauth/access_token") {
       const body = new URLSearchParams(init.body);

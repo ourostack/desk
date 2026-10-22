@@ -3,9 +3,11 @@
 // chat carry no capability, so every page asks for the session of the account it acts for.
 //
 // The session is one sealed cookie, `__Host-desk-session`: HttpOnly, Secure, SameSite=Lax (it must ride the
-// top-level redirect back from ciamlogin.com), Path=/, no Domain, 12 hours. It holds the accountId and a random
-// session id; the gateway keeps no session state. Every use reads the account, so a session ends as soon as its
-// account's Desk access is turned off or the account is deleted.
+// top-level redirect back from ciamlogin.com), Path=/, no Domain, 12 hours. It holds the accountId, a random session
+// id and when it was issued; the gateway keeps no session state. Every use reads the account, so a session ends as
+// soon as its account's Desk access is turned off, the account is deleted, or the account signs out: sign-out records
+// a time on the account (store revokeSessions) before which every session of it, any copy of the cookie included, is
+// refused.
 //
 // A page that changes something posts a CSRF token sealed for that session id, and the post must come from the
 // gateway's own origin (provider.js `fromOwnOrigin`, as the consent form does).
@@ -45,7 +47,7 @@ export function createBrowserSession({ key, keys, store, issuer, now = Date.now,
     // The Set-Cookie header that starts a session for `accountId`.
     cookie(accountId) {
       if (typeof accountId !== "string" || accountId === "") throw new TypeError("a session needs an accountId");
-      return hostCookie(SESSION_COOKIE, sealed(SESSION_KIND, { accountId, sid: randomBytes(16).toString("base64url") }, SESSION_TTL_SEC), SESSION_TTL_SEC);
+      return hostCookie(SESSION_COOKIE, sealed(SESSION_KIND, { accountId, sid: randomBytes(16).toString("base64url"), iat: now() }, SESSION_TTL_SEC), SESSION_TTL_SEC);
     },
 
     start(res, accountId) {
@@ -66,7 +68,18 @@ export function createBrowserSession({ key, keys, store, issuer, now = Date.now,
         log(`session refused: ${account ? "access_off" : "no_account"} account ${session.accountId}`);
         return null;
       }
+      if (account.sessionsNotBefore !== undefined && !(Number.isFinite(session.iat) && session.iat >= account.sessionsNotBefore)) {
+        log(`session refused: signed_out account ${session.accountId}`);
+        return null;
+      }
       return session.accountId;
+    },
+
+    // Signs out every session of this request's account issued up to now, when this request's session is itself
+    // still valid: a signed-out copy of a cookie can't sign the account out again. Throws the store's error.
+    async revoke(req) {
+      const accountId = await this.require(req);
+      if (accountId) await store.revokeSessions(accountId, now() + 1);
     },
 
     // The account row for a page to show (getAccount's answer).

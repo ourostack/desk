@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "nod
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { assertChildKernelBoundary } from "./isolation.js";
-import { ensureClone, runGit } from "./clone.js";
+import { ensureClone, publishNewBranch, runGit } from "./clone.js";
 import { serveTokens } from "./token-socket.js";
 import { pipeServiceOutput, relayServiceOutput, sendServiceControl } from "./service-output.js";
 
@@ -263,6 +263,8 @@ if (process.env.DESK_RUNTIME_WORKER !== "1") {
       case "push": {
         const { runPushWorker } = await import(pathToFileURL(join(job.pluginDir, "mcp/src/runtime/sync-worker.js")));
         const deadline = Date.now() + 60_000;
+        // A desk made in an empty repository: its branch doesn't exist on GitHub until this first push.
+        await publishNewBranch(git);
         for (;;) {
           const ahead = (await git(["rev-list", "@{u}..HEAD"])).trim();
           if (!ahead) break;

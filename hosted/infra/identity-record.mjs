@@ -30,7 +30,7 @@ export const GITHUB_REPO = "ourostack/desk";
 export const CHECKS_SUBJECT = "repo:ourostack@265728804/desk@1386529300:environment:identity";
 export const GITHUB_ISSUER = "https://token.actions.githubusercontent.com";
 export const FEDERATED_AUDIENCE = "api://AzureADTokenExchange";
-export const TABLES = ["accounts", "identities", "invites", "bindings"];
+export const TABLES = ["accounts", "identities", "invites", "bindings", "repoclaims"];
 // The Container App secret that references the gateway's Entra client secret in Key Vault.
 export const ENTRA_SECRET_REF = "entra-client-secret";
 export const ARI = { githubUserId: 16390116, githubLogin: "arimendelow", displayName: "Ari Mendelow", authorEmail: "16390116+arimendelow@users.noreply.github.com" };

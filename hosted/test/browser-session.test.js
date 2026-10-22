@@ -24,6 +24,7 @@ test("session cookie attributes", async (t) => {
   const account = await ari.request("/account");
   assert.equal(account.status, 200);
   assert.match(account.text, /Ari Mendelow/);
+  assert.doesNotMatch(account.text, /link\/github/, "without GitHub linking the account page doesn't offer it");
   assert.equal(account.response.headers.get("cache-control"), "no-store");
 });
 
@@ -119,6 +120,58 @@ test("sign-out with the page's csrf token ends the session", async (t) => {
   assert.match(out.text, /signed out/i);
   assert.ok(!ari.jar.has(SESSION_COOKIE));
   assert.equal((await ari.request("/account")).status, 303);
+});
+
+test("sign-out ends every copy of the session, and a later sign-in works", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const ari = browser(ctx);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  const copied = ari.jar.get(SESSION_COOKIE);
+  const elsewhere = browser(ctx);
+  await pageSignIn(ctx, elsewhere, { oid: ARI_OID });
+  ctx.advance(1000);
+  const csrf = /name="csrf" value="([^"]+)"/.exec((await ari.request("/account")).text)[1];
+  assert.equal((await ari.request("/signout", { method: "POST", form: { csrf } })).status, 200);
+  const thief = browser(ctx);
+  thief.jar.set(SESSION_COOKIE, copied);
+  assert.equal((await thief.request("/account")).status, 303, "a copy of the signed-out cookie no longer works");
+  assert.equal((await elsewhere.request("/account")).status, 303, "nor does the account's session in another browser");
+  assert.ok(ctx.logs.some((line) => /session refused: signed_out account/.test(line)));
+  ctx.advance(1000);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  assert.equal((await ari.request("/account")).status, 200);
+});
+
+test("a signed-out cookie can't sign the account out again", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const ari = browser(ctx);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  const copied = ari.jar.get(SESSION_COOKIE);
+  const csrf = /name="csrf" value="([^"]+)"/.exec((await ari.request("/account")).text)[1];
+  ctx.advance(1000);
+  assert.equal((await ari.request("/signout", { method: "POST", form: { csrf } })).status, 200);
+  ctx.advance(1000);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  ctx.advance(1000);
+  const thief = browser(ctx);
+  thief.jar.set(SESSION_COOKIE, copied);
+  assert.equal((await thief.request("/signout", { method: "POST", form: { csrf } })).status, 200);
+  assert.equal((await ari.request("/account")).status, 200, "the person's new session still works");
+});
+
+test("a sign-out the store can't record still signs this browser out, and says the others may not be", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const ari = browser(ctx);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  ctx.store.revokeSessions = async () => {
+    throw Object.assign(new Error("down"), { name: "StoreError" });
+  };
+  const csrf = /name="csrf" value="([^"]+)"/.exec((await ari.request("/account")).text)[1];
+  const out = await ari.request("/signout", { method: "POST", form: { csrf } });
+  assert.equal(out.status, 200);
+  assert.match(out.text, /in this browser/);
+  assert.ok(!ari.jar.has(SESSION_COOKIE));
+  assert.ok(ctx.logs.includes("sign-out: revoke failed (StoreError)"));
 });
 
 test("a new person signs in through their invite and gets a session; without one they get the invite-only page", async (t) => {

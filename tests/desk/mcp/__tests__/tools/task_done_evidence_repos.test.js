@@ -445,3 +445,25 @@ test("ssh remotes with a login and a port match the same host in an https PR URL
   const bare = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
   assert.equal((await done(bare, { kind: "pr", ref: "https://org.visualstudio.com/DefaultCollection/_git/widgets/pullrequest/3" })).status, "updated")
 })
+
+test("in an isolated hosted realm a card naming a clone outside the desk can still finish with a PR and record a step's PR", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  const saved = { DESK: process.env.DESK, DESK_ISOLATED_HOSTED: process.env.DESK_ISOLATED_HOSTED }
+  process.env.DESK = root
+  process.env.DESK_ISOLATED_HOSTED = "1"
+  try {
+    const ref = "https://github.com/acme/widgets/pull/9"
+    await assert.rejects(done(root, { kind: "commit", ref: (await makeClone("acme/widgets")).pushed }), /Desk Git context refused/, "commit evidence must look inside the clone, which the guard refuses")
+    await task_create({ deskRoot: root, input: { track: "t", slug: "stepped", title: "S", status: "processing", repos: [{ name: "acme/widgets", local_path: clone, mode: "local" }] } })
+    await task_update({ deskRoot: root, input: { track: "t", slug: "stepped", step: { id: "api", depends_on: [], repo: "acme/widgets", state: "in progress", evidence: ref } } })
+    assert.match(await fs.readFile(path.join(root, "t", "stepped", "task.md"), "utf8"), /pull\/9/u)
+    await done(root, { kind: "pr", ref })
+    assert.equal((await readFront(path.join(root, "t", "ship-it", "task.md"))).data.status, "done")
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})

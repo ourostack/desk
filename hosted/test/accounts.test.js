@@ -282,6 +282,103 @@ function storeSuite(label, make) {
       await assert.rejects(store.setAccess(accountId, "off"), TypeError);
     });
 
+    test(name("one repository is one account's claim whatever its case, and of two concurrent claims exactly one wins"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `Jordan-Dev/Desk-${tag}`;
+      const [a, b] = [randomUUID(), randomUUID()];
+      const outcomes = await Promise.all([store.claimRepo(repo, a, { now: NOW }), store.claimRepo(repo.toLowerCase(), b, { now: NOW })]);
+      const winners = outcomes.filter((o) => o.claimed);
+      assert.equal(winners.length, 1, JSON.stringify(outcomes));
+      const winner = outcomes[0].claimed ? a : b;
+      const loser = winner === a ? b : a;
+      assert.deepEqual(outcomes.find((o) => !o.claimed), { heldBy: winner });
+      assert.deepEqual(await store.claimRepo(repo, winner, { now: NOW + 1 }), { claimed: true }, "claiming one's own again is fine");
+      assert.deepEqual(await store.claimRepo(repo.toUpperCase(), loser, { now: NOW + 60_000 }), { heldBy: winner }, "a fresh claim is held before its binding is written");
+    });
+
+    test(name("a claim passes on once its holder no longer holds the repository: binding gone, moved or suspended"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `jordan-dev/desk-${tag}`;
+      const [holder, next] = [randomUUID(), randomUUID()];
+      const later = NOW + 10 * 60_000;
+      assert.deepEqual(await store.claimRepo(repo, holder, { now: NOW }), { claimed: true });
+      await store.putBinding(holder, { ...BINDING, repo });
+      assert.deepEqual(await store.claimRepo(repo, next, { now: later }), { heldBy: holder }, "an active binding holds its claim");
+      await store.putBinding(holder, { ...BINDING, repo, suspended: true });
+      assert.deepEqual(await store.claimRepo(repo, next, { now: later }), { claimed: true }, "a suspended binding no longer holds it");
+      assert.deepEqual(await store.claimRepo(repo, holder, { now: later + 1 }), { heldBy: next }, "and its holder can't take it back while the new holder's claim is fresh");
+      await store.putBinding(next, { ...BINDING, repo: `someone/other-${tag}` });
+      assert.deepEqual(await store.claimRepo(repo, holder, { now: later + 10 * 60_000 }), { claimed: true }, "a holder whose binding names another repository holds nothing");
+      await store.removeBinding(holder);
+      assert.deepEqual(await store.claimRepo(repo, next, { now: later + 20 * 60_000 }), { claimed: true }, "a holder with no binding holds nothing");
+    });
+
+    test(name("a holder reclaiming its repository and a newcomer taking it over can't both win"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `jordan-dev/desk-${tag}`;
+      const [holder, newcomer] = [randomUUID(), randomUUID()];
+      await store.claimRepo(repo, holder, { now: NOW });
+      await store.putBinding(holder, { ...BINDING, repo, suspended: true });
+      const later = NOW + 10 * 60_000;
+      const [mine, theirs] = await Promise.all([store.claimRepo(repo, holder, { now: later }), store.claimRepo(repo, newcomer, { now: later })]);
+      assert.equal([mine, theirs].filter((outcome) => outcome.claimed).length, 1, JSON.stringify({ mine, theirs }));
+    });
+
+    test(name("a binding from before claims existed keeps its repository"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `arimendelow/desk-${tag}`;
+      const [old, newcomer] = [randomUUID(), randomUUID()];
+      await store.putBinding(old, { ...BINDING, repo });
+      assert.deepEqual(await store.claimRepo(repo.toUpperCase(), newcomer, { now: NOW }), { heldBy: old });
+      assert.deepEqual(await store.claimRepo(repo, old, { now: NOW }), { claimed: true }, "the claim now belongs to the old binding");
+    });
+
+    test(name("releaseRepo frees only the account's own claim"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `jordan-dev/desk-${tag}`;
+      const [holder, other] = [randomUUID(), randomUUID()];
+      await store.claimRepo(repo, holder, { now: NOW });
+      await store.releaseRepo(repo, other);
+      assert.deepEqual(await store.claimRepo(repo, other, { now: NOW }), { heldBy: holder });
+      await store.releaseRepo(repo.toUpperCase(), holder);
+      assert.deepEqual(await store.claimRepo(repo, other, { now: NOW }), { claimed: true });
+      await store.releaseRepo(`nobody/none-${tag}`, holder);
+    });
+
+    test(name("a binding replaced since it was read is not overwritten"), async () => {
+      const store = await make();
+      const accountId = randomUUID();
+      const tag = accountId.slice(0, 8);
+      assert.equal(await store.getBindingEntry(accountId), null);
+      await store.putBinding(accountId, { ...BINDING, repo: `jordan-dev/old-${tag}` });
+      const read = await store.getBindingEntry(accountId);
+      assert.equal(read.binding.repo, `jordan-dev/old-${tag}`);
+      await store.putBinding(accountId, { ...BINDING, repo: `jordan-dev/new-${tag}` });
+      await assert.rejects(store.replaceBinding(accountId, { ...read.binding, suspended: true }, read.etag), { name: "PreconditionFailed" });
+      assert.deepEqual(await store.getBinding(accountId), { ...BINDING, repo: `jordan-dev/new-${tag}` });
+      const fresh = await store.getBindingEntry(accountId);
+      await store.replaceBinding(accountId, { ...fresh.binding, suspended: true }, fresh.etag);
+      assert.equal((await store.getBinding(accountId)).suspended, true);
+    });
+
+    test(name("signing out every session records a time; earlier sessions are refused, the account keeps its name and access"), async () => {
+      const store = await make();
+      const { accountId } = await seed({ store, displayName: "Test account", binding: BINDING });
+      assert.equal((await store.getAccount(accountId)).sessionsNotBefore, undefined);
+      assert.equal(await store.revokeSessions(accountId, NOW), true);
+      assert.deepEqual(await store.getAccount(accountId), { accountId, displayName: "Test account", deskAccess: true, sessionsNotBefore: NOW });
+      await store.setAccess(accountId, false);
+      assert.equal((await store.getAccount(accountId)).sessionsNotBefore, NOW, "a later access change keeps it");
+      await store.putAccount({ accountId, displayName: "Renamed", deskAccess: true });
+      assert.equal((await store.getAccount(accountId)).sessionsNotBefore, NOW, "and so does writing the account again");
+      assert.equal(await store.revokeSessions(randomUUID(), NOW), false);
+    });
+
     test(name("deleteAccount removes the account and every row naming it, and nothing else"), async () => {
       const store = await make();
       const { accountId, tokenHash } = await seededInvite(store);
@@ -302,6 +399,12 @@ function storeSuite(label, make) {
       assert.deepEqual(await store.getBinding(other.accountId), BINDING);
       assert.equal((await store.getInvite(other.tokenHash)).redeemed, true);
       assert.equal(await store.deleteAccount(accountId), false, "a second delete finds nothing");
+
+      const tag = randomUUID().slice(0, 8);
+      const gone = await seededInvite(store);
+      await store.claimRepo(`gone/desk-${tag}`, gone.accountId, { now: NOW });
+      await store.deleteAccount(gone.accountId);
+      assert.deepEqual(await store.claimRepo(`gone/desk-${tag}`, other.accountId, { now: NOW }), { claimed: true }, "a deleted account's claims are released");
     });
   });
 }
