@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.339 — 2026-10-22
+
+Semantic recall refreshes its pre-evaluation event fence and lexical proof after waiting for convergence, so a queued change that finishes indexing before evaluation does not leave the request using stale readiness facts. Results are still discarded if readiness or generation identity changes during evaluation; the semantic backend is never replayed.
+
+When no current lexical snapshot is proven, semantic reads report the missing proof instead of incorrectly describing it as an embedding-specification mismatch. Actual specification mismatches remain rejected.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.338 — 2026-10-22
 
 Explicit resume can reconnect an intact signed-in browser context after its CLI and relay stop, preserving its pages, tab group and popup windows. Recovery refuses missing or unresolved bindings, fences retired connections, and reports unacknowledged command outcomes as unknown instead of replaying actions. Ordinary page commands do not restart a missing CLI. Selected-profile installation and installed shared-machine qualification remain separate requirements.
