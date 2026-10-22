@@ -14,6 +14,7 @@ const require = createRequire(import.meta.url)
 const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const expectedProgram = "426463dd0405f86221bd81161772f54eca4699b04a3433f3d240b3ee657e2137"
 const digest = value => createHash("sha256").update(value).digest("hex")
+const originalExecFileSync = childProcess.execFileSync
 
 function capturedProgram() {
   const directory = "C:\\owned-generation", receipt = directory + "\\playwright-patch.json"
@@ -94,8 +95,8 @@ function safeError(error) {
   }
 }
 
-function observeActualProvider(t, mode) {
-  const execute = childProcess.execFileSync, write = process.stderr.write, rows = []
+function observeActualProvider(t, mode, execute = childProcess.execFileSync) {
+  const write = process.stderr.write, rows = []
   let active = null, operation = "setup"
   t.mock.method(process.stderr, "write", function(chunk, ...args) {
     if (active && mode === "phase") active.stages.push(...observedPhases(chunk))
@@ -170,14 +171,14 @@ test("synthetic observer preserves caller/result/error identity without formatti
   let calls = 0, formats = 0
   Object.defineProperty(returned, "toString", { get() { formats++; throw new Error("PRIVATE_FORMATTER") } })
   const refusal = Object.assign(new Error("PRIVATE_FAILURE"), { code: "ETIMEDOUT", signal: "SIGTERM" })
-  t.mock.method(childProcess, "execFileSync", function(_file, _argv, seen) {
+  const execute = function(_file, _argv, seen) {
     assert.strictEqual(this, childProcess)
     assert.strictEqual(seen, options)
     calls++
     if (calls === 2) throw refusal
     return returned
-  })
-  const observed = observeActualProvider(t, "phase")
+  }
+  const observed = observeActualProvider(t, "phase", execute)
   const invoke = () => childProcess.execFileSync("powershell.exe", ["-Command", program], options)
   assert.doesNotThrow(() => assert.strictEqual(invoke(), returned))
   assert.throws(invoke, error => error === refusal)
@@ -185,6 +186,10 @@ test("synthetic observer preserves caller/result/error identity without formatti
   assert.equal(observed.rows.length, 2, "the real observation seam, not its forwarding path, must execute")
   assert.equal(formats, 0)
   assert.doesNotMatch(JSON.stringify(observed.rows), /PRIVATE/u)
+})
+
+test("synthetic observer leaves the original child-process provider for subsequent actual controls", () => {
+  assert.strictEqual(childProcess.execFileSync, originalExecFileSync)
 })
 
 const windowsOnly = process.platform !== "win32" ? "actual Windows ACL provider diagnostic only" : false
