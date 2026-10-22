@@ -1127,13 +1127,19 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
   const steps = []
   let reachedPush
   const pushStarted = new Promise(resolve => { reachedPush = resolve })
+  // Node's Windows RNG needs the real OS root; only the injected fault helpers use it.
+  const spawnFaultNode = (args, options) => spawnGit(process.execPath, args, {
+    ...options, env: posix ? options.env : { ...options.env, SystemRoot: process.env.SystemRoot },
+  })
   const slowPush = (command, args, options) => {
     if (!delayedPolicyProbe && args[2] === "config" && args[3] === "--get-all") {
       delayedPolicyProbe = true
-      return spawnGit(process.execPath, ["-e", `
+      return spawnFaultNode(["-e", `
         const { spawn } = require("node:child_process");
         setTimeout(() => {
-          const child = spawn(${JSON.stringify(command)}, ${JSON.stringify(args)}, { stdio: "inherit", windowsHide: true });
+          const child = spawn(${JSON.stringify(command)}, ${JSON.stringify(args)}, {
+            stdio: "inherit", windowsHide: true, env: { ...process.env, SystemRoot: ${JSON.stringify(systemRoot)} },
+          });
           child.on("error", error => { console.error(error); process.exitCode = 1; });
           child.on("exit", code => { process.exitCode = code ?? 1; });
         }, 1100);
@@ -1141,7 +1147,7 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
     }
     if (args[2] === "push") {
       pushCalls++
-      const child = spawnGit(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], options)
+      const child = spawnFaultNode(["-e", "setTimeout(() => {}, 1500)"], options)
       reachedPush(child)
       return child
     }
