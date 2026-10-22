@@ -12,6 +12,8 @@ const pair = { source: "C:\\owned\\PRIVATE_SOURCE", destination: "C:\\owned\\arc
 const volumeHex = "8877665544332211", fileIdHex = "08070605040302011020304050607080"
 const methods = ["CreateFileW", "GetFileInformationByHandleEx", "GetVolumeInformationByHandleW", "SetFileInformationByHandle", "CloseHandle"]
 const layout = { pointerSize: 8, headerSize: 24, replaceOffset: 0, rootOffset: 8, lengthOffset: 16, nameOffset: 20, littleEndian: true }
+// PowerShell cold start on a busy CI runner can exceed several seconds.
+const POWERSHELL_TIMEOUT_MS = 60_000
 function sample(role, extra = {}) {
   return { role, access: role === "held" ? 65536 : 0, share: role === "held" ? 3 : 7, flags: 35651584, creation: 3,
     openSuccess: true, openError: null, volumeSuccess: true, volumeError: null, filesystem: "NTFS",
@@ -449,7 +451,7 @@ $report = @{ parseErrors = $errors.Count; helpers = $rows } | ConvertTo-Json -De
   const program = await capturedProgram()
   const started = performance.now()
   const parsed = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    { input: program, encoding: "utf8", env: process.env, timeout: 5000 })
+    { input: program, encoding: "utf8", env: process.env, timeout: POWERSHELL_TIMEOUT_MS })
   if (process.platform !== "win32" && parsed.error?.code === "ENOENT") return t.skip("PowerShell parser unavailable; not native Windows proof")
   assert.equal(parsed.status, 0, JSON.stringify(metadataParseFailure(parsed, performance.now() - started)))
   const report = JSON.parse(parsed.stdout)
@@ -573,7 +575,7 @@ try {
 }
 `
   const checked = spawnSync(parserExecutable(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    { input: await capturedProgram(), encoding: "utf8", env: process.env, timeout: 5000 })
+    { input: await capturedProgram(), encoding: "utf8", env: process.env, timeout: POWERSHELL_TIMEOUT_MS })
   if (process.platform !== "win32" && checked.error?.code === "ENOENT") return t.skip("PowerShell managed library unavailable; Windows ABI unqualified")
   if (checked.status !== 0 && checked.stdout.trim()) {
     const failure = JSON.parse(checked.stdout)

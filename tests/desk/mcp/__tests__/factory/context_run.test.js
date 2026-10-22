@@ -1,13 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { osEnv } from "../_os_env.js"
 import { factoryStateRoot, readStatus, requestEvaluation, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { listContextWork, prepareTaskContexts, readyTaskContexts } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
+import { acceptContextCandidate, listContextWork, prepareTaskContexts, readyTaskContexts } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { indexJob } from "./_index_helper.js"
 import { contextFacts, contextRecord } from "./_context_fixture.js"
@@ -24,12 +25,24 @@ const runner = await import("../../../../../plugins/desk/mcp/src/factory/context
 })
 const STORE = "ourostack/factory"
 const VERSION = "3.2.0-alpha.1"
+const NEXT_VERSION = "3.2.0-alpha.2"
 const NOW = Date.parse("2026-10-21T00:00:00.000Z")
 const json = (value) => `${JSON.stringify(value)}\n`
-async function fixture(count = 1, { ready = true, spent = 0 } = {}) {
+async function writePluginVersion(root, version) {
+  const bytes = json({ name: "desk", version })
+  await writeFile(join(root, "plugin.json"), bytes)
+  await writeFile(join(root, ".claude-plugin", "plugin.json"), bytes)
+}
+async function fixture(count = 1, { ready = true, spent = 0, rubricSuffix = "" } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "desk-context-run-")))
   const desk = join(root, "desk")
-  const env = osEnv({ HOME: root, XDG_STATE_HOME: join(root, "state") })
+  const pluginRoot = join(root, "plugin source")
+  const env = osEnv({ HOME: root, XDG_STATE_HOME: join(root, "state"), DESK_PLUGIN_ROOT: pluginRoot })
+  await mkdir(join(pluginRoot, ".claude-plugin"), { recursive: true })
+  await mkdir(join(pluginRoot, "skills", "factory-task-context"), { recursive: true })
+  await writePluginVersion(pluginRoot, VERSION)
+  await writeFile(join(pluginRoot, "skills", "factory-task-context", "SKILL.md"),
+    await readFile(new URL("../../../../../plugins/desk/skills/factory-task-context/SKILL.md", import.meta.url), "utf8") + rubricSuffix)
   await mkdir(join(desk, "_meta"), { recursive: true })
   await writeFile(join(desk, "_meta", "factory.json"), json({ schema_version: 1, store: STORE }))
   await writeFile(join(desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores: { [STORE]: true } }))
@@ -49,7 +62,10 @@ async function fixture(count = 1, { ready = true, spent = 0 } = {}) {
     await writeFile(log, '{"synthetic":"private evidence"}\n')
     entries.push({ facts, deskRoot: desk, personPrefix: "", localJobs: [{ local: job, published: job }], logPath: log, clockOrigin: "2026-10-01T00:00:00.000Z" })
   }
-  await prepareTaskContexts(env, { store: STORE, entries, pluginVersion: VERSION, clock: () => NOW })
+  const prepared = await prepareTaskContexts(env, {
+    store: STORE, entries, pluginVersion: VERSION, clock: () => NOW, readRemote: () => null,
+  })
+  assert.equal(prepared.prepared, count)
   const phases = []
   const runHeadless = async (options) => {
     for (const file of options.briefPaths) {
@@ -59,7 +75,7 @@ async function fixture(count = 1, { ready = true, spent = 0 } = {}) {
         "native authors need the successful state enum, not just withheld/unavailable instructions")
       const input = JSON.parse(await readFile(brief.input_file, "utf8"))
       const output = brief.phase === "candidate"
-        ? { ...contextRecord(input.sources[0], brief.job), privacy: null }
+        ? { ...contextRecord(input.sources[0], brief.job), evaluator: brief.evaluator, privacy: null }
         : { schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: brief.payload_sha256, reviewer: brief.evaluator, reason: "safe" }
       await writeFile(brief.output, json(output))
     }
@@ -69,9 +85,264 @@ async function fixture(count = 1, { ready = true, spent = 0 } = {}) {
   const options = {
     pluginVersion: VERSION, now: NOW, deadline: NOW + 3600000, clock: () => NOW,
     findAgentCli: () => "/synthetic/claude", probeSignIn: async () => ({ state: "subscription" }), runHeadless,
+    qualifyHeadlessSource: async () => ({ state: "qualified" }),
   }
-  return { root, desk, env, entries, phases, options }
+  return { root, desk, pluginRoot, env, entries, phases, options }
 }
+
+async function pendingPrivacy(f) {
+  const [work] = await listContextWork(f.env, { store: STORE })
+  const result = await acceptContextCandidate(f.env, {
+    store: STORE, job: work.job, basis: work.basis,
+    bytes: json({ ...contextRecord(work.source.sources[0], work.job), evaluator: work.source.evaluator, privacy: null }),
+  })
+  assert.equal(result.result, "candidate_accepted")
+  await updateTaskContextState(f.env, STORE, work.job, (state) => ({
+    ...state, attempts: { candidate: 1, privacy: 0 }, last_attempts: { candidate: new Date(NOW).toISOString() },
+  }))
+}
+
+for (const phase of ["candidate", "privacy"]) {
+  test(`unqualified native ${phase} source is held before any claim or reservation`, async () => {
+    const f = await fixture()
+    if (phase === "privacy") await pendingPrivacy(f)
+    const [work] = await listContextWork(f.env, { store: STORE })
+    const statePath = await taskContextPath(f.env, STORE, work.job, "state.json")
+    const before = await readFile(statePath, "utf8")
+    const output = await runner.runTaskContextStep(f.env, {
+      ...f.options,
+      qualifyHeadlessSource: async () => ({ state: "source_unqualified" }),
+      reserveAgentLaunch: () => assert.fail("unqualified source reached the ledger"),
+      runHeadless: () => assert.fail("unqualified source requested a model"),
+    })
+    assert.equal(output.result, "context_source_unqualified")
+    assert.equal(output.launched, false)
+    assert.equal(await readFile(statePath, "utf8"), before)
+    assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+  })
+
+  test(`a native ${phase} source change immediately before launch preserves spend without requesting a model`, async () => {
+    const f = await fixture()
+    if (phase === "privacy") await pendingPrivacy(f)
+    let checks = 0
+    const output = await runner.runTaskContextStep(f.env, {
+      ...f.options,
+      qualifyHeadlessSource: async () => ({ state: ++checks === 1 ? "qualified" : "source_unqualified" }),
+      runHeadless: () => assert.fail("the second source check must precede the model"),
+    })
+    assert.equal(checks, 2)
+    assert.equal(output.result, "context_source_unqualified")
+    assert.equal(output.launched, false)
+    assert.equal(output.accepted, 0)
+    assert.equal(output.refused, 1)
+    const [work] = await listContextWork(f.env, { store: STORE })
+    assert.equal(work.state.attempts[phase], 1)
+    const ledger = JSON.parse(await readFile(join(await factoryStateRoot(f.env), "agent-launch-ledger.json"), "utf8"))
+    assert.equal(ledger.spent, 1)
+    assert.equal(ledger.evaluate.not_started, 1)
+    assert.equal((await readStatus(f.env)).context_evaluation.cost_usd, null)
+  })
+
+  test(`a native ${phase} source change after generation refuses outputs without refunding cost or attempt`, async () => {
+    const f = await fixture()
+    if (phase === "privacy") await pendingPrivacy(f)
+    let checks = 0
+    const output = await runner.runTaskContextStep(f.env, {
+      ...f.options,
+      qualifyHeadlessSource: async () => ({ state: ++checks < 3 ? "qualified" : "source_unqualified" }),
+    })
+    assert.equal(checks, 3)
+    assert.equal(output.result, "context_source_unqualified")
+    assert.equal(output.launched, true)
+    assert.equal(output.accepted, 0)
+    assert.equal(output.refused, 1)
+    const [work] = await listContextWork(f.env, { store: STORE })
+    assert.equal(work.phase, phase)
+    assert.equal(work.state.attempts[phase], 1)
+    const ledger = JSON.parse(await readFile(join(await factoryStateRoot(f.env), "agent-launch-ledger.json"), "utf8"))
+    assert.equal(ledger.spent, 1)
+    assert.equal(ledger.evaluate.ran, 1)
+    assert.equal((await readStatus(f.env)).context_evaluation.cost_usd, 0.1)
+    assert.deepEqual(await readyTaskContexts(f.env, { store: STORE, entries: f.entries }), [])
+  })
+}
+
+test("metadata qualification cannot consume the remaining model deadline", async () => {
+  for (const blockedCheck of [1, 2]) {
+    const f = await fixture()
+    let checks = 0, clock = NOW
+    const output = await runner.runTaskContextStep(f.env, {
+      ...f.options, clock: () => clock,
+      qualifyHeadlessSource: async () => {
+        if (++checks === blockedCheck) clock = f.options.deadline
+        return { state: "qualified" }
+      },
+      runHeadless: () => assert.fail("qualification consumed the remaining model time"),
+    })
+    assert.equal(output.result, "no_time_for_a_run")
+    assert.equal(output.launched, false)
+    assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), blockedCheck === 2)
+  }
+})
+
+test("an expired parent deadline refuses model outputs without starting a post-run metadata child", async () => {
+  const f = await fixture()
+  let clock = NOW, checks = 0
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, clock: () => clock,
+    qualifyHeadlessSource: async () => { checks += 1; return { state: "qualified" } },
+    runHeadless: async (options) => {
+      const result = await f.options.runHeadless(options)
+      clock = f.options.deadline
+      return result
+    },
+  })
+  assert.equal(checks, 2)
+  assert.equal(output.accepted, 0)
+  assert.equal(output.refused, 1)
+  assert.equal(output.launched, true)
+  assert.equal(output.result, "context_source_unqualified")
+  assert.equal((await readStatus(f.env)).context_evaluation.cost_usd, 0.1)
+})
+
+test("all three native checks carry the frozen source and actual source-relevant child directories", async () => {
+  const f = await fixture()
+  const calls = []
+  let modelOptions
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options,
+    qualifyHeadlessSource: async (options) => {
+      assert.ok(existsSync(options.workDir))
+      calls.push(options)
+      return { state: "qualified" }
+    },
+    runHeadless: async (options) => {
+      modelOptions = options
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(output.accepted, 1)
+  assert.equal(calls.length, 3)
+  assert.equal(modelOptions.pluginRoot, f.pluginRoot)
+  for (const options of calls) {
+    assert.equal(options.pluginRoot, f.pluginRoot)
+    assert.equal(options.pluginVersion, VERSION)
+    assert.equal(options.cli, "/synthetic/claude")
+    assert.equal(options.workDir, modelOptions.workDir)
+    assert.equal(options.evaluationDir, modelOptions.evaluationDir)
+    assert.deepEqual(new Set(options.logDirs), new Set(modelOptions.logDirs))
+  }
+})
+
+for (const phase of ["candidate", "privacy"]) {
+  test(`source upgrades hold pending ${phase} work without relabeling it or spending another reservation`, async () => {
+    const f = await fixture(1, { spent: 4 })
+    if (phase === "privacy") await pendingPrivacy(f)
+    const job = f.entries[0].facts.jobs[0].job
+    const statePath = await taskContextPath(f.env, STORE, job, "state.json")
+    const before = await readFile(statePath, "utf8")
+    const ledgerPath = join(await factoryStateRoot(f.env), "agent-launch-ledger.json")
+    const ledger = existsSync(ledgerPath) ? await readFile(ledgerPath, "utf8") : null
+    await writePluginVersion(f.pluginRoot, NEXT_VERSION)
+    const output = await runner.runTaskContextStep(f.env, {
+      ...f.options, pluginVersion: NEXT_VERSION,
+      reserveAgentLaunch: () => assert.fail("an incompatible source reached the launch ledger"),
+    })
+    assert.equal(output.result, "context_source_stale")
+    assert.equal(output.launched, false)
+    assert.equal(await readFile(statePath, "utf8"), before)
+    assert.equal(existsSync(ledgerPath) ? await readFile(ledgerPath, "utf8") : null, ledger)
+    assert.equal((await readStatus(f.env)).evaluator.headless.jobs, 4)
+    assert.equal(await runner.contextEvaluationDue(f.env, await readStatus(f.env), NOW), false)
+  })
+}
+
+test("a stale caller version cannot authorize a different executing source", async () => {
+  const f = await fixture()
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, pluginVersion: NEXT_VERSION,
+    reserveAgentLaunch: () => assert.fail("a stale caller reached the launch ledger"),
+  })
+  assert.equal(output.result, "context_source_mismatch")
+  assert.equal(output.launched, false)
+  assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+})
+
+test("an unreadable producer identity starts no context run", async () => {
+  const f = await fixture()
+  await rename(join(f.pluginRoot, "plugin.json"), join(f.pluginRoot, "plugin.kept.json"))
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, reserveAgentLaunch: () => assert.fail("an unknown producer reached the launch ledger"),
+  })
+  assert.equal(output.result, "context_source_unavailable")
+  assert.equal(output.launched, false)
+  assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+  assert.equal(await runner.contextEvaluationDue(f.env, await readStatus(f.env), NOW), false)
+})
+
+test("the brief carries the declared producer's rubric rather than a different module copy", async () => {
+  const marker = "Synthetic source-specific rubric instruction."
+  const f = await fixture(1, { rubricSuffix: `\n${marker}\n` })
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options,
+    reserveAgentLaunch: async () => ({ state: "reserved", token: "a".repeat(32), day: "2026-10-21", remaining: 29 }),
+    finishAgentLaunch: async () => ({ state: "finished" }),
+    runHeadless: async (options) => {
+      const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
+      assert.ok(brief.instructions.includes(marker))
+      return f.options.runHeadless(options)
+    },
+  })
+  assert.equal(output.accepted, 1)
+})
+
+test("a missing declared rubric is held before reaching the launch ledger", async () => {
+  const f = await fixture()
+  const rubric = join(f.pluginRoot, "skills", "factory-task-context", "SKILL.md")
+  await rename(rubric, `${rubric}.kept`)
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, reserveAgentLaunch: () => assert.fail("an unavailable rubric reached the launch ledger"),
+  })
+  assert.equal(output.result, "context_source_unavailable")
+  assert.equal(output.launched, false)
+  assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+})
+
+test("an unexpected rubric read failure propagates before reaching the launch ledger", async () => {
+  const f = await fixture()
+  const rubric = join(f.pluginRoot, "skills", "factory-task-context", "SKILL.md")
+  await rename(rubric, `${rubric}.kept`)
+  await mkdir(rubric)
+  await assert.rejects(runner.runTaskContextStep(f.env, {
+    ...f.options, reserveAgentLaunch: () => assert.fail("a failed rubric read reached the launch ledger"),
+  }), (error) => error.code === "EISDIR")
+  assert.equal(existsSync(join(await factoryStateRoot(f.env), "agent-launch-ledger.json")), false)
+})
+
+test("current-source work proceeds without consuming older privacy work", async () => {
+  const f = await fixture()
+  await pendingPrivacy(f)
+  const oldJob = f.entries[0].facts.jobs[0].job
+  const oldState = await readFile(await taskContextPath(f.env, STORE, oldJob, "state.json"), "utf8")
+  await writePluginVersion(f.pluginRoot, NEXT_VERSION)
+  const facts = contextFacts(), job = "2".padStart(32, "0")
+  facts.jobs[0].job = job
+  facts.outcomes[0].job = job
+  facts.session.id = "00000002-8a1d-4c2e-9f3a-1b2c3d4e5f60"
+  await prepareTaskContexts(f.env, { store: STORE, pluginVersion: NEXT_VERSION, clock: () => NOW, readRemote: () => null, entries: [{
+    facts, deskRoot: f.desk, personPrefix: "", localJobs: [{ local: job, published: job }], logPath: null, clockOrigin: null,
+  }] })
+  const output = await runner.runTaskContextStep(f.env, {
+    ...f.options, pluginVersion: NEXT_VERSION,
+    reserveAgentLaunch: async () => ({ state: "reserved", token: "a".repeat(32), day: "2026-10-21", remaining: 29 }),
+    finishAgentLaunch: async () => ({ state: "finished" }),
+  })
+  assert.equal(output.accepted, 1)
+  assert.equal(await readFile(await taskContextPath(f.env, STORE, oldJob, "state.json"), "utf8"), oldState)
+  const state = JSON.parse(await readFile(await taskContextPath(f.env, STORE, job, "state.json"), "utf8"))
+  assert.equal(state.phase, "privacy")
+  assert.equal(state.candidate.evaluator.plugin_version, NEXT_VERSION)
+})
 
 test("ordinary context runs generate then separately review, bounded to one launch and eight jobs", async () => {
   assert.ok(runner, "the ordinary context runner is not implemented")
@@ -179,7 +450,7 @@ test("equal-start evidence is ordered by its actual endpoint in the native outli
   } })
 })
 
-test("a freshly identified task card grants only its own directory to the native reader", async () => {
+test("the native task-card handoff exposes its verified pointer and only its own directory", async () => {
   const f = await fixture(0)
   const remote = "https://github.com/synthetic/desk.git"
   const git = (...args) => execFileSync("git", args, { cwd: f.desk, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -190,7 +461,8 @@ test("a freshly identified task card grants only its own directory to the native
   git("remote", "add", "origin", remote)
   const folder = join(f.desk, "sample", "safe")
   await mkdir(folder, { recursive: true })
-  await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nRetesting resumed after the required update.\n")
+  const card = "---\nstatus: done\n---\nRetesting resumed after the required update.\n"
+  await writeFile(join(folder, "task.md"), card)
   git("add", "sample")
   git("commit", "-qm", "create task")
   const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug: "safe" })
@@ -203,8 +475,11 @@ test("a freshly identified task card grants only its own directory to the native
     assert.equal(options.logDirs.includes(folder), true)
     assert.equal(options.logDirs.includes(f.desk), false)
     const brief = JSON.parse(await readFile(options.briefPaths[0], "utf8"))
-    const input = JSON.parse(await readFile(brief.input_file, "utf8"))
-    assert.equal(input.task_card.path, join(folder, "task.md"))
+    assert.deepEqual(brief.task_card, {
+      path: join(folder, "task.md"),
+      sha256: createHash("sha256").update(card).digest("hex"),
+    })
+    assert.equal(await readFile(brief.task_card.path, "utf8"), card)
     return { state: "failed", cost_usd: null }
   } })
 })
