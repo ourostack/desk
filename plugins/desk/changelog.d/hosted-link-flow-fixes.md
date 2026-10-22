@@ -4,4 +4,4 @@ One repository is now one account's desk atomically. Linking claims the reposito
 
 A session-start recheck no longer overwrites a link made while it ran: its writes are conditional on the binding it read, and a changed binding is rechecked instead. A binding the operator seeded, with no GitHub user, is now rechecked too: it is suspended when the Ouro Desk App's installation no longer serves its repository. Signing out now ends every browser session of the account, including a copied cookie.
 
-Fixed: in an isolated hosted realm, `task_update` refused to finish a task with a PR, or to record a step's PR, when the card named a local clone outside the desk. Done evidence now treats such a clone as one Git can't answer for and matches the PR by the recorded repo name.
+Fixed: in an isolated hosted realm, `task_update` refused to finish a task with a PR, or to record a step's PR, when the card named a local clone outside the desk. Matching a PR to the card's repos now treats such a clone as one with no remotes and matches by the recorded repo name; commit evidence from it is still refused by the hosted Git guard.
