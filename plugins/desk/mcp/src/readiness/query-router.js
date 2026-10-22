@@ -3,6 +3,8 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { directLexicalSearch, loadCurrentTombstoneLedger } from "./direct-lexical.js"
 import { expectedLexicalGenerationIdentity, matchesLexicalGenerationIdentity } from "./generations.js"
 import { stableStringify } from "./identity.js"
+import { outranks } from "./index-writer.js"
+import { deskVersion } from "../package-metadata.js"
 import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline, SEMANTIC_CATCHING_UP, SEMANTIC_OFF } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
 
@@ -17,19 +19,55 @@ function readinessError(reason, message) {
   }
 }
 
-// What desk_recall and desk_similar say when they cannot answer: plain words and what to do, with the technical reason kept in `diagnostic.reason` and `diagnostic.detail`.
+// What desk_recall and desk_similar say when they cannot answer: plain words and what to do, with the technical reason kept in `diagnostic.reason` and `diagnostic.detail`. The fix depends on the cause, so a retry is suggested only when waiting can help.
 const SEMANTIC_UNAVAILABLE = "Meaning-based search is not available right now."
-const SEMANTIC_FIX = "Retry in about a minute; if it keeps failing, call desk_status. desk_search answers now with exact-word matches."
+const EXACT_WORDS_NOW = "desk_search answers now with exact-word matches."
+const SEMANTIC_FIX = `Retry in about a minute; if it keeps failing, call desk_status. ${EXACT_WORDS_NOW}`
+const EMBEDDING_FIX = `Start Ollama, run \`ollama pull ${ACTIVE_EMBEDDING_SPEC.model}\`, then call desk_reindex. ${EXACT_WORDS_NOW}`
+const SEMANTIC_OFF_REFUSAL = Object.freeze({
+  message: "Meaning-based search is off for this desk.",
+  fix: `Use desk_search for exact-word matches. To turn meaning-based search on, set desk_runtime.semantic to "background" in Desk's activation config and restart the session.`,
+})
+const NEWER_DESK_REASON = "index_owned_by_newer_desk"
+const NEWER_DESK_REFUSAL = Object.freeze({
+  message: "A newer Desk session on this desk is serving meaning-based search.",
+  fix: `Restart this session to update Desk. ${EXACT_WORDS_NOW}`,
+})
 
-function semanticCapabilityError(reason, detail) {
+function semanticCapabilityError(reason, detail, { message = SEMANTIC_UNAVAILABLE, fix = SEMANTIC_FIX } = {}) {
   return {
     status: "error", code: "required_capability_unavailable", capability: "semantic",
-    diagnostic: { reason, message: SEMANTIC_UNAVAILABLE, detail },
-    fix: SEMANTIC_FIX,
+    diagnostic: { reason, message, detail },
+    fix,
   }
 }
 
-// Another Desk build's controller on this desk wrote the shared search index after this controller converged. Old builds cannot be changed to step aside, so this controller reconciles the index again; vectors still valid under the same embedding specification are kept.
+// The controller's last check found the embedding service not answering; waiting does not help until it runs.
+function embeddingRefusal(observed) {
+  return observed?.convergence?.semantic?.query_embedding?.available === false ? { fix: EMBEDDING_FIX } : {}
+}
+
+// Only chooses the fix sentence, so a failed status read leaves the refusal as it is.
+async function observedStatus(controller, signal) {
+  try {
+    return await cancellable(() => controller.status(), signal)
+  } catch (error) {
+    signal?.throwIfAborted()
+    return null
+  }
+}
+
+// One deadline for a whole call: each wait inside it gets only the time that is left. A deadline of 0 or less means none.
+export function callDeadline(timeoutMs, now = Date.now) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return () => timeoutMs
+  const end = now() + timeoutMs
+  return () => Math.max(1, end - now())
+}
+
+// The Desk version this session runs; its controller records the same one with each generation it writes.
+const RUNNING_VERSION = deskVersion()
+
+// Another Desk build's controller on this desk wrote the shared search index after this controller converged. A build that ranks lower, or an older build that records no writer, cannot be changed to step aside, so this controller reconciles the index again; vectors still valid under the same embedding specification are kept. A build that ranks higher keeps the index.
 const INDEX_RECLAIM_REASON = "index_written_by_other_controller"
 
 function isSemanticKind(kind) {
@@ -144,6 +182,7 @@ export function createQueryRouter({
   semanticBackend,
   directBackend,
   semanticDeadlineMs = 30_000,
+  version = RUNNING_VERSION,
 } = {}) {
   let lastProof = null
 
@@ -157,12 +196,12 @@ export function createQueryRouter({
     }
   }
 
-  async function serviceProof(request, { semanticRequired = false, waitForSemantic = semanticRequired } = {}) {
+  async function serviceProof(request, { semanticRequired = false, waitForSemantic = semanticRequired, remaining } = {}) {
     const { signal } = request
     let fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
     let lexicalBarrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
     const semanticBarrier = semanticRequired && waitForSemantic
-      ? await semanticBarrierState(controller, request, semanticDeadlineMs)
+      ? await semanticBarrierState(controller, request, remaining())
       : await cancellable(() => controller.barrier({ capability: "semantic" }), signal).catch((error) => ({
           current: false,
           reason: error.code ?? "semantic_unavailable",
@@ -196,12 +235,15 @@ export function createQueryRouter({
         ? "generation_identity_mismatch" : fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
       message: "A current, event-certain lexical generation is not proven.",
     }
+    // The controller says it is current and certain, yet the index was last written under another journal: another controller (another Desk build on this desk) wrote it since.
+    const foreign = currentAndCertain && snapshot !== null && !lexicalProven && snapshot.cursor?.journal_id !== fence.cursor.journal_id
+    const yields = foreign && snapshot.writer !== null && outranks(snapshot.writer, { version, build: controller.identity.build })
     return {
       snapshot,
       lexicalProven,
       semanticProven,
-      // The controller says it is current and certain, yet the index was last written under another journal: another controller (another Desk build on this desk) wrote it since.
-      reclaimable: currentAndCertain && snapshot !== null && !lexicalProven && snapshot.cursor?.journal_id !== fence.cursor.journal_id,
+      reclaimable: foreign && !yields,
+      yields,
       proven: semanticRequired ? semanticProven : lexicalProven,
       owner: observed.owner?.token,
       observed,
@@ -305,11 +347,11 @@ export function createQueryRouter({
     return { ...result, readiness_diagnostic: diagnostic }
   }
 
-  async function reclaimIndex(request) {
+  async function reclaimIndex(request, remaining) {
     await cancellable(() => controller.markUncertain(INDEX_RECLAIM_REASON), request.signal)
     await withDeadline(
       () => cancellable(() => controller.barrier({ capability: "semantic", wait: true }), request.signal),
-      semanticDeadlineMs,
+      remaining(),
       "semantic_deadline",
       "Semantic convergence did not become current before the deadline.",
     )
@@ -329,21 +371,29 @@ export function createQueryRouter({
     if (!controller || !semanticBackend) {
       return semanticScopeError()
     }
+    if (controller.identity?.semantic_contract?.mode === "unsupported") {
+      return semanticCapabilityError(SEMANTIC_OFF.reason, "This desk's readiness policy turns meaning-based search off.", SEMANTIC_OFF_REFUSAL)
+    }
+    const remaining = callDeadline(semanticDeadlineMs)
     let before
     try {
-      const barrier = await semanticBarrierState(controller, request, semanticDeadlineMs)
+      const barrier = await semanticBarrierState(controller, request, remaining())
       if (barrier.current !== true) {
-        return semanticCapabilityError(barrier.reason ?? "semantic_unavailable", barrier.message ?? "Semantic serving is not current for the active generation.")
+        const observed = await observedStatus(controller, signal)
+        return semanticCapabilityError(barrier.reason ?? "semantic_unavailable", barrier.message ?? "Semantic serving is not current for the active generation.", embeddingRefusal(observed))
       }
-      before = await serviceProof(request, { semanticRequired: true })
-      if (!before.semanticProven && before.reclaimable) {
+      before = await serviceProof(request, { semanticRequired: true, remaining })
+      if (before.reclaimable) {
         before.snapshot.db.close()
         before = null
-        await reclaimIndex(request)
-        before = await serviceProof(request, { semanticRequired: true })
+        await reclaimIndex(request, remaining)
+        before = await serviceProof(request, { semanticRequired: true, remaining })
+      }
+      if (before.yields) {
+        return semanticCapabilityError(NEWER_DESK_REASON, "The search index was last written by a Desk build that ranks above this one.", NEWER_DESK_REFUSAL)
       }
       if (!before.semanticProven) {
-        return semanticCapabilityError(before.semanticDiagnostic.reason, before.semanticDiagnostic.message)
+        return semanticCapabilityError(before.semanticDiagnostic.reason, before.semanticDiagnostic.message, embeddingRefusal(before.observed))
       }
       const result = await cancellable(() => semanticBackend({
         ...request,
@@ -351,7 +401,7 @@ export function createQueryRouter({
         generation: before.snapshot.generation,
       }), signal)
       if (result?.error === "semantic_unavailable") {
-        return semanticCapabilityError("semantic_unavailable", result.note ?? "Semantic serving is unavailable for this request.")
+        return semanticCapabilityError("semantic_unavailable", result.note ?? "Semantic serving is unavailable for this request.", { fix: EMBEDDING_FIX })
       }
       const after = await serviceProof(request, { semanticRequired: true, waitForSemantic: false })
       try {
@@ -460,9 +510,10 @@ export function createQueryRouter({
   }
 }
 
-export function createDeskQueryRouter({ controller } = {}) {
+export function createDeskQueryRouter({ controller, version } = {}) {
   return createQueryRouter({
     controller,
+    version,
     directBackend: directLexicalSearch,
     indexedBackend: (request) => {
       const backend = request.kind === "thread" ? indexedThread

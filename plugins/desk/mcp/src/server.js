@@ -157,6 +157,8 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
             ...(embed === null ? {} : { embed }),
             eventCursor,
             identities: { policy_identity: stableStringify(policy) },
+            // Recorded with each generation, so every Desk build on this desk can tell which build owns the shared index.
+            writer: { version: deskVersion(), build: options.identity.build },
           }, { deskRoot })
           // Keep the opt-out at ensureIndex's normalization boundary; resolved undefined would re-enable legacy snapshot auto-discovery.
           const result = await ensureIndexOrQuarantine(deskRoot, { ...indexOptions, snapshots: false })

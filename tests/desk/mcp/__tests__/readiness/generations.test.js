@@ -7,6 +7,7 @@ import { openDb, closeDb, getMeta, runMigrations } from "../../../../../plugins/
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
 import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
+import { openSnapshot } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const identities = {
@@ -112,6 +113,43 @@ test("a failure at SQLite COMMIT rolls back generation, operations and canonical
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, 1)
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM readiness_operations").get().n, 1)
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM commit_guard").get().n, 0)
+  } finally { closeDb(db) }
+})
+
+test("each generation records its writer, and only the newest generations are kept", async () => {
+  const { commitLexicalGeneration, RETAINED_LEXICAL_GENERATIONS } = await generationModule()
+  const root = await mkTempRoot("desk-generation-")
+  const db = openDb(root)
+  try {
+    const writer = { version: "3.2.0-alpha.342", build: "b".repeat(64) }
+    const empty = openSnapshot(root)
+    try {
+      assert.equal(empty.generation, null)
+      assert.equal(empty.writer, null)
+    } finally { empty.db.close() }
+    commitLexicalGeneration({ db, documents: [], eventCursor, identities, writer })
+    assert.deepEqual(JSON.parse(getMeta(db, "index_writer")), { journal_id: eventCursor.journal_id, ...writer })
+    const written = openSnapshot(root)
+    try { assert.deepEqual(written.writer, writer, "a search snapshot reads the writer of its generation") } finally { written.db.close() }
+    commitLexicalGeneration({ db, documents: [], identities, writer })
+    assert.equal(getMeta(db, "index_writer"), null, "a generation without a journal names no writer")
+    commitLexicalGeneration({ db, documents: [], eventCursor, identities, writer })
+    commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+    assert.equal(getMeta(db, "index_writer"), null, "a commit that names no writer clears the last one")
+
+    let last
+    for (let sequence = 0; sequence < RETAINED_LEXICAL_GENERATIONS + 4; sequence += 1) {
+      last = commitLexicalGeneration({ db, documents: [], eventCursor: { ...eventCursor, sequence }, identities, writer })
+    }
+    const ids = db.prepare("SELECT id FROM lexical_generations ORDER BY id").all().map((row) => row.id)
+    assert.equal(ids.length, RETAINED_LEXICAL_GENERATIONS)
+    assert.equal(ids.at(-1), last)
+    assert.equal(ids[0], last - RETAINED_LEXICAL_GENERATIONS + 1)
+    assert.equal(getMeta(db, "active_lexical_generation"), String(last))
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM readiness_operations").get().n, RETAINED_LEXICAL_GENERATIONS,
+      "the operation row of each removed generation goes with it")
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM lexical_generations g
+      JOIN readiness_operations o ON o.id = g.operation_id`).get().n, RETAINED_LEXICAL_GENERATIONS)
   } finally { closeDb(db) }
 })
 
