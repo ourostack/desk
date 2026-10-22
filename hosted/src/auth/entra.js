@@ -213,7 +213,8 @@ async function bindingOf(store, accountId) {
 // single-desk gateway serves (DESK_REPO), which the binding must name; null on a multi-user gateway, where each
 // account's binding names its own desk. Returns the page that refuses it, or null. Throws when the store can't
 // answer. Shared by the Ouro tenant's sign-in and the GitHub fallback.
-export async function admissionRefusal({ store, accountId, repo, clientId, log = stderrLog }) {
+// `linkGitHub`: the gateway mounts GitHub linking (/link/github), so the no-desk page links there.
+export async function admissionRefusal({ store, accountId, repo, clientId, linkGitHub = false, log = stderrLog }) {
   const account = await store.getAccount(accountId);
   if (!account?.deskAccess) {
     log(`sign-in refused: access_off account ${accountId} client ${clientId}`);
@@ -222,7 +223,7 @@ export async function admissionRefusal({ store, accountId, repo, clientId, log =
   const binding = await bindingOf(store, accountId);
   if (binding?.kind !== "github" || (repo !== null && binding.repo !== repo)) {
     log(`sign-in refused: no_desk account ${accountId} client ${clientId}`);
-    return noDeskPage({ link: repo === null });
+    return noDeskPage({ link: repo === null && linkGitHub });
   }
   return null;
 }
@@ -246,6 +247,7 @@ export function createEntraSignIn({
   store,
   repo,
   sessions,
+  linkGitHub = false,
   fetch = globalThis.fetch,
   timeoutMs = TOKEN_EXCHANGE_TIMEOUT_MS,
   now = Date.now,
@@ -416,7 +418,7 @@ export function createEntraSignIn({
       if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
       if (found.refusal) return { ...found.refusal, clearCookies };
       accountId = found.accountId;
-      const refusal = await admissionRefusal({ store, accountId, repo, clientId: pending.clientId, log });
+      const refusal = await admissionRefusal({ store, accountId, repo, clientId: pending.clientId, linkGitHub, log });
       if (refusal) return { ...refusal, clearCookies };
     } catch (failure) {
       log(`sign-in failed: store_unavailable (${failure?.name ?? "error"}) client ${pending.clientId}`);

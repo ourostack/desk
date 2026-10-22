@@ -91,6 +91,8 @@ export function createProvider({
   store,
   repo,
   entra,
+  // The gateway mounts GitHub linking: the no-desk page links to it.
+  linkGitHub = false,
   legacy = { byUserId: new Map(), cutoff: null },
 }) {
   if (!signingKeys[0]?.key) throw new Error("createProvider needs a signing key");
@@ -120,7 +122,7 @@ export function createProvider({
           now,
           async admit(accountId, clientId) {
             try {
-              return await admissionRefusal({ store, accountId, repo, clientId, log });
+              return await admissionRefusal({ store, accountId, repo, clientId, linkGitHub, log });
             } catch (error) {
               log(`sign-in failed: store_unavailable (${error?.name ?? "error"}) client ${clientId}`);
               return signInUnavailablePage();

@@ -366,6 +366,12 @@ export function storeOn(tables, { onStep = noop } = {}) {
         }
         const holder = found.entity.accountId;
         if (holder !== accountId && (at - expiryOf(found.entity.claimedAt) < CLAIM_GRACE_MS || (await holds(holder, repo)))) return { heldBy: holder };
+        // An active binding that names the repository without holding its claim (one a rolled-back desk init
+        // restored, or one seeded) still holds the repository: a takeover would make it two accounts' desk.
+        if (holder !== accountId) {
+          const bound = await repoBoundElsewhere(repo, accountId);
+          if (bound !== null) return { heldBy: bound };
+        }
         // A takeover, or the holder renewing its own claim. Both write the row, so a holder whose binding comes back
         // and a newcomer taking the claim over can't both win: the second write finds the ETag changed and re-reads.
         try {

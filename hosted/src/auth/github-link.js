@@ -441,8 +441,12 @@ export function createGitHubLink({
       return sendPage(res, linkedPage(pick.repo, result.status === "created"));
     }
     try {
-      if (previous) await store.putBinding(accountId, previous);
-      else await store.removeBinding(accountId);
+      // The previous repository may have become another account's desk while init ran; the binding then comes back
+      // suspended, and the next session start tells the person it was taken.
+      if (previous) {
+        const kept = previous.suspended === true || (await store.claimRepo(previous.repo, accountId, { now: now() })).claimed === true;
+        await store.putBinding(accountId, kept ? previous : { ...previous, suspended: true });
+      } else await store.removeBinding(accountId);
       await release(accountId, pick.repo, previous?.repo);
     } catch (error) {
       log(`link failed: desk_init rollback_failed account ${accountId}`);

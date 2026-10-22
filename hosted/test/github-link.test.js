@@ -422,6 +422,30 @@ test("a suspended binding whose repository has since become another account's de
   assert.match(await ctx.link.sessionRefusal(ctx.jordanId), new RegExp(`${GATEWAY}/link/github`));
 });
 
+test("a rolled-back init restores the previous binding suspended when another account took its repository meanwhile", async (t) => {
+  const other = randomUUID();
+  let ctx;
+  ctx = await startLinking(t, {
+    repos: { [DESK_REPO]: { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES }, "jordan-dev/empty": { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: [] } },
+    // While Jordan's init runs on the new repository, a collaborator links the old one.
+    initDesk: async () => {
+      assert.deepEqual(await ctx.store.claimRepo(DESK_REPO, other, { now: ctx.now() }), { claimed: true });
+      await ctx.store.putBinding(other, { kind: "github", repo: DESK_REPO, installationId: INSTALLATION, author: { name: "x", email: "1+x@users.noreply.github.com" } });
+      return { status: "error", step: "commit" };
+    },
+  });
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  ctx.advance(10 * 60_000);
+  const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/empty");
+  const failed = await ctx.jordan.request("/link/github", { method: "POST", form: { action: "init", csrf: decode(csrfOf(offer.text)), pick: decode(fieldOf(offer.text, "pick")) } });
+  assert.equal(failed.status, 502, failed.text);
+  const restored = await ctx.store.getBinding(ctx.jordanId);
+  assert.equal(restored.repo, DESK_REPO);
+  assert.equal(restored.suspended, true, "two accounts must never both hold one repository");
+  assert.deepEqual(await ctx.store.claimRepo(DESK_REPO, randomUUID(), { now: ctx.now() + 60 * 60_000 }), { heldBy: other });
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "taken");
+});
+
 test("a failed init never erases a binding it couldn't read, and tells the runtime after a rollback", async (t) => {
   const ctx = await startLinking(t, { repos: { "jordan-dev/notes": { installationId: INSTALLATION, collaborators: { "jordan-dev": "admin" }, files: [] } }, initDesk: () => ({ status: "error", step: "commit" }) });
   const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/notes");

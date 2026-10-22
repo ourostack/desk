@@ -237,6 +237,9 @@ export const deskRepoOf = (config) => (config.multiUser ? null : config.repo);
 // The Ouro tenant's parts, built from config.identity: the accounts store and its cache, discovery (fetched, within
 // its bound, before the gateway listens), the tenant's sign-in, invites and the deep health check. `deps.store` and
 // `deps.fetch` stand in for the Table store and the network in tests.
+// Whether the gateway mounts GitHub linking (/link/github): a multi-user gateway whose GitHub App is set up.
+const linksGitHub = (config) => Boolean(config.multiUser && config.appReady);
+
 export async function startIdentity(config, deps = {}) {
   const { identity } = config;
   const fetch = deps.fetch ?? globalThis.fetch;
@@ -257,6 +260,7 @@ export async function startIdentity(config, deps = {}) {
     store,
     repo: deskRepoOf(config),
     ...(sessions ? { sessions } : {}),
+    linkGitHub: linksGitHub(config),
     fetch,
   });
   const invites = createInvites({ keys: config.signingKeys, store, issuer: config.issuer });
@@ -310,7 +314,7 @@ export function buildGateway({ config, relay, parts, admin, githubLink, log: wri
     resource: config.resource,
     redirects: config.redirects,
     ...(write ? { log: write } : {}),
-    ...(parts ? { accounts: parts.accounts, store: parts.store, repo: deskRepoOf(config), entra: parts.entra, legacy: config.identity.legacy } : {}),
+    ...(parts ? { accounts: parts.accounts, store: parts.store, repo: deskRepoOf(config), entra: parts.entra, legacy: config.identity.legacy, linkGitHub: linksGitHub(config) } : {}),
   });
   const app = createApp({
     provider,

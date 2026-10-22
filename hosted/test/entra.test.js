@@ -50,7 +50,7 @@ function browser() {
   };
 }
 
-async function setup({ discoveryDown = false, retryMs = 30_000, repo = REPO } = {}) {
+async function setup({ discoveryDown = false, retryMs = 30_000, repo = REPO, linkGitHub } = {}) {
   let clock = START;
   const now = () => clock;
   const tenant = await stubTenant({ now });
@@ -68,6 +68,7 @@ async function setup({ discoveryDown = false, retryMs = 30_000, repo = REPO } = 
     callbackUrl: CALLBACK,
     store,
     repo,
+    ...(linkGitHub === undefined ? {} : { linkGitHub }),
     fetch: tenant.fetch,
     now,
     log,
@@ -359,7 +360,7 @@ test("a multi-user gateway (repo null) admits an account bound to its own reposi
 });
 
 test("a multi-user gateway (repo null) still gives an account with no binding the no-desk page", async () => {
-  const ctx = await setup({ repo: null });
+  const ctx = await setup({ repo: null, linkGitHub: true });
   const accountId = "acct-without-binding";
   await ctx.store.putAccount({ accountId, displayName: "Nobody", deskAccess: true });
   await ctx.store.tables.create("identities", { partitionKey: TENANT_ID, rowKey: OID, accountId });
@@ -367,6 +368,17 @@ test("a multi-user gateway (repo null) still gives an account with no binding th
   assert.equal(outcome.status, 403);
   assert.match(outcome.html, /no desk/i);
   assert.match(outcome.html, /<a href="\/link\/github">/, "it links to where the person links a GitHub desk");
+});
+
+test("a multi-user gateway whose GitHub linking isn't set up gives the no-desk page without a link to it", async () => {
+  const ctx = await setup({ repo: null, linkGitHub: false });
+  const accountId = "acct-without-binding";
+  await ctx.store.putAccount({ accountId, displayName: "Nobody", deskAccess: true });
+  await ctx.store.tables.create("identities", { partitionKey: TENANT_ID, rowKey: OID, accountId });
+  const outcome = await signIn(ctx, browser(), { oid: OID });
+  assert.equal(outcome.status, 403);
+  assert.match(outcome.html, /no desk/i);
+  assert.doesNotMatch(outcome.html, /link\/github/, "/link/github is mounted only once the GitHub App is set up");
 });
 
 test("an account with no binding gets the no-desk page", async () => {

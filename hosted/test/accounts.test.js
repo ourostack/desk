@@ -327,6 +327,20 @@ function storeSuite(label, make) {
       assert.equal([mine, theirs].filter((outcome) => outcome.claimed).length, 1, JSON.stringify({ mine, theirs }));
     });
 
+    test(name("a claim that no longer holds isn't taken over while another account's active binding names the repository"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `jordan-dev/desk-${tag}`;
+      const [holder, bound, newcomer] = [randomUUID(), randomUUID(), randomUUID()];
+      const later = NOW + 10 * 60_000;
+      assert.deepEqual(await store.claimRepo(repo, holder, { now: NOW }), { claimed: true });
+      await store.putBinding(holder, { ...BINDING, repo: `someone/other-${tag}` });
+      // A binding that names the repository without its claim: one a rolled-back desk init restored, or one seeded.
+      await store.putBinding(bound, { ...BINDING, repo });
+      assert.deepEqual(await store.claimRepo(repo, newcomer, { now: later }), { heldBy: bound });
+      assert.deepEqual(await store.claimRepo(repo, bound, { now: later }), { claimed: true }, "the bound account itself may take the claim");
+    });
+
     test(name("a binding from before claims existed keeps its repository"), async () => {
       const store = await make();
       const tag = randomUUID().slice(0, 8);
