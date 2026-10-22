@@ -1476,6 +1476,48 @@ export async function jobsIndexRebuilt(env, { platform = process.platform, runne
 // Local facts reads, local labels and the waste evaluator's files.
 // ---------------------------------------------------------------------------
 
+const CONTEXT_FILE = /^(?:state|discovery|input-[0-9a-f]{64}|[0-9a-f]{16}\.(?:brief|candidate|privacy))\.json$/u
+const CONTEXT_FILE_MAX = 16 * 1024 * 1024
+
+export const serializeTaskContext = (value) => `${JSON.stringify(value, null, 2)}\n`
+
+export async function taskContextPath(env, store, job, name) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  requirePattern(name, CONTEXT_FILE, "name")
+  return path.join(await factoryStateRoot(env), "task-context", storeSlug(store), job, name)
+}
+
+/** Context files use the same owner-only, no-link and atomic-write policy as facts and labels. */
+export async function writeTaskContextFile(env, store, job, name, value) {
+  const file = await taskContextPath(env, store, job, name)
+  const bytes = serializeTaskContext(value)
+  if (Buffer.byteLength(bytes) > CONTEXT_FILE_MAX) fail("file", "context file is too large")
+  await writeAtomic(await factoryStateRoot(env), file, bytes, { platform: process.platform, env })
+  return file
+}
+
+export async function readTaskContextFile(env, store, job, name) {
+  const file = await taskContextPath(env, store, job, name)
+  const stat = await lstatIfPresent(file, NAMING)
+  if (stat !== null && stat.size > CONTEXT_FILE_MAX) fail("file", "context file is too large")
+  return readProtectedBytes(file)
+}
+
+export async function updateTaskContextState(env, store, job, mutate) {
+  const file = await taskContextPath(env, store, job, "state.json")
+  return updateJsonLocked(await factoryStateRoot(env), file, null, (current) => {
+    const next = mutate(current)
+    requirePlainObject(next, "record")
+    if (Buffer.byteLength(JSON.stringify(next)) > 512 * 1024) fail("record", "context state is too large")
+    return next
+  }, { platform: process.platform, env }, (value) => value === null || isPlainObject(value))
+}
+
+export async function listTaskContextJobs(env, store) {
+  const root = await factoryStateRoot(env)
+  return (await listDirSafe(path.join(root, "task-context", storeSlug(store)))).filter((name) => PATTERNS.jobId.test(name)).sort()
+}
+
 /** Reads a regular, owner-only file under the state root; `null` when it is absent. */
 async function readProtectedBytes(file) {
   if ((await lstatIfPresent(file, NAMING)) === null) return null

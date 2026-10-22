@@ -444,14 +444,142 @@ test("with no binding at all, a work overlay's ~/ms-desk is never bound by plain
 })
 
 // An Agency session container holding Desk and the plugins selected with it.
-function agencySession(fixture, plugins) {
+function agencySession(fixture, plugins, deskFolder = "desk") {
   const container = path.join(fixture.root, "sessions", "agency-plugin-Ab3_x-9.p4242")
   for (const [folder, name] of Object.entries(plugins)) {
     mkdirSync(path.join(container, folder), { recursive: true })
     if (name !== null) writeFileSync(path.join(container, folder, "plugin.json"), JSON.stringify({ name }), "utf8")
   }
-  return path.join(container, "desk")
+  return path.join(container, deskFolder)
 }
+
+test("numbered Agency source roots bind the declared overlay in the same session, not a personal desk", () => {
+  const fixture = makeFixture()
+  try {
+    const deskPluginRoot = agencySession(fixture, {
+      "root-0/desk": "desk",
+      "root-5/ms-desk": "ms-desk",
+      "root-4/superpowers": "superpowers",
+    }, "root-0/desk")
+    const bound = pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home })
+    assert.equal(bound.root, path.join(fixture.home, "ms-desk"))
+    assert.equal(bound.source, "overlay_home_fallback")
+    assert.deepEqual(bound.tried, [{ source: "overlay_home_fallback", overlay: "ms-desk", path: path.join(fixture.home, "ms-desk") }])
+
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    const options = {
+      deskPluginRoot,
+      homeDir: fixture.home,
+      explicitRoot: fixture.explicitRoot,
+      hostSessionRoot: fixture.hostSessionRoot,
+      activationConfigPath: fixture.configPath,
+      env: { DESK: fixture.envRoot },
+    }
+    for (const [key, source, root] of [
+      ["explicitRoot", "explicit-root", fixture.explicitRoot],
+      ["hostSessionRoot", "host-session-root", fixture.hostSessionRoot],
+      ["activationConfigPath", "activation-config", fixture.activationRoot],
+      ["env", "env:DESK", fixture.envRoot],
+    ]) {
+      assert.deepEqual(pathsModule.resolveDeskRootWithSource(options), { root, source, tried: [{ source, path: root }] })
+      const missing = path.join(fixture.root, `missing-${source}`)
+      if (key === "activationConfigPath") writeActivationConfig(fixture.configPath, missing)
+      const unavailable = key === "activationConfigPath" ? options : {
+        ...options, [key]: key === "env" ? { DESK: missing } : missing,
+      }
+      assert.throws(() => pathsModule.resolveDeskRootWithSource(unavailable), (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_UNAVAILABLE)
+        assert.deepEqual(err.tried, [{ source, path: missing }])
+        return true
+      })
+      if (key === "activationConfigPath") writeActivationConfig(fixture.configPath, fixture.activationRoot)
+      if (key === "env") options.env = {}
+      else delete options[key]
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("numbered overlay discovery rejects other sessions, invalid manifests and unrelated layouts", () => {
+  const cases = [
+    ["no overlay", "root-0/desk", {}],
+    ["wrong manifest", "root-0/desk", { "root-5/ms-desk": "impostor" }],
+    ["missing manifest", "root-0/desk", { "root-5/ms-desk": null }],
+    ["wrong overlay folder", "root-0/desk", { "root-5/other": "ms-desk" }],
+    ["unnumbered source root", "root-0/desk", { "root-five/ms-desk": "ms-desk" }],
+    ["source root suffix", "root-0/desk", { "root-5-extra/ms-desk": "ms-desk" }],
+    ["nested overlay", "root-0/desk", { "root-5/plugins/ms-desk": "ms-desk" }],
+    ["unnumbered Desk source root", "root-zero/desk", { "root-5/ms-desk": "ms-desk" }],
+    ["arbitrary Desk ancestor", "root-0/plugins/desk", { "root-5/ms-desk": "ms-desk" }],
+    ["neighboring session", "root-0/desk", { "../agency-plugin-Other.p8/root-5/ms-desk": "ms-desk" }],
+  ]
+  for (const [label, deskFolder, plugins] of cases) {
+    const fixture = makeFixture()
+    try {
+      const deskPluginRoot = agencySession(fixture, { [deskFolder]: "desk", ...plugins }, deskFolder)
+      assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ deskPluginRoot, homeDir: fixture.home }), [], label)
+      assert.equal(pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home }).root, path.join(fixture.home, "desk"), label)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  }
+  const fixture = makeFixture()
+  try {
+    for (const container of ["installed-plugins", "agency-plugin-Invalid.p0"]) {
+      const deskPluginRoot = path.join(fixture.root, container, "root-0", "desk")
+      const overlayRoot = path.join(fixture.root, container, "root-5", "ms-desk")
+      mkdirSync(overlayRoot, { recursive: true })
+      writeFileSync(path.join(overlayRoot, "plugin.json"), JSON.stringify({ name: "ms-desk" }), "utf8")
+      assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ deskPluginRoot, homeDir: fixture.home }), [], container)
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("unavailable numbered Agency composition never becomes a personal-desk fallback", () => {
+  const fixture = makeFixture()
+  try {
+    const container = path.join(fixture.root, "agency-plugin-Unavailable.p7")
+    const deskPluginRoot = path.join(container, "root-0", "desk")
+    for (const state of ["missing", "not a directory"]) {
+      if (state === "not a directory") writeFileSync(container, "unavailable composition")
+      assert.throws(() => pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home }), (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_UNAVAILABLE, state)
+        assert.equal(err.path, container, state)
+        assert.equal(err.source, "agency-session", state)
+        assert.deepEqual(err.tried, [], state)
+        return true
+      })
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("a numbered Agency overlay never falls back to personal desks when its work desk is missing or empty", () => {
+  const fixture = makeFixture()
+  try {
+    const deskPluginRoot = agencySession(fixture, {
+      "root-0/desk": "desk",
+      "root-5/ms-desk": "ms-desk",
+    }, "root-0/desk")
+    const home = path.join(fixture.root, "work-home")
+    makeDesk(path.join(home, "desk"))
+    makeDesk(path.join(home, "worker-workspace"))
+    for (const state of ["missing", "empty"]) {
+      if (state === "empty") mkdirSync(path.join(home, "ms-desk"))
+      assert.throws(() => pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }), (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_NOT_FOUND, state)
+        assert.deepEqual(err.tried, [{ source: "overlay_home_fallback", overlay: "ms-desk", path: path.join(home, "ms-desk") }], state)
+        return true
+      })
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
 
 test("an Agency session that loads the ms-desk overlay still binds ~/ms-desk, instead of the personal fallbacks", () => {
   const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")

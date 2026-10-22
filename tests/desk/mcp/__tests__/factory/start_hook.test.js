@@ -367,6 +367,7 @@ async function overridesFor(dir, { lines = null, calls }) {
   await fs.writeFile(file, `
 const fs = require("node:fs");
 module.exports = {
+  migrationLine: async () => "",
   checks: ${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })),
   startFactory: async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; },
 };
@@ -402,6 +403,11 @@ for (const host of ["claude", "copilot"]) {
   test(`${host} session-start output is byte-identical when no boot check speaks, and gains exactly one line when they do`, () => scratch(async ({ env, desk, base }) => {
     const calls = path.join(base, "calls.txt")
     const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
+    if (host === "copilot") {
+      const home = hookEnv.COPILOT_HOME || path.join(hookEnv.HOME, ".copilot")
+      await fs.mkdir(home, { recursive: true })
+      await fs.writeFile(path.join(home, "settings.json"), JSON.stringify({ memory: false, includeCoAuthoredBy: false }))
+    }
     const silent = await overridesFor(base, { calls })
     const quietRun = runHook(host, bootFixtureEnv(hookEnv, silent), desk)
     assert.equal(quietRun.status, 0, quietRun.stderr)

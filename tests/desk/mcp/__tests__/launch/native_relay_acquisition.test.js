@@ -29,7 +29,8 @@ const fixture = readFileSync(new URL('./fixtures/playwright-server-lifecycle.cjs
 const actualCli = path.dirname(errorFixture.sessionFile);
 const A = '12a12345-6789-4234-8123-123456789abc';
 const B = '23b12345-6789-4234-8123-123456789abc';
-const NONCES = ['34c12345-6789-4234-8123-123456789abc', '45d12345-6789-4234-8123-123456789abc'];
+const NONCES = ['34c12345-6789-4234-8123-123456789abc', '45d12345-6789-4234-8123-123456789abc',
+  '56e12345-6789-4234-8123-123456789abc', '67f12345-6789-4234-8123-123456789abc'];
 const EXTENSION = 'a'.repeat(32), SOURCE = 'b'.repeat(64), TOKEN = 'c'.repeat(64);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const event = () => {
@@ -569,6 +570,28 @@ test('a native relay constructor exception is fixed-code only and cannot leak it
   assert.equal(f.creates(), 0);
   assert.equal(f.relays.length, 0);
   assert.equal(f.timers.size, 0);
+});
+
+test('explicit recovery reconnects actual Core to the same producer binding without creating tabs', { timeout: 15000 }, async t => {
+  const f = await integrated(t);
+  const first = await f.create(A);
+  await f.create(B);
+  await first.close();
+  await new Promise(resolve => setImmediate(resolve));
+  f.coreProc.env.DESK_BROWSER_RECOVERY_CONTEXT = A;
+  await f.create(A);
+  assert.equal(f.creates(), 2);
+  assert.equal(f.relays[1].closed, false, 'peer relay is unchanged');
+  assert.equal(f.tabs.size, 3, 'manual page and both original task pages survive');
+});
+
+test('explicit recovery never creates a missing binding or accepts another context intent', { timeout: 15000 }, async t => {
+  const f = await integrated(t);
+  f.coreProc.env.DESK_BROWSER_RECOVERY_CONTEXT = A;
+  await assert.rejects(f.create(A), { code: 'native_context_unavailable' });
+  assert.equal(f.creates(), 0);
+  await assert.rejects(f.create(B), { code: 'NATIVE_CONFIG_INVALID' });
+  assert.equal(f.creates(), 0);
 });
 
 test('Core disconnect stops only its relay without discarding native tabs or claiming a CLI stop', { timeout: 15000 }, async t => {

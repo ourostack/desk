@@ -60,7 +60,8 @@ function hostFor(env, homeDir, pluginRoot) {
   return "copilot";
 }
 
-// The folders of the installed plugins, in the host's order. Copilot (and Agency) lists the folders beside Desk's own; Claude Code reads its plugin registry. A host whose list cannot be read gives none, which leaves the browser as it was.
+// The folders of the installed plugins, in the host's order. Copilot reads its
+// siblings, Agency its session source roots, and Claude its plugin registry.
 function pluginDirs(o) {
   var env = either(o.env, process.env);
   var homeDir = either(o.homeDir, os.homedir());
@@ -78,6 +79,7 @@ function pluginDirs(o) {
       sources: false
     }).dirs;
   } catch (error) {
+    if (error.code === "DESK_ROOT_UNAVAILABLE") throw error;
     return [];
   }
 }

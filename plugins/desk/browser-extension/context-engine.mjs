@@ -562,6 +562,82 @@ export function createBrowserExtension(api, options = {}) {
     })
     return socket
   }
+  async function connectRelay(b, socket, tab, recovering = false) {
+    const scope = scopedApi(b)
+    if (recovering) {
+      const group = scope.tabs.group
+      scope.tabs.group = args => group({ ...args, groupId: b.groupId })
+    }
+    let connection
+    for (const api of Object.values(scope)) {
+      for (const [name, method] of Object.entries(api)) {
+        if (typeof method !== "function") continue
+        api[name] = (...args) => {
+          if (b.connection !== connection) return Promise.reject(fail("native_context_unavailable"))
+          return method(...args)
+        }
+      }
+    }
+    const components = maintainedComponents(scope, Socket)
+    connection = new components.RelayConnection(socket)
+    b.connection = connection
+    const style = recovering ? b.group.groupStyle :
+      components.uniqueGroupStyle(b.label, [...bindings.values()].filter(other => other !== b && other.group).map(other => other.group.groupStyle))
+    b.group = new components.ConnectedTabGroup(connection, tab, b.label, { ...style, title: b.label }, id => owners.get(id) !== b)
+    const anchorAttached = connection.ontabattached
+    connection.ontabattached = tabId => {
+      if (b.connection === connection && owners.get(tabId) === b && b.tabs.get(tabId)?.windowId === b.windowId) anchorAttached(tabId)
+    }
+    b.group.onclose = () => {
+      if (b.connection !== connection) return
+      if (b.state !== "unavailable") b.state = "disconnected"
+      publish({ event: "context.disconnected", contextId: b.id })
+    }
+    b.group.onfailure = () => {
+      if (b.connection !== connection) return
+      b.state = "unavailable"
+      publish({ event: "context.unavailable", contextId: b.id, code: "native_group_unconfirmed" })
+    }
+    await b.group.initialize(tab)
+    if (recovering) {
+      for (const id of b.tabs.keys()) {
+        if (id !== tab.id) connection.attachTab((await own(b, id)).tab)
+      }
+    }
+    if (b.state !== "creating" || socket.readyState !== Socket.OPEN) throw fail("native_relay_unavailable")
+  }
+  async function recoverContext(b, relayUrl) {
+    if (!relayValid(relayUrl)) throw fail("native_context_parameters_invalid")
+    if (b.state !== "disconnected" || b.pending || b.mutating || update || b.revoked.size ||
+        b.unconfirmedCreates || b.uncertainTabs.size || b.groupingObligations.size ||
+        b.effectObligations.size || b.admitting.size ||
+        [...debuggerCustody.values()].some(c => c.binding === b))
+      throw fail("native_context_unavailable", projection(b))
+    b.state = "creating"
+    try {
+      await track(b, async () => {
+        const tabs = []
+        for (const id of b.tabs.keys()) tabs.push((await own(b, id)).tab)
+        const anchor = tabs.find(tab => tab.windowId === b.windowId && tab.groupId === b.groupId)
+        if (!anchor) throw fail("native_context_unavailable")
+        const group = await api.tabGroups.get(b.groupId)
+        if (group.windowId !== b.windowId || group.title !== b.label || group.color !== b.group.groupStyle.color)
+          throw fail("native_group_unconfirmed")
+        const socket = await openSocket(relayUrl)
+        if (stopped || b.state !== "creating" || socket.readyState !== Socket.OPEN) {
+          socket.close()
+          throw fail("native_relay_unavailable")
+        }
+        await connectRelay(b, socket, anchor, true)
+        b.state = "ready"
+      })
+      return projection(b)
+    } catch (error) {
+      b.state = "unavailable"
+      b.connection?.close("native_context_unavailable")
+      throw fail(isInternal(error) ? error.code : "native_relay_unavailable", projection(b))
+    }
+  }
   async function createContext(contextId, params) {
     if (bindings.has(contextId)) throw fail("native_context_duplicate")
     if (update) throw fail("native_update_pending")
@@ -578,27 +654,10 @@ export function createBrowserExtension(api, options = {}) {
         if (!window) throw fail("native_normal_window_unavailable")
         b.windowId = window.id
         const tab = await createTab(b, "about:blank")
-        const components = maintainedComponents(scopedApi(b), Socket)
         const socket = await openSocket(params.relayUrl)
         if (socket.readyState !== Socket.OPEN) { socket.close(); throw fail("native_relay_unavailable") }
         if (stopped) { socket.close(); throw fail("native_context_unavailable") }
-        const connection = new components.RelayConnection(socket)
-        b.connection = connection
-        const style = components.uniqueGroupStyle(b.label, [...bindings.values()].filter(other => other !== b && other.group).map(other => other.group.groupStyle))
-        b.group = new components.ConnectedTabGroup(connection, tab, b.label, { ...style, title: b.label }, id => owners.get(id) !== b)
-        const anchorAttached = connection.ontabattached
-        connection.ontabattached = tabId => {
-          // Maintain the real anchor's normal grouping behavior. An exact
-          // child in another normal/popup window stays in place, ungrouped.
-          if (owners.get(tabId) === b && b.tabs.get(tabId)?.windowId === b.windowId) anchorAttached(tabId)
-        }
-        b.group.onclose = () => {
-          if (b.state !== "unavailable") b.state = "disconnected"
-          publish({ event: "context.disconnected", contextId: b.id })
-        }
-        b.group.onfailure = () => { b.state = "unavailable"; publish({ event: "context.unavailable", contextId: b.id, code: "native_group_unconfirmed" }) }
-        await b.group.initialize(tab)
-        if (b.state !== "creating" || socket.readyState !== Socket.OPEN) throw fail("native_relay_unavailable")
+        await connectRelay(b, socket, tab)
         if ((await own(b, tab.id)).tab.active !== false) throw fail("native_inactive_tab_unconfirmed")
         b.state = "ready"
       })
@@ -679,6 +738,7 @@ export function createBrowserExtension(api, options = {}) {
     const b = bindings.get(contextId)
     if (!b) throw fail("native_context_unavailable")
     if (method === "context.discard") return discard(b)
+    if (method === "context.resume" && Object.hasOwn(params, "relayUrl")) return recoverContext(b, params.relayUrl)
     for (const id of b.tabs.keys()) {
       try { await own(b, id) } catch { b.state = "unavailable" }
     }

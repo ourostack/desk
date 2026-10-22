@@ -548,7 +548,23 @@ function wasteLines(timeline, labelsByJobSession) {
   return lines
 }
 
-export function renderJobMarkdown({ timeline, formulas, labels = new Map(), clocks }) {
+function contextLines(context, job) {
+  if (!context) return []
+  if (context.record === null) return ["## Task context", "", "The earlier explanation no longer matches the available source evidence. Context is unavailable until it is reviewed again.", ""]
+  const value = context.record
+  if (value.state !== "published") return ["## Task context", "", value.state === "withheld" ? "The explanation is withheld for privacy." : "An evidence-supported explanation is not recorded.", ""]
+  const lines = ["## Task context", ""]
+  if (value.heading !== null) lines.push(value.heading, "")
+  for (const event of value.events) {
+    lines.push(`- ${event.kind === "waiting" ? "Waiting" : event.kind === "result" ? "Result" : "Work"} (${event.confidence} confidence): ${event.explanation}`)
+    if (event.reason !== null) lines.push(`  Reason: ${event.reason} Prerequisite: ${event.prerequisite}${event.resumption === null ? "" : ` Resumption: ${event.resumption}`}`)
+  }
+  if (value.coverage.state === "partial") lines.push(``, `Context coverage is partial; ${value.coverage.omitted_events} events omitted. Unexplained time remains unexplained.`)
+  lines.push("", `[Full public context and evidence](${job}.json). The explanation does not change the measured totals below.`, "")
+  return lines
+}
+
+export function renderJobMarkdown({ timeline, formulas, labels = new Map(), clocks, context }) {
   const hostCounts = formulas.sessions_by_host.value
   const sessions = formulas.sessions.value
   const transitions = timeline.transitions.length === 0 ? "none" : timeline.transitions.map(transitionText).join(", ")
@@ -561,6 +577,7 @@ export function renderJobMarkdown({ timeline, formulas, labels = new Map(), cloc
   return [
     `# Job ${timeline.job}`,
     "",
+    ...contextLines(context, timeline.job),
     "## What happened",
     "",
     `- Status: ${labelled(`${formulas.status.value}`, formulas.status)}.`,

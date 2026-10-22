@@ -537,7 +537,8 @@ for (const host of ["copilot", "claude"]) {
 }
 test("existing hook command relays one decision while retaining the accounting marker", () => scratch(async ctx => {
   const f = await fixture(ctx, "copilot")
-  const r = spawnSync(process.execPath, [SCRIPT, "copilot"], { env: ctx.env, input: JSON.stringify(f.payload), encoding: "utf8", timeout: 6000 })
+  // Exercise the production deadline without the coverage loader's child-startup overhead.
+  const r = spawnSync(process.execPath, [SCRIPT, "copilot"], { env: { ...ctx.env, NODE_OPTIONS: "" }, input: JSON.stringify(f.payload), encoding: "utf8", timeout: 6000 })
   assert.equal(r.status, 0)
   assert.equal(JSON.parse(r.stdout).decision, "block")
   const { listMarkers } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")

@@ -13,7 +13,7 @@ const closure = [
   'package.json', 'native-host.mjs', 'native-bootstrap.mjs', 'web-native-messaging.cjs', 'web-native-private-path.cjs', 'web-real-profile.cjs', 'web-extension-credential.cjs',
   'src/browser/native-host.mjs', 'src/browser/native-transport.mjs', 'src/browser/native-provider.mjs', 'src/browser/native-owner-inventory.mjs',
   'src/browser/native-update-proof.mjs',
-  'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs',
+  'src/util/broker-error.mjs', 'src/util/private-state.mjs', 'src/util/broker-lock.mjs', 'src/util/agency-session.cjs',
   'src/factory/os-protect.js', 'src/factory/windows-acl.js', 'src/factory/plugin-sources.cjs', 'src/readiness/process-start.js',
 ].map(name => `mcp/${name}`).concat([
   'browser-context-broker/src/primitives/broker-error.mjs',

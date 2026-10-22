@@ -24,6 +24,19 @@ const record = (hosts = { "claude-code": claude(), "copilot-cli": copilot() }) =
 const bytes = (value) => Buffer.from(`${JSON.stringify(value)}\n`)
 const codes = (result) => result.errors.map((item) => item.code)
 
+test("refresh metadata accepts only its fixed enum or null and never echoes an invalid value", () => {
+  for (const value of [null, "current", "incomplete", "resource_unrecoverable"]) {
+    const errors = []
+    assert.equal(validateLoopSlot({ v: 1, triage_refresh: value }, "loop", errors), true)
+    assert.deepEqual(errors, [])
+  }
+  for (const value of [false, 0, {}, [], "unknown", SENTINEL]) {
+    const errors = []
+    assert.equal(validateLoopSlot({ v: 1, triage_refresh: value }, "loop", errors), false)
+    assert.deepEqual(errors, [{ code: "enum", path: "loop.triage_refresh" }])
+  }
+})
+
 test("constants name the schema, the path shape, the size and the loop slot", () => {
   assert.equal(CAPTURE_SCHEMA, "desk.factory.capture/1")
   assert.equal(CAPTURE_MAX_BYTES, 2048)

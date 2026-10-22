@@ -5,6 +5,7 @@ import { removeWithRetry } from "../../util/remove-retry.js"
 import { renameWithRetry } from "../../util/rename-retry.js"
 
 import { validateLabelsBytes } from "../label-schema.js"
+import { CONTEXT_PATH, checkContextAgainstFacts, validateContextBytes } from "../context-schema.js"
 import { PATTERNS } from "../schema.js"
 import { calculateFormulas } from "./formulas.js"
 import { normalizePublished, stableStringify } from "./normalize.js"
@@ -145,6 +146,27 @@ function readLabels(storeDir) {
   return labels
 }
 
+function readContexts(storeDir, sessions) {
+  const directory = path.join(storeDir, "context")
+  const stat = existingEntry(directory)
+  const contexts = new Map()
+  if (stat === null) return contexts
+  if (!stat.isDirectory()) throw buildError("context_not_directory", "context must be a real directory")
+  for (const entry of visibleEntries(directory)) {
+    const match = CONTEXT_PATH.exec(`context/${entry.name}`)
+    if (!entry.isFile() || !match) throw buildError("invalid_context_entry", "context entries must be regular context files")
+    const bytes = readFileSync(path.join(directory, entry.name))
+    if (!validateContextBytes(bytes).ok) throw buildError("invalid_published_context", "context failed validation")
+    const value = JSON.parse(bytes.toString("utf8"))
+    if (value.job !== match[1]) throw buildError("invalid_published_context", "context identity mismatch")
+    const checked = checkContextAgainstFacts(value, sessions)
+    contexts.set(value.job, checked.ok
+      ? { state: value.state, reason: null, record: value }
+      : { state: "unavailable", reason: checked.errors[0].code, record: null })
+  }
+  return contexts
+}
+
 function writeRollups(directory, rollups) {
   mkdirSync(directory)
   writeFileSync(path.join(directory, "index.md"), renderRollupsMarkdown(rollups))
@@ -238,6 +260,7 @@ export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET
   requireDirectory(store, "store")
 
   const { sessions, labels, reports, records } = readStore(store)
+  const contexts = readContexts(store, sessions)
   const walks = walkStore({ labels, reports, records })
   const rollups = {
     ...computeRollups({ records, sessions, labels }),
@@ -255,8 +278,9 @@ export function build({ storeDir, outDir, detailBudgetBytes = DETAIL_FILE_BUDGET
     reports.forEach(({ timeline, formulas }, reportIndex) => {
       const detailFiles = writeSessionDetails(path.join(temporary, "jobs"), timeline, labels, detailBudgetBytes)
       const { additions, walk, clocks } = walks[reportIndex]
-      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline, additions, walk, detailFiles), formulas, clocks })}\n`)
-      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession, clocks }))
+      const context = contexts.get(timeline.job)
+      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline, additions, walk, detailFiles), formulas, clocks, ...(context ? { context } : {}) })}\n`)
+      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession, clocks, context }))
     })
     writeRollups(path.join(temporary, "rollups"), rollups)
     replaceDirectory(temporary, out, rename)

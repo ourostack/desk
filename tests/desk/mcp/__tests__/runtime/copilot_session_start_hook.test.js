@@ -2,7 +2,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -42,11 +42,24 @@ test("a session start turns Copilot's AI co-author commit trailer off once when 
   mkdirSync(path.join(home, ".copilot"), { recursive: true })
   const settings = path.join(home, ".copilot", "settings.json")
   const first = start({ sessionId: "sess-trailer", cwd: ROOT, source: "new" }, "trailer")
-  assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { includeCoAuthoredBy: false })
+  assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, includeCoAuthoredBy: false })
   assert.equal(first.context.split("\n").filter((line) => line.includes("includeCoAuthoredBy")).length, 1)
   assert.match(first.context, /\n\nDesk startup: set `includeCoAuthoredBy: false` in \S+settings\.json, so Copilot stops asking for an AI co-author trailer on commits from the next session; add none in this session either\.\n\n/u)
   assert.doesNotMatch(start({ sessionId: "sess-trailer-2", cwd: ROOT, source: "new" }, "trailer").context, /includeCoAuthoredBy/u, "the next session says nothing")
   assert.doesNotMatch(start({ sessionId: "sess-no-copilot", cwd: ROOT, source: "new" }, "no-copilot-folder").context, /includeCoAuthoredBy/u, "a home with no Copilot folder is left alone")
+})
+
+test("every Desk session disables explicitly enabled native memory and injects the versioned prohibition", () => {
+  const home = path.join(ROOT, "native-memory")
+  mkdirSync(path.join(home, ".copilot"), { recursive: true })
+  const settings = path.join(home, ".copilot", "settings.json")
+  for (let attempt = 0; attempt < 2; ++attempt) {
+    writeFileSync(settings, JSON.stringify({ memory: true, model: "x", includeCoAuthoredBy: false }))
+    const { context } = start({ sessionId: `sess-memory-${attempt}`, cwd: ROOT, source: "new" }, "native-memory")
+    assert.deepEqual(JSON.parse(readFileSync(settings, "utf8")), { memory: false, model: "x", includeCoAuthoredBy: false })
+    assert.match(context, /Disable host memory \(`store_memory`\/`vote_memory`\)/u)
+    assert.match(context, /native memory/u)
+  }
 })
 
 test("the plugin registers only Desk's own boundary hooks for Copilot", () => {
