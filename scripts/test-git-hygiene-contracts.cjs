@@ -55,6 +55,13 @@ function main() {
   }
   assert.doesNotMatch(codeRepos, /frozen (?:task )?refs?|frozen base|frozen SHA|pinned or frozen/iu, "Code repos must not treat a frozen ref as task authority");
 
+  const deliveryPolicy = skill.split("\n").find((line) => line.includes("Neither technical access nor a provider's finishing options extends publication authority"));
+  assert.ok(deliveryPolicy, "git-hygiene must retain its publication-authority paragraph");
+  assert.match(deliveryPolicy, /Where the recorded repository or task policy requires human approval, wait for it/u, "human gates must follow the recorded policy");
+  assert.match(deliveryPolicy, /An intentional alpha-only endpoint still forbids plugin main merge/u, "intentional alpha-only authority must remain binding");
+  assert.match(deliveryPolicy, /Neither technical access nor a provider's finishing options extends publication authority/u, "access must not expand publication authority");
+  assert.doesNotMatch(deliveryPolicy, /This release's alpha-only exception|Production ADO delivery/u, "Generic guidance must not impose a task-specific release or employer-specific rule");
+
   const attribution = subsection(skill, "AI-attribution strip");
   for (const phrase of [
     "Operator authorship overrides repository conventions",

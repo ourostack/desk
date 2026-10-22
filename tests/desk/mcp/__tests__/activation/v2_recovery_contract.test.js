@@ -148,8 +148,9 @@ test("delivery uses known repository policy, not a late provider finishing menu"
   const source = read("skills/git-hygiene/SKILL.md")
   assert.match(source, /recorded repository policy.*literal finishing menu/u)
   assert.match(source, /repo-handling.*PR.*host-specific skills/u)
-  assert.match(source, /Production ADO.*required human approval.*agent.*merges.*cleans/u)
-  assert.match(source, /alpha.*forbids plugin main merge/u)
+  assert.match(source, /Where the recorded repository or task policy requires human approval, wait for it.*once recorded.*resume the existing gates, merge and clean up.*without a second go/u)
+  assert.match(source, /An intentional alpha-only endpoint still forbids plugin main merge/u)
+  assert.match(source, /Neither technical access nor a provider's finishing options extends publication authority/u)
   assert.doesNotMatch(source, /\*\*At the delivery endpoint\*\*: use `desk:superpowers-integration`/u)
 })
 

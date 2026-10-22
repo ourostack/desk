@@ -33,6 +33,11 @@ test("the Desk version is null when plugin.json is missing or carries no version
   assert.equal(deskVersion({ DESK_PLUGIN_ROOT: root }), null)
 })
 
+test("invalid declared root values remain an unavailable version", () => {
+  assert.equal(deskVersion({ DESK_PLUGIN_ROOT: 5 }), null)
+  assert.equal(deskVersion({ CLAUDE_PLUGIN_ROOT: {} }), null)
+})
+
 test("the process environment is the default", () => {
   assert.equal(typeof deskVersion(), "string")
 })

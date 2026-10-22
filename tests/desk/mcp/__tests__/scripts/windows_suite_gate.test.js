@@ -269,6 +269,7 @@ test("native generation retention rejects malformed oversized duplicate and priv
 test("native generation retention preserves explicit unknowns and bounded useful fields", () => {
   const records = [
     nativeUnknown,
+    { ...nativeRecord, setupPhase: "signedWorkerFixture.codec-binding", originalCode: "EIO" },
     { ...nativeRecord, originalCode: "EPERM", status: -2147483648, signal: "SIGTERM" },
     { ...nativeRecord, originalCode: "ENOENT", status: 4294967295, signal: "SIGKILL",
       guard: { file: "plugins/desk/mcp/web-playwright-patch.cjs", line: 99999 } },

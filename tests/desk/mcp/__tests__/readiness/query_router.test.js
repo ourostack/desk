@@ -213,6 +213,86 @@ test("semantic request starts or reuses convergence and executes one proven sema
   assert.deepEqual(f.used, ["semantic"])
 })
 
+// The controller/watcher boundary is the only concurrency double: publication,
+// snapshots, query routing and indexed recall all use their real implementations.
+async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) {
+  const deskRoot = await fs.realpath(await mkTempDeskRoot())
+  t.diagnostic(`queued semantic fixture: ${deskRoot}`)
+  const documentPath = "track/work/task.md"
+  const embed = { fetch: makeEmbedFetch() }
+  let cursor = { journal_id: "queued-semantic-change", sequence: 0 }
+  let current = true
+  let discovered = false
+  let evaluations = 0
+  await writeFile(deskRoot, documentPath, "old quartz")
+  await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
+  const controller = {
+    identity: { semantic_contract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } },
+    async fenceEvents() {
+      if (!discovered) {
+        discovered = true
+        await writeFile(deskRoot, documentPath, "converged quartz")
+        cursor = { ...cursor, sequence: 1 }
+        current = false
+      }
+      return { certain: true, cursor: { ...cursor } }
+    },
+    barrier: async ({ capability }) => ({
+      capability, current, certain: true, state: current ? "READY" : "LEXICAL_CONVERGING",
+    }),
+    async beginConvergence() {
+      await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
+      current = true
+      return { accepted: true }
+    },
+    status: async () => ({
+      state: current ? "READY" : "LEXICAL_CONVERGING",
+      owner: { token: "fixture-owner" },
+      freshness: { certain: true, cursor: { ...cursor } },
+      convergence: {
+        status: current ? "succeeded" : "pending",
+        semantic: {
+          chunks_total: 1, vectors_indexed: 1, missing_vectors: 0,
+          provenance_current: true,
+          query_embedding: { available: current, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } },
+        },
+      },
+    }),
+  }
+  const router = createQueryRouter({
+    controller,
+    async semanticBackend(request) {
+      evaluations++
+      const result = await indexedRecall({
+        deskRoot, db: request.db, input: request, opts: { embed },
+      })
+      if (changeDuringEvaluation) {
+        await writeFile(deskRoot, documentPath, "later quartz")
+        cursor = { ...cursor, sequence: 2 }
+        current = false
+      }
+      return result
+    },
+  })
+  const result = await router.semantic({ deskRoot, kind: "recall", topic: "quartz", limit: 3 })
+  return { result, evaluations }
+}
+
+test("semantic recall refreshes proof after a fenced change finishes convergence", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t)
+  assert.equal(result.results?.[0]?.path, "track/work/task.md", JSON.stringify(result))
+  assert.equal(result.results[0].snippet, "converged quartz")
+  assert.equal(evaluations, 1, "recall must evaluate once, never replay its backend")
+})
+
+test("refreshed semantic proof still discards a change during backend evaluation", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changeDuringEvaluation: true })
+  assert.equal(evaluations, 1)
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
+  assert.equal(result.results, undefined)
+})
+
 test("semantic request never executes against an unproven generation", async (t) => {
   const f = await fixture(t, { semanticCurrent: false })
   const result = await f.router.semantic({
@@ -318,7 +398,7 @@ test("semantic barrier string failures use semantic-unavailable string diagnosti
   assert.equal(result.diagnostic.message, "semantic string failure")
 })
 
-test("semantic proof without a durable snapshot returns an embedding identity diagnostic", async () => {
+test("semantic proof without a durable snapshot reports missing lexical proof", async () => {
   const root = await mkTempDeskRoot()
   const router = createQueryRouter({
     controller: {
@@ -333,8 +413,25 @@ test("semantic proof without a durable snapshot returns an embedding identity di
   })
   const result = await router.semantic({ deskRoot: root, kind: "similar", path: "track/work/task.md" })
   assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "generation_unproven")
+  assert.match(result.diagnostic.message, /current.*lexical generation.*not proven/u)
+})
+
+test("semantic proof still rejects a genuinely mismatched active embedding specification", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  await f.controller.beginConvergence()
+  const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
+  try {
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'active_embedding_spec_id'").run("different-spec")
+  } finally { db.close() }
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot, kind: "recall", topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.message, "The active embedding specification does not match the proven generation.")
+  assert.match(result.diagnostic.message, /embedding specification.*does not match/u)
+  assert.deepEqual(f.used, [])
 })
 
 test("semantic proof rejects snapshots with missing vectors", async (t) => {

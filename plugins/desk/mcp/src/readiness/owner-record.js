@@ -11,10 +11,19 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { lexicalControllerIdentity, stableStringify } from "./identity.js"
-import { readProcessStart } from "./process-start.js"
+import { controllerStartTimeoutMs, readProcessStart } from "./process-start.js"
 
 // An owner that started more than this long before the machine booted is from an earlier boot, so its PID now names some other process.
 const BOOT_SLACK_MS = 5 * 60_000
+
+export function controllerStartupWaitMs(owner, { now = Date.now(), platform = process.platform } = {}) {
+  if (owner?.state !== "live" || owner.verified !== true) return 0
+  const startedAt = owner.record?.startup?.started_at
+  if (typeof startedAt !== "string") return 0
+  const elapsed = now - Date.parse(startedAt)
+  const limit = controllerStartTimeoutMs(platform)
+  return elapsed >= 0 && elapsed < limit ? limit - elapsed : 0
+}
 
 /**
  * Read owner.json. `status` is "valid" (it names this identity, an owner PID, token and start time), "missing" (no file) or "corrupt" (anything else, including a file that cannot be read).

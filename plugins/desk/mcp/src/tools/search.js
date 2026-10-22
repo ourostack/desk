@@ -47,13 +47,13 @@ export const DESK_TIMELINE_FIELDS = ["from", "to", "query", "limit", "scope"]
 const SEMANTIC_REPAIR_COMMAND =
   "Start Ollama, pull nomic-embed-text, then run desk_reindex; no force is required after v1.2.2 because missing vectors are repaired automatically."
 
-function semanticUnavailableFields(diagnostic) {
+function semanticUnavailableFields(diagnostic, opts) {
   return {
     semantic_note: diagnostic?.message
       ? `Semantic search unavailable: ${diagnostic.message}`
       : "Semantic search unavailable: embedding service did not return a usable vector",
     semantic_diagnostic: diagnostic ?? null,
-    ...(diagnostic?.reason === "alpha_scope" ? {} : { semantic_repair: SEMANTIC_REPAIR_COMMAND }),
+    ...(diagnostic?.reason === "alpha_scope" || opts?.lexicalOnly ? {} : { semantic_repair: SEMANTIC_REPAIR_COMMAND }),
   }
 }
 
@@ -575,7 +575,7 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
       search_mode: semanticAvailable ? "hybrid" : "lexical",
       semantic_unavailable: !semanticAvailable,
       latency_ms: Date.now() - t0,
-      ...(!semanticAvailable ? semanticUnavailableFields(semanticDiagnostic) : {}),
+      ...(!semanticAvailable ? semanticUnavailableFields(semanticDiagnostic, opts) : {}),
     }
   } finally {
     if (!suppliedDb) closeDb(db)
@@ -955,7 +955,7 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
       semantic_unavailable: query ? !semanticAvailable : false,
       latency_ms: Date.now() - t0,
       ...(query && !semanticAvailable
-        ? semanticUnavailableFields(semanticDiagnostic)
+        ? semanticUnavailableFields(semanticDiagnostic, opts)
         : {}),
     }
   } finally {

@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "browser_context",
-      "description": "Create a fresh handle for each actual agent before browsing. Signed-in is the default and needs a useful label and an already-attested declared profile. Private is explicit. Keep/resume/discard require the exact returned contextId. Keep across turns without retention approval. Never infer ownership from an MCP connection, PID or title. Unknown cleanup is an error, not disposal.",
+      "description": "Create a fresh handle for each actual agent before browsing. Signed-in is the default and needs a useful label and an already-attested declared profile. Private is explicit. Keep/resume/discard require the exact returned contextId. Keep preserves this agent's task-owned context across turns without an extra approval step. Never infer ownership from an MCP connection, PID or title. Unknown cleanup is an error, not disposal.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -23,7 +23,7 @@
     },
     {
       "name": "browser_command",
-      "description": "Run an ordinary maintained Playwright CLI page command using this actual agent's explicit contextId. args are argv, never shell text. Use maintained command help/schema. Session/profile/configuration/lifecycle/global overrides are refused. Put literal leading-dash page data after an inner --. Missing sessions are never recreated. Preserve screenshot/export files.",
+      "description": "Run an ordinary maintained Playwright CLI page command using this actual agent's explicit contextId. args are argv, never shell text. Start with [\"snapshot\"] or [\"tab-list\"], then use observed refs with [\"fill\",\"e4\",\"value\"] or [\"click\",\"e4\"]. Wait for each action before its dependent snapshot. Private mode supports [\"snapshot\",\"--json\"] for inline state. Help/--help and session/profile/configuration/lifecycle/global overrides are refused. Put literal leading-dash page data after an inner --. Missing sessions are never recreated. Preserve screenshot/export files.",
       "inputSchema": {
         "type":"object","additionalProperties":false,
         "properties":{

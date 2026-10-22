@@ -10,6 +10,10 @@ function observer(...args) {
   assert.equal(typeof loader.observeNextVerifyGeneration,"function","test-only one-shot diagnostic is not implemented")
   return loader.observeNextVerifyGeneration(...args)
 }
+function firstRefusal(...args) {
+  assert.equal(typeof loader.observeFirstVerifyGenerationFailure,"function","first-refusal observation is not implemented")
+  return loader.observeFirstVerifyGenerationFailure(...args)
+}
 function memoryContext(behavior) {
   const context={behavior}
   vm.runInNewContext(
@@ -71,6 +75,18 @@ test("GivenStoredWrapper_WhenCalledTwice_OnlyFirstInvocationIsObservedWithoutRet
   assert.strictEqual(thrownBy(()=>wrapped()),error)
   assert.equal(calls,2,"two explicit callers, not an internal verification retry")
   assert.equal(events.length,1)
+})
+
+test("GivenInitialCodecBinding_WhenVerificationRefuses_KnownPhaseAndErrorIdentityArePreserved",()=>{
+  const error={code:"EIO",message:"PRIVATE_INITIAL_BINDING_FAILURE"},events=[]
+  const context=memoryContext(()=>{throw error})
+  observer(context,"signedWorkerFixture.codec-binding",value=>events.push(value))
+  assert.strictEqual(thrownBy(()=>context.binding()),error)
+  assert.deepEqual(events,[{
+    setupPhase:"signedWorkerFixture.codec-binding",originalCode:"EIO",status:"unknown",signal:"unknown",
+    guard:{file:"unknown",line:"unknown"},
+  }])
+  assert.equal(JSON.stringify(events).includes("PRIVATE"),false)
 })
 
 test("GivenDiagnosticSinkFailure_WhenVerifierRefuses_OriginalErrorStillRethrows",()=>{
@@ -216,4 +232,71 @@ test("GivenNativeErrorWithInjectedStackOrMessageGetter_WhenObserved_NoGetterExec
     assert.equal(calls,0)
     assert.equal(JSON.stringify(events).includes("PRIVATE"),false)
   }
+})
+
+test("GivenEarlierSuccessfulVerifications_WhenLaterRefused_FirstRefusalStillReportsWithoutRetry",()=>{
+  const error={code:"EIO"},returned={},caller={},args=[returned],events=[]
+  let calls=0
+  const context=memoryContext(function(...values){
+    calls++
+    assert.strictEqual(this,caller)
+    assert.deepEqual(values,args)
+    if(calls===3)throw error
+    return returned
+  }),original=context.verifyGeneration
+  firstRefusal(context,phase,value=>events.push(value))
+  assert.strictEqual(context.binding.call(caller,...args),returned)
+  assert.strictEqual(context.binding.call(caller,...args),returned)
+  assert.deepEqual(events,[])
+  assert.strictEqual(thrownBy(()=>context.binding.call(caller,...args)),error)
+  assert.equal(calls,3,"only the three explicit callers execute verification")
+  assert.strictEqual(context.verifyGeneration,original)
+  assert.deepEqual(events,[{
+    setupPhase:phase,originalCode:"EIO",status:"unknown",signal:"unknown",
+    guard:{file:"unknown",line:"unknown"},
+  }])
+})
+
+test("GivenSuccessfulFirstRefusalScope_WhenRestored_LaterErrorsAreNotObserved",()=>{
+  let calls=0
+  const error={code:"EPERM"},events=[]
+  const context=memoryContext(()=>{if(++calls===2)throw error;return 17}),original=context.verifyGeneration
+  const restore=firstRefusal(context,phase,value=>events.push(value))
+  const wrapped=context.verifyGeneration
+  assert.equal(wrapped(),17)
+  restore()
+  assert.strictEqual(context.verifyGeneration,original)
+  assert.strictEqual(thrownBy(()=>wrapped()),error)
+  assert.deepEqual(events,[])
+  assert.equal(calls,2)
+})
+
+test("GivenNestedRefusal_WhenScopeObserved_OneSafeDiagnosticAndSameErrorEscape",()=>{
+  const error={code:"EACCES"},events=[]
+  let context,calls=0
+  context=memoryContext(()=>{if(++calls===1)return context.verifyGeneration();throw error})
+  const original=context.verifyGeneration
+  firstRefusal(context,phase,value=>{events.push(value);throw new Error("PRIVATE_SINK")})
+  assert.strictEqual(thrownBy(()=>context.binding()),error)
+  assert.equal(calls,2)
+  assert.equal(events.length,1,"nested unwinding must not duplicate the refusal")
+  assert.strictEqual(context.verifyGeneration,original)
+  assert.equal(JSON.stringify(events).includes("PRIVATE"),false)
+})
+
+test("GivenScopedAccessorRefusal_WhenObserved_NoGetterOrFormatterExecutes",()=>{
+  let getters=0,calls=0
+  const error={},events=[]
+  for(const key of ["code","status","signal","stack"])
+    Object.defineProperty(error,key,{get(){getters++;throw new Error("PRIVATE_GETTER")}})
+  const context=memoryContext(()=>{if(++calls===1)return true;throw error})
+  firstRefusal(context,phase,value=>events.push(value))
+  assert.equal(context.binding(),true)
+  assert.strictEqual(thrownBy(()=>context.binding()),error)
+  assert.equal(calls,2)
+  assert.equal(getters,0)
+  assert.deepEqual(events,[{
+    setupPhase:phase,originalCode:"unknown",status:"unknown",signal:"unknown",
+    guard:{file:"unknown",line:"unknown"},
+  }])
 })

@@ -1,5 +1,37 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.342 — 2026-10-22
+
+Native task-context generation and privacy review now select the producing Desk plugin explicitly and check its version, effective native registration and task-context skill before launch and before accepting output. Pending work from an older producer stays held without relabeling its provenance. These separate metadata checks are compatibility checks, not same-process attestation. Private briefs expose the independently associated task-card pointer directly, so readers can find task meaning without paging through large numerical snapshots. Independent privacy review and all launch, billing and publication limits are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.341 — 2026-10-22
+
+Browser tool discovery now shows supported page-command examples instead of directing agents to unavailable help. The guidance explains serial action/snapshot use, private-mode inline snapshots, and keeping the same task-owned context without another approval step. Command guards, tool schemas and profile ownership boundaries are unchanged.
+
+Controllers now finish the existing workspace Git-ignore and managed-card-hook preparation before reporting readiness. Cold Git checks no longer first run on the control event loop during background indexing, where they could delay status and durable-change acknowledgements. Failed required hook preparation refuses readiness rather than deferring another attempt to the answering thread. Concurrent sessions can join verified, still-preparing owners within the remaining existing startup window; ready or unverified owners retain ordinary hung-controller handling. The same protection checks and all request/startup deadlines remain in force.
+
+Lexical-only search and query timelines no longer prescribe starting an embedding provider or rebuilding the index when no embedding request was attempted. Results and readiness diagnostics are unchanged; actual embedding-failure guidance remains available.
+
+Scope release guidance to the recorded repository/task policy instead of a shared task-specific alpha exception, preserving required human gates and intentional alpha-only limits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.340 — 2026-10-22
+
+Status and doctor no longer repeat an earlier missing-desk setup diagnostic while a fresh admission attempt is resolving newly available host evidence or loading the runtime. They report admission in progress, naming the workspace only after resolution, without claiming ready state or write authority. Sessions that still have no workspace continue to receive the normal setup diagnostic after resolution completes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.339 — 2026-10-22
+
+Semantic recall refreshes its pre-evaluation event fence and lexical proof after waiting for convergence, so a queued change that finishes indexing before evaluation does not leave the request using stale readiness facts. Results are still discarded if readiness or generation identity changes during evaluation; the semantic backend is never replayed.
+
+When no current lexical snapshot is proven, semantic reads report the missing proof instead of incorrectly describing it as an embedding-specification mismatch. Actual specification mismatches remain rejected.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.338 — 2026-10-22
 
 Explicit resume can reconnect an intact signed-in browser context after its CLI and relay stop, preserving its pages, tab group and popup windows. Recovery refuses missing or unresolved bindings, fences retired connections, and reports unacknowledged command outcomes as unknown instead of replaying actions. Ordinary page commands do not restart a missing CLI. Selected-profile installation and installed shared-machine qualification remain separate requirements.
