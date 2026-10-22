@@ -97,7 +97,7 @@ function observeNextVerifyGeneration(context, phase, diagnostic) {
       }
     }
     return {
-      setupPhase: phase === "signedWorkerFixture.initial-daemon" ? phase : "unknown",
+      setupPhase: ["signedWorkerFixture.initial-daemon","signedWorkerFixture.codec-binding"].includes(phase) ? phase : "unknown",
       originalCode: codes.has(code) ? code : "unknown",
       status: Number.isInteger(status) && status >= -2147483648 && status <= 4294967295 ? status : "unknown",
       signal: signals.has(signal) ? signal : "unknown",

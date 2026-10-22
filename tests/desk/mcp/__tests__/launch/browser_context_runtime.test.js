@@ -91,6 +91,35 @@ test("actual maintained daemon options can reach native acquisition using the st
     "strict native owner config must supply its profile to actual CLI acquisition; observed "+(rejected?.code || "no error"))
 })
 
+test("initial signed worker binding reports its safe verification failure before daemon startup",async t=>{
+  const read=fs.readFileSync,diagnostic=t.diagnostic.bind(t),messages=[]
+  const loader=require("./fixtures/native-template-loader.cjs"),load=loader.loadTemplate
+  let armed=false,injections=0
+  const failure=Object.assign(new Error("PRIVATE_INITIAL_BINDING_FAILURE"),{code:"EIO"})
+  t.mock.method(t,"diagnostic",value=>{messages.push(value);diagnostic(value)})
+  t.mock.method(loader,"loadTemplate",(file,context)=>{
+    const value=load(file,context)
+    if(path.basename(file)==="desk-native-error-transport.cjs")armed=true
+    return value
+  })
+  t.mock.method(fs,"readFileSync",(file,...args)=>{
+    const bytes=read(file,...args),name=path.basename(String(file))
+    if(armed&&name==="playwright-patch.json"){
+      armed=false;injections++;throw failure
+    }
+    return bytes
+  })
+  await assert.rejects(signedWorkerFixture(t),{code:"NATIVE_CODE_UNAVAILABLE"})
+  assert.equal(injections,1)
+  const prefix="DESK_NATIVE_GENERATION_DIAGNOSTIC_V1 "
+  const observed=messages.filter(value=>value.startsWith(prefix)).map(value=>JSON.parse(value.slice(prefix.length)))
+  assert.deepEqual(observed,[{
+    setupPhase:"signedWorkerFixture.codec-binding",originalCode:"EIO",status:"unknown",signal:"unknown",
+    guard:{file:"unknown",line:"unknown"},
+  }])
+  assert.equal(JSON.stringify(observed).includes("PRIVATE"),false)
+})
+
   // Exercise the actual Registry, persistent metadata producer, C client and E4
   // codec. Only process/Chrome/HTTP/socket resources are virtual. In particular,
   // no positive .session is written by a test-owned metadata implementation.
@@ -260,7 +289,14 @@ test("actual maintained daemon options can reach native acquisition using the st
       templates.set(key,value);return value
     }
     const codec = template("desk-native-error-transport.cjs")
-    const scope = codec.forDaemon({...config,configFile:l.configFile},id)
+    template("desk-extension-credential.cjs")
+    const restoreBindingDiagnostic=require("./fixtures/native-template-loader.cjs").observeNextVerifyGeneration(
+      templateContexts.get(path.join(lib,"desk-extension-credential.cjs")),
+      "signedWorkerFixture.codec-binding",
+      value=>t.diagnostic("DESK_NATIVE_GENERATION_DIAGNOSTIC_V1 "+JSON.stringify(value)))
+    let scope
+    try { scope=codec.forDaemon({...config,configFile:l.configFile},id) }
+    finally { restoreBindingDiagnostic() }
     assert.equal(codec.sessionStamp(scope).sourceGeneration,generation)
     const chain = [1,2,3].map((n,i)=>({pid:810003-i,parentPid:810002-i,startIdentity:"F-owned-"+n,owner:String(process.getuid?.()||"fixture"),executable:i===2?app:path.join(root,"native-"+n)}))
     let active=true, error, wire, nativeFailure, acknowledged="ok",provider,nativeResponse,stopEffect,nativeStatusEffect,launchFinalEffect

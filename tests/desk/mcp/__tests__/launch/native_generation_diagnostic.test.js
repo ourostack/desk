@@ -73,6 +73,18 @@ test("GivenStoredWrapper_WhenCalledTwice_OnlyFirstInvocationIsObservedWithoutRet
   assert.equal(events.length,1)
 })
 
+test("GivenInitialCodecBinding_WhenVerificationRefuses_KnownPhaseAndErrorIdentityArePreserved",()=>{
+  const error={code:"EIO",message:"PRIVATE_INITIAL_BINDING_FAILURE"},events=[]
+  const context=memoryContext(()=>{throw error})
+  observer(context,"signedWorkerFixture.codec-binding",value=>events.push(value))
+  assert.strictEqual(thrownBy(()=>context.binding()),error)
+  assert.deepEqual(events,[{
+    setupPhase:"signedWorkerFixture.codec-binding",originalCode:"EIO",status:"unknown",signal:"unknown",
+    guard:{file:"unknown",line:"unknown"},
+  }])
+  assert.equal(JSON.stringify(events).includes("PRIVATE"),false)
+})
+
 test("GivenDiagnosticSinkFailure_WhenVerifierRefuses_OriginalErrorStillRethrows",()=>{
   const error={code:"EIO"},sinkError=new Error("secret-sink-message")
   let calls=0
