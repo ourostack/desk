@@ -70,9 +70,9 @@ After exact-owner removal, record **removed-and-absent** only with readback of t
 
 The [workspace-tidy boot check](../../docs/workspace-tidy.md) lists only the bound desk and repositories on active or recently finished task cards, then defers all safety inspection and removal. It cannot infer ownership from a branch name, clean status, missing remote ref or dead root process. An owner may leave its documented machine-local version-2 release receipt only after the host has reconciled the entire generation and all consumers; no receipt is the safe default. Creation, revocation and reacquisition use the same exact branch/worktree claim as cleanup; never unlink a receipt directly or attach a consumer after a refused revocation, and never issue a removal receipt for an intentionally retained alpha. Read the repair's retained per-resource evidence, copy verified dispositions into canonical Resources, then acknowledge only that exact evidence id/digest. Another boot is not an acknowledgement and must not erase unresolved branches or removal receipts.
 
-## Clone hygiene — `main` is the resting state; do work in worktrees
+## Code clone hygiene — `main` is the resting state; do work in worktrees
 
-A code clone is shared infrastructure: many sessions, machines, and agents touch the same checkout over time. Its **resting state is `main`** — clean, current, predictable. An agent that parks a clone on its own feature branch and walks away forces the next session into archaeology ("what is this branch, is it safe to build on?") before it can start.
+This section covers code repositories. A desk has no worktrees or feature branches: work on `main`. A code clone is shared infrastructure: many sessions, machines, and agents touch the same checkout over time. Its **resting state is `main`** — clean, current, predictable. An agent that parks a clone on its own feature branch and walks away forces the next session into archaeology ("what is this branch, is it safe to build on?") before it can start.
 
 The discipline:
 
@@ -276,13 +276,13 @@ Apply this per conflicted file that is a filter artifact. Files with real semant
 
 ## Never leave state behind
 
-Before the session ends, persist task-owned changes through the recorded contribution path. Commit and push only when authorized; a no-push or local-handoff endpoint must preserve the exact commits and required worktree instead. Preserve unfinished source through `desk:session-resumption` when it is not ready to commit, without sweeping unrelated files. Apply this to canonical task/progress state and code changes through their respective owners; persistence is not authority to publish or delete.
+Before the session ends, persist task-owned changes through the recorded contribution path. In a desk, commit your own paths to `main` (`git pull --rebase --autostash`, `git commit <paths>`, `git push`), and use a branch only to coordinate writers working at the same time. In a code repository, commit and push only when authorized; a no-push or local-handoff endpoint must preserve the exact commits and required worktree instead. Preserve unfinished source through `desk:session-resumption` when it is not ready to commit, without sweeping unrelated files. Apply this to canonical task/progress state and code changes through their respective owners; persistence is not authority to publish or delete.
 
 At session start, if git status in any repo shows unexpected uncommitted changes, surface them to the operator before doing anything else — they may represent orphaned work from a previous session.
 
-Never reconcile a dirty checked-out state repository by moving the branch ref in place with `git update-ref` or an equivalent ref move under the existing index/worktree. Start from a clean temporary worktree based on the current remote destination, replay only the exact task-owned change, stage only an explicit staged-path allowlist, inspect `git diff --cached --name-status` against that allowlist, then inspect the full staged diff before commit.
+Never move a branch ref in place with `git update-ref` or an equivalent under a dirty checkout. In a desk, run `git pull --rebase --autostash` and commit only your own paths; other sessions' unfinished files stay where they are. In a code repository, start from a clean temporary worktree based on the current remote destination, replay only the exact task-owned change, stage only an explicit staged-path allowlist, inspect `git diff --cached --name-status` against that allowlist, then inspect the full staged diff before commit.
 
-(overlay users: consumer overlays often ship a state-repo-specific anti-pattern note — never branch/PR on a state repo even when push-to-main is denied; the denial is a permission config problem, not a workflow problem.)
+(overlay users: consumer overlays often ship a state-repo-specific anti-pattern note — never branch or open a PR on a state repo to get around a denied push to `main`; the denial is a permission setting to fix, not a workflow to route around.)
 
 ## Commit identity and secrets
 

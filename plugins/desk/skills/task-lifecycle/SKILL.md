@@ -172,7 +172,7 @@ The selected Superpowers controller consumes the inventory through the [Desk ada
 
 ## Delivery and resource accounting
 
-The mapped progress record (`progressPath`) is the single canonical home for delivery and resource accounting. If `progressPath` resolves to `task.md`, keep the tables there, not in a second record. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep detailed host/private evidence in approved protected storage, not the task card. No delivery daemon or schema is introduced.
+The mapped progress record (`progressPath`) is the single canonical home for delivery and resource accounting. If `progressPath` resolves to `task.md`, keep the tables there, not in a second record. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep secrets and raw private evidence outside Git, cited by pointer; everything else goes in the task's folder. No delivery daemon or schema is introduced.
 
 Create the following headings and tables in that record when needed, using this single definition. These tables are a Markdown convention, not task frontmatter, a ninth state, a database schema or a universal lifecycle schema. Each table shows one illustrative placeholder row:
 
@@ -196,7 +196,7 @@ Desk can record rows of this table and remind you of them: `task_update`'s `reso
 
 - **removed-and-absent**: exact-owner cleanup plus source-system/host readback proving the resource and its owned writers or descendants are absent.
 - **named transfer**: a specific receiving owner has acknowledged the exact resource, ongoing obligations and next step; recording an intended recipient alone is insufficient.
-- **retained-with-trigger**: a responsible owner, reason and explicit cleanup trigger are recorded and verified, including intentional alpha branches/worktrees, protected evidence and any continuing consumers.
+- **retained-with-trigger**: a responsible owner, reason and explicit cleanup trigger are recorded and verified, including intentional alpha branches/worktrees, private evidence and any continuing consumers.
 
 Unknown ownership, uncertain external effects or failed absence checks remain unresolved in the table, not silently complete. Reconcile effects and writer release through `desk:session-resumption`; perform repository/process cleanup through `desk:git-hygiene` and the owning host's existing skills. `desk:work-orchestration` owns reservations and ready-set recomputation, and `superpowers:requesting-code-review` owns review admission on the current candidate and affected re-review; resource accounting does not bypass their finding-disposition, acceptance or sole-writer gates.
 

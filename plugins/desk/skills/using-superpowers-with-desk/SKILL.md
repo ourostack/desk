@@ -81,7 +81,7 @@ Incremental milestones do not change the authorized endpoint or lower its standa
 Resolve the map once, with explicit existing paths, before handing over:
 
 ```sh
-node <loaded-desk-plugin>/mcp/src/activation/superpowers-context.js --desk-root <desk-root> --person <alias> --task-path <task-directory> --iteration-path <iteration-directory> [--plan-path <existing-plan>] [--progress-path <existing-progress>] --evidence-root <approved-private-evidence-root> --step <positive-step> --attempt <positive-attempt>
+node <loaded-desk-plugin>/mcp/src/activation/superpowers-context.js --desk-root <desk-root> --person <alias> --task-path <task-directory> --iteration-path <iteration-directory> [--plan-path <existing-plan>] [--progress-path <existing-progress>] [--evidence-root <folder>] --step <positive-step> --attempt <positive-attempt>
 ```
 
 Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk artifact, not a guessed sibling directory or mutable cache path. The mapper reads and creates nothing: it reuses Desk's path authority without creating missing roots, verifies existing regular files, and returns JSON.
@@ -91,7 +91,7 @@ Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk
 | `--plan-path` | Optional. A supplied plan must be an existing regular file within the Desk root; a shared cross-repository plan stays at its existing Desk planning path. Omit it while the task has no plan: the mapper returns `planPath: null`, and the selection above is `writing-plans`, not `executing-plans`. |
 | `--progress-path` | Optional. A supplied progress record must be an existing regular file inside this task's own directory, resolved through any symlink, and within the effective person prefix, because progress and rulings are written. Omit it to select the iteration's existing `doing.md`, then the canonical `task.md`. |
 
-Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations under the approved private evidence root. Produce the normal Superpowers brief and review contents at those paths with native file and diff tools. This changes storage binding, not the engineering method.
+Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations, by default under `<iteration-directory>/superpowers/step-<n>/attempt-<m>/` in the desk. Produce the normal Superpowers brief and review contents at those paths with native file and diff tools. This changes storage binding, not the engineering method.
 
 Include the mapper's `briefRules` in **both the implementer brief and every reviewer brief**, including re-reviews. The Desk-owned addition to each brief template is:
 
@@ -113,7 +113,7 @@ Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Des
 
 On interruption, read the canonical progress record, not an upstream shadow ledger. Reuse the recorded step and attempt for reading; allocate an explicit new attempt for new output and preserve earlier evidence. Full task, repository and iteration qualification prevents same-basename plan and progress collisions.
 
-The evidence root must be an explicitly approved private artifact location outside Git-backed Desk. It must never be inside the factory's own state directory, `<state home>/ouroboros-skills/desk/factory/`, or the retired work ledger's `<state home>/ouroboros-skills/desk/work-ledger/`, whose leftover folders `desk_doctor` counts. File contents remain subject to the repository's write authority and the selected private-storage policy. The mapper does not create, discover or protect an evidence store.
+`--evidence-root` is optional; leave it out so briefs and reports stay in the task's folder and are committed to `main`. Pass it only to send them elsewhere, and never into the factory's state directory, `<state home>/ouroboros-skills/desk/factory/`, or the retired work ledger's `<state home>/ouroboros-skills/desk/work-ledger/`, whose leftover folders `desk_doctor` counts. Secrets, credentials, raw private transcripts and customer data never go in these files.
 
 ## Mapped controller close-out
 

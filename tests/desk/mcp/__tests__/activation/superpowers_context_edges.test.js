@@ -26,8 +26,8 @@ for (const [args, expected] of [
     assert.equal(result.stderr, `Superpowers context: ${expected}\n`)
   })
 }
-test("context rejects whitespace-only required paths", async () => {
-  await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " \t " }), { message: /^Superpowers context: evidenceRoot is required: pass --evidence-root <a folder outside the desk>/u })
+test("context rejects a whitespace-only evidence root", async () => {
+  await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " 	 " }), { message: "Superpowers context: evidenceRoot must be a non-empty path when supplied" })
 })
 for (const key of ["planPath", "progressPath"]) {
   test(`context rejects a supplied but empty ${key} without filesystem work`, async () => {
@@ -80,6 +80,5 @@ test("the hint for each missing path names its flag, with an example built from 
   await assert.rejects(resolveSuperpowersContext({ ...input, deskRoot: undefined }), /deskRoot is required: pass --desk-root <the desk's absolute path>/u)
   await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: "/desk/t/x/", step: 1, attempt: 1 }), /iterationPath is required: .* for example \/desk\/t\/x\/<repo>\//u)
   await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: " ", step: 1, attempt: 1 }), /taskPath is required/u)
-  await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: "/desk/t/x", iterationPath: "/desk/t/x/r/d", step: 1, attempt: 1 }), /evidenceRoot is required: pass --evidence-root <a folder outside the desk>, for example \/evidence;/u)
   await assert.rejects(resolveSuperpowersContext({ taskPath: "/desk/t/x", iterationPath: "/desk/t/x/r/d", step: 1, attempt: 1 }), /deskRoot is required/u)
 })
