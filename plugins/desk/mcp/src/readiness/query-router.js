@@ -31,7 +31,7 @@ const SEMANTIC_OFF_REFUSAL = Object.freeze({
 const NEWER_DESK_REASON = "index_owned_by_newer_desk"
 const NEWER_DESK_REFUSAL = Object.freeze({
   message: "A newer Desk session on this desk is serving meaning-based search.",
-  fix: `Restarting this session moves it to the newer Desk. ${EXACT_WORDS_NOW}`,
+  fix: `${EXACT_WORDS_NOW} To use meaning-based search here, run this session on the newer Desk: update Desk for this host and restart the session.`,
 })
 const UNINDEXED_DOCUMENT_REFUSAL = Object.freeze({
   message: "This document has not been indexed for meaning-based search yet.",

@@ -132,7 +132,7 @@ test("two builds that record their writer agree on one owner: the lower one neve
     assert.equal(refused.status, "error")
     assert.equal(refused.diagnostic.reason, "index_owned_by_newer_desk")
     assert.equal(refused.diagnostic.message, "A newer Desk session on this desk is serving meaning-based search.")
-    assert.equal(refused.fix, "Restarting this session moves it to the newer Desk. desk_search answers now with exact-word matches.")
+    assert.equal(refused.fix, "desk_search answers now with exact-word matches. To use meaning-based search here, run this session on the newer Desk: update Desk for this host and restart the session.")
     const exact = await search(low)
     assert.equal(exact.results.length, 3, "the lower build still answers exact-word search from the files")
     assert.equal((await search(high)).readiness_diagnostic, undefined, "and leaves the index to the higher build")
