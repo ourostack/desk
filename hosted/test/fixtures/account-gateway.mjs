@@ -23,7 +23,8 @@ export const CLI_CLIENT_ID = "0b6f7c1e-2d3a-4b5c-8d9e-1f2a3b4c5d6e";
 
 // Starts the gateway. Ari's account exists, with his binding and his identity mapped. `ctx.logs` collects every line.
 // With `discoveryDown`, the tenant's discovery document can't be fetched, so nothing tenant-signed can be checked.
-export async function startAccountGateway(t, { discoveryDown = false } = {}) {
+// `githubLink({ store, sessions, log, now })`, when given, builds the GitHub linking the app mounts (`ctx.link`).
+export async function startAccountGateway(t, { discoveryDown = false, githubLink } = {}) {
   let clock = START;
   const now = () => clock;
   const logs = [];
@@ -70,7 +71,8 @@ export async function startAccountGateway(t, { discoveryDown = false } = {}) {
     resource: RESOURCE,
     log,
   });
-  const app = createApp({ provider, relay: { handle: () => assert.fail("no relay") }, githubCallback: provider.githubCallback, issuer: GATEWAY, resource: RESOURCE, entra, invites, sessions, admin, log });
+  const link = githubLink ? githubLink({ store, sessions, log, now }) : undefined;
+  const app = createApp({ provider, relay: { handle: () => assert.fail("no relay") }, githubCallback: provider.githubCallback, issuer: GATEWAY, resource: RESOURCE, entra, invites, sessions, admin, githubLink: link, log });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => {
@@ -79,7 +81,7 @@ export async function startAccountGateway(t, { discoveryDown = false } = {}) {
     discovery.stop();
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { base, tenant, discovery, store, accountId, sessions, entra, invites, forgotten, deleted, logs, now, advance: (ms) => (clock += ms) };
+  return { base, tenant, discovery, store, accountId, sessions, entra, invites, link, forgotten, deleted, logs, now, advance: (ms) => (clock += ms) };
 }
 
 // A browser: keeps cookies across requests to the gateway, as a real one would for desk.ouro.bot. `sameSite` sets

@@ -32,7 +32,7 @@ async function call(fetch, path, jwt, init = {}, timeoutMs = CALL_TIMEOUT_MS) {
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
   });
-  if (!response.ok) throw new Error(`GitHub answered ${response.status} to ${init.method ?? "GET"} ${path}`);
+  if (!response.ok) throw Object.assign(new Error(`GitHub answered ${response.status} to ${init.method ?? "GET"} ${path}`), { status: response.status });
   return response.json();
 }
 
@@ -41,7 +41,9 @@ async function mint({ appId, privateKeyPem, repo, installationId, fetch, now, ti
   const installation = await call(fetch, `/repos/${repo}/installation`, jwt, {}, timeoutMs);
   // A binding records the installation it was linked through; a repository now served by another installation is
   // not that binding's desk any more.
-  if (installationId !== undefined && installation.id !== installationId) throw new Error(`the App's installation for ${repo} is not the one its binding names`);
+  if (installationId !== undefined && installation.id !== installationId) {
+    throw Object.assign(new Error(`the App's installation for ${repo} is not the one its binding names`), { code: "installation_mismatch" });
+  }
   const body = JSON.stringify({ repositories: [repo.split("/")[1]], permissions: { contents: "write", pull_requests: "read" } });
   const granted = await call(fetch, `/app/installations/${installation.id}/access_tokens`, jwt, { method: "POST", body }, timeoutMs);
   return { token: granted.token, expiresAt: Date.parse(granted.expires_at) };

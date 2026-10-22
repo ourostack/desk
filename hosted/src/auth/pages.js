@@ -7,6 +7,9 @@ export const escapeHtml = (text) =>
 const document = (body) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Desk sign-in</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/assets/desk.css"></head><body><header class="brand"><img src="/assets/desk-logo.png" width="80" height="80" alt=""><h1>Hosted Desk</h1></header><main>${body}</main></body></html>`;
 
+// A page whose body is `bodyHtml`, which the caller has already escaped.
+export const htmlPage = (status, bodyHtml) => ({ status, html: document(bodyHtml) });
+
 // A page holding one message.
 export const page = (status, message) => ({ status, html: document(`<p>${escapeHtml(message)}</p>`) });
 

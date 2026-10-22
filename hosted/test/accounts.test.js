@@ -225,6 +225,31 @@ function storeSuite(label, make) {
       assert.deepEqual(await store.getBinding(accountId), noInstallation);
     });
 
+    test(name("a linked binding keeps its GitHub user, login and suspension; removing it leaves none"), async () => {
+      const store = await make();
+      const accountId = randomUUID();
+      // Repos of this test's own: on Azurite every test shares the tables.
+      const mine = `jordan-dev/desk-${accountId.slice(0, 8)}`;
+      const theirs = `someone/else-${accountId.slice(0, 8)}`;
+      const linked = { ...BINDING, repo: mine, githubUserId: 3_000_000_123, login: "jordan-dev" };
+      await store.putBinding(accountId, linked);
+      assert.deepEqual(await store.getBinding(accountId), linked);
+      await store.putBinding(accountId, { ...linked, suspended: true });
+      assert.deepEqual(await store.getBinding(accountId), { ...linked, suspended: true });
+      await store.putBinding(accountId, linked);
+      assert.equal((await store.getBinding(accountId)).suspended, undefined, "a binding put without the flag is no longer suspended");
+      for (const bad of [{ ...linked, githubUserId: 0 }, { ...linked, githubUserId: "12" }, { ...linked, login: "bad login" }, { ...linked, suspended: false }]) {
+        await assert.rejects(store.putBinding(accountId, bad), undefined, JSON.stringify(bad));
+      }
+      const other = randomUUID();
+      await store.putBinding(other, { ...BINDING, repo: theirs });
+      assert.equal(await store.repoBoundElsewhere(mine, accountId), null, "an account's own binding isn't elsewhere");
+      assert.equal(await store.repoBoundElsewhere(theirs, accountId), other);
+      await store.removeBinding(accountId);
+      assert.equal(await store.getBinding(accountId), null);
+      await store.removeBinding(accountId);
+    });
+
     test(name("a hosted binding is refused"), async () => {
       const store = await make();
       const accountId = randomUUID();

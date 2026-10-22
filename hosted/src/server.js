@@ -81,8 +81,9 @@ export function createDeepHealth({ discovery, store, accountIds = [], ttlMs = DE
 //
 // `sessions` (createBrowserSession's), with `entra`, adds the gateway's own pages: GET /signin?next=<path>, which
 // signs the browser in through the Ouro tenant and returns to that path, GET /account and POST /signout. `admin`
-// (admin.js createAdmin's router) is mounted at /admin.
-export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites, deepHealth, sessions, admin, log = provider.log }) {
+// (admin.js createAdmin's router) is mounted at /admin. `githubLink` (github-link.js createGitHubLink's), which needs
+// `sessions`, adds GET and POST /link/github and takes the linking answers that come back to /oauth/github/callback.
+export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites, deepHealth, sessions, admin, githubLink, log = provider.log }) {
   const app = express();
   // Container Apps terminates TLS one hop in front of the app; the SDK's
   // rate limiters read the client address from X-Forwarded-For.
@@ -130,7 +131,8 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.use("/.well-known/oauth-authorization-server", metadataHandler(authorizationServerMetadata));
   app.use(mcpAuthRouter(routerOptions));
   app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider, { issuer }));
-  app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback }));
+  if (githubLink && !sessions) throw new Error("linking GitHub needs the browser session");
+  app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback, link: githubLink }));
   if (entra) app.get("/oauth/entra/callback", entraCallbackHandler(entra, { log }));
   if (invites) {
     const handlers = inviteHandlers(invites);
@@ -140,6 +142,7 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   if (sessions && !entra?.pageSignIn) throw new Error("the browser session's pages need the Ouro tenant's sign-in built with the same sessions");
   if (sessions) mountSessionPages(app, { entra, sessions, log });
   if (admin) app.use("/admin", admin);
+  if (githubLink) app.use(githubLink.router());
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));
   app.all(
