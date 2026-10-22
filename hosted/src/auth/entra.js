@@ -25,6 +25,7 @@ import { TTL, sealer } from "./seal.js";
 import { createIdTokenVerifier } from "./id-token.js";
 import { createSigninCookies, hostCookie, parseCookies } from "./signin-cookie.js";
 import { hashToken } from "../accounts/invites.js";
+import { safeNext } from "./browser-session.js";
 import {
   accessOffPage,
   inviteInvalidPage,
@@ -34,6 +35,7 @@ import {
   noDeskPage,
   page,
   sendPage,
+  signInCancelledPage,
   signInUnavailablePage,
   startAgainPage,
   startingUpPage,
@@ -227,8 +229,9 @@ export async function admissionRefusal({ store, accountId, repo, clientId, log =
 // `key` or `keys` is the signing-key ring the provider uses. `discovery` is createDiscovery's; `verifier` defaults
 // to an ID-token verifier built from it once it has loaded. `store` is the accounts store (findIdentity,
 // redeemInvite, getAccount, getBinding). `repo` is the one desk this gateway serves (DESK_REPO), or null on a
-// multi-user gateway (admissionRefusal). `now()` is the
-// clock in milliseconds.
+// multi-user gateway (admissionRefusal). `sessions`, when set, is createBrowserSession's: it enables `beginPage`, a
+// sign-in to the gateway's own pages, whose callback starts a browser session instead of sending a code to a client.
+// `now()` is the clock in milliseconds.
 export function createEntraSignIn({
   key,
   keys,
@@ -241,6 +244,7 @@ export function createEntraSignIn({
   cookies,
   store,
   repo,
+  sessions,
   fetch = globalThis.fetch,
   timeoutMs = TOKEN_EXCHANGE_TIMEOUT_MS,
   now = Date.now,
@@ -302,7 +306,7 @@ export function createEntraSignIn({
 
   // The account for this identity, redeeming the browser's invite when it is new. Returns `{ accountId, redeemed }`
   // or `{ refusal }` (a page).
-  async function accountFor({ tid, oid }, jar, clientIdForLog) {
+  async function accountFor({ tid, oid }, jar, clientIdForLog, pageOptions) {
     const known = await store.findIdentity(tid, oid);
     // An invite cookie left in a browser whose identity already has an account is dropped, so nobody signing in
     // later in that browser as a new identity can redeem it.
@@ -310,7 +314,7 @@ export function createEntraSignIn({
     const tokenHash = inviteFrom(jar);
     if (!tokenHash) {
       log(`sign-in refused: not_invited client ${clientIdForLog}`);
-      return { refusal: inviteOnlyPage() };
+      return { refusal: inviteOnlyPage(pageOptions) };
     }
     const result = await store.redeemInvite({ tokenHash, tid, oid, now: now() });
     if (result.refused === "identity_has_account") {
@@ -334,93 +338,153 @@ export function createEntraSignIn({
         log(`sign-in refused: discovery_not_ready client ${pending?.clientId}`);
         return startingUpPage();
       }
-      const { stateId, challenge, nonce, setCookies } = signins.begin(jar);
-      const { exp: _exp, ...request } = pending;
-      const url = new URL(discovery.get().authorizationEndpoint);
-      url.search = new URLSearchParams({
-        client_id: clientId,
-        response_type: "code",
-        redirect_uri: callbackUrl,
-        response_mode: "query",
-        scope: "openid profile",
-        state: sealed(STATE_KIND, { ...request, stateId }, TTL.pending),
-        nonce,
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-      }).toString();
-      return { redirectTo: url.href, setCookies };
+      const { exp: _exp, page: _page, ...request } = pending;
+      return authorizeRedirect(request, jar);
     },
 
-    // Returns `{ redirectTo, clearCookies }` to send the browser back to the client, or `{ status, html,
-    // clearCookies }` for a page shown instead.
-    async callback({ code, state, error, cookies: jar = {} }) {
-      const pending = unsealed(STATE_KIND, state);
-      if (!pending || typeof pending.stateId !== "string") {
-        log("sign-in refused: invalid_state");
-        return { ...startAgainPage(), clearCookies: [] };
-      }
-      const clearCookies = [signins.clear(pending.stateId)];
-      const signin = signins.take(pending.stateId, jar);
-      if (!signin) {
-        log(`sign-in refused: signin_cookie_missing client ${pending.clientId}`);
-        return { ...startAgainPage(), clearCookies };
-      }
-      const back = new URL(pending.redirectUri);
-      if (pending.state !== undefined) back.searchParams.set("state", pending.state);
-      if (error || !code) {
-        log(`sign-in refused: access_denied by Entra client ${pending.clientId}`);
-        back.searchParams.set("error", "access_denied");
-        return { redirectTo: back.href, clearCookies };
-      }
+    // A sign-in to the gateway's own pages, returning to `next` when browser-session.js `safeNext` accepts it, else
+    // to the account page.
+    // Same tenant round trip and per-sign-in cookie as `begin`; the callback starts a browser session.
+    beginPage(next, jar = {}) {
+      if (!sessions) throw new Error("page sign-in needs the browser session");
       if (!discovery.ready()) {
-        log(`sign-in refused: discovery_not_ready client ${pending.clientId}`);
-        return { ...signInUnavailablePage(), clearCookies };
+        log("page sign-in refused: discovery_not_ready");
+        return startingUpPage();
       }
-
-      const idToken = await exchange(code, signin.verifier, pending.clientId);
-      if (!idToken) return { ...page(502, "Ouro sign-in did not confirm who signed in. Start again from Claude."), clearCookies };
-      let identity;
-      try {
-        identity = await verifierNow().verify(idToken, { nonce: signin.nonce });
-      } catch (refusal) {
-        log(`sign-in refused: invalid_id_token (${refusal?.reason ?? "error"}) client ${pending.clientId}`);
-        return { ...page(400, "Ouro sign-in could not be confirmed. Start again from Claude."), clearCookies };
-      }
-      const authTime = Math.floor(now() / 1000);
-
-      let accountId;
-      try {
-        const found = await accountFor(identity, jar, pending.clientId);
-        if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
-        if (found.refusal) return { ...found.refusal, clearCookies };
-        accountId = found.accountId;
-        const refusal = await admissionRefusal({ store, accountId, repo, clientId: pending.clientId, log });
-        if (refusal) return { ...refusal, clearCookies };
-      } catch (failure) {
-        log(`sign-in failed: store_unavailable (${failure?.name ?? "error"}) client ${pending.clientId}`);
-        return { ...signInUnavailablePage(), clearCookies };
-      }
-
-      back.searchParams.set(
-        "code",
-        sealed(
-          "code",
-          {
-            clientId: pending.clientId,
-            redirectUri: pending.redirectUri,
-            codeChallenge: pending.codeChallenge,
-            scopes: pending.scopes,
-            accountId,
-            authTime,
-            aud: pending.aud,
-          },
-          TTL.code,
-        ),
-      );
-      log(`sign-in: account ${accountId} client ${pending.clientId}`);
-      return { redirectTo: back.href, clearCookies };
+      return authorizeRedirect({ page: true, next: safeNext(next) }, jar);
     },
+
+    callback,
+
+    // Whether `beginPage` works: true when the browser session is configured.
+    pageSignIn: Boolean(sessions),
   };
+
+  // The tenant authorize URL for `request`, sealed into `state` with a new per-sign-in cookie's stateId.
+  function authorizeRedirect(request, jar) {
+    const { stateId, challenge, nonce, setCookies } = signins.begin(jar);
+    const url = new URL(discovery.get().authorizationEndpoint);
+    url.search = new URLSearchParams({
+      client_id: clientId,
+      response_type: "code",
+      redirect_uri: callbackUrl,
+      response_mode: "query",
+      scope: "openid profile",
+      state: sealed(STATE_KIND, { ...request, stateId }, TTL.pending),
+      nonce,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    }).toString();
+    return { redirectTo: url.href, setCookies };
+  }
+
+  // Returns `{ redirectTo, clearCookies, setCookies? }` to send the browser back to the client (or, for a page
+  // sign-in, to its page with a new session), or `{ status, html, clearCookies }` for a page shown instead.
+  async function callback({ code, state, error, cookies: jar = {} }) {
+    const pending = unsealed(STATE_KIND, state);
+    if (!pending || typeof pending.stateId !== "string") {
+      log("sign-in refused: invalid_state");
+      return { ...startAgainPage(), clearCookies: [] };
+    }
+    const clearCookies = [signins.clear(pending.stateId)];
+    const signin = signins.take(pending.stateId, jar);
+    if (!signin) {
+      log(`sign-in refused: signin_cookie_missing client ${pending.page ? "page" : pending.clientId}`);
+      return { ...startAgainPage({ page: pending.page === true }), clearCookies };
+    }
+    if (pending.page === true) return pageCallback({ code, error, signin, pending, jar, clearCookies });
+    const back = new URL(pending.redirectUri);
+    if (pending.state !== undefined) back.searchParams.set("state", pending.state);
+    if (error || !code) {
+      log(`sign-in refused: access_denied by Entra client ${pending.clientId}`);
+      back.searchParams.set("error", "access_denied");
+      return { redirectTo: back.href, clearCookies };
+    }
+    if (!discovery.ready()) {
+      log(`sign-in refused: discovery_not_ready client ${pending.clientId}`);
+      return { ...signInUnavailablePage(), clearCookies };
+    }
+
+    const { identity, refusal: unconfirmed } = await identityFor(code, signin, pending.clientId, "Start again from Claude.");
+    if (unconfirmed) return { ...unconfirmed, clearCookies };
+    const authTime = Math.floor(now() / 1000);
+
+    let accountId;
+    try {
+      const found = await accountFor(identity, jar, pending.clientId);
+      if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
+      if (found.refusal) return { ...found.refusal, clearCookies };
+      accountId = found.accountId;
+      const refusal = await admissionRefusal({ store, accountId, repo, clientId: pending.clientId, log });
+      if (refusal) return { ...refusal, clearCookies };
+    } catch (failure) {
+      log(`sign-in failed: store_unavailable (${failure?.name ?? "error"}) client ${pending.clientId}`);
+      return { ...signInUnavailablePage(), clearCookies };
+    }
+
+    back.searchParams.set(
+      "code",
+      sealed(
+        "code",
+        {
+          clientId: pending.clientId,
+          redirectUri: pending.redirectUri,
+          codeChallenge: pending.codeChallenge,
+          scopes: pending.scopes,
+          accountId,
+          authTime,
+          aud: pending.aud,
+        },
+        TTL.code,
+      ),
+    );
+    log(`sign-in: account ${accountId} client ${pending.clientId}`);
+    return { redirectTo: back.href, clearCookies };
+  }
+
+  // The ID token's identity for `code`, or `{ refusal }` (a page).
+  async function identityFor(code, signin, clientIdForLog, again) {
+    const idToken = await exchange(code, signin.verifier, clientIdForLog);
+    if (!idToken) return { refusal: page(502, `Ouro sign-in did not confirm who signed in. ${again}`) };
+    try {
+      return { identity: await verifierNow().verify(idToken, { nonce: signin.nonce }) };
+    } catch (refusal) {
+      log(`sign-in refused: invalid_id_token (${refusal?.reason ?? "error"}) client ${clientIdForLog}`);
+      return { refusal: page(400, `Ouro sign-in could not be confirmed. ${again}`) };
+    }
+  }
+
+  // A page sign-in's return: maps the identity to its account (redeeming the browser's invite when it is new), as a
+  // client's sign-in does, and requires Desk access on but no desk yet, since linking one is what the pages are for.
+  async function pageCallback({ code, error, signin, pending, jar, clearCookies }) {
+    if (error || !code) {
+      log("page sign-in refused: access_denied by Entra");
+      return { ...signInCancelledPage(), clearCookies };
+    }
+    if (!discovery.ready()) {
+      log("page sign-in refused: discovery_not_ready");
+      return { ...signInUnavailablePage({ page: true }), clearCookies };
+    }
+    const { identity, refusal } = await identityFor(code, signin, "page", "Sign in again.");
+    if (refusal) return { ...refusal, clearCookies };
+    let accountId;
+    try {
+      const found = await accountFor(identity, jar, "page", { page: true });
+      if (found.clearInvite || found.redeemed) clearCookies.push(hostCookie(INVITE_COOKIE, "", 0));
+      if (found.refusal) return { ...found.refusal, clearCookies };
+      accountId = found.accountId;
+      const account = await store.getAccount(accountId);
+      if (!account?.deskAccess) {
+        log(`page sign-in refused: access_off account ${accountId}`);
+        return { ...accessOffPage(), clearCookies };
+      }
+    } catch (failure) {
+      log(`page sign-in failed: store_unavailable (${failure?.name ?? "error"})`);
+      return { ...signInUnavailablePage({ page: true }), clearCookies };
+    }
+    log(`page sign-in: account ${accountId}`);
+    return { redirectTo: pending.next, status: 303, clearCookies, setCookies: [sessions.cookie(accountId)] };
+  }
 }
 
 const text = (value) => (typeof value === "string" ? value : undefined);
@@ -438,7 +502,8 @@ export function entraCallbackHandler(entra, { log = stderrLog } = {}) {
         cookies: parseCookies(req.headers.cookie),
       });
       for (const header of outcome.clearCookies ?? []) res.append("set-cookie", header);
-      if (outcome.redirectTo) return res.redirect(302, outcome.redirectTo);
+      for (const header of outcome.setCookies ?? []) res.append("set-cookie", header);
+      if (outcome.redirectTo) return res.redirect(outcome.status ?? 302, outcome.redirectTo);
       sendPage(res, outcome);
     } catch (error) {
       log(`sign-in failed: entra_callback_error (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
