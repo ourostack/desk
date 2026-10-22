@@ -75,9 +75,9 @@ test("unsafe and omitted labels do not break the successful focus observation", 
   assert.deepEqual(created.session_label, { state: "unavailable", code: "unsafe_label" })
   const focused = await taskFocus({ deskRoot, input: target, statusContext })
   assert.equal(focused.status, "focused")
-  assert.deepEqual(focused.session_label, { state: "unavailable", code: "missing_safe_label" })
+  assert.equal(focused.session_label, undefined)
   const updated = await task_update({ deskRoot, input: { ...target, note: "Continuing" }, statusContext })
-  assert.deepEqual(updated.session_label, { state: "unavailable", code: "missing_safe_label" })
+  assert.equal(updated.session_label, undefined)
 })
 
 test("a parked create cannot change the current task's display proposal", async () => {

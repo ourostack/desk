@@ -194,10 +194,75 @@ async function readCardText(filePath) {
   try {
     const buffer = Buffer.alloc(MAX_CARD_BYTES)
     const { bytesRead } = await file.read(buffer, 0, MAX_CARD_BYTES, 0)
-    return { text: buffer.toString("utf8", 0, bytesRead), truncated: bytesRead === MAX_CARD_BYTES }
+    const truncated = bytesRead === MAX_CARD_BYTES
+    return { text: buffer.toString("utf8", 0, bytesRead), truncated, filePath, ...(truncated ? { size: (await file.stat()).size } : {}) }
   } finally {
     await file.close()
   }
+}
+
+const TAIL_CHUNK = 64 * 1024
+const NEXT_STEP_START = /^\*\*Next step:\*\*/u
+const NEXT_STEP_SNIPPET = 8 * 1024
+
+/**
+ * The next step of a card longer than the first read, found by reading the rest of the file in chunks for the `**Next step:**` line alone (outside fenced code); null when there is none.
+ * Nothing but that paragraph is kept, so a card of any length costs a read, not a parse.
+ */
+async function tailNextStep(raw) {
+  let file
+  try {
+    file = await open(raw.filePath, "r")
+  } catch {
+    return null
+  }
+  try {
+    // The head's last line may be cut; scanning restarts at its first byte, with the fence state of the whole lines before it.
+    const cut = raw.text.lastIndexOf("\n") + 1
+    let fence = null
+    for (const line of raw.text.slice(0, cut).split(/\r?\n/u)) fence = fenceAfter(fence, line)
+    let position = Buffer.byteLength(raw.text.slice(0, cut))
+    let carry = ""
+    let carryStart = position
+    const buffer = Buffer.alloc(TAIL_CHUNK)
+    while (position < raw.size) {
+      const { bytesRead } = await file.read(buffer, 0, TAIL_CHUNK, position)
+      if (bytesRead === 0) break
+      // latin1 keeps one character per byte, so offsets stay byte offsets; the marker is ASCII.
+      const lines = (carry + buffer.toString("latin1", 0, bytesRead)).split("\n")
+      position += bytesRead
+      carry = lines.pop()
+      let offset = carryStart
+      for (const line of lines) {
+        const bare = line.replace(/\r$/u, "")
+        if (fence === null && NEXT_STEP_START.test(bare)) {
+          const snippet = Buffer.alloc(NEXT_STEP_SNIPPET)
+          const read = await file.read(snippet, 0, NEXT_STEP_SNIPPET, offset)
+          return nextStepOf(snippet.toString("utf8", 0, read.bytesRead))
+        }
+        fence = fenceAfter(fence, bare)
+        offset += Buffer.byteLength(line, "latin1") + 1
+      }
+      carryStart = offset
+    }
+    if (fence === null && NEXT_STEP_START.test(carry.replace(/\r$/u, ""))) {
+      const snippet = Buffer.alloc(NEXT_STEP_SNIPPET)
+      const read = await file.read(snippet, 0, NEXT_STEP_SNIPPET, carryStart)
+      return nextStepOf(snippet.toString("utf8", 0, read.bytesRead))
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    await file.close()
+  }
+}
+
+// The fence a line leaves open (its opening run), given the fence open before it; null when none.
+function fenceAfter(open, line) {
+  const fence = /^\s{0,3}(`{3,}|~{3,})/u.exec(line)
+  if (open === null) return fence === null ? null : fence[1]
+  return fence !== null && fence[1][0] === open[0] && fence[1].length >= open.length && line.trim() === fence[1] ? null : open
 }
 
 // null for a card that was not read; `{ data: {}, content: "" }` when its frontmatter is malformed.
@@ -205,7 +270,7 @@ function parseCard(raw) {
   if (raw === null) return null
   try {
     const parsed = parseFrontmatter(raw.text)
-    return { data: parsed.data, content: parsed.content, truncated: raw.truncated }
+    return { data: parsed.data, content: parsed.content, truncated: raw.truncated, raw }
   } catch {
     return { data: {}, content: "" }
   }
@@ -266,7 +331,7 @@ async function scanDesk(deskRoot, scanRoot, desk, counts) {
     for (const [index, taskName] of taskNames.entries()) {
       const card = parseCard(texts[index])
       if (card === null) continue
-      const { data, content, truncated } = card
+      const { data, content, truncated, raw } = card
       const status = asText(data.status)
       if (TERMINAL_STATUSES.has(status)) continue
       const slug = redactName(taskName)
@@ -282,7 +347,8 @@ async function scanDesk(deskRoot, scanRoot, desk, counts) {
         status: status === null ? null : redactName(status),
         updated: asText(data.updated),
         repos: shownRepos(data.repos),
-        next_step: nextStepOf(content),
+        next_step: nextStepOf(content) ?? (truncated && raw?.size !== undefined ? await tailNextStep(raw) : null),
+        ...(truncated && raw?.size !== undefined ? { card_kb: Math.round(raw.size / 1024) } : {}),
         blocker: blockerOf(content),
         ...stepsOf(content, truncated),
         ...cleanupOf(content, truncated, status),
