@@ -100,7 +100,7 @@ function main() {
   assert.doesNotMatch(skill, /\b(?:safe|force)- (?:conditions|push)/u, "git-hygiene must not keep hyphen-join artifacts from the unwrap");
 
   for (const phrase of [
-    "Never reconcile a dirty checked-out state repository by moving the branch ref in place with `git update-ref` or an equivalent ref move under the existing index/worktree",
+    "Never move a branch ref in place with `git update-ref` or an equivalent under a dirty checkout",
     "clean temporary worktree based on the current remote destination",
     "replay only the exact task-owned change",
     "explicit staged-path allowlist",
