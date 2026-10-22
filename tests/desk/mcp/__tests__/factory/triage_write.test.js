@@ -1104,7 +1104,7 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
   }
   const env = { ...a.env, SystemRoot: systemRoot }
   let spawnGit = spawn
-  if (posix) {
+  if (posix && Object.hasOwn(env, "GIT_CONFIG_COUNT")) {
     // Simulated Windows lookup resolves .exe to the real Git; its children retain the host's native PATH.
     const realGit = realpathSync(spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim())
     const bin = path.join(w.base, "windows-git")
