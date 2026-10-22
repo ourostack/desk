@@ -9,7 +9,7 @@ import {
   controllerIdentity, deriveControllerEndpoint, lexicalControllerIdentity,
   semanticContractDiagnostic, stableStringify, validatePrivateDirectory,
 } from "./identity.js"
-import { ownerState } from "./owner-record.js"
+import { controllerStartupWaitMs, ownerState, readOwnerRecord } from "./owner-record.js"
 import { controllerStartTimeoutMs } from "./process-start.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
@@ -142,7 +142,7 @@ async function startOrReuseController({
     requireCompatibleHandshake(existing, identity)
     return
   }
-  if (await socketTakeoverGuards[process.platform]({ endpoint, identity, stateDir })) return
+  if (await socketTakeoverGuards[process.platform]({ endpoint, identity, stateDir, electionWaitMs })) return
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
@@ -169,9 +169,13 @@ async function startOrReuseController({
 }
 
 // Before binding: a controller whose owner runs is never taken over, even when it does not answer (no unlink, no second controller; the session stays controller-free and its hung-controller checks report it). Otherwise a stale socket of ours is removed. Resolves true when the running owner answered, so the session joins it instead of binding.
-async function guardSocketTakeover({ endpoint, identity, stateDir }) {
+async function guardSocketTakeover({ endpoint, identity, stateDir, electionWaitMs = electionWaitMsFor(process.platform) }) {
   const owner = await ownerState({ stateDir, identity })
   if (owner.state === "live") {
+    const startupWaitMs = owner.record.endpoint === endpoint ? Math.min(electionWaitMs, controllerStartupWaitMs(owner)) : 0
+    if (startupWaitMs > 0 && await waitForHandshake({
+      endpoint, identity, stateDir, waitMs: startupWaitMs, startingOwner: owner.record,
+    })) return true
     const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
     if (answered) {
       requireCompatibleHandshake(answered, identity)
@@ -262,7 +266,7 @@ function pipeIsFree(endpoint) {
   })
 }
 
-async function waitForHandshake({ endpoint, identity, stateDir, waitMs }) {
+async function waitForHandshake({ endpoint, identity, stateDir, waitMs, startingOwner }) {
   let lastError
   const deadline = Date.now() + waitMs
   while (true) {
@@ -277,6 +281,13 @@ async function waitForHandshake({ endpoint, identity, stateDir, waitMs }) {
       lastError = error
     }
     if (Date.now() >= deadline) break
+    if (startingOwner) {
+      const current = readOwnerRecord(stateDir, identity)
+      if (current.status !== "valid" || current.record.owner.token !== startingOwner.owner.token ||
+          current.record.owner.pid !== startingOwner.owner.pid || current.record.endpoint !== endpoint ||
+          current.record.owner.process_start !== startingOwner.owner.process_start ||
+          current.record.startup?.started_at !== startingOwner.startup.started_at) return null
+    }
     // A winner that died leaves the pipe free; no handshake will come, so the session gives up now and is elected again on its next attempt.
     if (await pipeIsFree(endpoint)) {
       lastError = new Error("readiness controller election winner is gone")

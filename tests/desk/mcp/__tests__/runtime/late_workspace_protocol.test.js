@@ -107,6 +107,8 @@ async function fixture(t, { explicit = false, person = null, capturedFolder = fa
   const convergenceTrace = []
   let hold = false
   let held = null
+  let retainPastHook = false
+  let pastHook = null
   const controllerArm = path.join(base, "controller-block-arm")
   const controllerBlock = path.join(base, "controller-block.json")
   const controllerPreload = path.join(base, "controller-block.mjs")
@@ -206,6 +208,10 @@ JSON.stringify = function(...args) {
           hold = false
           await new Promise((resolve) => { held = resolve })
         }
+        if (retainPastHook) {
+          retainPastHook = false
+          await new Promise((resolve) => { pastHook = resolve })
+        }
       }
       return value
     }, runtimeInspector: null,
@@ -283,7 +289,10 @@ JSON.stringify = function(...args) {
     assert.fail("runtime status detail did not arrive")
   }
   return { a, b, base, cwd, env, handle, call, rpc, associate, config, card, connectedRoots, status, focuses,
-    resolutionTrace, dispatchTrace, holdNextResolution: () => { hold = true },
+    resolutionTrace, dispatchTrace, holdNextResolution: async () => {
+      await handle.admission.idle({ waitMs: 15000 })
+      hold = true
+    },
     armSlowController: () => writeFileSync(controllerArm, "arm"),
     controllerBlock,
     waitHeld: async () => {
@@ -291,7 +300,17 @@ JSON.stringify = function(...args) {
       while (!held && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
       assert.ok(held, "the real resolver reply must be retained at the concurrency seam")
     },
-    releaseResolution: () => { held() } }
+    releaseResolution: () => { held() },
+    retainNextPastHook: () => { retainPastHook = true },
+    waitPastHook: async () => {
+      const deadline = Date.now() + 15000
+      while (!pastHook && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
+      assert.ok(pastHook, "the real resolver result must be retained after the existing hook")
+    },
+    releasePastHook: () => { pastHook?.() },
+    isHeld: () => held !== null,
+    clearHold: () => { hold = false },
+  }
 }
 
 test("a slow completed controller response cannot monopolize the MCP status event loop", async (t) => {
@@ -430,24 +449,40 @@ test("a mutation cannot join destination proof sampled before its request", asyn
   const f = await fixture(t, { capturedFolder: true })
   f.associate(f.b)
   assertWritten(await f.call("task_update", update))
-  f.holdNextResolution()
-  await f.call("desk_status", { detail: true })
-  await f.waitHeld()
-  assert.equal(f.resolutionTrace.at(-1).root, f.b)
-  assert.equal(f.resolutionTrace.at(-1).source, "activation-config")
-  const record = copilotSessionFile(path.join(f.env.XDG_STATE_HOME, "ouroboros-skills", "desk"), f.env.COPILOT_AGENT_SESSION_ID)
-  renameSync(record, `${record}.removed`)
-  const heads = [f.a, f.b].map((root) => git(root, "rev-parse", "HEAD"))
-  const mutations = f.dispatchTrace.filter((call) => call.name === "task_update").length
-  const pending = f.call("task_update", update)
-  // The request has reached admission before the retained stale reply arrives.
-  await new Promise((resolve) => setImmediate(resolve))
-  f.releaseResolution()
-  const result = await pending
-  assert.equal(result.isError, true, JSON.stringify({ result, resolution: f.resolutionTrace, dispatch: f.dispatchTrace }))
-  assert.equal(payload(result).code, "root_unavailable")
-  assert.equal(f.dispatchTrace.filter((call) => call.name === "task_update").length, mutations)
-  assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
+  await f.handle.admission.idle({ waitMs: 15000 })
+  f.retainNextPastHook()
+  try {
+    await f.handle.admission.refresh({ force: true, waitMs: 0, revalidateOnly: true })
+    await f.waitPastHook()
+    assert.equal(f.handle.admission.running, true)
+    let armed = false
+    const arming = Promise.resolve(f.holdNextResolution()).then(() => { armed = true })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(armed, false, "arming must wait for the older admission already past the hook")
+    f.releasePastHook()
+    await arming
+    await f.call("desk_status", { detail: true })
+    await f.waitHeld()
+    assert.equal(f.resolutionTrace.at(-1).root, f.b)
+    assert.equal(f.resolutionTrace.at(-1).source, "activation-config")
+    const record = copilotSessionFile(path.join(f.env.XDG_STATE_HOME, "ouroboros-skills", "desk"), f.env.COPILOT_AGENT_SESSION_ID)
+    renameSync(record, `${record}.removed`)
+    const heads = [f.a, f.b].map((root) => git(root, "rev-parse", "HEAD"))
+    const mutations = f.dispatchTrace.filter((call) => call.name === "task_update").length
+    const pending = f.call("task_update", update)
+    // The request has reached admission before the retained stale reply arrives.
+    await new Promise((resolve) => setImmediate(resolve))
+    f.releaseResolution()
+    const result = await pending
+    assert.equal(result.isError, true, JSON.stringify({ result, resolution: f.resolutionTrace, dispatch: f.dispatchTrace }))
+    assert.equal(payload(result).code, "root_unavailable")
+    assert.equal(f.dispatchTrace.filter((call) => call.name === "task_update").length, mutations)
+    assert.deepEqual([f.a, f.b].map((root) => git(root, "rev-parse", "HEAD")), heads)
+  } finally {
+    f.clearHold()
+    f.releasePastHook()
+    if (f.isHeld()) f.releaseResolution()
+  }
 })
 
 for (const failure of ["removed", "untrusted", "unreadable"]) {

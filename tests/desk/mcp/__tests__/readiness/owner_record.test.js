@@ -12,6 +12,24 @@ const NOW = Date.parse("2026-09-26T12:00:00.000Z")
 // Booted an hour before NOW.
 const clock = { now: () => NOW, uptimeSeconds: () => 3600, selfPid: 100 }
 
+test("only verified live preparation receives the remaining existing startup window", async () => {
+  const { controllerStartupWaitMs } = await import("../../../../../plugins/desk/mcp/src/readiness/owner-record.js")
+  assert.equal(typeof controllerStartupWaitMs, "function", "bounded startup-state policy is not implemented")
+  const startup = { started_at: new Date(NOW - 3000).toISOString() }
+  const live = { state: "live", verified: true, record: { startup } }
+  for (const [platform, expected] of [["darwin", 7000], ["linux", 7000], ["win32", 27000]])
+    assert.equal(controllerStartupWaitMs(live, { now: NOW, platform }), expected)
+  for (const owner of [
+    { ...live, state: "dead" }, { ...live, state: "self" }, { ...live, verified: false },
+    { ...live, record: {} },
+    { ...live, record: { startup: {} } },
+    { ...live, record: { startup: { started_at: "not a date" } } },
+    { ...live, record: { startup: { started_at: new Date(NOW + 1).toISOString() } } },
+    { ...live, record: { startup: { started_at: new Date(NOW - 10000).toISOString() } } },
+  ]) assert.equal(controllerStartupWaitMs(owner, { now: NOW, platform: "darwin" }), 0,
+    "ready, unverified, stale or malformed owners must retain ordinary hung-owner handling")
+})
+
 function record(identity, owner) {
   return { schema_version: 1, identity, endpoint: "/tmp/x.sock", socket: { dev: 1, ino: 2 }, owner }
 }

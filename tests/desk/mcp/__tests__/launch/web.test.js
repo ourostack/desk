@@ -1300,6 +1300,29 @@ test("retained proxy lists its explicit unit catalog consistently while default 
   assert.deepEqual(read()[0].result.tools,JSON.parse(readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
 })
 
+test("discoverable browser guidance offers executable page examples with private-only inline output", async () => {
+  const input = new PassThrough(), output = new PassThrough(), read = collect(output)
+  const serving = browser.serveDegraded({ stdin: input, stdout: output, payload: { code: "owned_unavailable" } })
+  input.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n")
+  await serving
+  const command = read()[0].result.tools.find(tool => tool.name === "browser_command")
+  const examples = [...command.description.matchAll(/\["[^"\n]*"(?:\s*,\s*"[^"\n]*")*\]/gu)]
+  assert.ok(examples.length > 0, "agent-facing guidance must offer executable argv examples, not unavailable help")
+  const { validatePageArgs } = require(path.join(mcpRoot, "browser-context-common.cjs"))
+  for (const example of examples) {
+    const args = JSON.parse(example[0])
+    assert.doesNotThrow(() => validatePageArgs(args, "private"))
+    if (args.includes("--json")) {
+      assert.match(command.description.slice(0, example.index).split(".").at(-1), /private/iu)
+      assert.throws(() => validatePageArgs(args, "signed-in"), { code: "reserved_option" })
+    } else {
+      assert.doesNotThrow(() => validatePageArgs(args, "signed-in"))
+    }
+  }
+  assert.ok(examples.some(example => JSON.parse(example[0])[0] === "snapshot"))
+  assert.ok(examples.some(example => JSON.parse(example[0])[0] === "tab-list"))
+})
+
 test("actual default SDK handshake and invalid/legacy calls do not wait for or start browser installation", posixOnly, async () => {
   const home=await makeIsolatedHome("desk-web-hostflow-")
   const session = await openSession({ command: process.execPath, args: [path.join(mcpRoot,"web.cjs")], cwd: home.root, env: isolatedEnv(home) })

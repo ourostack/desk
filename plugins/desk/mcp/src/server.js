@@ -65,6 +65,8 @@ import { indexDbPath, openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
 import { stableStringify } from "./readiness/identity.js"
 import { CanonicalWriteRecordingError } from "./readiness/journal.js"
+import { ensureStateIgnored } from "./util/state-ignore.js"
+import { ensureCardGuard } from "./desk/card-commit-guard.js"
 import { createDeskQueryRouter } from "./readiness/query-router.js"
 import { admitControlPlane } from "./activation/admit.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
@@ -132,6 +134,15 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
     return await startReadinessController({
       ...options,
       watcher,
+      prepareRootSync: () => {
+        ensureStateIgnored(deskRoot)
+        const guard = ensureCardGuard(deskRoot)
+        if (guard?.state === "failed") {
+          throw Object.assign(new Error(`Workspace card-guard preparation failed: ${guard.reason}`), {
+            code: "controller_workspace_preparation_failed",
+          })
+        }
+      },
       handlers: {
         async beginConvergence({ eventCursor, journal }) {
           // Leave turns for controller messages between phases; the owning MCP session runs on a different event loop.
