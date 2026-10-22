@@ -3,7 +3,7 @@
   "id": "always-on-collaboration",
   "description": "Bounded collaboration contracts after corrections, during authorized research, and at real human-only gates. Static validation does not establish agent behavior.",
   "sources": ["plugins/desk/skills/using-desk/SKILL.md", "plugins/desk/skills/interaction-style/SKILL.md"],
-  "reviewedSourceFingerprint": "2f62fada119950338643e68d09581185def6e2fedb03ee192ac4c10c34f488b4",
+  "reviewedSourceFingerprint": "b78ef7bf9a2f6ac3970c0f24ec49e980d0f1497724e361e5c5a4bbd7dd42714b",
   "requirements": [
     {"id": "git-backed-memory", "description": "Disable native harness memory while Desk is active. Keep durable instructions and preferences in the Git-backed desk, never in store_memory, vote_memory or another host memory store."},
     {"id": "shared-work-locations", "description": "Keep work product in the repository (code and docs) or the desk (private work product), never in a host's own folder such as Copilot's session folder under ~/.copilot/session-state, and never in a new dot folder; an app's runtime data goes in the operating system's standard app-data folder. Work runs across agents and machines, and a local-only folder reaches neither."},

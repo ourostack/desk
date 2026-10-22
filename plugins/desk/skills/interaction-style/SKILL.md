@@ -73,7 +73,7 @@ Hosts offer their own memory, storage, planning, task and review commands. The n
 | The host offers | Use instead |
 | --- | --- |
 | `store_memory`, `vote_memory`, `/memory` | the desk: the operator's rules and preferences there, and a skill for a rule that is general |
-| the session folder `~/.copilot/session-state/<id>/` (its `files/`, `plan.md`, checkpoints), which the host calls persistent; Claude Code's `~/.claude/projects/` and Codex's `~/.codex/sessions/` | the repository for code and docs; the desk for private work product. Work runs across agents and machines, and a host's local folder reaches neither |
+| the session folder `~/.copilot/session-state/<id>/` (its `files/`, `plan.md`, checkpoints), which the host calls persistent; Claude Code's `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` and Codex's `${CODEX_HOME:-~/.codex}/sessions/` | the repository for code and docs; the desk for private work product. Work runs across agents and machines, and a host's local folder reaches neither |
 | a new dot folder (`~/.<name>`) or another private location you invent | the operating system's standard app-data folder for an app's runtime data; otherwise the repository or the desk |
 | a session `plan.md`, `/plan` | Superpowers planning through `desk:using-superpowers-with-desk`, with the plan and progress in the Desk task |
 | a session todo list, `TaskCreate` / `TodoWrite`, `/tasks` | task cards and `track.md` for work state; the session list only as scratch, as above |
