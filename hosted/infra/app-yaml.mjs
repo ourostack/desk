@@ -38,7 +38,7 @@ import { parseArgs } from "node:util";
 import { checkIdentitySettings, cutoffGapWarning, cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
 import { OURO_SETTINGS, readIdentity } from "../src/identity-config.js";
 
-const MULTI_USER_NEEDS_IDENTITY = "DESK_MULTI_USER requires Ouro account identity, so the gateway would not start: apply a complete identity record with it.";
+const MULTI_USER_NEEDS_IDENTITY = "DESK_MULTI_USER requires Ouro account identity, so the gateway would not start with DESK_MULTI_USER=1: apply a complete identity record with it, or pass DESK_MULTI_USER=0.";
 
 // `az containerapp show -o json`'s output, as text or already parsed.
 export function parseShown(shown) {
@@ -269,7 +269,14 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   }
   if (values["require-identity"]) {
     // A create with DESK_MULTI_USER=1 checks this before the app exists: the setting joins only with a complete record.
-    if (!record || identitySettings(record).missing.length) throw new Error(`${MULTI_USER_NEEDS_IDENTITY} ${values["identity-record"] ? `${values["identity-record"]} is incomplete.` : "There is no identity record."} Nothing was sent to Azure.`);
+    const settings = record ? identitySettings(record) : null;
+    if (!settings || settings.missing.length) throw new Error(`${MULTI_USER_NEEDS_IDENTITY} ${record ? `identity-${record.env}.json is incomplete.` : "There is no identity record."} Nothing was sent to Azure.`);
+    // The same check the update after the create runs, so a record it would refuse stops the create instead.
+    try {
+      checkIdentitySettings({ record, env: { ...settings.setEnv, DESK_MULTI_USER: "1" }, current: {}, now });
+    } catch (error) {
+      throw new Error(`${error.message.replace(/ This update was not sent to the app\.$/, "")} Nothing was sent to Azure.`);
+    }
     return null;
   }
   if (values.mask) return print(maskSecrets(readFileSync(values.mask, "utf8")));

@@ -528,9 +528,39 @@ test("DESK_MULTI_USER=1 without a complete identity record is refused before any
     assert.ok(!argv.some((args) => args.slice(0, 3).join(" ") === "containerapp identity assign"), name);
     assert.match(output, /DESK_MULTI_USER requires Ouro account identity/, name);
   }
-  const create = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", DESK_MULTI_USER: "1" }, expectFailure: true });
-  assert.ok(!create.argv.some((args) => args.slice(0, 2).join(" ") === "containerapp create"), "no app created");
-  assert.match(create.output, /DESK_MULTI_USER requires Ouro account identity/);
+  // A create is refused before any write at all: no staging identity, role, image build or app (review I1).
+  const WRITES = ["identity create", "role assignment", "acr build", "containerapp create", "containerapp update", "containerapp identity"];
+  const writes = (argv) => argv.filter((args) => WRITES.includes(args.slice(0, 2).join(" ")));
+  for (const [name, env, record] of [
+    ["staging, no record", { STAGE: "staging", FAKE_NO_STAGING_IDENTITY: "1" }, undefined],
+    ["staging, incomplete record", { STAGE: "staging", FAKE_NO_STAGING_IDENTITY: "1" }, { ...completeRecord("test"), ari: null }],
+    ["production, no record", {}, undefined],
+  ]) {
+    const create = runProvision(t, { env: { ...env, DESK_MULTI_USER: "1" }, record, expectFailure: true });
+    assert.deepEqual(writes(create.argv), [], name);
+    assert.match(create.output, /DESK_MULTI_USER requires Ouro account identity/, name);
+    assert.match(create.output, /DESK_MULTI_USER=0/, name);
+  }
+  // A complete record the gateway would still refuse stops a create before the app exists, too (review m2).
+  const badEndpoint = { ...completeRecord("test"), storage: { account: "x", endpoint: "https://x.blob.core.windows.net" } };
+  const refused = runProvision(t, { env: { STAGE: "staging", DESK_MULTI_USER: "1" }, record: badEndpoint, expectFailure: true });
+  assert.deepEqual(writes(refused.argv), []);
+  assert.match(refused.output, /storage\.endpoint must be/);
+});
+
+test("an app already holding DESK_MULTI_USER=1 without Ouro settings is refused with both ways out (review m3)", (t) => {
+  const app = todaysProduction();
+  envOf(app).push({ name: "DESK_MULTI_USER", value: "1" });
+  const { argv, output } = runProvision(t, { app, expectFailure: true });
+  assert.deepEqual(updates(argv), []);
+  assert.match(output, /DESK_MULTI_USER=0/);
+  assert.equal(multiUserOf(runProvision(t, { app, env: { DESK_MULTI_USER: "0" } }).documents[0]), "0");
+});
+
+test("a dry run of a create says the update after it would add DESK_MULTI_USER=1 with the Ouro settings (review m4)", (t) => {
+  const { argv, output } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", DRY_RUN: "1", DESK_MULTI_USER: "1" }, record: completeRecord("test") });
+  assert.deepEqual(updates(argv), []);
+  assert.match(output, /after the create.*DESK_MULTI_USER=1/i);
 });
 
 test("REMOVE_OURO_SETTINGS=1 also takes DESK_MULTI_USER off, and refuses DESK_MULTI_USER=1 alongside it", (t) => {

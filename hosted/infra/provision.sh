@@ -181,6 +181,19 @@ write() {
   fi
 }
 
+not_found() { grep -qiE "ResourceNotFound|was not found|could not be found" <<<"$1"; }
+
+# DESK_MULTI_USER=1 on an app that doesn't exist yet: the record must be complete and pass the gateway's checks
+# before anything here writes (the staging identity, its role, the first image, the app), because the setting
+# joins only through the update that adds the Ouro settings. An app that exists is checked by app-yaml.mjs.
+if [[ "${DESK_MULTI_USER:-}" == 1 ]] && ! early_error="$(az_read containerapp show -n "$APP" -g "$RESOURCE_GROUP" --query name -o tsv 2>&1 >/dev/null)" && not_found "$early_error"; then
+  if [[ -f "$IDENTITY_FILE" ]]; then
+    node "$APP_YAML" --require-identity --identity-record "$IDENTITY_FILE"
+  else
+    node "$APP_YAML" --require-identity
+  fi
+fi
+
 environment_id="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query id -o tsv)"
 default_domain="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query properties.defaultDomain -o tsv)"
 verification_id="$(az_read containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" --query properties.customDomainConfiguration.customDomainVerificationId -o tsv)"
@@ -188,7 +201,6 @@ login_server="$(az_read acr show -n "$REGISTRY" --query loginServer -o tsv)"
 
 # The identity the app pulls images with. Staging's is its own, made here if missing and granted AcrPull on the
 # registry only; the role is read first, so a rerun writes nothing.
-not_found() { grep -qiE "ResourceNotFound|was not found|could not be found" <<<"$1"; }
 if [[ "$STAGE" == staging ]]; then
   if identity_error="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query id -o tsv 2>&1 >/dev/null)"; then
     pull_identity_id="$(az_read identity show -n "$PULL_IDENTITY" -g "$PULL_IDENTITY_GROUP" --query id -o tsv)"
@@ -479,13 +491,8 @@ else
     say "Building the first image $image from $REPO_ROOT"
     write acr build --registry "$REGISTRY" --image "ouro-desk-hosted:$tag" --file hosted/Dockerfile "$REPO_ROOT"
   fi
-  if [[ "${DESK_MULTI_USER:-}" == 1 ]]; then
-    # Checked before the app exists: the setting joins only through the update that adds a complete record.
-    if [[ -f "$IDENTITY_FILE" ]]; then
-      node "$APP_YAML" --require-identity --identity-record "$IDENTITY_FILE"
-    else
-      node "$APP_YAML" --require-identity
-    fi
+  if [[ "${DESK_MULTI_USER:-}" == 1 && "${DRY_RUN:-0}" == 1 ]]; then
+    say "After the create, the update that adds the Ouro settings would also set DESK_MULTI_USER=1 (a dry run shows only the create)"
   fi
   secrets_yaml="$(
     printf '      - name: desk-signing-key\n        value: "%s"\n' "$(openssl rand -hex 32)"
