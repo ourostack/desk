@@ -147,6 +147,7 @@ jobs:
           docker version > native-runtime-evidence/docker-version.txt
           cp hosted/test/fixtures/runtime-native.Dockerfile native-runtime-evidence/fixture-context/Dockerfile
           cp hosted/test/fixtures/runtime-{native,child,timeout-native,service-native}.js native-runtime-evidence/fixture-context/
+          cp hosted/test/fixtures/isolation-e2e-native.js native-runtime-evidence/fixture-context/
           cp hosted/test/fixtures/echo-desk.js hosted/test/fixtures/entra-discovery-ourobottest.json native-runtime-evidence/fixture-context/
           sha256sum hosted/Dockerfile .dockerignore hosted/package-lock.json plugins/desk/mcp/package-lock.json \
             hosted/src/account-runtime.js hosted/src/realm-helper.js hosted/src/service-lifetime.js hosted/src/service-output.js \
@@ -176,15 +177,16 @@ jobs:
 
       # Cases run sequentially against one real production build. A failure is
       # retained and makes the step red; subsequent cases still supply evidence.
-      - name: Qualify actual MCP services, unchanged I1 deadlines and multi-account routing
+      - name: Qualify actual MCP services, unchanged I1 deadlines, multi-account routing and two-account isolation
         run: |
           failed=0
-          for mode in services unproven i1 main; do
+          for mode in services unproven i1 main isolation; do
             case "$mode" in
               services) flags=(-e DESK_NATIVE_SERVICES=1) ;;
               unproven) flags=(-e DESK_NATIVE_SERVICES=1 -e DESK_SERVICE_UNPROVEN=1) ;;
               i1) flags=(-e DESK_NATIVE_TIMEOUTS=1) ;;
               main) flags=(-e DESK_NATIVE_MAIN=1) ;;
+              isolation) flags=(-e DESK_NATIVE_ISOLATION=1) ;;
             esac
             evidence="native-runtime-evidence/$mode"
             mkdir -p "$evidence"
