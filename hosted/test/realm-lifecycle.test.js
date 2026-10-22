@@ -40,7 +40,7 @@ async function setup(t, { holdPush = false, holdBroker = false } = {}) {
   const lifecycle = createRealmLifecycle({
     services, operations: new Set(), failure: () => preservationFailures.get("unit")?.error, preserve,
     stop: () => { state.stopped = true; },
-    async push() { state.order.push("push"); state.push++; if (holdPush) await pushGate.promise; },
+    async push() { state.push++; if (holdPush) await pushGate.promise; state.order.push("pushed"); },
     async closeBroker() {
       state.order.push("broker-closed");
       state.brokerClose++;
@@ -253,20 +253,33 @@ test("the lifecycle seam refuses new service registration once close has started
   }
 });
 
-test("close waits for every service to retire before the push, and pushes before the broker closes", async t => {
-  const f = await setup(t);
-  const live = await f.service({ buffered: false, protocolClosed: false, retired: false });
+test("close waits for every service to retire before the push, and the push finishes before the broker closes", async t => {
+  const f = await setup(t, { holdPush: true });
+  const services = [
+    await f.service({ buffered: false, protocolClosed: false, retired: false }),
+    await f.service({ buffered: false, protocolClosed: false, retired: false }),
+  ];
+  const retire = ({ guardian }) => {
+    guardian.emit("message", { serviceClosed: true, code: 0, signal: null });
+    guardian.emit("message", { retired: true, quiescent: true });
+    guardian.connected = false;
+    guardian.exitCode = 0;
+    guardian.emit("disconnect");
+    guardian.emit("close", 0);
+  };
   const closing = f.lifecycle.close();
   await turn();
+  for (const { guardian } of services) assert.deepEqual(guardian.signals, ["SIGTERM"], "close asks every service to stop");
+  retire(services[0]);
   await turn();
-  assert.deepEqual(live.guardian.signals, ["SIGTERM"], "close asks the service to stop");
-  assert.deepEqual(f.state.order, [], "nothing is pushed while a service may still write");
-  live.guardian.emit("message", { serviceClosed: true, code: 0, signal: null });
-  live.guardian.emit("message", { retired: true, quiescent: true });
-  live.guardian.connected = false;
-  live.guardian.exitCode = 0;
-  live.guardian.emit("disconnect");
-  live.guardian.emit("close", 0);
+  await turn();
+  assert.equal(f.state.push, 0, "nothing is pushed while any service may still write");
+  retire(services[1]);
+  await turn();
+  await turn();
+  assert.equal(f.state.push, 1, "the push starts once every service has retired");
+  assert.equal(f.state.brokerClose, 0, "the broker stays open while the push runs");
+  f.pushGate.resolve();
   await closing;
-  assert.deepEqual(f.state.order, ["push", "broker-closed"], "the push follows retirement, and the broker outlives the push");
+  assert.deepEqual(f.state.order, ["pushed", "broker-closed"]);
 });

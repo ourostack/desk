@@ -254,6 +254,8 @@ await store.putBinding("account-a", { ...binding, author: { ...binding.author, n
 await assert.rejects(manager.prepare("account-a"), /authority/);
 await store.putBinding("account-a", { ...binding, repo: "synthetic/third" });
 await assert.rejects(manager.prepare("account-a"), /authority/, "a prepared account's repository cannot change");
+await store.putBinding("account-a", { ...binding, repo: "Synthetic/Desk" });
+assert.equal(await manager.prepare("account-a"), a, "a case-only change names the same repository");
 await store.putBinding("account-a", binding);
 await store.putAccount({ accountId: "account-a", displayName: "Synthetic", deskAccess: false });
 await assert.rejects(manager.prepare("account-a"));
@@ -289,6 +291,12 @@ const nextManager = runtime.createAccountRuntime({
   baseEnv: { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin" },
   mint: async (repo) => { minted.add(repo); return { token: "synthetic-token" }; },
 });
+// A preparation that fails and is purged releases its repository, so another account can be bound to it.
+await store.putAccount({ accountId: "account-failed", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-failed", { ...binding, repo: "synthetic/second" });
+writeFileSync("/data/runtime-native-fail", "synthetic forced fetch failure");
+await assert.rejects(nextManager.prepare("account-failed"));
+unlinkSync("/data/runtime-native-fail");
 const c = await nextManager.prepare("account-c");
 assert.equal(c.env.GH_REPO, "synthetic/second", "an account's desk is its own binding's repository");
 assert.equal(await c.git(["show", "HEAD:marker"]), "second marker", "the clone is the account's own repository");

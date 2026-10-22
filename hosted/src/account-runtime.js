@@ -220,10 +220,11 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
     if (closed || account?.accountId !== accountId || account.deskAccess !== true ||
         binding?.kind !== "github" || !binding.author || !validRepo(binding.repo) ||
-        (binding.installationId === undefined && binding.repo !== configuredRepo)) throw refused();
+        (binding.installationId === undefined && binding.repo.toLowerCase() !== configuredRepo?.toLowerCase())) throw refused();
+    // GitHub repository names are case-insensitive.
     const claim = binding.repo.toLowerCase();
     if (claims.has(claim) && claims.get(claim) !== accountId) throw refused();
-    const authority = JSON.stringify([binding.kind, binding.repo, binding.installationId ?? null, binding.author.name, binding.author.email]);
+    const authority = JSON.stringify([binding.kind, claim, binding.installationId ?? null, binding.author.name, binding.author.email]);
     if (authorities.has(accountId) && authorities.get(accountId) !== authority) throw refused();
     authorities.set(accountId, authority);
     claims.set(claim, accountId);
@@ -235,6 +236,14 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       const value = await pending;
       prepared.set(accountId, value);
       return value;
+    } catch (error) {
+      // A preparation that failed and was purged holds nothing for this repository, so the account may be rebound
+      // and the repository bound to another account. An uncertain realm keeps both: it may still hold writes.
+      if (!preservationFailures.has(accountId)) {
+        authorities.delete(accountId);
+        if (claims.get(claim) === accountId) claims.delete(claim);
+      }
+      throw error;
     } finally {
       preparing.delete(accountId);
     }
