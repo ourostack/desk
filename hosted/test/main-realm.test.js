@@ -171,11 +171,14 @@ test("initDesk runs desk-init in a fresh realm from the new binding, with no pat
   assert.deepEqual(deskInitArgs(CONFIG), ["/app/plugins/desk/mcp/scripts/desk-init.js"]);
 });
 
-test("initDesk returns desk-init's refusal for an existing desk without pushing, and discards the realm", async () => {
+test("initDesk returns desk-init's refusal for an existing desk without pushing, keeping the realm, and discards any other refusal", async () => {
   const existing = linkFixture({ stdout: '{"status":"refused","reason":"already_a_desk"}\n' });
   assert.deepEqual(await existing.hooks.initDesk({ accountId: "acct-1" }), { status: "refused", reason: "already_a_desk" });
   assert.ok(!existing.events.includes("push"));
-  assert.equal(existing.events.at(-1), "discard acct-1");
+  assert.ok(!existing.events.includes("discard acct-1"), "an existing desk's realm (and any session in it) stays");
+  const other = linkFixture({ stdout: '{"status":"refused","reason":"not_empty","step":"check"}\n' });
+  await other.hooks.initDesk({ accountId: "acct-1" });
+  assert.equal(other.events.at(-1), "discard acct-1");
 });
 
 test("a desk-init that fails, prints nothing or runs too long leaves its realm discarded, never pushed", async () => {

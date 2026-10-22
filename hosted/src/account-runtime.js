@@ -100,6 +100,8 @@ export function completion(child, timeoutMs = 60_000, requireRetirement = false)
 // and real guardian retirement; neither outcome substitutes for the other.
 export function createRealmLifecycle({ services, operations, failure, preserve, stop, push, closeBroker, purgeRoot }) {
   let closePromise;
+  // Set by a discard: a close that has not reached its push yet skips it.
+  let withheld = false;
   const healthy = () => {
     const error = failure();
     if (error) throw error;
@@ -134,13 +136,13 @@ export function createRealmLifecycle({ services, operations, failure, preserve, 
     }, failed);
     guardian.kill("SIGTERM");
   });
-  const finish = pushing => (async () => {
+  const finish = () => (async () => {
     healthy();
     await Promise.all([...services].map(retire));
     healthy();
     await Promise.all([...operations]);
     healthy();
-    if (pushing) {
+    if (!withheld) {
       await push();
       healthy();
     }
@@ -174,7 +176,7 @@ export function createRealmLifecycle({ services, operations, failure, preserve, 
       try { healthy(); } catch (error) { return Promise.reject(error); }
       if (closePromise) return closePromise;
       stop();
-      const closing = finish(true);
+      const closing = finish();
       closePromise = closing;
       // A quiescent failure (the push could not be verified, say) leaves the writes in the realm and nothing
       // running in it, so a later close tries again; a preservation failure stays final.
@@ -190,18 +192,15 @@ export function createRealmLifecycle({ services, operations, failure, preserve, 
       await purgeRoot();
       healthy();
     },
+    // Keeps the realm's writes from reaching its repository, even if a close is already retiring its services.
+    withholdPush() {
+      withheld = true;
+    },
     // Retires everything and purges the root without pushing: for a realm whose work must not reach its
-    // repository (a desk init that is being rolled back).
+    // repository (a desk init that is being rolled back). A clean failure can be retried, as with close.
     async discard() {
-      healthy();
-      if (!closePromise) {
-        stop();
-        closePromise = finish(false);
-      }
-      await closePromise;
-      healthy();
-      await purgeRoot();
-      healthy();
+      withheld = true;
+      await value.purge();
     },
   });
   return value;
@@ -275,7 +274,12 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     authorities.set(accountId, authority);
     claims.set(claim, accountId);
     if (prepared.has(accountId)) return prepared.get(accountId);
-    if (preparing.has(accountId)) return preparing.get(accountId);
+    // Joining a preparation already under way: if the account was released or deleted meanwhile, that realm was
+    // built from a binding the account no longer has, so start again.
+    if (preparing.has(accountId)) {
+      const value = await preparing.get(accountId);
+      return generation(accountId) === started ? value : prepare(accountId);
+    }
     const pending = provision(accountId, structuredClone(binding));
     preparing.set(accountId, pending);
     try {
@@ -416,6 +420,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       close: lifecycle.close,
       purge: lifecycle.purge,
       discard: lifecycle.discard,
+      withholdPush: lifecycle.withholdPush,
     });
     return value;
   }
@@ -428,6 +433,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   function removePrepared(accountId, options) {
     const value = prepared.get(accountId);
     if (!value) return Promise.resolve();
+    if (options?.discard) value.withholdPush();
     if (!removals.has(value)) {
       const removal = removeRealm(accountId, value, options);
       removals.set(value, removal);
@@ -474,10 +480,13 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   // share one release. Throws when the old realm may still hold writes; the next preparation retries it.
   function release(accountId, { discard = false } = {}) {
     bump(accountId);
+    // A discard asked for while a pushing release is under way still keeps the writes out of the repository.
+    if (discard) prepared.get(accountId)?.withholdPush();
     if (releasing.has(accountId)) return releasing.get(accountId);
     const done = (async () => {
       await preparing.get(accountId)?.catch(() => {});
       if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+      if (discard) prepared.get(accountId)?.withholdPush();
       await removePrepared(accountId, { discard });
     })();
     releasing.set(accountId, done);

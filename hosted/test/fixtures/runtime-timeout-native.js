@@ -58,7 +58,9 @@ export async function runTimeoutCases({ config, store, binding, root, waitForSlo
   if (!writePushed) {
     assert.equal(pushClose.status, "rejected", "retirement must not turn a stale push count into a successful close");
     assert.equal(afterPush.socketExists, true, "a retired but unpushed write retains its broker");
-    await assert.rejects(pushManager.close(), /preserv|shutdown/i);
+    // The realm is quiescent and keeps its broker, so the next close (here, shutdown) pushes the write it missed.
+    await pushManager.close();
+    assert.ok(originSubjects().includes("post-push retirement write"), "a retried close pushes the write the first push missed");
   } else {
     await pushManager.close();
   }

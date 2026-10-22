@@ -20,7 +20,7 @@ const outcome = promise => promise.then(
   error => ({ code: error.code, quiescent: error.quiescent }),
 );
 
-async function setup(t, { holdPush = false, holdBroker = false, pushFailures = 0 } = {}) {
+async function setup(t, { holdPush = false, holdBroker = false, pushFailures = 0, brokerFailures = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "desk-r3-"));
   console.log(`retained R3 unit root: ${root}`);
   writeFileSync(join(root, "recovery"), "retained lifecycle unit evidence");
@@ -47,8 +47,9 @@ async function setup(t, { holdPush = false, holdBroker = false, pushFailures = 0
       state.order.push("pushed");
     },
     async closeBroker() {
-      state.order.push("broker-closed");
       state.brokerClose++;
+      if (state.brokerClose <= brokerFailures) throw Object.assign(new Error("broker unclosed"), { code: "DESK_BROKER_UNCLOSED", quiescent: true });
+      state.order.push("broker-closed");
       brokerEntered.resolve();
       if (holdBroker) await brokerGate.promise;
       await new Promise(resolve => broker.close(resolve));
@@ -305,4 +306,31 @@ test("discard retires the realm and purges its root without pushing", async t =>
   assert.equal(f.state.push, 0, "a discarded realm's writes never reach the repository");
   assert.equal(f.state.brokerClose, 1);
   assert.equal(f.state.purge, 1);
+});
+
+test("a discard that fails cleanly can be retried", async t => {
+  const f = await setup(t, { brokerFailures: 1 });
+  assert.deepEqual(await outcome(f.lifecycle.discard()), { code: "DESK_BROKER_UNCLOSED", quiescent: true });
+  assert.equal(f.state.purge, 0);
+  await turn();
+  await f.lifecycle.discard();
+  assert.equal(f.state.push, 0, "neither attempt pushes");
+  assert.equal(f.state.purge, 1);
+});
+
+test("a discard asked for during a close that has not pushed yet keeps the writes out of the repository", async t => {
+  const f = await setup(t);
+  const { guardian } = await f.service({ buffered: false, protocolClosed: false, retired: false });
+  const closing = f.lifecycle.close();
+  await turn();
+  f.lifecycle.withholdPush();
+  guardian.emit("message", { serviceClosed: true, code: 0, signal: null });
+  guardian.emit("message", { retired: true, quiescent: true });
+  guardian.connected = false;
+  guardian.exitCode = 0;
+  guardian.emit("disconnect");
+  guardian.emit("close", 0);
+  await closing;
+  assert.equal(f.state.push, 0);
+  assert.equal(f.state.brokerClose, 1);
 });

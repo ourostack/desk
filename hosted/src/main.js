@@ -386,7 +386,8 @@ export function createLinkHooks({ config, parts, runtime, relay = () => null, ti
       try {
         const result = await runDeskInit(prepared, config, timeoutMs);
         if (result?.status === "created") await prepared.push();
-        if (result?.status !== "created") await runtime.release(accountId, { discard: true });
+        // An existing desk keeps its realm (and any session using it); any other refusal is rolled back.
+        else if (result?.reason !== "already_a_desk") await runtime.release(accountId, { discard: true });
         return result;
       } catch (error) {
         await runtime.release(accountId, { discard: true }).catch((discardError) =>
