@@ -502,9 +502,24 @@ export async function pushDesk({ dir, args, env, git, timeoutMs = 60_000, retryM
 // sessions, every Desk child stopped, then Desk's own push of whatever the
 // clone still holds, and only then the token socket that push authenticates
 // through.
-export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket }) {
+//
+// The wait for Desk children is bounded: a multi-user session's stop is a
+// message to its realm's supervisor, which a wedged or stopped supervisor never
+// answers, and every realm's push must still run before Container Apps kills
+// the replica.
+export const RELAY_CLOSE_DEADLINE_MS = 12_000;
+
+export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket, relayCloseMs = RELAY_CLOSE_DEADLINE_MS }) {
   server.close();
-  await relay?.close();
+  if (relay) {
+    let timer;
+    const closed = await Promise.race([
+      relay.close().then(() => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), relayCloseMs); }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) log(`Desk sessions did not all close within ${relayCloseMs / 1000} s; pushing the desks anyway`);
+  }
   await push?.();
   await closeTokenSocket?.();
   server.closeAllConnections();
