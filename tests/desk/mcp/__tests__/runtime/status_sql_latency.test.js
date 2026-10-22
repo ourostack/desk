@@ -9,21 +9,57 @@ import * as path from "node:path"
 import Database from "better-sqlite3"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
+import { startControllerProcess } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
 import { startInProcess } from "./_in_process_desk.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-for (const phase of ["rootStatus", "inspectLocalDb", "openSnapshot"]) {
-test(`synchronous ${phase} work cannot stall the answering thread or its budget`, async (t) => {
+for (const [phase, slowControl] of [
+  ["rootStatus", false], ["inspectLocalDb", false], ["openSnapshot", false],
+  ["rootStatus", true],
+]) {
+test(`synchronous ${phase} work cannot stall the answering thread or its budget${slowControl ? " with delayed controller status" : ""}`, async (t) => {
   const root = await mkTempRoot("status-sql-")
   mkdirSync(path.join(root, "_meta"))
   mkdirSync(path.join(root, "_archive"))
   writeFileSync(path.join(root, "task.md"), "# SQLite status seam\n")
+  const launches = []
+  const controlPreload = path.join(root, "slow-control-status.mjs")
+  const controlStarted = path.join(root, "control-started")
+  const controlDelayed = path.join(root, "control-delayed")
+  if (slowControl) writeFileSync(controlPreload, `
+    import * as net from "node:net";
+    import { writeFileSync } from "node:fs";
+    writeFileSync(${JSON.stringify(controlStarted)}, String(process.pid));
+    const end = net.Socket.prototype.end;
+    net.Socket.prototype.end = function(chunk, ...args) {
+      if (typeof chunk === "string" && chunk.startsWith("{")) {
+        const response = JSON.parse(chunk);
+        if (response.result?.owner && response.result?.convergence) {
+          writeFileSync(${JSON.stringify(controlDelayed)}, String(process.pid));
+          setTimeout(() => { if (!this.destroyed) end.call(this, chunk, ...args); }, 5000);
+          return this;
+        }
+      }
+      return end.call(this, chunk, ...args);
+    };
+  `)
   const desk = await startInProcess({
     argv: ["--root", root], env: process.env,
     readinessPolicy: { semantic: "unsupported" },
     runtimeImporter: async () => ({
       ...server,
-      connectOrStartController: (options) => server.connectOrStartController({ ...options, ephemeral: true }),
+      connectOrStartController: (options) => server.connectOrStartController({
+        ...options, ephemeral: true,
+        controllerLauncher: async (launchOptions) => {
+          const controller = await startControllerProcess(launchOptions, slowControl ? {
+            spawn: (file, args, forkOptions) => childProcess.fork(file, args, {
+              ...forkOptions, execArgv: ["--import", pathToFileURL(controlPreload).href],
+            }),
+          } : undefined)
+          launches.push({ pid: controller.owner.pid, identity: launchOptions.identity.id })
+          return controller
+        },
+      }),
     }),
   })
   t.after(async () => {
@@ -34,8 +70,14 @@ test(`synchronous ${phase} work cannot stall the answering thread or its budget`
   })
   assert.equal((await desk.settled()).state, "ready")
   const controller = desk.handle.session.context.admission.controller
-  const observed = await controller.status()
-  assert.notEqual(observed.owner.pid, process.pid, "the controller must run on its own event loop")
+  assert.equal(launches.length, 1, "the fixture must retain exactly one real child startup receipt")
+  const observed = launches[0]
+  assert.equal(observed.identity, controller.identity.id)
+  assert.notEqual(observed.pid, process.pid, "the controller must run on its own event loop")
+  if (slowControl) {
+    assert.equal(Number(readFileSync(controlStarted, "utf8")), observed.pid)
+    assert.equal(existsSync(controlDelayed), false, "identity must not depend on a separate status RPC")
+  }
   // A real DB is needed: missing-index status must not pass without traversing SQLite.
   await server.ensureIndex(root, { skipEmbed: true, snapshots: false, vectorPacks: false })
   const marker = path.join(root, "sql-entered")
@@ -119,8 +161,12 @@ test(`synchronous ${phase} work cannot stall the answering thread or its budget`
   assert.equal(detail.root.path, root)
   assert.equal(detail.local_db.path, indexDbPath(root))
   assert.ok(detail.status_detail_from, "a late computation must carry its actual start timestamp")
+  if (slowControl) {
+    await assert.rejects(controller.status(), /readiness controller request timed out: status/u)
+    assert.equal(Number(readFileSync(controlDelayed, "utf8")), observed.pid)
+  }
   t.diagnostic(JSON.stringify({ phase, statusMs: elapsedMs, firstTimerMs: timerMs, busyTimerMs,
-    controlMs, inspectionPid, controllerPid: observed.owner.pid, capMs: 200,
+    controlMs, inspectionPid, controllerPid: observed.pid, capMs: 200,
     fields: ["state", "root.path", "local_db.path", "status_detail_from"] }))
 })
 }
