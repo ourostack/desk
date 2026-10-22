@@ -445,7 +445,20 @@ if (process.env.DESK_NATIVE_MAIN === "1") {
     DESK_ENTRA_TENANT_ID: "c12edfb6-c5ab-4bf8-b1d5-1f053311d396", DESK_ENTRA_SUBDOMAIN: "ourobottest",
     DESK_ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555", DESK_ENTRA_CLIENT_SECRET: "synthetic",
     DESK_ACCOUNTS_ENDPOINT: "https://synthetic.invalid",
-  }, { store, fetch: async () => new Response(JSON.stringify(discovery), { headers: { "content-type": "application/json" } }) });
+  }, {
+    store,
+    // GitHub, for the session-start recheck of these operator-style bindings (no GitHub user): the App's installation
+    // still serves each repository, and mints a token from it. Everything else is the tenant's discovery document.
+    fetch: async (input, init = {}) => {
+      const url = new URL(typeof input === "string" ? input : input.url);
+      const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      if (url.hostname === "api.github.com" && /^\/repos\/synthetic\/[^/]+\/installation$/.test(url.pathname)) return json({ id: binding.installationId });
+      if (url.hostname === "api.github.com" && url.pathname === `/app/installations/${binding.installationId}/access_tokens` && init.method === "POST") {
+        return json({ token: "ghs_native_recheck", expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+      }
+      return json(discovery);
+    },
+  });
   const port = server.address().port;
   const bearer = (accountId) => seal("access", { clientId: "native", accountId, authTime: Math.floor(Date.now() / 1000) }, { key: "synthetic", ttlSec: 300 });
   const headers = (accountId, sessionId) => ({
