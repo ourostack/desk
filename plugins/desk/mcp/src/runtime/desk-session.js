@@ -626,10 +626,15 @@ export function createDeskSession(deps) {
     }
   }
 
+  // The loaded runtime's Desk build. Its controller connector elects by it, so the probes must look at the same controller.
+  function runningBuild() {
+    return context.runtimeServer?.RUNNING_BUILD ?? null
+  }
+
   // Count consecutive misses of one owner generation. Election never stops it; explicit repair must go through its child supervisor.
   async function noticeHungController({ controllerProblem, deskRoot, policy }) {
     if (controllerProblem.code !== "controller_unavailable") return controllerProblem
-    const probe = await hungPolicy.probe({ root: deskRoot, policy, stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
+    const probe = await hungPolicy.probe({ root: deskRoot, policy, build: runningBuild(), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
     if (!probeMissed(probe)) {
       context.hung = { misses: 0 }
       hungOwner = null
@@ -1255,7 +1260,7 @@ export function createDeskSession(deps) {
     if (!context.root || !context.policyKey) {
       return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: "not_admitted", fix: "Desk has not resolved a desk root and policy yet; call desk_status, then retry." }, true)
     }
-    const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
+    const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), build: runningBuild(), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
     const report = hungControllerReport(probe)
     const hung = probeMissed(probe)
     if (hung && hungOwner === controllerProbeKey(probe) && context.hung.misses >= hungPolicy.misses && report.owner_verified && report.owner_kind === "controller_child") {
@@ -1320,6 +1325,8 @@ export function createDeskSession(deps) {
       admission: {
         state: snapshot.state,
         code: snapshot.code,
+        // An admission attempt is running now: tool calls wait for it (GATE_WAIT_MS), so the compact answer says Desk is still starting even when the last attempt settled ready.
+        running: !disposed && admission.running,
         summary: snapshot.summary,
         blockers: snapshot.blockers,
         attempts: snapshot.attempts,

@@ -59,6 +59,7 @@ export async function connectOrStartController({
   protocolVersion = 1,
   lexicalContract = {},
   semanticContract = null,
+  build = null,
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
   watcher,
@@ -71,7 +72,7 @@ export async function connectOrStartController({
   makeDir = mkdir,
   recordChangeTimeoutMs = RECORD_CHANGE_TIMEOUT_MS,
 } = {}) {
-  const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
+  const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract, build })
   const stateDir = path.join(stateHome, identity.id)
   // Refuses a real, non-temp state home under what looks like a node:test run (Review Focus, PR #101 fix round: this
   // write sits under the CACHE home, not the STATE home every other guarded writer in this PR uses, so the original

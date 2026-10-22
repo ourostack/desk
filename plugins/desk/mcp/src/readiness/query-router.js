@@ -3,7 +3,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { directLexicalSearch, loadCurrentTombstoneLedger } from "./direct-lexical.js"
 import { expectedLexicalGenerationIdentity, matchesLexicalGenerationIdentity } from "./generations.js"
 import { stableStringify } from "./identity.js"
-import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline } from "../tools/search.js"
+import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline, SEMANTIC_CATCHING_UP, SEMANTIC_OFF } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
 
 function semanticScopeError() {
@@ -73,7 +73,7 @@ function semanticDiagnostic(proof) {
   if (proof.semanticBarrier.current !== true) {
     return {
       reason: proof.semanticBarrier.reason ?? "semantic_unavailable",
-      message: proof.semanticBarrier.message ?? "Semantic convergence is not current for the active generation.",
+      message: proof.semanticBarrier.message ?? SEMANTIC_CATCHING_UP,
     }
   }
   if (!proof.lexicalProven) return proof.diagnostic
@@ -232,8 +232,8 @@ export function createQueryRouter({
     await currentIdentity(request)
     let before = null
     let diagnostic = { reason: "controller_unavailable", message: "No readiness controller is available." }
-    const semanticDesired = ["lexical", "timeline"].includes(request.kind ?? "lexical") &&
-      hasQuery(request) &&
+    const semanticSearch = ["lexical", "timeline"].includes(request.kind ?? "lexical") && hasQuery(request)
+    const semanticDesired = semanticSearch &&
       ["background", "required"].includes(controller?.identity?.semantic_contract?.mode)
     try {
       if (controller) {
@@ -265,7 +265,8 @@ export function createQueryRouter({
         const result = await cancellable(() => indexedBackend({
           ...request, db: before.snapshot.db, generation: before.snapshot.generation,
           semanticCurrent: semanticDesired && before.semanticProven,
-          semanticDiagnostic: semanticDesired && !before.semanticProven ? before.semanticDiagnostic : null,
+          semanticDiagnostic: semanticDesired && !before.semanticProven ? before.semanticDiagnostic
+            : semanticSearch && !semanticDesired ? SEMANTIC_OFF : null,
         }), signal)
         let after
         try {
