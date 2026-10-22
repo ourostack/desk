@@ -173,6 +173,7 @@ export async function reconcileAdminApi({ graph, record, log, sleep = (ms) => ne
   let created = null;
   // Set once this run has written the role: until then an assignment's "does not exist" names a wrong principal.
   let roleIsNew = false;
+  let pending = [];
   for (let pass = 0; pass < PASSES; pass += 1) {
     const state = await readState(graph, record);
     // A client this run created that Graph doesn't list yet is waited for, never created again.
@@ -204,7 +205,9 @@ export async function reconcileAdminApi({ graph, record, log, sleep = (ms) => ne
       } catch (error) {
         const message = `${error?.message ?? ""}`;
         if (step.create && DONE.test(message)) {
+          // Done, but the read that planned it lags, so the next read waits too.
           log("    already done.");
+          lagged = true;
           continue;
         }
         // Something created moments ago may be unknown to the replica that takes the write.
@@ -214,7 +217,8 @@ export async function reconcileAdminApi({ graph, record, log, sleep = (ms) => ne
         lagged = true;
       }
     }
-    if (lagged) await sleep(LAG_MS);
+    if (lagged || deferred.length) await sleep(LAG_MS);
+    pending = [...steps.map(({ name }) => name), ...deferred];
   }
-  throw new Error(`The admin API did not settle after ${PASSES} passes; run this again in a few minutes.`);
+  throw new Error(`The admin API did not settle after ${PASSES} passes; still pending: ${pending.join("; ")}. Check those ids, then run this again in a few minutes.`);
 }

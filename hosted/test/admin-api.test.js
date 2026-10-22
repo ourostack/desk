@@ -41,6 +41,7 @@ function directory() {
     writes: [],
     lag: {},
     spLag: {},
+    assignLag: {},
     flowLag: {},
     users: [ARI, OTHER],
     next: 1,
@@ -99,7 +100,7 @@ function fakeFetch(dir) {
     }
     if ((match = /^servicePrincipals\/([^/]+)\/appRoleAssignedTo$/.exec(path))) {
       if (method === "GET") {
-        const all = dir.assignments.filter((a) => a.resourceId === match[1]);
+        const all = dir.assignments.filter((a) => a.resourceId === match[1] && !(dir.assignLag[a.id] > 0 && dir.assignLag[a.id]--));
         const skip = Number(parsed.searchParams.get("$skiptoken") ?? 0);
         const page = all.slice(skip, skip + (dir.pageSize ?? 100));
         return answer(200, { value: page, ...(skip + page.length < all.length ? { "@odata.nextLink": `${GRAPH}${path}?$skiptoken=${skip + page.length}` } : {}) });
@@ -112,6 +113,7 @@ function fakeFetch(dir) {
       if (dir.assignments.some((a) => a.principalId === body.principalId && a.appRoleId === body.appRoleId && a.resourceId === body.resourceId)) return answer(400, { error: { code: "Request_BadRequest", message: "Permission being assigned already exists on the object" } });
       const assignment = { id: id(), ...body };
       dir.assignments.push(assignment);
+      dir.assignLag[assignment.id] = dir.assignLagOnCreate ?? 0;
       return answer(201, assignment);
     }
     if ((match = /^servicePrincipals\/([^/]+)\/appRoleAssignedTo\/([^/]+)$/.exec(path)) && method === "DELETE") {
@@ -262,7 +264,7 @@ test("a Graph error other than lag stops the run, and a run that never settles s
   await assert.rejects(reconcileAdminApi({ graph, record: record(), log: () => {}, sleep: async () => {} }), /bad identifier uri/);
   const stuck = directory();
   stuck.refuseAssign = Infinity;
-  await assert.rejects(go(stuck), /did not settle after 20 passes/);
+  await assert.rejects(go(stuck), /did not settle after 20 passes; still pending: ouro\.admin for 4850d5fc/);
 });
 
 test("a create that a lagging read misses is not an error: the service principal, the user flow link and the assignment", async () => {
@@ -326,4 +328,19 @@ test("a disabled scope or role is enabled again, v1 tokens go back to v2, and a 
   assert.equal(gateway.api.requestedAccessTokenVersion, 2);
   assert.equal(cli.isFallbackPublicClient, false);
   assert.deepEqual(cli.publicClient.redirectUris, [CLI_REDIRECT]);
+});
+
+test("replacing one admin with another settles even while the new assignment's read lags, and the old admin goes last", async () => {
+  const dir = directory();
+  dir.assignments.push({ id: "old", principalId: OTHER, resourceId: GATEWAY_SP, appRoleId: ADMIN_ROLE_ID });
+  await go(dir, { record: { adminApi: { admins: [OTHER] } } });
+  dir.assignments = dir.assignments.filter((a) => a.id === "old");
+  dir.assignLagOnCreate = 5;
+  const sleeps = [];
+  const graph = graphFor(dir);
+  await reconcileAdminApi({ graph, record: record(), log: () => {}, sleep: async (ms) => sleeps.push(ms) });
+  assert.deepEqual(dir.assignments.map(({ principalId }) => principalId), [ARI]);
+  assert.ok(sleeps.length >= 1, "a pass with deferred work waits before reading again");
+  const order = dir.writes.filter(({ path }) => path.includes("appRoleAssignedTo")).map(({ method }) => method);
+  assert.equal(order.at(-1), "DELETE", "the old admin loses the role only after the new one holds it");
 });
