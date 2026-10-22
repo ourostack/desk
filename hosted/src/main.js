@@ -12,6 +12,8 @@ import { fingerprint } from "./auth/seal.js";
 import { createRedirectPolicy } from "./auth/redirects.js";
 import { createDiscovery, createEntraSignIn, createInvites, DISCOVERY_TIMEOUT_MS } from "./auth/entra.js";
 import { createTableStore } from "./accounts/store.js";
+import { createBrowserSession } from "./auth/browser-session.js";
+import { createAdmin, createAdminTokenVerifier } from "./admin.js";
 import { createAccountCache } from "./accounts/cache.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
@@ -241,6 +243,9 @@ export async function startIdentity(config, deps = {}) {
   const accounts = createAccountCache({ store });
   const discovery = createDiscovery({ subdomain: identity.subdomain, tenantId: identity.tenantId, fetch });
   await startDiscovery(discovery, deps.discoveryBoundMs ? { boundMs: deps.discoveryBoundMs } : {});
+  // A multi-user gateway's own pages (sign-in, account, sign-out) share one browser session with the tenant's page
+  // sign-in, which starts it.
+  const sessions = config.multiUser ? createBrowserSession({ keys: config.signingKeys, store, issuer: config.issuer }) : null;
   const entra = createEntraSignIn({
     keys: config.signingKeys,
     discovery,
@@ -250,17 +255,32 @@ export async function startIdentity(config, deps = {}) {
     callbackUrl: identity.callbackUrl,
     store,
     repo: deskRepoOf(config),
+    ...(sessions ? { sessions } : {}),
     fetch,
   });
   const invites = createInvites({ keys: config.signingKeys, store, issuer: config.issuer });
   const accountIds = [...identity.legacy.byUserId.values()].map(({ accountId }) => accountId);
   const deepHealth = createDeepHealth({ discovery, store, accountIds });
-  return { store, accounts, discovery, entra, invites, deepHealth, accountIds };
+  return { store, accounts, discovery, entra, invites, deepHealth, accountIds, sessions };
+}
+
+// A multi-user gateway's admin routes (spec item 16), for tokens carrying the Entra app role `ouro.admin`. A change
+// to an account reaches its open sessions through the account cache at once; `onAccountDeleted(accountId)` removes
+// what the gateway holds for a deleted account.
+export function createGatewayAdmin({ config, parts, fetch = globalThis.fetch, onAccountDeleted }) {
+  const { identity } = config;
+  return createAdmin({
+    store: parts.store,
+    verifier: createAdminTokenVerifier({ discovery: parts.discovery, tenantId: identity.tenantId, clientId: identity.clientId, fetch }),
+    issuer: config.issuer,
+    forget: (accountId) => parts.accounts.forget(accountId),
+    onAccountDeleted,
+  });
 }
 
 // The provider and the Express app. `parts` is startIdentity's, or absent on a gateway without the Ouro tenant, which
 // then serves exactly what it always has.
-export function buildGateway({ config, relay, parts, log: write }) {
+export function buildGateway({ config, relay, parts, admin, log: write }) {
   const provider = createProvider({
     signingKeys: config.signingKeys,
     clientKey: config.clientKey,
@@ -282,6 +302,8 @@ export function buildGateway({ config, relay, parts, log: write }) {
     entra: parts?.entra,
     invites: parts?.invites,
     deepHealth: parts?.deepHealth,
+    ...(parts?.sessions ? { sessions: parts.sessions } : {}),
+    ...(admin ? { admin } : {}),
   });
   return { provider, app };
 }
@@ -382,6 +404,7 @@ export async function main(env = process.env, deps = {}) {
   log(keysStartupLine(config));
   for (const line of identityStartupLines(config)) log(line);
   let relay = null;
+  let admin;
   let push;
   let closeTokenSocket;
   // The Ouro tenant comes first, so a tenant naming another issuer stops the start before the clone.
@@ -404,6 +427,14 @@ export async function main(env = process.env, deps = {}) {
       });
       push = () => runtime.close();
     }
+    // Deleting an account ends its sessions and purges its realm: its clone, state and broker, as its own UID.
+    admin = createGatewayAdmin({
+      config, parts, fetch: deps.fetch,
+      onAccountDeleted: async (accountId) => {
+        relay?.closeAccount(accountId);
+        await runtime.purgeAccount(accountId);
+      },
+    });
   } else if (config.appReady) {
     const runtimeDir = mkdtempSync(join(tmpdir(), "desk-hosted-")); // mode 0700
     const socketPath = join(runtimeDir, "git-token.sock");
@@ -445,7 +476,7 @@ export async function main(env = process.env, deps = {}) {
     log(NOT_SET_UP);
   }
 
-  const { app } = buildGateway({ config, relay, parts });
+  const { app } = buildGateway({ config, relay, parts, admin });
   const server = app.listen(config.port);
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);

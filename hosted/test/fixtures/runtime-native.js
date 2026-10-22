@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, writeFileSync, statSync, readFileSync, readdirSync, symlinkSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync, statSync, readFileSync, readdirSync, symlinkSync, unlinkSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -298,6 +298,15 @@ writeFileSync("/data/runtime-native-fail", "synthetic forced fetch failure");
 await assert.rejects(nextManager.prepare("account-failed"));
 unlinkSync("/data/runtime-native-fail");
 const c = await nextManager.prepare("account-c");
+// Deleting an account purges its realm as its own UID and releases its repository.
+await nextManager.purgeAccount("account-never-prepared");
+await store.putAccount({ accountId: "account-d", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-d", { ...binding, repo: "synthetic/third" });
+const d = await nextManager.prepare("account-d");
+assert.equal(await d.git(["show", "HEAD:marker"]), "third marker");
+await nextManager.purgeAccount("account-d");
+assert.equal(existsSync(d.realm.root), false, "the deleted account's realm root is gone");
+await assert.rejects(d.git(["status"]), /closed/);
 assert.equal(c.env.GH_REPO, "synthetic/second", "an account's desk is its own binding's repository");
 assert.equal(await c.git(["show", "HEAD:marker"]), "second marker", "the clone is the account's own repository");
 assert.notEqual(c.realm.uid, a.realm.uid, "manager replacement cannot recycle a prior account's UID");

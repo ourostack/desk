@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertGatewayKernelBoundary, createUidAllocator, isolatedDeskEnv, isolationArgs } from "./isolation.js";
@@ -360,8 +360,24 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     return value;
   }
 
+  // Removes a deleted account's realm, if this replica prepared one: its services retire, its writes are pushed and
+  // its root is purged as its own UID. The UID stays reserved; the repository is released.
+  async function purgeAccount(accountId) {
+    await preparing.get(accountId)?.catch(() => {});
+    const value = prepared.get(accountId);
+    if (!value) return;
+    await value.purge();
+    // The owning UID emptied the root; the gateway owns its parent and removes the empty directory, which fails
+    // if anything was left in it.
+    rmdirSync(value.realm.root);
+    prepared.delete(accountId);
+    authorities.delete(accountId);
+    for (const [claim, owner] of claims) if (owner === accountId) claims.delete(claim);
+  }
+
   return Object.freeze({
     prepare,
+    purgeAccount,
     close() {
       closed = true;
       closing ??= (async () => {
