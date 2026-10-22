@@ -265,16 +265,19 @@ export async function startIdentity(config, deps = {}) {
 }
 
 // A multi-user gateway's admin routes (spec item 16), for tokens carrying the Entra app role `ouro.admin`. A change
-// to an account reaches its open sessions through the account cache at once; `onAccountDeleted(accountId)` removes
-// what the gateway holds for a deleted account.
-export function createGatewayAdmin({ config, parts, fetch = globalThis.fetch, onAccountDeleted }) {
+// to an account reaches its open sessions through the account cache at once. Deleting an account ends its sessions
+// (`relay`, absent until the GitHub App is set up) and purges its realm as its own UID (`runtime.purgeAccount`).
+export function createGatewayAdmin({ config, parts, relay, runtime, fetch = globalThis.fetch }) {
   const { identity } = config;
   return createAdmin({
     store: parts.store,
     verifier: createAdminTokenVerifier({ discovery: parts.discovery, tenantId: identity.tenantId, clientId: identity.clientId, fetch }),
     issuer: config.issuer,
     forget: (accountId) => parts.accounts.forget(accountId),
-    onAccountDeleted,
+    onAccountDeleted: async (accountId) => {
+      relay?.closeAccount(accountId);
+      await runtime.purgeAccount(accountId);
+    },
   });
 }
 
@@ -427,14 +430,7 @@ export async function main(env = process.env, deps = {}) {
       });
       push = () => runtime.close();
     }
-    // Deleting an account ends its sessions and purges its realm: its clone, state and broker, as its own UID.
-    admin = createGatewayAdmin({
-      config, parts, fetch: deps.fetch,
-      onAccountDeleted: async (accountId) => {
-        relay?.closeAccount(accountId);
-        await runtime.purgeAccount(accountId);
-      },
-    });
+    admin = createGatewayAdmin({ config, parts, relay, runtime, fetch: deps.fetch });
   } else if (config.appReady) {
     const runtimeDir = mkdtempSync(join(tmpdir(), "desk-hosted-")); // mode 0700
     const socketPath = join(runtimeDir, "git-token.sock");

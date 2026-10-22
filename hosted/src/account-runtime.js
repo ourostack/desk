@@ -211,14 +211,17 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   const prepared = new Map();
   const preservationFailures = new Map();
   const claims = new Map();
+  // Accounts deleted while this replica runs: never prepared again, even by a preparation already reading the store.
+  const deleted = new Set();
+  const purging = new Map();
   let closed = false;
   let closing;
 
   async function prepare(accountId) {
     if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
-    if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId)) throw refused();
+    if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId) || deleted.has(accountId)) throw refused();
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
-    if (closed || account?.accountId !== accountId || account.deskAccess !== true ||
+    if (closed || deleted.has(accountId) || account?.accountId !== accountId || account.deskAccess !== true ||
         binding?.kind !== "github" || !binding.author || !validRepo(binding.repo) ||
         (binding.installationId === undefined && binding.repo.toLowerCase() !== configuredRepo?.toLowerCase())) throw refused();
     // GitHub repository names are case-insensitive.
@@ -235,6 +238,11 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     try {
       const value = await pending;
       prepared.set(accountId, value);
+      // Deleted while it was being provisioned: purgeAccount found nothing to remove yet, so this removes it.
+      if (deleted.has(accountId)) {
+        await removePrepared(accountId);
+        throw refused();
+      }
       return value;
     } catch (error) {
       // A preparation that failed and was purged holds nothing for this repository, so the account may be rebound
@@ -301,8 +309,11 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       if (preservationFailures.has(accountId)) throw error;
       await closeBroker();
       // Remove incomplete contents as the owning UID; the UID remains reserved.
-      await run({ action: "purge" }).catch(() => {});
+      const purged = await run({ action: "purge" }).then(() => true, () => false);
       if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+      if (purged) {
+        try { rmdirSync(realm.root); } catch {}
+      }
       throw error;
     }
     const git = async args => {
@@ -362,17 +373,31 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
 
   // Removes a deleted account's realm, if this replica prepared one: its services retire, its writes are pushed and
   // its root is purged as its own UID. The UID stays reserved; the repository is released.
-  async function purgeAccount(accountId) {
-    await preparing.get(accountId)?.catch(() => {});
+  async function removePrepared(accountId) {
     const value = prepared.get(accountId);
     if (!value) return;
     await value.purge();
-    // The owning UID emptied the root; the gateway owns its parent and removes the empty directory, which fails
-    // if anything was left in it.
-    rmdirSync(value.realm.root);
+    // Writes were pushed and the root emptied as its own UID; nothing remains for the claim to protect.
     prepared.delete(accountId);
     authorities.delete(accountId);
     for (const [claim, owner] of claims) if (owner === accountId) claims.delete(claim);
+    // The gateway owns the parent and removes the empty root, which fails if anything was left in it.
+    rmdirSync(value.realm.root);
+  }
+
+  // Throws when the account's desk may still be on disk: a preservation failure, or a purge that did not finish.
+  // Concurrent calls share one purge.
+  function purgeAccount(accountId) {
+    deleted.add(accountId);
+    if (purging.has(accountId)) return purging.get(accountId);
+    const done = (async () => {
+      await preparing.get(accountId)?.catch(() => {});
+      if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+      await removePrepared(accountId);
+    })();
+    purging.set(accountId, done);
+    done.catch(() => purging.delete(accountId));
+    return done;
   }
 
   return Object.freeze({

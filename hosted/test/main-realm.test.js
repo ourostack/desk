@@ -28,8 +28,10 @@ async function gateway(t, env) {
   await store.ensureTables();
   const parts = await startIdentity(config, { store, fetch: tenant.fetch });
   const deleted = [];
-  const admin = config.multiUser ? createGatewayAdmin({ config, parts, fetch: tenant.fetch, onAccountDeleted: async (id) => deleted.push(id) }) : undefined;
-  const relay = { handle: (_req, res) => res.status(204).end() };
+  const closed = [];
+  const relay = { handle: (_req, res) => res.status(204).end(), closeAccount: (id) => closed.push(id) };
+  const runtime = { purgeAccount: async (id) => { deleted.push(id); } };
+  const admin = config.multiUser ? createGatewayAdmin({ config, parts, relay, runtime, fetch: tenant.fetch }) : undefined;
   const { app } = buildGateway({ config, relay, parts, admin, log: () => {} });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -38,7 +40,7 @@ async function gateway(t, env) {
     server.close();
     parts.discovery.stop();
   });
-  return { base: `http://127.0.0.1:${server.address().port}`, parts, deleted, tenant };
+  return { base: `http://127.0.0.1:${server.address().port}`, parts, deleted, closed, tenant };
 }
 
 test("a multi-user gateway mounts /signin, /account, /signout and /admin, sharing one browser session", async (t) => {
@@ -65,8 +67,8 @@ test("a single-desk gateway with the Ouro tenant mounts none of the account page
   }
 });
 
-test("the gateway's admin forgets a changed account in the account cache and hands a deleted one to its realm", async (t) => {
-  const { base, parts, deleted, tenant } = await gateway(t, { ...ENV, DESK_MULTI_USER: "1" });
+test("the gateway's admin forgets a deleted account in the account cache, ends its sessions and purges its realm", async (t) => {
+  const { base, parts, deleted, closed, tenant } = await gateway(t, { ...ENV, DESK_MULTI_USER: "1" });
   const binding = { kind: "github", repo: "owner/desk", installationId: 1, author: { name: "Someone", email: "1+someone@users.noreply.github.com" } };
   const { accountId: adminId } = await seed({ store: parts.store, displayName: "Admin", binding });
   await parts.store.tables.create("identities", { partitionKey: TENANT_ID, rowKey: ADMIN_OID, accountId: adminId });
@@ -79,5 +81,6 @@ test("the gateway's admin forgets a changed account in the account cache and han
   const response = await fetch(`${base}/admin/accounts/${target}`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } });
   assert.equal(response.status, 200, await response.text());
   assert.deepEqual(forgotten, [target], "the account cache forgets the deleted account");
+  assert.deepEqual(closed, [target], "the deleted account's sessions end");
   assert.deepEqual(deleted, [target], "the deleted account's realm is purged");
 });

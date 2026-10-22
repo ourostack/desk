@@ -307,6 +307,11 @@ assert.equal(await d.git(["show", "HEAD:marker"]), "third marker");
 await nextManager.purgeAccount("account-d");
 assert.equal(existsSync(d.realm.root), false, "the deleted account's realm root is gone");
 await assert.rejects(d.git(["status"]), /closed/);
+await assert.rejects(nextManager.prepare("account-d"), /authority/, "a deleted account is never prepared again");
+await store.putAccount({ accountId: "account-e", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-e", { ...binding, repo: "synthetic/third" });
+const e = await nextManager.prepare("account-e");
+assert.equal(await e.git(["show", "HEAD:marker"]), "third marker", "the deleted account's repository is released");
 assert.equal(c.env.GH_REPO, "synthetic/second", "an account's desk is its own binding's repository");
 assert.equal(await c.git(["show", "HEAD:marker"]), "second marker", "the clone is the account's own repository");
 assert.notEqual(c.realm.uid, a.realm.uid, "manager replacement cannot recycle a prior account's UID");
@@ -394,6 +399,10 @@ if (process.env.DESK_NATIVE_MAIN === "1") {
   });
   assert.equal(crossed.status, 403, "a session refuses a token naming another account");
   assert.match(await crossed.text(), /another user/);
+  // main() mounts the account pages and the admin routes on a multi-user gateway.
+  assert.notEqual((await fetch(`http://127.0.0.1:${port}/signin?next=/account`, { redirect: "manual" })).status, 404);
+  assert.notEqual((await fetch(`http://127.0.0.1:${port}/account`, { redirect: "manual" })).status, 404);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/admin/invites`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 401);
   mainRouted = true;
 }
 await new Promise(resolve => http.close(resolve));
