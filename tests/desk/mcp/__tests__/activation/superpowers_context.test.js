@@ -322,6 +322,22 @@ test("still refuses the factory state folder and the retired work-ledger folder"
   }
 })
 
+test("refuses an evidence root that is a link into the factory state folder", async () => {
+  const previous = process.env.XDG_STATE_HOME
+  process.env.XDG_STATE_HOME = path.join(fixtureRoot, "state")
+  try {
+    const factory = path.join(process.env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
+    mkdirSync(factory, { recursive: true })
+    const link = path.join(fixtureRoot, "desk", "link")
+    symlinkSync(factory, link)
+    const resolveContext = await loadResolver()
+    await assert.rejects(() => resolveContext(context({ evidenceRoot: path.join(link, "inner") })), /evidenceRoot must not be inside Desk's private factory folder/u)
+  } finally {
+    if (previous === undefined) delete process.env.XDG_STATE_HOME
+    else process.env.XDG_STATE_HOME = previous
+  }
+})
+
 test("context canonical paths agree with existing Desk write-target authority", async () => {
   const input = context()
   const output = await resolve(input)

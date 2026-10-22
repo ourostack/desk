@@ -72,7 +72,7 @@ The [workspace-tidy boot check](../../docs/workspace-tidy.md) lists only the bou
 
 ## Code clone hygiene — `main` is the resting state; do work in worktrees
 
-This section covers code repositories. A desk has no worktrees or feature branches: work on `main`. A code clone is shared infrastructure: many sessions, machines, and agents touch the same checkout over time. Its **resting state is `main`** — clean, current, predictable. An agent that parks a clone on its own feature branch and walks away forces the next session into archaeology ("what is this branch, is it safe to build on?") before it can start.
+This section covers code repositories. A desk uses `main`; a branch only to coordinate writers working at the same time. A code clone is shared infrastructure: many sessions, machines, and agents touch the same checkout over time. Its **resting state is `main`** — clean, current, predictable. An agent that parks a clone on its own feature branch and walks away forces the next session into archaeology ("what is this branch, is it safe to build on?") before it can start.
 
 The discipline:
 

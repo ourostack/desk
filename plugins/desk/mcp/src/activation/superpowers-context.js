@@ -80,6 +80,22 @@ function deskTaskRule(deskRoot, person, taskPath) {
   return parseDeskTaskLine(line) === null ? [] : [line, "Never call task_focus; your work is credited through the Desk-Task line."]
 }
 
+// Real path of the deepest part of `target` that exists, plus the rest, so a link into a private folder is seen.
+async function realpathOfExisting(target) {
+  let rest = ""
+  let current = target
+  for (;;) {
+    try {
+      return path.join(await realpath(current), rest)
+    } catch (error) {
+      const parent = path.dirname(current)
+      if (parent === current) return target
+      rest = path.join(path.basename(current), rest)
+      current = parent
+    }
+  }
+}
+
 export async function resolveSuperpowersContext(input) {
   const deskRoot = requiredPath(input, "deskRoot")
   const taskPath = requiredPath(input, "taskPath")
@@ -111,10 +127,11 @@ export async function resolveSuperpowersContext(input) {
     throw new Error("Superpowers context: progressPath must be within taskPath")
   }
   if (evidenceRoot !== null) {
+    const resolvedRoot = await realpathOfExisting(evidenceRoot)
     // Briefs and reports may live in the desk. Only Desk's own private state folders are off limits.
     const factoryDir = factoryStateDir(process.env)
     for (const [name, folder] of [["factory", factoryDir], ["work-ledger", path.join(path.dirname(factoryDir), LEGACY_LEDGER_SEGMENTS.at(-1))]]) {
-      if (isPathContained(folder, evidenceRoot)) {
+      if (isPathContained(folder, evidenceRoot) || isPathContained(await realpathOfExisting(folder), resolvedRoot)) {
         throw new Error(`Superpowers context: evidenceRoot must not be inside Desk's private ${name} folder (${folder}); leave it out to keep the files in the task's folder`)
       }
     }
