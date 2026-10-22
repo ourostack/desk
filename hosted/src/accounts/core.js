@@ -86,6 +86,11 @@ function checkBinding(binding) {
   if (binding.installationId !== undefined && !(Number.isSafeInteger(binding.installationId) && binding.installationId > 0)) {
     throw new Error("a binding's installationId must be a positive integer");
   }
+  if (binding.githubUserId !== undefined && !(Number.isSafeInteger(binding.githubUserId) && binding.githubUserId > 0)) {
+    throw new Error("a binding's githubUserId must be a positive integer");
+  }
+  if (binding.login !== undefined && !(typeof binding.login === "string" && OWNER.test(binding.login))) throw new Error("a binding's login must be a GitHub login");
+  if (binding.suspended !== undefined && binding.suspended !== true) throw new Error("a binding's suspended flag is true or absent");
   const { name, email } = binding.author ?? {};
   if (typeof name !== "string" || !name || typeof email !== "string" || !email) throw new Error("a binding needs an author name and email");
 }
@@ -204,9 +209,14 @@ export function storeOn(tables, { onStep = noop } = {}) {
     async getBinding(accountId) {
       const found = await tables.get("bindings", key(accountId, "accountId"), "");
       if (!found) return null;
-      const { kind, repo, installationId, authorName, authorEmail } = found.entity;
+      const { kind, repo, installationId, githubUserId, login, suspended, authorName, authorEmail } = found.entity;
       const binding = { kind, repo };
       if (installationId) binding.installationId = Number(installationId);
+      // A binding linked through the gateway (github-link.js) names the GitHub user who linked it; one the operator
+      // seeded doesn't.
+      if (githubUserId) binding.githubUserId = Number(githubUserId);
+      if (login) binding.login = login;
+      if (suspended === true) binding.suspended = true;
       binding.author = { name: authorName, email: authorEmail };
       checkBinding(binding);
       return binding;
@@ -218,7 +228,20 @@ export function storeOn(tables, { onStep = noop } = {}) {
       const entity = { partitionKey: accountId, rowKey: "", kind: binding.kind, repo: binding.repo, authorName: binding.author.name, authorEmail: binding.author.email };
       // Stored as text: Table Storage numbers are 32-bit unless typed, and installation ids may outgrow that.
       if (binding.installationId !== undefined) entity.installationId = String(binding.installationId);
+      if (binding.githubUserId !== undefined) entity.githubUserId = String(binding.githubUserId);
+      if (binding.login !== undefined) entity.login = binding.login;
+      if (binding.suspended) entity.suspended = true;
       await tables.upsert("bindings", entity);
+    },
+
+    async removeBinding(accountId) {
+      await tables.remove("bindings", key(accountId, "accountId"), "");
+    },
+
+    // The account whose binding names `repo` other than `accountId`, or null: one repository is one account's desk.
+    async repoBoundElsewhere(repo, accountId) {
+      const other = (await tables.list("bindings")).find((row) => row.repo === repo && row.partitionKey !== accountId);
+      return other ? other.partitionKey : null;
     },
 
     async putInvite({ tokenHash, accountId, expiresAt }) {
