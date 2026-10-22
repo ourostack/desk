@@ -48,9 +48,13 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
 
 // Pages for sign-in through the Ouro tenant and for invites.
 export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.");
-export const signInUnavailablePage = () => page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.");
-export const startAgainPage = () => page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.");
-export const inviteOnlyPage = () => page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.");
+// `{ page: true }` words a page for a sign-in to the gateway's own pages (/signin), which starts again there, not in
+// Claude.
+const again = ({ page: forPage } = {}) => (forPage ? "sign in again" : "start again from Claude");
+const Again = (options) => again(options).replace(/^s/, "S");
+export const signInUnavailablePage = (options) => page(503, `Sign-in can't be completed right now. Please try again shortly, then ${again(options)}.`);
+export const startAgainPage = (options) => page(400, `This sign-in link has expired, or it was started in another browser. ${Again(options)}.`);
+export const inviteOnlyPage = (options) => page(403, `Hosted Desk is invite-only. Open your invite link in this browser first, then ${again(options)}.`);
 export const inviteRefusedPage = () => page(403, "This invite has already been used or has expired. Ask for a new invite.");
 export const accessOffPage = () => page(403, "Desk access is turned off for this account.");
 export const noDeskPage = () => page(403, "There is no desk for this account yet on this Hosted Desk.");
@@ -60,6 +64,19 @@ export const invitePage = ({ issuer } = {}) => ({
   html: document(
     "<p>You're invited to Hosted Desk.</p>" +
       `<p>In Claude, add a custom connector${issuer ? ` with the URL <strong>${escapeHtml(new URL("/mcp", issuer).href)}</strong>` : ""}, then connect it and sign in with Apple or email in this browser. Your invite is used the first time you sign in.</p>`,
+  ),
+});
+
+// Pages of the browser session (browser-session.js).
+export const signInCancelledPage = () => page(400, "Sign-in was cancelled. Sign in again to continue.");
+export const signedOutPage = () => page(200, "You're signed out of Hosted Desk.");
+export const pageRefusedPage = () => page(403, "This change didn't come from a Hosted Desk page in this browser. Reload the page and try again.");
+// The signed-in account's page: who is signed in, and a sign-out form carrying the session's CSRF token.
+export const accountPage = ({ displayName, csrf }) => ({
+  status: 200,
+  html: document(
+    `<p>You're signed in to Hosted Desk as <strong>${escapeHtml(displayName || "your account")}</strong>.</p>` +
+      `<form method="post" action="/signout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Sign out</button></form>`,
   ),
 });
 
