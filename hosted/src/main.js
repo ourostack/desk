@@ -288,7 +288,7 @@ export function createGatewayAdmin({ config, parts, relay, runtime, fetch = glob
 export const MULTI_USER_LIMITS = Object.freeze({ maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 600_000, minIdleForeignMs: 600_000 });
 
 // Every desk's shutdown push must finish within this long of SIGTERM: Container Apps kills the replica after its
-// 90 s termination grace period (provision.sh), and the token brokers still need a few seconds after the pushes.
+// 120 s termination grace period (provision.sh), and the token brokers still need a few seconds after the pushes.
 export const SHUTDOWN_PUSH_DEADLINE_MS = 80_000;
 
 // The ouro CLI's admin sign-in settings, published on a multi-user gateway that has them.
