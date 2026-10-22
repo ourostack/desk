@@ -9,7 +9,7 @@ import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 
 // Keep legacy indexed ranking coverage separate from the alpha consumer contract.
-import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { __searchInternalsForTests, desk_search as routedSearch, desk_timeline as routedTimeline, indexedSearch as desk_search, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
@@ -82,6 +82,23 @@ test("search without a readiness controller reads files immediately without inde
   assert.equal(independentEmbeds, 0)
   await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
 })
+
+for (const [name, tool] of [["search", routedSearch], ["query timeline", routedTimeline]]) {
+  test(`routed lexical-only ${name} does not prescribe unobserved provider or index repair`, async () => {
+    const root = await mkTempDeskRoot()
+    await writeFile(root, "track/work/task.md", "immediatequartz")
+    const result = await tool({
+      deskRoot: root, input: { query: "immediatequartz" },
+    })
+    assert.equal(result.results[0].path, "track/work/task.md")
+    assert.equal(result.search_mode, "lexical")
+    assert.equal(result.semantic_unavailable, true)
+    assert.equal(result.readiness_diagnostic.reason, "controller_unavailable")
+    assert.ok(result.semantic_diagnostic.message)
+    assert.equal(Object.hasOwn(result, "semantic_repair"), false)
+    await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
+  })
+}
 
 test("indexed search closes and propagates sqlite extension load failures", async (t) => {
   const root = await mkTempDeskRoot()
