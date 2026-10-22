@@ -56,9 +56,17 @@ function loadTemplate(runtimeFile, context) {
   return context.module.exports;
 }
 
-// One-shot observation at the existing VM global seam. Never retries or
+// Bounded observation at the existing VM global seam. Never retries or
 // changes the verifier's result/refusal, and never projects arbitrary errors.
 function observeNextVerifyGeneration(context, phase, diagnostic) {
+  return observeVerifyGeneration(context, phase, diagnostic, true);
+}
+
+function observeFirstVerifyGenerationFailure(context, phase, diagnostic) {
+  return observeVerifyGeneration(context, phase, diagnostic, false);
+}
+
+function observeVerifyGeneration(context, phase, diagnostic, oneShot) {
   const actual = context.verifyGeneration;
   assert.equal(typeof actual, "function");
   assert.equal(typeof diagnostic, "function");
@@ -104,17 +112,21 @@ function observeNextVerifyGeneration(context, phase, diagnostic) {
       guard,
     };
   }
-  let armed = true;
+  let armed = true, reported = false;
   function restore() {
     armed = false;
     if (context.verifyGeneration === observed) context.verifyGeneration = actual;
   }
   function observed(...args) {
     if (!armed) return Reflect.apply(actual, this, args);
-    restore(); // Exactly the next invocation, including nested calls.
+    if (oneShot) restore();
     try { return Reflect.apply(actual, this, args); }
     catch (error) {
-      try { diagnostic(record(error)); } catch {}
+      if (!reported) {
+        reported = true;
+        restore();
+        try { diagnostic(record(error)); } catch {}
+      }
       throw error; // Preserve identity even for malformed errors or failed sinks.
     }
   }
@@ -122,4 +134,4 @@ function observeNextVerifyGeneration(context, phase, diagnostic) {
   return restore;
 }
 
-module.exports = { loadTemplate, observeNextVerifyGeneration };
+module.exports = { loadTemplate, observeNextVerifyGeneration, observeFirstVerifyGenerationFailure };

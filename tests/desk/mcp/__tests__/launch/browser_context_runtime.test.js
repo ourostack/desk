@@ -91,30 +91,47 @@ test("actual maintained daemon options can reach native acquisition using the st
     "strict native owner config must supply its profile to actual CLI acquisition; observed "+(rejected?.code || "no error"))
 })
 
-test("initial signed worker binding reports its safe verification failure before daemon startup",async t=>{
+for(const phase of ["codec-binding","initial-daemon"])
+for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe refusal at verification "+failAt,async t=>{
   const read=fs.readFileSync,diagnostic=t.diagnostic.bind(t),messages=[]
   const loader=require("./fixtures/native-template-loader.cjs"),load=loader.loadTemplate
-  let armed=false,injections=0
+  let armed=false,injections=0,verifications=0,completed=0
+  for(const method of ["observeNextVerifyGeneration","observeFirstVerifyGenerationFailure"]){
+    const observe=loader[method]
+    t.mock.method(loader,method,(context,setupPhase,...args)=>{
+      if(setupPhase==="signedWorkerFixture."+phase)armed=true
+      return observe(context,setupPhase,...args)
+    })
+  }
   const failure=Object.assign(new Error("PRIVATE_INITIAL_BINDING_FAILURE"),{code:"EIO"})
   t.mock.method(t,"diagnostic",value=>{messages.push(value);diagnostic(value)})
   t.mock.method(loader,"loadTemplate",(file,context)=>{
     const value=load(file,context)
-    if(path.basename(file)==="desk-native-error-transport.cjs")armed=true
+    if(path.basename(file)==="desk-extension-credential.cjs"){
+      const verify=context.verifyGeneration
+      context.verifyGeneration=function(...args){
+        if(armed)verifications++
+        const result=Reflect.apply(verify,this,args)
+        if(armed)completed++
+        return result
+      }
+    }
     return value
   })
   t.mock.method(fs,"readFileSync",(file,...args)=>{
     const bytes=read(file,...args),name=path.basename(String(file))
-    if(armed&&name==="playwright-patch.json"){
+    if(armed&&verifications===failAt&&name==="playwright-patch.json"){
       armed=false;injections++;throw failure
     }
     return bytes
   })
   await assert.rejects(signedWorkerFixture(t),{code:"NATIVE_CODE_UNAVAILABLE"})
   assert.equal(injections,1)
+  assert.equal(completed,failAt-1,"earlier real verifications must succeed before the injected refusal")
   const prefix="DESK_NATIVE_GENERATION_DIAGNOSTIC_V1 "
   const observed=messages.filter(value=>value.startsWith(prefix)).map(value=>JSON.parse(value.slice(prefix.length)))
   assert.deepEqual(observed,[{
-    setupPhase:"signedWorkerFixture.codec-binding",originalCode:"EIO",status:"unknown",signal:"unknown",
+    setupPhase:"signedWorkerFixture."+phase,originalCode:"EIO",status:"unknown",signal:"unknown",
     guard:{file:"unknown",line:"unknown"},
   }])
   assert.equal(JSON.stringify(observed).includes("PRIVATE"),false)
@@ -290,14 +307,16 @@ test("initial signed worker binding reports its safe verification failure before
     }
     const codec = template("desk-native-error-transport.cjs")
     template("desk-extension-credential.cjs")
-    const restoreBindingDiagnostic=require("./fixtures/native-template-loader.cjs").observeNextVerifyGeneration(
+    const restoreBindingDiagnostic=require("./fixtures/native-template-loader.cjs").observeFirstVerifyGenerationFailure(
       templateContexts.get(path.join(lib,"desk-extension-credential.cjs")),
       "signedWorkerFixture.codec-binding",
       value=>t.diagnostic("DESK_NATIVE_GENERATION_DIAGNOSTIC_V1 "+JSON.stringify(value)))
     let scope
-    try { scope=codec.forDaemon({...config,configFile:l.configFile},id) }
+    try {
+      scope=codec.forDaemon({...config,configFile:l.configFile},id)
+      assert.equal(codec.sessionStamp(scope).sourceGeneration,generation)
+    }
     finally { restoreBindingDiagnostic() }
-    assert.equal(codec.sessionStamp(scope).sourceGeneration,generation)
     const chain = [1,2,3].map((n,i)=>({pid:810003-i,parentPid:810002-i,startIdentity:"F-owned-"+n,owner:String(process.getuid?.()||"fixture"),executable:i===2?app:path.join(root,"native-"+n)}))
     let active=true, error, wire, nativeFailure, acknowledged="ok",provider,nativeResponse,stopEffect,nativeStatusEffect,launchFinalEffect
     const socketStates=new Map([[descriptor.socketPath,{...descriptor,id,get active(){return active},set active(value){active=value}}]])
@@ -487,7 +506,7 @@ test("initial signed worker binding reports its safe verification failure before
     }
     const daemon=createDaemon(socketStates.get(descriptor.socketPath))
     socketStates.get(descriptor.socketPath).daemon=daemon
-    const restoreGenerationDiagnostic=require("./fixtures/native-template-loader.cjs").observeNextVerifyGeneration(
+    const restoreGenerationDiagnostic=require("./fixtures/native-template-loader.cjs").observeFirstVerifyGenerationFailure(
       templateContexts.get(path.join(lib,"desk-extension-credential.cjs")),
       "signedWorkerFixture.initial-daemon",
       value=>t.diagnostic("DESK_NATIVE_GENERATION_DIAGNOSTIC_V1 "+JSON.stringify(value)))
