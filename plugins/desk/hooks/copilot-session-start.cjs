@@ -60,6 +60,20 @@ async function commitTrailerLine() {
   }
 }
 
+async function nativeMemoryLine() {
+  try {
+    const { disableNativeMemory } = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "runtime", "copilot-commit-trailer.js")).href);
+    const result = disableNativeMemory({ env: process.env });
+    if (result.state === "already") return "";
+    if (result.state === "set") return "Desk memory: native memory is set off.";
+    if (result.line) process.stderr.write(result.line + "\n");
+    return "Desk memory: repair native memory now.";
+  } catch {
+    process.stderr.write("Desk memory: native settings helper failed; use the supported memory:false setting before continuing.\n");
+    return "Desk memory: repair native memory now.";
+  }
+}
+
 // Let Desk's shared startup module resolve the root the way the Desk server will, with the session folder as the
 // project folder, so the line never names a root the server will not use.
 async function startupDirection() {
@@ -97,13 +111,14 @@ function emit(additionalContext) {
 }
 
 (async () => {
+  const memory = await nativeMemoryLine();
   // A headless evaluator session gets no startup output and starts nothing (mcp/src/factory/headless-flag.cjs); a missing rule file falls back to the same exact comparison.
   try { if (require("../mcp/src/factory/headless-flag.cjs").isHeadlessFactorySession(process.env)) return; } catch { const v = String(process.env.DESK_FACTORY_HEADLESS ?? ""); if (v !== "" && v !== "0") return; }
   try {
     const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
     const direction = await startupDirection();
     // The startup line leads, as in the Claude hook: a host that keeps only a preview of a long context still shows the boot imperative.
-    const output = `${direction}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
+    const output = `${direction}${memory ? `\n\n${memory}` : ""}\n\n${foundation}\n\nDesk RFC: ${rfcPath}`;
     // Factory delivery starts detached only once the output is built; it never delays or changes it.
     await startFactory();
     emit(output);
