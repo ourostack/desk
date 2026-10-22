@@ -1196,7 +1196,7 @@ async function deliver(env, context) {
     }]
   })
   const contextPlan = await contextSafely({ work: false, ready: [], states: [], prs: new Set() }, () => planContexts(env, {
-    store, entries: contextEntries, pluginVersion: deskVersion(), now: now(), deadline: deadline - 30000, clock: now,
+    store, entries: contextEntries, pluginVersion: deskVersion(), now: now(), deadline, clock: now,
   }))
   if (contextPlan.deferred) {
     progress.contextHeld = "context_preparation_deferred"

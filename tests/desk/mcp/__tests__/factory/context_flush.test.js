@@ -114,6 +114,45 @@ test("numeric-only consent or an incompatible store never sends context and fact
   assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
 }))
 
+for (const elapsed of [98000, 119000]) {
+  test(`ordinary context preparation still progresses after ${elapsed} ms of a 120000 ms flush`, () => scratch(async (base) => {
+    const w = await world(base, { card: true })
+    let now = T0
+    const result = await w.run({
+      now: () => now,
+      planContexts: (env, options) => {
+        now += elapsed
+        return planContextPublication(env, options)
+      },
+    })
+    assert.equal(result.result, "delivered_pr_open")
+    assert.equal(result.context_held, undefined)
+    const [work] = await listContextWork(w.env, { store: STORE })
+    assert.ok(work, "the remaining flush window must prepare the eligible job")
+    assert.equal(work.job, w.job)
+    assert.equal(work.phase, "candidate")
+    assert.equal(work.source.task_card.path, w.cardFile)
+    assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
+    assert.equal(contexts(await w.files()).length, 0)
+  }))
+}
+
+test("late context preparation cannot extend an expired total flush deadline", () => scratch(async (base) => {
+  const w = await world(base, { card: true })
+  let now = T0
+  const result = await w.run({
+    now: () => now,
+    planContexts: (env, options) => {
+      now += 120000
+      return planContextPublication(env, options)
+    },
+  })
+  assert.equal(result.result, "deadline")
+  assert.deepEqual(await listContextWork(w.env, { store: STORE }), [])
+  assert.equal(w.hub.pulls.length, 0)
+  assert.equal(await w.files(), null)
+}))
+
 test("slow optional context preparation defers prose while ordinary numeric delivery keeps its time window", () => scratch(async (base) => {
   const w = await world(base, { card: true })
   let now = T0
