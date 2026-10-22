@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.340 — 2026-10-22
+
+Status and doctor no longer repeat an earlier missing-desk setup diagnostic while a fresh admission attempt is resolving newly available host evidence or loading the runtime. They report admission in progress, naming the workspace only after resolution, without claiming ready state or write authority. Sessions that still have no workspace continue to receive the normal setup diagnostic after resolution completes.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.339 — 2026-10-22
 
 Semantic recall refreshes its pre-evaluation event fence and lexical proof after waiting for convergence, so a queued change that finishes indexing before evaluation does not leave the request using stale readiness facts. Results are still discarded if readiness or generation identity changes during evaluation; the semantic backend is never replayed.
