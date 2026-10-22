@@ -401,16 +401,15 @@ function main() {
     /recorded source/iu,
     /changes reach the channel, the branch consumers track, through the normal flow/u,
     /branch from it in a worktree and merge back through a pull request/u,
-    /In a desk, everything lives on `main`/u,
+    /In a desk, commit and push to `main`/u,
     /Never pin a commit; a hash is evidence only/u,
     /`git-hygiene` holds the procedure/u,
   ]);
 
   assertSectionPhrases(section(skill, "Durable context and attribution"), "using-desk Durable context and attribution", [
-    "live on `main` in the desk, a Git repository",
+    "live on `main` in the desk",
     "Only secrets, credentials, raw private transcripts and customer data stay outside Git",
     "(`session-resumption`)",
-    "Commit and push desk changes",
     "Disable host memory (`store_memory`/`vote_memory`)",
     "host settings only mirror the desk",
     "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere",
