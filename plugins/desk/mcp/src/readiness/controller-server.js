@@ -22,6 +22,7 @@ export async function startReadinessController({
   exitRelease = defaultExitRelease,
   ownProcessStart = readOwnProcessStart,
   bindBeforeProcessStart = process.platform === "win32",
+  prepareRootSync = () => {},
   supervisor,
 } = {}) {
   validateControllerEndpoint(endpoint)
@@ -300,11 +301,13 @@ export async function startReadinessController({
       `${JSON.stringify({ schema_version: 1, identity, owner, endpoint, socket, ...(supervisor ? { supervisor } : {}) }, null, 2)}\n`,
       { encoding: "utf8", mode: 0o600 },
     )
+    // Only the bind winner prepares. Its published owner prevents takeover while synchronous setup runs before readiness.
+    if (prepareRootSync() !== undefined) throw new TypeError("Controller root preparation must finish synchronously without returning a value")
   } catch (error) {
     try {
       await closeServer(server, stateDir, owner)
     } catch {
-      // Preserve the publication failure; stale cleanup is recoverable on the next election.
+      // Preserve the startup failure; stale cleanup is recoverable on the next election.
     }
     throw error
   }
