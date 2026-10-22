@@ -213,3 +213,30 @@ test("settled waits for a relink's reset, and a failed release is logged rather 
   assert.ok(events.some((line) => typeof line === "string" && /could not be released \(DESK_SESSION_REFUSED\)/.test(line)));
   await hooks.settled("acct-1");
 });
+
+const ADMIN_CLI = { DESK_ADMIN_CLIENT_ID: "20a65c9b-2fe5-45c1-8af9-79b4e22b958c", DESK_ADMIN_SCOPE: `api://${CLIENT_ID}/desk.admin` };
+
+test("a multi-user gateway publishes the ouro CLI's admin sign-in settings at /.well-known/ouro-desk-admin", async (t) => {
+  const { base } = await gateway(t, { ...ENV, ...ADMIN_CLI, DESK_MULTI_USER: "1" });
+  const response = await fetch(`${base}/.well-known/ouro-desk-admin`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+  assert.deepEqual(await response.json(), { tenantId: TENANT_ID, subdomain: SUBDOMAIN, clientId: ADMIN_CLI.DESK_ADMIN_CLIENT_ID, scope: ADMIN_CLI.DESK_ADMIN_SCOPE });
+});
+
+test("the admin sign-in settings are absent with the multi-user switch off, and on a multi-user gateway without them", async (t) => {
+  for (const env of [{ ...ENV, ...ADMIN_CLI }, { ...ENV, DESK_MULTI_USER: "1" }]) {
+    const { base } = await gateway(t, env);
+    assert.equal((await fetch(`${base}/.well-known/ouro-desk-admin`)).status, 404);
+  }
+});
+
+test("the admin sign-in settings are refused at start unless both are set, the client is a GUID and the scope is the gateway app's", () => {
+  const multi = { ...ENV, DESK_MULTI_USER: "1" };
+  assert.throws(() => readConfig({ ...multi, DESK_ADMIN_CLIENT_ID: ADMIN_CLI.DESK_ADMIN_CLIENT_ID }), /DESK_ADMIN_SCOPE/);
+  assert.throws(() => readConfig({ ...multi, DESK_ADMIN_SCOPE: ADMIN_CLI.DESK_ADMIN_SCOPE }), /DESK_ADMIN_CLIENT_ID/);
+  assert.throws(() => readConfig({ ...multi, ...ADMIN_CLI, DESK_ADMIN_CLIENT_ID: "ouro-cli" }), /GUID/);
+  assert.throws(() => readConfig({ ...multi, ...ADMIN_CLI, DESK_ADMIN_SCOPE: "api://55555555-5555-5555-5555-555555555555/desk.admin" }), /gateway app/);
+  assert.throws(() => readConfig({ ...multi, ...ADMIN_CLI, DESK_ADMIN_SCOPE: `api://${CLIENT_ID}/desk admin` }), /gateway app/);
+  assert.deepEqual(readConfig({ ...multi, ...ADMIN_CLI }).identity.adminCli, { clientId: ADMIN_CLI.DESK_ADMIN_CLIENT_ID, scope: ADMIN_CLI.DESK_ADMIN_SCOPE });
+});

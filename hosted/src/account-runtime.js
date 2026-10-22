@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
+import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmdirSync, statfsSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertGatewayKernelBoundary, createUidAllocator, isolatedDeskEnv, isolationArgs } from "./isolation.js";
@@ -12,6 +12,68 @@ const allocateUid = createUidAllocator();
 const refused = () => new Error("Hosted desk account authority is unavailable or changed.");
 // Session start passes this message to the person (relay.js).
 const stillSaving = () => Object.assign(new Error("Hosted Desk is still saving the last changes of your previous desk. Try again in a few minutes."), { code: "DESK_SESSION_REFUSED" });
+
+// Refused when the realm disk is too full for another clone (spec item 20); session start passes it to the person.
+const diskFull = () => Object.assign(new Error("Hosted Desk is short of disk space, so it can't set up your desk right now. Please try again later."), { code: "DESK_SESSION_REFUSED" });
+const runtimeLog = (message) => process.stderr.write(`desk-hosted runtime: ${message}\n`);
+
+// The share of the disk's usable blocks in use, as df's Use% reports it: blocks reserved for root count as neither.
+export function diskUsedFraction(path, statfs = statfsSync) {
+  const { blocks, bfree, bavail } = statfs(path);
+  const used = blocks - bfree;
+  return used + bavail > 0 ? used / (used + bavail) : 1;
+}
+
+// Closes every prepared realm at once: each retires its services and pushes its own writes as its own UID, so one
+// slow or failing push neither delays nor stops another's. A realm whose close failed is logged by account and kept
+// on disk, writes and all. Returns the failures.
+export async function closeRealms(entries, write = runtimeLog) {
+  const results = await Promise.allSettled(entries.map(({ value }) => value.close()));
+  const failed = [];
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") return;
+    const { accountId } = entries[index];
+    const code = typeof result.reason?.code === "string" ? result.reason.code : (result.reason?.name ?? "error");
+    write(`DESK WRITES NOT PUSHED for account ${accountId} (${code}); its realm is kept on disk`);
+    failed.push({ accountId, error: result.reason });
+  });
+  return failed;
+}
+
+// A push's time: its usual 65 s, or less when the shutdown deadline is nearer. Zero means there is no time left.
+export function pushBudget(now, deadline, max = 65_000) {
+  return Math.max(0, Math.min(max, deadline - now));
+}
+
+// The shutdown close: realms already prepared close at once, without waiting for a preparation still under way (a
+// clone can take minutes); a preparation that finishes before `deadline` has its realm closed then. One still running
+// at the deadline is logged and left: it is a fresh clone that no session has written to yet.
+export async function closeAll({ prepared, preparing, deadline, write = runtimeLog }) {
+  const first = new Set(prepared.values());
+  const now = closeRealms([...prepared].map(([accountId, value]) => ({ accountId, value })), write);
+  const late = (async () => {
+    const pending = [...preparing];
+    if (pending.length === 0) return [];
+    const settledIds = new Set();
+    const closes = [];
+    // Each preparation's realm is closed as soon as that preparation finishes.
+    const tracked = pending.map(([accountId, promise]) => promise.then(() => {}, () => {}).then(() => {
+      settledIds.add(accountId);
+      const value = prepared.get(accountId);
+      if (value && !first.has(value)) closes.push(closeRealms([{ accountId, value }], write));
+    }));
+    const settled = Promise.allSettled(tracked);
+    let timer;
+    // Without a deadline (Infinity, which setTimeout would treat as 1 ms), wait for every preparation.
+    await (Number.isFinite(deadline)
+      ? Promise.race([settled, new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); })])
+      : settled);
+    clearTimeout(timer);
+    for (const [accountId] of pending) if (!settledIds.has(accountId)) write(`account ${accountId} was still being prepared at the shutdown deadline; nothing of it was closed`);
+    return (await Promise.all(closes)).flat();
+  })();
+  return [...(await now), ...(await late)];
+}
 
 function protectedKey(path) {
   protectedAncestors(path);
@@ -214,7 +276,10 @@ export function assertAccountRuntimeBoundary(config, baseEnv = process.env) {
   if (baseEnv.AZURE_FEDERATED_TOKEN_FILE) protectedKey(baseEnv.AZURE_FEDERATED_TOKEN_FILE);
 }
 
-export function createAccountRuntime({ config, store, mint, baseEnv = process.env, rootDir = "/data/realms" }) {
+export function createAccountRuntime({
+  config, store, mint, baseEnv = process.env, rootDir = "/data/realms",
+  diskUsage = (path) => diskUsedFraction(path), diskLimit = 0.8, log: write = runtimeLog,
+}) {
   assertAccountRuntimeBoundary(config, baseEnv);
   // Each account's desk is the repository its own binding names, not DESK_REPO. A binding to any repository other
   // than DESK_REPO (which the operator configured) must name the App installation it was verified through, which
@@ -247,6 +312,8 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   const releaseFailures = new Map();
   let closed = false;
   let closing;
+  // When the shutdown's pushes must be done by (closeAll); every push in the meantime gets only the time left.
+  let shutdownDeadline = Infinity;
 
   async function prepare(accountId) {
     if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
@@ -271,6 +338,19 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     if (claims.has(claim) && claims.get(claim) !== accountId) throw refused();
     const authority = JSON.stringify([binding.kind, claim, binding.installationId ?? null, binding.author.name, binding.author.email]);
     if (authorities.has(accountId) && authorities.get(accountId) !== authority) throw refused();
+    // A new realm means a new clone: refused while the disk is too full, before anything is claimed for it.
+    if (!prepared.has(accountId) && !preparing.has(accountId)) {
+      let used;
+      try {
+        used = diskUsage(rootDir);
+      } catch (error) {
+        write(`could not read realm disk use (${error?.code ?? error?.name ?? "error"}); preparing account ${accountId} anyway`);
+      }
+      if (used > diskLimit) {
+        write(`REALM DISK FULL: ${Math.round(used * 100)}% used, over ${Math.round(diskLimit * 100)}%; refused a new clone for account ${accountId}`);
+        throw diskFull();
+      }
+    }
     authorities.set(accountId, authority);
     claims.set(claim, accountId);
     if (prepared.has(accountId)) return prepared.get(accountId);
@@ -377,8 +457,12 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       return run({ action: "git", args });
     };
     const push = async () => {
-      const deadline = Date.now() + 65_000;
-      await run({ action: "push", pluginDir }, 65_000);
+      const budget = pushBudget(Date.now(), shutdownDeadline);
+      if (budget === 0) {
+        throw Object.assign(new Error("Desk writes were not pushed before the shutdown deadline."), { code: "DESK_PUSH_UNPRESERVED", quiescent: true });
+      }
+      const deadline = Date.now() + budget;
+      await run({ action: "push", pluginDir }, budget);
       const remaining = deadline - Date.now();
       if (remaining <= 0 || (await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, remaining)).trim()) {
         throw Object.assign(new Error("Desk writes were not verified pushed after operation retirement."), {
@@ -501,13 +585,17 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     prepare,
     release,
     purgeAccount,
-    close() {
+    close({ deadline = Infinity } = {}) {
       closed = true;
+      shutdownDeadline = Math.min(shutdownDeadline, deadline);
       closing ??= (async () => {
-        await Promise.allSettled([...preparing.values()]);
-        const results = await Promise.allSettled([...prepared.values()].map(value => value.close()));
+        const results = await closeAll({ prepared, preparing, deadline: shutdownDeadline, write });
+        const logged = new Set(results.map(({ accountId }) => accountId));
+        for (const [accountId, { error }] of preservationFailures) {
+          if (!logged.has(accountId)) write(`DESK WRITES MAY NOT BE PUSHED for account ${accountId} (${typeof error?.code === "string" ? error.code : "error"}); its realm is preserved on disk`);
+        }
         const failed = new Set([
-          ...results.filter(result => result.status === "rejected").map(result => result.reason),
+          ...results.map(({ error }) => error),
           ...[...preservationFailures.values()].map(({ error }) => error),
         ]);
         if (failed.size) throw new AggregateError([...failed], "Hosted desk shutdown could not preserve every desk.");

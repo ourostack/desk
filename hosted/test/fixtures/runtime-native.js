@@ -323,6 +323,43 @@ await store.putAccount({ accountId: "account-e", displayName: "Synthetic", deskA
 await store.putBinding("account-e", { ...binding, repo: "synthetic/third" });
 const e = await nextManager.prepare("account-e");
 assert.equal(await e.git(["show", "HEAD:marker"]), "third marker", "the deleted account's repository is released");
+// A new clone is refused, with a message the person can read, while the realm disk is over 80% used; nothing is
+// claimed or cloned for it.
+const fullLog = [];
+const fullManager = runtime.createAccountRuntime({
+  config, store, rootDir: join(root, "full-realms"),
+  baseEnv: { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin" },
+  mint: async () => ({ token: "synthetic-token" }),
+  diskUsage: () => 0.81, log: line => fullLog.push(line),
+});
+await store.putAccount({ accountId: "account-full", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-full", { ...binding, repo: "synthetic/full" });
+await assert.rejects(fullManager.prepare("account-full"), error => error.code === "DESK_SESSION_REFUSED" && /disk space/.test(error.message));
+assert.deepEqual(readdirSync(join(root, "full-realms")), [], "a refused clone leaves no realm");
+assert.match(fullLog.join("\n"), /REALM DISK FULL: 81% used, over 80%; refused a new clone for account account-full/);
+await fullManager.close();
+// An account that already has its realm keeps being served when the disk fills: only a new clone is refused. A disk
+// use that can't be read lets the preparation go ahead, and says so.
+let fullness = 0.5;
+const fillingLog = [];
+const fillingManager = runtime.createAccountRuntime({
+  config, store, rootDir: join(root, "filling-realms"),
+  baseEnv: { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin" },
+  mint: async () => ({ token: "synthetic-token" }),
+  diskUsage: () => { if (fullness === null) throw Object.assign(new Error("statfs failed"), { code: "EIO" }); return fullness; },
+  log: line => fillingLog.push(line),
+});
+await store.putAccount({ accountId: "account-filling", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-filling", { ...binding, repo: "synthetic/second" });
+const filling = await fillingManager.prepare("account-filling");
+fullness = 0.95;
+assert.equal(await fillingManager.prepare("account-filling"), filling, "a prepared account is served on a full disk");
+await fillingManager.release("account-filling");
+fullness = null;
+const unread = await fillingManager.prepare("account-filling");
+assert.notEqual(unread, filling);
+assert.match(fillingLog.join("\n"), /could not read realm disk use \(EIO\); preparing account account-filling anyway/);
+await fillingManager.close({ deadline: Date.now() + 80_000 });
 // A suspended binding (GitHub no longer gives write access) is refused before any realm work.
 await store.putAccount({ accountId: "account-suspended", displayName: "Synthetic", deskAccess: true });
 await store.putBinding("account-suspended", { ...binding, repo: "synthetic/suspended", suspended: true });
