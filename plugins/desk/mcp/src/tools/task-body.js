@@ -34,7 +34,7 @@ export function scan(body) {
       if (match !== null && match[1][0] === open[0] && match[1].length >= open.length && line.trim() === match[1]) open = null
     }
   }
-  return { eol, lines, fenced }
+  return { eol, lines, fenced, open: open !== null }
 }
 
 function appendParagraph(body, paragraph, eol) {
@@ -101,8 +101,10 @@ export function appendProgressNote(body, text, date) {
 export function replaceSection(body, heading, markdown) {
   const name = typeof heading === "string" ? heading.trim().replace(/^##\s+/u, "").trim() : ""
   if (name === "" || /[\r\n]/u.test(name)) throw new Error("`replace_section.heading` must be the name of one `## ` section on a single line, such as \"Progress log\"")
+  if (/^(?:steps|resources)$/iu.test(name)) throw new Error(`\`replace_section\` cannot replace the \`## ${name}\` table, because Desk checks every change to it; use the \`${name.toLowerCase() === "steps" ? "step" : "resource"}\` field instead`)
   if (typeof markdown !== "string" || markdown.trim() === "") throw new Error("`replace_section.markdown` must be the new text of the section, not empty")
   const inner = scan(markdown)
+  if (inner.open) throw new Error("`replace_section.markdown` has a code fence that is never closed; close the code fence in replace_section.markdown")
   if (inner.lines.some((line, index) => !inner.fenced[index] && /^## /u.test(line))) throw new Error("`replace_section.markdown` must not contain its own `## ` heading; pass one section at a time")
   const { eol, lines, fenced } = scan(body)
   const text = markdown.trim().split(/\r?\n/u)

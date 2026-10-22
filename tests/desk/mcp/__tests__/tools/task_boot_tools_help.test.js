@@ -67,6 +67,27 @@ test("pending repo checks collapse to one line per kind with a count", () => {
   assert.doesNotMatch(text, /repo state for repo/u)
 })
 
+test("a next step on the last line with no trailing newline is found; one inside an unclosed fence is not", async () => {
+  const found = await activeTasks(await bigCard(`${filler(100)}**Next step:** last line`))
+  assert.equal(found.tracks[0].tasks[0].next_step, "last line")
+  const fenced = await activeTasks(await bigCard(`${filler(100)}\`\`\`\n**Next step:** inside`))
+  assert.equal(fenced.tracks[0].tasks[0].next_step, null)
+})
+
+test("a single pending repo is counted in the singular, and push-account lines collapse too", () => {
+  const text = formatBootText({ status: "ok", instructions: [], pending: [
+    "repo state for only (t/x): boot_budget_exceeded",
+    "open pull requests for a/b: boot_budget_exceeded",
+    ...Array.from({ length: 80 }, (_, i) => `push account for o/r${i % 40} (t/task${i}): boot_budget_exceeded`),
+  ] })
+  assert.match(text, /Repo state not checked for 1 repo \(/u)
+  assert.match(text, /Open pull requests not checked for 1 repo \(/u)
+  assert.match(text, /Push route not checked for 40 repos \(boot ran out of time\); run gh auth status before you push\./u)
+  assert.doesNotMatch(text, /push account for/u)
+  const one = formatBootText({ status: "ok", instructions: [], pending: ["push account for o/r (t/x): boot_budget_exceeded"] })
+  assert.match(one, /Push route not checked for 1 repo \(/u)
+})
+
 test("task tools omit session_label when no label was proposed and keep it when one was", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "a-task", title: "T", body: "x" } })
@@ -83,6 +104,11 @@ test("replaceSection replaces one named section, appends a missing one and respe
   assert.equal(replaceSection("## A\n\nx\n\n```\n## Notes\n```\n", "Notes", "t"), "## A\n\nx\n\n```\n## Notes\n```\n\n## Notes\n\nt\n")
   assert.throws(() => replaceSection(body, "Ruling", "## Other\nx"), /own `## ` heading/u)
   assert.throws(() => replaceSection(body, "", "x"), /heading/u)
+  assert.throws(() => replaceSection(body, 5, "x"), /heading/u)
+  assert.throws(() => replaceSection(body, "Steps", "x"), /`step` field/u)
+  assert.throws(() => replaceSection(body, "## resources", "x"), /`resource` field/u)
+  assert.throws(() => replaceSection(body, "Ruling", "```\nunclosed code"), /close the code fence/u)
+  assert.equal(replaceSection("## A\n\nx\n", "A", "```\ncode\n```"), "## A\n\n```\ncode\n```\n")
   assert.throws(() => replaceSection(body, "Ruling", "  "), /not empty/u)
 })
 

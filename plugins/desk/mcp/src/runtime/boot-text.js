@@ -74,27 +74,32 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
 }
 
 const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u
+const PENDING_PUSH = /^push account for (.+?) \(.*\): boot_budget_exceeded$/u
 const PENDING_PR = /^open pull requests for (.+): boot_budget_exceeded$/u
 
 /**
  * The pending lines as printed, `{ rest, summaries }`: the per-repo and per-store lines that only say boot ran out of time become one line each with a count and the next action; other lines pass through.
  * The structured result keeps every line.
  */
-export function collapsePending(pending) {
+function collapsePending(pending) {
   const repos = new Set()
   const stores = new Set()
+  const pushes = new Set()
   const rest = []
   const summaries = []
   for (const line of pending) {
     const repo = PENDING_REPO.exec(line)
     const store = PENDING_PR.exec(line)
+    const push = PENDING_PUSH.exec(line)
     if (repo !== null) repos.add(repo[1])
     else if (store !== null) stores.add(store[1])
+    else if (push !== null) pushes.add(push[1])
     else rest.push(line)
   }
   const plural = (count, one, many) => (count === 1 ? one : many)
   if (repos.size > 0) summaries.push(`Repo state not checked for ${repos.size} ${plural(repos.size, "repo", "repos")} (boot ran out of time); check a repo with git when you work in it.`)
   if (stores.size > 0) summaries.push(`Open pull requests not checked for ${stores.size} ${plural(stores.size, "repo", "repos")} (boot ran out of time); check with gh pr list when you need them.`)
+  if (pushes.size > 0) summaries.push(`Push route not checked for ${pushes.size} ${plural(pushes.size, "repo", "repos")} (boot ran out of time); run gh auth status before you push.`)
   return { rest, summaries }
 }
 

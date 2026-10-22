@@ -214,6 +214,7 @@ async function tailNextStep(raw) {
   try {
     file = await open(raw.filePath, "r")
   } catch {
+    /* istanbul ignore next -- the card was readable a moment ago; it can only vanish between the two reads, which a test cannot time. */
     return null
   }
   try {
@@ -227,6 +228,7 @@ async function tailNextStep(raw) {
     const buffer = Buffer.alloc(TAIL_CHUNK)
     while (position < raw.size) {
       const { bytesRead } = await file.read(buffer, 0, TAIL_CHUNK, position)
+      /* istanbul ignore next -- the card shrank between the size check and this read. */
       if (bytesRead === 0) break
       // latin1 keeps one character per byte, so offsets stay byte offsets; the marker is ASCII.
       const lines = (carry + buffer.toString("latin1", 0, bytesRead)).split("\n")
@@ -252,6 +254,7 @@ async function tailNextStep(raw) {
     }
     return null
   } catch {
+    /* istanbul ignore next -- a read error on a card opened a moment ago; no portable test can cause one. */
     return null
   } finally {
     await file.close()
