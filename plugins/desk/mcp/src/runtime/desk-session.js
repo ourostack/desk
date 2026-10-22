@@ -1109,6 +1109,20 @@ export function createDeskSession(deps) {
 
   function statusSnapshot() {
     const snapshot = admission.snapshot()
+    if (admission.running && snapshot.code === "no_desk_root") {
+      // A retry may have new host evidence while the last settled outcome is
+      // still no-root. Report the pending attempt, not obsolete setup advice.
+      const summary = "Desk is admitting this session's destination; operations wait for verification."
+      return {
+        ...snapshot, state: "admitting", code: null, summary,
+        fix: "Call desk_status again after admission completes.",
+        diagnostic: {
+          mode: "admitting", summary,
+          ...(context.root && !context.resolutionFailed
+            ? { root: { path: context.root.root, source: context.root.source } } : {}),
+        },
+      }
+    }
     return admission.running && snapshot.state === "ready" &&
       (context.phase?.name !== "resolving_inputs" || context.resolutionFailed)
       ? { ...snapshot, state: "admitting", code: null, diagnostic: null,
@@ -1196,7 +1210,7 @@ export function createDeskSession(deps) {
         ...result,
       })
     }
-    const snapshot = admission.snapshot()
+    const snapshot = statusSnapshot()
     let payload = baseDiagnostic(snapshot)
     if (context.runtimeServer && context.root && !context.resolutionFailed && launcher?.mode !== "refuse") {
       payload = JSON.parse((await runtimeCall("desk_doctor", { format }, signal)).content[0].text)
