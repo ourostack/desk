@@ -76,6 +76,7 @@ function semanticDiagnostic(proof) {
       message: proof.semanticBarrier.message ?? "Semantic convergence is not current for the active generation.",
     }
   }
+  if (!proof.lexicalProven) return proof.diagnostic
   if (proof.snapshot?.semantic?.active_embedding_spec_id !== ACTIVE_EMBEDDING_SPEC.id) {
     return {
       reason: "semantic_unavailable",
@@ -150,8 +151,8 @@ export function createQueryRouter({
 
   async function serviceProof(request, { semanticRequired = false, waitForSemantic = semanticRequired } = {}) {
     const { signal } = request
-    const fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
-    const lexicalBarrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
+    let fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
+    let lexicalBarrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
     const semanticBarrier = semanticRequired && waitForSemantic
       ? await semanticBarrierState(controller, request, semanticDeadlineMs)
       : await cancellable(() => controller.barrier({ capability: "semantic" }), signal).catch((error) => ({
@@ -159,6 +160,12 @@ export function createQueryRouter({
           reason: error.code ?? "semantic_unavailable",
           message: String(error.message ?? error),
         }))
+    if (semanticRequired && waitForSemantic) {
+      // The first fence can discover changes whose convergence we just awaited.
+      // Prove the pre-evaluation snapshot against current facts, not that old fence.
+      fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
+      lexicalBarrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
+    }
     const observed = await cancellable(() => controller.status(), signal)
     const identity = await currentIdentity(request)
     const currentAndCertain = fence.certain === true &&
@@ -176,6 +183,11 @@ export function createQueryRouter({
       snapshot?.semantic?.vectors_indexed === snapshot?.semantic?.chunks_total &&
       observed.convergence?.semantic?.query_embedding?.available === true &&
       observed.convergence?.semantic?.query_embedding?.diagnostic?.model === ACTIVE_EMBEDDING_SPEC.model
+    const diagnostic = {
+      reason: snapshot && !matchesLexicalGenerationIdentity(snapshot.identities, identity)
+        ? "generation_identity_mismatch" : fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
+      message: "A current, event-certain lexical generation is not proven.",
+    }
     return {
       snapshot,
       lexicalProven,
@@ -202,15 +214,13 @@ export function createQueryRouter({
         observed: { cursor: observed.freshness.cursor, certain: observed.freshness.certain,
           owner: observed.owner?.token ?? null },
       }) : null,
-      diagnostic: {
-        reason: snapshot && !matchesLexicalGenerationIdentity(snapshot.identities, identity)
-          ? "generation_identity_mismatch" : fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
-        message: "A current, event-certain lexical generation is not proven.",
-      },
+      diagnostic,
       semanticDiagnostic: semanticDiagnostic({
         snapshot,
         semanticBarrier,
         observed,
+        lexicalProven,
+        diagnostic,
       }),
     }
   }
