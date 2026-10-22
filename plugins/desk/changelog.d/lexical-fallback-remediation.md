@@ -1,0 +1,1 @@
+Lexical-only search and query timelines no longer prescribe starting an embedding provider or rebuilding the index when no embedding request was attempted. Results and readiness diagnostics are unchanged; actual embedding-failure guidance remains available.
