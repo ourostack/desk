@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.338 — 2026-10-22
+
+Explicit resume can reconnect an intact signed-in browser context after its CLI and relay stop, preserving its pages, tab group and popup windows. Recovery refuses missing or unresolved bindings, fences retired connections, and reports unacknowledged command outcomes as unknown instead of replaying actions. Ordinary page commands do not restart a missing CLI. Selected-profile installation and installed shared-machine qualification remain separate requirements.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.337 — 2026-10-22
 
 Desk's versioned foundation forbids native harness memory stores. Copilot startup forces its native memory setting off even after re-enablement, so instructions and preferences stay in the Git-backed desk. Settings repair failures are reported without overwriting commented or malformed files.
