@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.342 — 2026-10-22
+
+Native task-context generation and privacy review now select the producing Desk plugin explicitly and check its version, effective native registration and task-context skill before launch and before accepting output. Pending work from an older producer stays held without relabeling its provenance. These separate metadata checks are compatibility checks, not same-process attestation. Private briefs expose the independently associated task-card pointer directly, so readers can find task meaning without paging through large numerical snapshots. Independent privacy review and all launch, billing and publication limits are unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.341 — 2026-10-22
 
 Browser tool discovery now shows supported page-command examples instead of directing agents to unavailable help. The guidance explains serial action/snapshot use, private-mode inline snapshots, and keeping the same task-owned context without another approval step. Command guards, tool schemas and profile ownership boundaries are unchanged.
