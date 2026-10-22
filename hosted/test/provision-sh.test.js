@@ -126,6 +126,13 @@ test("STAGE=staging creates ouro-desk-hosted-staging on the pinned image, scalin
   assert.ok(!output.includes("gh variable set"), "no deploy variables for staging");
 });
 
+test("the app gives shutdown 120 s: Desk sessions (up to 12 s) and every realm's push and rescue within 80 s, then the token broker", (t) => {
+  for (const env of [{}, { STAGE: "staging", IMAGE: "abc123" }]) {
+    const { documents } = runProvision(t, { env });
+    assert.match(documents.at(-1), /^\s+terminationGracePeriodSeconds: 120$/m);
+  }
+});
+
 test("the Ouro settings come from identity-<env>.json with the names readConfig reads, and DESK_ALLOWED_LOGINS stays", (t) => {
   const { documents } = runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") });
   const written = JSON.parse(documents[0]);
