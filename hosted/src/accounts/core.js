@@ -282,9 +282,21 @@ export function storeOn(tables, { onStep = noop } = {}) {
     async putAccount({ accountId, displayName, deskAccess }) {
       if (typeof displayName !== "string") throw new TypeError("displayName must be a string");
       if (typeof deskAccess !== "boolean") throw new TypeError("deskAccess must be true or false");
-      const existing = await tables.get("accounts", key(accountId, "accountId"), "");
-      const signedOut = existing?.entity.sessionsNotBefore;
-      await tables.upsert("accounts", { partitionKey: accountId, rowKey: "", displayName, deskAccess, ...(signedOut !== undefined ? { sessionsNotBefore: signedOut } : {}) });
+      key(accountId, "accountId");
+      // Conditional, like setAccess: a sign-out recorded meanwhile is re-read rather than overwritten.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const existing = await tables.get("accounts", accountId, "");
+        const signedOut = existing?.entity.sessionsNotBefore;
+        const row = { partitionKey: accountId, rowKey: "", displayName, deskAccess, ...(signedOut !== undefined ? { sessionsNotBefore: signedOut } : {}) };
+        try {
+          if (existing) await tables.update("accounts", row, existing.etag);
+          else await tables.create("accounts", row);
+          return;
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed || error instanceof Conflict)) throw error;
+        }
+      }
+      throw new Error("the account kept changing; try again");
     },
 
     findIdentity,
