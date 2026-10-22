@@ -23,9 +23,10 @@ const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
 
 // The App's user authorization: trades GitHub's `code` for a user token, or null when GitHub doesn't grant one.
-export async function exchangeCode({ clientId, clientSecret, callbackUrl, code, fetch = globalThis.fetch }) {
+export async function exchangeCode({ clientId, clientSecret, callbackUrl, code, fetch = globalThis.fetch, timeoutMs }) {
   const exchange = await fetch(TOKEN_URL, {
     method: "POST",
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: callbackUrl }).toString(),
   });
@@ -34,8 +35,9 @@ export async function exchangeCode({ clientId, clientSecret, callbackUrl, code, 
 }
 
 // The user a user token belongs to (`{ id, login, name, ... }`), or null.
-export async function readUser(token, fetch = globalThis.fetch) {
+export async function readUser(token, fetch = globalThis.fetch, timeoutMs) {
   const response = await fetch(USER_URL, {
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "ouro-desk-hosted" },
   });
   if (!response.ok) return null;

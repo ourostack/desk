@@ -5,8 +5,8 @@
 // repositories), they can push to it, and, read again with the App's installation token, the App's installation for
 // it is the one listed and the collaborator permission is write, maintain or admin. One repository is one account's
 // desk. The binding keeps the GitHub user id and login, never the user token: that is used inside the callback and
-// dropped. Each Desk session start rechecks the binding with the installation token (`recheckBinding`), and a
-// binding that fails is suspended until linked again.
+// dropped. Each Desk session start rechecks the binding with the installation token (`sessionRefusal`): a binding
+// whose access GitHub says is gone is suspended, and refused, until a later recheck passes or the person links again.
 //
 // The pages, all behind the browser session (browser-session.js):
 //   GET  /link/github                     what is linked, and a form to link (again)
@@ -45,8 +45,11 @@ export const suspendedMessage = (issuer) =>
 
 const noreply = ({ githubUserId, login }) => `${githubUserId}+${login}@users.noreply.github.com`;
 
-// A GitHub answer that says the App or the person has no access (as opposed to GitHub being down or slow).
-const refusedByGitHub = (error) => error?.code === "installation_mismatch" || (Number.isInteger(error?.status) && error.status >= 400 && error.status < 500 && error.status !== 429);
+// GitHub saying the access is gone: the repository is now served by another installation than the binding's, or
+// GitHub answers 404 (the App was uninstalled from it, the installation, repository or user no longer exists, or the
+// installation can't see it). Every other failure is "try again", never a suspension: a 401 is our App's JWT or a
+// stale token, a 403 or 429 a rate limit or our App's own fault, a 5xx or a timeout GitHub being down.
+const accessGone = (error) => error?.code === "installation_mismatch" || error?.status === 404;
 
 class GitHubError extends Error {
   constructor(status, path) {
@@ -85,6 +88,9 @@ export function createGitHubLink({
   }
   if (!store || !sessions) throw new Error("createGitHubLink needs the accounts store and the browser session");
   if (typeof initDesk !== "function") throw new Error("createGitHubLink needs initDesk");
+  // DESK_APP_ID arrives as text; GitHub's `app_id` is a number.
+  const appNumber = Number(appId);
+  if (!Number.isSafeInteger(appNumber) || appNumber <= 0) throw new Error("createGitHubLink needs appId, the App's numeric id");
   const { sealed, unsealed } = sealer({ key, keys, now });
 
   async function get(path, token) {
@@ -97,7 +103,7 @@ export function createGitHubLink({
   }
 
   // An installation token for `repo` from exactly `installationId`.
-  const tokenFor = async (repo, installationId) => (await mint({ appId, privateKeyPem, repo, installationId, fetch, now, timeoutMs })).token;
+  const tokenFor = async (repo, installationId) => (await mint({ appId: appNumber, privateKeyPem, repo, installationId, fetch, now, timeoutMs })).token;
 
   // Whether `login` may push to `repo`, read with the installation token.
   async function canPush(repo, login, token) {
@@ -112,13 +118,13 @@ export function createGitHubLink({
     try {
       token = await tokenFor(repo, installationId);
     } catch (error) {
-      if (refusedByGitHub(error)) return { refused: "not_installed" };
+      if (accessGone(error)) return { refused: "not_installed" };
       throw error;
     }
     try {
       if (!(await canPush(repo, login, token))) return { refused: "no_write" };
     } catch (error) {
-      if (refusedByGitHub(error)) return { refused: "no_write" };
+      if (accessGone(error)) return { refused: "no_write" };
       throw error;
     }
     return { token };
@@ -143,10 +149,11 @@ export function createGitHubLink({
     return { kind: "github", repo, installationId, githubUserId, login, author: { name: account?.displayName || login, email: noreply({ githubUserId, login }) } };
   }
 
-  // Records the binding after the final checks. Returns `{ binding }` or `{ refused, status }`.
-  async function link(accountId, pick) {
-    const checked = await verify(pick);
-    if (checked.refused) return { refused: checked.refused, status: 403 };
+  // Records the binding after the final checks. `checked` is verify's answer when the caller already has it. Returns
+  // `{ binding, token }` or `{ refused }`.
+  async function link(accountId, pick, checked) {
+    checked ??= await verify(pick);
+    if (checked.refused) return { refused: checked.refused };
     if (await store.repoBoundElsewhere(pick.repo, accountId)) return { refused: "bound_elsewhere", status: 409 };
     const binding = await bindingFor(accountId, pick);
     await store.putBinding(accountId, binding);
@@ -169,12 +176,12 @@ export function createGitHubLink({
   // What a user token offers: the user, and each repository in the App's installations they can see that they can
   // push to. Null when GitHub doesn't confirm the user.
   async function offeredTo(userToken) {
-    const user = await readUser(userToken, fetch);
+    const user = await readUser(userToken, fetch, timeoutMs);
     if (!user || !Number.isSafeInteger(user.id) || user.id <= 0) return null;
     const { installations = [] } = await get(`/user/installations?per_page=${PER_PAGE}`, userToken);
     const candidates = [];
     for (const installation of installations.slice(0, MAX_INSTALLATIONS)) {
-      if (!Number.isSafeInteger(installation?.id) || (installation.app_id !== undefined && installation.app_id !== appId)) continue;
+      if (!Number.isSafeInteger(installation?.id) || (installation.app_id !== undefined && installation.app_id !== appNumber)) continue;
       const { repositories = [] } = await get(`/user/installations/${installation.id}/repositories?per_page=${PER_PAGE}`, userToken);
       for (const repository of repositories) {
         const { push, maintain, admin } = repository?.permissions ?? {};
@@ -199,7 +206,7 @@ export function createGitHubLink({
       login = (await get(`/user/${binding.githubUserId}`, token))?.login ?? login;
       allowed = await canPush(binding.repo, login, token);
     } catch (error) {
-      if (!refusedByGitHub(error)) {
+      if (!accessGone(error)) {
         log(`recheck unavailable: account ${accountId}`);
         return "unavailable";
       }
@@ -216,6 +223,15 @@ export function createGitHubLink({
       onLinked(accountId);
     }
     return "ok";
+  }
+
+  // Session start's one call: null when the account's desk may start, else the message to refuse the session with.
+  // An account with no binding gets null here; the runtime refuses it itself, as it always has.
+  async function sessionRefusal(accountId) {
+    const state = await recheckBinding({ accountId });
+    if (state === "suspended") return suspendedMessage(issuer);
+    if (state === "unavailable") return "GitHub didn't answer while Hosted Desk checked your desk link. Try again in a minute.";
+    return null;
   }
 
   // ---- pages
@@ -296,7 +312,7 @@ export function createGitHubLink({
     }
     const code = text(req.query.code);
     if (text(req.query.error) || !code) return sendPage(res, htmlPage(200, `<p>Linking was cancelled on GitHub. Nothing was linked.</p>${startForm(sessions.csrfToken(req), "Link again")}`));
-    const userToken = await exchangeCode({ clientId, clientSecret, callbackUrl, code, fetch });
+    const userToken = await exchangeCode({ clientId, clientSecret, callbackUrl, code, fetch, timeoutMs });
     const offered = userToken ? await offeredTo(userToken) : null;
     if (!offered) {
       log(`link refused: github_unconfirmed account ${accountId}`);
@@ -337,7 +353,7 @@ export function createGitHubLink({
       if (checked.refused) return finish(res, accountId, pick, checked);
       if (await store.repoBoundElsewhere(pick.repo, accountId)) return finish(res, accountId, pick, { refused: "bound_elsewhere" });
       if (!(await isDesk(pick.repo, checked.token))) return sendPage(res, offerPage(pick, csrf));
-      return finish(res, accountId, pick, await link(accountId, pick));
+      return finish(res, accountId, pick, await link(accountId, pick, checked));
     }
     if (action === "init" || action === "decline") {
       const pick = unsealed(PICK_KIND, req.body?.pick);
@@ -350,11 +366,11 @@ export function createGitHubLink({
 
   // Links the picked repository and runs desk init in it. A failed init puts back whatever binding the account had,
   // so the person is never left bound to a repository that isn't a desk.
+  // The binding is recorded before init because the realm clones the repository its stored binding names; a
+  // session that starts during init sees a repository that isn't a desk yet, as it would without Hosted Desk.
   async function makeDesk(res, accountId, pick) {
-    const previous = await store.getBinding(accountId).catch((error) => {
-      if (error?.name === "StoreError") throw error;
-      return null;
-    });
+    // Any read failure, an unreadable row included, stops here: the rollback must never erase a row it couldn't read.
+    const previous = await store.getBinding(accountId);
     const linked = await link(accountId, pick);
     if (linked.refused) return finish(res, accountId, pick, linked);
     let result;
@@ -368,8 +384,15 @@ export function createGitHubLink({
       onLinked(accountId);
       return sendPage(res, linkedPage(pick.repo, result.status === "created"));
     }
-    if (previous) await store.putBinding(accountId, previous);
-    else await store.removeBinding(accountId);
+    try {
+      if (previous) await store.putBinding(accountId, previous);
+      else await store.removeBinding(accountId);
+    } catch (error) {
+      log(`link failed: desk_init rollback_failed account ${accountId}`);
+      throw error;
+    } finally {
+      onLinked(accountId);
+    }
     log(`link failed: desk_init ${typeof result?.step === "string" && /^\w{1,32}$/.test(result.step) ? result.step : "error"} account ${accountId}`);
     sendPage(res, page(502, `Desk couldn't make ${pick.repo} a desk, so nothing was linked. Try again, or choose another repository.`));
   }
@@ -402,5 +425,6 @@ export function createGitHubLink({
     callbackHandler: guarded(callback),
     linkGitHub,
     recheckBinding,
+    sessionRefusal,
   };
 }

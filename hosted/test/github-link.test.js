@@ -20,7 +20,8 @@ const INSTALLATION = 777001;
 // installation token reads. `state.repos` maps owner/name to `{ installationId, collaborators: {login: role}, files }`.
 // Every request is recorded with the token it carried.
 function fakeGitHub({ user = JORDAN, repos = {}, appId } = {}) {
-  const state = { user, repos, calls: [], userTokens: new Set(), installationTokens: new Map(), down: false, appId };
+  // `failures` are `{ path: RegExp, status }`: a matching API call answers with that status.
+  const state = { user, repos, calls: [], userTokens: new Set(), installationTokens: new Map(), down: false, failures: [], appId };
   const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   let counter = 0;
   const fetch = async (input, init = {}) => {
@@ -38,6 +39,8 @@ function fakeGitHub({ user = JORDAN, repos = {}, appId } = {}) {
       return json(200, { access_token: token, token_type: "bearer" });
     }
     const path = url.pathname;
+    const failure = state.failures.find((f) => f.path.test(path));
+    if (failure) return json(failure.status, { message: "failing on purpose" });
     const isUser = state.userTokens.has(bearer);
     const installationOf = (token) => state.installationTokens.get(token);
     if (path === "/user") return isUser ? json(200, state.user) : json(401, {});
@@ -112,7 +115,8 @@ async function startLinking(t, { repos = { [DESK_REPO]: { installationId: INSTAL
         clientId: "Iv1.ouro-desk",
         clientSecret: "secret",
         callbackUrl: `${GATEWAY}/oauth/github/callback`,
-        appId,
+        // As main.js passes it: DESK_APP_ID is text.
+        appId: String(appId),
         privateKeyPem: PRIVATE_KEY,
         fetch: github.fetch,
         initDesk: async (args) => {
@@ -379,4 +383,71 @@ test("a binding the operator seeded (no GitHub user) and an account with no bind
   assert.equal(await ctx.link.recheckBinding({ accountId: ctx.accountId }), "ok", "Ari's seeded binding");
   assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "none");
   assert.equal(ctx.github.state.calls.length, calls);
+});
+
+test("our App's own failures and GitHub's rate limits are 'try again', never a suspension", async (t) => {
+  const ctx = await startLinking(t);
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  for (const [what, failure] of [
+    ["the App's JWT refused", { path: /\/installation$/, status: 401 }],
+    ["access tokens rate-limited", { path: /\/access_tokens$/, status: 403 }],
+    ["permission rate-limited", { path: /\/permission$/, status: 403 }],
+    ["permission 429", { path: /\/permission$/, status: 429 }],
+    ["GitHub 502", { path: /\/permission$/, status: 502 }],
+  ]) {
+    ctx.github.state.failures = [failure];
+    assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "unavailable", what);
+    assert.equal((await ctx.store.getBinding(ctx.jordanId)).suspended, undefined, what);
+  }
+  ctx.github.state.failures = [{ path: /\/installation$/, status: 404 }];
+  assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "suspended", "the App uninstalled");
+});
+
+test("session start: a suspended desk is refused with the relink message, GitHub down with try again, a good one starts", async (t) => {
+  const ctx = await startLinking(t);
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  assert.equal(await ctx.link.sessionRefusal(ctx.jordanId), null);
+  assert.equal(await ctx.link.sessionRefusal(ctx.accountId), null, "Ari's seeded binding starts without a GitHub call");
+  ctx.github.state.down = true;
+  assert.match(await ctx.link.sessionRefusal(ctx.jordanId), /Try again/);
+  ctx.github.state.down = false;
+  ctx.github.state.repos[DESK_REPO].collaborators["jordan-dev"] = "read";
+  assert.equal(await ctx.link.sessionRefusal(ctx.jordanId), suspendedMessage(GATEWAY));
+  assert.equal(await ctx.link.sessionRefusal(ctx.jordanId), suspendedMessage(GATEWAY), "still refused at the next start");
+});
+
+test("one repository is one account's desk whatever its case; a suspended binding no longer holds it", async (t) => {
+  const ctx = await startLinking(t);
+  const other = randomUUID();
+  await ctx.store.putAccount({ accountId: other, displayName: "Old Owner", deskAccess: true });
+  await ctx.store.putBinding(other, { kind: "github", repo: "Jordan-Dev/Desk", installationId: INSTALLATION, author: { name: "x", email: "1+x@users.noreply.github.com" } });
+  const refused = await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO);
+  assert.equal(refused.status, 409, "Jordan-Dev/Desk and jordan-dev/desk are one repository");
+  await ctx.store.putBinding(other, { kind: "github", repo: "Jordan-Dev/Desk", installationId: INSTALLATION, suspended: true, author: { name: "x", email: "1+x@users.noreply.github.com" } });
+  const linked = await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO);
+  assert.equal(linked.status, 200, linked.text);
+});
+
+test("a failed init never erases a binding it couldn't read, and tells the runtime after a rollback", async (t) => {
+  const ctx = await startLinking(t, { repos: { "jordan-dev/notes": { installationId: INSTALLATION, collaborators: { "jordan-dev": "admin" }, files: [] } }, initDesk: () => ({ status: "error", step: "commit" }) });
+  const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/notes");
+  const pick = { action: "init", csrf: decode(csrfOf(offer.text)), pick: decode(fieldOf(offer.text, "pick")) };
+  // A row this gateway can't read as a binding (a v1c hosted desk, say).
+  await ctx.store.tables.upsert("bindings", { partitionKey: ctx.jordanId, rowKey: "", kind: "hosted", deskId: "d1" });
+  const stopped = await ctx.jordan.request("/link/github", { method: "POST", form: pick });
+  assert.equal(stopped.status, 503, stopped.text);
+  assert.equal((await ctx.store.tables.get("bindings", ctx.jordanId, "")).entity.kind, "hosted", "the unreadable row is untouched");
+  assert.equal(ctx.inits.length, 0);
+  await ctx.store.tables.remove("bindings", ctx.jordanId, "");
+  const failed = await ctx.jordan.request("/link/github", { method: "POST", form: pick });
+  assert.equal(failed.status, 502);
+  assert.equal(await ctx.store.getBinding(ctx.jordanId), null);
+  assert.deepEqual(ctx.linked, [ctx.jordanId], "the runtime hears about the rollback");
+});
+
+test("createGitHubLink refuses an App id that isn't a number", () => {
+  const base = { key: "k".repeat(32), store: {}, sessions: {}, issuer: GATEWAY, clientId: "c", clientSecret: "s", callbackUrl: `${GATEWAY}/cb`, privateKeyPem: PRIVATE_KEY, initDesk: () => {} };
+  assert.throws(() => createGitHubLink({ ...base, appId: "Iv1.abc" }), /numeric id/);
+  assert.throws(() => createGitHubLink({ ...base, appId: undefined }), /numeric id/);
+  assert.doesNotThrow(() => createGitHubLink({ ...base, appId: "123" }));
 });

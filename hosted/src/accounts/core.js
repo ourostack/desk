@@ -238,9 +238,13 @@ export function storeOn(tables, { onStep = noop } = {}) {
       await tables.remove("bindings", key(accountId, "accountId"), "");
     },
 
-    // The account whose binding names `repo` other than `accountId`, or null: one repository is one account's desk.
+    // The account other than `accountId` whose binding names `repo`, or null: one repository is one account's desk.
+    // GitHub's names are case-insensitive. A suspended binding no longer holds its repository, so someone who can
+    // push to it now may link it. Read, then written by the caller: two collaborators linking one repository at the
+    // same moment can both succeed, each having proved push access to it.
     async repoBoundElsewhere(repo, accountId) {
-      const other = (await tables.list("bindings")).find((row) => row.repo === repo && row.partitionKey !== accountId);
+      const wanted = String(repo).toLowerCase();
+      const other = (await tables.list("bindings")).find((row) => String(row.repo).toLowerCase() === wanted && row.partitionKey !== accountId && row.suspended !== true);
       return other ? other.partitionKey : null;
     },
 
