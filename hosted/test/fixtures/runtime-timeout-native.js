@@ -32,9 +32,12 @@ export async function runTimeoutCases({ config, store, binding, root, waitForSlo
   const bound = setTimeout(() => { console.error("Timeout native fixture exceeded its 100-second bound."); process.exit(1); }, 100_000);
   const rootDir = join(root, "timeout-realms");
   const baseEnv = { PATH: "/data/runtime-native-bin:/usr/local/bin:/usr/bin:/bin" };
-  for (const accountId of ["deadline-push", "deadline-a", "deadline-b", "deadline-c"]) {
+  // One repository serves one account at a time in a runtime, so the three accounts of `manager` have three
+  // repositories.
+  const repos = { "deadline-push": binding.repo, "deadline-a": binding.repo, "deadline-b": "synthetic/second", "deadline-c": "synthetic/third" };
+  for (const [accountId, repo] of Object.entries(repos)) {
     await store.putAccount({ accountId, displayName: "Synthetic", deskAccess: true });
-    await store.putBinding(accountId, binding);
+    await store.putBinding(accountId, { ...binding, repo });
   }
   const manager = createAccountRuntime({
     config, store, rootDir, baseEnv, mint: async () => ({ token: "synthetic-token" }),

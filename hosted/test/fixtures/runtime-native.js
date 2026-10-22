@@ -14,10 +14,12 @@ const root = "/data/runtime-native";
 mkdirSync(root, { recursive: true, mode: 0o711 });
 const bare = "/data/runtime-native-remote";
 const seed = "/data/runtime-native-seed";
-// A second desk repository, so accounts bound to different repositories each clone their own.
+// Second and third desk repositories, so accounts bound to different repositories each clone their own.
 const secondBare = "/data/runtime-native-second";
 const secondSeed = "/data/runtime-native-second-seed";
-for (const path of [bare, seed, secondBare, secondSeed, "/data/runtime-native-bin"]) mkdirSync(path, { recursive: true });
+const thirdBare = "/data/runtime-native-third";
+const thirdSeed = "/data/runtime-native-third-seed";
+for (const path of [bare, seed, secondBare, secondSeed, thirdBare, thirdSeed, "/data/runtime-native-bin"]) mkdirSync(path, { recursive: true });
 function fixtureGit(cwd, args) {
   const result = spawnSync("/usr/bin/git", args, {
     cwd, encoding: "utf8",
@@ -32,13 +34,15 @@ writeFileSync(join(seed, "marker"), "synthetic marker");
 fixtureGit(seed, ["add", "."]);
 fixtureGit(seed, ["commit", "--quiet", "-m", "seed"]);
 fixtureGit(seed, ["push", "--quiet", bare, "main"]);
-fixtureGit(secondBare, ["init", "--quiet", "--bare", "-b", "main"]);
-fixtureGit(secondSeed, ["init", "--quiet", "-b", "main"]);
-writeFileSync(join(secondSeed, "marker"), "second marker");
-fixtureGit(secondSeed, ["add", "."]);
-fixtureGit(secondSeed, ["commit", "--quiet", "-m", "second seed"]);
-fixtureGit(secondSeed, ["push", "--quiet", secondBare, "main"]);
-for (const remote of [bare, secondBare]) {
+for (const [remote, origin, marker] of [[secondBare, secondSeed, "second marker"], [thirdBare, thirdSeed, "third marker"]]) {
+  fixtureGit(remote, ["init", "--quiet", "--bare", "-b", "main"]);
+  fixtureGit(origin, ["init", "--quiet", "-b", "main"]);
+  writeFileSync(join(origin, "marker"), marker);
+  fixtureGit(origin, ["add", "."]);
+  fixtureGit(origin, ["commit", "--quiet", "-m", marker]);
+  fixtureGit(origin, ["push", "--quiet", remote, "main"]);
+}
+for (const remote of [bare, secondBare, thirdBare]) {
   fixtureGit(remote, ["config", "http.receivepack", "true"]);
   fixtureGit(remote, ["config", "uploadpack.allowFilter", "true"]);
   for (const entry of readdirSync(remote, { recursive: true })) {
@@ -89,6 +93,7 @@ const http = createServer(async (req, res) => {
 await new Promise(resolve => http.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${http.address().port}/runtime-native-remote`;
 const secondOrigin = `http://127.0.0.1:${http.address().port}/runtime-native-second`;
+const thirdOrigin = `http://127.0.0.1:${http.address().port}/runtime-native-third`;
 writeFileSync("/data/runtime-native-bin/git", `#!/usr/bin/env node
 const { existsSync, appendFileSync } = require("node:fs");
 const { spawn, spawnSync } = require("node:child_process");
@@ -96,19 +101,21 @@ if (existsSync("/data/runtime-native-fail") && process.argv[2] === "fetch") proc
 if (existsSync("/data/runtime-native-fail-push") && process.argv[2] === "rev-list") process.exit(1);
 appendFileSync(process.env.XDG_STATE_HOME + "/git-argv.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");
 const env = {
-  ...process.env, GIT_CONFIG_COUNT: "3",
+  ...process.env, GIT_CONFIG_COUNT: "4",
   GIT_CONFIG_KEY_0: ${JSON.stringify(`url.${origin}.insteadOf`)},
   GIT_CONFIG_VALUE_0: "https://github.com/synthetic/desk.git",
   GIT_CONFIG_KEY_1: "safe.bareRepository", GIT_CONFIG_VALUE_1: "all",
   GIT_CONFIG_KEY_2: ${JSON.stringify(`url.${secondOrigin}.insteadOf`)},
   GIT_CONFIG_VALUE_2: "https://github.com/synthetic/second.git",
+  GIT_CONFIG_KEY_3: ${JSON.stringify(`url.${thirdOrigin}.insteadOf`)},
+  GIT_CONFIG_VALUE_3: "https://github.com/synthetic/third.git",
 };
 const run = () => {
   if (process.argv[2] === "fetch" && existsSync("/data/runtime-native-slow-fetch")) {
     const fs = require("node:fs"), path = require("node:path");
     const mode = fs.readFileSync("/data/runtime-native-slow-fetch", "utf8");
     const child = spawn("/usr/bin/git", process.argv.slice(2), {
-      env: { ...env, GIT_CONFIG_COUNT: "4", GIT_CONFIG_KEY_3: "http.extraHeader", GIT_CONFIG_VALUE_3: "X-Desk-Timeout: " + mode },
+      env: { ...env, GIT_CONFIG_COUNT: "5", GIT_CONFIG_KEY_4: "http.extraHeader", GIT_CONFIG_VALUE_4: "X-Desk-Timeout: " + mode },
       stdio: "inherit", detached: mode === "escaped",
     });
     import("file:///app/plugins/desk/mcp/src/readiness/process-start.js").then(async ({ readProcessStart }) => {
