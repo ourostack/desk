@@ -18,6 +18,8 @@ test("consent, invitation and refusal pages share an accessible logo without cha
     pages.consentPage(arguments_),
     pages.consentPage({ ...arguments_, signIn: { entra: true, github: true } }),
     pages.invitePage({ issuer: "https://desk.ouro.bot" }),
+    pages.invitePage({ issuer: "https://desk.ouro.bot", linkGitHub: true }),
+    pages.noDeskPage({ link: true }),
     ...["startingUpPage", "signInUnavailablePage", "startAgainPage", "inviteOnlyPage", "inviteRefusedPage", "accessOffPage", "noDeskPage", "inviteInvalidPage"].map((name) => pages[name]()),
   ];
   for (const { html } of rendered) {
@@ -28,6 +30,9 @@ test("consent, invitation and refusal pages share an accessible logo without cha
   }
   assert.match(rendered[1].html, /name="consent" value="&quot;&lt;&amp;"/);
   assert.match(rendered[1].html, /action="\/oauth\/consent"/);
+  assert.match(rendered[4].html, /href="\/signin\?next=\/link\/github"/);
+  assert.match(rendered[5].html, /href="\/link\/github"/);
+  assert.equal(rendered[5].status, 403);
   assert.match(rendered[1].html, />Approve<\/button>/);
   assert.match(rendered[2].html, /name="method" value="entra">Continue with Apple or email/);
   assert.match(rendered[2].html, /name="method" value="github">Continue with GitHub/);

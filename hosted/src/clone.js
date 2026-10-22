@@ -20,6 +20,22 @@ export function runGit(args, { cwd, env = process.env } = {}) {
   });
 }
 
+// The branch a clone of an empty repository starts.
+const FIRST_BRANCH = "main";
+
+// In a private-context clone (Git runs inside it): pushes the current branch when it has commits and its upstream
+// doesn't exist on the remote yet, which is the first push to an empty repository. Returns whether it pushed. Desk's
+// own push worker pushes only to an upstream that exists, so this runs before it.
+export async function publishNewBranch(git) {
+  const ok = (args) => git(args).then(() => true, () => false);
+  if (!(await ok(["rev-parse", "--verify", "--quiet", "HEAD"]))) return false;
+  if (await ok(["rev-parse", "--verify", "--quiet", "@{u}"])) return false;
+  const branch = (await git(["symbolic-ref", "--short", "HEAD"])).trim();
+  if (!(await ok(["config", `branch.${branch}.merge`]))) return false;
+  await git(["push", "--quiet", "origin", "HEAD"]);
+  return true;
+}
+
 // Points GitHub credentials at the helper only. The empty value first clears
 // any helper inherited from system or global config.
 async function configure(dir, git) {
@@ -53,9 +69,18 @@ export async function ensureClone({ dir, repo, git = runGit, privateContext = fa
       writeFileSync(join(dir, ".git", "config"), `[core]\nrepositoryformatversion = 0\nbare = false\n[remote "origin"]\nurl = desk::origin\nfetch = +refs/heads/*:refs/remotes/origin/*\npromisor = true\npartialclonefilter = blob:none\n[protocol "desk"]\nallow = always\n`, { mode: 0o600 });
       await configure("", (args) => git(args.slice(2)));
       await git(["fetch", "--quiet", "--filter=blob:none", "origin"]);
-      await git(["remote", "set-head", "origin", "--auto"]);
-      const head = (await git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim();
-      await git(["checkout", "--quiet", "-B", head.slice("origin/".length), "--track", head]);
+      if ((await git(["for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes/origin/"])).trim() === "") {
+        // An empty repository (a new one, with no README) has no default branch to check out. Start the first branch
+        // here, tracking the same name there; desk init commits to it, and its first push (publishNewBranch) creates
+        // it. GitHub makes the first branch pushed to an empty repository its default.
+        await git(["symbolic-ref", "HEAD", `refs/heads/${FIRST_BRANCH}`]);
+        await git(["config", `branch.${FIRST_BRANCH}.remote`, "origin"]);
+        await git(["config", `branch.${FIRST_BRANCH}.merge`, `refs/heads/${FIRST_BRANCH}`]);
+      } else {
+        await git(["remote", "set-head", "origin", "--auto"]);
+        const head = (await git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim();
+        await git(["checkout", "--quiet", "-B", head.slice("origin/".length), "--track", head]);
+      }
       writeFileSync(marker, "", { mode: 0o600 });
     }
     await configure("", (args) => git(args.slice(2)));

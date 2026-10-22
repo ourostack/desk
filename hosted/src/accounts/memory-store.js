@@ -51,9 +51,12 @@ export function createMemoryStore({ tablePrefix = "", ...options } = {}) {
       rowsOf(table, "upsert").set(id(entity), { entity: copy(entity), etag });
       return etag;
     },
-    async remove(table, partitionKey, rowKey) {
+    async remove(table, partitionKey, rowKey, etag) {
       await tick();
-      rowsOf(table, "remove").delete(`${partitionKey}\u0000${rowKey}`);
+      const rows = rowsOf(table, "remove");
+      const row = rows.get(`${partitionKey}\u0000${rowKey}`);
+      if (etag !== undefined && row && row.etag !== etag) throw new PreconditionFailed(table);
+      rows.delete(`${partitionKey}\u0000${rowKey}`);
     },
     async list(table) {
       await tick();

@@ -135,12 +135,12 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback, link: githubLink }));
   if (entra) app.get("/oauth/entra/callback", entraCallbackHandler(entra, { log }));
   if (invites) {
-    const handlers = inviteHandlers(invites);
+    const handlers = inviteHandlers(invites, { linkGitHub: Boolean(githubLink) });
     app.get("/invite/:token", handlers.landing);
     app.get("/invite", handlers.page);
   }
   if (sessions && !entra?.pageSignIn) throw new Error("the browser session's pages need the Ouro tenant's sign-in built with the same sessions");
-  if (sessions) mountSessionPages(app, { entra, sessions, log });
+  if (sessions) mountSessionPages(app, { entra, sessions, linkGitHub: Boolean(githubLink), log });
   if (admin) app.use("/admin", admin);
   // What the ouro CLI needs to sign in for the admin routes: public settings, no secret.
   if (admin && adminDiscovery) app.get("/.well-known/ouro-desk-admin", (_req, res) => res.set("cache-control", "no-store").json(adminDiscovery));
@@ -163,7 +163,7 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
 }
 
 // The browser session's routes. Every page here is behind the session; one without it goes to sign in and back.
-function mountSessionPages(app, { entra, sessions, log }) {
+function mountSessionPages(app, { entra, sessions, linkGitHub, log }) {
   const toSignIn = (res, next) => res.redirect(303, `/signin?next=${encodeURIComponent(next)}`);
 
   app.get("/signin", (req, res) => {
@@ -181,19 +181,27 @@ function mountSessionPages(app, { entra, sessions, log }) {
       accountId = await sessions.require(req);
       if (!accountId) return toSignIn(res, "/account");
       const account = await sessions.account(accountId);
-      sendPage(res, accountPage({ displayName: account?.displayName, csrf: sessions.csrfToken(req) }));
+      sendPage(res, accountPage({ displayName: account?.displayName, csrf: sessions.csrfToken(req), linkGitHub }));
     } catch (error) {
       log(`page failed: store_unavailable (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
       sendPage(res, signInUnavailablePage());
     }
   });
 
-  app.post("/signout", express.urlencoded({ extended: false, limit: "4kb" }), (req, res) => {
+  app.post("/signout", express.urlencoded({ extended: false, limit: "4kb" }), async (req, res) => {
     // With no session left (it expired, say) there is nothing to protect: the browser is signed out either way.
     if (sessions.csrfToken(req) === null) return sendPage(res, { ...signedOutPage(), headers: { "set-cookie": sessions.clear() } });
     if (!sessions.checkCsrf(req)) {
       log("sign-out refused: csrf");
       return sendPage(res, pageRefusedPage());
+    }
+    // Ends every copy of the session, not only this browser's cookie. If the store can't record that, this browser
+    // is still signed out, and the page says the other sessions may not be.
+    try {
+      await sessions.revoke(req);
+    } catch (error) {
+      log(`sign-out: revoke failed (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
+      return sendPage(res, { ...signedOutPage({ everywhere: false }), headers: { "set-cookie": sessions.clear() } });
     }
     sendPage(res, { ...signedOutPage(), headers: { "set-cookie": sessions.clear() } });
   });
