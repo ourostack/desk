@@ -15,14 +15,14 @@ import { protectWindowsPaths } from '../../../../../plugins/desk/mcp/src/factory
 const require = createRequire(import.meta.url);
 // A selected canonical collector is initialized by the ordinary module import.
 // VM execution below shares it; no coverage global or counter is synthesized.
-require(path.join(mcpRoot, 'browser-context.cjs'));
+require(path.join(mcpRoot, 'browser-native.cjs'));
 const native = require(path.join(mcpRoot, 'web-native-messaging.cjs'));
 const profile = require(path.join(mcpRoot, 'web-real-profile.cjs'));
 const discovery = require(path.join(mcpRoot, 'web-browser-discovery.cjs'));
 const distribution = await import(pathToFileURL(path.join(mcpRoot, 'native-messaging-install.mjs')).href);
 const { loadTemplate } = require('./fixtures/native-template-loader.cjs');
 
-// Controller unit resource model, NOT enrollment or installed/native proof.
+// Legacy controller compatibility model, NOT normal creation or enrollment proof.
 // The unchanged installer/distribution verifier and C attest boundary are
 // independently exercised by their integration suites. No browser is launched.
 async function fixture(t, options = {}) {
@@ -78,7 +78,7 @@ async function fixture(t, options = {}) {
     return Object.freeze({ contextId: record.contextId });
   } };
   const module = { exports: {} };
-  const controller = loadTemplate(path.join(mcpRoot, 'browser-context.cjs'), {
+  const controller = loadTemplate(path.join(mcpRoot, 'browser-native.cjs'), {
     module, __dirname: mcpRoot, process, Buffer,
     require: name => name === 'fs' ? observedFs : name === 'os' ?
       { ...os, userInfo: () => ({ ...os.userInfo(), homedir: home }) } :

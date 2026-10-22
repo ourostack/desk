@@ -18,7 +18,7 @@ test("browser catalog exposes object-root discoverable explicit context tools, n
   const {ToolSchema,ListToolsResultSchema} = await sdk("types.js")
   assert.equal(ListToolsResultSchema.safeParse({tools}).success,true)
   for (const tool of tools) assert.equal(ToolSchema.safeParse(tool).success,true)
-  assert.deepEqual(Object.keys(tools[0].inputSchema.properties),["action","mode","contextId","label"])
+  assert.deepEqual(Object.keys(tools[0].inputSchema.properties),["action","mode","interactive","contextId","label"])
 })
 
 test("standard SDK memory client keeps explicit handles and rejects invalid calls without browser allocation", async t => {
@@ -78,6 +78,23 @@ test("old-Node missing-root inline launcher preserves the exact two healthy sche
   const response = JSON.parse(stdout)
   assert.deepEqual(response.result.tools,JSON.parse(fs.readFileSync(path.join(mcpRoot,"web-catalog.json"))).tools)
   stdin.destroy()
+})
+
+test("owned stdio session closes its child when initialization times out",async t=>{
+  const root=await mkTempRoot("desk-mcp-failed-initialize-")
+  const marker=path.join(root,"child.json")
+  let pid
+  t.after(()=>{
+    if(pid)try{process.kill(pid,"SIGTERM")}catch(error){if(error.code!=="ESRCH")throw error}
+  })
+  await assert.rejects(openSession({
+    command:process.execPath,
+    args:["-e",`require("fs").writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:process.pid}));process.stdin.resume()`],
+    cwd:root,env:{...process.env},timeoutMs:250,
+  }),/no answer to initialize/)
+  pid=JSON.parse(fs.readFileSync(marker,"utf8")).pid
+  assert.throws(()=>process.kill(pid,0),{code:"ESRCH"},"a failed handshake must not leave the owned frontend alive")
+  pid=undefined
 })
 
 test("normal prepared browser-only SDK over owned stdio lists two tools without browser preparation",async t=>{

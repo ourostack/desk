@@ -24,7 +24,7 @@ claude --version && node --version && git --version && gh --version
 
 - Claude Code 2.1.277 or later. If older, run `claude update`. The desktop app bundles its own Claude Code; this check is for the `claude` CLI the setup commands use, which can lag behind the app.
 - Node 22 on macOS arm64 or Linux x64, or Node 24 on Windows x64. It does not need to be the default `node`: Desk finds a compatible installed Node on its own. If none is installed, install it yourself (for example `nvm install 22`, or the platform's package manager), and change the default `node` if that helps other tools; involve the operator only for something only they can do, such as a password prompt. Desk ships its native runtime for exactly these platforms; others are unsupported.
-- Google Chrome or Edge for the browser Desk ships. Windows always has Edge. If neither is installed, install one, or run `npx -y @playwright/mcp@latest install-browser chrome`, which installs Google Chrome system-wide and needs an administrator password on macOS and Linux. Desk's first session downloads its browser server from npm once, so the machine must reach the npm registry that time. Desk's browser is signed out; for signed-in pages see `desk:cdp-headed-browser`.
+- Installed Edge or Google Chrome for authenticated browser work. Install a supported browser with the platform's normal installer if neither is present; involve the operator only for a genuine administrator/security prompt. Desk acquires its maintained browser runtime from npm, so the registry must be reachable on first use. Default browser contexts have their own persistent profiles and can use normal device SSO without touching the operator's profile or installing an extension. Fresh in-memory browsing is explicit private mode; see `desk:cdp-headed-browser`.
 - `gh auth status` should be healthy so desk discovery can find the operator's desk repository. If it is not, give the repair (`gh auth login`) and continue; local discovery still works.
 
 ### 2. Install the plugins
@@ -95,16 +95,16 @@ Plugins and their MCP servers load when a session starts, so ask the operator to
 - the session runs as `desk:worker`, and the Desk foundation appears at startup;
 - `desk_status` reports the bound desk root and its source;
 - `desk:session-start` runs normally and offers work to resume or start;
-- the `desk-web` server's tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
+- `desk-web` lists `browser_context` and `browser_command`. Create an explicit private context for this public-site check, navigate its returned handle to `https://example.com`, and read `document.title`; expect "Example Domain". Discard that exact test context and verify its cleanup result.
 
 The browser is part of the default install, so check it here, but never let it block setup. The first call on a machine can wait up to two minutes while Desk installs `@playwright/mcp`. Two kinds of failure can follow:
 
 - A `status: degraded` answer carries a `code` and a `fix`. It means Node, npm or the npm registry is missing or unreachable, or the launcher could not start. Apply the fix and reconnect the `desk-web` server.
-- A plain Playwright error on a page call means neither Chrome nor Edge is installed. Install one (see step 1).
+- A browser error carries its actual code and message. `browser_missing` means an installed supported browser was not found; other page, policy, authentication and cleanup failures are not the same condition.
 
 Retry once after the fix. If it still fails, or `example.com` is unreachable, report the browser as not verified, with the error, in your setup report, and continue; the rest of setup does not depend on it.
 
-For a signed-in page, which the default `desk-web` cannot reach, an installed plugin can declare `desk.browser` so `desk-web` drives the operator's own signed-in browser profile, each session in its own tab group (`desk:cdp-headed-browser` explains it). Without that declaration, `desk:cdp-headed-browser` shows how to make the browser context broker runnable from the installed plugin with a short copy-and-install sequence. The broker also needs a provider that launches the signed-in browser, and a personal install has none yet, so on such an install use the Playwright MCP options that skill names.
+For authenticated work, create a default context with a useful label. It owns a persistent profile in the declared installed browser, or prefers installed Edge then Chrome when no browser is declared. Authentication depends on the browser, OS and site policy; inspect the actual page with an explicit `["snapshot"]` command for inline state and refs. Navigation's automatic snapshot may instead be a file path. If genuine sign-in needs a visible window, ask the operator and create a signed-in context with `interactive: true`; never automate MFA or security consent, copy cookies, or substitute the operator's profile. After the human finishes, `finish-sign-in` closes those sign-in pages and reopens the same owned profile headlessly; verify authentication again. Keep an uncertain existing work context rather than replay its actions. No manual extension installation, token export or broker configuration is part of this normal path.
 
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 

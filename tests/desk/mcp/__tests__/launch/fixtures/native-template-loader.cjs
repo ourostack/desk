@@ -12,6 +12,7 @@ const vm = require("node:vm");
 const root = path.resolve(__dirname, "../../../../../../plugins/desk/mcp");
 const names = {
   "browser-context.cjs": "browser-context.cjs",
+  "browser-native.cjs": "browser-native.cjs",
   "browser-context-common.cjs": "browser-context-common.cjs",
   "web.cjs": "web.cjs",
   "desk-extension-credential.cjs": "web-extension-credential.cjs",
