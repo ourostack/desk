@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
-const { assignShards, shardFiles, loadDurations, defaultTablePath } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
+const { assignShards, shardFiles, loadDurations, defaultTablePath, underweighted } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
 const { checkTable, refreshTable } = await import(pathToFileURL(path.join(scripts, "suite-durations.mjs")).href)
 const { suiteFiles } = await import(pathToFileURL(path.join(scripts, "suite-files.mjs")).href)
 const require = createRequire(import.meta.url)
@@ -161,4 +161,12 @@ test("the shard runner runs only its own files and reports its predicted load", 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("a file that ran for minutes far past its table weight is named, so a stale table shows up in the run", () => {
+  const table = { defaultSeconds: 16, files: { "known.test.js": 600 } }
+  assert.equal(underweighted("new.test.js", 1143, table), true, "an unlisted file that ran 19 minutes")
+  assert.equal(underweighted("new.test.js", 200, table), false, "a short file is never worth a warning")
+  assert.equal(underweighted("known.test.js", 1143, table), false, "under three times its weight")
+  assert.equal(underweighted("known.test.js", 1900, table), true, "over three times its weight")
 })
