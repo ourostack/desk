@@ -353,3 +353,96 @@ test("without a shutdown deadline, close waits for every preparation", async () 
   await closing;
   assert.deepEqual(closed, ["acct-b"]);
 });
+
+// A preserved realm's recovery with every step recorded: `failAt` names a step after which a new preservation
+// failure is recorded (the step itself could not be proved stopped), so the recovery's failure is no longer current.
+function recoveryFixture({ unsaved = true, failAt, pushRejects = false, revList = "" } = {}) {
+  const steps = [];
+  let current = true;
+  const after = step => {
+    steps.push(step);
+    if (step === failAt) current = false;
+  };
+  return {
+    steps,
+    options: {
+      current: () => current,
+      quiet: () => true,
+      unsaved: () => unsaved,
+      pluginDir: "/opt/desk/plugin",
+      deadline: Infinity,
+      now: () => 1_000,
+      async run(job) {
+        const step = job.action === "git" ? job.args[0] : job.action;
+        after(step);
+        if (step === "push" && pushRejects) throw Object.assign(new Error("unproven"), { code: "DESK_OPERATION_UNQUIESCENT", quiescent: false });
+        return step === "rev-list" ? revList : "";
+      },
+      async rescue() {
+        after("rescue");
+        return "desk-rescue/x";
+      },
+      markSaved: () => steps.push("saved"),
+      async closeBroker() { after("broker-closed"); },
+    },
+  };
+}
+
+test("a recovery pushes the realm's writes, closes its broker and then empties it", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture();
+  assert.equal(await recoverRealm(f.options), true);
+  assert.deepEqual(f.steps, ["rebase", "push", "rev-list", "saved", "broker-closed", "purge"]);
+});
+
+test("a recovery of a realm already saved closes its broker and empties it without pushing", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture({ unsaved: false });
+  assert.equal(await recoverRealm(f.options), true);
+  assert.deepEqual(f.steps, ["broker-closed", "purge"]);
+});
+
+test("a recovery whose own push can't be proved stopped neither rescues, closes the broker nor empties the realm", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture({ failAt: "push", pushRejects: true });
+  assert.equal(await recoverRealm(f.options), false);
+  assert.deepEqual(f.steps, ["rebase", "push"]);
+});
+
+test("a recovery whose rebase abort can't be proved stopped doesn't push", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture({ failAt: "rebase" });
+  assert.equal(await recoverRealm(f.options), false);
+  assert.deepEqual(f.steps, ["rebase"]);
+});
+
+test("a recovery whose rescue can't be proved stopped neither marks the realm saved nor closes the broker", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture({ failAt: "rescue", revList: "abc123\n" });
+  assert.equal(await recoverRealm(f.options), false);
+  assert.deepEqual(f.steps, ["rebase", "push", "rev-list", "rescue"]);
+});
+
+test("a recovery doesn't empty the realm when a new failure was recorded while its broker closed", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture({ failAt: "broker-closed" });
+  assert.equal(await recoverRealm(f.options), false);
+  assert.deepEqual(f.steps, ["rebase", "push", "rev-list", "saved", "broker-closed"]);
+});
+
+test("a recovery stops before pushing, rescuing or closing the broker while something else of the realm runs", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  for (const [quietFor, expected] of [[0, []], [1, ["rebase"]], [2, ["rebase", "push", "rev-list"]]]) {
+    const f = recoveryFixture({ revList: "abc123\n" });
+    let checks = 0;
+    assert.equal(await recoverRealm({ ...f.options, quiet: () => checks++ < quietFor }), false);
+    assert.deepEqual(f.steps, expected, `quiet for ${quietFor} checks`);
+  }
+});
+
+test("a recovery whose failure is no longer current does nothing", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  const f = recoveryFixture();
+  assert.equal(await recoverRealm({ ...f.options, current: () => false }), false);
+  assert.deepEqual(f.steps, []);
+});

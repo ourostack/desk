@@ -122,6 +122,40 @@ export async function rescueDeskWrites({ run, accountId, deadline, now = Date.no
   return branch;
 }
 
+// Recovers a realm after a preservation failure: saves its writes (its own push, or a rescue branch when that
+// fails), closes its token broker and empties its root. `current()` is true while the failure being recovered is
+// still the account's recorded one: a step of the recovery that can't itself be proved stopped records a new failure,
+// which ends this attempt. `quiet()` is true while nothing of the realm runs but its broker. Both are checked before
+// each step that pushes, rescues or closes the broker, and `current()` again before the root is emptied (the broker's
+// own processes may take a moment to go once it closed). `markSaved()` records that nothing is left to push, so a
+// later attempt doesn't push again. Returns true once the root was emptied; false leaves the next session to try again.
+export async function recoverRealm({ current, quiet, unsaved, run, rescue, markSaved, closeBroker, pluginDir, deadline: shutdownDeadline = Infinity, now = Date.now }) {
+  const still = () => current() && quiet();
+  if (!still()) return false;
+  if (unsaved()) {
+    const budget = pushBudget(now(), shutdownDeadline);
+    if (budget === 0) return false;
+    const deadline = now() + budget;
+    await run({ action: "git", args: ["rebase", "--abort"] }, Math.min(RESCUE_RESERVE_MS, budget)).catch(() => {});
+    if (!still()) return false;
+    let saved = false;
+    try {
+      await run({ action: "push", pluginDir }, budget);
+      saved = !(await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, Math.max(1, deadline - now()))).trim();
+    } catch {
+      // The rescue below saves them instead.
+    }
+    if (!still()) return false;
+    if (!saved) saved = (await rescue(Math.min(shutdownDeadline, now() + RESCUE_RESERVE_MS))) !== null;
+    if (!saved || !still()) return false;
+    markSaved();
+  }
+  await closeBroker();
+  if (!current()) return false;
+  await run({ action: "purge" });
+  return true;
+}
+
 // The shutdown close: realms already prepared close at once, without waiting for a preparation still under way (a
 // clone can take minutes); a preparation that finishes before `deadline` has its realm closed then. One still running
 // at the deadline is logged and left: it is a fresh clone that no session has written to yet.
@@ -237,7 +271,9 @@ export function completion(child, timeoutMs = 60_000, requireRetirement = false)
 
 // The prepared realm's preservation boundary owns both protocol termination
 // and real guardian retirement; neither outcome substitutes for the other.
-export function createRealmLifecycle({ services, operations, failure, preserve, stop, push, closeBroker, purgeRoot }) {
+// `saved()` is told when the close's own push succeeded with every service retired and no failure latched: only
+// then is nothing of the realm's left to push.
+export function createRealmLifecycle({ services, operations, failure, preserve, stop, push, closeBroker, purgeRoot, saved = () => {} }) {
   let closePromise;
   // Set by a discard: a close that has not reached its push yet skips it.
   let withheld = false;
@@ -284,6 +320,7 @@ export function createRealmLifecycle({ services, operations, failure, preserve, 
     if (!withheld) {
       await push();
       healthy();
+      saved();
     }
     await closeBroker();
     healthy();
@@ -411,7 +448,7 @@ export function createAccountRuntime({
         } catch (error) {
           write(`could not recover account ${accountId}'s realm yet (${typeof error?.code === "string" ? error.code : "error"})`);
         }
-        if (!recovered || preservationFailures.get(accountId)?.realm !== entry.realm) return false;
+        if (!recovered || preservationFailures.get(accountId) !== entry) return false;
         preservationFailures.delete(accountId);
         if (prepared.get(accountId)?.realm === entry.realm) prepared.delete(accountId);
         authorities.delete(accountId);
@@ -511,8 +548,8 @@ export function createAccountRuntime({
     let broker;
     let cloned = false;
     let pushWithheld = false;
-    // Set when a push was verified after the realm stopped taking work, or a recovery saved its writes: nothing is
-    // left to push.
+    // Set when the realm's close pushed after every service retired, or a recovery saved its writes: nothing is left
+    // to push. A push that merely ended after the realm stopped doesn't count: a service may still have been writing.
     let saved = false;
     // Set once a recovery emptied the realm; a late failure report about it changes nothing.
     let recovered = false;
@@ -527,7 +564,9 @@ export function createAccountRuntime({
     const preserve = (error, child) => {
       if (recovered) return;
       stopped = true;
-      preservationFailures.set(accountId, { error, child, realm, recover: () => recover(), rescue: () => rescueAtShutdown() });
+      const entry = { error, child, realm, rescue: () => rescueAtShutdown() };
+      entry.recover = () => recover(entry);
+      preservationFailures.set(accountId, entry);
     };
     const run = (job, timeoutMs) => {
       const child = start(job);
@@ -554,26 +593,20 @@ export function createAccountRuntime({
       return othersRunning(running(uid), brokerPid).length === 0;
     };
     const unsaved = () => cloned && !pushWithheld && !saved;
-    // After a preservation failure: false while anything else of the realm runs. Otherwise saves the clone's writes
-    // (its own push, or a rescue branch when that fails), closes the broker and empties the root.
-    const recover = async () => {
-      if (!quiet()) return false;
-      if (unsaved()) {
-        const budget = pushBudget(Date.now(), shutdownDeadline);
-        if (budget === 0) return false;
-        const deadline = Date.now() + budget;
-        await run({ action: "git", args: ["rebase", "--abort"] }, Math.min(RESCUE_RESERVE_MS, budget)).catch(() => {});
-        try {
-          await run({ action: "push", pluginDir }, budget);
-          saved = !(await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, Math.max(1, deadline - Date.now()))).trim();
-        } catch {
-          // The rescue below saves them instead.
-        }
-        if (!saved) saved = (await rescueDeskWrites({ run, accountId, deadline: Math.min(shutdownDeadline, Date.now() + RESCUE_RESERVE_MS), write })) !== null;
-        if (!saved) return false;
-      }
-      await closeBroker();
-      await run({ action: "purge" });
+    // After the preservation failure `entry`: recoverRealm, while `entry` is still the account's recorded failure.
+    const recover = async entry => {
+      const done = await recoverRealm({
+        current: () => preservationFailures.get(accountId) === entry,
+        quiet,
+        unsaved,
+        run,
+        pluginDir,
+        deadline: shutdownDeadline,
+        rescue: deadline => rescueDeskWrites({ run, accountId, deadline, write }),
+        markSaved: () => { saved = true; },
+        closeBroker,
+      });
+      if (!done) return false;
       recovered = true;
       try {
         rmdirSync(realm.root);
@@ -643,7 +676,6 @@ export function createAccountRuntime({
           code: "DESK_PUSH_UNPRESERVED", quiescent: true,
         });
       }
-      if (stopped) saved = true;
     };
     // A shutdown push that failed with nothing left running in the realm gets a rescue push; the push still counts
     // as failed, so the shutdown reports it.
@@ -663,6 +695,7 @@ export function createAccountRuntime({
       preserve,
       stop: () => { stopped = true; },
       push, closeBroker, purgeRoot: () => run({ action: "purge" }),
+      saved: () => { saved = true; },
     });
     const value = Object.freeze({
       realm, env,
@@ -740,7 +773,8 @@ export function createAccountRuntime({
     if (purging.has(accountId)) return purging.get(accountId);
     const done = (async () => {
       await preparing.get(accountId)?.catch(() => {});
-      if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+      // A realm that couldn't be proved stopped is recovered first; until then the delete fails and can be retried.
+      if (preservationFailures.has(accountId)) await recoverPreservation(accountId);
       await removePrepared(accountId);
     })();
     purging.set(accountId, done);
@@ -759,8 +793,8 @@ export function createAccountRuntime({
     if (releasing.has(accountId)) return releasing.get(accountId);
     const done = (async () => {
       await preparing.get(accountId)?.catch(() => {});
-      if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
       if (discard) prepared.get(accountId)?.withholdPush();
+      if (preservationFailures.has(accountId)) await recoverPreservation(accountId);
       await removePrepared(accountId, { discard });
     })();
     releasing.set(accountId, done);

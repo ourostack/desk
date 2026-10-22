@@ -31,7 +31,7 @@ async function setup(t, { holdPush = false, holdBroker = false, pushFailures = 0
   const brokerEntered = deferred();
   const services = new Set();
   const preservationFailures = new Map();
-  const state = { push: 0, brokerClose: 0, purge: 0, failure: undefined, stopped: false, order: [] };
+  const state = { push: 0, brokerClose: 0, purge: 0, saved: 0, failure: undefined, stopped: false, order: [] };
   const preserve = (error, child) => {
     state.failure = error;
     state.stopped = true;
@@ -40,6 +40,10 @@ async function setup(t, { holdPush = false, holdBroker = false, pushFailures = 0
   const lifecycle = createRealmLifecycle({
     services, operations: new Set(), failure: () => preservationFailures.get("unit")?.error, preserve,
     stop: () => { state.stopped = true; },
+    saved() {
+      state.saved++;
+      state.order.push("saved");
+    },
     async push() {
       state.push++;
       if (holdPush) await pushGate.promise;
@@ -287,7 +291,7 @@ test("close waits for every service to retire before the push, and the push fini
   assert.equal(f.state.brokerClose, 0, "the broker stays open while the push runs");
   f.pushGate.resolve();
   await closing;
-  assert.deepEqual(f.state.order, ["pushed", "broker-closed"]);
+  assert.deepEqual(f.state.order, ["pushed", "saved", "broker-closed"]);
 });
 
 test("a close whose push fails quiescently can be retried, and the retry pushes before the broker closes", async t => {
@@ -297,7 +301,7 @@ test("a close whose push fails quiescently can be retried, and the retry pushes 
   await turn();
   await f.lifecycle.close();
   assert.equal(f.state.push, 2);
-  assert.deepEqual(f.state.order, ["pushed", "broker-closed"]);
+  assert.deepEqual(f.state.order, ["pushed", "saved", "broker-closed"]);
 });
 
 test("discard retires the realm and purges its root without pushing", async t => {
@@ -333,4 +337,43 @@ test("a discard asked for during a close that has not pushed yet keeps the write
   await closing;
   assert.equal(f.state.push, 0);
   assert.equal(f.state.brokerClose, 1);
+});
+
+test("a realm counts as saved only once its own close pushed, after every service retired", async t => {
+  const f = await setup(t, { holdPush: true });
+  const { guardian } = await f.service({ buffered: false, protocolClosed: false, retired: false });
+  const closing = f.lifecycle.close();
+  await turn();
+  assert.equal(f.state.saved, 0, "a service may still be writing");
+  guardian.emit("message", { serviceClosed: true, code: 0, signal: null });
+  guardian.emit("message", { retired: true, quiescent: true });
+  guardian.connected = false;
+  guardian.exitCode = 0;
+  guardian.emit("disconnect");
+  guardian.emit("close", 0);
+  await turn();
+  await turn();
+  assert.equal(f.state.saved, 0, "the push hasn't finished");
+  f.pushGate.resolve();
+  await closing;
+  assert.deepEqual(f.state.order, ["pushed", "saved", "broker-closed"]);
+});
+
+test("a close whose push fails, or that latches a preservation failure while pushing, never marks the realm saved", async t => {
+  const failing = await setup(t, { pushFailures: 1 });
+  await outcome(failing.lifecycle.close());
+  assert.equal(failing.state.saved, 0);
+  const latched = await setup(t, { holdPush: true });
+  const closing = latched.lifecycle.close();
+  await turn();
+  latched.preserve(Object.assign(new Error("unproven"), { code: "DESK_OPERATION_UNQUIESCENT", quiescent: false }));
+  latched.pushGate.resolve();
+  assert.deepEqual(await outcome(closing), { code: "DESK_OPERATION_UNQUIESCENT", quiescent: false });
+  assert.equal(latched.state.saved, 0);
+});
+
+test("a discarded realm is never marked saved", async t => {
+  const f = await setup(t);
+  await f.lifecycle.discard();
+  assert.equal(f.state.saved, 0);
 });

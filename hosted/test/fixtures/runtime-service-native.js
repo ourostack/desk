@@ -188,10 +188,13 @@ const timer = setInterval(() => {
     await assert.rejects(a.close(), /quiescen|preserv/i);
     // While the writer still runs, the person gets a plain message to try again, not a lockout.
     await assert.rejects(manager.prepare("service-a"), error => error.code === "DESK_SESSION_REFUSED" && /still finishing/.test(error.message));
+    // A relink (or a delete) while it runs fails the same retryable way.
+    await assert.rejects(manager.release("service-a"), error => error.code === "DESK_SESSION_REFUSED" && /still finishing/.test(error.message));
     await pause(21_000);
     assert.equal(inspect(a).finished, true, "retained writer eventually finishes without lost evidence");
-    // Once nothing but its token broker runs as the realm's UID, the next session pushes the retained realm's
-    // writes, empties it and starts a fresh realm.
+    // Once nothing but its token broker runs as the realm's UID, a relink recovers the realm: its writes are pushed
+    // and it is emptied. The next session starts a fresh realm.
+    await manager.release("service-a");
     const recovered = await manager.prepare("service-a");
     assert.notEqual(recovered, a);
     assert.notEqual(recovered.realm.root, a.realm.root);
