@@ -315,6 +315,18 @@ function storeSuite(label, make) {
       assert.deepEqual(await store.claimRepo(repo, next, { now: later + 20 * 60_000 }), { claimed: true }, "a holder with no binding holds nothing");
     });
 
+    test(name("a holder reclaiming its repository and a newcomer taking it over can't both win"), async () => {
+      const store = await make();
+      const tag = randomUUID().slice(0, 8);
+      const repo = `jordan-dev/desk-${tag}`;
+      const [holder, newcomer] = [randomUUID(), randomUUID()];
+      await store.claimRepo(repo, holder, { now: NOW });
+      await store.putBinding(holder, { ...BINDING, repo, suspended: true });
+      const later = NOW + 10 * 60_000;
+      const [mine, theirs] = await Promise.all([store.claimRepo(repo, holder, { now: later }), store.claimRepo(repo, newcomer, { now: later })]);
+      assert.equal([mine, theirs].filter((outcome) => outcome.claimed).length, 1, JSON.stringify({ mine, theirs }));
+    });
+
     test(name("a binding from before claims existed keeps its repository"), async () => {
       const store = await make();
       const tag = randomUUID().slice(0, 8);
@@ -362,6 +374,8 @@ function storeSuite(label, make) {
       assert.deepEqual(await store.getAccount(accountId), { accountId, displayName: "Test account", deskAccess: true, sessionsNotBefore: NOW });
       await store.setAccess(accountId, false);
       assert.equal((await store.getAccount(accountId)).sessionsNotBefore, NOW, "a later access change keeps it");
+      await store.putAccount({ accountId, displayName: "Renamed", deskAccess: true });
+      assert.equal((await store.getAccount(accountId)).sessionsNotBefore, NOW, "and so does writing the account again");
       assert.equal(await store.revokeSessions(randomUUID(), NOW), false);
     });
 

@@ -75,10 +75,11 @@ export function createBrowserSession({ key, keys, store, issuer, now = Date.now,
       return session.accountId;
     },
 
-    // Signs out every session of this request's account issued up to now. Throws the store's error.
+    // Signs out every session of this request's account issued up to now, when this request's session is itself
+    // still valid: a signed-out copy of a cookie can't sign the account out again. Throws the store's error.
     async revoke(req) {
-      const session = sessionOf(req);
-      if (session) await store.revokeSessions(session.accountId, now() + 1);
+      const accountId = await this.require(req);
+      if (accountId) await store.revokeSessions(accountId, now() + 1);
     },
 
     // The account row for a page to show (getAccount's answer).

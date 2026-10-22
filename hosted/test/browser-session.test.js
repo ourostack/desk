@@ -142,6 +142,23 @@ test("sign-out ends every copy of the session, and a later sign-in works", async
   assert.equal((await ari.request("/account")).status, 200);
 });
 
+test("a signed-out cookie can't sign the account out again", async (t) => {
+  const ctx = await startAccountGateway(t);
+  const ari = browser(ctx);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  const copied = ari.jar.get(SESSION_COOKIE);
+  const csrf = /name="csrf" value="([^"]+)"/.exec((await ari.request("/account")).text)[1];
+  ctx.advance(1000);
+  assert.equal((await ari.request("/signout", { method: "POST", form: { csrf } })).status, 200);
+  ctx.advance(1000);
+  await pageSignIn(ctx, ari, { oid: ARI_OID });
+  ctx.advance(1000);
+  const thief = browser(ctx);
+  thief.jar.set(SESSION_COOKIE, copied);
+  assert.equal((await thief.request("/signout", { method: "POST", form: { csrf } })).status, 200);
+  assert.equal((await ari.request("/account")).status, 200, "the person's new session still works");
+});
+
 test("a sign-out the store can't record still signs this browser out, and says the others may not be", async (t) => {
   const ctx = await startAccountGateway(t);
   const ari = browser(ctx);

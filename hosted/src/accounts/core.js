@@ -277,10 +277,14 @@ export function storeOn(tables, { onStep = noop } = {}) {
       return account;
     },
 
+    // Writes the account's name and access, keeping a recorded sign-out (revokeSessions), so writing an account again
+    // never revives sessions that were signed out.
     async putAccount({ accountId, displayName, deskAccess }) {
       if (typeof displayName !== "string") throw new TypeError("displayName must be a string");
       if (typeof deskAccess !== "boolean") throw new TypeError("deskAccess must be true or false");
-      await tables.upsert("accounts", { partitionKey: key(accountId, "accountId"), rowKey: "", displayName, deskAccess });
+      const existing = await tables.get("accounts", key(accountId, "accountId"), "");
+      const signedOut = existing?.entity.sessionsNotBefore;
+      await tables.upsert("accounts", { partitionKey: accountId, rowKey: "", displayName, deskAccess, ...(signedOut !== undefined ? { sessionsNotBefore: signedOut } : {}) });
     },
 
     findIdentity,
@@ -349,8 +353,9 @@ export function storeOn(tables, { onStep = noop } = {}) {
           return { heldBy: legacy };
         }
         const holder = found.entity.accountId;
-        if (holder === accountId) return { claimed: true };
-        if (at - expiryOf(found.entity.claimedAt) < CLAIM_GRACE_MS || (await holds(holder, repo))) return { heldBy: holder };
+        if (holder !== accountId && (at - expiryOf(found.entity.claimedAt) < CLAIM_GRACE_MS || (await holds(holder, repo)))) return { heldBy: holder };
+        // A takeover, or the holder renewing its own claim. Both write the row, so a holder whose binding comes back
+        // and a newcomer taking the claim over can't both win: the second write finds the ETag changed and re-reads.
         try {
           await tables.update("repoclaims", claim, found.etag);
         } catch (error) {
@@ -445,6 +450,8 @@ export function storeOn(tables, { onStep = noop } = {}) {
       for (const row of await tables.list("invites")) {
         if (row.accountId === accountId) await tables.remove("invites", row.partitionKey, row.rowKey);
       }
+      // The binding goes before the claims, so a claim made meanwhile can't be handed back to this account's binding.
+      await tables.remove("bindings", accountId, "");
       for (const row of await tables.list("repoclaims").catch(missingTable) ?? []) {
         if (row.accountId !== accountId) continue;
         const found = await tables.get("repoclaims", row.partitionKey, row.rowKey);
@@ -455,7 +462,6 @@ export function storeOn(tables, { onStep = noop } = {}) {
           if (!(error instanceof PreconditionFailed)) throw error;
         }
       }
-      await tables.remove("bindings", accountId, "");
       await tables.remove("accounts", accountId, "");
       return true;
     },
