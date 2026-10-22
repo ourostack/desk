@@ -6,6 +6,7 @@ import { chmodSync, statSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, r
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { disableCoAuthorTrailer } from "../../../../../plugins/desk/mcp/src/runtime/copilot-commit-trailer.js"
+import * as hostSettings from "../../../../../plugins/desk/mcp/src/runtime/copilot-commit-trailer.js"
 
 const ROOT = mkdtempSync(path.join(tmpdir(), "copilot-trailer-"))
 test.after(() => rmSync(ROOT, { recursive: true, force: true }))
@@ -129,4 +130,43 @@ test("a settings file kept as a symlink is edited where it lives, and the link s
 
 test("with no options it reads the process environment, which the test preload points at a Copilot folder that does not exist", () => {
   assert.deepEqual(disableCoAuthorTrailer(), { state: "no_copilot_home", line: "" })
+})
+
+test("Desk forces native memory off even when explicitly enabled, without changing other settings", () => {
+  assert.equal(typeof hostSettings.disableNativeMemory, "function")
+  for (const memory of [true, null, "yes", undefined]) {
+    const dir = home({ settings: JSON.stringify({ model: "x", ...(memory === undefined ? {} : { memory }) }) })
+    const result = hostSettings.disableNativeMemory({ env: { HOME: dir } })
+    assert.equal(result.state, "set")
+    assert.match(result.line, /native memory/u)
+    assert.deepEqual(JSON.parse(readFileSync(file(dir), "utf8")), { model: "x", memory: false })
+    assert.deepEqual(hostSettings.disableNativeMemory({ env: { HOME: dir } }), { state: "already", line: "" })
+  }
+})
+
+test("memory setting failures are explicit and preserve unreadable or commented host files", () => {
+  assert.equal(typeof hostSettings.disableNativeMemory, "function")
+  for (const text of ["not json", '{ "memory": true, // keep this comment\n}']) {
+    const dir = home({ settings: text })
+    const result = hostSettings.disableNativeMemory({ env: { HOME: dir } })
+    assert.match(result.line, /native memory/u)
+    assert.match(result.line, /copilot config memory false/u)
+    assert.match(result.line, /do not use/u)
+    assert.equal(readFileSync(file(dir), "utf8"), text)
+  }
+})
+
+test("mandatory memory repair reports missing folders, concurrent changes and write failure", () => {
+  assert.equal(typeof hostSettings.disableNativeMemory, "function")
+  const absent = home({ copilot: false })
+  assert.match(hostSettings.disableNativeMemory({ env: { HOME: absent } }).line, /native memory could not be disabled/u)
+  const text = '{"memory":true}'
+  const dir = home({ settings: text })
+  for (const [recheck, state] of [[() => "changed", "changed"], [() => { throw new Error("write failed") }, "failed"]]) {
+    const result = hostSettings.disableNativeMemory({ env: { HOME: dir }, recheck })
+    assert.equal(result.state, state)
+    assert.match(result.line, /native memory/u)
+    assert.match(result.line, /copilot config memory false/u)
+    assert.equal(readFileSync(file(dir), "utf8"), text)
+  }
 })

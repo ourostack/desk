@@ -198,11 +198,34 @@ async function signedMain(request, registryModule, Session, SocketConnection, in
   }
   var before = await load();
   if (request.operation !== "discard") {
-    if (before.cli !== "active") fail("context_absent","Native CLI is absent; its retained context was not recreated");
+    var recovered = false;
+    if (before.cli !== "active") {
+      if (request.operation !== "resume") fail("context_absent","Native CLI is absent; its retained context was not recreated");
+      var retained = await client.request("context.status",{});
+      if (!retained || retained.contextId !== request.contextId || retained.state !== "disconnected" ||
+          retained.pendingEffects !== 0 || retained.unconfirmedCreates !== 0 || !Array.isArray(retained.tabs) || !retained.tabs.length ||
+          ["revokedTabIds","uncertainTabs","groupingObligations","effectObligations","admittingTabIds","debuggerCustody"].some(function(key) {
+            return !Array.isArray(retained[key]) || retained[key].length !== 0;
+          })) fail("native_context_unavailable","Retained browser effects are not reconciled for recovery");
+      if (JSON.stringify(inventory.descriptor(request.contextId).record) !== JSON.stringify(descriptor.record))
+        fail("NATIVE_OWNER_BINDING_MISMATCH","Owner binding changed before recovery");
+      if (process.env.DESK_BROWSER_RECOVERY_CONTEXT !== undefined)
+        fail("NATIVE_CONFIG_INVALID","Unexpected inherited recovery intent");
+      process.env.DESK_BROWSER_RECOVERY_CONTEXT = request.contextId;
+      try {
+        await Session.startDaemon(info,{session:request.contextId,browser:descriptor.record.channel,extension:true,
+          persistent:true,"idle-timeout":0,config:path.join(request.root,"config","browser.json")},"attach");
+      } finally { delete process.env.DESK_BROWSER_RECOVERY_CONTEXT; }
+      var resumed = await load();
+      if (resumed.cli !== "active" || JSON.stringify(inventory.descriptor(request.contextId).record) !== JSON.stringify(descriptor.record))
+        fail("NATIVE_OWNER_BINDING_MISMATCH","Recovered CLI did not confirm the same owner binding");
+      recovered = true;
+    }
     await client.request("context.resume",{});
     var socket = await connect(entry.config.socketPath);
     if (request.operation === "run") return runPage(request,socket,SocketConnection,{codec:codec,contextId:request.contextId,stamp:stamp});
-    socket.destroy(); return {state:"running"};
+    socket.destroy(); return {state:"running",...(recovered ? {result:{recovered:true,previousCommandOutcome:"unknown",
+      nextAction:"Inspect the retained pages before retrying an action whose result was not received"}} : {})};
   }
   await client.request("context.status",{});
   var nativeResult = await client.request("context.discard",{});

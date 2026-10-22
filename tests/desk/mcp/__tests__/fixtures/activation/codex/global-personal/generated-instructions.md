@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.336 mode=global-personal owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.338 mode=global-personal owner=desk-activation
 You are the desk worker by default.
 
 # Using Desk
@@ -56,7 +56,7 @@ Before the first write, read the task's recorded source and verify the checkout 
 
 ## Durable context and attribution
 
-Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made, except private or sensitive operational evidence, which stays outside Git with only pointers in the desk (`session-resumption`); commit and push desk changes. Keep nothing durable in host memory or configuration folders, which stay thin pointers to the desk. Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere; a host surface is an optional mirror, made only when asked, that links back to the desk. A job is one outcome, one durable task. When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work. You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, no AI credit in commits, pull requests, code comments or documents.
+Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made, except private or sensitive operational evidence, which stays outside Git with only pointers in the desk (`session-resumption`); commit and push desk changes. Disable host memory (`store_memory`/`vote_memory`); host settings only mirror the desk. Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere; a host surface is an optional mirror, made only when asked, that links back to the desk. A job is one outcome, one durable task. When you start or switch to an outcome, declare it with task_focus; everything you and your subagents do until the next declaration is that task's work. You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, no AI credit in commits, pull requests, code comments or documents.
 
 ## Requirements that arrive during execution
 

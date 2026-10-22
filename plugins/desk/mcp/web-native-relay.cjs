@@ -22,6 +22,9 @@ function initialize(record, selection, clock) {
     try { credential = require(path.join(__dirname, "desk-extension-credential.cjs")); }
     catch (error) { throw fail("NATIVE_CODE_UNAVAILABLE"); }
     var binding = credential.getNativeBinding(record);
+    var recoveryContext = process.env.DESK_BROWSER_RECOVERY_CONTEXT;
+    if (recoveryContext !== undefined && recoveryContext !== record.contextId) throw fail("NATIVE_CONFIG_INVALID");
+    var method = recoveryContext === record.contextId ? "context.resume" : "context.create";
     if (!selection || JSON.stringify(selection) !== JSON.stringify(binding.selection) ||
         !clock || typeof clock.now !== "function" || !Number.isFinite(clock.deadline))
       throw fail("NATIVE_SELECTION_MISMATCH");
@@ -47,7 +50,7 @@ function initialize(record, selection, clock) {
         resources = Object.assign({}, resources, { pendingRelayOperation: true, relayDisposition: "unknown" });
       if (dispatched) {
         resources = Object.assign({}, resources && typeof resources === "object" ? resources : {}, {
-          contextId: record.contextId, method: "context.create",
+          contextId: record.contextId, method: method,
           disposition: created ? "retained" : "unknown",
         });
         if (created) resources.native = binding.client.safeResources(nativeResult);
@@ -148,7 +151,7 @@ function initialize(record, selection, clock) {
         pending = true;
         // Approved C request() always returns its invoke() Promise for this
         // constant method/plain payload; failures settle through tracked below.
-        var operation = client.request("context.create", { label: record.label, relayUrl: endpoint });
+        var operation = client.request(method, { label: record.label, relayUrl: endpoint });
         var tracked = Promise.resolve(operation).then(function (result) {
           pending = false;
           if (!retired && result && result.contextId === record.contextId && result.state === "ready" &&
