@@ -12,8 +12,10 @@ const require = createRequire(import.meta.url)
 const { load } = require("js-yaml")
 const root = path.resolve(fileURLToPath(new URL("../../../../../", import.meta.url)))
 const workflows = path.join(root, ".github/workflows")
-const installs = /\bnpm\s+(?:ci|install|i)\b/u
-const auditOff = (env) => String(env?.npm_config_audit) === "false"
+// Options may come before the command, as in `npm --prefix dir ci`.
+const installs = /\bnpm(?:\s+--?[\w-]+(?:[= ][^\s-]\S*)?)*\s+(?:ci|install|i|it|add|install-test)\b/u
+// GitHub applies the most specific env that sets a variable, so a step or job can turn the audit back on.
+const auditOff = (...levels) => String(levels.find(env => env && "npm_config_audit" in env)?.npm_config_audit) === "false"
 
 test("every npm install in CI runs without the advisory audit", () => {
   const offenders = []
@@ -25,7 +27,7 @@ test("every npm install in CI runs without the advisory audit", () => {
         for (const line of String(step.run ?? "").split("\n")) {
           if (!installs.test(line)) continue
           seen += 1
-          if (line.includes("--no-audit") || auditOff(step.env) || auditOff(job.env) || auditOff(workflow.env)) continue
+          if (line.includes("--no-audit") || auditOff(step.env, job.env, workflow.env)) continue
           offenders.push(`${file} ${jobName} step ${step.name ?? index}: ${line.trim()}`)
         }
       }
@@ -33,6 +35,14 @@ test("every npm install in CI runs without the advisory audit", () => {
   }
   assert.ok(seen > 0, "the guard must find the workflows' npm installs")
   assert.deepEqual(offenders, [])
+})
+
+test("the guard recognizes each install form and the most specific env", () => {
+  for (const line of ["npm ci", "npm install --global x", "npm i x", "npm --prefix dir ci", "npm add x", "npm it"]) assert.ok(installs.test(line), line)
+  for (const line of ["npm run test:coverage -- --shard 1/12", "npm test", "npx azurite-table"]) assert.ok(!installs.test(line), line)
+  assert.equal(auditOff(undefined, { npm_config_audit: "true" }, { npm_config_audit: "false" }), false)
+  assert.equal(auditOff({ npm_config_audit: false }, undefined, { npm_config_audit: "true" }), true)
+  assert.equal(auditOff(undefined, undefined, undefined), false)
 })
 
 test("the hosted image's npm installs run without the advisory audit", () => {
