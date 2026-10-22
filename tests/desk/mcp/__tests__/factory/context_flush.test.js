@@ -114,7 +114,7 @@ test("numeric-only consent or an incompatible store never sends context and fact
   assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
 }))
 
-for (const elapsed of [98000, 119000]) {
+for (const elapsed of [98000, 117000]) {
   test(`ordinary context preparation still progresses after ${elapsed} ms of a 120000 ms flush`, () => scratch(async (base) => {
     const w = await world(base, { card: true })
     let now = T0
@@ -122,7 +122,11 @@ for (const elapsed of [98000, 119000]) {
       now: () => now,
       planContexts: (env, options) => {
         now += elapsed
-        return planContextPublication(env, options)
+        return planContextPublication(env, {
+          ...options,
+          readRemote: () => "https://github.com/synthetic/context-desk.git",
+          resolveIdentity: ({ track, slug }) => ({ track, slug }),
+        })
       },
     })
     assert.equal(result.result, "delivered_pr_open")
@@ -136,6 +140,32 @@ for (const elapsed of [98000, 119000]) {
     assert.equal(contexts(await w.files()).length, 0)
   }))
 }
+
+test("near-expiry context preparation preserves numerical transport's remaining opportunity", () => scratch(async (base) => {
+  const w = await world(base, { card: true })
+  let now = T0, planning = false, delayed = false
+  const result = await w.run({
+    now: () => now,
+    runner: (args, options) => {
+      if (planning && !delayed) { now += 750; delayed = true }
+      return w.hub.runner(args, options)
+    },
+    planContexts: (env, options) => {
+      now += 119000
+      planning = true
+      return planContextPublication(env, {
+        ...options,
+        readRemote: () => { now += 500; return "https://github.com/synthetic/context-desk.git" },
+      })
+    },
+  })
+  assert.equal(result.result, "delivered_pr_open")
+  assert.equal(result.context_held, "context_preparation_deferred")
+  assert.equal(now - T0, 119750)
+  assert.deepEqual(await listContextWork(w.env, { store: STORE }), [])
+  assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
+  assert.equal(contexts(await w.files()).length, 0)
+}))
 
 test("late context preparation cannot extend an expired total flush deadline", () => scratch(async (base) => {
   const w = await world(base, { card: true })
