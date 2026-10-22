@@ -20,10 +20,12 @@
 //     [--ensure-secret <name>]...      a random 32-byte hex value, only if the app lacks it
 //     [--ensure-placeholder <name>]... the value `unset`, only if the app lacks it
 //     [--set-env NAME=value]... [--remove-env NAME]...
+//     [--termination-grace <seconds>]  the shutdown grace period, on a rerun as well as a create
 //     [--identity-record <identity-env.json>]   the Ouro tenant settings (identity-record.mjs)
 //     [--forbid-identity <name>]...    refuse an app that holds this identity (staging: production's pull identity)
 // It prints only the written file's path; notes go to stderr.
 //   node hosted/infra/app-yaml.mjs --shown <show.json> --get-env NAME    prints that env var's plain value
+//   node hosted/infra/app-yaml.mjs --require-identity --identity-record <file>   fails unless the record is complete
 //   node hosted/infra/app-yaml.mjs --mask <file>                         prints a document with every secret value as ***
 //   node hosted/infra/app-yaml.mjs --verify --before <show.json> --after <show.json> --secret-list <list.json>
 //     [--identity-record <file>] [--forbid-identity <name>]... [--registry-identity <id>]   the check after a write
@@ -35,6 +37,8 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { checkIdentitySettings, cutoffGapWarning, cutoffWarning, identitySettings, loadRecordFile } from "./identity-record.mjs";
 import { OURO_SETTINGS, readIdentity } from "../src/identity-config.js";
+
+const MULTI_USER_NEEDS_IDENTITY = "DESK_MULTI_USER requires Ouro account identity, so the gateway would not start: apply a complete identity record with it.";
 
 // `az containerapp show -o json`'s output, as text or already parsed.
 export function parseShown(shown) {
@@ -72,9 +76,13 @@ function gatewayContainer(app) {
   return container;
 }
 
-export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRefs = {}, keyVaultSecrets = {}, removeEnv = [], addIdentities = [], forbidIdentities = [] }) {
+export function buildAppYaml({ shownYaml, setSecrets = {}, setEnv = {}, secretRefs = {}, keyVaultSecrets = {}, removeEnv = [], addIdentities = [], forbidIdentities = [], terminationGracePeriodSeconds } = {}) {
   const app = parseShown(shownYaml);
   refuseForbidden(app, forbidIdentities, "");
+  if (terminationGracePeriodSeconds !== undefined) {
+    app.properties.template ??= {};
+    app.properties.template.terminationGracePeriodSeconds = terminationGracePeriodSeconds;
+  }
   app.properties.configuration ??= {};
   const shownSecrets = app.properties.configuration.secrets ?? [];
 
@@ -237,6 +245,8 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
       "secret-list": { type: "string" },
       "forbid-identity": { type: "string", multiple: true, default: [] },
       "registry-identity": { type: "string" },
+      "termination-grace": { type: "string" },
+      "require-identity": { type: "boolean", default: false },
     },
   });
   const record = values["identity-record"] ? loadRecordFile(values["identity-record"]) : null;
@@ -257,6 +267,11 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     });
     return print("Checked: every secret, Key Vault reference and identity is still on the app.");
   }
+  if (values["require-identity"]) {
+    // A create with DESK_MULTI_USER=1 checks this before the app exists: the setting joins only with a complete record.
+    if (!record || identitySettings(record).missing.length) throw new Error(`${MULTI_USER_NEEDS_IDENTITY} ${values["identity-record"] ? `${values["identity-record"]} is incomplete.` : "There is no identity record."} Nothing was sent to Azure.`);
+    return null;
+  }
   if (values.mask) return print(maskSecrets(readFileSync(values.mask, "utf8")));
   if (values.shown && values["get-env"]) {
     const entry = gatewayContainer(parseShown(readFileSync(values.shown, "utf8"))).env?.find((candidate) => candidate.name === values["get-env"]);
@@ -270,13 +285,24 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   for (const name of values["ensure-placeholder"]) if (!held.has(name)) setSecrets[name] = "unset";
   const setEnv = Object.fromEntries(values["set-env"].map((text) => splitAssignment(text, "--set-env")));
   if (setEnv.DESK_GITHUB_SIGNIN !== undefined && !["on", "off"].includes(setEnv.DESK_GITHUB_SIGNIN)) throw new Error("DESK_GITHUB_SIGNIN must be on or off.");
+  if (setEnv.DESK_MULTI_USER !== undefined && !["0", "1"].includes(setEnv.DESK_MULTI_USER)) throw new Error("DESK_MULTI_USER must be 0 or 1.");
+  let terminationGracePeriodSeconds;
+  if (values["termination-grace"] !== undefined) {
+    if (!/^[1-9][0-9]{0,3}$/.test(values["termination-grace"])) throw new Error("--termination-grace takes a whole number of seconds.");
+    terminationGracePeriodSeconds = Number(values["termination-grace"]);
+  }
   const current = Object.fromEntries((gatewayContainer(shown).env ?? []).filter((entry) => entry.value !== undefined).map((entry) => [entry.name, entry.value]));
   const removeEnv = [...values["remove-env"]];
   if (values["remove-ouro"]) {
     if (record) throw new Error("--remove-ouro takes every Ouro setting off; it can't also apply an identity record.");
     if (Object.keys(setEnv).some((name) => OURO_SETTINGS.includes(name))) throw new Error("REMOVE_OURO_SETTINGS=1 removes every Ouro setting; don't pass DESK_GITHUB_SIGNIN with it. This update was not sent to the app.");
+    if (setEnv.DESK_MULTI_USER === "1") throw new Error("REMOVE_OURO_SETTINGS=1 removes Ouro accounts, which DESK_MULTI_USER=1 needs; don't pass both. This update was not sent to the app.");
     removeEnv.push(...OURO_SETTINGS);
     note(`Removing every Ouro sign-in setting (${OURO_SETTINGS.join(", ")}); the gateway goes back to GitHub sign-in for DESK_ALLOWED_LOGINS.`);
+    if (setEnv.DESK_MULTI_USER === undefined && current.DESK_MULTI_USER !== undefined) {
+      removeEnv.push("DESK_MULTI_USER");
+      note("Removing DESK_MULTI_USER too: without Ouro accounts the gateway serves the single shared desk.");
+    }
   }
   let identity = { setEnv: {}, secretRefs: {}, keyVaultSecrets: {}, addIdentities: [] };
   if (record) {
@@ -295,18 +321,29 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
   // No Ouro setting reaches the app unless the whole set, as the app will hold it, passes the gateway's own check
   // (re-review N-1): DESK_GITHUB_SIGNIN alone, say, makes the gateway refuse to start as "partly configured".
   const written = [...Object.keys(setEnv), ...Object.keys(identity.setEnv), ...Object.keys(identity.secretRefs)];
+  // The env as the app will hold it, for the gateway's own checks below.
+  const final = {};
+  for (const entry of gatewayContainer(shown).env ?? []) if (!removeEnv.includes(entry.name)) final[entry.name] = entry.value ?? (entry.secretRef ? "secret-reference" : undefined);
+  Object.assign(final, setEnv, identity.setEnv);
+  for (const name of Object.keys(identity.secretRefs)) final[name] = "secret-reference";
   if (written.some((name) => OURO_SETTINGS.includes(name))) {
-    const result = {};
-    for (const entry of gatewayContainer(shown).env ?? []) if (!removeEnv.includes(entry.name)) result[entry.name] = entry.value ?? (entry.secretRef ? "secret-reference" : undefined);
-    Object.assign(result, setEnv, identity.setEnv);
-    for (const name of Object.keys(identity.secretRefs)) result[name] = "secret-reference";
     try {
-      readIdentity(result, "https://desk.invalid");
+      readIdentity(final, "https://desk.invalid");
     } catch (error) {
       const file = record ? `identity-${record.env}.json` : `identity-${values["identity-env"] ?? "<env>"}.json`;
       const incomplete = !record || identity.missing.length ? ` DESK_GITHUB_SIGNIN applies only once ${file} is complete.` : "";
       throw new Error(`the app would hold Ouro settings the gateway refuses, so it would not start: ${error.message} This update was not sent to the app.${incomplete}`);
     }
+  }
+  // The gateway refuses to start with DESK_MULTI_USER=1 and no Ouro account identity (main.js readConfig).
+  if (final.DESK_MULTI_USER === "1") {
+    let accounts = null;
+    try {
+      accounts = readIdentity(final, "https://desk.invalid");
+    } catch (error) {
+      throw new Error(`${MULTI_USER_NEEDS_IDENTITY} ${error.message} This update was not sent to the app.`);
+    }
+    if (!accounts) throw new Error(`${MULTI_USER_NEEDS_IDENTITY} This update was not sent to the app.`);
   }
   const text = buildAppYaml({
     shownYaml: shown,
@@ -317,6 +354,7 @@ export function cli(argv = process.argv.slice(2), { print = (line) => process.st
     addIdentities: identity.addIdentities,
     removeEnv,
     forbidIdentities: values["forbid-identity"],
+    terminationGracePeriodSeconds,
   });
   const { file } = writeAppYaml(text, { parent: values.out });
   print(file);

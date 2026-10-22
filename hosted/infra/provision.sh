@@ -11,6 +11,9 @@
 #   DESK_GITHUB_SIGNIN=on|off hosted/infra/provision.sh
 #                                             # turn the GitHub sign-in fallback on or off; a rerun keeps the app's value.
 #                                             # Refused until identity-<env>.json is complete.
+#   DESK_MULTI_USER=1|0 hosted/infra/provision.sh
+#                                             # turn per-account desks on or off; a rerun keeps the app's value.
+#                                             # 1 is refused until identity-<env>.json is complete.
 #   REMOVE_OURO_SETTINGS=1 hosted/infra/provision.sh
 #                                             # take every Ouro sign-in setting off the app (GitHub sign-in for
 #                                             # DESK_ALLOWED_LOGINS again); secrets and identities stay
@@ -40,7 +43,8 @@
 # reads the app back and stops unless every secret, Key Vault reference and
 # identity is still there. A rerun keeps the app's probes, scale and resources
 # as they are; only a create applies the template's (fix a hand-made change in
-# the portal or by creating the app again).
+# the portal or by creating the app again). The one exception is the shutdown
+# grace period, which every update sets (below).
 #
 # Ouro sign-in: both stages read the Ouro tenant's settings from
 # hosted/infra/identity-<env>.json (prod, or test for staging), which
@@ -56,6 +60,14 @@
 # After every update the script waits until the new revision is the ready one,
 # and fails if it doesn't start. DESK_ALLOWED_LOGINS and every existing
 # secret stay until the day-14 check.
+#
+# DESK_MULTI_USER (v1b-2) works like DESK_GITHUB_SIGNIN: a rerun keeps the app's
+# value unless it is passed. 1 joins only with a complete identity record, because
+# the gateway won't start in multi-user mode without Ouro accounts; a create gets
+# it through the same update as the Ouro settings, never in the create spec.
+# REMOVE_OURO_SETTINGS=1 takes it off too. Every update, not only a create, sets
+# the shutdown grace period to GRACE_SECONDS; the rest of the template's probes,
+# scale and resources still apply only on a create.
 #
 # DESK_PUBLIC_URL: a create uses https://desk.ouro.bot unless it is passed. A rerun
 # keeps the app's current value unless it is passed, so a reconcile never moves
@@ -130,6 +142,18 @@ case "${DESK_GITHUB_SIGNIN:-}" in
   "" | on | off) ;;
   *) printf 'DESK_GITHUB_SIGNIN must be on or off, not %s\n' "$DESK_GITHUB_SIGNIN" >&2; exit 1 ;;
 esac
+case "${DESK_MULTI_USER:-}" in
+  "" | 0 | 1) ;;
+  *) printf 'DESK_MULTI_USER must be 0 or 1, not %s\n' "$DESK_MULTI_USER" >&2; exit 1 ;;
+esac
+if [[ "${REMOVE_OURO_SETTINGS:-}" == 1 && "${DESK_MULTI_USER:-}" == 1 ]]; then
+  printf 'REMOVE_OURO_SETTINGS=1 removes Ouro accounts, which DESK_MULTI_USER=1 needs; pass one or the other.\n' >&2
+  exit 1
+fi
+# Shutdown stops every Desk child (up to 12 s), then pushes every desk, with a
+# rescue push for any that fail, all within 80 s of SIGTERM, and then closes the
+# token broker (up to 5 s) before the gateway exits.
+GRACE_SECONDS=120
 APP_SECRETS=(desk-app-id desk-app-client-id desk-app-client-secret desk-app-key)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -228,10 +252,7 @@ properties:
     secrets:
 $secrets_yaml
   template:
-    # Shutdown stops every Desk child (up to 12 s), then pushes every desk,
-    # with a rescue push for any that fail, all within 80 s of SIGTERM, and
-    # then closes the token broker (up to 5 s) before the gateway exits.
-    terminationGracePeriodSeconds: 120
+    terminationGracePeriodSeconds: $GRACE_SECONDS
     scale:
       minReplicas: $MIN_REPLICAS
       maxReplicas: 1
@@ -311,6 +332,8 @@ build_update() {
     if [[ -n "$DESK_REDIRECTS" ]]; then args+=(--set-env "DESK_REDIRECTS=$DESK_REDIRECTS"); else args+=(--remove-env DESK_REDIRECTS); fi
   fi
   if [[ -n "${DESK_GITHUB_SIGNIN:-}" ]]; then args+=(--set-env "DESK_GITHUB_SIGNIN=$DESK_GITHUB_SIGNIN"); fi
+  if [[ -n "${DESK_MULTI_USER:-}" ]]; then args+=(--set-env "DESK_MULTI_USER=$DESK_MULTI_USER"); fi
+  args+=(--termination-grace "$GRACE_SECONDS")
   args+=(--identity-env "$IDENTITY_ENV")
   if [[ "${REMOVE_OURO_SETTINGS:-}" == 1 ]]; then
     args+=(--remove-ouro)
@@ -455,6 +478,14 @@ else
     image="$login_server/ouro-desk-hosted:$tag"
     say "Building the first image $image from $REPO_ROOT"
     write acr build --registry "$REGISTRY" --image "ouro-desk-hosted:$tag" --file hosted/Dockerfile "$REPO_ROOT"
+  fi
+  if [[ "${DESK_MULTI_USER:-}" == 1 ]]; then
+    # Checked before the app exists: the setting joins only through the update that adds a complete record.
+    if [[ -f "$IDENTITY_FILE" ]]; then
+      node "$APP_YAML" --require-identity --identity-record "$IDENTITY_FILE"
+    else
+      node "$APP_YAML" --require-identity
+    fi
   fi
   secrets_yaml="$(
     printf '      - name: desk-signing-key\n        value: "%s"\n' "$(openssl rand -hex 32)"
