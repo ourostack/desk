@@ -1065,6 +1065,73 @@ test("non_git_unsynchronized_busy_and_failed_git_calls_hold", async () => {
   assert.equal(next.resources[0].disposition, "removed", "recovered first")
 })
 
+// Git's own view of the desk's worktrees: every path `git worktree list` names, and every `desk-triage/*` branch.
+function worktreesAndTriageBranches(root) {
+  const worktrees = git(root, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => realpathSync(line.slice("worktree ".length)))
+  const branches = git(root, ["branch", "--list", "--format=%(refname:short)", "desk-triage/*"]).split("\n").filter(Boolean)
+  return { worktrees, branches }
+}
+
+test("triage removes its own worktree and branch after its commit reaches main", async () => {
+  const w = await world()
+  const a = w.clone("a")
+  // Another session's worktree and a desk-triage branch no record of this writer owns: never touched.
+  const foreignTree = path.join(w.base, "someone-elses-worktree")
+  git(a.deskRoot, ["worktree", "add", "-q", "-b", "feature/other", foreignTree, "HEAD"])
+  const foreignBranch = `desk-triage/${"e".repeat(32)}`
+  git(a.deskRoot, ["branch", foreignBranch, "HEAD"])
+
+  const result = await publish(a)
+
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  assert.equal(result.ack.commit, git(w.origin, ["rev-parse", "main"]), "the commit reached main")
+  const own = result.resources.find((r) => r.kind === "worktree")
+  assert.equal(own.disposition, "removed")
+  const { worktrees, branches } = worktreesAndTriageBranches(a.deskRoot)
+  assert.deepEqual(worktrees, [realpathSync(a.deskRoot), realpathSync(foreignTree)], "only the checkout and the other session's worktree are left")
+  assert.deepEqual(branches, [foreignBranch], "only the branch this writer does not own is left")
+  assert.equal(git(foreignTree, ["rev-parse", "--abbrev-ref", "HEAD"]), "feature/other")
+  assert.deepEqual(await fs.readdir(path.dirname(path.dirname(own.path))), [], "no folder or record of its own is left")
+})
+
+// A `git worktree add` cut off mid-checkout (its process killed with the session, say, so Git's own clean-up never runs) leaves a
+// worktree locked "initializing", part of a checkout, and its branch: one was found at 1.2 GB. Git drops that lock before any hook
+// runs, so the half-made worktree holds only part of a checkout of a commit Git already has. This writer removes it and its branch,
+// instead of keeping it and blocking every later call.
+test("triage removes its own half-made worktree and branch when creating the worktree is cut off", async () => {
+  const w = await world()
+  const a = w.clone("a")
+  // The real `git worktree add`, left the way a cut-off one leaves it: locked "initializing", nothing checked out, a failed exit.
+  const script = "const r = require('child_process').spawnSync(process.argv[1], process.argv.slice(2), { stdio: 'ignore' }); process.exit(r.status === 0 ? 137 : 1)"
+  const cutOff = (command, args, options) => (args[2] === "worktree" && args[3] === "add"
+    ? spawn(process.execPath, ["-e", script, command, ...args.slice(0, 2), "worktree", "add", "--no-checkout", "--lock", "--reason", "initializing", ...args.slice(4)], options)
+    : spawn(command, args, options))
+
+  const cut = await publish(a, { git: { spawn: cutOff } })
+
+  assert.equal(cut.state, "write_failed", JSON.stringify(cut))
+  assert.equal(cut.resources.find((r) => r.kind === "worktree").disposition, "removed", JSON.stringify(cut.resources))
+  assert.deepEqual(worktreesAndTriageBranches(a.deskRoot), { worktrees: [realpathSync(a.deskRoot)], branches: [] })
+  const next = await publish(a)
+  assert.equal(next.state, "acknowledged", "the next call is not blocked by a leftover")
+})
+
+// A worktree locked for any other reason, or one a hook wrote into, is still kept: only an unfinished `worktree add` is removed.
+test("triage keeps its own worktree when it is locked for another reason", async () => {
+  const w = await world()
+  const a = w.clone("a")
+  const script = "const r = require('child_process').spawnSync(process.argv[1], process.argv.slice(2), { stdio: 'ignore' }); process.exit(r.status === 0 ? 1 : 2)"
+  const lockedByHand = (command, args, options) => (args[2] === "worktree" && args[3] === "add"
+    ? spawn(process.execPath, ["-e", script, command, ...args.slice(0, 2), "worktree", "add", "--no-checkout", "--lock", "--reason", "kept by the operator", ...args.slice(4)], options)
+    : spawn(command, args, options))
+
+  const kept = await publish(a, { git: { spawn: lockedByHand } })
+
+  assert.equal(kept.state, "write_failed")
+  assert.equal(kept.resources.find((r) => r.kind === "worktree").disposition, "retained")
+  assert.equal(worktreesAndTriageBranches(a.deskRoot).worktrees.length, 2)
+})
+
 test("foreign_or_vanished_operation_records", async () => {
   const w = await world()
   const a = w.clone("a")

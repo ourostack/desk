@@ -169,8 +169,24 @@ test("a pull that still fails after quarantine files a reason that names its cau
   const { root } = await mkOriginWithClone()
   await fs.writeFile(path.join(root, "stray.txt"), "local only\n")
   let filed = null
-  const result = await syncWorkspace({ root, env, fileProblem: (args) => { filed = args }, spawnGit: failingPull({ status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" }) })
+  // The first pull names stray.txt as in its way; the retry fails for another reason.
+  const answers = [
+    { status: 1, stderr: "error: The following untracked working tree files would be overwritten by checkout:\n\tstray.txt\nPlease move or remove them before you switch branches.\nAborting\n" },
+    { status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" },
+  ]
+  const spawnGit = (command, args, options) => (args[2] === "pull" ? { stdout: "", ...answers.shift() } : spawnSync(command, args, options))
+  const result = await syncWorkspace({ root, env, fileProblem: (args) => { filed = args }, spawnGit })
   assert.equal(result.state, "unresolved")
-  assert.ok(result.quarantinedPaths.length > 0)
+  assert.deepEqual(result.quarantinedPaths.map((moved) => path.basename(moved)), ["stray.txt"])
   assert.equal(filed.reason, "pull_rebase_failed_after_quarantine:diverged")
+})
+
+test("a diverged pull moves no untracked file aside", async () => {
+  const { root } = await mkOriginWithClone()
+  await fs.writeFile(path.join(root, "stray.txt"), "local only\n")
+  const result = await syncWorkspace({ root, env, fileProblem, spawnGit: failingPull({ status: 1, stderr: "fatal: Need to specify how to reconcile divergent branches.\n" }) })
+  assert.equal(result.state, "unresolved")
+  assert.equal(result.cause, "diverged")
+  assert.equal(result.quarantinedPaths, undefined)
+  assert.equal(await fs.readFile(path.join(root, "stray.txt"), "utf8"), "local only\n")
 })

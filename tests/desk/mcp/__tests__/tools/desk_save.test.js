@@ -177,6 +177,54 @@ test("desk_save commits only its own paths, leaving another process's staged, un
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
 
+// https://github.com/ourostack/desk/issues/414: a deletion or rename already staged with `git rm` or `git mv` was "nothing to commit".
+test("desk_save commits a staged deletion and a staged rename at listed paths", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const git = (args) => {
+    const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+    assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
+  }
+  for (const name of ["gone.md", "old.md", "edited.md", "other.md"]) await fs.writeFile(path.join(root, name), `${name}\n`, "utf8")
+  git(["add", "--", "gone.md", "old.md", "edited.md", "other.md"])
+  git(["commit", "-q", "-m", "seed"])
+  git(["rm", "-q", "--", "gone.md"])
+  git(["mv", "old.md", "new.md"])
+  await fs.writeFile(path.join(root, "edited.md"), "edited\n", "utf8")
+  // Another session's staged work, at a path this call does not list.
+  await fs.writeFile(path.join(root, "other.md"), "another session\n", "utf8")
+  git(["add", "--", "other.md"])
+
+  const result = await desk_save({
+    deskRoot: root,
+    input: { paths: ["gone.md", "old.md", "new.md", "edited.md"], message: "remove and rename" },
+    schedulePush: () => {},
+  })
+
+  assert.equal(result.status, "committed", JSON.stringify(result))
+  const shown = spawnSync("git", ["-C", root, "show", "--name-status", "--no-renames", "--format=", "HEAD"], { encoding: "utf8" })
+  assert.deepEqual(shown.stdout.trim().split("\n").sort(), ["A\tnew.md", "D\tgone.md", "D\told.md", "M\tedited.md"])
+  assert.equal(gitStatus(root), "M  other.md\n", "the path the call did not list stays staged")
+
+  // Only a staged change at the listed paths, with nothing unstaged anywhere among them.
+  git(["rm", "-q", "--", "edited.md"])
+  const deletion = await desk_save({ deskRoot: root, input: { paths: ["edited.md"], message: "remove edited" }, schedulePush: () => {} })
+  assert.equal(deletion.status, "committed", JSON.stringify(deletion))
+  assert.deepEqual(lastCommitFiles(root), ["edited.md"])
+})
+
+test("desk_save reports nothing_to_commit when nothing is unstaged at the paths and git cannot list what is staged", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8")
+  spawnSync("git", ["-C", root, "add", "--", "notes.md"], { encoding: "utf8" })
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "seed"], { encoding: "utf8" })
+  const spawnGit = (cmd, args, opts) => (args.includes("--cached") ? { status: 1, stdout: "", stderr: "diff boom" } : spawnSync(cmd, args, opts))
+  const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save" }, spawnGit, schedulePush: () => {} })
+  assert.deepEqual(result, { status: "nothing_to_commit" })
+  assert.equal(commitCount(root), 1)
+})
+
 test("desk_save reports a commit failure as nothing_to_commit with the reason, and creates no commit", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

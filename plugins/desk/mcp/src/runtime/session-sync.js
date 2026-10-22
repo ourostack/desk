@@ -5,14 +5,14 @@
 // retry-quarantine-diagnose sequence, never a silent proceed.
 //
 // `syncWorkspace` never throws: `git pull --rebase --autostash` runs once;
-// on failure, every untracked, non-ignored path at the desk root (the
-// classic cause of a dirty-index pull failure: a stray file another tool or
-// a previous session left lying around, which the incoming pull would
-// overwrite) is quarantined to `_cache/stray-<date>[-n]/` -- moved, never
-// deleted, and never clobbering an earlier same-day quarantine (Review
-// Focus: "same-day double quarantine") -- then the pull is retried once
-// more. Anything still unresolved (no untracked paths to blame, or the
-// retry also fails -- a genuine tracked-file conflict) queues the detached
+// when it fails because git names untracked files the incoming commits would
+// overwrite, exactly those files (and no others: an untracked file on a shared
+// desk is usually another session's unfinished work) are quarantined to
+// `_cache/stray-<date>[-n]/` -- moved, never deleted, and never clobbering an
+// earlier same-day quarantine (Review Focus: "same-day double quarantine") --
+// then the pull is retried once more. Anything still unresolved (git named no
+// untracked file in the way, or the retry also fails -- a genuine tracked-file
+// conflict) queues the detached
 // Desk-problem filer (mechanism `session-sync`) and returns the same
 // honest, five-field `Desk problem:` block shape every other mechanism in
 // this codebase uses -- this is the "unresolved branch" upgrade originally
@@ -100,15 +100,35 @@ function conflictedPaths(root, spawnGit, timeoutMs) {
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 }
 
-// Untracked, non-ignored paths at `root` -- what a dirty-index pull failure
-// most often blames. `--exclude-standard` respects `.gitignore`, which on most
-// desks lists `_cache/`; a desk whose `.gitignore` does not would list its
-// earlier quarantines here, and moving those would nest the quarantine folder
-// inside itself, so anything under `_cache/` is left out whatever Git says.
+// Untracked, non-ignored paths at `root`, unquoted (`-z`), so a name with spaces or non-ASCII letters matches git's own
+// error text. Used only to confirm that a path git named really is untracked before it is moved.
 function untrackedPaths(root, spawnGit, timeoutMs) {
-  const result = run(spawnGit, root, ["ls-files", "--others", "--exclude-standard"], timeoutMs)
+  const result = run(spawnGit, root, ["ls-files", "--others", "--exclude-standard", "-z"], timeoutMs)
   if (result.status !== 0 || typeof result.stdout !== "string") return []
-  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith(`${QUARANTINE_FOLDER}/`))
+  return result.stdout.split("\0").filter((line) => line !== "")
+}
+
+const OVERWRITTEN_LIST = /^(?:error: )?The following untracked working tree files would be overwritten by (?:merge|checkout):\s*$/u
+const OVERWRITTEN_ONE = /^(?:error: )?Untracked working tree file '(.+)' would be overwritten by (?:merge|checkout)\.?\s*$/u
+
+/**
+ * The untracked files a failed pull named as in its way, from git's own error text: the tab-indented list under "The
+ * following untracked working tree files would be overwritten by merge:" (or "...by checkout:"), or the older one-file
+ * form. Nothing else in the text counts. A path that is absolute, climbs out with `..`, or sits in the `_cache/` folder
+ * the moved files go to is dropped, so a quarantine can never reach outside the desk or into itself.
+ */
+export function overwrittenUntrackedPaths(stderr) {
+  const found = []
+  const lines = String(stderr ?? "").split(/\r?\n/u)
+  for (let index = 0; index < lines.length; index += 1) {
+    const one = OVERWRITTEN_ONE.exec(lines[index])
+    if (one !== null) found.push(one[1])
+    if (!OVERWRITTEN_LIST.test(lines[index])) continue
+    while (index + 1 < lines.length && lines[index + 1].startsWith("\t")) found.push(lines[(index += 1)].slice(1))
+  }
+  const safe = found.filter((relative) => relative !== "" && !path.isAbsolute(relative) && !relative.split(/[\\/]/u).includes("..") &&
+    relative !== QUARANTINE_FOLDER && !relative.startsWith(`${QUARANTINE_FOLDER}/`))
+  return [...new Set(safe)]
 }
 
 // The number of stash entries `root` currently has -- used only to notice a
@@ -202,7 +222,7 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
       "--mechanism", "session-sync",
       "--reason", safeReason,
       "--host", host,
-      "--fix-attempt", "retried once with git pull --rebase --autostash; quarantined stray paths and retried once more",
+      "--fix-attempt", "ran git pull --rebase --autostash; when git named untracked files in the way, moved only those to _cache/ and retried once more",
     ], { cwd: root, detached: true, stdio: "ignore", windowsHide: true, env })
     child.on("error", () => {})
     child.unref()
@@ -267,7 +287,7 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
     symptom: "session-start pull did not resolve",
     broke: `git pull --rebase --autostash failed (${reason})${conflicted.length ? `; conflicted: ${conflicted.join(", ")}` : ""}`,
     means: "this desk did not sync with its remote at session start; local work continues, but it may be out of date or diverged from the remote",
-    fix: "not auto-repaired past one retry (and one quarantine attempt) -- inspect the conflict and resolve it, or ask the operator",
+    fix: "not repaired automatically: only untracked files git named as in the pull's way are ever moved aside, then the pull is retried once -- inspect the conflict and resolve it, or ask the operator",
     file: filing?.file ?? "filing in background",
     tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
@@ -333,10 +353,12 @@ async function runSync({
 
   if (remaining() <= 0) return deadlineExceeded(firstConflicted)
 
-  // A remote that cannot be reached, or that refuses our credentials, is not a dirty index: moving
-  // stray files aside and pulling again would change nothing and only disturb the desk.
-  const firstCause = classifyPullFailure({ stderr: first.stderr, conflicted: firstConflicted, timedOut: first.error?.code === "ETIMEDOUT" || first.signal === "SIGTERM" })
-  const stray = firstCause === "unreachable" || firstCause === "auth_failed" ? [] : untrackedPaths(root, spawnGit, budgetedTimeout())
+  // Several sessions share a desk, so an untracked file usually belongs to another session's unfinished work. Only the
+  // untracked files git itself named as in the pull's way are moved aside; any other failure (a conflict, an unreachable
+  // remote, refused credentials) moves nothing.
+  const named = overwrittenUntrackedPaths(first.stderr)
+  const untracked = new Set(named.length === 0 ? [] : untrackedPaths(root, spawnGit, budgetedTimeout()))
+  const stray = named.filter((relative) => untracked.has(relative))
   if (stray.length === 0) {
     return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }

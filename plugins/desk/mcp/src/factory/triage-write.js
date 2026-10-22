@@ -22,8 +22,10 @@
 //   - It pushes the exact commit to `refs/heads/main` without force. A rejected push is retried once from a new fetch, with
 //     loser adoption and the basis check repeated. Then it fetches again and reads both blobs back.
 //   - It never resets, rebases, stashes or writes the live checkout, index or branch; the normal Desk sync later pulls the commit.
-//     The temporary worktree and branch are removed only when the worktree is still exactly clean; otherwise they are retained and
-//     reported (a file a hook left is never deleted), and block new resources with a stable alarm until they are recovered.
+//     The temporary worktree and branch are removed after each attempt (after the readback that acknowledges the commit on the
+//     remote main, or on a hold) when the worktree is still exactly clean, or is an unfinished `git worktree add` that Git still
+//     holds locked "initializing"; otherwise they are retained and reported (a file a hook left is never deleted), and block new
+//     resources with a stable alarm until they are recovered. Only this writer's own records are ever removed.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
 import { constants, promises as fs, realpathSync } from "node:fs"
@@ -327,12 +329,27 @@ async function onlyOwnChanges(ctx, record) {
   return entries.every((entry) => /^([AM][ M]|\?\?) /u.test(entry) && record.files.includes(entry.slice(3)))
 }
 
-// Removes the worktree and its branch only when it holds nothing but its own files: a file a hook left there is never deleted.
-// Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
+// Whether the worktree is one whose `git worktree add` never finished: Git still holds it locked "initializing" (the add was
+// killed mid-checkout, so Git's own clean-up never ran). Git drops that lock before the post-checkout hook, so no hook has run
+// there; it holds only part of a checkout of a commit Git already has, and removing it loses nothing.
+async function unfinishedAdd(record) {
+  try {
+    // A `.git` file with no `gitdir:` line throws here too, and is not an unfinished add.
+    const [, gitdir] = /^gitdir: (.+)$/mu.exec(await fs.readFile(path.join(record.path, ".git"), "utf8"))
+    return (await fs.readFile(path.join(path.resolve(record.path, gitdir.trim()), "locked"), "utf8")).trim() === "initializing"
+  } catch {
+    return false
+  }
+}
+
+// Removes the worktree and its branch only when it holds nothing but its own files, or is an unfinished add: a file a hook left
+// there is never deleted. Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
 async function release(ctx, record, resource) {
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
-    const removed = (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
+    const removed = (await unfinishedAdd(record))
+      ? (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", "--force", record.path])).status === 0
+      : (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
     if (!removed) {
       resource.disposition = "retained"
       await saveRecord(ctx, { ...record, disposition: "retained" })

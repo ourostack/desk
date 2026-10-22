@@ -172,9 +172,9 @@ async function writeFiles(checked) {
  * real path of its deepest existing folder, inside the desk and the write prefix. Any failure refuses the whole call
  * before a byte is written.
  *
- * Stages and commits exactly `paths` with `message`, `git commit -- <paths>`,
- * never `-a`/`-A`. When none of `paths` holds an unstaged change or an
- * untracked file — a path that was never actually written — desk_save
+ * Stages exactly `paths` (`git add -A -- <paths>`, never repo-wide) and commits them with `message`, `git commit -- <paths>`,
+ * never `-a`. A deletion or rename already staged at a listed path (`git rm`, `git mv`) is committed too. When none of `paths`
+ * holds an unstaged change, an untracked file or a staged change — a path that was never actually written — desk_save
  * reports `nothing_to_commit` without staging or committing anything, so a
  * caller's typo or stale path never becomes an empty commit. A stage or
  * commit failure for paths that do hold real changes is reported the same
@@ -229,17 +229,21 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
 
   if (tidy) return commitTidy({ deskRoot, paths, message, spawnGit, schedulePush })
 
-  // No unstaged change and no untracked file at any of these paths means
-  // there is nothing here to commit — most often a path that was never
-  // actually written. Checking this before staging means a caller's typo
-  // never becomes an empty commit.
-  if (!hasUnstagedWork(deskRoot, paths, spawnGit)) {
+  // No unstaged change, no untracked file and no staged change at any of these paths means there is nothing here to commit:
+  // most often a path that was never actually written. Checking this before staging means a caller's typo never becomes an
+  // empty commit. A deletion or rename already staged with `git rm` or `git mv` is a change to commit (issue #414).
+  const unstaged = paths.filter((p) => hasUnstagedWork(deskRoot, [p], spawnGit))
+  if (unstaged.length === 0 && (stagedChanges(deskRoot, paths, spawnGit)?.length ?? 0) === 0) {
     return { status: "nothing_to_commit" }
   }
 
-  const staged = stagePaths(deskRoot, paths, spawnGit)
-  if (!staged.ok) {
-    return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+  // Only the listed paths that hold unstaged work are staged: the old side of a `git rm` or `git mv` is neither on disk nor in
+  // the index, and `git add` refuses the whole call for one such path.
+  if (unstaged.length > 0) {
+    const staged = stagePaths(deskRoot, unstaged, spawnGit, undefined, { all: true })
+    if (!staged.ok) {
+      return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+    }
   }
   const committed = commitPaths(deskRoot, paths, message, spawnGit)
   if (!committed.ok) {
