@@ -273,6 +273,7 @@ test("ordinary flush and evaluator entries complete the whole producer path with
   const options = {
     pluginVersion: work.source.evaluator.plugin_version, now: T0, clock: () => T0, deadline: T0 + 3600000, maxRuns: 1,
     findAgentCli: () => "/synthetic/claude", probeSignIn: async () => ({ state: "subscription" }),
+    qualifyHeadlessSource: async () => ({ state: "qualified" }),
     runHeadless: async ({ briefPaths }) => {
       for (const file of briefPaths) {
         const brief = JSON.parse(await fs.readFile(file, "utf8"))
