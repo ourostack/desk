@@ -2,14 +2,14 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
 import { fork, spawn, spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as server from "../../../../../plugins/desk/mcp/src/server.js"
 import { startControllerProcess } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
 import { connectOrStartController, socketTakeoverGuards } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
-import { HOOK_MARKER } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
+import { ensureCardGuard, HOOK_MARKER, installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { controllerStartTimeoutMs, readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { killAndWait } from "../_kill_and_wait.js"
@@ -302,6 +302,69 @@ test("finishing preparation refuses a replaced owner record without overwriting 
     await controller?.close()
   }
 })
+
+test("a real failed card-guard installation refuses readiness and can recover after confirmed repair", async t => {
+  const root = await mkTempRoot("controller-preparation-soft-failure-")
+  mkdirSync(path.join(root, "_meta"))
+  mkdirSync(path.join(root, "_archive"))
+  git(root, ["init", "-b", "main"])
+  const hooks = path.join(root, ".managed-hooks")
+  writeFileSync(hooks, "owned obstruction, not a hooks directory")
+  git(root, ["config", "core.hooksPath", hooks])
+  assert.equal(ensureCardGuard(root).state, "failed", "exercise the real helper's soft failure, not a thrown callback double")
+  let options, unexpected, recovered
+  const request = {
+    deskRoot: root, stateHome: path.join(root, "state"), ephemeral: true,
+    policy: { semantic: "unsupported" },
+    controllerLauncher: value => {
+      options = value
+      return server.startControllerRuntime(value)
+    },
+  }
+  t.after(async () => { await unexpected?.close(); await recovered?.close() })
+  await assert.rejects(server.connectOrStartController(request).then(client => {
+    unexpected = client
+    return client
+  }), { code: "controller_workspace_preparation_failed" })
+  assert.equal(existsSync(path.join(options.stateDir, "owner.json")), false)
+  if (process.platform !== "win32") assert.equal(existsSync(options.endpoint), false)
+  assert.equal(readFileSync(hooks, "utf8"), "owned obstruction, not a hooks directory")
+  renameSync(hooks, `${hooks}.held`)
+  mkdirSync(hooks)
+  recovered = await server.connectOrStartController(request)
+  assert.equal(recovered.accepted, true)
+  assert.ok(readFileSync(path.join(hooks, "pre-commit"), "utf8").includes(HOOK_MARKER))
+  assert.equal(ensureCardGuard(root), null, "only successful preparation is cached before later index opening")
+  await recovered.close()
+  recovered = await server.connectOrStartController(request)
+  assert.equal(recovered.accepted, true, "cached successful preparation remains a valid startup")
+})
+
+for (const kind of ["no-git", "tracked-hooks"]) {
+  test(`controller preparation preserves the legitimate ${kind} helper outcome`, async t => {
+    const root = await mkTempRoot(`controller-preparation-${kind}-`)
+    mkdirSync(path.join(root, "_meta"))
+    mkdirSync(path.join(root, "_archive"))
+    let hook
+    if (kind === "tracked-hooks") {
+      git(root, ["init", "-b", "main"])
+      mkdirSync(path.join(root, ".hooks"))
+      hook = path.join(root, ".hooks", "pre-commit")
+      writeFileSync(hook, "owned tracked hook must remain unchanged")
+      git(root, ["config", "core.hooksPath", ".hooks"])
+      git(root, ["add", ".hooks/pre-commit"])
+    }
+    assert.equal(installCardGuard(root).state, kind === "no-git" ? "skipped" : "tracked")
+    const client = await server.connectOrStartController({
+      deskRoot: root, stateHome: path.join(root, "state"), ephemeral: true,
+      policy: { semantic: "unsupported" }, controllerLauncher: server.startControllerRuntime,
+    })
+    t.after(() => client.close())
+    assert.equal(client.accepted, true)
+    assert.equal(ensureCardGuard(root), null)
+    if (hook) assert.equal(readFileSync(hook, "utf8"), "owned tracked hook must remain unchanged")
+  })
+}
 
 for (const kind of ["throw", "async-return"]) {
   test(`preparation ${kind} refuses readiness and releases only its owned rendezvous`, async () => {
