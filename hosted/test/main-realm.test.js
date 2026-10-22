@@ -103,31 +103,57 @@ test("session start refuses a suspended or unconfirmed GitHub link before prepar
   assert.deepEqual(prepared, ["acct-1"]);
 });
 
-// A launched child that prints `stdout` and exits.
-function childPrinting(stdout) {
-  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stdin: new PassThrough() });
-  setImmediate(() => {
+test("a multi-user session start needs the GitHub link recheck, and waits for a reset the recheck started", async () => {
+  assert.throws(() => createSessionStart({ config: CONFIG, runtime: {} }), /GitHub link recheck/);
+  const events = [];
+  let finishReset;
+  const resetting = new Promise((resolve) => { finishReset = resolve; });
+  const hooks = { settled: async (id) => { events.push(`settled ${id}`); await resetting; events.push("reset done"); } };
+  const runtime = { prepare: async (id) => { events.push(`prepare ${id}`); return { realm: {}, launch: () => ({}) }; } };
+  const start = createSessionStart({ config: CONFIG, runtime, hooks, githubLink: { sessionRefusal: async () => { events.push("recheck"); return null; } } });
+  const started = start({ auth: AUTH });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["recheck", "settled acct-1"], "no realm is prepared while the account's reset runs");
+  finishReset();
+  await started;
+  assert.deepEqual(events, ["recheck", "settled acct-1", "reset done", "prepare acct-1"]);
+});
+
+// A launched child that writes `stderr`, prints `stdout` and exits. Like a real child, its "close" waits for both
+// streams to be read, so a desk-init whose stderr nobody drains never closes.
+function childPrinting(stdout, { stderr = "desk-init: progress\n", hang = false } = {}) {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough({ highWaterMark: 1 }),
+    stdin: new PassThrough(),
+    killed: null,
+    kill(signal) { child.killed = signal; setImmediate(() => child.emit("close", null, signal)); },
+  });
+  if (hang) return child;
+  setImmediate(async () => {
     child.stdout.end(stdout);
+    child.stderr.end(stderr);
+    await Promise.all([once(child.stdout, "end"), once(child.stderr, "end")]);
     child.emit("close", 0);
   });
   return child;
 }
 
-function linkFixture({ stdout = '{"status":"created"}\n' } = {}) {
+function linkFixture({ stdout = '{"status":"created"}\n', child, release } = {}) {
   const events = [];
   const parts = { accounts: { forget: (id) => events.push(`forget ${id}`) } };
   const relay = { closeAccount: (id) => events.push(`close ${id}`) };
   const runtime = {
-    release: async (id) => { events.push(`release ${id}`); },
+    release: release ?? (async (id, options) => { events.push(options?.discard ? `discard ${id}` : `release ${id}`); }),
     prepare: async (id) => {
       events.push(`prepare ${id}`);
       return {
-        launch: (args) => { events.push(["launch", args]); return childPrinting(stdout); },
+        launch: (args) => { events.push(["launch", args]); return child?.() ?? childPrinting(stdout); },
         push: async () => { events.push("push"); },
       };
     },
   };
-  const hooks = createLinkHooks({ config: CONFIG, parts, runtime, relay: () => relay, log: (line) => events.push(line) });
+  const hooks = createLinkHooks({ config: CONFIG, parts, runtime, relay: () => relay, timeoutMs: 200, log: (line) => events.push(line) });
   return { hooks, events };
 }
 
@@ -145,10 +171,42 @@ test("initDesk runs desk-init in a fresh realm from the new binding, with no pat
   assert.deepEqual(deskInitArgs(CONFIG), ["/app/plugins/desk/mcp/scripts/desk-init.js"]);
 });
 
-test("initDesk returns desk-init's refusal for an existing desk without pushing, and fails when desk-init prints nothing", async () => {
+test("initDesk returns desk-init's refusal for an existing desk without pushing, and discards the realm", async () => {
   const existing = linkFixture({ stdout: '{"status":"refused","reason":"already_a_desk"}\n' });
   assert.deepEqual(await existing.hooks.initDesk({ accountId: "acct-1" }), { status: "refused", reason: "already_a_desk" });
   assert.ok(!existing.events.includes("push"));
-  const silent = linkFixture({ stdout: "" });
-  await assert.rejects(silent.hooks.initDesk({ accountId: "acct-1" }), /no result/);
+  assert.equal(existing.events.at(-1), "discard acct-1");
+});
+
+test("a desk-init that fails, prints nothing or runs too long leaves its realm discarded, never pushed", async () => {
+  for (const [name, fixture, error] of [
+    ["silent", linkFixture({ stdout: "" }), /no result/],
+    ["garbled", linkFixture({ stdout: "not json\n" }), SyntaxError],
+    ["hung", linkFixture({ child: () => childPrinting("", { hang: true }) }), /did not finish in time/],
+  ]) {
+    await assert.rejects(fixture.hooks.initDesk({ accountId: "acct-1" }), error, name);
+    assert.ok(!fixture.events.includes("push"), `${name}: nothing is pushed`);
+    assert.equal(fixture.events.at(-1), "discard acct-1", `${name}: the realm is discarded`);
+  }
+});
+
+test("a desk-init that writes a lot to stderr still finishes", async () => {
+  const { hooks, events } = linkFixture({ child: () => childPrinting('{"status":"created"}\n', { stderr: "x".repeat(256 * 1024) }) });
+  assert.deepEqual(await hooks.initDesk({ accountId: "acct-1" }), { status: "created" });
+  assert.equal(events.at(-1), "push");
+});
+
+test("settled waits for a relink's reset, and a failed release is logged rather than thrown", async () => {
+  let finish;
+  const { hooks, events } = linkFixture({ release: () => new Promise((_, reject) => { finish = () => reject(Object.assign(new Error("x"), { code: "DESK_SESSION_REFUSED" })); }) });
+  hooks.onLinked("acct-1");
+  let settled = false;
+  const waiting = hooks.settled("acct-1").then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "settled waits while the release runs");
+  finish();
+  await waiting;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(events.some((line) => typeof line === "string" && /could not be released \(DESK_SESSION_REFUSED\)/.test(line)));
+  await hooks.settled("acct-1");
 });

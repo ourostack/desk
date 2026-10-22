@@ -314,13 +314,15 @@ export function buildGateway({ config, relay, parts, admin, githubLink, log: wri
 }
 
 // Session start on a multi-user gateway: the account's GitHub binding is rechecked with GitHub first (a suspended
-// or unconfirmed link refuses the session with a message the person can act on), then its realm is prepared and
-// its Desk child launched in it.
-export function createSessionStart({ config, runtime, githubLink }) {
+// or unconfirmed link refuses the session with a message the person can act on), any reset that recheck or a
+// relink started is awaited, then the account's realm is prepared and its Desk child launched in it.
+export function createSessionStart({ config, runtime, githubLink, hooks }) {
+  if (!githubLink) throw new Error("a multi-user session start needs the GitHub link recheck");
   return async ({ auth }) => {
     const accountId = auth?.extra?.accountId;
-    const refusal = githubLink && typeof accountId === "string" ? await githubLink.sessionRefusal(accountId) : null;
+    const refusal = typeof accountId === "string" ? await githubLink.sessionRefusal(accountId) : null;
     if (refusal) throw Object.assign(new Error(refusal), { code: "DESK_SESSION_REFUSED" });
+    await hooks?.settled(accountId);
     const prepared = await runtime.prepare(accountId);
     return prepared.launch(deskChildArgs(config, prepared.realm));
   };
@@ -328,37 +330,75 @@ export function createSessionStart({ config, runtime, githubLink }) {
 
 // desk-init in a realm: its root comes from the realm's DESK, so no path is on the command line.
 export const deskInitArgs = (config) => [join(config.pluginDir, "mcp", "scripts", "desk-init.js")];
+export const DESK_INIT_TIMEOUT_MS = 120_000;
+const DESK_INIT_STDOUT_LIMIT = 64 * 1024;
+
+// Runs desk-init in a prepared realm and returns its one JSON result. stderr is passed through, since a child's
+// handle closes only once both streams are drained; a desk-init that runs past `timeoutMs` is killed.
+async function runDeskInit(prepared, config, timeoutMs) {
+  const child = prepared.launch(deskInitArgs(config));
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    if (stdout.length < DESK_INIT_STDOUT_LIMIT) stdout += chunk;
+  });
+  child.stderr?.pipe(process.stderr, { end: false });
+  child.stdin?.end();
+  let timer;
+  const timedOut = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("desk-init did not finish in time"));
+    }, timeoutMs);
+  });
+  try {
+    await Promise.race([once(child, "close"), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+  const line = stdout.slice(0, DESK_INIT_STDOUT_LIMIT).split("\n").map((text) => text.trim()).filter(Boolean).pop();
+  if (!line) throw new Error("desk-init printed no result");
+  return JSON.parse(line);
+}
 
 // What GitHub linking needs from the gateway. Linking changes the account's binding, so its cached account row,
 // its open sessions and its prepared realm (cloned from the old repository, with the old authority pinned) are
 // dropped; the next session prepares a realm from the new binding. `initDesk` runs desk-init in that new realm as
-// the account's own UID and pushes the commit it makes. `relay()` returns the relay, built after these hooks.
-export function createLinkHooks({ config, parts, runtime, relay = () => null, log: write = log }) {
-  const reset = async (accountId) => {
+// the account's own UID and pushes the commit it makes; when it fails, its realm is discarded unpushed, so a link
+// that is rolled back leaves nothing in the repository. One reset runs at a time per account, and `settled`
+// waits for it. `relay()` returns the relay, built after these hooks.
+export function createLinkHooks({ config, parts, runtime, relay = () => null, timeoutMs = DESK_INIT_TIMEOUT_MS, log: write = log }) {
+  const resets = new Map();
+  const reset = (accountId) => {
     parts.accounts.forget(accountId);
     relay()?.closeAccount(accountId);
-    await runtime.release(accountId);
+    const done = runtime.release(accountId);
+    resets.set(accountId, done);
+    done.catch(() => {}).finally(() => {
+      if (resets.get(accountId) === done) resets.delete(accountId);
+    });
+    return done;
   };
   return {
     async initDesk({ accountId }) {
       await reset(accountId);
       const prepared = await runtime.prepare(accountId);
-      const child = prepared.launch(deskInitArgs(config));
-      let stdout = "";
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk;
-      });
-      child.stdin?.end();
-      await once(child, "close");
-      const line = stdout.split("\n").map((text) => text.trim()).filter(Boolean).pop();
-      if (!line) throw new Error("desk-init printed no result");
-      const result = JSON.parse(line);
-      if (result?.status === "created") await prepared.push();
-      return result;
+      try {
+        const result = await runDeskInit(prepared, config, timeoutMs);
+        if (result?.status === "created") await prepared.push();
+        if (result?.status !== "created") await runtime.release(accountId, { discard: true });
+        return result;
+      } catch (error) {
+        await runtime.release(accountId, { discard: true }).catch((discardError) =>
+          write(`desk init: account ${accountId}'s realm could not be discarded (${discardError?.code ?? discardError?.name ?? "error"})`));
+        throw error;
+      }
     },
     onLinked(accountId) {
       reset(accountId).catch((error) => write(`relink: account ${accountId}'s previous realm could not be released (${error?.code ?? error?.name ?? "error"})`));
+    },
+    async settled(accountId) {
+      await resets.get(accountId)?.catch(() => {});
     },
   };
 }
@@ -490,7 +530,7 @@ export async function main(env = process.env, deps = {}) {
         onLinked: hooks.onLinked,
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
       });
-      relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink }) });
+      relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink, hooks }) });
       push = () => runtime.close();
     }
     admin = createGatewayAdmin({ config, parts, relay, runtime, fetch: deps.fetch });

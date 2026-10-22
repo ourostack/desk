@@ -10,6 +10,8 @@ import { validRepo } from "./accounts/core.js";
 const HELPER = fileURLToPath(new URL("./realm-helper.js", import.meta.url));
 const allocateUid = createUidAllocator();
 const refused = () => new Error("Hosted desk account authority is unavailable or changed.");
+// Session start passes this message to the person (relay.js).
+const stillSaving = () => Object.assign(new Error("Hosted Desk is still saving the last changes of your previous desk. Try again in a few minutes."), { code: "DESK_SESSION_REFUSED" });
 
 function protectedKey(path) {
   protectedAncestors(path);
@@ -132,6 +134,19 @@ export function createRealmLifecycle({ services, operations, failure, preserve, 
     }, failed);
     guardian.kill("SIGTERM");
   });
+  const finish = pushing => (async () => {
+    healthy();
+    await Promise.all([...services].map(retire));
+    healthy();
+    await Promise.all([...operations]);
+    healthy();
+    if (pushing) {
+      await push();
+      healthy();
+    }
+    await closeBroker();
+    healthy();
+  })();
   const value = Object.freeze({
     service(guardian) {
       healthy();
@@ -159,22 +174,31 @@ export function createRealmLifecycle({ services, operations, failure, preserve, 
       try { healthy(); } catch (error) { return Promise.reject(error); }
       if (closePromise) return closePromise;
       stop();
-      closePromise = (async () => {
-        healthy();
-        await Promise.all([...services].map(retire));
-        healthy();
-        await Promise.all([...operations]);
-        healthy();
-        await push();
-        healthy();
-        await closeBroker();
-        healthy();
-      })();
-      return closePromise;
+      const closing = finish(true);
+      closePromise = closing;
+      // A quiescent failure (the push could not be verified, say) leaves the writes in the realm and nothing
+      // running in it, so a later close tries again; a preservation failure stays final.
+      closing.catch(error => {
+        if (closePromise === closing && error?.quiescent === true && !failure()) closePromise = undefined;
+      });
+      return closing;
     },
     async purge() {
       healthy();
       await value.close();
+      healthy();
+      await purgeRoot();
+      healthy();
+    },
+    // Retires everything and purges the root without pushing: for a realm whose work must not reach its
+    // repository (a desk init that is being rolled back).
+    async discard() {
+      healthy();
+      if (!closePromise) {
+        stop();
+        closePromise = finish(false);
+      }
+      await closePromise;
       healthy();
       await purgeRoot();
       healthy();
@@ -214,13 +238,32 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
   // Accounts deleted while this replica runs: never prepared again, even by a preparation already reading the store.
   const deleted = new Set();
   const purging = new Map();
+  // Bumped by every release or purge: a preparation that read the store before one finishes again from the top,
+  // so it can never pin a binding the account no longer has.
+  const generations = new Map();
+  const generation = accountId => generations.get(accountId) ?? 0;
+  const bump = accountId => generations.set(accountId, generation(accountId) + 1);
+  // One release in flight per account; one that failed is retried by the next preparation.
+  const releasing = new Map();
+  const releaseFailures = new Map();
   let closed = false;
   let closing;
 
   async function prepare(accountId) {
     if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId) || deleted.has(accountId)) throw refused();
+    // The realm of an earlier binding could not be released yet: try again before following the new binding.
+    if (releaseFailures.has(accountId)) {
+      try {
+        await release(accountId);
+      } catch {
+        throw stillSaving();
+      }
+    }
+    await releasing.get(accountId)?.catch(() => {});
+    const started = generation(accountId);
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
+    if (generation(accountId) !== started) return prepare(accountId);
     if (closed || deleted.has(accountId) || account?.accountId !== accountId || account.deskAccess !== true ||
         binding?.kind !== "github" || binding.suspended === true || !binding.author || !validRepo(binding.repo) ||
         (binding.installationId === undefined && binding.repo.toLowerCase() !== configuredRepo?.toLowerCase())) throw refused();
@@ -242,6 +285,11 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       if (deleted.has(accountId)) {
         await removePrepared(accountId);
         throw refused();
+      }
+      // Released while it was being provisioned (the account relinked): it was built from the old binding.
+      if (generation(accountId) !== started) {
+        await removePrepared(accountId, { discard: true });
+        return prepare(accountId);
       }
       return value;
     } catch (error) {
@@ -367,28 +415,48 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
       },
       close: lifecycle.close,
       purge: lifecycle.purge,
+      discard: lifecycle.discard,
     });
     return value;
   }
 
   // Removes a deleted account's realm, if this replica prepared one: its services retire, its writes are pushed and
   // its root is purged as its own UID. The UID stays reserved; the repository is released.
-  async function removePrepared(accountId) {
+  // A realm that a release, a purge and its own preparation all remove at once is removed once; the first caller
+  // decides whether its writes are pushed.
+  const removals = new WeakMap();
+  function removePrepared(accountId, options) {
     const value = prepared.get(accountId);
-    if (!value) return;
-    await value.purge();
-    // Writes were pushed and the root emptied as its own UID; nothing remains for the claim to protect.
-    prepared.delete(accountId);
+    if (!value) return Promise.resolve();
+    if (!removals.has(value)) {
+      const removal = removeRealm(accountId, value, options);
+      removals.set(value, removal);
+      // A removal that failed may be tried again by the next release or purge.
+      removal.catch(() => removals.delete(value));
+    }
+    return removals.get(value);
+  }
+
+  async function removeRealm(accountId, value, { discard = false } = {}) {
+    await (discard ? value.discard() : value.purge());
+    // Writes were pushed (or deliberately discarded) and the root emptied as its own UID; nothing remains for the
+    // claim to protect.
+    if (prepared.get(accountId) === value) prepared.delete(accountId);
     authorities.delete(accountId);
     for (const [claim, owner] of claims) if (owner === accountId) claims.delete(claim);
     // The gateway owns the parent and removes the empty root, which fails if anything was left in it.
-    rmdirSync(value.realm.root);
+    try {
+      rmdirSync(value.realm.root);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
   }
 
   // Throws when the account's desk may still be on disk: a preservation failure, or a purge that did not finish.
   // Concurrent calls share one purge.
   function purgeAccount(accountId) {
     deleted.add(accountId);
+    bump(accountId);
     if (purging.has(accountId)) return purging.get(accountId);
     const done = (async () => {
       await preparing.get(accountId)?.catch(() => {});
@@ -402,11 +470,22 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
 
   // Drops an account's prepared realm after its binding changed (it relinked GitHub): services retire, writes are
   // pushed, the root is purged as its own UID and the old repository and authority are released, so the next
-  // preparation follows the new binding. Throws when the old realm may still hold writes.
-  async function release(accountId) {
-    await preparing.get(accountId)?.catch(() => {});
-    if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
-    await removePrepared(accountId);
+  // preparation follows the new binding. `discard` skips the push (a desk init being rolled back). Concurrent calls
+  // share one release. Throws when the old realm may still hold writes; the next preparation retries it.
+  function release(accountId, { discard = false } = {}) {
+    bump(accountId);
+    if (releasing.has(accountId)) return releasing.get(accountId);
+    const done = (async () => {
+      await preparing.get(accountId)?.catch(() => {});
+      if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+      await removePrepared(accountId, { discard });
+    })();
+    releasing.set(accountId, done);
+    done.then(
+      () => releaseFailures.delete(accountId),
+      error => releaseFailures.set(accountId, error),
+    ).finally(() => releasing.delete(accountId));
+    return done;
   }
 
   return Object.freeze({

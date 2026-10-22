@@ -330,6 +330,17 @@ await once(init, "close");
 assert.equal(JSON.parse(initOutput.trim().split("\n").pop()).status, "created", initOutput);
 await relinked.push();
 assert.equal(fixtureGit(thirdBare, ["rev-list", "--count", "main"]).trim(), "2", "desk-init's commit reached the account's repository");
+// A release that lands while a preparation is provisioning (a relink during session start) wins: the realm built
+// from the old binding is discarded, and the preparation finishes with a fresh realm once the release is done.
+await nextManager.release("account-e");
+const racing = nextManager.prepare("account-e");
+await new Promise(resolve => setTimeout(resolve, 20));
+const overlapping = nextManager.release("account-e");
+const [raced] = await Promise.all([racing, overlapping]);
+assert.equal(existsSync(raced.realm.root), true, "the preparation ends with a live realm");
+assert.equal(await raced.git(["show", "HEAD:marker"]), "third marker", "the fresh realm is the account's repository");
+assert.equal(existsSync(relinked.realm.root), false, "the released realm is gone");
+assert.notEqual(raced, relinked);
 assert.equal(c.env.GH_REPO, "synthetic/second", "an account's desk is its own binding's repository");
 assert.equal(await c.git(["show", "HEAD:marker"]), "second marker", "the clone is the account's own repository");
 assert.notEqual(c.realm.uid, a.realm.uid, "manager replacement cannot recycle a prior account's UID");

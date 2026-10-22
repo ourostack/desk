@@ -20,7 +20,7 @@ const outcome = promise => promise.then(
   error => ({ code: error.code, quiescent: error.quiescent }),
 );
 
-async function setup(t, { holdPush = false, holdBroker = false } = {}) {
+async function setup(t, { holdPush = false, holdBroker = false, pushFailures = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "desk-r3-"));
   console.log(`retained R3 unit root: ${root}`);
   writeFileSync(join(root, "recovery"), "retained lifecycle unit evidence");
@@ -40,7 +40,12 @@ async function setup(t, { holdPush = false, holdBroker = false } = {}) {
   const lifecycle = createRealmLifecycle({
     services, operations: new Set(), failure: () => preservationFailures.get("unit")?.error, preserve,
     stop: () => { state.stopped = true; },
-    async push() { state.push++; if (holdPush) await pushGate.promise; state.order.push("pushed"); },
+    async push() {
+      state.push++;
+      if (holdPush) await pushGate.promise;
+      if (state.push <= pushFailures) throw Object.assign(new Error("push unverified"), { code: "DESK_PUSH_UNPRESERVED", quiescent: true });
+      state.order.push("pushed");
+    },
     async closeBroker() {
       state.order.push("broker-closed");
       state.brokerClose++;
@@ -282,4 +287,22 @@ test("close waits for every service to retire before the push, and the push fini
   f.pushGate.resolve();
   await closing;
   assert.deepEqual(f.state.order, ["pushed", "broker-closed"]);
+});
+
+test("a close whose push fails quiescently can be retried, and the retry pushes before the broker closes", async t => {
+  const f = await setup(t, { pushFailures: 1 });
+  assert.deepEqual(await outcome(f.lifecycle.close()), { code: "DESK_PUSH_UNPRESERVED", quiescent: true });
+  assert.equal(f.state.brokerClose, 0, "the broker stays open so the writes can still be pushed");
+  await turn();
+  await f.lifecycle.close();
+  assert.equal(f.state.push, 2);
+  assert.deepEqual(f.state.order, ["pushed", "broker-closed"]);
+});
+
+test("discard retires the realm and purges its root without pushing", async t => {
+  const f = await setup(t);
+  await f.lifecycle.discard();
+  assert.equal(f.state.push, 0, "a discarded realm's writes never reach the repository");
+  assert.equal(f.state.brokerClose, 1);
+  assert.equal(f.state.purge, 1);
 });
