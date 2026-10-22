@@ -126,7 +126,8 @@ export async function rescueDeskWrites({ run, accountId, deadline, now = Date.no
 // fails), closes its token broker and empties its root. `current()` is true while the failure being recovered is
 // still the account's recorded one: a step of the recovery that can't itself be proved stopped records a new failure,
 // which ends this attempt. `quiet()` is true while nothing of the realm runs but its broker. Both are checked before
-// each step that pushes, rescues or closes the broker, and `current()` again before the root is emptied (the broker's
+// each step that pushes, rescues or closes the broker (`rescue(deadline, run)` gets a `run` that refuses once they
+// no longer hold), and `current()` again before the root is emptied (the broker's
 // own processes may take a moment to go once it closed). `markSaved()` records that nothing is left to push, so a
 // later attempt doesn't push again. Returns true once the root was emptied; false leaves the next session to try again.
 export async function recoverRealm({ current, quiet, unsaved, run, rescue, markSaved, closeBroker, pluginDir, deadline: shutdownDeadline = Infinity, now = Date.now }) {
@@ -138,17 +139,24 @@ export async function recoverRealm({ current, quiet, unsaved, run, rescue, markS
     const deadline = now() + budget;
     await run({ action: "git", args: ["rebase", "--abort"] }, Math.min(RESCUE_RESERVE_MS, budget)).catch(() => {});
     if (!still()) return false;
+    // A discard asked for meanwhile (a desk init rolled back) withholds the push: unsaved() is checked before each.
     let saved = false;
-    try {
-      await run({ action: "push", pluginDir }, budget);
-      saved = !(await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, Math.max(1, deadline - now()))).trim();
-    } catch {
-      // The rescue below saves them instead.
+    if (unsaved()) {
+      try {
+        await run({ action: "push", pluginDir }, budget);
+        saved = !(await run({ action: "git", args: ["rev-list", "@{u}..HEAD"] }, Math.max(1, deadline - now()))).trim();
+      } catch {
+        // The rescue below saves them instead.
+      }
     }
     if (!still()) return false;
-    if (!saved) saved = (await rescue(Math.min(shutdownDeadline, now() + RESCUE_RESERVE_MS))) !== null;
-    if (!saved || !still()) return false;
-    markSaved();
+    // The rescue's own steps run only while the realm is still quiet and the failure still current.
+    const guarded = (job, timeoutMs) => still()
+      ? run(job, timeoutMs)
+      : Promise.reject(Object.assign(new Error("The realm is no longer quiet."), { code: "DESK_RECOVERY_INTERRUPTED" }));
+    if (!saved && unsaved()) saved = (await rescue(Math.min(shutdownDeadline, now() + RESCUE_RESERVE_MS), guarded)) !== null;
+    if ((!saved && unsaved()) || !still()) return false;
+    if (saved) markSaved();
   }
   await closeBroker();
   if (!current()) return false;
@@ -602,7 +610,7 @@ export function createAccountRuntime({
         run,
         pluginDir,
         deadline: shutdownDeadline,
-        rescue: deadline => rescueDeskWrites({ run, accountId, deadline, write }),
+        rescue: (deadline, guarded) => rescueDeskWrites({ run: guarded, accountId, deadline, write }),
         markSaved: () => { saved = true; },
         closeBroker,
       });

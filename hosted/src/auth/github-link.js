@@ -443,8 +443,10 @@ export function createGitHubLink({
     try {
       // The previous repository may have become another account's desk while init ran; the binding then comes back
       // suspended, and the next session start tells the person it was taken.
+      // A claim that can't be made now also restores it suspended: the next recheck lifts that once it holds.
       if (previous) {
-        const kept = previous.suspended === true || (await store.claimRepo(previous.repo, accountId, { now: now() })).claimed === true;
+        const kept = previous.suspended === true ||
+          (await store.claimRepo(previous.repo, accountId, { now: now() }).catch(() => ({}))).claimed === true;
         await store.putBinding(accountId, kept ? previous : { ...previous, suspended: true });
       } else await store.removeBinding(accountId);
       await release(accountId, pick.repo, previous?.repo);

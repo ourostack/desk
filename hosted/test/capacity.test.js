@@ -446,3 +446,45 @@ test("a recovery whose failure is no longer current does nothing", async () => {
   assert.equal(await recoverRealm({ ...f.options, current: () => false }), false);
   assert.deepEqual(f.steps, []);
 });
+
+test("a discard asked for while a recovery runs keeps that recovery from pushing or rescuing", async () => {
+  const { recoverRealm } = await import("../src/account-runtime.js");
+  let withheld = false;
+  const f = recoveryFixture();
+  const run = f.options.run;
+  const options = {
+    ...f.options,
+    unsaved: () => !withheld,
+    async run(job, timeoutMs) {
+      const result = await run(job, timeoutMs);
+      if (job.args?.[0] === "rebase") withheld = true;
+      return result;
+    },
+  };
+  assert.equal(await recoverRealm(options), true);
+  assert.deepEqual(f.steps, ["rebase", "broker-closed", "purge"], "the withheld writes are emptied with the realm, never pushed");
+});
+
+test("a recovery's rescue can't push once its own first step can't be proved stopped", async () => {
+  const { recoverRealm, rescueDeskWrites } = await import("../src/account-runtime.js");
+  const steps = [];
+  let current = true;
+  const lines = [];
+  const run = async job => {
+    const step = job.action === "git" ? job.args[0] : job.action;
+    steps.push(step);
+    // The rescue's rebase abort (the second one) can't be proved stopped.
+    if (step === "rebase" && steps.filter(s => s === "rebase").length === 2) current = false;
+    if (job.action === "push") throw Object.assign(new Error("push failed"), { quiescent: true });
+    return step === "rev-list" ? "abc123\n" : "";
+  };
+  const done = await recoverRealm({
+    current: () => current, quiet: () => true, unsaved: () => true, run, pluginDir: "/p", deadline: Infinity, now: () => 1_000,
+    rescue: (deadline, guarded) => rescueDeskWrites({ run: guarded, accountId: "acct-a", deadline, now: () => 1_000, write: line => lines.push(line) }),
+    markSaved: () => steps.push("saved"),
+    closeBroker: async () => steps.push("broker-closed"),
+  });
+  assert.equal(done, false);
+  assert.deepEqual(steps, ["rebase", "push", "rebase"], "nothing runs in the realm after the step that couldn't be proved stopped");
+  assert.match(lines.join("\n"), /DESK WRITES NOT RESCUED for account acct-a/);
+});

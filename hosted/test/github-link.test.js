@@ -446,6 +446,22 @@ test("a rolled-back init restores the previous binding suspended when another ac
   assert.equal(await ctx.link.recheckBinding({ accountId: ctx.jordanId }), "taken");
 });
 
+test("a rolled-back init whose claim on the previous repository fails still restores that binding, suspended", async (t) => {
+  const ctx = await startLinking(t, { repos: { [DESK_REPO]: { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: DESK_FILES }, "jordan-dev/empty": { installationId: INSTALLATION, collaborators: { "jordan-dev": "write" }, files: [] } }, initDesk: () => ({ status: "error", step: "commit" }) });
+  assert.equal((await choose(ctx, await linkThroughGitHub(ctx), DESK_REPO)).status, 200);
+  const claimRepo = ctx.store.claimRepo.bind(ctx.store);
+  ctx.store.claimRepo = async (repo, ...rest) => {
+    if (repo === DESK_REPO) throw new Error("the repository's claim kept changing; try again");
+    return claimRepo(repo, ...rest);
+  };
+  const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/empty");
+  const failed = await ctx.jordan.request("/link/github", { method: "POST", form: { action: "init", csrf: decode(csrfOf(offer.text)), pick: decode(fieldOf(offer.text, "pick")) } });
+  assert.equal(failed.status, 502, failed.text);
+  const restored = await ctx.store.getBinding(ctx.jordanId);
+  assert.equal(restored.repo, DESK_REPO, "never left bound to the repository that isn't a desk");
+  assert.equal(restored.suspended, true);
+});
+
 test("a failed init never erases a binding it couldn't read, and tells the runtime after a rollback", async (t) => {
   const ctx = await startLinking(t, { repos: { "jordan-dev/notes": { installationId: INSTALLATION, collaborators: { "jordan-dev": "admin" }, files: [] } }, initDesk: () => ({ status: "error", step: "commit" }) });
   const offer = await choose(ctx, await linkThroughGitHub(ctx), "jordan-dev/notes");
