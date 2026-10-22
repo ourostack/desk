@@ -19,6 +19,8 @@ function envFor(log) {
   delete env.NODE_TEST_CONTEXT
   return env
 }
+const assertNestedStderr = stderr => assert.match(stderr,
+  /^(?:\(node:[0-9]+\) Warning: Using the inspector with --test forces running at a concurrency of 1\. Use the inspectPort option to run with concurrency\r?\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n)?$/u)
 
 function summarize(rows) {
   const firstRefusal = rows.find(row => row.event === "reply" && row.token === "refused") ?? null
@@ -42,6 +44,15 @@ test("transport summary does not invent close certainty from a refusal or EOF", 
   assert.equal(summarize(rows).firstRefuserEvents.length, 4)
 })
 
+test("nested command retains the inherited inspector warning but rejects unrelated stderr", () => {
+  const warning = "(node:5168) Warning: Using the inspector with --test forces running at a concurrency of 1. Use the inspectPort option to run with concurrency\n" +
+    "(Use `node --trace-warnings ...` to show where the warning was created)\n"
+  assertNestedStderr("")
+  assertNestedStderr(warning)
+  assert.throws(() => assertNestedStderr(warning + "UNEXPECTED_STDERR"))
+  assert.throws(() => assertNestedStderr("UNEXPECTED_STDERR"))
+})
+
 test("nested diagnostic keeps the real preload and selects only the unchanged requested case", async () => {
   const base = await mkTempRoot("native-refusal-command-"), target = path.join(base, "selected.test.cjs")
   const observer = fileURLToPath(new URL("./fixtures/native-private-path-observer.cjs", import.meta.url))
@@ -54,7 +65,7 @@ test('must not execute',()=>{throw new Error('UNSELECTED_CASE_EXECUTED')});\n`)
   })
   assert.match(result.stdout, /ok 1 - selected/u)
   assert.doesNotMatch(result.stdout, /UNSELECTED_CASE_EXECUTED/u)
-  assert.equal(result.stderr, "")
+  assertNestedStderr(result.stderr)
 })
 
 test("actual Windows unchanged readonly policy case retains refusal and real helper close outcomes", {
