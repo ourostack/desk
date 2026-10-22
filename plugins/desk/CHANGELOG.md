@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.341 — 2026-10-22
+
+Browser tool discovery now shows supported page-command examples instead of directing agents to unavailable help. The guidance explains serial action/snapshot use, private-mode inline snapshots, and keeping the same task-owned context without another approval step. Command guards, tool schemas and profile ownership boundaries are unchanged.
+
+Controllers now finish the existing workspace Git-ignore and managed-card-hook preparation before reporting readiness. Cold Git checks no longer first run on the control event loop during background indexing, where they could delay status and durable-change acknowledgements. Failed required hook preparation refuses readiness rather than deferring another attempt to the answering thread. Concurrent sessions can join verified, still-preparing owners within the remaining existing startup window; ready or unverified owners retain ordinary hung-controller handling. The same protection checks and all request/startup deadlines remain in force.
+
+Lexical-only search and query timelines no longer prescribe starting an embedding provider or rebuilding the index when no embedding request was attempted. Results and readiness diagnostics are unchanged; actual embedding-failure guidance remains available.
+
+Scope release guidance to the recorded repository/task policy instead of a shared task-specific alpha exception, preserving required human gates and intentional alpha-only limits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.340 — 2026-10-22
 
 Status and doctor no longer repeat an earlier missing-desk setup diagnostic while a fresh admission attempt is resolving newly available host evidence or loading the runtime. They report admission in progress, naming the workspace only after resolution, without claiming ready state or write authority. Sessions that still have no workspace continue to receive the normal setup diagnostic after resolution completes.

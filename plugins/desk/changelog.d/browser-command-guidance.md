@@ -1,1 +1,0 @@
-Browser tool discovery now shows supported page-command examples instead of directing agents to unavailable help. The guidance explains serial action/snapshot use, private-mode inline snapshots, and keeping the same task-owned context without another approval step. Command guards, tool schemas and profile ownership boundaries are unchanged.
