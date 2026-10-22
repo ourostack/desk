@@ -204,6 +204,11 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     try {
       child = await spawnDesk({ auth, sessionId: id });
     } catch (error) {
+      // A refusal the person can act on (a suspended GitHub link, say) reaches them as it is.
+      if (error?.code === "DESK_SESSION_REFUSED") {
+        log(`refused a new session for ${owner.label}: ${error.message}`);
+        return refuse(res, 403, -32000, error.message);
+      }
       log(`could not start Desk for a new session: ${error.message}`);
       return refuse(res, 502, -32000, "Bad Gateway: Desk could not be started; try again shortly.");
     } finally {

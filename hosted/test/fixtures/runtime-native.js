@@ -312,6 +312,24 @@ await store.putAccount({ accountId: "account-e", displayName: "Synthetic", deskA
 await store.putBinding("account-e", { ...binding, repo: "synthetic/third" });
 const e = await nextManager.prepare("account-e");
 assert.equal(await e.git(["show", "HEAD:marker"]), "third marker", "the deleted account's repository is released");
+// A suspended binding (GitHub no longer gives write access) is refused before any realm work.
+await store.putAccount({ accountId: "account-suspended", displayName: "Synthetic", deskAccess: true });
+await store.putBinding("account-suspended", { ...binding, repo: "synthetic/suspended", suspended: true });
+await assert.rejects(nextManager.prepare("account-suspended"), /authority/);
+// Relinking releases the prepared realm; the next preparation is a fresh realm, where desk-init runs as the
+// account's own UID and its commit is pushed to the account's repository.
+await nextManager.release("account-e");
+assert.equal(existsSync(e.realm.root), false, "a released realm's root is gone");
+const relinked = await nextManager.prepare("account-e");
+assert.notEqual(relinked, e);
+const init = relinked.launch(["/app/plugins/desk/mcp/scripts/desk-init.js"]);
+let initOutput = "";
+init.stdout.on("data", chunk => { initOutput += chunk; });
+init.stdin.end();
+await once(init, "close");
+assert.equal(JSON.parse(initOutput.trim().split("\n").pop()).status, "created", initOutput);
+await relinked.push();
+assert.equal(fixtureGit(thirdBare, ["rev-list", "--count", "main"]).trim(), "2", "desk-init's commit reached the account's repository");
 assert.equal(c.env.GH_REPO, "synthetic/second", "an account's desk is its own binding's repository");
 assert.equal(await c.git(["show", "HEAD:marker"]), "second marker", "the clone is the account's own repository");
 assert.notEqual(c.realm.uid, a.realm.uid, "manager replacement cannot recycle a prior account's UID");

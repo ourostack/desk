@@ -222,7 +222,7 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     if (closed || typeof accountId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(accountId) || deleted.has(accountId)) throw refused();
     const [account, binding] = await Promise.all([store.getAccount(accountId), store.getBinding(accountId)]);
     if (closed || deleted.has(accountId) || account?.accountId !== accountId || account.deskAccess !== true ||
-        binding?.kind !== "github" || !binding.author || !validRepo(binding.repo) ||
+        binding?.kind !== "github" || binding.suspended === true || !binding.author || !validRepo(binding.repo) ||
         (binding.installationId === undefined && binding.repo.toLowerCase() !== configuredRepo?.toLowerCase())) throw refused();
     // GitHub repository names are case-insensitive.
     const claim = binding.repo.toLowerCase();
@@ -400,8 +400,18 @@ export function createAccountRuntime({ config, store, mint, baseEnv = process.en
     return done;
   }
 
+  // Drops an account's prepared realm after its binding changed (it relinked GitHub): services retire, writes are
+  // pushed, the root is purged as its own UID and the old repository and authority are released, so the next
+  // preparation follows the new binding. Throws when the old realm may still hold writes.
+  async function release(accountId) {
+    await preparing.get(accountId)?.catch(() => {});
+    if (preservationFailures.has(accountId)) throw preservationFailures.get(accountId).error;
+    await removePrepared(accountId);
+  }
+
   return Object.freeze({
     prepare,
+    release,
     purgeAccount,
     close() {
       closed = true;

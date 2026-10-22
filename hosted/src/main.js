@@ -14,6 +14,7 @@ import { createDiscovery, createEntraSignIn, createInvites, DISCOVERY_TIMEOUT_MS
 import { createTableStore } from "./accounts/store.js";
 import { createBrowserSession } from "./auth/browser-session.js";
 import { createAdmin, createAdminTokenVerifier } from "./admin.js";
+import { createGitHubLink } from "./auth/github-link.js";
 import { createAccountCache } from "./accounts/cache.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
@@ -283,7 +284,7 @@ export function createGatewayAdmin({ config, parts, relay, runtime, fetch = glob
 
 // The provider and the Express app. `parts` is startIdentity's, or absent on a gateway without the Ouro tenant, which
 // then serves exactly what it always has.
-export function buildGateway({ config, relay, parts, admin, log: write }) {
+export function buildGateway({ config, relay, parts, admin, githubLink, log: write }) {
   const provider = createProvider({
     signingKeys: config.signingKeys,
     clientKey: config.clientKey,
@@ -307,8 +308,59 @@ export function buildGateway({ config, relay, parts, admin, log: write }) {
     deepHealth: parts?.deepHealth,
     ...(parts?.sessions ? { sessions: parts.sessions } : {}),
     ...(admin ? { admin } : {}),
+    ...(githubLink ? { githubLink } : {}),
   });
   return { provider, app };
+}
+
+// Session start on a multi-user gateway: the account's GitHub binding is rechecked with GitHub first (a suspended
+// or unconfirmed link refuses the session with a message the person can act on), then its realm is prepared and
+// its Desk child launched in it.
+export function createSessionStart({ config, runtime, githubLink }) {
+  return async ({ auth }) => {
+    const accountId = auth?.extra?.accountId;
+    const refusal = githubLink && typeof accountId === "string" ? await githubLink.sessionRefusal(accountId) : null;
+    if (refusal) throw Object.assign(new Error(refusal), { code: "DESK_SESSION_REFUSED" });
+    const prepared = await runtime.prepare(accountId);
+    return prepared.launch(deskChildArgs(config, prepared.realm));
+  };
+}
+
+// desk-init in a realm: its root comes from the realm's DESK, so no path is on the command line.
+export const deskInitArgs = (config) => [join(config.pluginDir, "mcp", "scripts", "desk-init.js")];
+
+// What GitHub linking needs from the gateway. Linking changes the account's binding, so its cached account row,
+// its open sessions and its prepared realm (cloned from the old repository, with the old authority pinned) are
+// dropped; the next session prepares a realm from the new binding. `initDesk` runs desk-init in that new realm as
+// the account's own UID and pushes the commit it makes. `relay()` returns the relay, built after these hooks.
+export function createLinkHooks({ config, parts, runtime, relay = () => null, log: write = log }) {
+  const reset = async (accountId) => {
+    parts.accounts.forget(accountId);
+    relay()?.closeAccount(accountId);
+    await runtime.release(accountId);
+  };
+  return {
+    async initDesk({ accountId }) {
+      await reset(accountId);
+      const prepared = await runtime.prepare(accountId);
+      const child = prepared.launch(deskInitArgs(config));
+      let stdout = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stdin?.end();
+      await once(child, "close");
+      const line = stdout.split("\n").map((text) => text.trim()).filter(Boolean).pop();
+      if (!line) throw new Error("desk-init printed no result");
+      const result = JSON.parse(line);
+      if (result?.status === "created") await prepared.push();
+      return result;
+    },
+    onLinked(accountId) {
+      reset(accountId).catch((error) => write(`relink: account ${accountId}'s previous realm could not be released (${error?.code ?? error?.name ?? "error"})`));
+    },
+  };
 }
 
 export const deskChildArgs = (config, realm) => [
@@ -408,6 +460,7 @@ export async function main(env = process.env, deps = {}) {
   for (const line of identityStartupLines(config)) log(line);
   let relay = null;
   let admin;
+  let githubLink = null;
   let push;
   let closeTokenSocket;
   // The Ouro tenant comes first, so a tenant naming another issuer stops the start before the clone.
@@ -422,12 +475,22 @@ export async function main(env = process.env, deps = {}) {
       mint: (repo, installationId) => installationToken({ appId: config.appId, privateKeyPem: readFileSync(config.appKeyFile, "utf8"), repo, installationId }),
     });
     if (config.appReady) {
-      relay = createRelay({
-        spawnDesk: async ({ auth }) => {
-          const prepared = await runtime.prepare(auth?.extra?.accountId);
-          return prepared.launch(deskChildArgs(config, prepared.realm));
-        },
+      const hooks = createLinkHooks({ config, parts, runtime, relay: () => relay });
+      githubLink = createGitHubLink({
+        keys: config.signingKeys,
+        store: parts.store,
+        sessions: parts.sessions,
+        issuer: config.issuer,
+        clientId: config.appClientId,
+        clientSecret: config.appClientSecret,
+        callbackUrl: config.githubCallbackUrl,
+        appId: config.appId,
+        privateKeyPem: readFileSync(config.appKeyFile, "utf8"),
+        initDesk: hooks.initDesk,
+        onLinked: hooks.onLinked,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
       });
+      relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink }) });
       push = () => runtime.close();
     }
     admin = createGatewayAdmin({ config, parts, relay, runtime, fetch: deps.fetch });
@@ -472,7 +535,7 @@ export async function main(env = process.env, deps = {}) {
     log(NOT_SET_UP);
   }
 
-  const { app } = buildGateway({ config, relay, parts, admin });
+  const { app } = buildGateway({ config, relay, parts, admin, githubLink });
   const server = app.listen(config.port);
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);

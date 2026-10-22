@@ -4,7 +4,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { buildGateway, createGatewayAdmin, readConfig, startIdentity } from "../src/main.js";
+import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { buildGateway, createGatewayAdmin, createLinkHooks, createSessionStart, deskChildArgs, deskInitArgs, readConfig, startIdentity } from "../src/main.js";
 import { createMemoryStore } from "../src/accounts/memory-store.js";
 import { seed } from "../src/accounts/invites.js";
 import { stubTenant, ISSUER, TENANT_ID, SUBDOMAIN, CLIENT_ID, CLIENT_SECRET } from "./fixtures/stub-tenant.mjs";
@@ -83,4 +85,70 @@ test("the gateway's admin forgets a deleted account in the account cache, ends i
   assert.deepEqual(forgotten, [target], "the account cache forgets the deleted account");
   assert.deepEqual(closed, [target], "the deleted account's sessions end");
   assert.deepEqual(deleted, [target], "the deleted account's realm is purged");
+});
+
+const CONFIG = { pluginDir: "/app/plugins/desk" };
+const AUTH = { extra: { accountId: "acct-1" } };
+
+test("session start refuses a suspended or unconfirmed GitHub link before preparing the realm", async () => {
+  const prepared = [];
+  const runtime = { prepare: async (id) => { prepared.push(id); return { realm: {}, launch: (args) => ({ args }) }; } };
+  const suspended = createSessionStart({ config: CONFIG, runtime, githubLink: { sessionRefusal: async () => "Your GitHub desk link is suspended." } });
+  await assert.rejects(suspended({ auth: AUTH }), (error) => error.code === "DESK_SESSION_REFUSED" && /suspended/.test(error.message));
+  assert.deepEqual(prepared, [], "no realm is prepared for a refused session");
+  const checked = [];
+  const ok = createSessionStart({ config: CONFIG, runtime, githubLink: { sessionRefusal: async (id) => { checked.push(id); return null; } } });
+  assert.deepEqual(await ok({ auth: AUTH }), { args: deskChildArgs(CONFIG, {}) });
+  assert.deepEqual(checked, ["acct-1"]);
+  assert.deepEqual(prepared, ["acct-1"]);
+});
+
+// A launched child that prints `stdout` and exits.
+function childPrinting(stdout) {
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stdin: new PassThrough() });
+  setImmediate(() => {
+    child.stdout.end(stdout);
+    child.emit("close", 0);
+  });
+  return child;
+}
+
+function linkFixture({ stdout = '{"status":"created"}\n' } = {}) {
+  const events = [];
+  const parts = { accounts: { forget: (id) => events.push(`forget ${id}`) } };
+  const relay = { closeAccount: (id) => events.push(`close ${id}`) };
+  const runtime = {
+    release: async (id) => { events.push(`release ${id}`); },
+    prepare: async (id) => {
+      events.push(`prepare ${id}`);
+      return {
+        launch: (args) => { events.push(["launch", args]); return childPrinting(stdout); },
+        push: async () => { events.push("push"); },
+      };
+    },
+  };
+  const hooks = createLinkHooks({ config: CONFIG, parts, runtime, relay: () => relay, log: (line) => events.push(line) });
+  return { hooks, events };
+}
+
+test("relinking drops the account's cached row, sessions and prepared realm", async () => {
+  const { hooks, events } = linkFixture();
+  hooks.onLinked("acct-1");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["forget acct-1", "close acct-1", "release acct-1"]);
+});
+
+test("initDesk runs desk-init in a fresh realm from the new binding, with no path on its command line, and pushes what it made", async () => {
+  const { hooks, events } = linkFixture();
+  assert.deepEqual(await hooks.initDesk({ accountId: "acct-1" }), { status: "created" });
+  assert.deepEqual(events, ["forget acct-1", "close acct-1", "release acct-1", "prepare acct-1", ["launch", deskInitArgs(CONFIG)], "push"]);
+  assert.deepEqual(deskInitArgs(CONFIG), ["/app/plugins/desk/mcp/scripts/desk-init.js"]);
+});
+
+test("initDesk returns desk-init's refusal for an existing desk without pushing, and fails when desk-init prints nothing", async () => {
+  const existing = linkFixture({ stdout: '{"status":"refused","reason":"already_a_desk"}\n' });
+  assert.deepEqual(await existing.hooks.initDesk({ accountId: "acct-1" }), { status: "refused", reason: "already_a_desk" });
+  assert.ok(!existing.events.includes("push"));
+  const silent = linkFixture({ stdout: "" });
+  await assert.rejects(silent.hooks.initDesk({ accountId: "acct-1" }), /no result/);
 });
