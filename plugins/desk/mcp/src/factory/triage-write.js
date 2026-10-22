@@ -24,8 +24,9 @@
 //   - It never resets, rebases, stashes or writes the live checkout, index or branch; the normal Desk sync later pulls the commit.
 //     The temporary worktree and branch are removed after each attempt (after the readback that acknowledges the commit on the
 //     remote main, or on a hold) when the worktree is still exactly clean, or is an unfinished `git worktree add` that Git still
-//     holds locked "initializing"; otherwise they are retained and reported (a file a hook left is never deleted), and block new
-//     resources with a stable alarm until they are recovered. Only this writer's own records are ever removed.
+//     holds locked "initializing" and whose recorded Git process has ended; otherwise they are retained and reported (a file a
+//     hook left is never deleted), and block new resources with a stable alarm until they are recovered. Only this writer's own
+//     records are ever removed.
 
 import { spawn as spawnDefault, spawnSync } from "node:child_process"
 import { constants, promises as fs, realpathSync } from "node:fs"
@@ -96,7 +97,7 @@ function killProcessTree(pid, platform) {
 
 // One bounded Git call in its own process group. A time-out kills the whole group, so a hook that hangs, or a process it left
 // behind, does not outlive the call. Resolves `{status, stdout, stderr, timedOut}`; a spawn failure is status null.
-function runGit(ctx, cwd, args, env = ctx.childEnv, outputLimit = Infinity) {
+function runGit(ctx, cwd, args, env = ctx.childEnv, outputLimit = Infinity, onSpawn = undefined) {
   return new Promise((resolve) => {
     const posix = ctx.platform !== "win32"
     let child
@@ -109,6 +110,7 @@ function runGit(ctx, cwd, args, env = ctx.childEnv, outputLimit = Infinity) {
       resolve({ status: null, stdout: Buffer.alloc(0), stderr: "", timedOut: false })
       return
     }
+    onSpawn?.(child.pid)
     const out = []
     let stderr = ""
     let timedOut = false
@@ -342,13 +344,29 @@ async function unfinishedAdd(record) {
   }
 }
 
-// Removes the worktree and its branch only when it holds nothing but its own files, or is an unfinished add: a file a hook left
-// there is never deleted. Returns whether everything was removed; otherwise the record stays, marked retained, and reported.
+// Whether the `git worktree add` this record started may still be running: a writer that died mid-add leaves that Git process (in
+// its own process group) checking out. True while its group or process is alive, and when no process was recorded, since then
+// nothing says it ended. A pid the system reused also reads as alive, which keeps the worktree: the safe side.
+function addMayBeRunning(record) {
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return error.code === "EPERM"
+    }
+  }
+  return !Number.isInteger(record.addPid) || alive(-record.addPid) || alive(record.addPid)
+}
+
+// Removes the worktree and its branch only when it holds nothing but its own files, or is an unfinished add whose Git process has
+// ended: a file a hook left there is never deleted. Returns whether everything was removed; otherwise the record stays, marked
+// retained, and reported.
 async function release(ctx, record, resource) {
   const exists = await settles(fs.lstat(record.path))
   if (exists) {
     const removed = (await unfinishedAdd(record))
-      ? (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", "--force", record.path])).status === 0
+      ? !addMayBeRunning(record) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", "--force", record.path])).status === 0
       : (await onlyOwnChanges(ctx, record)) && (await runGit(ctx, ctx.deskRoot, ["worktree", "remove", "--force", record.path])).status === 0
     if (!removed) {
       resource.disposition = "retained"
@@ -406,7 +424,15 @@ async function candidate(ctx, base, files, resources) {
     await release(ctx, record, resource)
     return { hold: state }
   }
-  if ((await runGit(ctx, ctx.deskRoot, ["worktree", "add", "-q", "-b", record.ref, record.path, base])).status !== 0) return hold("write_failed")
+  // The add's process is recorded as soon as it starts, so a later call can tell whether a worktree this one leaves is still being
+  // checked out.
+  let recorded = Promise.resolve()
+  const added = await runGit(ctx, ctx.deskRoot, ["worktree", "add", "-q", "-b", record.ref, record.path, base], ctx.childEnv, Infinity, (pid) => {
+    record.addPid = pid
+    recorded = saveRecord(ctx, record)
+  })
+  await recorded
+  if (added.status !== 0) return hold("write_failed")
   for (const file of files) {
     let cursor = record.path
     for (const segment of path.posix.dirname(file.path).split("/")) {

@@ -173,7 +173,8 @@ async function writeFiles(checked) {
  * before a byte is written.
  *
  * Stages exactly `paths` (`git add -A -- <paths>`, never repo-wide) and commits them with `message`, `git commit -- <paths>`,
- * never `-a`. A deletion or rename already staged at a listed path (`git rm`, `git mv`) is committed too. When none of `paths`
+ * never `-a`. A deletion or rename already staged at a listed path (`git rm`, `git mv`) is committed too; a staged rename with only
+ * one of its two paths listed is refused (throws), naming the other path to add. When none of `paths`
  * holds an unstaged change, an untracked file or a staged change — a path that was never actually written — desk_save
  * reports `nothing_to_commit` without staging or committing anything, so a
  * caller's typo or stale path never becomes an empty commit. A stage or
@@ -243,6 +244,18 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
     const staged = stagePaths(deskRoot, unstaged, spawnGit, undefined, { all: true })
     if (!staged.ok) {
       return { status: "nothing_to_commit", commit: { status: "failed", reason: staged.stderr } }
+    }
+  }
+  // A staged move committed by one side only keeps both files (the new path listed) or deletes the file on the remote while its
+  // content stays staged here (the old path listed), so both paths must be listed, as a tidy requires.
+  const everything = stagedChanges(deskRoot, [], spawnGit)
+  if (everything === null) return { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } }
+  const listed = paths.map((p) => path.relative(deskRoot, path.resolve(deskRoot, p)).split(path.sep).join("/"))
+  const covered = (p) => listed.some((rel) => rel === "" || p === rel || p.startsWith(`${rel}/`))
+  for (const change of everything) {
+    const missing = change.paths.filter((p) => !covered(p))
+    if (change.paths.length === 2 && missing.length === 1) {
+      throw new Error(`desk_save: add ${missing[0]} to \`paths\`: a move is committed with both its old and its new path`)
     }
   }
   const committed = commitPaths(deskRoot, paths, message, spawnGit)

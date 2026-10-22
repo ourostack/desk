@@ -213,6 +213,61 @@ test("desk_save commits a staged deletion and a staged rename at listed paths", 
   assert.deepEqual(lastCommitFiles(root), ["edited.md"])
 })
 
+// A staged rename committed by one side only either keeps both files (new name listed) or deletes the file on the remote while
+// its content stays behind, staged and unpushed (old name listed). Like a tidy, desk_save refuses and names the other side.
+for (const [listed, missing] of [["new.md", "old.md"], ["old.md", "new.md"]]) {
+  test(`desk_save refuses a staged rename when only ${listed} is listed, and names ${missing}`, async () => {
+    const root = await mkTempDeskRoot()
+    initGit(root)
+    await fs.writeFile(path.join(root, "old.md"), "content\n", "utf8")
+    spawnSync("git", ["-C", root, "add", "--", "old.md"], { encoding: "utf8" })
+    spawnSync("git", ["-C", root, "commit", "-q", "-m", "seed"], { encoding: "utf8" })
+    spawnSync("git", ["-C", root, "mv", "old.md", "new.md"], { encoding: "utf8" })
+
+    await assert.rejects(
+      desk_save({ deskRoot: root, input: { paths: [listed], message: "half a move" }, schedulePush: () => { throw new Error("must not push") } }),
+      new RegExp(`add ${missing.replace(".", "\\.")} to \`paths\`: a move is committed with both its old and its new path`, "u"),
+    )
+    assert.equal(commitCount(root), 1, "nothing was committed")
+    assert.equal(gitStatus(root), "R  old.md -> new.md\n", "the staged move is left as it was")
+  })
+}
+
+test("desk_save commits a staged rename listed by both paths, inside a listed folder", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.mkdir(path.join(root, "notes"), { recursive: true })
+  await fs.writeFile(path.join(root, "notes", "old.md"), "content\n", "utf8")
+  spawnSync("git", ["-C", root, "add", "--", "notes"], { encoding: "utf8" })
+  spawnSync("git", ["-C", root, "commit", "-q", "-m", "seed"], { encoding: "utf8" })
+  spawnSync("git", ["-C", root, "mv", "notes/old.md", "notes/new.md"], { encoding: "utf8" })
+
+  const both = await desk_save({ deskRoot: root, input: { paths: ["notes/old.md", "./notes/new.md"], message: "rename" }, schedulePush: () => {} })
+  assert.equal(both.status, "committed", JSON.stringify(both))
+  assert.equal(gitStatus(root), "")
+
+  spawnSync("git", ["-C", root, "mv", "notes/new.md", "notes/newer.md"], { encoding: "utf8" })
+  const folder = await desk_save({ deskRoot: root, input: { paths: ["notes/"], message: "rename again" }, schedulePush: () => {} })
+  assert.equal(folder.status, "committed", JSON.stringify(folder))
+  assert.equal(gitStatus(root), "")
+
+  spawnSync("git", ["-C", root, "mv", "notes/newer.md", "notes/newest.md"], { encoding: "utf8" })
+  const whole = await desk_save({ deskRoot: root, input: { paths: ["."], message: "rename once more" }, schedulePush: () => {} })
+  assert.equal(whole.status, "committed", JSON.stringify(whole))
+  assert.equal(gitStatus(root), "")
+  assert.equal(commitCount(root), 4)
+})
+
+test("desk_save reports a failure when git cannot list the staged changes before committing", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, "notes.md"), "notes\n", "utf8")
+  const spawnGit = (cmd, args, opts) => (args.includes("-M") ? { status: 1, stdout: "", stderr: "diff boom" } : spawnSync(cmd, args, opts))
+  const result = await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save" }, spawnGit, schedulePush: () => {} })
+  assert.deepEqual(result, { status: "nothing_to_commit", commit: { status: "failed", reason: "git could not list the staged changes" } })
+  assert.equal(commitCount(root), 0)
+})
+
 test("desk_save reports nothing_to_commit when nothing is unstaged at the paths and git cannot list what is staged", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

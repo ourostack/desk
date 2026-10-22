@@ -1116,6 +1116,49 @@ test("triage removes its own half-made worktree and branch when creating the wor
   assert.equal(next.state, "acknowledged", "the next call is not blocked by a leftover")
 })
 
+// A writer that dies during `git worktree add` leaves that Git process running in its own process group, still checking out. The
+// next writer must not remove the worktree under it: it keeps the worktree while the recorded process is alive, or when no process
+// was recorded, and removes it once that process has ended.
+test("triage keeps an interrupted worktree while the git process creating it still runs", { skip: !posix }, async (t) => {
+  const w = await world()
+  const a = w.clone("a")
+  const first = await publish(a)
+  assert.equal(first.state, "acknowledged")
+  const ops = path.dirname(path.dirname(first.resources.find((r) => r.kind === "worktree").path))
+  // Leaves a worktree exactly as an interrupted add does, with the operation record a dead writer left.
+  const interrupted = async (extra) => {
+    const token = hex(16)
+    const record = { schema: "desk.factory.triage-operation/1", token, path: path.join(ops, token, "wt"), ref: `desk-triage/${token}`, owner: 1, files: [paths.registry, paths.annotation], disposition: "active", ...extra }
+    git(a.deskRoot, ["worktree", "add", "-q", "--no-checkout", "--lock", "--reason", "initializing", "-b", record.ref, record.path, "HEAD"])
+    await fs.writeFile(path.join(ops, `${token}.json`), `${JSON.stringify(record)}\n`, { mode: 0o600 })
+    return record
+  }
+  const checkout = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { detached: true, stdio: "ignore" })
+  t.after(() => { try { process.kill(-checkout.pid, "SIGKILL") } catch {} })
+  const running = await interrupted({ addPid: checkout.pid })
+
+  const blocked = await publish(a, { review: { ...AGENT, protected_result: hex(16) } })
+  assert.equal(blocked.state, "busy", JSON.stringify(blocked))
+  assert.equal(blocked.alarm, RESOURCE_ALARM)
+  assert.equal(blocked.resources[0].disposition, "retained")
+  assert.ok(worktreesAndTriageBranches(a.deskRoot).branches.includes(running.ref), "kept while its git process runs")
+
+  const ended = new Promise((resolve) => checkout.on("exit", resolve))
+  process.kill(-checkout.pid, "SIGKILL")
+  await ended
+  const next = await publish(a, { review: { ...AGENT, protected_result: hex(16) } })
+  assert.equal(next.state, "acknowledged", JSON.stringify(next))
+  assert.equal(next.resources[0].disposition, "removed", "removed once that process ended")
+  assert.deepEqual(worktreesAndTriageBranches(a.deskRoot), { worktrees: [realpathSync(a.deskRoot)], branches: [] })
+
+  // No recorded process: Desk cannot tell, so it keeps the worktree and reports it.
+  const unknown = await interrupted({})
+  const unsure = await publish(a, { review: { ...HUMAN, protected_result: hex(16) } })
+  assert.equal(unsure.state, "busy")
+  assert.equal(unsure.resources[0].disposition, "retained")
+  assert.ok(worktreesAndTriageBranches(a.deskRoot).branches.includes(unknown.ref))
+})
+
 // A worktree locked for any other reason, or one a hook wrote into, is still kept: only an unfinished `worktree add` is removed.
 test("triage keeps its own worktree when it is locked for another reason", async () => {
   const w = await world()
