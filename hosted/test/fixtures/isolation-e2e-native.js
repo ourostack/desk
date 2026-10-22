@@ -45,6 +45,9 @@ if (mode === "kernel") {
     realmsParent: attempt(() => fs.readdirSync(target.parent)),
     neighborWrite: attempt(() => fs.writeFileSync(target.desk + "/_shared/probe.md", "x")),
   }));
+} else if (mode === "card") {
+  // The card A created, read back as A: its repos must carry no local_only mark.
+  console.log(JSON.stringify({ text: fs.readFileSync(process.env.DESK + "/neighbor-probe/" + process.argv[3] + "/task.md", "utf8") }));
 } else if (mode === "git-calls") {
   const log = process.env.XDG_STATE_HOME + "/git-calls.jsonl";
   console.log(JSON.stringify(fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse) : []));
@@ -69,8 +72,8 @@ async function inRealm(desk, args, input = "") {
   const [code] = await closed;
   return { code, stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString() };
 }
-const probeIn = async (desk, mode) => {
-  const result = await inRealm(desk, [PROBE, mode]);
+const probeIn = async (desk, mode, ...args) => {
+  const result = await inRealm(desk, [PROBE, mode, ...args]);
   assert.equal(result.code, 0, result.stderr);
   return JSON.parse(result.stdout);
 };
@@ -245,7 +248,9 @@ export async function runIsolationCases({ config, store, binding, root }) {
   for (const [slug, repos] of cards) {
     const created = await session.call("task_create", { track: "neighbor-probe", slug, title: "Reach a clone outside the desk", status: "processing", repos });
     assert.equal(created.isError, false, created.text);
-    assert.doesNotMatch(created.text, /local_only/, `task_create recorded a clone outside the desk as local-only: ${created.text}`);
+    const card = (await probeIn(a, "card", slug)).text;
+    assert.match(card, /local_path:/, "the card records its repos");
+    assert.doesNotMatch(card, /local_only/, `task_create recorded a clone outside the desk as local-only: ${card}`);
     const done = await session.call("task_update", { track: "neighbor-probe", slug, status: "done", evidence: { kind: "commit", ref: bBefore.head } });
     assert.equal(done.isError, true, `commit evidence from a clone outside the desk must be refused: ${done.text}`);
     assert.match(done.text, /Desk Git context refused/, "the hosted Git guard refuses before any spawn");
@@ -269,8 +274,11 @@ export async function runIsolationCases({ config, store, binding, root }) {
       if (!answer.request.includes(secret)) assert.ok(!answer.text.includes(secret), `${answer.name} named B (${secret}) unprompted: ${answer.text}`);
     }
     assert.ok(!answer.text.includes("second marker"), `${answer.name} showed B's content`);
-    if (answer.isError && !answer.request.includes("/data/")) {
-      assert.doesNotMatch(answer.text, /\/data\//, `${answer.name} error names an absolute path: ${answer.text}`);
+    if (answer.isError) {
+      for (const [match] of answer.text.matchAll(/\/data\/[^\s'"`\\]*/g)) {
+        const absolute = match.replace(/[:.,;)]+$/, "");
+        assert.ok(answer.request.includes(absolute), `${answer.name} error names an absolute path A did not give: ${absolute}`);
+      }
     }
   }
   cases.errors = { answers: answers.length, errors: answers.filter(answer => answer.isError).length };
