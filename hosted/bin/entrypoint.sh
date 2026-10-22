@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+# The gateway runs as node (uid 1000) in both modes, so its HOME and USER are
+# node's: Desk children on a single-desk gateway inherit them and keep their
+# state under that home. Each multi-user realm sets its own.
+export HOME=/home/node USER=node
 case "${DESK_MULTI_USER-0}" in
   1)
     exec /usr/bin/setpriv --bounding-set=-all,+chown,+setgid,+setuid \
