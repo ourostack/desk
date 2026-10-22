@@ -501,6 +501,8 @@ contract("interaction-style maps host commands to their Desk owners", () => {
   for (const row of ["store_memory", "/plan", "/tasks", "/review", "/autopilot", "/init"]) assert.ok(body.includes(row), row);
   assert.match(body, /desk:using-superpowers-with-desk/u);
   assert.match(body, /superpowers:requesting-code-review/u);
+  assert.match(body, /`~\/\.copilot\/session-state\/<id>\/`[^\n]+\| the repository for code and docs; the desk for private work product\./u);
+  assert.match(body, /a new dot folder \(`~\/\.<name>`\)[^\n]+\| the operating system's standard app-data folder/u);
 });
 requires(
   "plugins/desk/skills/interaction-style/SKILL.md",
