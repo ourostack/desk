@@ -4,7 +4,9 @@
 // - the gateway app (ouro-desk-hosted) exposes the delegated scope `desk.admin` at api://<appId> and defines the app
 //   role `ouro.admin` for users, with v2 access tokens (src/admin.js requires `scp` and the role);
 // - the ouro CLI's public client (ouro-cli) requests that scope on the loopback redirect and is preauthorized for it,
-//   so signing in shows no consent page, and the tenant's user flow signs its users in;
+//   so signing in shows no consent page, and the tenant's user flow signs its users in. An external tenant's users
+//   can't consent to anything themselves, so the CLI asks for `desk.admin` alone, never openid or offline_access;
+//   it is not a fallback public client, so device-code and password flows stay off for an admin token;
 // - exactly the record's `adminApi.admins` (user object ids) hold `ouro.admin`.
 //
 // The scope is a "User" scope on purpose: it lets a client ask for a token to the admin routes, and the routes refuse
@@ -24,7 +26,9 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PASSES = 20;
 const LAG_MS = 5_000;
 // What Graph answers while a new app, service principal or role isn't visible everywhere yet.
-const LAG = /Request_ResourceNotFound|does not exist|was not found|HTTP 404|\(404\)/i;
+const LAG = /Request_ResourceNotFound|does not exist|was not found|does not reference a valid application|HTTP 404|\(404\)/i;
+// A create Graph had already applied before a lagging read missed it.
+const DONE = /already exists|ObjectConflict|conflicting object|HTTP 409|\(409\)/i;
 
 const SCOPE = {
   id: ADMIN_SCOPE_ID,
@@ -47,6 +51,13 @@ const ROLE = {
 
 const quote = (value) => encodeURIComponent(value.replace(/'/g, "''"));
 const get = (graph, path) => graph.call("GET", `${GRAPH}${path}`);
+// Every page of a Graph collection.
+async function getAll(graph, path) {
+  const values = [];
+  for (let page = await get(graph, path); page; page = page["@odata.nextLink"] ? await graph.call("GET", page["@odata.nextLink"]) : null) values.push(...(page.value ?? []));
+  return values;
+}
+const isNotFound = (error) => /Request_ResourceNotFound|HTTP 404|\(404\)/i.test(`${error?.message ?? ""}`);
 
 function adminsOf(record) {
   const admins = record.adminApi?.admins;
@@ -61,12 +72,26 @@ async function readState(graph, record) {
   const gatewaySp = record.gatewayApp?.servicePrincipalId;
   if (!gatewayObject || !gatewaySp || !record.userFlow?.id) throw new Error(`identity-${record.env}.json has no gateway app or user flow yet; run provision-identity.mjs --env ${record.env} first.`);
   const gateway = await get(graph, `applications/${gatewayObject}?$select=id,appId,identifierUris,api,appRoles`);
-  const clis = (await get(graph, `applications?$filter=displayName%20eq%20'${quote(CLI_APP_NAME)}'&$select=id,appId,displayName,signInAudience,isFallbackPublicClient,publicClient,requiredResourceAccess`))?.value ?? [];
-  if (clis.length > 1) throw new Error(`There are ${clis.length} app registrations named ${CLI_APP_NAME}; keep one, delete the others, and run this again.`);
-  const cli = clis[0] ?? null;
-  const cliSp = cli ? ((await get(graph, `servicePrincipals?$filter=appId%20eq%20'${cli.appId}'&$select=id,appId`))?.value ?? [])[0] ?? null : null;
-  const assignments = ((await get(graph, `servicePrincipals/${gatewaySp}/appRoleAssignedTo`))?.value ?? []).filter(({ appRoleId }) => appRoleId === ADMIN_ROLE_ID);
-  const flowApps = ((await get(graph, `identity/authenticationEventsFlows/${record.userFlow.id}/conditions/applications/includeApplications`))?.value ?? []).map(({ appId }) => appId);
+  const cliFields = "id,appId,displayName,signInAudience,isFallbackPublicClient,publicClient,requiredResourceAccess";
+  let cli;
+  const recorded = record.cliApp?.objectId;
+  if (recorded) {
+    // Once recorded, the client is read by its object id: a renamed one is still found, and another app given its
+    // name is never adopted and preauthorized.
+    try {
+      cli = await get(graph, `applications/${recorded}?$select=${cliFields}`);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      throw new Error(`identity-${record.env}.json names ${CLI_APP_NAME} ${recorded}, which no longer exists; check the tenant, remove cliApp from the record, and run this again.`);
+    }
+  } else {
+    const clis = await getAll(graph, `applications?$filter=displayName%20eq%20'${quote(CLI_APP_NAME)}'&$select=${cliFields}`);
+    if (clis.length > 1) throw new Error(`There are ${clis.length} app registrations named ${CLI_APP_NAME}; keep one, delete the others, and run this again.`);
+    cli = clis[0] ?? null;
+  }
+  const cliSp = cli ? (await getAll(graph, `servicePrincipals?$filter=appId%20eq%20'${cli.appId}'&$select=id,appId`))[0] ?? null : null;
+  const assignments = (await getAll(graph, `servicePrincipals/${gatewaySp}/appRoleAssignedTo`)).filter(({ appRoleId }) => appRoleId === ADMIN_ROLE_ID);
+  const flowApps = (await getAll(graph, `identity/authenticationEventsFlows/${record.userFlow.id}/conditions/applications/includeApplications`)).map(({ appId }) => appId);
   return { gateway, gatewaySp, cli, cliSp, assignments, flowApps };
 }
 
@@ -101,7 +126,7 @@ function plan(state, record) {
 
   const cliTarget = {
     signInAudience: "AzureADMyOrg",
-    isFallbackPublicClient: true,
+    isFallbackPublicClient: false,
     publicClient: { redirectUris: [CLI_REDIRECT] },
     requiredResourceAccess: [{ resourceAppId: gateway.appId, resourceAccess: [{ id: ADMIN_SCOPE_ID, type: "Scope" }] }],
   };
@@ -115,28 +140,30 @@ function plan(state, record) {
   if (!cliAppId) {
     deferred.push(`${CLI_APP_NAME} service principal, preauthorization and user flow`);
   } else {
-    if (!cliSp) steps.push(write(`${CLI_APP_NAME} service principal`, "POST", "servicePrincipals", { appId: cliAppId }));
+    if (!cliSp) steps.push(write(`${CLI_APP_NAME} service principal`, "POST", "servicePrincipals", { appId: cliAppId }, { lag: true, create: true }));
     const preauthorized = api.preAuthorizedApplications ?? [];
     const own = preauthorized.find(({ appId }) => appId === cliAppId);
     if (!own || !sameJson(own.delegatedPermissionIds, [ADMIN_SCOPE_ID])) {
       // Graph checks a preauthorization against the scopes it has stored, so the scope lands in an earlier write.
       if (change.api) deferred.push(`${CLI_APP_NAME} preauthorization`);
-      else steps.push(write(`gateway app preauthorizes ${CLI_APP_NAME}`, "PATCH", `applications/${gateway.id}`, { api: { preAuthorizedApplications: [...preauthorized.filter(({ appId }) => appId !== cliAppId), { appId: cliAppId, delegatedPermissionIds: [ADMIN_SCOPE_ID] }] } }));
+      else steps.push(write(`gateway app preauthorizes ${CLI_APP_NAME}`, "PATCH", `applications/${gateway.id}`, { api: { preAuthorizedApplications: [...preauthorized.filter(({ appId }) => appId !== cliAppId), { appId: cliAppId, delegatedPermissionIds: [ADMIN_SCOPE_ID] }] } }, { lag: true }));
     }
     if (!flowApps.includes(cliAppId)) {
-      steps.push(write(`user flow: ${CLI_APP_NAME}`, "POST", `identity/authenticationEventsFlows/${record.userFlow.id}/conditions/applications/includeApplications`, { "@odata.type": "#microsoft.graph.authenticationConditionApplication", appId: cliAppId }));
+      steps.push(write(`user flow: ${CLI_APP_NAME}`, "POST", `identity/authenticationEventsFlows/${record.userFlow.id}/conditions/applications/includeApplications`, { "@odata.type": "#microsoft.graph.authenticationConditionApplication", appId: cliAppId }, { lag: true, create: true }));
     }
   }
 
-  // Exactly the record's admins hold the role.
+  // Exactly the record's admins hold the role. Nobody loses it until every listed admin holds it, so a mistyped id
+  // can never leave the tenant without an admin. Graph's "does not exist" is lag only while the role itself is new.
   const held = new Set(assignments.map(({ principalId }) => principalId.toLowerCase()));
-  for (const principalId of admins.filter((id) => !held.has(id))) {
-    steps.push(write(`${ADMIN_ROLE} for ${principalId}`, "POST", `servicePrincipals/${gatewaySp}/appRoleAssignedTo`, { principalId, resourceId: gatewaySp, appRoleId: ADMIN_ROLE_ID }, { lag: true }));
+  const missing = admins.filter((id) => !held.has(id));
+  for (const principalId of missing) {
+    steps.push(write(`${ADMIN_ROLE} for ${principalId}`, "POST", `servicePrincipals/${gatewaySp}/appRoleAssignedTo`, { principalId, resourceId: gatewaySp, appRoleId: ADMIN_ROLE_ID }, { lag: "role", create: true }));
   }
-  for (const assignment of assignments.filter(({ principalId }) => !admins.includes(principalId.toLowerCase()))) {
-    steps.push(write(`${ADMIN_ROLE} removed from ${assignment.principalId}`, "DELETE", `servicePrincipals/${gatewaySp}/appRoleAssignedTo/${assignment.id}`));
-  }
-  return { steps, deferred };
+  const stale = assignments.filter(({ principalId }) => !admins.includes(principalId.toLowerCase()));
+  if (missing.length && stale.length) deferred.push(`${ADMIN_ROLE} removed from ${stale.length} principal(s), once every listed admin holds it`);
+  else for (const assignment of stale) steps.push(write(`${ADMIN_ROLE} removed from ${assignment.principalId}`, "DELETE", `servicePrincipals/${gatewaySp}/appRoleAssignedTo/${assignment.id}`));
+  return { steps, deferred, roleChanged: Boolean(change.appRoles) };
 }
 
 // Reconciles the admin API and returns the record's new `cliApp` and `adminApi` fields. In a dry run, prints the
@@ -144,6 +171,8 @@ function plan(state, record) {
 export async function reconcileAdminApi({ graph, record, log, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), dryRun = false }) {
   adminsOf(record);
   let created = null;
+  // Set once this run has written the role: until then an assignment's "does not exist" names a wrong principal.
+  let roleIsNew = false;
   for (let pass = 0; pass < PASSES; pass += 1) {
     const state = await readState(graph, record);
     // A client this run created that Graph doesn't list yet is waited for, never created again.
@@ -151,7 +180,7 @@ export async function reconcileAdminApi({ graph, record, log, sleep = (ms) => ne
       await sleep(LAG_MS);
       continue;
     }
-    const { steps, deferred } = plan(state, record);
+    const { steps, deferred, roleChanged } = plan(state, record);
     if (!steps.length && !deferred.length) {
       log("admin API: everything is in place.");
       return {
@@ -165,18 +194,27 @@ export async function reconcileAdminApi({ graph, record, log, sleep = (ms) => ne
       log("Dry run: nothing was changed.");
       return null;
     }
+    if (roleChanged) roleIsNew = true;
+    let lagged = false;
     for (const step of steps) {
       log(`==> ${step.name}`);
       try {
         const answer = await graph.call(step.method, `${GRAPH}${step.path}`, step.body === undefined ? undefined : JSON.stringify(step.body));
         if (step.creates === "cli") created = answer;
       } catch (error) {
-        // A role or principal created moments ago may be unknown to the replica that takes the assignment.
-        if (!step.lag || !LAG.test(`${error?.message ?? ""}`)) throw error;
-        log("    Graph doesn't show the new role or principal yet; trying again on the next pass.");
-        await sleep(LAG_MS);
+        const message = `${error?.message ?? ""}`;
+        if (step.create && DONE.test(message)) {
+          log("    already done.");
+          continue;
+        }
+        // Something created moments ago may be unknown to the replica that takes the write.
+        const lagging = step.lag === "role" ? roleIsNew : Boolean(step.lag);
+        if (!lagging || !LAG.test(message)) throw error;
+        log("    Graph doesn't show what this needs yet; trying again on the next pass.");
+        lagged = true;
       }
     }
+    if (lagged) await sleep(LAG_MS);
   }
   throw new Error(`The admin API did not settle after ${PASSES} passes; run this again in a few minutes.`);
 }

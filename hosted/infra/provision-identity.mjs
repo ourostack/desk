@@ -37,8 +37,7 @@
 //   ... --admin-api [--dry-run]
 //       reconciles only the admin API (admin-api.mjs): the gateway app's desk.admin scope and ouro.admin role, the
 //       ouro-cli public client, and the role for exactly the record's adminApi.admins. It signs in as the
-//       ouro-identity-admin app from the keychain, so az needn't be signed in to the tenant. A full run does the
-//       same at its end once the record names adminApi.admins.
+//       ouro-identity-admin app from the keychain, so az needn't be signed in to the tenant. Run it after a full run.
 //
 // Secrets move only inside this process: read with `--query value -o tsv`,
 // trimmed of az's one trailing newline, and written through a child's stdin or
@@ -889,16 +888,13 @@ async function reconcile(ctx) {
   throw new Error("The reconcile did not settle after 30 passes.");
 }
 
-// The admin API through the admin app: the full run's graph when it has one, else the keychain's secret.
+// The admin API, as the admin app from the keychain.
 async function adminApi(ctx) {
   const { record } = ctx;
   if (!record.tenant?.id || !record.adminApp?.appId) throw new Error(`identity-${ctx.env}.json names no tenant or ${ADMIN_APP_NAME} app yet; run provision-identity.mjs --env ${ctx.env} first.`);
-  let graph = ctx.adminGraph;
-  if (!graph) {
-    const secret = await readAdminSecret({ runner: ctx.runner, tenantId: record.tenant.id, appId: record.adminApp.appId });
-    if (!secret) throw new Error(`The keychain has no ${ADMIN_APP_NAME} secret (${adminKeychainService(record.tenant.id)}); run provision-identity.mjs --env ${ctx.env} to make one.`);
-    graph = createAdminGraph({ tenantId: record.tenant.id, appId: record.adminApp.appId, secret, fetch: ctx.fetch, sleep: ctx.sleep });
-  }
+  const secret = await readAdminSecret({ runner: ctx.runner, tenantId: record.tenant.id, appId: record.adminApp.appId });
+  if (!secret) throw new Error(`The keychain has no ${ADMIN_APP_NAME} secret (${adminKeychainService(record.tenant.id)}); run provision-identity.mjs --env ${ctx.env} to make one.`);
+  const graph = createAdminGraph({ tenantId: record.tenant.id, appId: record.adminApp.appId, secret, fetch: ctx.fetch, sleep: ctx.sleep });
   const result = await reconcileAdminApi({ graph, record, log: ctx.log, sleep: ctx.sleep, dryRun: ctx.dryRun });
   if (result && !ctx.dryRun) {
     ctx.record = { ...ctx.record, ...result };
@@ -1399,7 +1395,6 @@ export async function run({
   if (flags.adminApi) return adminApi(ctx);
   try {
     await reconcile(ctx);
-    if (ctx.record.adminApi?.admins) await adminApi(ctx);
   } catch (error) {
     // Seeding needs only the accounts store, so a stop on a later step (Apple under outcome B) doesn't block it.
     if (flags.seedAri && error instanceof Stop && ctx.record.storage?.id) await seedAri(ctx);

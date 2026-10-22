@@ -371,7 +371,7 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 | `--migrate client-key` | Copies the signing key into the client key, checked by fingerprint. |
 | `--rotate signing-key` | Test only in v1b-1. Rotates the signing key with a 30-day overlap ([Rotate the signing key](#rotate-the-signing-key)). |
 | `--rotate signing-key --emergency` | For a leaked signing key, in production too: new signing and client keys, no previous key ([If the signing key leaks](#if-the-signing-key-leaks)). |
-| `--admin-api` | Reconciles only the [admin API](#admin-api), as the admin app from the keychain, so `az` needn't be signed in to the tenant. A full run does the same at its end once the record names `adminApi.admins`. |
+| `--admin-api` | Reconciles only the [admin API](#admin-api), as the admin app from the keychain, so `az` needn't be signed in to the tenant. Run it after a full run. |
 | `--rotate entra-secret` | Rotates the gateway's Entra client secret, deleting the old credential only once the gateway shows the new one ([Rotate the gateway's Entra client secret](#rotate-the-gateways-entra-client-secret)). |
 
 ### Admin API
@@ -379,8 +379,8 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 `ouro desk invite`, `access` and `delete-account` call the gateway's admin routes with a delegated access token for the scope `api://<gateway appId>/desk.admin`, and the routes refuse every token without the app role `ouro.admin`. `hosted/infra/admin-api.mjs` keeps this in place through the admin app's Graph token:
 
 - the gateway app's `desk.admin` scope (a user scope, because the role is what grants admin), its `ouro.admin` role for users, its identifier URI `api://<appId>` and v2 access tokens;
-- the CLI client `ouro-cli`, its service principal, its preauthorization for the scope and its place in the user flow;
-- the role for exactly the users listed in the record's `adminApi.admins` (Entra user object ids): a missing assignment is made, and an assignment for anyone else is removed.
+- the CLI client `ouro-cli`, its service principal, its preauthorization for the scope and its place in the user flow. An external tenant's users can't consent to anything, so the CLI asks for `desk.admin` alone, never `openid` or `offline_access`. It is not a fallback public client, so device-code and password sign-ins can't get an admin token. Once the record has `cliApp`, the client is read by its object id, so another app given its name is never adopted;
+- the role for exactly the users listed in the record's `adminApi.admins` (Entra user object ids): a missing assignment is made, and an assignment for anyone else is removed, but only once every listed admin holds the role, so a mistyped id never leaves the tenant without an admin.
 
 The scope and role ids are fixed in the script, the same in both tenants. A scope or role with the same name and another id stops the run before any write. After a run the record gains `cliApp` and the full `adminApi` (the scope URI and both ids), which the gateway and the CLI need. To make someone an admin, add their user object id to `adminApi.admins` in `identity-<env>.json` and run `node hosted/infra/provision-identity.mjs --env <env> --admin-api`.
 

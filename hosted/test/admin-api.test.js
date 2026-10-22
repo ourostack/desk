@@ -40,6 +40,9 @@ function directory() {
     flowApps: [GATEWAY_APP],
     writes: [],
     lag: {},
+    spLag: {},
+    flowLag: {},
+    users: [ARI, OTHER],
     next: 1,
   };
 }
@@ -81,19 +84,32 @@ function fakeFetch(dir) {
     }
     if (method === "GET" && path === "servicePrincipals") {
       const appId = /appId eq '([^']+)'/.exec(parsed.searchParams.get("$filter") ?? "")?.[1];
-      return answer(200, { value: dir.sps.filter((sp) => sp.appId === appId) });
+      return answer(200, { value: dir.sps.filter((sp) => sp.appId === appId && !(dir.spLag[sp.id] > 0 && dir.spLag[sp.id]--)) });
     }
     if (method === "POST" && path === "servicePrincipals") {
+      if (dir.spRefusals > 0) {
+        dir.spRefusals -= 1;
+        return answer(400, { error: { code: "Request_BadRequest", message: "The appId of the service principal does not reference a valid application object." } });
+      }
+      if (dir.sps.some((sp) => sp.appId === body.appId)) return answer(409, { error: { code: "Request_MultipleObjectsWithSameKeyValue", message: "conflicting object: a service principal with this appId already exists" } });
       const sp = { id: id(), appId: body.appId };
       dir.sps.push(sp);
+      dir.spLag[sp.id] = dir.spLagOnCreate ?? 0;
       return answer(201, sp);
     }
     if ((match = /^servicePrincipals\/([^/]+)\/appRoleAssignedTo$/.exec(path))) {
-      if (method === "GET") return answer(200, { value: dir.assignments.filter((a) => a.resourceId === match[1]) });
+      if (method === "GET") {
+        const all = dir.assignments.filter((a) => a.resourceId === match[1]);
+        const skip = Number(parsed.searchParams.get("$skiptoken") ?? 0);
+        const page = all.slice(skip, skip + (dir.pageSize ?? 100));
+        return answer(200, { value: page, ...(skip + page.length < all.length ? { "@odata.nextLink": `${GRAPH}${path}?$skiptoken=${skip + page.length}` } : {}) });
+      }
       if (dir.refuseAssign > 0) {
         dir.refuseAssign -= 1;
         return answer(400, { error: { code: "Request_BadRequest", message: "Permission being assigned was not found on application" } });
       }
+      if (!dir.users.includes(body.principalId)) return answer(404, { error: { code: "Request_ResourceNotFound", message: `Resource '${body.principalId}' does not exist or one of its queried reference-property objects are not present.` } });
+      if (dir.assignments.some((a) => a.principalId === body.principalId && a.appRoleId === body.appRoleId && a.resourceId === body.resourceId)) return answer(400, { error: { code: "Request_BadRequest", message: "Permission being assigned already exists on the object" } });
       const assignment = { id: id(), ...body };
       dir.assignments.push(assignment);
       return answer(201, assignment);
@@ -103,8 +119,10 @@ function fakeFetch(dir) {
       return answer(204);
     }
     if (path === `identity/authenticationEventsFlows/${FLOW}/conditions/applications/includeApplications`) {
-      if (method === "GET") return answer(200, { value: dir.flowApps.map((appId) => ({ appId })) });
+      if (method === "GET") return answer(200, { value: dir.flowApps.filter((appId) => !(dir.flowLag[appId] > 0 && dir.flowLag[appId]--)).map((appId) => ({ appId })) });
+      if (dir.flowApps.includes(body.appId)) return answer(409, { error: { code: "ObjectConflict", message: "The application already exists in the flow" } });
       dir.flowApps.push(body.appId);
+      dir.flowLag[body.appId] = dir.flowLagOnCreate ?? 0;
       return answer(201, body);
     }
     return answer(404, { error: { code: "Request_ResourceNotFound", message: `fake has no ${method} ${path}` } });
@@ -126,7 +144,7 @@ test("a tenant without the admin API gets the scope, the role, the CLI client an
   assert.deepEqual(gateway.api.oauth2PermissionScopes.map(({ id, value, type, isEnabled }) => ({ id, value, type, isEnabled })), [{ id: ADMIN_SCOPE_ID, value: ADMIN_SCOPE, type: "User", isEnabled: true }]);
   assert.deepEqual(gateway.appRoles.map(({ id, value, allowedMemberTypes, isEnabled }) => ({ id, value, allowedMemberTypes, isEnabled })), [{ id: ADMIN_ROLE_ID, value: ADMIN_ROLE, allowedMemberTypes: ["User"], isEnabled: true }]);
   const cli = dir.apps.find((app) => app.displayName === CLI_APP_NAME);
-  assert.equal(cli.isFallbackPublicClient, true);
+  assert.equal(cli.isFallbackPublicClient, false, "no device-code or password flow can get an admin token");
   assert.equal(cli.signInAudience, "AzureADMyOrg");
   assert.deepEqual(cli.publicClient.redirectUris, [CLI_REDIRECT]);
   assert.deepEqual(cli.requiredResourceAccess, [{ resourceAppId: GATEWAY_APP, resourceAccess: [{ id: ADMIN_SCOPE_ID, type: "Scope" }] }]);
@@ -245,4 +263,67 @@ test("a Graph error other than lag stops the run, and a run that never settles s
   const stuck = directory();
   stuck.refuseAssign = Infinity;
   await assert.rejects(go(stuck), /did not settle after 20 passes/);
+});
+
+test("a create that a lagging read misses is not an error: the service principal, the user flow link and the assignment", async () => {
+  const dir = directory();
+  dir.spLagOnCreate = 2;
+  dir.flowLagOnCreate = 2;
+  dir.spRefusals = 1;
+  const { logs } = await go(dir);
+  assert.equal(dir.sps.filter((sp) => sp.appId === dir.apps.find((app) => app.displayName === CLI_APP_NAME).appId).length, 1);
+  assert.ok(logs.some((line) => /already done/.test(line)), logs.join("\n"));
+  assert.ok(logs.some((line) => /admin API: everything is in place/.test(line)));
+});
+
+test("a mistyped admin id fails at once and never removes the admin who holds the role", async () => {
+  const dir = directory();
+  await go(dir);
+  const typo = "4850d5fc-552c-4b0d-88a3-2d0329bf4b26";
+  dir.writes = [];
+  await assert.rejects(go(dir, { record: { adminApi: { admins: [typo] } } }), new RegExp(`${typo}' does not exist`));
+  assert.deepEqual(dir.writes.map(({ method }) => method), ["POST"], "only the failed grant; no removal");
+  assert.ok(dir.assignments.some((a) => a.principalId === ARI && a.appRoleId === ADMIN_ROLE_ID), "Ari keeps the role");
+});
+
+test("assignments on a later page are seen, so they are neither granted twice nor left in place", async () => {
+  const dir = directory();
+  dir.pageSize = 1;
+  dir.users.push("55555555-5555-4555-8555-555555555555");
+  dir.assignments.push({ id: "filler", principalId: "55555555-5555-4555-8555-555555555555", resourceId: GATEWAY_SP, appRoleId: "22222222-2222-4222-8222-222222222222" }, { id: "late", principalId: OTHER, resourceId: GATEWAY_SP, appRoleId: ADMIN_ROLE_ID });
+  await go(dir);
+  assert.deepEqual(dir.assignments.filter((a) => a.appRoleId === ADMIN_ROLE_ID).map(({ principalId }) => principalId), [ARI]);
+});
+
+test("a recorded CLI client is read by its object id: a renamed one is kept, a deleted one stops the run, and a namesake is never adopted", async () => {
+  const dir = directory();
+  const first = await go(dir);
+  const cli = dir.apps.find((app) => app.displayName === CLI_APP_NAME);
+  cli.displayName = "ouro-cli (renamed)";
+  dir.apps.push({ id: "imposter", appId: "imposter-app", displayName: CLI_APP_NAME });
+  dir.writes = [];
+  await go(dir, { record: { cliApp: first.cliApp } });
+  assert.deepEqual(dir.writes, [], "the renamed client is still in place");
+  dir.apps = dir.apps.filter((app) => app !== cli);
+  await assert.rejects(go(dir, { record: { cliApp: first.cliApp } }), /no longer exists/);
+  assert.ok(!dir.apps.find((app) => app.id === "imposter").api, "the namesake was never touched");
+  assert.ok(!dir.flowApps.includes("imposter-app"));
+});
+
+test("a disabled scope or role is enabled again, v1 tokens go back to v2, and a CLI client that drifted is corrected", async () => {
+  const dir = directory();
+  await go(dir);
+  const gateway = dir.apps[0];
+  gateway.api.oauth2PermissionScopes[0].isEnabled = false;
+  gateway.appRoles[0].isEnabled = false;
+  gateway.api.requestedAccessTokenVersion = 1;
+  const cli = dir.apps.find((app) => app.displayName === CLI_APP_NAME);
+  cli.isFallbackPublicClient = true;
+  cli.publicClient = { redirectUris: ["http://localhost/other"] };
+  await go(dir);
+  assert.equal(gateway.api.oauth2PermissionScopes[0].isEnabled, true);
+  assert.equal(gateway.appRoles[0].isEnabled, true);
+  assert.equal(gateway.api.requestedAccessTokenVersion, 2);
+  assert.equal(cli.isFallbackPublicClient, false);
+  assert.deepEqual(cli.publicClient.redirectUris, [CLI_REDIRECT]);
 });
