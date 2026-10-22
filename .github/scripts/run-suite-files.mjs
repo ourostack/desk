@@ -79,7 +79,7 @@ const nativeGenerationDiagnostic = (body, indentation) => {
   try {
     const value = JSON.parse(candidate)
     if (!closed(value, ["setupPhase", "originalCode", "status", "signal", "guard"]) ||
-        !["unknown", "signedWorkerFixture.initial-daemon"].includes(value.setupPhase) ||
+        !["unknown", "signedWorkerFixture.initial-daemon", "signedWorkerFixture.codec-binding"].includes(value.setupPhase) ||
         !codes.has(value.originalCode) || !signals.has(value.signal) ||
         !(value.status === "unknown" || (Number.isInteger(value.status) &&
           value.status >= -2147483648 && value.status <= 4294967295)) ||
