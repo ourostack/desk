@@ -789,6 +789,18 @@ test("semantic backend unavailability without a note uses the standard semantic 
   assert.equal(result.diagnostic.detail, "Semantic serving is unavailable for this request.")
 })
 
+test("desk_similar on a document without vectors says the document is not indexed yet, not to start Ollama", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticBackend: async () => ({ error: "semantic_unavailable", note: "seed doc has no embeddings; the index was built while semantic embeddings were unavailable." }),
+  })
+  const result = await router.semantic({ deskRoot: f.deskRoot, kind: "similar", path: "track/work/task.md" })
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "This document has not been indexed for meaning-based search yet.")
+  assert.equal(result.fix, "Pick another document; if this one has text, call desk_reindex and try again. desk_search answers now with exact-word matches.")
+})
+
 test("semantic backend exceptions are converted without leaking partial results", async (t) => {
   const f = await fixture(t, { semanticCurrent: true })
   const router = createQueryRouter({

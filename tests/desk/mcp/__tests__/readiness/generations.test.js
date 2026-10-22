@@ -121,7 +121,7 @@ test("each generation records its writer, and only the newest generations are ke
   const root = await mkTempRoot("desk-generation-")
   const db = openDb(root)
   try {
-    const writer = { version: "3.2.0-alpha.342", build: "b".repeat(64) }
+    const writer = { version: "3.2.0-alpha.342", build: "b".repeat(64), controller: "c".repeat(64) }
     const empty = openSnapshot(root)
     try {
       assert.equal(empty.generation, null)

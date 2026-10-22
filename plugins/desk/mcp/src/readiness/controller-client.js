@@ -124,7 +124,7 @@ export async function connectOrStartController({
   })
   requireCompatibleHandshake(handshake, identity)
   if (local) local.clients += 1
-  return createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs })
+  return createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs, stateDir })
 }
 
 async function startOrReuseController({
@@ -193,7 +193,7 @@ function isControllerElectionCollision(error) {
   return error?.code === "EADDRINUSE" || error?.code === "EEXIST"
 }
 
-function createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs }) {
+function createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs, stateDir }) {
   let closed = false
   const call = (method, params, timeoutMs = 2_000, signal) => request({
     endpoint,
@@ -207,6 +207,8 @@ function createClient({ endpoint, ephemeral, identity, local, token, recordChang
     accepted: true,
     id: identity.id,
     identity,
+    // Sibling folders hold the other controllers on this machine; the search router checks whether one of them still runs.
+    stateDir,
     ...(local?.controller.onExit ? { onExit: (listener) => local.controller.onExit(listener) } : {}),
     status: (timeoutMs = 2_000) => call("status", {}, timeoutMs),
     beginConvergence: () => call("beginConvergence", {}, null),

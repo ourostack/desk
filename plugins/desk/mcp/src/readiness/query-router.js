@@ -3,7 +3,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { directLexicalSearch, loadCurrentTombstoneLedger } from "./direct-lexical.js"
 import { expectedLexicalGenerationIdentity, matchesLexicalGenerationIdentity } from "./generations.js"
 import { stableStringify } from "./identity.js"
-import { outranks } from "./index-writer.js"
+import { outranks, writerRuns } from "./index-writer.js"
 import { deskVersion } from "../package-metadata.js"
 import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline, SEMANTIC_CATCHING_UP, SEMANTIC_OFF } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
@@ -31,7 +31,11 @@ const SEMANTIC_OFF_REFUSAL = Object.freeze({
 const NEWER_DESK_REASON = "index_owned_by_newer_desk"
 const NEWER_DESK_REFUSAL = Object.freeze({
   message: "A newer Desk session on this desk is serving meaning-based search.",
-  fix: `Restart this session to update Desk. ${EXACT_WORDS_NOW}`,
+  fix: `Restarting this session moves it to the newer Desk. ${EXACT_WORDS_NOW}`,
+})
+const UNINDEXED_DOCUMENT_REFUSAL = Object.freeze({
+  message: "This document has not been indexed for meaning-based search yet.",
+  fix: `Pick another document; if this one has text, call desk_reindex and try again. ${EXACT_WORDS_NOW}`,
 })
 
 function semanticCapabilityError(reason, detail, { message = SEMANTIC_UNAVAILABLE, fix = SEMANTIC_FIX } = {}) {
@@ -237,7 +241,9 @@ export function createQueryRouter({
     }
     // The controller says it is current and certain, yet the index was last written under another journal: another controller (another Desk build on this desk) wrote it since.
     const foreign = currentAndCertain && snapshot !== null && !lexicalProven && snapshot.cursor?.journal_id !== fence.cursor.journal_id
-    const yields = foreign && snapshot.writer !== null && outranks(snapshot.writer, { version, build: controller.identity.build })
+    // A higher-ranked writer keeps the index only while its controller runs; once its sessions have ended, this build takes the index back.
+    const yields = foreign && snapshot.writer !== null && outranks(snapshot.writer, { version, build: controller.identity.build }) &&
+      await writerRuns(snapshot.writer, controller.stateDir)
     return {
       snapshot,
       lexicalProven,
@@ -401,7 +407,9 @@ export function createQueryRouter({
         generation: before.snapshot.generation,
       }), signal)
       if (result?.error === "semantic_unavailable") {
-        return semanticCapabilityError("semantic_unavailable", result.note ?? "Semantic serving is unavailable for this request.", { fix: EMBEDDING_FIX })
+        // The proof already showed the embedding service answering and no vectors missing, so for desk_similar this means the chosen document has none of its own.
+        return semanticCapabilityError("semantic_unavailable", result.note ?? "Semantic serving is unavailable for this request.",
+          request.kind === "similar" ? UNINDEXED_DOCUMENT_REFUSAL : { fix: EMBEDDING_FIX })
       }
       const after = await serviceProof(request, { semanticRequired: true, waitForSemantic: false })
       try {

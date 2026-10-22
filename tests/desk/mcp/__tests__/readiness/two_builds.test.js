@@ -8,6 +8,7 @@ import { desk_recall, desk_search } from "../../../../../plugins/desk/mcp/src/to
 import { createDeskQueryRouter, createQueryRouter } from "../../../../../plugins/desk/mcp/src/readiness/query-router.js"
 import { RETAINED_LEXICAL_GENERATIONS } from "../../../../../plugins/desk/mcp/src/readiness/generations.js"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { controllerIdentity } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readiness/contracts.js"
 import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
@@ -28,15 +29,17 @@ function countingEmbed() {
 
 // `version` set: a build with the writer record, as the production handler in server.js passes it. Unset: an older alpha that records no writer.
 async function controllerFor(t, root, stateHome, build, embed, { version, converged = { count: 0 }, before = async () => {}, after = async () => {} } = {}) {
+  const contracts = { ...readinessContracts({ lexical: "required" }, { build }), semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } }
+  // The production handler records the writing controller's identity id, which names its state folder.
+  const id = controllerIdentity({ root, ...contracts }).id
   const controller = await connectOrStartController({
-    root, stateHome, ephemeral: true, ...readinessContracts({ lexical: "required" }, { build }),
+    root, stateHome, ephemeral: true, ...contracts,
     watcher: { fence: async () => ({ certain: true }) },
-    semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC },
     handlers: { async beginConvergence({ eventCursor, journal }) {
       converged.count += 1
       await before()
       const summary = await rebuildIndex(root, {
-        eventCursor, embed: { fetch: embed.fetch }, ...(version ? { writer: { version, build } } : {}),
+        eventCursor, embed: { fetch: embed.fetch }, ...(version ? { writer: { version, build, controller: id } } : {}),
       })
       const db = openDb(root)
       try {
@@ -129,7 +132,7 @@ test("two builds that record their writer agree on one owner: the lower one neve
     assert.equal(refused.status, "error")
     assert.equal(refused.diagnostic.reason, "index_owned_by_newer_desk")
     assert.equal(refused.diagnostic.message, "A newer Desk session on this desk is serving meaning-based search.")
-    assert.equal(refused.fix, "Restart this session to update Desk. desk_search answers now with exact-word matches.")
+    assert.equal(refused.fix, "Restarting this session moves it to the newer Desk. desk_search answers now with exact-word matches.")
     const exact = await search(low)
     assert.equal(exact.results.length, 3, "the lower build still answers exact-word search from the files")
     assert.equal((await search(high)).readiness_diagnostic, undefined, "and leaves the index to the higher build")
@@ -153,6 +156,16 @@ test("two builds that record their writer agree on one owner: the lower one neve
   const rows = generationRows(root)
   assert.equal(rows.generations, RETAINED_LEXICAL_GENERATIONS, "generation rows stay bounded however often the builds reconcile")
   assert.equal(rows.operations, RETAINED_LEXICAL_GENERATIONS)
+
+  // The newer session ends. Without any desk change, the lower build takes the index back on its next recall.
+  await high.controller.close()
+  const after = low.converged.count
+  const recovered = await recall(low)
+  assert.equal(recovered.results?.length, 3, JSON.stringify(recovered))
+  assert.equal(low.converged.count, after + 1, "one reconcile, started by the recall itself")
+  assert.equal((await recall(low)).results.length, 3)
+  assert.equal(low.converged.count, after + 1)
+  assert.equal(embed.documents, settled.embedded, "taking the index back embeds nothing again")
 })
 
 test("taking the index back waits only for what is left of the call's deadline", async (t) => {
