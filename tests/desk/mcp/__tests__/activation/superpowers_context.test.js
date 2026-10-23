@@ -274,7 +274,6 @@ test("an explicit cross-repository Desk plan is preserved rather than rebound by
 })
 
 for (const [label, overrides, message] of [
-  ["missing protected-evidence root", { evidenceRoot: undefined }, /^Superpowers context: evidenceRoot is required: pass --evidence-root /u],
   ["invalid step", { step: 0 }, "Superpowers context: step must be a positive integer"],
   ["invalid attempt", { attempt: 0 }, "Superpowers context: attempt must be a positive integer"],
   ["task outside Desk", { taskPath: path.join(tmpdir(), "outside-task") }, "Superpowers context: taskPath must be within the effective Desk scope"],
@@ -287,11 +286,56 @@ for (const [label, overrides, message] of [
   })
 }
 
-test("operational evidence is never mapped into the git-backed Desk", async () => {
+test("maps artifacts inside the iteration when no evidence root is given", async () => {
   const input = context()
-  input.evidenceRoot = path.join(input.deskRoot, "_private-looking-but-tracked")
-  const resolveContext = await loadResolver()
-  await assert.rejects(() => resolveContext(input), { message: "Superpowers context: evidenceRoot must be outside Desk" })
+  delete input.evidenceRoot
+  const output = await resolve(input)
+  const directory = path.join(input.iterationPath, "superpowers", "step-1", "attempt-1")
+  assert.equal(output.artifactDirectory, directory)
+  assert.equal(output.briefPath, path.join(directory, "brief.md"))
+  assert.equal(output.implementationReportPath, path.join(directory, "implementation-report.md"))
+  assert.equal(output.reviewPackagePath, path.join(directory, "review.patch"))
+  assert.equal(output.reviewReportPath, path.join(directory, "review-report.md"))
+})
+
+test("accepts an evidence root inside the desk", async () => {
+  const input = context()
+  input.evidenceRoot = path.join(input.deskRoot, "evidence")
+  const output = await resolve(input)
+  assert.equal(output.briefPath, path.join(input.evidenceRoot, path.relative(input.deskRoot, input.iterationPath), "superpowers", "step-1", "attempt-1", "brief.md"))
+})
+
+test("still refuses the factory state folder and the retired work-ledger folder", async () => {
+  const previous = process.env.XDG_STATE_HOME
+  process.env.XDG_STATE_HOME = path.join(fixtureRoot, "desk", "state")
+  try {
+    const resolveContext = await loadResolver()
+    for (const folder of ["factory", "work-ledger"]) {
+      for (const sub of ["", "inner"]) {
+        const input = context({ evidenceRoot: path.join(process.env.XDG_STATE_HOME, "ouroboros-skills", "desk", folder, sub) })
+        await assert.rejects(() => resolveContext(input), /^Error: Superpowers context: evidenceRoot must not be inside Desk's private (factory|work-ledger) folder/u)
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.XDG_STATE_HOME
+    else process.env.XDG_STATE_HOME = previous
+  }
+})
+
+test("refuses an evidence root that is a link into the factory state folder", async () => {
+  const previous = process.env.XDG_STATE_HOME
+  process.env.XDG_STATE_HOME = path.join(fixtureRoot, "state")
+  try {
+    const factory = path.join(process.env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
+    mkdirSync(factory, { recursive: true })
+    const link = path.join(fixtureRoot, "desk", "link")
+    symlinkSync(factory, link)
+    const resolveContext = await loadResolver()
+    await assert.rejects(() => resolveContext(context({ evidenceRoot: path.join(link, "inner") })), /evidenceRoot must not be inside Desk's private factory folder/u)
+  } finally {
+    if (previous === undefined) delete process.env.XDG_STATE_HOME
+    else process.env.XDG_STATE_HOME = previous
+  }
 })
 
 test("context canonical paths agree with existing Desk write-target authority", async () => {
@@ -427,15 +471,15 @@ test("the read-only helper emits the exact bound paths through its command inter
   assert.deepEqual(JSON.parse(result.stdout), await resolve(input))
 })
 
-test("CLI missing evidence root fails with its own diagnostic and no partial output or writes", () => {
-  const args = commandArgs(context())
+test("CLI without an evidence root maps artifacts inside the iteration", () => {
+  const input = context()
+  const args = commandArgs(input)
   args.splice(args.indexOf("--evidence-root"), 2)
   const before = snapshotTree()
   const result = runCommand(args)
   assert.deepEqual(snapshotTree(), before)
-  assert.equal(result.status, 1)
-  assert.equal(result.stdout, "")
-  assert.match(result.stderr.trim(), /^Superpowers context: evidenceRoot is required: pass --evidence-root <a folder outside the desk>, for example .*\/evidence; the mapper only names paths under it and creates nothing$/u)
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).briefPath, path.join(input.iterationPath, "superpowers", "step-1", "attempt-1", "brief.md"))
 })
 
 test("CLI unknown option fails with its own diagnostic and no partial output or writes", () => {

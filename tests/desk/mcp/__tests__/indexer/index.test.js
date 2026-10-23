@@ -9,6 +9,7 @@ import Database from "better-sqlite3"
 
 import { isIndexFresh, rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { openDb, closeDb, getMeta, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function mkRoot() {
@@ -640,4 +641,50 @@ test("Task 4 readers see complete generations and embedding runs after the lexic
     const generation = reader.prepare("SELECT * FROM lexical_generations WHERE id = ?").get(summary.lexical_generation)
     assert.deepEqual(JSON.parse(generation.documents), reader.prepare("SELECT path, hash FROM docs ORDER BY path").all())
   } finally { closeDb(reader); closeDb(db) }
+})
+
+test("an invalid tombstone ledger stops a rebuild before any document is indexed", async () => {
+  const root = await mkRoot()
+  await w(root, "track/a/task.md", "# task")
+  const pluginRoot = await mkTempRoot("desk-idx-plugin-")
+  await w(pluginRoot, "artifacts/tombstones/tombstones.jsonl", "{not json\n")
+  await assert.rejects(rebuildIndex(root, { skipEmbed: true, tombstones: { pluginRoot } }), (error) => {
+    assert.equal(error.code, "artifact_tombstone_ledger_invalid")
+    assert.deepEqual(error.diagnostics, ["tombstone ledger line 1 must be valid JSON"])
+    return true
+  })
+  const db = openDb(root)
+  try {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM docs").get().n, 0)
+  } finally { closeDb(db) }
+})
+
+test("an ignored vector-pack root that fails with a non-Error value is recorded by its text", async () => {
+  const root = await mkRoot()
+  await w(root, "track/a/task.md", "# task")
+  const pluginRoot = await mkTempRoot("desk-idx-plugin-")
+  await fs.mkdir(path.join(pluginRoot, "artifacts", "vector-packs", ACTIVE_EMBEDDING_SPEC.id), { recursive: true })
+  const db = openDb(root)
+  // Only the vector-pack import prepares this statement when embedding is skipped.
+  const failing = new Proxy(db, {
+    get(target, prop) {
+      if (prop === "prepare") {
+        return (sql) => {
+          if (sql.startsWith("INSERT INTO chunk_vecs")) throw "vector store unavailable"
+          return target.prepare(sql)
+        }
+      }
+      const value = Reflect.get(target, prop, target)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+  try {
+    const summary = await rebuildIndex(root, {
+      db: failing,
+      skipEmbed: true,
+      vectorPacks: { pluginRoot, ignoreInvalidRoots: true },
+    })
+    assert.equal(summary.docs_indexed, 1)
+    assert.deepEqual(summary.vector_packs.import_errors, [{ pluginRoot, message: "vector store unavailable" }])
+  } finally { closeDb(db) }
 })

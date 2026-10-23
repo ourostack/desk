@@ -537,7 +537,7 @@ requires(
 requires(
   "plugins/desk/skills/session-resumption/SKILL.md",
   "session-resumption owns the protected-evidence boundary",
-  /## Protected evidence[\s\S]+raw transcripts, credentials, private measurement(?: and|,) customer data[\s\S]+outside Git[\s\S]+approved private evidence location[\s\S]+only pointers and derived, non-sensitive summaries/iu,
+  /## Protected evidence[\s\S]+raw transcripts, credentials, private measurement(?: and|,) customer data[\s\S]+outside Git[\s\S]+approved private location[\s\S]+a pointer and a non-sensitive summary[\s\S]+task's folder[\s\S]+committed to `main`/iu,
 );
 contract("operator-voice-comments owns approval of anything sent in the operator's name", () => {
   const skill = text("plugins/desk/skills/operator-voice-comments/SKILL.md");
@@ -769,7 +769,7 @@ contract("directory-structure says what may sit where", () => {
   assert.doesNotMatch(skill, /confirm the destination/iu, "the agent decides where a file goes; it never asks");
   assert.match(skill, /decides the destination[\s\S]{0,300}one line/iu);
   assert.match(skill, /^ {6}_iterations\/ +# /mu, "the layout names where a task with no repositories keeps its iterations");
-  assert.match(skill, /reports, status notes and handoffs belong in a task or iteration folder/iu);
+  assert.match(skill, /reports, status notes and handoffs belong in a task or iteration folder, committed to `main`/iu);
   assert.match(skill, /`task_move`[\s\S]+`track_rename`/u);
   assert.match(skill, /`desk_doctor`[\s\S]{0,200}`loose_file`/u);
 });
@@ -813,7 +813,7 @@ contract("evidence-discipline owns the citation procedure and the estimate rule"
     /inference or unverified/iu,
     /own actions[\s\S]+link to the artifact[\s\S]+before it has happened/iu,
     /estimate cites the historical data behind it or carries no number/iu,
-    /pointer to its protected location/iu,
+    /secrets, credentials, raw private transcripts and customer data stay out of Git[\s\S]+pointer/iu,
   ]) assert.match(section, pattern);
   assert.match(skill.split("---", 3)[1], /factual claim/iu);
 });
@@ -1631,9 +1631,9 @@ contract("every general operator rule is stated in the skill that owns its topic
     ["content-routing", /Fold new context into existing docs when possible/u],
     ["content-routing", /Tools for agents are designed by their user: the agent[\s\S]+"what would I want to use, and what would confuse me\?"[\s\S]+conversation partner, not the customer/u],
     // Rules the skills already stated; pinned so the desk's own instruction file can drop its copy.
-    ["using-desk", /task state and reusable artifacts live in the desk, a Git repository/u],
-    ["using-desk", /Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made[\s\S]+; commit and push desk changes\./u],
-    ["using-desk", /Desks and shared workspace state live on their default branch/u],
+    ["using-desk", /task state and reusable artifacts live on `main` in the desk/u],
+    ["using-desk", /Instructions, preferences, task state and reusable artifacts live on `main` in the desk\. Only secrets, credentials, raw private transcripts and customer data stay outside Git/u],
+    ["using-desk", /In a desk, commit and push to `main`; use a branch only to coordinate concurrent writers/u],
     ["git-hygiene", /## Never leave state behind\n\nBefore the session ends, persist task-owned changes/u],
     ["friction-management", /appending new entries during real use/u],
     ["directory-structure", /the desk lives at `\$DESK\/` \(shorthand for the desk's absolute path/u],

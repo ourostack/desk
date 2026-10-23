@@ -96,6 +96,17 @@ const TASK_PROGRESS = {
   next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
 }
 
+const REPLACE_SECTION = {
+  type: "object",
+  properties: {
+    heading: text("The section's name without the `## `, such as `Progress log`. The first such section outside fenced code is replaced; a card without it gets it appended."),
+    markdown: text("The section's new text, without its heading and without any `## ` heading of its own. Use it to shorten a card: it is the only way to replace a section, because the card cannot be edited directly."),
+  },
+  required: ["heading", "markdown"],
+  additionalProperties: false,
+  description: "Replace the body of one `## ` section of the card (up to the next `## `); the frontmatter is never touched.",
+}
+
 const TASK_DONE_EVIDENCE = {
   type: "object",
   additionalProperties: false,
@@ -173,7 +184,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
     steps: { type: "array", items: STEP, description: "The outcome's steps, in order, written as the card's `## Steps` table; each may depend on the ones before it. A new step needs `id`, `repo` and `depends_on`." },
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, status: text("Shorthand for `frontmatter.status`: one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled. Moving to `done` needs `evidence`."), ...CARD_UPDATE, ...TASK_PROGRESS, evidence: TASK_DONE_EVIDENCE, repos_removed_reason: REPOS_REMOVED_REASON, return_reason: RETURN_REASON, step: STEP, resource: RESOURCE, display_label: DISPLAY_LABEL, replace_section: REPLACE_SECTION }, ["track", "slug"]),
   task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_signoff: schema({
     track: text("The track folder of the delivered task."),

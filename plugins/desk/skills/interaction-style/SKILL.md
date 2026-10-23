@@ -80,7 +80,7 @@ Hosts offer their own memory, planning, task and review commands. The names belo
 | `/autopilot`, `/fleet` | native execution controls that may run the selected Superpowers work and its parallel agents; they never replace its review gates or the Desk task record |
 | `/init`, which writes a repository instructions file | the desk for operator instructions and the repository's existing `AGENTS.md` for repository rules; do not generate a new instructions file unasked |
 
-Protected operational evidence goes in none of these stores; `session-resumption` says where it goes.
+Secrets, credentials, raw private transcripts and customer data go in none of these stores; `session-resumption` says where they go.
 
 ## 4. Act on confident decisions, don't narrate options
 

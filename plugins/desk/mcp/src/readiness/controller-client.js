@@ -59,6 +59,7 @@ export async function connectOrStartController({
   protocolVersion = 1,
   lexicalContract = {},
   semanticContract = null,
+  build = null,
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
   watcher,
@@ -71,7 +72,7 @@ export async function connectOrStartController({
   makeDir = mkdir,
   recordChangeTimeoutMs = RECORD_CHANGE_TIMEOUT_MS,
 } = {}) {
-  const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
+  const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract, build })
   const stateDir = path.join(stateHome, identity.id)
   // Refuses a real, non-temp state home under what looks like a node:test run (Review Focus, PR #101 fix round: this
   // write sits under the CACHE home, not the STATE home every other guarded writer in this PR uses, so the original
@@ -123,7 +124,7 @@ export async function connectOrStartController({
   })
   requireCompatibleHandshake(handshake, identity)
   if (local) local.clients += 1
-  return createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs })
+  return createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs, stateDir })
 }
 
 async function startOrReuseController({
@@ -192,7 +193,7 @@ function isControllerElectionCollision(error) {
   return error?.code === "EADDRINUSE" || error?.code === "EEXIST"
 }
 
-function createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs }) {
+function createClient({ endpoint, ephemeral, identity, local, token, recordChangeTimeoutMs, stateDir }) {
   let closed = false
   const call = (method, params, timeoutMs = 2_000, signal) => request({
     endpoint,
@@ -206,6 +207,8 @@ function createClient({ endpoint, ephemeral, identity, local, token, recordChang
     accepted: true,
     id: identity.id,
     identity,
+    // Sibling folders hold the other controllers on this machine; the search router checks whether one of them still runs.
+    stateDir,
     ...(local?.controller.onExit ? { onExit: (listener) => local.controller.onExit(listener) } : {}),
     status: (timeoutMs = 2_000) => call("status", {}, timeoutMs),
     beginConvergence: () => call("beginConvergence", {}, null),

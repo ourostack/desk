@@ -9,6 +9,7 @@ export function controllerIdentity({
   protocolVersion,
   lexicalContract,
   semanticContract = null,
+  build = null,
 } = {}) {
   const canonicalRoot = realpathSync(path.resolve(root))
   const stat = statSync(canonicalRoot)
@@ -16,6 +17,7 @@ export function controllerIdentity({
   const contract = stableStringify({
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
+    build,
   })
   const id = digest(stableStringify({
     root: canonicalRoot,
@@ -32,6 +34,7 @@ export function controllerIdentity({
     root: canonicalRoot,
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
+    build,
     semantic_contract: semanticContract,
     user: Object.freeze({
       uid: user.uid,
@@ -97,7 +100,7 @@ export function validatePrivateDirectory(directory, {
   }
 }
 
-// The rendezvous every session on a root must agree on: the per-user folder /tmp/desk-readiness-<uid>, keyed by the controller identity (real root path, user and lexical contract). It deliberately ignores XDG_RUNTIME_DIR and TMPDIR: sessions started with different values (a desktop host and a terminal, for example) would otherwise derive different sockets for one root, share one owner record and journal, and elect two controllers.
+// The rendezvous every session on a root must agree on: the per-user folder /tmp/desk-readiness-<uid>, keyed by the controller identity (real root path, user, lexical contract and Desk build). It deliberately ignores XDG_RUNTIME_DIR and TMPDIR: sessions started with different values (a desktop host and a terminal, for example) would otherwise derive different sockets for one root, share one owner record and journal, and elect two controllers.
 export function deriveControllerEndpoint({
   identity, platform = process.platform, uid = process.getuid?.(), fs = filesystem,
 } = {}) {

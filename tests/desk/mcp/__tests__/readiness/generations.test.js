@@ -3,10 +3,11 @@ import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
-import { openDb, closeDb, getMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { openDb, closeDb, getMeta, setMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
 import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
+import { openSnapshot } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const identities = {
@@ -95,6 +96,43 @@ test("invalid generation identities and cursors cannot bless document state", as
   } finally { closeDb(db) }
 })
 
+test("a generation refuses an enclosing transaction, malformed documents and an asynchronous apply", async () => {
+  const { commitLexicalGeneration, withActiveLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-generation-")
+  const db = openDb(root)
+  try {
+    assert.throws(() => db.transaction(() => commitLexicalGeneration({ db, documents: [], eventCursor, identities }))(),
+      /a lexical generation must own its commit/)
+    for (const documents of ["task.md", [{ path: "task.md" }], [{ path: "task.md", hash: "a" }, { path: "task.md", hash: "b" }]]) {
+      assert.throws(() => commitLexicalGeneration({ db, documents, eventCursor, identities }), /invalid lexical generation documents/)
+    }
+    assert.throws(() => commitLexicalGeneration({ db, documents: [], eventCursor, identities, apply: () => Promise.resolve() }),
+      /apply must be synchronous/)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, 0)
+    const generationId = commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+    let replaced = false
+    assert.throws(() => db.transaction(() => withActiveLexicalGeneration({ db, generationId, eventCursor }, () => { replaced = true }))(),
+      /journal compaction requires a committed generation/)
+    assert.equal(replaced, false)
+  } finally { closeDb(db) }
+})
+
+test("compaction treats an unreadable covered cursor as superseded and rethrows any other cursor failure", async () => {
+  const { commitLexicalGeneration, withActiveLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-generation-")
+  const db = openDb(root)
+  try {
+    const generationId = commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+    let replaced = false
+    const replace = () => { replaced = true }
+    // A caller without an expected cursor is a programming error, not a superseded generation.
+    assert.throws(() => withActiveLexicalGeneration({ db, generationId, eventCursor: undefined }, replace), TypeError)
+    setMeta(db, "covered_event_cursor", "{not json")
+    assert.throws(() => withActiveLexicalGeneration({ db, generationId, eventCursor }, replace), { code: "generation_superseded" })
+    assert.equal(replaced, false)
+  } finally { closeDb(db) }
+})
+
 test("a failure at SQLite COMMIT rolls back generation, operations and canonical-index changes", async () => {
   const { commitLexicalGeneration } = await generationModule()
   const root = await mkTempRoot("desk-generation-")
@@ -112,6 +150,43 @@ test("a failure at SQLite COMMIT rolls back generation, operations and canonical
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, 1)
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM readiness_operations").get().n, 1)
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM commit_guard").get().n, 0)
+  } finally { closeDb(db) }
+})
+
+test("each generation records its writer, and only the newest generations are kept", async () => {
+  const { commitLexicalGeneration, RETAINED_LEXICAL_GENERATIONS } = await generationModule()
+  const root = await mkTempRoot("desk-generation-")
+  const db = openDb(root)
+  try {
+    const writer = { version: "3.2.0-alpha.342", build: "b".repeat(64), controller: "c".repeat(64) }
+    const empty = openSnapshot(root)
+    try {
+      assert.equal(empty.generation, null)
+      assert.equal(empty.writer, null)
+    } finally { empty.db.close() }
+    commitLexicalGeneration({ db, documents: [], eventCursor, identities, writer })
+    assert.deepEqual(JSON.parse(getMeta(db, "index_writer")), { journal_id: eventCursor.journal_id, ...writer })
+    const written = openSnapshot(root)
+    try { assert.deepEqual(written.writer, writer, "a search snapshot reads the writer of its generation") } finally { written.db.close() }
+    commitLexicalGeneration({ db, documents: [], identities, writer })
+    assert.equal(getMeta(db, "index_writer"), null, "a generation without a journal names no writer")
+    commitLexicalGeneration({ db, documents: [], eventCursor, identities, writer })
+    commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+    assert.equal(getMeta(db, "index_writer"), null, "a commit that names no writer clears the last one")
+
+    let last
+    for (let sequence = 0; sequence < RETAINED_LEXICAL_GENERATIONS + 4; sequence += 1) {
+      last = commitLexicalGeneration({ db, documents: [], eventCursor: { ...eventCursor, sequence }, identities, writer })
+    }
+    const ids = db.prepare("SELECT id FROM lexical_generations ORDER BY id").all().map((row) => row.id)
+    assert.equal(ids.length, RETAINED_LEXICAL_GENERATIONS)
+    assert.equal(ids.at(-1), last)
+    assert.equal(ids[0], last - RETAINED_LEXICAL_GENERATIONS + 1)
+    assert.equal(getMeta(db, "active_lexical_generation"), String(last))
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM readiness_operations").get().n, RETAINED_LEXICAL_GENERATIONS,
+      "the operation row of each removed generation goes with it")
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM lexical_generations g
+      JOIN readiness_operations o ON o.id = g.operation_id`).get().n, RETAINED_LEXICAL_GENERATIONS)
   } finally { closeDb(db) }
 })
 

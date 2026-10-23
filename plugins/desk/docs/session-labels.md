@@ -41,8 +41,7 @@ rejected as a whole. They are private display data, not permission to export
 task information. `display_label` is not written to the task card or a separate
 naming store; normal tool transcripts may still record the supplied input.
 
-For a successful focus observation without a label, `session_label` is
-`{"state":"unavailable","code":"missing_safe_label"}`. Unsafe input instead
+When no label was proposed, `session_label` is left out of the result. Unsafe input instead
 returns code `unsafe_label`; task CRUD and its existing evidence checks remain
 unchanged. A supplied label on a parked create or nonfocused update returns
 `awaiting_focus` without changing the held focus. An invalid internal task

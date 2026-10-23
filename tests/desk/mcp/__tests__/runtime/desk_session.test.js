@@ -1486,6 +1486,23 @@ test("a hung controller is counted across attempts and marked controller_hung af
   assert.match(status.summary ?? status.admission.summary, /3 of 3 checks missed; hung/u)
 })
 
+test("the hung-controller probe and reclaim look for the controller of the loaded Desk build", async (t) => {
+  const builds = []
+  const build = "f".repeat(64)
+  const runtime = fakeRuntime({
+    RUNNING_BUILD: build,
+    connectOrStartController: async () => { throw new Error("readiness controller election did not converge") },
+  })
+  const { session } = await makeSession(t, {
+    runtime,
+    hung: { probe: async (options) => { builds.push(options.build); return { state: "answering", endpoint: "/tmp/x", record: null } } },
+  })
+  await session.admission.refresh()
+  await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
+  assert.ok(builds.length >= 2, "both the admission probe and the reclaim probe ran")
+  assert.deepEqual(new Set(builds), new Set([build]))
+})
+
 test("a running owner that refuses connections counts as a miss, and a controller that answers the probe resets the count", async (t) => {
   const states = ["unreachable", "silent", "answering", "refused"]
   const { session } = await makeSession(t, {

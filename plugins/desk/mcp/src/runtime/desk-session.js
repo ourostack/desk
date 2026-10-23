@@ -24,6 +24,7 @@ import { deskSkill } from "./skills.js"
 import { appendRepairLog, createLastStartWriter, lastStartPath } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { compactStatus } from "./status-compact.js"
+import { GATE_WAIT_MS } from "./gate-wait.js"
 import { inspectStateBranch, inspectWriteBranch, writeBranchProblem, repairStateBranch, runGit, stateBranchProblem, isStateBranchName, STATE_BRANCH_REPAIR } from "./state-branch.js"
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
@@ -55,7 +56,6 @@ const STATUS_DETAIL_MS = 120
 const STATUS_BUDGET_MS = 90
 // How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
 const STATUS_RUN_LIMIT_MS = 10000
-const GATE_WAIT_MS = 10000
 // How many background attempts that start between a gated call's own admission check and its dispatch it joins before refusing.
 const GATE_REJOINS = 3
 const GATE_RETRY = Symbol("gate retry")
@@ -626,10 +626,15 @@ export function createDeskSession(deps) {
     }
   }
 
+  // The loaded runtime's Desk build. Its controller connector elects by it, so the probes must look at the same controller.
+  function runningBuild() {
+    return context.runtimeServer?.RUNNING_BUILD ?? null
+  }
+
   // Count consecutive misses of one owner generation. Election never stops it; explicit repair must go through its child supervisor.
   async function noticeHungController({ controllerProblem, deskRoot, policy }) {
     if (controllerProblem.code !== "controller_unavailable") return controllerProblem
-    const probe = await hungPolicy.probe({ root: deskRoot, policy, stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
+    const probe = await hungPolicy.probe({ root: deskRoot, policy, build: runningBuild(), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
     if (!probeMissed(probe)) {
       context.hung = { misses: 0 }
       hungOwner = null
@@ -1255,7 +1260,7 @@ export function createDeskSession(deps) {
     if (!context.root || !context.policyKey) {
       return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: "not_admitted", fix: "Desk has not resolved a desk root and policy yet; call desk_status, then retry." }, true)
     }
-    const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
+    const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), build: runningBuild(), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
     const report = hungControllerReport(probe)
     const hung = probeMissed(probe)
     if (hung && hungOwner === controllerProbeKey(probe) && context.hung.misses >= hungPolicy.misses && report.owner_verified && report.owner_kind === "controller_child") {
@@ -1320,6 +1325,8 @@ export function createDeskSession(deps) {
       admission: {
         state: snapshot.state,
         code: snapshot.code,
+        // The session's first admission is still running (no attempt has settled yet): every tool call waits for it, so the compact answer says Desk is still starting. A re-check of an admitted desk is not a start.
+        starting: !disposed && admission.snapshot().state === "admitting",
         summary: snapshot.summary,
         blockers: snapshot.blockers,
         attempts: snapshot.attempts,

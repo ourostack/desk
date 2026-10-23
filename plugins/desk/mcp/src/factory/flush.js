@@ -1195,8 +1195,9 @@ async function deliver(env, context) {
       localJobs: local.jobs.map((job) => ({ local: job.job, published: keepIdentity ? job.job : keyedJobId(job.job, secret) })),
     }]
   })
+  // Leave one two-second preparation-sized window for priority numerical delivery.
   const contextPlan = await contextSafely({ work: false, ready: [], states: [], prs: new Set() }, () => planContexts(env, {
-    store, entries: contextEntries, pluginVersion: deskVersion(), now: now(), deadline: deadline - 30000, clock: now,
+    store, entries: contextEntries, pluginVersion: deskVersion(), now: now(), deadline: deadline - 2000, clock: now,
   }))
   if (contextPlan.deferred) {
     progress.contextHeld = "context_preparation_deferred"

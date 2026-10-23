@@ -2,6 +2,10 @@ import { createHash, randomUUID } from "node:crypto"
 import { getMeta, setMeta } from "../db/init.js"
 import { stableStringify } from "./identity.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
+import { INDEX_WRITER_KEY, indexWriterRecord } from "./index-writer.js"
+
+// Each commit adds a generation row holding the whole document list, and builds sharing a desk commit often. Older rows are kept only so a compaction that is still running can find the generation it started from.
+export const RETAINED_LEXICAL_GENERATIONS = 8
 
 // Mirrors the identities committed by the canonical indexer, not the event cursor.
 export function expectedLexicalGenerationIdentity({ ledger, policyIdentity = "desk-lexical-required-v1" }) {
@@ -21,7 +25,7 @@ export function matchesLexicalGenerationIdentity(stored, expected) {
 
 // The callback is synchronous: lexical rows and their coverage are one SQLite commit.
 // Network work (including embedding) belongs after this function returns.
-export function commitLexicalGeneration({ db, documents, eventCursor = null, identities, apply = () => {} }) {
+export function commitLexicalGeneration({ db, documents, eventCursor = null, identities, writer, apply = () => {} }) {
   if (db.inTransaction) throw new Error("a lexical generation must own its commit")
   if (!Number.isSafeInteger(identities?.schema_version) || identities.schema_version < 1 ||
       ["chunker_id", "normalization_id", "tombstone_identity", "policy_identity"]
@@ -62,6 +66,11 @@ export function commitLexicalGeneration({ db, documents, eventCursor = null, ide
     setMeta(db, "active_lexical_generation", String(row.id))
     setMeta(db, "covered_event_cursor", cursorJson)
     setMeta(db, "last_indexed_at", completedAt)
+    if (writer && eventCursor) setMeta(db, INDEX_WRITER_KEY, indexWriterRecord(writer, eventCursor))
+    else db.prepare("DELETE FROM meta WHERE key = ?").run(INDEX_WRITER_KEY)
+    db.prepare("DELETE FROM lexical_generations WHERE id <= ?").run(row.id - RETAINED_LEXICAL_GENERATIONS)
+    db.prepare(`DELETE FROM readiness_operations WHERE kind = 'lexical'
+      AND id NOT IN (SELECT operation_id FROM lexical_generations)`).run()
     return row.id
   })()
 }

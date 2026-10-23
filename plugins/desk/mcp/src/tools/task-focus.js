@@ -99,7 +99,8 @@ export async function taskFocus({ deskRoot, input, person = null, statusContext 
   }
   if (card.data.planning_complete === true) result.planning_complete = true
   if (found.archived) result.archived = true
-  result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel })
+  const proposal = makeSessionLabelProposal({ task: { track, slug }, displayLabel })
+  if (proposal.code !== "missing_safe_label") result.session_label = proposal
   Object.assign(result, archiveDueAnswer({ track, slug, status: card.data.status, archived: found.archived }))
   return result
 }

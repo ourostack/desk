@@ -3,6 +3,8 @@ import { realpathSync } from "node:fs"
 import { realpath, stat } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { parseDeskTaskLine } from "../factory/desk-task-line.js"
+import { factoryStateDir } from "../factory/boot-check.js"
+import { LEGACY_LEDGER_SEGMENTS } from "../protected/legacy-ledger.js"
 import { expandHome, isPathContained, personPrefix, resolveWriteTarget } from "../util/paths.js"
 
 // What to pass for a missing path, with an example built from the paths already checked (`deskRoot`, then `taskPath`,
@@ -15,8 +17,6 @@ function missingPathHint(input, name) {
       return `pass --iteration-path <task folder>/<repo>/<YYYY-MM-DD>-<slug>, a folder under the task's own folder, for example ${trim(input.taskPath)}/<repo>/2026-09-30-<slug>. The mapper only reads and creates nothing, so do not mkdir it first`
     case "taskPath":
       return `pass --task-path <desk>/<track>/<task>, the task's folder (the one that holds task.md), for example ${trim(input.deskRoot)}/<track>/<task>`
-    case "evidenceRoot":
-      return `pass --evidence-root <a folder outside the desk>, for example ${path.posix.dirname(trim(input.deskRoot)).replace(/\/$/u, "")}/evidence; the mapper only names paths under it and creates nothing`
     default:
       return `pass --desk-root <the desk's absolute path>, which boot prints as "Desk:"`
   }
@@ -80,13 +80,29 @@ function deskTaskRule(deskRoot, person, taskPath) {
   return parseDeskTaskLine(line) === null ? [] : [line, "Never call task_focus; your work is credited through the Desk-Task line."]
 }
 
+// Real path of the deepest part of `target` that exists, plus the rest, so a link into a private folder is seen.
+async function realpathOfExisting(target) {
+  let rest = ""
+  let current = target
+  for (;;) {
+    try {
+      return path.join(await realpath(current), rest)
+    } catch (error) {
+      const parent = path.dirname(current)
+      if (parent === current) return target
+      rest = path.join(path.basename(current), rest)
+      current = parent
+    }
+  }
+}
+
 export async function resolveSuperpowersContext(input) {
   const deskRoot = requiredPath(input, "deskRoot")
   const taskPath = requiredPath(input, "taskPath")
   const iterationPath = requiredPath(input, "iterationPath")
   const planPath = optionalPath(input, "planPath")
   const requestedProgressPath = optionalPath(input, "progressPath")
-  const evidenceRoot = requiredPath(input, "evidenceRoot")
+  const evidenceRoot = optionalPath(input, "evidenceRoot")
   const person = input.person ?? null
   for (const name of ["step", "attempt"]) {
     if (!Number.isInteger(input[name]) || input[name] < 1) {
@@ -110,8 +126,15 @@ export async function resolveSuperpowersContext(input) {
   if (requestedProgressPath !== null && !isPathContained(taskPath, requestedProgressPath)) {
     throw new Error("Superpowers context: progressPath must be within taskPath")
   }
-  if (isPathContained(deskRoot, evidenceRoot)) {
-    throw new Error("Superpowers context: evidenceRoot must be outside Desk")
+  if (evidenceRoot !== null) {
+    const resolvedRoot = await realpathOfExisting(evidenceRoot)
+    // Briefs and reports may live in the desk. Only Desk's own private state folders are off limits.
+    const factoryDir = factoryStateDir(process.env)
+    for (const [name, folder] of [["factory", factoryDir], ["work-ledger", path.join(path.dirname(factoryDir), LEGACY_LEDGER_SEGMENTS.at(-1))]]) {
+      if (isPathContained(folder, evidenceRoot) || isPathContained(await realpathOfExisting(folder), resolvedRoot)) {
+        throw new Error(`Superpowers context: evidenceRoot must not be inside Desk's private ${name} folder (${folder}); leave it out to keep the files in the task's folder`)
+      }
+    }
   }
   const taskCardPath = await canonicalFile(deskRoot, person, path.join(taskPath, "task.md"), "task card")
   const progressPath = requestedProgressPath === null
@@ -120,7 +143,8 @@ export async function resolveSuperpowersContext(input) {
   await assertTaskLocal(taskPath, progressPath, "progressPath")
   // A plan is a read reference and may live outside the person prefix, but must remain within this Desk root.
   const canonicalPlan = planPath === null ? null : await canonicalFile(deskRoot, null, planPath, "plan")
-  const artifactDirectory = path.join(evidenceRoot, path.relative(deskRoot, iterationPath), "superpowers", `step-${input.step}`, `attempt-${input.attempt}`)
+  const artifactBase = evidenceRoot === null ? iterationPath : path.join(evidenceRoot, path.relative(deskRoot, iterationPath))
+  const artifactDirectory = path.join(artifactBase, "superpowers", `step-${input.step}`, `attempt-${input.attempt}`)
   return {
     taskCardPath,
     iterationPath,

@@ -21,8 +21,9 @@ export const HUNG_PROBE_MS = 5000
  * Where the root's controller is and whether it answers. `state` is one of:
  * "missing" (no socket), "refused" (a socket nobody listens on), "answering", "silent" (accepts, no answer within `timeoutMs`), "unreachable" (refused, no socket or no answer while the owner record names a running process) or "unknown".
  */
-export async function probeController({ root, policy, stateHome, timeoutMs = HUNG_PROBE_MS, connect = net.createConnection, liveness = {} }) {
-  const identity = controllerIdentity({ root, ...readinessContracts(policy) })
+// `build` is the session's own Desk build (see readinessContracts): the probe looks at the controller this session would elect, never at another build's.
+export async function probeController({ root, policy, build = null, stateHome, timeoutMs = HUNG_PROBE_MS, connect = net.createConnection, liveness = {} }) {
+  const identity = controllerIdentity({ root, ...readinessContracts(policy, { build }) })
   const stateDir = path.join(stateHome, identity.id)
   const owner = await ownerState({ stateDir, identity, ...liveness })
   const record = owner.record

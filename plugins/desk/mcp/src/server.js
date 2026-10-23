@@ -61,6 +61,7 @@ import {
 } from "./server-helpers.js"
 import { existsSync, renameSync } from "node:fs"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { indexDbPath, openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
 import { stableStringify } from "./readiness/identity.js"
@@ -71,12 +72,15 @@ import { createDeskQueryRouter } from "./readiness/query-router.js"
 import { admitControlPlane } from "./activation/admit.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { createWorkspaceWatcher } from "./readiness/workspace-watcher.js"
-import { readinessContracts } from "./readiness/contracts.js"
+import { readinessContracts, sourceMirrorBuild } from "./readiness/contracts.js"
 import { headlessRefusal } from "./factory/headless-flag.js"
 import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex, readinessContracts }
+
+// The Desk build this runtime was loaded from: the digest naming its source mirror, or null when it runs from the source folder. Sessions on one root share a controller only when they run the same build; the session passes this to its hung-controller probes so they look at the same controller.
+export const RUNNING_BUILD = sourceMirrorBuild(fileURLToPath(new URL("..", import.meta.url)))
 
 let readinessControllerModulePromise
 
@@ -94,7 +98,7 @@ export function embeddingOverride(semantic) {
   })
 }
 
-export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral, onRepair, controllerLauncher }) {
+export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral, onRepair, controllerLauncher, build = RUNNING_BUILD }) {
   const embed = policy.semantic === "unsupported" ? null : Object.freeze({
     model: ACTIVE_EMBEDDING_SPEC.model,
     endpoints: Object.freeze(resolveEmbeddingEndpoints()),
@@ -103,7 +107,7 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
   const launch = controllerLauncher ?? (await import("./readiness/controller-process.js")).startControllerProcess
   const controller = await connectReadinessController({
     root: deskRoot,
-    ...readinessContracts(policy),
+    ...readinessContracts(policy, { build }),
     stateHome,
     ephemeral,
     onRepair,
@@ -153,6 +157,8 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
             ...(embed === null ? {} : { embed }),
             eventCursor,
             identities: { policy_identity: stableStringify(policy) },
+            // Recorded with each generation, so every Desk build on this desk can tell which build owns the shared index.
+            writer: { version: deskVersion(), build: options.identity.build, controller: options.identity.id },
           }, { deskRoot })
           // Keep the opt-out at ensureIndex's normalization boundary; resolved undefined would re-enable legacy snapshot auto-discovery.
           const result = await ensureIndexOrQuarantine(deskRoot, { ...indexOptions, snapshots: false })

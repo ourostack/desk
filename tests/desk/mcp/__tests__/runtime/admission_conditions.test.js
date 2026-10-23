@@ -15,7 +15,7 @@ import { connectOrStartController, probeEndpoint } from "../../../../../plugins/
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/server.js"
 import { killAndWait } from "../_kill_and_wait.js"
 import {
-  HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, settled, startDesk, writeActivation, writeFile,
+  HANDSHAKE_BUDGET_MS, git, lastStartUntil, makeGitDesk, sessionBuild, settled, startDesk, writeActivation, writeFile,
 } from "./_admission_fixtures.js"
 
 const posixOnly = process.platform === "win32" ? "unix sockets and file modes are POSIX-only" : false
@@ -51,11 +51,11 @@ async function assertWritesRefused(session, code) {
 }
 
 function controllerFixture(fixture, semanticContract = { mode: "unsupported", embedding_spec: null }) {
-  const { protocolVersion, lexicalContract } = readinessContracts({ lexical: "required", semantic: "unsupported" })
-  const identity = controllerIdentity({ root: fixture.desk, protocolVersion, lexicalContract, semanticContract })
+  const { protocolVersion, lexicalContract, build } = readinessContracts({ lexical: "required", semantic: "unsupported" }, { build: sessionBuild() })
+  const identity = controllerIdentity({ root: fixture.desk, protocolVersion, lexicalContract, semanticContract, build })
   const endpoint = deriveControllerEndpoint({ identity, env: {} })
   const stateDir = path.join(fixture.readinessHome, identity.id)
-  return { identity, endpoint, stateDir, protocolVersion, lexicalContract }
+  return { identity, endpoint, stateDir, protocolVersion, lexicalContract, build }
 }
 
 async function waitForRelease(ownerFile, endpoint) {
@@ -246,9 +246,9 @@ test("a stopped owner is never taken over: the other session reports controller_
 test("a rival controller with a different semantic contract: lexical reads, degraded:controller_semantic_mismatch", { skip: posixOnly }, async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
-  const { protocolVersion, lexicalContract } = controllerFixture(fixture)
+  const { protocolVersion, lexicalContract, build } = controllerFixture(fixture)
   const rival = await connectOrStartController({
-    root: fixture.desk, protocolVersion, lexicalContract, stateHome: fixture.readinessHome, ephemeral: true,
+    root: fixture.desk, protocolVersion, lexicalContract, build, stateHome: fixture.readinessHome, ephemeral: true,
     semanticContract: { mode: "background", embedding_spec: { id: "rival-spec", model: "rival-model" } },
     handlers: {},
   })
