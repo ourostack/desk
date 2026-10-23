@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.345 — 2026-10-23
+
+Session-start sync no longer moves other sessions' files. Several agents share one desk, so an untracked file there is usually another session's unfinished work, yet a pull that failed for any reason other than the network, including an ordinary rebase conflict, used to move every untracked file in the desk into `_cache/stray-<date>/`. Sync now moves only the files git itself names as in the pull's way ("The following untracked working tree files would be overwritten by merge:" or "...by checkout:"), and moves nothing for any other failure, which it reports as before. Boot lists every moved file by its old and new path, so the session that owns one can find it.
+
+The factory triage writer now removes a temporary worktree whose `git worktree add` was cut off mid-checkout, which Git leaves locked "initializing", together with its `desk-triage/<token>` branch. Git releases that lock before any hook runs, so the half-made worktree holds only part of a checkout and removing it loses nothing. Before, such a worktree was kept (one was found at 1.2 GB) and every later triage write stopped as busy. While the Git process that was creating it may still be running, the worktree is kept and reported. A worktree locked for any other reason, or holding a file a hook left, is still kept, and the writer still removes only its own worktrees and branches.
+
+`desk_save` now commits a deletion or rename already staged with `git rm` or `git mv` at a listed path, instead of answering "nothing to commit" ([#414](https://github.com/ourostack/desk/issues/414)). It stages only the listed paths, with `git add -A -- <paths>`, and refuses a staged rename with only one of its two paths listed, naming the path to add, because committing one side would keep both files or delete the file on the remote.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.344 — 2026-10-23
 
 Task-context preparation can now use its bounded time window even when earlier ordinary flush work takes more than 90 seconds, while reserving a two-second opportunity for priority numerical delivery. The total flush deadline and the separate two-second preparation limit are unchanged, as are privacy checks, independent review and publication guards.
