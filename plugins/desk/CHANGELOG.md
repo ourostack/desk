@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.348 — 2026-10-23
+
+Keep public task explanations moving after an update by spreading known task paths throughout bounded discovery, without changing its time limit or evidence checks.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.347 — 2026-10-23
 
 A session now uses the search controller of its own Desk build. The build (the digest that names the runtime's source mirror) is part of the controller's identity, so a session running a newer Desk elects its own controller instead of joining one an older build started, which could refuse the newer session's meaning-based search and leave `desk_recall` waiting. Sessions on the same build and desk still share one controller. An older build's controller is left alone and exits with its own sessions. The hung-controller probe and `desk_doctor`'s `reclaim_controller` repair look at the controller of the session's own build.
