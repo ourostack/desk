@@ -31,4 +31,4 @@ When the change is to the factory itself, invoke `factory-work` first and put it
 
 ## Evidence boundary
 
-Keep detailed reviewer output and operational evidence at the approved private artifact destination. Desk's canonical doing record holds progress/rulings and approved summaries or references, not an uncontrolled copy of private evidence. A reference and a declared hash alone do not prove an artifact exists or was verified. Preserve provenance labels and coverage limits.
+Keep reviewer output in the task's folder on `main`. Only secrets, credentials, raw private transcripts and customer data stay outside Git, cited by pointer; the doing record holds progress/rulings and summaries or references, not a copy of them. A reference and a declared hash alone do not prove an artifact exists or was verified. Preserve provenance labels and coverage limits.

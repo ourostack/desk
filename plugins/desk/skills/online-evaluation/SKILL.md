@@ -76,6 +76,6 @@ The report contains the canonical identity and horizon, composition exposure, cr
 
 Separate an observed cause from a hypothesis. A proposed workflow change should name the avoidable failure or wait it targets and the quality constraint it preserves; a repeated one belongs on a kaizen card. If the critical chain or attribution is unknown, do not attach a fabricated time or money saving.
 
-Return the assessment in the response. Persist it only in the already-approved, protected evidence location supplied by the current Desk context (see `desk:session-resumption`), never in the factory's state directory, a Git-backed desk or harness scratch; if that location cannot be established, report storage as unavailable and do not write elsewhere. Canonical Desk records receive only a pointer or an explicitly approved summary, never private usage detail.
+Return the assessment in the response. Persist it in the task's folder on `main`, never in the factory's state directory or harness scratch. Only secrets, credentials, raw private transcripts and customer data stay outside Git, cited by pointer (see `desk:session-resumption`); private usage detail stays out.
 
 A real-world failure can become a candidate fixed offline regression case. Preserve its recurrence evidence and propose that case through the existing evaluation owner. Do not silently edit a frozen dataset, discard failed attempts or claim comparative improvement from this observational report.

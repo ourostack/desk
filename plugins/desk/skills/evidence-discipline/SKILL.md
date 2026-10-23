@@ -34,7 +34,7 @@ The rules are siblings, not steps. Each is short, has a clear trigger, and appli
 - **Label what you cannot source.** Write "inference:" or "unverified:" in front of it; a plausible claim with no source is not a fact.
 - **Your own actions link to the artifact.** "Merged", "tests pass" and "PR opened" link to the merge, the CI run or test output, and the pull request. Because the link must exist, no action is announced before it has happened.
 - **Numbers too.** An estimate cites the historical data behind it or carries no number; "Fixtures or refusal" below has the procedure.
-- **Private evidence stays private.** Cite it by a pointer to its protected location (`session-resumption` "Protected evidence"), never by copying it into a public place.
+- **Secrets, credentials, raw private transcripts and customer data stay out of Git.** Cite them by a pointer (`session-resumption` "Protected evidence"), never by copying them into a public place.
 
 **Anti-patterns.** A handoff that says "all tests pass" with no run linked; a pull request description that states current behavior with no `file:line`; a status line that says "merged" before the merge exists; a task card that copies a private transcript excerpt instead of pointing at it.
 
