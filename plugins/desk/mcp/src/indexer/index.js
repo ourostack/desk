@@ -16,7 +16,7 @@ import {
   tombstoneDecisionForDoc,
   tombstoneStatusForDocuments,
 } from "../artifacts/tombstones.js"
-import { commitLexicalGeneration } from "../readiness/generations.js"
+import { commitLexicalGeneration, generationContent } from "../readiness/generations.js"
 import { stableStringify } from "../readiness/identity.js"
 import { discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
@@ -80,27 +80,11 @@ export async function rebuildIndex(deskRoot, opts = {}) {
 
   try {
     throwIfAborted(opts.signal)
-    const discoveredRaw = await discover(deskRoot, { signal: opts.signal })
-    const ledger = await loadTombstoneLedger({ pluginRoot: opts.tombstones?.pluginRoot })
-    if (!ledger.valid) {
-      const error = new Error("artifact tombstone ledger is invalid")
-      error.code = "artifact_tombstone_ledger_invalid"
-      error.diagnostics = ledger.diagnostics
-      throw error
-    }
-    const discovered = discoveredRaw.filter((doc) => !tombstoneDecisionForDoc({ ledger, doc }).tombstoned)
-    summary.docs_tombstoned = discoveredRaw.length - discovered.length
+    const { documents: discovered, identities, tombstoned } = await discoverGeneration(deskRoot, opts)
+    summary.docs_tombstoned = tombstoned
     throwIfAborted(opts.signal)
     const discoveredByPath = new Map(discovered.map((d) => [d.path, d]))
     const reindexedDocIds = []
-    const identities = {
-      schema_version: 1,
-      chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
-      normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
-      embedding_spec: ACTIVE_EMBEDDING_SPEC,
-      tombstone_identity: `sha256:${createHash("sha256").update(stableStringify(ledger.rows)).digest("hex")}`,
-      policy_identity: opts.identities?.policy_identity ?? "desk-lexical-required-v1",
-    }
 
     summary.lexical_generation = commitLexicalGeneration({
       db, documents: discovered, eventCursor: opts.eventCursor ?? null, identities, writer: opts.writer,
@@ -154,6 +138,42 @@ export async function rebuildIndex(deskRoot, opts = {}) {
   }
 
   return summary
+}
+
+// The documents and identities a generation of this desk would hold now, read from the files without writing the index.
+async function discoverGeneration(deskRoot, opts) {
+  const discoveredRaw = await discover(deskRoot, { signal: opts.signal })
+  const ledger = await loadTombstoneLedger({ pluginRoot: opts.tombstones?.pluginRoot })
+  if (!ledger.valid) {
+    const error = new Error("artifact tombstone ledger is invalid")
+    error.code = "artifact_tombstone_ledger_invalid"
+    error.diagnostics = ledger.diagnostics
+    throw error
+  }
+  const documents = discoveredRaw.filter((doc) => !tombstoneDecisionForDoc({ ledger, doc }).tombstoned)
+  return {
+    documents,
+    tombstoned: discoveredRaw.length - documents.length,
+    identities: {
+      schema_version: 1,
+      chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
+      normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
+      embedding_spec: ACTIVE_EMBEDDING_SPEC,
+      tombstone_identity: `sha256:${createHash("sha256").update(stableStringify(ledger.rows)).digest("hex")}`,
+      policy_identity: opts.identities?.policy_identity ?? "desk-lexical-required-v1",
+    },
+  }
+}
+
+/**
+ * What a generation of this desk would index now (`content`, see generationContent) and the index settings it would use (`settings`: the same digest without documents), read from the files without writing the index. A Desk build that stands aside for the build owning the index compares these with the index's active generation before it reads from it.
+ *
+ * @param {string} deskRoot
+ * @param {object} [opts] — `identities.policy_identity`, `tombstones.pluginRoot` and `signal`, as rebuildIndex takes them.
+ */
+export async function deskGenerationContent(deskRoot, opts = {}) {
+  const { documents, identities } = await discoverGeneration(deskRoot, opts)
+  return { content: generationContent(documents, identities), settings: generationContent([], identities) }
 }
 
 async function importVectorPackRoots({ db, vectorPacks, signal }) {

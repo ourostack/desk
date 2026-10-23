@@ -233,6 +233,72 @@ test("the search fallback note is plain", async (t) => {
   assert.doesNotMatch(off.semantic_note, jargon)
 })
 
+// Words an agent should never have to decode in a readiness refusal, its detail or a fallback note. Tool and setting names (desk_search, desk_runtime.semantic) and quoted values are exact identifiers the reader acts on, so they are left out of the check.
+const READINESS_JARGON = /converg|semantic|generation|lexical|controller|barrier|journal|reconcil|\bproo?f\b|\bproven\b|RECOVERING|_READY\b/iu
+function assertPlain(text, where) {
+  assert.equal(typeof text, "string", `${where}: a sentence`)
+  assert.ok(text.length > 0, `${where}: not empty`)
+  const prose = text.replace(/`[^`]*`|"[^"]*"|\b[a-z]+(?:[_.][a-z]+)+\b/gu, "")
+  assert.doesNotMatch(prose, READINESS_JARGON, `${where}: ${text}`)
+}
+// Every sentence a refusal carries for the reader; `diagnostic.technical` keeps the raw cause and is left out.
+function readerWords(result) {
+  return [
+    ["diagnostic.message", result.diagnostic?.message], ["diagnostic.detail", result.diagnostic?.detail], ["fix", result.fix],
+    ["readiness_diagnostic.message", result.readiness_diagnostic?.message],
+  ].filter(([, text]) => text !== undefined)
+}
+
+test("every readiness refusal and its detail are plain", async () => {
+  const { READINESS_WORDING, createQueryRouter } = await import("../../../../../plugins/desk/mcp/src/readiness/query-router.js")
+  for (const text of READINESS_WORDING) assertPlain(text, "router wording")
+
+  const root = await mkTempDeskRoot()
+  const owner = { version: "3.2.0-alpha.349", build: "0".repeat(64), this_controller: false }
+  const status = async () => ({ state: "LEXICAL_CONVERGING", freshness: { certain: false, reason: "index_owner_catching_up", cursor: null }, index_owner: owner })
+  const throwing = (error) => async () => { throw error }
+  const late = () => new Promise((resolve) => setTimeout(() => resolve({ current: false }), 200))
+  const direct = async () => ({ results: [] })
+  const cases = {
+    "no search service": createQueryRouter({ semanticBackend: () => {} }),
+    "meaning-based search off": createQueryRouter({ semanticBackend: () => {}, controller: { identity: { semantic_contract: { mode: "unsupported" } } } }),
+    "another build rewrote the index": createQueryRouter({ semanticBackend: () => {}, controller: { status,
+      barrier: throwing(Object.assign(new Error("active lexical generation or journal coverage changed before compaction"), { code: "generation_superseded" })) } }),
+    "unknown failure": createQueryRouter({ semanticBackend: () => {}, controller: { status, barrier: throwing(new Error("socket closed")) } }),
+    "owner still catching up": createQueryRouter({ semanticBackend: () => {}, controller: { status, beginConvergence: async () => ({}),
+      barrier: async () => ({ current: false, state: "LEXICAL_CONVERGING", reason: "index_owner_catching_up" }) } }),
+    "owner indexes differently": createQueryRouter({ semanticBackend: () => {}, controller: { status, beginConvergence: async () => ({}),
+      barrier: async () => ({ current: false, state: "LEXICAL_CONVERGING", reason: "index_owned_by_newer_desk" }) } }),
+    "deadline": createQueryRouter({ semanticBackend: () => {}, semanticDeadlineMs: 5, controller: { status, beginConvergence: async () => ({}),
+      barrier: async (request) => (request?.wait ? late() : { current: false, state: "RECOVERING" }) } }),
+  }
+  for (const [name, router] of Object.entries(cases)) {
+    const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
+    assert.equal(result.status, "error", name)
+    for (const [field, text] of readerWords(result)) assertPlain(text, `${name}, ${field}`)
+  }
+  assertPlain((await createQueryRouter().semantic({ deskRoot: root, kind: "graph" })).diagnostic.message, "unknown kind")
+  // The refusals that waited on the owner name it.
+  const deadline = await cases.deadline.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
+  assert.equal(deadline.diagnostic.reason, "semantic_deadline")
+  assert.equal(deadline.diagnostic.detail,
+    "The search index was still being updated when the wait ran out. Desk 3.2.0-alpha.349 (another session) owns the search index; this session only reads it.")
+
+  // Exact-word search and reindex: the notes they carry when the index cannot answer.
+  const lexical = {
+    "no search service": createQueryRouter({ directBackend: direct }),
+    "index behind": createQueryRouter({ directBackend: direct, controller: { status, barrier: async () => ({ current: false }) } }),
+    "service failed": createQueryRouter({ directBackend: direct, controller: { status, barrier: throwing(new Error("readiness controller request timed out: barrier")) } }),
+  }
+  for (const [name, router] of Object.entries(lexical)) {
+    for (const [field, text] of readerWords(await router.lexical({ deskRoot: root, query: "quartz" }))) assertPlain(text, `search, ${name}, ${field}`)
+    for (const [field, text] of readerWords(await router.lexical({ deskRoot: root, kind: "thread", start_path: "a.md" }))) assertPlain(text, `thread, ${name}, ${field}`)
+  }
+  assertPlain((await createQueryRouter().reindex({})).diagnostic.message, "reindex without a search service")
+  const behind = createQueryRouter({ controller: { beginConvergence: async () => ({}), barrier: async () => ({ current: false }) } })
+  assertPlain((await behind.reindex({})).diagnostic.message, "reindex not caught up")
+})
+
 test("alpha consumer concurrent startup search and reindex leave zero orphan vectors and one writer", async (t) => {
   const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-client.js")
   const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")

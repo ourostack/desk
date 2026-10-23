@@ -324,11 +324,29 @@ test("F1 compaction rejects generation A when B becomes active before queued com
     const covered = journal.cursor
     const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities })
     const compacting = journal.compact({ db, generationId: generationA })
-    // Even B with identical coverage supersedes A: the active generation must be checked.
-    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities })
+    // Even B with identical coverage supersedes A when it indexes the desk differently: the active generation must be checked.
+    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities: { ...identities, policy_identity: "other-policy" } })
     await assert.rejects(compacting, { code: "generation_superseded" })
     assert.equal(getMeta(db, "active_lexical_generation"), String(generationB))
     assert.deepEqual(fs.readFileSync(path.join(stateDir, "changes.jsonl")), original)
+  } finally { await journal.close(); closeDb(db) }
+})
+
+test("compaction goes ahead when another Desk build committed a generation with the same content", async () => {
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-r1-generation-")
+  const stateDir = path.join(root, "journal")
+  const journal = await openChangeJournal({ root, stateDir })
+  const db = openDb(root)
+  try {
+    await journal.appendChange({ path: "task.md" })
+    const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: journal.cursor, identities })
+    const compacting = journal.compact({ db, generationId: generationA })
+    // An older build that cannot stand aside commits the unchanged desk under its own journal and records no writer.
+    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: { journal_id: "older-build", sequence: 7 }, identities })
+    await compacting
+    assert.equal(getMeta(db, "active_lexical_generation"), String(generationB))
+    assert.deepEqual(journal.replay().changes, [], "the change log is cleaned up: B covers the same desk as A")
   } finally { await journal.close(); closeDb(db) }
 })
 
@@ -412,7 +430,7 @@ test(`${finding} failed compaction keeps controller barriers uncertain and sched
         }
         original = fs.readFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"))
         if (failure === "generation_superseded") {
-          commitLexicalGeneration({ db, documents: [], eventCursor: null, identities })
+          commitLexicalGeneration({ db, documents: [], eventCursor: null, identities: { ...identities, policy_identity: "other-policy" } })
         }
         try {
           await compacting

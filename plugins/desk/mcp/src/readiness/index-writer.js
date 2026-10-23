@@ -1,7 +1,8 @@
 // Which Desk build wrote the shared search index last. Every build on a desk writes the one index in it, so each build that has this record can tell whether the index belongs to a newer build and leave it alone; without that, two builds would take the index from each other on every query.
+import { readdirSync } from "node:fs"
 import * as path from "node:path"
 import { compareVersions } from "../runtime/stale-desk.js"
-import { ownerState } from "./owner-record.js"
+import { ownerState, readOwnerRecord } from "./owner-record.js"
 
 export const INDEX_WRITER_KEY = "index_writer"
 const CONTROLLER_ID = /^[0-9a-f]{64}$/u
@@ -41,4 +42,41 @@ export async function writerRuns(writer, ownStateDir, { inspect = ownerState } =
   } catch {
     return true
   }
+}
+
+/**
+ * The running Desk build that owns this desk's shared search index, when it is not `self`: the highest-ranked build, by `outranks`, among the controllers on this desk that publish their Desk version in their owner record (`desk_version`) and the controller that wrote the index last. Only the owner writes the index; a lower build stands aside and reads from it. Returns null when no running controller ranks above `self`.
+ *
+ * `self` is `{ version, build, controller }`; `stateDir` is this controller's folder, with the other controllers' folders beside it. `indexWriter` is the writer of the active generation (readIndexWriter), or null.
+ */
+export async function indexOwner({ self, root, stateDir, indexWriter = null, inspect = ownerState, list = readdirSync }) {
+  const home = path.dirname(stateDir)
+  const candidates = indexWriter !== null && indexWriter.controller !== self.controller ? [indexWriter] : []
+  let names = []
+  try {
+    names = list(home)
+  } catch {
+    // No folder beside this one: no other controller has run here.
+  }
+  for (const name of names) {
+    if (name === self.controller || !CONTROLLER_ID.test(name) || candidates.some((known) => known.controller === name)) continue
+    const { status, record } = readOwnerRecord(path.join(home, name))
+    if (status !== "valid" || record.identity?.root !== root || typeof record.desk_version !== "string") continue
+    candidates.push({ version: record.desk_version, build: typeof record.identity.build === "string" ? record.identity.build : null, controller: name })
+  }
+  const higher = candidates.filter((candidate) => outranks(candidate, self))
+    .sort((a, b) => (outranks(a, b) ? -1 : outranks(b, a) ? 1 : 0))
+  for (const candidate of higher) {
+    // A writer whose controller is unknown cannot be checked, and "running" there would stop this build from ever writing.
+    if (candidate.controller !== null && await writerRuns(candidate, stateDir, { inspect })) return candidate
+  }
+  return null
+}
+
+/** One plain sentence naming the Desk build that owns the search index (`{ version, this_controller }`), or null when it is not known. */
+export function indexOwnerSentence(owner) {
+  if (typeof owner?.version !== "string") return null
+  return owner.this_controller === true
+    ? `Desk ${owner.version} (this session) owns the search index.`
+    : `Desk ${owner.version} (another session) owns the search index; this session only reads it.`
 }

@@ -13,7 +13,9 @@ import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readines
 import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
-import { getSemanticCoverage } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { getSemanticCoverage, verifyIndexCoversDesk } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
+import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { makeEmbedFetch, mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
 
 // An embedding service that counts the document texts it is asked to embed.
@@ -27,20 +29,23 @@ function countingEmbed() {
   return counter
 }
 
-// `version` set: a build with the writer record, as the production handler in server.js passes it. Unset: an older alpha that records no writer.
-async function controllerFor(t, root, stateHome, build, embed, { version, converged = { count: 0 }, before = async () => {}, after = async () => {} } = {}) {
+// `version` set: a build with the writer record, as the production handler in server.js passes it. Unset: an older alpha that records no writer. `policy` indexes under other settings, so the generation's content differs from the other build's even for the same files.
+async function controllerFor(t, root, stateHome, build, embed, { version, policy, converged = { count: 0 }, verified = { count: 0 }, before = async () => {}, between = async () => {}, after = async () => {} } = {}) {
   const contracts = { ...readinessContracts({ lexical: "required" }, { build }), semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } }
   // The production handler records the writing controller's identity id, which names its state folder.
   const id = controllerIdentity({ root, ...contracts }).id
   const controller = await connectOrStartController({
-    root, stateHome, ephemeral: true, ...contracts,
+    root, stateHome, ephemeral: true, ...contracts, ...(version ? { version } : {}),
     watcher: { fence: async () => ({ certain: true }) },
     handlers: { async beginConvergence({ eventCursor, journal }) {
       converged.count += 1
       await before()
       const summary = await rebuildIndex(root, {
         eventCursor, embed: { fetch: embed.fetch }, ...(version ? { writer: { version, build, controller: id } } : {}),
+        ...(policy ? { identities: { policy_identity: policy } } : {}),
       })
+      // Embedding stands between the commit and the change-log cleanup.
+      await between()
       const db = openDb(root)
       try {
         await journal.compact({ db, generationId: summary.lexical_generation })
@@ -48,6 +53,16 @@ async function controllerFor(t, root, stateHome, build, embed, { version, conver
         return { summary, semantic: { ...getSemanticCoverage(db), provenance_current: true,
           query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } } } }
       } finally { closeDb(db) }
+    },
+    // As server.js checks the owner's index when a higher build owns it; the index fixture records no vector provenance.
+    async verifyIndex() {
+      verified.count += 1
+      const result = await verifyIndexCoversDesk(root)
+      if (result.semantic !== null) {
+        result.semantic = { ...result.semantic, provenance_current: true,
+          query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } } }
+      }
+      return result
     } },
   })
   t.after(() => controller.close())
@@ -62,7 +77,8 @@ test("a newer build reclaims the shared index the older build wrote last, withou
   const stateHome = path.join(root, "controller-state")
   mkdirSync(stateHome, { recursive: true, mode: 0o700 })
   const embed = countingEmbed()
-  const older = await controllerFor(t, root, stateHome, "a".repeat(64), embed)
+  // An older build that indexed the desk the same way would leave an index the newer build reads as it is; this one used other settings.
+  const older = await controllerFor(t, root, stateHome, "a".repeat(64), embed, { policy: "older-policy" })
   const newer = await controllerFor(t, root, stateHome, "b".repeat(64), embed)
   const recall = (readiness) => desk_recall({ deskRoot: root, readiness, input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
 
@@ -109,63 +125,64 @@ function generationRows(root) {
   } finally { closeDb(db) }
 }
 
-test("two builds that record their writer agree on one owner: the lower one never takes the index back", async (t) => {
+test("two builds that record their writer agree on one owner: only the higher one writes, and the lower one reads its index", async (t) => {
   const { root, stateHome } = await deskWithThreeTasks()
   const embed = countingEmbed()
   // The higher version wins even with the smaller build digest: version ranks before the digest.
-  const high = { build: "0".repeat(64), version: "3.2.0-alpha.343", converged: { count: 0 } }
-  const low = { build: "f".repeat(64), version: "3.2.0-alpha.342", converged: { count: 0 } }
+  const high = { build: "0".repeat(64), version: "3.2.0-alpha.343", converged: { count: 0 }, verified: { count: 0 } }
+  const low = { build: "f".repeat(64), version: "3.2.0-alpha.342", converged: { count: 0 }, verified: { count: 0 } }
   high.controller = await controllerFor(t, root, stateHome, high.build, embed, high)
   low.controller = await controllerFor(t, root, stateHome, low.build, embed, low)
   const router = (side) => createDeskQueryRouter({ controller: side.controller, version: side.version })
   const recall = (side) => desk_recall({ deskRoot: root, queryRouter: router(side), input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
   const search = (side) => desk_search({ deskRoot: root, queryRouter: router(side), input: { query: "quartz" }, opts: { embed: { fetch: makeEmbedFetch() } } })
 
+  // The lower build catches up first, but the higher build's controller runs: it writes nothing and waits for the owner's index.
   await low.controller.beginConvergence()
+  assert.equal(low.converged.count, 0, "the lower build does not write the index while the higher build runs")
+  assert.equal((await low.controller.status()).freshness.reason, "index_owner_catching_up")
   await high.controller.beginConvergence()
-  const settled = { high: high.converged.count, low: low.converged.count, embedded: embed.documents, rows: generationRows(root) }
+  await low.controller.barrier({ capability: "semantic", wait: true })
+  const settled = { high: high.converged.count, embedded: embed.documents, rows: generationRows(root) }
 
   for (let round = 0; round < 3; round += 1) {
     const served = await recall(high)
     assert.equal(served.results?.length, 3, JSON.stringify(served))
-    const refused = await recall(low)
-    assert.equal(refused.status, "error")
-    assert.equal(refused.diagnostic.reason, "index_owned_by_newer_desk")
-    assert.equal(refused.diagnostic.message, "A newer Desk session on this desk is serving meaning-based search.")
-    assert.equal(refused.fix, "desk_search answers now with exact-word matches. To use meaning-based search here, run this session on the newer Desk: update Desk for this host and restart the session.")
-    const exact = await search(low)
-    assert.equal(exact.results.length, 3, "the lower build still answers exact-word search from the files")
-    assert.equal((await search(high)).readiness_diagnostic, undefined, "and leaves the index to the higher build")
+    const read = await recall(low)
+    assert.equal(read.results?.length, 3, `the lower build reads the owner's index: ${JSON.stringify(read)}`)
+    assert.equal((await search(low)).readiness_diagnostic, undefined, "exact-word search reads the owner's index too")
+    assert.equal((await search(high)).readiness_diagnostic, undefined)
   }
   assert.equal(high.converged.count, settled.high, "alternating queries start no reconcile in the owning build")
-  assert.equal(low.converged.count, settled.low, "nor in the lower build")
+  assert.equal(low.converged.count, 0, "nor any write by the lower build")
   assert.deepEqual(generationRows(root), settled.rows, "so no generation rows are added")
   assert.equal(embed.documents, settled.embedded)
+  assert.deepEqual((await low.controller.status()).index_owner, { version: high.version, build: high.build, this_controller: false })
+  assert.deepEqual((await high.controller.status()).index_owner, { version: high.version, build: high.build, this_controller: true })
 
-  // A desk change the lower build reconciles last hands the index to it; the higher build takes it back once, on its next query.
+  // A desk change the lower build reconciles only checks the owner's index again; it still writes nothing.
+  const checks = low.verified.count
   await low.controller.beginConvergence()
-  assert.equal((await recall(high)).results.length, 3)
-  assert.equal(high.converged.count, settled.high + 1)
-  assert.equal((await recall(low)).diagnostic.reason, "index_owned_by_newer_desk")
-  assert.equal((await recall(high)).results.length, 3)
-  assert.equal(high.converged.count, settled.high + 1, "one reconcile per foreign write, not one per query")
-  assert.equal(low.converged.count, settled.low + 1)
-  assert.equal(embed.documents, settled.embedded, "nothing is embedded again under the same embedding settings")
+  assert.equal(low.verified.count, checks + 1)
+  assert.equal(low.converged.count, 0)
+  assert.deepEqual(generationRows(root), settled.rows)
+  assert.equal((await recall(low)).results.length, 3)
 
   for (let i = 0; i < RETAINED_LEXICAL_GENERATIONS; i += 1) await high.controller.beginConvergence()
   const rows = generationRows(root)
-  assert.equal(rows.generations, RETAINED_LEXICAL_GENERATIONS, "generation rows stay bounded however often the builds reconcile")
+  assert.equal(rows.generations, RETAINED_LEXICAL_GENERATIONS, "generation rows stay bounded however often the owner reconciles")
   assert.equal(rows.operations, RETAINED_LEXICAL_GENERATIONS)
 
-  // The newer session ends. Without any desk change, the lower build takes the index back on its next recall.
+  // The newer session ends. The lower build keeps reading the unchanged index, and becomes the owner on its next catch-up.
   await high.controller.close()
-  const after = low.converged.count
-  const recovered = await recall(low)
-  assert.equal(recovered.results?.length, 3, JSON.stringify(recovered))
-  assert.equal(low.converged.count, after + 1, "one reconcile, started by the recall itself")
-  assert.equal((await recall(low)).results.length, 3)
-  assert.equal(low.converged.count, after + 1)
-  assert.equal(embed.documents, settled.embedded, "taking the index back embeds nothing again")
+  assert.equal((await recall(low)).results?.length, 3)
+  assert.equal(low.converged.count, 0, "an unchanged index needs no write")
+  await writeFile(root, "track/four/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz rollout four detail\n")
+  await low.controller.beginConvergence()
+  assert.equal(low.converged.count, 1, "with no higher build running, the lower build writes the desk change")
+  assert.deepEqual((await low.controller.status()).index_owner, { version: low.version, build: low.build, this_controller: true })
+  assert.equal((await recall(low)).results?.length, 3)
+  assert.equal(embed.documents, settled.embedded + 1, "only the new card is embedded")
 })
 
 test("taking the index back waits only for what is left of the call's deadline", async (t) => {
@@ -176,7 +193,7 @@ test("taking the index back waits only for what is left of the call's deadline",
   let phase = "idle"
   const hold = Promise.withResolvers()
   t.after(() => hold.resolve())
-  const older = await controllerFor(t, root, stateHome, "a".repeat(64), embed)
+  const older = await controllerFor(t, root, stateHome, "a".repeat(64), embed, { policy: "older-policy" })
   const newer = await controllerFor(t, root, stateHome, "b".repeat(64), embed, {
     version: "3.2.0-alpha.342",
     // The reclaim's own reconcile never finishes in time.
@@ -211,4 +228,122 @@ test("taking the index back waits only for what is left of the call's deadline",
   assert.equal(refused.diagnostic.reason, "semantic_deadline", JSON.stringify(refused))
   assert.ok(reclaimStarted !== null, "the call reached the reclaim wait")
   assert.ok(waited < deadlineMs - spentMs / 2, `the reclaim wait used the rest of one deadline, not a fresh one (waited ${waited} ms)`)
+})
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Polls the controller until its meaning-based search is current, or gives up after `limitMs`.
+async function readyWithin(controller, limitMs) {
+  const end = Date.now() + limitMs
+  while (Date.now() < end) {
+    if ((await controller.barrier({ capability: "semantic" })).current === true) return true
+    await sleep(25)
+  }
+  return false
+}
+
+test("overlapping catch-ups: the higher build becomes ready and the lower build writes nothing to the index", async (t) => {
+  const { root, stateHome } = await deskWithThreeTasks()
+  const embed = countingEmbed()
+  const committed = Promise.withResolvers()
+  // Each catch-up pauses between its commit and its change-log cleanup, the way embedding a large card does.
+  const high = { build: "0".repeat(64), version: "3.2.0-alpha.350", converged: { count: 0 },
+    async between() { committed.resolve(); await sleep(150) } }
+  const low = { build: "f".repeat(64), version: "3.2.0-alpha.349", converged: { count: 0 }, between: () => sleep(150) }
+  high.controller = await controllerFor(t, root, stateHome, high.build, embed, high)
+  low.controller = await controllerFor(t, root, stateHome, low.build, embed, low)
+
+  // The higher build starts first; the lower build starts while the higher one is between commit and cleanup.
+  void high.controller.beginConvergence().catch(() => {})
+  await committed.promise
+  void low.controller.beginConvergence().catch(() => {})
+
+  assert.equal(await readyWithin(high.controller, 5_000), true,
+    `the higher build became ready within 5 s (state ${(await high.controller.status()).state}, reason ${(await high.controller.status()).freshness.reason})`)
+  assert.equal(low.converged.count, 0, "the lower build wrote nothing to the index")
+  assert.equal(high.converged.count, 1, "so nothing undid the higher build's catch-up and it never had to start over")
+  const recall = (side) => desk_recall({ deskRoot: root, queryRouter: createDeskQueryRouter({ controller: side.controller, version: side.version }),
+    input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
+  const served = await recall(high)
+  assert.equal(served.results?.length, 3, JSON.stringify(served))
+})
+
+test("beside an older build that keeps committing the unchanged desk, the owning build becomes ready within a bound", async (t) => {
+  const { root, stateHome } = await deskWithThreeTasks()
+  const embed = countingEmbed()
+  // Embedding stands between this build's commit and its change-log cleanup, long enough for the older build to commit in between.
+  const high = { build: "0".repeat(64), version: "3.2.0-alpha.350", converged: { count: 0 }, between: () => sleep(100) }
+  high.controller = await controllerFor(t, root, stateHome, high.build, embed, high)
+  // A build from before writers were recorded: it cannot stand aside, records no writer and commits the desk under its own journal on a timer.
+  const older = { commits: 0, stopped: false }
+  older.loop = (async () => {
+    while (!older.stopped) {
+      await rebuildIndex(root, { eventCursor: { journal_id: "pre-461-journal", sequence: older.commits + 1 }, embed: { fetch: embed.fetch } })
+      older.commits += 1
+      await sleep(20)
+    }
+  })()
+  t.after(async () => { older.stopped = true; await older.loop })
+  await sleep(50)
+
+  void high.controller.beginConvergence().catch(() => {})
+  assert.equal(await readyWithin(high.controller, 5_000), true,
+    `the owning build became ready within 5 s (reason ${(await high.controller.status()).freshness.reason})`)
+  const recall = () => desk_recall({ deskRoot: root, queryRouter: createDeskQueryRouter({ controller: high.controller, version: high.version }),
+    input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
+  const before = older.commits
+  for (let round = 0; round < 5; round += 1) {
+    const served = await recall()
+    assert.equal(served.results?.length, 3, JSON.stringify(served))
+    await sleep(30)
+  }
+  assert.ok(older.commits > before, "the older build kept committing while the owning build served")
+  assert.equal(high.converged.count, 1, "and the owning build never had to catch up again")
+})
+
+test("a lower build started while a higher build runs stands aside, reads the higher build's index, and its status names the owner", async (t) => {
+  const { root, stateHome } = await deskWithThreeTasks()
+  const embed = countingEmbed()
+  const high = { build: "0".repeat(64), version: "3.2.0-alpha.349", converged: { count: 0 }, verified: { count: 0 } }
+  const low = { build: "f".repeat(64), version: "3.2.0-alpha.348", converged: { count: 0 }, verified: { count: 0 } }
+  high.controller = await controllerFor(t, root, stateHome, high.build, embed, high)
+  await high.controller.beginConvergence()
+  assert.equal((await high.controller.status()).state, "READY")
+  const rows = generationRows(root)
+
+  low.controller = await controllerFor(t, root, stateHome, low.build, embed, low)
+  await low.controller.beginConvergence()
+  assert.equal(low.converged.count, 0, "the lower build stands aside: it writes nothing")
+  assert.equal(low.verified.count, 1, "it checks that the owner's index covers the desk")
+  assert.equal((await low.controller.status()).state, "READY")
+  assert.deepEqual(generationRows(root), rows)
+  const router = (side, options = {}) => createDeskQueryRouter({ ...options, controller: side.controller, version: side.version })
+  const recall = (side, options) => desk_recall({ deskRoot: root, queryRouter: router(side, options), input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
+  const read = await recall(low)
+  assert.equal(read.results?.length, 3, JSON.stringify(read))
+
+  const owner = "Desk 3.2.0-alpha.349 (another session) owns the search index; this session only reads it."
+  const status = await desk_status({ deskRoot: root, statusContext: { admission: { controller: low.controller } } })
+  assert.equal(status.readiness.owner, owner)
+  assert.equal(status.readiness.owned_by_this_session, false)
+  assert.equal(compactStatus(status).search_owner, owner)
+  const ownStatus = await desk_status({ deskRoot: root, statusContext: { admission: { controller: high.controller } } })
+  assert.equal(ownStatus.readiness.owner, "Desk 3.2.0-alpha.349 (this session) owns the search index.")
+  assert.equal(ownStatus.readiness.owned_by_this_session, true)
+
+  // A desk change the owner has not indexed yet: the lower build waits for the owner, and its refusal names the owner in plain words.
+  await writeFile(root, "track/four/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz rollout four detail\n")
+  await low.controller.markUncertain("pending_change")
+  const refused = await recall(low, { semanticDeadlineMs: 1_000 })
+  assert.equal(refused.status, "error", JSON.stringify(refused))
+  assert.equal(refused.diagnostic.reason, "semantic_deadline")
+  assert.equal(refused.diagnostic.message, "Meaning-based search did not finish catching up within 1 second.")
+  assert.equal(refused.diagnostic.detail, `The search index was still being updated when the wait ran out. ${owner}`)
+  assert.equal(low.converged.count, 0, "waiting, the lower build still writes nothing")
+
+  await high.controller.markUncertain("pending_change")
+  await high.controller.barrier({ capability: "semantic", wait: true })
+  assert.equal(await readyWithin(low.controller, 5_000), true, "the lower build reads the owner's index once the owner has caught up")
+  assert.equal((await recall(low)).results?.length, 3)
+  assert.equal(low.converged.count, 0)
 })

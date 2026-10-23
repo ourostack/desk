@@ -58,6 +58,7 @@ import {
   ensureIndex,
   getSemanticCoverage,
   resolveEnsureIndexOptions,
+  verifyIndexCoversDesk,
 } from "./server-helpers.js"
 import { existsSync, renameSync } from "node:fs"
 import * as path from "node:path"
@@ -137,6 +138,8 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
   try {
     return await startReadinessController({
       ...options,
+      // Published in the owner record, so every Desk build on this desk agrees which one owns the shared index.
+      version: deskVersion(),
       watcher,
       prepareRootSync: () => {
         ensureStateIgnored(deskRoot)
@@ -177,6 +180,18 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
             closeDb(db)
           }
           if (policy.semantic !== "unsupported") {
+            result.semantic.query_embedding = await probeEmbeddingService(embed)
+          }
+          return result
+        },
+        // A higher-ranked Desk build owns the index: check that its index covers the desk as this build sees it, and write nothing.
+        async verifyIndex() {
+          await yieldTurn()
+          const result = await verifyIndexCoversDesk(deskRoot, {
+            identities: { policy_identity: stableStringify(policy) },
+            tombstones: resolveEnsureIndexOptions({}, { deskRoot }).tombstones,
+          })
+          if (result.semantic !== null && policy.semantic !== "unsupported") {
             result.semantic.query_embedding = await probeEmbeddingService(embed)
           }
           return result

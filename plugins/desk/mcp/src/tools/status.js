@@ -5,6 +5,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { deskVersion } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { indexOwnerSentence } from "../readiness/index-writer.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
@@ -215,7 +216,13 @@ const LEXICAL_MEANING = "Lexical search and the index are current; semantic (emb
 function presentReadiness(readiness) {
   const word = readinessWord(readiness)
   const meaning = word === "ready" && readiness.state === "LEXICAL_READY" ? LEXICAL_MEANING : READINESS_MEANING[word]
-  return { state: word, meaning, detail: { controller_state: readiness.state, convergence: readiness.convergence } }
+  // Which Desk build owns the shared search index, and whether it is this session's: several builds can share one desk, and only the owner writes the index.
+  const owner = indexOwnerSentence(readiness.index_owner)
+  return {
+    state: word, meaning,
+    ...(owner === null ? {} : { owner, owned_by_this_session: readiness.index_owner.this_controller === true }),
+    detail: { controller_state: readiness.state, convergence: readiness.convergence },
+  }
 }
 
 // Settles as `promise` does, or rejects with the signal's reason once it aborts.
@@ -236,7 +243,7 @@ async function controllerReadiness(admission, signal) {
   try {
     // An aborted run stops waiting for the controller, so the session's close does not wait for it either.
     const snapshot = await untilAborted(Promise.resolve().then(() => admission.controller.status()), signal)
-    return { state: snapshot.state, convergence: snapshot.convergence ?? empty }
+    return { state: snapshot.state, convergence: snapshot.convergence ?? empty, index_owner: snapshot.index_owner ?? null }
   } catch (error) {
     return {
       state: "unavailable",

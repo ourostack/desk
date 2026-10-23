@@ -11,6 +11,10 @@ import { resolveStateDirectory } from "./state-path.js"
 import { fenceEvents } from "./watcher.js"
 import { exitRelease as defaultExitRelease } from "./exit-release.js"
 import { readOwnProcessStart } from "./process-start.js"
+import { indexOwner } from "./index-writer.js"
+
+// A catch-up that another Desk build's commit undid, or a build standing aside whose owner has not caught up yet, tries again after a growing pause instead of at once: retrying at once is what kept two builds undoing each other's work. After the last pause the controller stops and stays uncertain; the next desk change or search starts it again.
+export const RETRY_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000])
 
 export async function startReadinessController({
   identity,
@@ -24,6 +28,9 @@ export async function startReadinessController({
   bindBeforeProcessStart = process.platform === "win32",
   prepareRootSync,
   supervisor,
+  // The Desk version this controller runs. With it the controller publishes the version in its owner record and writes the shared index only while no running build ranks above it (index-writer.js); without it (older callers and tests) it writes as before.
+  version = null,
+  retryDelaysMs = RETRY_DELAYS_MS,
 } = {}) {
   validateControllerEndpoint(endpoint)
   if (process.platform !== "win32") validatePrivateDirectory(path.dirname(endpoint))
@@ -54,6 +61,13 @@ export async function startReadinessController({
   let reconcileScheduled = null
   let closing = false
   let unregisterRelease
+  const self = typeof version === "string" ? { version, build: identity.build ?? null, controller: identity.id } : null
+  // The build that owns the index when it is not this one, as of the last catch-up; `ownerKnown` is false until the first.
+  let indexOwnedBy = null
+  let ownerKnown = false
+  // What the index held when this controller last proved it current (generationContent): another build's generation with the same content serves the same answers.
+  let readyContent = null
+  let retryAttempt = 0
   const semanticMode = identity.semantic_contract?.mode
   const semanticEnabled = semanticMode === "required" || semanticMode === "background"
   const server = net.createServer((socket) => {
@@ -81,13 +95,65 @@ export async function startReadinessController({
     return result
   }
 
-  function scheduleReconciliation() {
+  // `delayMs` above 0 is a retry after a pause; a desk change during the pause waits for it.
+  function scheduleReconciliation(delayMs = 0) {
     if (closing || reconcileScheduled || convergence) return
-    reconcileScheduled = setImmediate(() => {
+    const fired = Promise.withResolvers()
+    const run = () => {
       reconcileScheduled = null
       // beginConvergence retains the failure in live status; it is not an empty success.
       void beginConvergence().catch(() => {})
-    })
+      fired.resolve()
+    }
+    const handle = delayMs > 0 ? setTimeout(run, delayMs) : setImmediate(run)
+    if (delayMs > 0) handle.unref?.()
+    reconcileScheduled = {
+      delayed: delayMs > 0,
+      fired: fired.promise,
+      cancel() {
+        if (delayMs > 0) clearTimeout(handle)
+        else clearImmediate(handle)
+        fired.resolve()
+      },
+    }
+  }
+
+  // The next pause, or null once every pause is spent.
+  function nextRetryDelay() {
+    const delay = retryDelaysMs[retryAttempt] ?? null
+    if (delay !== null) retryAttempt += 1
+    return delay
+  }
+
+  // Whether a running Desk build that ranks above this one owns the index; this controller then only reads it.
+  async function readOwnership() {
+    if (self === null) return null
+    let indexWriter = null
+    try {
+      const { readActiveIndex } = await import("../db/status-read.js")
+      indexWriter = readActiveIndex(identity.root)?.writer ?? null
+    } catch {
+      // An unreadable index has no owner to defer to; the catch-up moves it aside and rebuilds it.
+    }
+    indexOwnedBy = await indexOwner({ self, root: identity.root, stateDir, indexWriter })
+    ownerKnown = true
+    return indexOwnedBy
+  }
+
+  async function committedContent(generationId) {
+    try {
+      const { readCommittedContent } = await import("../db/status-read.js")
+      return readCommittedContent(identity.root, generationId)
+    } catch {
+      return null
+    }
+  }
+
+  function indexOwnerStatus() {
+    if (self === null || !ownerKnown) return null
+    return indexOwnedBy === null
+      ? { version: self.version, build: self.build, this_controller: true }
+      : { version: indexOwnedBy.version, build: indexOwnedBy.build, this_controller: false }
   }
 
   function markUncertain(reason = "freshness_uncertain") {
@@ -138,7 +204,7 @@ export async function startReadinessController({
     const coverage = convergenceResult?.semantic
     const query = coverage?.query_embedding
     return {
-      status: convergence ? "pending" : convergenceError ? "failed"
+      status: convergence || reconcileScheduled?.delayed ? "pending" : convergenceError ? "failed"
         : convergenceResult ? "succeeded" : "not_checked",
       semantic: coverage ? {
         chunks_total: coverage.chunks_total,
@@ -164,12 +230,14 @@ export async function startReadinessController({
     if (convergence) {
       return { accepted: true, reused: true, in_progress: true, state }
     }
-    if (reconcileScheduled) clearImmediate(reconcileScheduled)
+    reconcileScheduled?.cancel()
     reconcileScheduled = null
     if (state === "LEXICAL_READY") state = transitionReadiness(state, "RECOVERING")
-    state = transitionReadiness(state, "LEXICAL_CONVERGING")
+    // A build standing aside stays catching up while it waits for the owner.
+    if (state !== "LEXICAL_CONVERGING") state = transitionReadiness(state, "LEXICAL_CONVERGING")
     convergenceError = null
     convergenceResult = null
+    readyContent = null
     // The operation belongs to the controller, not the requesting socket.
     server.ref()
     // Capture before asynchronous journal opening/protection. An uncertainty
@@ -177,7 +245,7 @@ export async function startReadinessController({
     // invalidate this attempt, not be mistaken for its initial revision.
     const startedRevision = revision
     let eventCursor
-    let retryConvergence = false
+    let retryDelay = null
     convergence = Promise.resolve().then(async () => {
       if (journalPoisoned) {
         await journalWork
@@ -188,21 +256,46 @@ export async function startReadinessController({
       await withJournal((active) => {
         eventCursor = active.cursor
       })
-      return handlers.beginConvergence?.({ eventCursor, reason: freshnessReason, journal })
+      // Only the build that owns the index writes it. A lower build reads the owner's index once it covers the desk as this build sees it, and writes nothing.
+      if (await readOwnership() !== null) {
+        const checked = await handlers.verifyIndex?.({ eventCursor })
+        return { ...(checked ?? { verified: false, same_settings: false, semantic: null }), stood_aside: true }
+      }
+      const result = await handlers.beginConvergence?.({ eventCursor, reason: freshnessReason, journal })
+      if (result && typeof result.content !== "string") {
+        const content = await committedContent(result.summary?.lexical_generation)
+        if (content !== null) result.content = content
+      }
+      return result
     }).then((result) => {
       convergenceResult = result ?? { accepted: true }
       if (revision === startedRevision) {
-        journal.reconciled(eventCursor)
-        freshnessReason = null
-        state = transitionReadiness(state, "LEXICAL_READY")
-        if (semanticCurrent()) state = transitionReadiness(state, "READY")
+        if (result?.stood_aside === true && result.verified !== true) {
+          // The owner has not caught up with the desk yet, or builds its index differently; this build never writes it.
+          freshnessReason = result.same_settings === true ? "index_owner_catching_up" : "index_owned_by_newer_desk"
+          if (result.same_settings === true) retryDelay = nextRetryDelay()
+        } else {
+          journal.reconciled(eventCursor)
+          freshnessReason = null
+          readyContent = typeof result?.content === "string" ? result.content : null
+          state = transitionReadiness(state, "LEXICAL_READY")
+          if (semanticCurrent()) state = transitionReadiness(state, "READY")
+          // Standing aside, the owner may still be embedding the text this build has seen; look again until it is done.
+          else if (result?.stood_aside === true && semanticEnabled) retryDelay = nextRetryDelay()
+        }
       }
+      if (retryDelay === null) retryAttempt = 0
       return convergenceResult
     }).catch((error) => {
       convergenceError = error
-      if (error.code === "generation_superseded" || error.code === "journal_integrity_failed") {
+      if (error.code === "generation_superseded") {
+        // Another build committed different content between this build's commit and its cleanup. Look again after a pause: the next round reads who owns the index first, and stands aside if a higher build does.
         markUncertain(error.code)
-        retryConvergence = true
+        retryDelay = nextRetryDelay()
+        if (retryDelay === null) retryAttempt = 0
+      } else if (error.code === "journal_integrity_failed") {
+        markUncertain(error.code)
+        retryDelay = 0
       } else {
         freshnessReason ??= "convergence_failed"
         if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
@@ -210,28 +303,43 @@ export async function startReadinessController({
       throw error
     }).finally(() => {
       convergence = null
-      if (retryConvergence || (!convergenceError && revision !== startedRevision)) scheduleReconciliation()
+      if (retryDelay !== null) scheduleReconciliation(retryDelay)
+      else if (!convergenceError && revision !== startedRevision) scheduleReconciliation()
       if (!ephemeral) server.unref()
     })
     return convergence
   }
 
+  const lexicalCurrent = () => freshnessReason === null && (state === "LEXICAL_READY" || state === "READY")
+
   async function barrier(params) {
     if (params?.wait) {
       while (convergence || reconcileScheduled) {
-        if (!convergence) beginConvergence()
-        await convergence
+        if (!convergence) {
+          if (!reconcileScheduled.delayed) beginConvergence()
+          // A paused retry: an exact-word wait that is already current does not wait for meaning-based search.
+          else if (params.capability !== "semantic" && lexicalCurrent()) break
+          else { await reconcileScheduled.fired; continue }
+        }
+        try {
+          await convergence
+        } catch (error) {
+          // A failure retried after a pause is waited out like the pause itself; the caller's own deadline bounds the wait.
+          if (!reconcileScheduled?.delayed) throw error
+        }
       }
       if (convergenceError) throw convergenceError
     }
     if (handlers.barrier) return handlers.barrier(params)
-    const lexicalCurrent = freshnessReason === null && (state === "LEXICAL_READY" || state === "READY")
+    const current = params?.capability === "semantic"
+      ? lexicalCurrent() && semanticCurrent()
+      : params?.capability === "lexical" && lexicalCurrent()
     return {
       capability: params?.capability,
-      current: params?.capability === "semantic"
-        ? lexicalCurrent && semanticCurrent()
-        : params?.capability === "lexical" && lexicalCurrent,
+      current,
       state,
+      // Why a build standing aside cannot answer from the index yet.
+      ...(!current && ["index_owner_catching_up", "index_owned_by_newer_desk"].includes(freshnessReason) ? { reason: freshnessReason } : {}),
     }
   }
 
@@ -255,7 +363,11 @@ export async function startReadinessController({
         }),
         status: () => ({
           state, identity, owner, convergence: convergenceStatus(),
-          freshness: { certain: freshnessReason === null, reason: freshnessReason, cursor: journal?.cursor ?? null },
+          freshness: {
+            certain: freshnessReason === null, reason: freshnessReason, cursor: journal?.cursor ?? null,
+            content: freshnessReason === null ? readyContent : null,
+          },
+          index_owner: indexOwnerStatus(),
         }),
         beginConvergence,
         barrier: () => barrier(request.params),
@@ -299,6 +411,8 @@ export async function startReadinessController({
     const ownerFile = path.join(stateDir, "owner.json")
     const record = {
       schema_version: 1, identity, owner, endpoint, socket,
+      // Other Desk builds on this desk read it to learn which build owns the shared index.
+      ...(self === null ? {} : { desk_version: self.version }),
       ...(supervisor ? { supervisor } : {}),
       ...(prepareRootSync === undefined ? {} : { startup: { started_at: new Date().toISOString() } }),
     }
@@ -340,7 +454,7 @@ export async function startReadinessController({
     async close() {
       closing = true
       unregisterRelease()
-      if (reconcileScheduled) clearImmediate(reconcileScheduled)
+      reconcileScheduled?.cancel()
       reconcileScheduled = null
       await convergence?.catch(() => {})
       await journalWork
