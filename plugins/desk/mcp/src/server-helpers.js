@@ -10,9 +10,10 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
 import { discover } from "./indexer/discover.js"
-import { deskGenerationContent, isIndexFresh, rebuildIndex } from "./indexer/index.js"
+import { isIndexFresh, rebuildIndex } from "./indexer/index.js"
 import { openSnapshot } from "./db/status-read.js"
-import { generationContent } from "./readiness/generations.js"
+import { expectedLexicalGenerationIdentity, generationContent } from "./readiness/generations.js"
+import { loadTombstoneLedger, tombstoneDecisionForDoc } from "./artifacts/tombstones.js"
 import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
@@ -391,9 +392,15 @@ function textOrNull(value) {
  * @returns {Promise<{ verified: boolean, same_settings: boolean, content: string, semantic: object|null }>}
  */
 export async function verifyIndexCoversDesk(deskRoot, opts = {}) {
-  const { content, settings } = await deskGenerationContent(deskRoot, {
-    ...opts, tombstones: { pluginRoot: resolveArtifactPluginRoot(opts), ...(opts.tombstones ?? {}) },
-  })
+  const ledger = await loadTombstoneLedger({ pluginRoot: resolveArtifactPluginRoot(opts), ...(opts.tombstones ?? {}) })
+  if (!ledger.valid) {
+    throw Object.assign(new Error("artifact tombstone ledger is invalid"), { code: "artifact_tombstone_ledger_invalid", diagnostics: ledger.diagnostics })
+  }
+  // The documents and settings a generation of this desk would hold now, as the indexer would commit them (rebuildIndex).
+  const documents = (await discover(deskRoot)).filter((doc) => !tombstoneDecisionForDoc({ ledger, doc }).tombstoned)
+  const identities = expectedLexicalGenerationIdentity({ ledger, policyIdentity: opts.identities?.policy_identity })
+  const content = generationContent(documents, identities)
+  const settings = generationContent([], identities)
   const snapshot = openSnapshot(deskRoot)
   try {
     if (snapshot?.generation == null) return { verified: false, same_settings: true, content, semantic: null }
