@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.346 — 2026-10-23
+
+In a desk, everything now lives on `main`: agents commit their own paths and push, and use a branch only to coordinate writers working at the same time. Briefs, reports, reviews, plans and small logs go in the task's folder. Only secrets, credentials, raw private transcripts and customer data stay outside Git, cited by pointer. Rules for code repositories (worktrees, branches, pull requests) are unchanged.
+
+The artifact-map helper (`superpowers-context.js`) no longer needs `--evidence-root`. Without it, the brief and report paths sit under `<iteration>/superpowers/step-<n>/attempt-<m>/` in the desk. An evidence root inside the desk is now accepted; one inside Desk's factory state folder or the retired work-ledger folder is still refused. Callers that pass an evidence root outside the desk keep working.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.345 — 2026-10-23
 
 Session-start sync no longer moves other sessions' files. Several agents share one desk, so an untracked file there is usually another session's unfinished work, yet a pull that failed for any reason other than the network, including an ordinary rebase conflict, used to move every untracked file in the desk into `_cache/stray-<date>/`. Sync now moves only the files git itself names as in the pull's way ("The following untracked working tree files would be overwritten by merge:" or "...by checkout:"), and moves nothing for any other failure, which it reports as before. Boot lists every moved file by its old and new path, so the session that owns one can find it.
