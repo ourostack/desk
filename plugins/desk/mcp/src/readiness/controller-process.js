@@ -78,7 +78,7 @@ export async function startControllerProcess(options, { spawn = fork, platform =
       return { reclaimed: false, reason: "supervisor_owner_mismatch" }
     }
     const probe = await probeController({
-      root: identity.root, policy: options.policy, stateHome: path.dirname(stateDir), timeoutMs: 1000,
+      root: identity.root, policy: options.policy, build: identity.build ?? null, stateHome: path.dirname(stateDir), timeoutMs: 1000,
     })
     if (!probeMissed(probe)) return { reclaimed: false, reason: "controller_answering" }
     const verification = await verifyOwnedChild({ child, record, stateDir, identity, endpoint })

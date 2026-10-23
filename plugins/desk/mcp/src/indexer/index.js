@@ -103,7 +103,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     }
 
     summary.lexical_generation = commitLexicalGeneration({
-      db, documents: discovered, eventCursor: opts.eventCursor ?? null, identities,
+      db, documents: discovered, eventCursor: opts.eventCursor ?? null, identities, writer: opts.writer,
       apply() {
         writeActiveEmbeddingSpec(db, setMeta)
         const existing = db.prepare("SELECT id, path, hash, mtime FROM docs").all()

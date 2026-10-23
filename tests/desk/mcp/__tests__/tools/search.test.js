@@ -24,7 +24,7 @@ import {
   writeFile,
 } from "./_search_helpers.js"
 
-async function createRoutedSemanticReadiness(t, root, { semanticCurrent = true } = {}) {
+async function createRoutedSemanticReadiness(t, root, { semanticCurrent = true, mode = "background" } = {}) {
   const canonicalRoot = await fs.realpath(root)
   const stateHome = path.join(canonicalRoot, "controller-state")
   mkdirSync(stateHome, { recursive: true, mode: 0o700 })
@@ -33,7 +33,7 @@ async function createRoutedSemanticReadiness(t, root, { semanticCurrent = true }
     stateHome,
     ephemeral: true,
     watcher: { fence: async () => ({ certain: true }) },
-    semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC },
+    semanticContract: { mode, embedding_spec: mode === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC },
     handlers: { async beginConvergence({ eventCursor }) {
       const summary = await rebuildIndex(canonicalRoot, {
         eventCursor,
@@ -202,6 +202,35 @@ test("routed search falls back to proven lexical ranking while semantic converge
   assert.equal(result.search_mode, "lexical")
   assert.equal(result.semantic_unavailable, true)
   assert.equal(result.results[0].path, "track/work/task.md")
+})
+
+test("the search fallback note is plain", async (t) => {
+  const plain = "Meaning-based search is still catching up; these results match exact words and are usable."
+  const jargon = /convergence|generation/iu
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "track/work/task.md", "---\nstatus: processing\nupdated: 2026-09-19\nschema_version: 1\n---\nquartz lexical fallback\n")
+  // Through the controller, while meaning-based search is not current.
+  const readiness = await createRoutedSemanticReadiness(t, root, { semanticCurrent: false })
+  const routed = await routedSearch({ deskRoot: root, readiness, input: { query: "quartz" }, opts: { embed: { fetch: makeEmbedFetch() } } })
+  assert.equal(routed.search_mode, "lexical")
+  assert.equal(routed.semantic_note, plain)
+  assert.doesNotMatch(routed.semantic_note, jargon)
+  // The indexed search and timeline, when the router serves exact words only and gives no reason of its own.
+  await buildFixtureIndex(root)
+  const search = await desk_search({ deskRoot: root, input: { query: "quartz" }, opts: { lexicalOnly: true } })
+  assert.equal(search.semantic_note, plain)
+  assert.equal(search.semantic_diagnostic.message, plain)
+  const timeline = await indexedTimeline({ deskRoot: root, input: { from: "2026-01-01", query: "quartz" }, opts: { lexicalOnly: true } })
+  assert.equal(timeline.semantic_note, plain)
+  assert.equal(timeline.semantic_diagnostic.message, plain)
+  for (const result of [search, timeline]) assert.ok(!("semantic_repair" in result), "nothing to repair: it is catching up")
+  // A desk whose policy turns meaning-based search off is not told it is catching up.
+  const offRoot = await mkTempDeskRoot()
+  await writeFile(offRoot, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz lexical only\n")
+  const off = await routedSearch({ deskRoot: offRoot, readiness: await createRoutedSemanticReadiness(t, offRoot, { mode: "unsupported" }), input: { query: "quartz" } })
+  assert.equal(off.search_mode, "lexical")
+  assert.equal(off.semantic_note, "Meaning-based search is off for this desk; these results match exact words.")
+  assert.doesNotMatch(off.semantic_note, jargon)
 })
 
 test("alpha consumer concurrent startup search and reindex leave zero orphan vectors and one writer", async (t) => {

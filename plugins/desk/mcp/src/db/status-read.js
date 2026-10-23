@@ -3,6 +3,7 @@ import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "./init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
+import { INDEX_WRITER_KEY, readIndexWriter } from "../readiness/index-writer.js"
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 
@@ -244,7 +245,8 @@ export function openSnapshot(deskRoot) {
     ).n
     const chunksTotal = db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n
     const cursor = generation ? JSON.parse(generation.event_cursor) : null
-    return { db, generation: generation?.id ?? null, identities: generation, cursor,
+    const writer = readIndexWriter(db.prepare("SELECT value FROM meta WHERE key = ?").get(INDEX_WRITER_KEY)?.value, cursor)
+    return { db, generation: generation?.id ?? null, identities: generation, cursor, writer,
       covered: covered ? JSON.parse(covered.value) : null,
       semantic: {
         active_embedding_spec_id: activeEmbeddingSpecId,

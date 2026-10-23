@@ -5,11 +5,19 @@
 import { spawnSync } from "node:child_process"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { bootstrapPath, isolatedEnv, makeIsolatedHome, indexPath, pluginRoot } from "../launch/_mcp_handshake.js"
+import { bootstrapPath, isolatedEnv, makeIsolatedHome, indexPath, mcpRoot, pluginRoot } from "../launch/_mcp_handshake.js"
+import { hashCurrentSource } from "../../../../../plugins/desk/mcp/src/runtime/bootstrap.js"
 import { openSession } from "../launch/_mcp_session.js"
 import { preloadArgs } from "./_readiness_failure_preload.mjs"
 
 export const HANDSHAKE_BUDGET_MS = 3000
+
+let build = null
+/** The Desk build a started session runs: it loads its runtime from the source mirror named by this digest, and its controller identity includes it. */
+export function sessionBuild() {
+  build ??= hashCurrentSource(mcpRoot)
+  return build
+}
 
 export function git(cwd, ...args) {
   const result = spawnSync("git", ["-c", "user.name=Desk Test", "-c", "user.email=desk-test@example.invalid", "-c", "init.defaultBranch=main", "-c", "advice.detachedHead=false", ...args], {

@@ -139,3 +139,18 @@ test("owner_verified requires a successful live start match, including when iden
     assert.equal(hungControllerReport(probe).owner_verified, expected, `live lookup returned ${current}`)
   }
 })
+
+test("a probe looks for the controller of the session's own Desk build", async (t) => {
+  const root = await mkTempRoot("desk-hung-build-")
+  const stateHome = path.join(root, "state")
+  const build = "e".repeat(64)
+  const missing = Object.assign(new EventEmitter(), { destroy() {}, write() {} })
+  const connect = () => { setImmediate(() => missing.emit("error", Object.assign(new Error("gone"), { code: "ENOENT" }))); return missing }
+  const probe = await probeController({ root, policy, stateHome, build, timeoutMs: 50, connect })
+  const expected = controllerIdentity({ root, ...readinessContracts(policy, { build }) })
+  assert.equal(probe.identity.id, expected.id)
+  assert.equal(probe.identity.build, build)
+  assert.equal(probe.stateDir, path.join(stateHome, expected.id))
+  const unbuilt = await probeController({ root, policy, stateHome, timeoutMs: 50, connect })
+  assert.notEqual(unbuilt.identity.id, expected.id, "a probe without a build never finds another build's controller")
+})

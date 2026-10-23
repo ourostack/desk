@@ -47,11 +47,19 @@ export const DESK_TIMELINE_FIELDS = ["from", "to", "query", "limit", "scope"]
 const SEMANTIC_REPAIR_COMMAND =
   "Start Ollama, pull nomic-embed-text, then run desk_reindex; no force is required after v1.2.2 because missing vectors are repaired automatically."
 
+// What a search says when it served exact-word results because meaning-based search is not current yet.
+export const SEMANTIC_CATCHING_UP = "Meaning-based search is still catching up; these results match exact words and are usable."
+// What it says when the desk's readiness policy turns meaning-based search off.
+export const SEMANTIC_OFF = Object.freeze({ reason: "semantic_off", message: "Meaning-based search is off for this desk; these results match exact words." })
+
 function semanticUnavailableFields(diagnostic, opts) {
   return {
-    semantic_note: diagnostic?.message
-      ? `Semantic search unavailable: ${diagnostic.message}`
-      : "Semantic search unavailable: embedding service did not return a usable vector",
+    // The router chose exact words only (opts.lexicalOnly) because meaning-based search is not current: the results are complete for exact words, so the note says that plainly and the reason stays in semantic_diagnostic.
+    semantic_note: opts?.lexicalOnly
+      ? (diagnostic?.reason === SEMANTIC_OFF.reason ? SEMANTIC_OFF.message : SEMANTIC_CATCHING_UP)
+      : diagnostic?.message
+        ? `Semantic search unavailable: ${diagnostic.message}`
+        : "Semantic search unavailable: embedding service did not return a usable vector",
     semantic_diagnostic: diagnostic ?? null,
     ...(diagnostic?.reason === "alpha_scope" || opts?.lexicalOnly ? {} : { semantic_repair: SEMANTIC_REPAIR_COMMAND }),
   }
@@ -489,7 +497,7 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
       vector: null, available: false,
       diagnostic: opts.semanticDiagnostic ?? {
         reason: "semantic_unavailable",
-        message: "Semantic convergence is not current for the active generation.",
+        message: SEMANTIC_CATCHING_UP,
       },
     } : await embedQuery(
       query,
@@ -839,7 +847,7 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
     let semanticAvailable = false
     let semanticDiagnostic = opts?.lexicalOnly ? opts.semanticDiagnostic ?? {
       reason: "semantic_unavailable",
-      message: "Semantic convergence is not current for the active generation.",
+      message: SEMANTIC_CATCHING_UP,
     } : null
     let queryVec = null
     if (query && !opts?.lexicalOnly) {
