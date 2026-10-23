@@ -91,6 +91,27 @@ async function reviewed() {
   assert.equal(plan.ready.length, 1)
   return { ...f, plan, item: plan.ready[0] }
 }
+async function reviewedJobs(count) {
+  const f = await reviewed()
+  for (let index = 0; index < count - 1; index += 1) {
+    const job = String(index).repeat(32)
+    const entry = structuredClone(f.entries[0])
+    entry.facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    entry.facts.jobs[0].job = job
+    entry.facts.outcomes[0].job = job
+    entry.localJobs = [{ local: job, published: job }]
+    f.entries.push(entry)
+    await queue.prepareTaskContexts(f.env, f.options)
+    const work = (await queue.listContextWork(f.env, { store: STORE })).find((item) => item.job === job)
+    const accepted = await queue.acceptContextCandidate(f.env, {
+      store: STORE, job, basis: work.basis, bytes: json(candidate(entry.facts, job)),
+    })
+    assert.equal((await queue.acceptContextPrivacy(f.env, {
+      store: STORE, job, basis: work.basis, bytes: json(review(accepted.payload_sha256)),
+    })).result, "context_accepted")
+  }
+  return f
+}
 async function online(f, changes = {}) {
   return queue.prepareContextPublication(f.env, { store: STORE, plan: f.plan, client: capabilityClient,
     direct: true, ref: "main", now: 1000, readMain: async () => ({ blobs: new Map(), unknown: false }), ...changes })
@@ -1035,10 +1056,9 @@ test("publication planning preserves numerical-only consent and expired deadline
 test("a ready input that spends the remaining budget is held rather than returned late", async (t) => {
   const f = await reviewed()
   let elapsed = 0
-  let reads = 0
   const plan = await withFsFault(t, {
     readFile: (original, file, ...args) => {
-      if (String(file) === f.work.input && ++reads === 2) elapsed = 2000
+      if (String(file) === f.work.input) elapsed = 2000
       return original(file, ...args)
     },
   }, () => queue.planContextPublication(f.env, {
@@ -1098,31 +1118,92 @@ for (const code of ["context_preparation_deferred", "synthetic_source_failure"])
   })
 }
 
+test("an exhausted numeric flush does not report deferred context when no context work exists", async () => {
+  const f = await fixture()
+  const plan = await queue.planContextPublication(f.env, { ...f.options, entries: [], deadline: -2000, now: 0 })
+  assert.deepEqual(plan, { work: false, ready: [], states: [], deferred: false, prs: new Set() })
+})
+
 test("publication batches retain the eight-record limit and rotate to later ready jobs", async () => {
-  const f = await reviewed()
-  for (let index = 0; index < 8; index += 1) {
-    const job = String(index).repeat(32)
-    const entry = structuredClone(f.entries[0])
-    entry.facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
-    entry.facts.jobs[0].job = job
-    entry.facts.outcomes[0].job = job
-    entry.localJobs = [{ local: job, published: job }]
-    f.entries.push(entry)
-    await queue.prepareTaskContexts(f.env, f.options)
-    const work = (await queue.listContextWork(f.env, { store: STORE })).find((item) => item.job === job)
-    const accepted = await queue.acceptContextCandidate(f.env, {
-      store: STORE, job, basis: work.basis, bytes: json(candidate(entry.facts, job)),
-    })
-    assert.equal((await queue.acceptContextPrivacy(f.env, {
-      store: STORE, job, basis: work.basis, bytes: json(review(accepted.payload_sha256)),
-    })).result, "context_accepted")
-  }
+  const f = await reviewedJobs(9)
   const first = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
   const second = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
   assert.equal(first.ready.length, 8)
   assert.equal(second.ready.length, 8)
   assert.equal(first.deferred, true)
   assert.equal(new Set([...first.ready, ...second.ready].map((item) => item.job)).size, 9)
+})
+
+test("a partial plan accounts for every owned member of the refused pull request", async () => {
+  const f = await reviewedJobs(9)
+  const sent = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+  await queue.saveContextSent(f.env, STORE, sent.ready, 102)
+  const partial = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+  await queue.saveContextRefused(f.env, STORE, { ...partial, refusedPrs: new Set([102]) }, "context_source_changed", 1000)
+  for (const item of sent.ready) {
+    const state = JSON.parse(await readFile(await taskContextPath(f.env, STORE, item.job, "state.json"), "utf8"))
+    assert.equal(state.refusals, 1, "a store-wide rejection watermark cannot skip an omitted batch member")
+    assert.equal(state.pr, null)
+    assert.equal(state.hold_until, 1000 + 24 * 3600 * 1000)
+  }
+})
+
+test("a pending context batch stays stable while the planner rotates to later jobs", async () => {
+  const f = await reviewedJobs(9)
+  const sent = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+  await queue.saveContextSent(f.env, STORE, sent.ready, 102)
+  const partial = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+  const items = await queue.prepareContextPublication(f.env, {
+    store: STORE, plan: partial, entries: f.entries, pendingPr: 102, client: capabilityClient,
+    direct: true, ref: "main", now: 1000, readMain: async () => ({ blobs: new Map(), unknown: false }),
+  })
+  assert.deepEqual(items.map((item) => item.path).sort(), sent.ready.map((item) => item.path).sort(),
+    "ordinary retries must not replace a still-valid unacknowledged batch")
+  const withoutSlice = await queue.prepareContextPublication(f.env, {
+    store: STORE, plan: { work: false, ready: [], states: [] }, entries: f.entries, pendingPr: 102,
+    client: capabilityClient, direct: true, ref: "main", now: 1000,
+    readMain: async () => ({ blobs: new Map(), unknown: false }),
+  })
+  assert.deepEqual(withoutSlice.map((item) => item.path).sort(), sent.ready.map((item) => item.path).sort())
+  const completePlan = await queue.prepareContextPublication(f.env, {
+    store: STORE, plan: sent, pendingPr: 102, client: capabilityClient,
+    direct: true, ref: "main", now: 1000, readMain: async () => ({ blobs: new Map(), unknown: false }),
+  })
+  assert.deepEqual(completePlan.map((item) => item.path).sort(), sent.ready.map((item) => item.path).sort())
+  assert.deepEqual(await queue.prepareContextPublication(f.env, {
+    store: STORE, plan: partial, entries: [], pendingPr: 102, client: capabilityClient,
+    direct: true, ref: "main", now: 1000, readMain: async () => ({ blobs: new Map(), unknown: false }),
+  }), [], "pending ownership cannot stand in for missing current source facts")
+})
+
+test("settled publication inventory leaves bounded preparation progress for a new task", async (t) => {
+  const f = await reviewedJobs(8)
+  const sent = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+  await queue.saveContextSent(f.env, STORE, sent.ready, 102)
+  await queue.prepareContextPublication(f.env, {
+    store: STORE, plan: sent, client: capabilityClient, direct: true, ref: "main", now: 1000,
+    readMain: async () => ({ blobs: new Map(sent.ready.map((item) => [item.path, item.sha])), unknown: false }),
+  })
+  const job = "f".repeat(32)
+  const entry = structuredClone(f.entries[0])
+  entry.facts.session.id = "ffbc1234-1234-4abc-8abc-123456789abc"
+  entry.facts.jobs[0].job = job
+  entry.facts.outcomes[0].job = job
+  entry.localJobs = [{ local: job, published: job }]
+  f.entries.push(entry)
+  for (let pass = 0; pass < 3; pass += 1) {
+    let elapsed = 0
+    await withFsFault(t, {
+      readFile: (original, file, ...args) => {
+        if (/input-[a-f0-9]{64}\.json$/u.test(String(file))) elapsed += 150
+        return original(file, ...args)
+      },
+    }, () => queue.planContextPublication(f.env, {
+      ...f.options, now: 1000, deadline: 2000, clock: () => elapsed,
+    }), fsNative.promises)
+  }
+  assert.ok((await queue.listContextWork(f.env, { store: STORE })).some((work) => work.job === job),
+    "already-delivered records cannot spend every turn's entire preparation allowance")
 })
 
 test("an atomic send cannot overwrite a different valid publication receipt written before it acquires the lock", async (t) => {
@@ -1137,6 +1218,25 @@ test("an atomic send cannot overwrite a different valid publication receipt writ
   assert.deepEqual([...plan.prs], [102])
 })
 
+test("refusal accounting preserves a newer publication receipt and retries the same PR without double counting", async (t) => {
+  const f = await reviewed()
+  await queue.saveContextSent(f.env, STORE, [f.item], 101)
+  const before = await storedState(f)
+  await queue.saveContextSent(f.env, STORE, [{ ...f.item, sha: "e".repeat(40) }], 101)
+  const winner = await storedState(f)
+  await writeFile(await taskContextPath(f.env, STORE, CONTEXT_JOB, "state.json"), json(before))
+  const plan = { refusedPrs: new Set([101]) }
+  await atStateLock(t, f, winner, () => assert.rejects(
+    queue.saveContextRefused(f.env, STORE, plan, "context_source_changed", 1000),
+    /context_publication_changed/u,
+  ))
+  assert.deepEqual(await storedState(f), winner)
+  await queue.saveContextRefused(f.env, STORE, plan, "context_source_changed", 1000)
+  await queue.saveContextRefused(f.env, STORE, plan, "context_source_changed", 1000)
+  assert.equal((await storedState(f)).refusals, 1)
+  assert.equal((await storedState(f)).pr, null)
+})
+
 test("publication holds unknown main and missing authority without sending reviewed context", async () => {
   const unknown = await reviewed()
   assert.deepEqual(await online(unknown, { readMain: async () => ({ blobs: new Map(), unknown: true }) }), [])
@@ -1147,7 +1247,7 @@ test("publication holds unknown main and missing authority without sending revie
 })
 
 test("a job removed or withdrawn during the online check cannot publish a cached ready record", async () => {
-  for (const change of ["missing", "consent"]) {
+  for (const change of ["missing", "consent"]) for (const pendingPr of [null, 101]) {
     const f = await reviewed()
     const client = { api: async (...args) => {
       if (change === "missing") {
@@ -1156,7 +1256,7 @@ test("a job removed or withdrawn during the online check cannot publish a cached
       } else await setConsent(f.env, { store: STORE, contribute: false, account: "synthetic" })
       return capabilityClient.api(...args)
     } }
-    assert.deepEqual(await online(f, { client }), [])
+    assert.deepEqual(await online(f, { client, pendingPr, entries: f.entries }), [])
   }
 })
 
