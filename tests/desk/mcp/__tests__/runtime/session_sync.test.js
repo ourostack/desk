@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { removeTree } from "../_remove_tree.js"
 import {
+  overwrittenUntrackedPaths,
   queueDeskProblemFiling,
   runSessionSyncCli,
   syncWorkspace,
@@ -150,6 +151,76 @@ test("a dirty-index pull failure is resolved by quarantining the stray paths and
   assert.ok(!git(cloneA, ["status", "--porcelain"]).includes("stray.txt"))
 })
 
+// Several agents share one desk, so an untracked file usually belongs to another session's unfinished work. A pull that fails
+// on a conflict must leave every one of them where it is.
+test("sync leaves untracked files alone when the pull fails on a conflict", async () => {
+  const { cloneA } = await mkConflictFixture()
+  await fs.writeFile(path.join(cloneA, "draft.md"), "another session's draft\n")
+  mkdirSync(path.join(cloneA, "track", "task"), { recursive: true })
+  await fs.writeFile(path.join(cloneA, "track", "task", "planning.md"), "in progress\n")
+
+  const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
+
+  assert.equal(result.state, "unresolved")
+  assert.equal(result.cause, "conflict")
+  assert.equal(result.quarantinedPaths, undefined)
+  assert.equal(await fs.readFile(path.join(cloneA, "draft.md"), "utf8"), "another session's draft\n")
+  assert.equal(await fs.readFile(path.join(cloneA, "track", "task", "planning.md"), "utf8"), "in progress\n")
+  assert.equal(existsSync(path.join(cloneA, "_cache")), false, "nothing was moved anywhere")
+})
+
+test("sync moves only the paths git says would be overwritten", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  mkdirSync(path.join(cloneB, "notes"), { recursive: true })
+  await fs.writeFile(path.join(cloneB, "notes", "café plan.md"), "from origin\n")
+  git(cloneB, ["add", "--", "notes"])
+  await writeAndCommit(cloneB, "stray.txt", "from origin\n", "add stray and a note from origin")
+  git(cloneB, ["push", "-q"])
+  // Two untracked files the incoming commit would overwrite, and two that it would not.
+  await fs.writeFile(path.join(cloneA, "stray.txt"), "local uncommitted\n")
+  mkdirSync(path.join(cloneA, "notes"), { recursive: true })
+  await fs.writeFile(path.join(cloneA, "notes", "café plan.md"), "local note\n")
+  await fs.writeFile(path.join(cloneA, "notes", "mine.md"), "another session's note\n")
+  await fs.writeFile(path.join(cloneA, "draft.md"), "another session's draft\n")
+  // A local commit makes the pull a real rebase, the shape a busy desk has.
+  await writeAndCommit(cloneA, "local.md", "local\n", "local commit")
+  const today = new Date().toISOString().slice(0, 10)
+
+  const result = await syncWorkspace({ root: cloneA, env, fileProblem: () => {} })
+
+  assert.equal(result.state, "quarantined", JSON.stringify(result))
+  assert.deepEqual([...result.quarantinedPaths].sort(), [
+    path.join("_cache", `stray-${today}`, "notes", "café plan.md"),
+    path.join("_cache", `stray-${today}`, "stray.txt"),
+  ])
+  assert.equal(await fs.readFile(path.join(cloneA, "_cache", `stray-${today}`, "notes", "café plan.md"), "utf8"), "local note\n")
+  assert.equal(await fs.readFile(path.join(cloneA, "notes", "mine.md"), "utf8"), "another session's note\n")
+  assert.equal(await fs.readFile(path.join(cloneA, "draft.md"), "utf8"), "another session's draft\n")
+  assert.equal(await fs.readFile(path.join(cloneA, "stray.txt"), "utf8"), "from origin\n", "the pull completed")
+})
+
+test("overwrittenUntrackedPaths reads git's list of untracked files in the way, and nothing else", () => {
+  const listed = [
+    "error: The following untracked working tree files would be overwritten by merge:",
+    "\tnotes/a.md",
+    "\tb c.md",
+    "Please move or remove them before you merge.",
+    "Aborting",
+  ].join("\n")
+  assert.deepEqual(overwrittenUntrackedPaths(listed), ["notes/a.md", "b c.md"])
+  assert.deepEqual(overwrittenUntrackedPaths("error: The following untracked working tree files would be overwritten by checkout:\n\tx.md\nerror: could not detach HEAD\n"), ["x.md"])
+  assert.deepEqual(overwrittenUntrackedPaths("error: Untracked working tree file 'one.md' would be overwritten by merge.\n"), ["one.md"])
+  // Tracked files with local changes are git's to report, never Desk's to move.
+  assert.deepEqual(overwrittenUntrackedPaths("error: Your local changes to the following files would be overwritten by merge:\n\tseed.md\nPlease commit your changes or stash them before you merge.\n"), [])
+  assert.deepEqual(overwrittenUntrackedPaths("CONFLICT (content): Merge conflict in seed.md\n"), [])
+  assert.deepEqual(overwrittenUntrackedPaths(undefined), [])
+  // A path that would leave the desk, or that names the quarantine folder itself, is never taken from git's text.
+  assert.deepEqual(overwrittenUntrackedPaths("error: The following untracked working tree files would be overwritten by merge:\n\t../outside.md\n\t/abs.md\n\t_cache/stray-x/a.md\n\t_cache\n\t\n\tok.md\n"), ["ok.md"])
+  // The list can be the last thing git printed, and a path named twice is moved once.
+  assert.deepEqual(overwrittenUntrackedPaths("The following untracked working tree files would be overwritten by checkout:\n\tz.md\n\tz.md"), ["z.md"])
+})
+
 // ~/ms-desk, 2026-10-12: that desk's `.gitignore` had no `_cache/` line, so an earlier quarantine was itself listed as stray and moved
 // into the new one, `_cache/stray-<today>/_cache/stray-<earlier>/...`.
 test("on a desk that does not ignore _cache/, an earlier quarantine is left where it is and only the stray path moves", async () => {
@@ -216,9 +287,11 @@ test("a second (and third) same-day quarantine does not clobber the ones before 
 
 test("quarantine skips a stray path that no longer exists by the time it runs, and does not lose the real one", async () => {
   const { cloneA } = await mkDirtyIndexFixture()
+  // git names ghost.txt as in the way and lists it as untracked, but it is gone before the move.
   const spawnGit = (cmd, args, opts) => {
     const result = spawnSync(cmd, args, opts)
-    if (args.includes("ls-files")) return { ...result, stdout: `${result.stdout.replace(/\n+$/u, "")}\nghost.txt\n` }
+    if (args.includes("ls-files")) return { ...result, stdout: `${result.stdout}ghost.txt\0` }
+    if (args.includes("pull") && result.status !== 0) return { ...result, stderr: result.stderr.replace("\tstray.txt\n", "\tstray.txt\n\tghost.txt\n") }
     return result
   }
   const result = await syncWorkspace({ root: cloneA, env, spawnGit })

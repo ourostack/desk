@@ -151,14 +151,14 @@ export function commitIndexPaths(root, relPaths, entries, message, spawnGit, sta
 }
 
 /**
- * `git add` exactly `relPaths` (relative to `root`). Returns `{ ok, stderr }`;
- * never throws on a Git failure. A call that runs past `GIT_TIMEOUT_MS` is
+ * `git add` exactly `relPaths` (relative to `root`); `all: true` adds `-A`, so a deletion in the working tree is staged too,
+ * still only at those paths. Returns `{ ok, stderr }`; never throws on a Git failure. A call that runs past `GIT_TIMEOUT_MS` is
  * killed and reported as `{ ok: false, stderr: "timeout" }`.
  */
-export function stagePaths(root, relPaths, spawnGit, stateBranch) {
+export function stagePaths(root, relPaths, spawnGit, stateBranch, { all = false } = {}) {
   const refusal = commitBranchRefusal(root, spawnGit, stateBranch)
   if (refusal !== null) return { ok: false, stderr: refusal }
-  const result = run(spawnGit, root, ["add", "--", ...relPaths])
+  const result = run(spawnGit, root, ["add", ...(all ? ["-A"] : []), "--", ...relPaths])
   if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
 }

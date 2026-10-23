@@ -1026,10 +1026,10 @@ test("bootOnce: sync states surface as instructions — unresolved degrades and 
 
   const quarantined = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
-    syncFn: async () => ({ state: "quarantined", quarantinedPaths: ["stray.txt"] }),
+    syncFn: async () => ({ state: "quarantined", quarantinedPaths: ["_cache/stray-2026-10-22/stray.txt"] }),
   })
   assert.equal(quarantined.status, "ready")
-  assert.ok(quarantined.instructions.some((line) => line.includes("moved stray untracked paths")))
+  assert.ok(quarantined.instructions.some((line) => line.includes("Sync moved 1 untracked file that the pull would have overwritten") && line.includes("stray.txt")))
 
   const unresolvedNoReason = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
@@ -1041,7 +1041,28 @@ test("bootOnce: sync states surface as instructions — unresolved degrades and 
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
     syncFn: async () => ({ state: "quarantined" }),
   })
-  assert.ok(quarantinedNoPaths.instructions.some((line) => line.includes("moved stray untracked paths")))
+  assert.ok(quarantinedNoPaths.instructions.some((line) => line.includes("Sync moved untracked files out of the pull's way")))
+})
+
+test("boot result lists every moved path", async () => {
+  const root = await mkDeskWorkspace()
+  const { gh, jq } = okPrereqRunners()
+  const factoryStatusFn = () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] })
+  const moved = ["_cache/stray-2026-10-22/stray.txt", "_cache/stray-2026-10-22/notes/café plan.md"]
+  for (const sync of [
+    { state: "quarantined", quarantinedPaths: moved },
+    { state: "unresolved", reason: "pull_rebase_failed_after_quarantine", cause: "conflict", conflicted: [], quarantinedPaths: moved },
+  ]) {
+    const result = await bootOnce({ env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn, syncFn: async () => sync })
+    assert.deepEqual(result.sync.quarantinedPaths, moved, "the structured result carries every moved path")
+    const line = result.instructions.find((instruction) => instruction.startsWith("Sync moved"))
+    assert.ok(line, JSON.stringify(result.instructions))
+    assert.match(line, /stray\.txt to _cache\/stray-2026-10-22\/stray\.txt/u)
+    assert.match(line, /notes\/café plan\.md to _cache\/stray-2026-10-22\/notes\/café plan\.md/u)
+    assert.ok(line.includes(root), "names the desk the paths are under")
+    const printed = formatBootText(result)
+    for (const path_ of moved) assert.ok(printed.includes(path_), `${path_} is in the printed boot`)
+  }
 })
 
 test("bootOnce: each step's own failure degrades only that part, never the whole call", async () => {
@@ -1716,7 +1737,7 @@ test("bootOnce: prereq, sync, card and push-account problems each become one pla
   assert.match(text, /Fix the frontmatter of track-a\/bad-card\/task\.md/u)
   assert.match(text, /Do not push acme\/widgets/u)
   const quarantined = await healthyBoot(root, { syncFn: async () => ({ state: "quarantined" }) })
-  assert.ok(quarantined.instructions.some((line) => line.includes("Sync moved stray untracked paths")))
+  assert.ok(quarantined.instructions.some((line) => line.includes("Sync moved untracked files out of the pull's way")))
 })
 
 const UNDECIDED = () => ({ store: "ourostack/factory-intake", source: "x", consent: "undecided", stores: [], warnings: [] })

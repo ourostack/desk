@@ -916,6 +916,18 @@ function factoryInstructions(factory, pluginRoot, { noninteractive, mentioned })
   ]
 }
 
+// Every untracked file the sync moved out of the pull's way, by its old and new path, so the session that owns one can find
+// it. Each moved path is `_cache/stray-<date>/<old path>`. Returns null when nothing was moved.
+function movedPathsInstruction(sync, root) {
+  if (sync?.state !== "quarantined" && sync?.state !== "unresolved") return null
+  const moved = Array.isArray(sync.quarantinedPaths) ? sync.quarantinedPaths : []
+  if (moved.length === 0) {
+    return sync.state === "quarantined" ? `Sync moved untracked files out of the pull's way into _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.` : null
+  }
+  const pairs = moved.map((to) => `${to.split(/[\\/]/u).slice(2).join("/")} to ${to}`)
+  return `Sync moved ${moved.length === 1 ? "1 untracked file" : `${moved.length} untracked files`} that the pull would have overwritten, under ${root.path}: ${pairs.join("; ")}. Another session may own them: tell the operator in one line, and leave them for their owner to restore.`
+}
+
 // What a failed sync means for the agent, by why it failed. A conflict or an unknown failure sends the agent to
 // `git status`; an unreachable or refusing origin must not, because `git status` then reads clean and the
 // degraded state gets dismissed (round 5). Returns null for a sync that did not fail.
@@ -1076,7 +1088,8 @@ function buildInstructionItems(ctx) {
   }
   const syncLine = syncInstruction(sync, root)
   if (syncLine !== null) add(syncLine)
-  if (sync?.state === "quarantined") add(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
+  const movedLine = movedPathsInstruction(sync, root)
+  if (movedLine !== null) add(movedLine)
   for (const entry of cardValidationResult) {
     add(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
