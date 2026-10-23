@@ -1,1 +1,0 @@
-Task-context preparation can now use its bounded time window even when earlier ordinary flush work takes more than 90 seconds, while reserving a two-second opportunity for priority numerical delivery. The total flush deadline and the separate two-second preparation limit are unchanged, as are privacy checks, independent review and publication guards.

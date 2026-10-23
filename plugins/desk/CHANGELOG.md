@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.344 — 2026-10-23
+
+Task-context preparation can now use its bounded time window even when earlier ordinary flush work takes more than 90 seconds, while reserving a two-second opportunity for priority numerical delivery. The total flush deadline and the separate two-second preparation limit are unchanged, as are privacy checks, independent review and publication guards.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.343 — 2026-10-23
 
 Boot and the task tools now say only what helps. Boot finds a card's next step even when it sits past the first 64 KB, and names a card over 64 KB with one hint to move its history into the iteration folder, instead of claiming there is no next step. When boot runs out of time, the repos and pull requests it did not check become one line each with a count and what to do, not one line per repo. Task tool results leave out `session_label` when no label was proposed.
