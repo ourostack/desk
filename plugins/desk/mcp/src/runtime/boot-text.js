@@ -73,6 +73,36 @@ export function syncSummary({ sync, timedOut = false, lastSyncAt = null, root = 
   return "sync ok"
 }
 
+const PENDING_REPO = /^repo state for (.+?) \(.*\): boot_budget_exceeded$/u
+const PENDING_PUSH = /^push account for (.+?) \(.*\): boot_budget_exceeded$/u
+const PENDING_PR = /^open pull requests for (.+): boot_budget_exceeded$/u
+
+/**
+ * The pending lines as printed, `{ rest, summaries }`: the per-repo and per-store lines that only say boot ran out of time become one line each with a count and the next action; other lines pass through.
+ * The structured result keeps every line.
+ */
+function collapsePending(pending) {
+  const repos = new Set()
+  const stores = new Set()
+  const pushes = new Set()
+  const rest = []
+  const summaries = []
+  for (const line of pending) {
+    const repo = PENDING_REPO.exec(line)
+    const store = PENDING_PR.exec(line)
+    const push = PENDING_PUSH.exec(line)
+    if (repo !== null) repos.add(repo[1])
+    else if (store !== null) stores.add(store[1])
+    else if (push !== null) pushes.add(push[1])
+    else rest.push(line)
+  }
+  const plural = (count, one, many) => (count === 1 ? one : many)
+  if (repos.size > 0) summaries.push(`Repo state not checked for ${repos.size} ${plural(repos.size, "repo", "repos")} (boot ran out of time); check a repo with git when you work in it.`)
+  if (stores.size > 0) summaries.push(`Open pull requests not checked for ${stores.size} ${plural(stores.size, "repo", "repos")} (boot ran out of time); check with gh pr list when you need them.`)
+  if (pushes.size > 0) summaries.push(`Push route not checked for ${pushes.size} ${plural(pushes.size, "repo", "repos")} (boot ran out of time); run gh auth status before you push.`)
+  return { rest, summaries }
+}
+
 /** How many active tasks the boot text lists; the rest are counted, never cut mid-sentence. */
 export const TASKS_SHOWN_CAP = 15
 
@@ -109,7 +139,7 @@ function stepLines(task) {
     return [`  blocker: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`, ...steps]
   }
   const stuck = stepsBlocked(task) ? [`  blocker: ${ceiling(task.steps.blocked.map((step) => `${step.id}: ${step.reason}`).join("; "))}`] : []
-  return [...stuck, `  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`, ...steps]
+  return [...stuck, `  next: ${next === null ? (task.card_kb > 0 ? `no next step found in this ${task.card_kb} KB card` : NO_NEXT_STEP) : ceiling(next)}`, ...steps]
 }
 
 // What Desk's own access check found for the active account, in words that claim nothing the check did not show.
@@ -191,7 +221,8 @@ function taskLines(track, task, pushNotes) {
   // A next step or blocker that says the thing lives only on another machine gets ELSEWHERE_NOTE (elsewhere-note.js, shared with the clone guard).
   const elsewhere = saysElsewhere(task) ? [`  ${ELSEWHERE_NOTE}`] : []
   const cleanup = task.cleanup_due_count > 0 ? [`  cleanup due: ${task.cleanup_due_count}`] : []
-  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...cleanup, ...elsewhere, ...push]
+  const large = task.card_kb > 0 ? [`  card is ${task.card_kb} KB; move history into its iteration folder (task_update replace_section) so boot can read all of it`] : []
+  return [`- ${named}${title}${updated}${hidden}`, ...stepLines(task), ...large, ...cleanup, ...elsewhere, ...push]
 }
 
 // A repo's path as boot prints it: already expanded against this machine's HOME, with the card's own spelling after it ("/home/me/code/x (~/code/x)"), so an agent never expands `~` itself
@@ -353,7 +384,9 @@ export function formatBootText(result) {
   if (typeof result.desk_problems?.line === "string") lines.push(result.desk_problems.line)
   // The headline already says why the sync failed and what else failed (up to three short entries), so those entries would only repeat it.
   for (const line of result.degraded ?? []) if (!inHeadline.has(line) && (sync === null || !line.startsWith("sync: "))) lines.push(`- degraded: ${line}`)
-  for (const line of result.pending ?? []) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
+  const { rest: pendingRest, summaries: pendingSummaries } = collapsePending(result.pending ?? [])
+  for (const line of pendingSummaries) lines.push(`- ${line}`)
+  for (const line of pendingRest) lines.push(line.startsWith("auth: ") ? `- warning: ${line.slice("auth: ".length)}` : `- pending (not finished in time, carry it): ${line}`)
   lines.push(...namedTaskLines(result.task))
   taskSection(result, lines)
   lines.push(...cleanupLines(result))

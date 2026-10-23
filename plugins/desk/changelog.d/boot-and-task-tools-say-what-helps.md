@@ -1,0 +1,3 @@
+Boot and the task tools now say only what helps. Boot finds a card's next step even when it sits past the first 64 KB, and names a card over 64 KB with one hint to move its history into the iteration folder, instead of claiming there is no next step. When boot runs out of time, the repos and pull requests it did not check become one line each with a count and what to do, not one line per repo. Task tool results leave out `session_label` when no label was proposed.
+
+`task_update` takes a new `replace_section` field (`{ heading, markdown }`) that replaces the body of one `## ` section, so an agent can slim a large card even though direct card edits are blocked, and it warns when the card is over 64 KB after the write.
