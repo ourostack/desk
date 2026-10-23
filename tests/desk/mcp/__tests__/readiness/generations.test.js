@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
-import { openDb, closeDb, getMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { openDb, closeDb, getMeta, setMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
 import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
@@ -93,6 +93,43 @@ test("invalid generation identities and cursors cannot bless document state", as
       db, documents: [{ path: "missing.md", hash: "not-in-db" }], eventCursor, identities,
     }), /document/)
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, 0)
+  } finally { closeDb(db) }
+})
+
+test("a generation refuses an enclosing transaction, malformed documents and an asynchronous apply", async () => {
+  const { commitLexicalGeneration, withActiveLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-generation-")
+  const db = openDb(root)
+  try {
+    assert.throws(() => db.transaction(() => commitLexicalGeneration({ db, documents: [], eventCursor, identities }))(),
+      /a lexical generation must own its commit/)
+    for (const documents of ["task.md", [{ path: "task.md" }], [{ path: "task.md", hash: "a" }, { path: "task.md", hash: "b" }]]) {
+      assert.throws(() => commitLexicalGeneration({ db, documents, eventCursor, identities }), /invalid lexical generation documents/)
+    }
+    assert.throws(() => commitLexicalGeneration({ db, documents: [], eventCursor, identities, apply: () => Promise.resolve() }),
+      /apply must be synchronous/)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, 0)
+    const generationId = commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+    let replaced = false
+    assert.throws(() => db.transaction(() => withActiveLexicalGeneration({ db, generationId, eventCursor }, () => { replaced = true }))(),
+      /journal compaction requires a committed generation/)
+    assert.equal(replaced, false)
+  } finally { closeDb(db) }
+})
+
+test("compaction treats an unreadable covered cursor as superseded and rethrows any other cursor failure", async () => {
+  const { commitLexicalGeneration, withActiveLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-generation-")
+  const db = openDb(root)
+  try {
+    const generationId = commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+    let replaced = false
+    const replace = () => { replaced = true }
+    // A caller without an expected cursor is a programming error, not a superseded generation.
+    assert.throws(() => withActiveLexicalGeneration({ db, generationId, eventCursor: undefined }, replace), TypeError)
+    setMeta(db, "covered_event_cursor", "{not json")
+    assert.throws(() => withActiveLexicalGeneration({ db, generationId, eventCursor }, replace), { code: "generation_superseded" })
+    assert.equal(replaced, false)
   } finally { closeDb(db) }
 })
 
