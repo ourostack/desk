@@ -196,7 +196,15 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock
       if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
       incomplete = true
     }
-    const candidates = nominal.concat(unresolved)
+    // Spread known paths across the cursor cycle instead of hiding them before a long fallback tail.
+    const candidates = []
+    let nominalIndex = 0
+    let unresolvedIndex = 0
+    while (nominalIndex < nominal.length || unresolvedIndex < unresolved.length) {
+      const takeNominal = nominalIndex < nominal.length && (unresolvedIndex === unresolved.length ||
+        nominalIndex * unresolved.length <= unresolvedIndex * nominal.length)
+      candidates.push(takeNominal ? nominal[nominalIndex++] : unresolved[unresolvedIndex++])
+    }
     const start = candidates.length === 0 ? 0 : cursor % candidates.length
     for (let offset = 0; offset < candidates.length; offset += 1) {
       const index = (start + offset) % candidates.length
