@@ -544,6 +544,55 @@ test("successive bounded passes refresh every previous association rather than r
   assert.equal(refreshed.size, 5, "the fifth prior card must eventually get a fresh identity and source hash")
 })
 
+test("a resumed mixed discovery cursor refreshes known work without traversing the unrelated tail", async () => {
+  const f = await fixture()
+  const remote = "https://github.com/synthetic/desk.git"
+  const template = f.entries[0]
+  f.entries.length = 0
+  const jobs = []
+  for (let index = 0; index < 4; index += 1) {
+    const slug = `known-${index}`
+    const job = jobId({ deskRemote: remote, personPrefix: "", track: "sample", slug })
+    const facts = contextFacts()
+    facts.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    facts.jobs[0].job = job
+    facts.outcomes[0].job = job
+    jobs.push(job)
+    f.entries.push({ ...template, facts, localJobs: [{ local: job, published: job }] })
+    const folder = join(f.desk, "sample", slug)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\nObserved work.\n")
+  }
+  for (let index = 0; index < 12; index += 1) {
+    const folder = join(f.desk, "sample", `unrelated-${index}`)
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, "task.md"), "---\nstatus: done\n---\n")
+  }
+  const options = {
+    ...f.options, readRemote: () => remote, resolveIdentity: ({ track, slug }) => ({ track, slug }),
+  }
+  assert.equal((await queue.prepareTaskContexts(f.env, options)).prepared, 4)
+  await writeTaskContextFile(f.env, STORE, [...jobs].sort()[0], "discovery.json", {
+    schema: "desk.factory.context-discovery/1", cursor: 8,
+  })
+  let elapsed = 0
+  const version = "3.2.0-alpha.2"
+  const counts = await queue.prepareTaskContexts(f.env, {
+    ...options, pluginVersion: version, deadline: 2000, clock: () => elapsed,
+    resolveIdentity: ({ track, slug, deadline, timeoutMs }) => {
+      assert.ok(deadline <= 1000)
+      assert.equal(timeoutMs, 500)
+      elapsed += 200
+      return { track, slug }
+    },
+  })
+  assert.ok(elapsed <= 2000, "useful progress must retain the existing preparation allowance")
+  assert.ok(counts.prepared > 0, "a persisted fallback cursor must not hide every known task after a release")
+  const refreshed = (await queue.listContextWork(f.env, { store: STORE })).filter((work) => work.source.evaluator.plugin_version === version)
+  assert.ok(refreshed.length > 0)
+  assert.ok(refreshed.every((work) => jobs.includes(work.job)), "unrelated cards never become task evidence")
+})
+
 test("a previous association Git timeout cannot starve later prior and renamed candidates", async () => {
   const f = await fixture()
   const remote = "https://github.com/synthetic/desk.git"
