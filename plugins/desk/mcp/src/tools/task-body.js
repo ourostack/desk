@@ -34,7 +34,7 @@ export function scan(body) {
       if (match !== null && match[1][0] === open[0] && match[1].length >= open.length && line.trim() === match[1]) open = null
     }
   }
-  return { eol, lines, fenced }
+  return { eol, lines, fenced, open: open !== null }
 }
 
 function appendParagraph(body, paragraph, eol) {
@@ -92,6 +92,28 @@ export function appendProgressNote(body, text, date) {
   while (last > heading && lines[last].trim() === "") last -= 1
   const spacer = last === heading ? [""] : []
   return [...lines.slice(0, last + 1), ...spacer, bullet, ...lines.slice(last + 1)].join(eol)
+}
+
+/**
+ * The body with the first `## <heading>` section outside a fenced code block given `markdown` as its content, up to the next `## ` heading (the heading line stays). A card without that section gets it appended.
+ * The replacement may not hold a `## ` heading of its own outside a fence, because that would split the section it replaces; only the body is touched, never the frontmatter.
+ */
+export function replaceSection(body, heading, markdown) {
+  const name = typeof heading === "string" ? heading.trim().replace(/^##\s+/u, "").trim() : ""
+  if (name === "" || /[\r\n]/u.test(name)) throw new Error("`replace_section.heading` must be the name of one `## ` section on a single line, such as \"Progress log\"")
+  if (/^(?:steps|resources)$/iu.test(name)) throw new Error(`\`replace_section\` cannot replace the \`## ${name}\` table, because Desk checks every change to it; use the \`${name.toLowerCase() === "steps" ? "step" : "resource"}\` field instead`)
+  if (typeof markdown !== "string" || markdown.trim() === "") throw new Error("`replace_section.markdown` must be the new text of the section, not empty")
+  const inner = scan(markdown)
+  if (inner.open) throw new Error("`replace_section.markdown` has a code fence that is never closed; close the code fence in replace_section.markdown")
+  if (inner.lines.some((line, index) => !inner.fenced[index] && /^## /u.test(line))) throw new Error("`replace_section.markdown` must not contain its own `## ` heading; pass one section at a time")
+  const { eol, lines, fenced } = scan(body)
+  const text = markdown.trim().split(/\r?\n/u)
+  const start = lines.findIndex((line, index) => !fenced[index] && line.trimEnd() === `## ${name}`)
+  if (start === -1) return appendParagraph(body, [`## ${name}`, "", ...text].join(eol), eol)
+  let end = start + 1
+  while (end < lines.length && (fenced[end] || !/^## /u.test(lines[end]))) end += 1
+  const tail = end < lines.length ? ["", ...lines.slice(end)] : [""]
+  return [...lines.slice(0, start + 1), "", ...text, ...tail].join(eol)
 }
 
 /** Today's date in the operator's own time zone, `YYYY-MM-DD`. */

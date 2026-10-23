@@ -42,7 +42,7 @@ import { checkDelivery } from "./delivery-gate.js"
 import { assertLocalOnlyUnchanged, withLocalOnlyRecorded } from "./local-only.js"
 import { setTaskState, setTaskArchiveLinks } from "./track-row.js"
 import { prepareArchiveState, prepareArchivedCardPublication, archivePublicationState, qualifyArchiveFailure } from "./archive-state.js"
-import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
+import { appendProgressNote, localDate, replaceNextStep, replaceSection } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { openArchiveMoveSession as openArchiveMoveDefault } from "./archive-move.js"
 import { nextStepOf } from "../desk/active-tasks.js"
@@ -319,7 +319,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", "focus", "steps", "intake_proposal", "display_label", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "status", "frontmatter", "body_append", "note", "next_step", "evidence", "repos_removed_reason", "return_reason", "step", "resource", "display_label", "replace_section"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 // The three outcome records are written only by the task tools; a caller never supplies them.
@@ -455,7 +455,12 @@ const stepVerdict = (repos, context) => (name, prRepo) => prRepoVerdict(recorded
 // How a step input that arrives as a JSON string is read, and what the refusal says about it.
 const STEP_INPUT = { tool: "task_update", field: "step", effect: "no step was changed", example: '{"id": "api-change", "depends_on": [], "repo": "widgets"}' }
 
+const REPLACE_SECTION_INPUT = { tool: "task_update", field: "replace_section", effect: "no section was changed", example: '{"heading": "Progress log", "markdown": "- 2026-10-22: shortened; history moved to the iteration folder"}' }
+
 const RESOURCE_INPUT = { tool: "task_update", field: "resource", effect: "no resource was changed", example: '{"identity": "worktree:/Users/me/code/widgets-worktrees/api", "step": "api-change"}' }
+
+/** Boot reads this many bytes of a card; a card past it is named in the answer. */
+const CARD_WARN_BYTES = 64 * 1024
 
 const asList = (value) => (Array.isArray(value) ? value : [])
 
@@ -801,7 +806,8 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     if (note !== undefined) result.focus_note = note
   }
   if (values.focus === true || values.display_label !== undefined) {
-    result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused: result.focused === true })
+    const proposal = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused: result.focused === true })
+    if (proposal.code !== "missing_safe_label") result.session_label = proposal
   }
   return result
 }
@@ -969,6 +975,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   refuseRecordKeys("task_update", frontmatter)
   const step = objectInput(values.step, STEP_INPUT)
   const resource = objectInput(values.resource, RESOURCE_INPUT)
+  const section = objectInput(values.replace_section, REPLACE_SECTION_INPUT)
   const nextStep = nextStepValue === undefined ? undefined : requiredText(nextStepValue, nextStepKey)
   const note = values.note === undefined ? undefined : requiredText(values.note, "note")
   const evidence = objectInput(values.evidence, {
@@ -1105,6 +1112,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
     resourceResult = applyResource(newBody, resource, "task_update", `${track}/${slug}`)
     newBody = resourceResult.body
   }
+  if (section !== undefined) newBody = replaceSection(newBody, section.heading, section.markdown)
   if (nextStep !== undefined) newBody = replaceNextStep(newBody, nextStep)
   if (note !== undefined) newBody = appendProgressNote(newBody, note, localDate())
   if (typeof body_append === "string" && body_append.length > 0) {
@@ -1143,6 +1151,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   else if (returnReason !== undefined) await requestTaskReturnSync({ deskRoot, person, track, slug, env, finalize })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  const cardBytes = (await fs.stat(filePath)).size
+  if (cardBytes > CARD_WARN_BYTES) result.card_size_warning = `This card is ${Math.round(cardBytes / 1024)} KB. Boot reads only the first 64 KB of a card, so move older history into the task's iteration folder and shorten the card (task_update with replace_section).`
   if (delivered !== null) Object.assign(result, delivered)
   Object.assign(result, reportResult(report, delivered === null))
   if (stepResult !== null) Object.assign(result, stepAnswer(stepResult))
@@ -1194,7 +1204,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, s
   const currentFocus = statusContext.focus?.get()
   const focused = currentFocus?.track === track && currentFocus?.slug === slug
   if (focused || values.display_label !== undefined) {
-    result.session_label = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused })
+    const proposal = makeSessionLabelProposal({ task: { track, slug }, displayLabel: values.display_label, focused })
+    if (proposal.code !== "missing_safe_label") result.session_label = proposal
   }
   Object.assign(result, archiveDueAnswer({ track, slug, status: merged.status }))
   // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
