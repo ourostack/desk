@@ -82,3 +82,33 @@ test("the hint for each missing path names its flag, with an example built from 
   await assert.rejects(resolveSuperpowersContext({ deskRoot: "/desk", taskPath: " ", step: 1, attempt: 1 }), /taskPath is required/u)
   await assert.rejects(resolveSuperpowersContext({ taskPath: "/desk/t/x", iterationPath: "/desk/t/x/r/d", step: 1, attempt: 1 }), /deskRoot is required/u)
 })
+test("an evidence root whose every ancestor is unreadable, up to the filesystem root, is used as given", async (t) => {
+  const root = await fs.mkdtemp(path.join(tmpdir(), "superpowers-rootwalk-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const taskPath = path.join(root, "task")
+  const iterationPath = path.join(taskPath, "iteration")
+  await fs.mkdir(iterationPath, { recursive: true })
+  await fs.writeFile(path.join(taskPath, "task.md"), "task\n")
+  await fs.writeFile(path.join(iterationPath, "doing.md"), "progress\n")
+  await fs.writeFile(path.join(iterationPath, "planning.md"), "plan\n")
+  // Outside the desk, so the desk's own folders are not among the unreadable ancestors.
+  const evidenceRoot = path.join(tmpdir(), "superpowers-rootwalk-absent", "evidence", "not-yet")
+  const unreadable = new Set()
+  for (let dir = evidenceRoot; ; dir = path.dirname(dir)) {
+    unreadable.add(dir)
+    if (path.dirname(dir) === dir) break
+  }
+  const original = fs.realpath
+  t.mock.method(fs, "realpath", async (target, ...rest) => {
+    if (unreadable.has(target)) throw Object.assign(new Error("fixture path unreadable"), { code: "ENOENT" })
+    return original(target, ...rest)
+  })
+  syncBuiltinESMExports()
+  try {
+    const context = await resolveSuperpowersContext({ ...input, deskRoot: root, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md"), evidenceRoot })
+    assert.ok(context.artifactDirectory.startsWith(path.join(evidenceRoot, "task", "iteration", "superpowers")), context.artifactDirectory)
+  } finally {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
+})
