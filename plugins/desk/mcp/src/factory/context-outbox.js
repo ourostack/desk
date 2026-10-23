@@ -361,33 +361,38 @@ export async function readyTaskContexts(env, { store, entries, deadline = Infini
     if (skipJobs.has(job)) continue
     const state = await stateOf(env, store, job)
     if (state === null || !groups.has(job)) continue
-    const input = await inputOf(env, store, state)
-    if (input === null) continue
-    let record = state.record
-    const invalidation = state.phase !== "ready"
-    if (invalidation) {
-      if (state.published_sha === null) continue
-      record = {
-        schema: "desk.factory.context/1", job, evaluator: input.evaluator, state: "unavailable", heading: null, events: [],
-        sources: input.sources.map((facts) => contextSource(facts, job)),
-        coverage: { state: "unavailable", reasons: [state.phase === "refused" ? "not_recorded" : "review_pending"], omitted_events: 0 },
-        privacy: null,
-      }
-      record.privacy = { verdict: "not_required", payload_sha256: contextPayloadHash(record), reviewer: null }
-    } else if (state.review_seal !== await seal(env, "review", state.basis, record)) continue
-    if (!validateContext(record).ok ||
-        !checkContextAgainstFacts(record, groups.get(job).entries.map((entry) => entry.facts)).ok) continue
-    const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
-    ready.push({
-      name: `context/${job}.json`, path: `context/${job}.json`, bytes, sha: gitBlobSha(bytes), context: true, job, basis: state.basis, invalidation,
-      source_files: groups.get(job).entries.map((entry) => ({
-        name: entry.name ?? `${entry.facts.session.host}-${entry.facts.session.id}.json`,
-        published: `${entry.facts.session.host}-${entry.facts.session.id}.json`,
-        sha: gitBlobSha(`${JSON.stringify(entry.facts)}\n`),
-      })),
-    })
+    const item = await readyContext(env, store, state, groups.get(job))
+    if (item !== null) ready.push(item)
   }
   return ready
+}
+
+async function readyContext(env, store, state, group) {
+  const job = state.job
+  const invalidation = state.phase !== "ready"
+  if (invalidation && state.published_sha === null) return null
+  const input = await inputOf(env, store, state)
+  if (input === null) return null
+  let record = state.record
+  if (invalidation) {
+    record = {
+      schema: "desk.factory.context/1", job, evaluator: input.evaluator, state: "unavailable", heading: null, events: [],
+      sources: input.sources.map((facts) => contextSource(facts, job)),
+      coverage: { state: "unavailable", reasons: [state.phase === "refused" ? "not_recorded" : "review_pending"], omitted_events: 0 },
+      privacy: null,
+    }
+    record.privacy = { verdict: "not_required", payload_sha256: contextPayloadHash(record), reviewer: null }
+  } else if (state.review_seal !== await seal(env, "review", state.basis, record)) return null
+  if (!validateContext(record).ok || !checkContextAgainstFacts(record, group.entries.map((entry) => entry.facts)).ok) return null
+  const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
+  return {
+    name: `context/${job}.json`, path: `context/${job}.json`, bytes, sha: gitBlobSha(bytes), context: true, job, basis: state.basis, invalidation,
+    source_files: group.entries.map((entry) => ({
+      name: entry.name ?? `${entry.facts.session.host}-${entry.facts.session.id}.json`,
+      published: `${entry.facts.session.host}-${entry.facts.session.id}.json`,
+      sha: gitBlobSha(`${JSON.stringify(entry.facts)}\n`),
+    })),
+  }
 }
 
 const DAY_MS = 24 * 3600 * 1000
@@ -419,21 +424,83 @@ async function publicationStatus(env, store, patch) {
 /** Local planning only; cached negative readiness never sends an unchanged queue online every start. */
 export async function planContextPublication(env, { store, entries, pluginVersion, now, deadline = Infinity, clock = Date.now, ...readers }) {
   const limit = Math.min(deadline, clock() + PREPARATION_MS)
-  const prepared = await prepareTaskContexts(env, { store, entries, pluginVersion, deadline: limit, clock, ...readers })
-  const ready = await readyTaskContexts(env, { store, entries, deadline: limit, clock, skipJobs: new Set(prepared.deferred) })
+  if ((await readConsent(env)).stores[store]?.contribute !== true) return { work: false, ready: [], states: [], deferred: false, prs: new Set() }
+  const groups = groupsOf(entries, store)
+  const jobs = (await listTaskContextJobs(env, store)).slice(0, CARD_LIMIT)
+  const ready = []
   const states = []
-  for (const job of (await listTaskContextJobs(env, store)).slice(0, 1000)) {
-    withinBudget(limit, clock)
-    const state = await stateOf(env, store, job)
+  let unfinished = false
+  let deferredWork = false
+  let next = 0
+  let start = 0
+  const cursorJob = jobs[0]
+  if (cursorJob !== undefined) {
+    const bytes = await readTaskContextFile(env, store, cursorJob, "publication.json")
+    if (bytes !== null) {
+      if (bytes.length > 256) throw new Error("context_publication_cursor_invalid")
+      let value
+      try { value = JSON.parse(bytes.toString("utf8")) } catch { throw new Error("context_publication_cursor_invalid") }
+      if (!isPlainObject(value) || Object.keys(value).sort().join() !== "cursor,schema" ||
+          value.schema !== "desk.factory.context-publication-cursor/1" || !Number.isSafeInteger(value.cursor) ||
+          value.cursor < 0 || value.cursor >= CARD_LIMIT) throw new Error("context_publication_cursor_invalid")
+      start = value.cursor % jobs.length
+    }
+  }
+  for (let offset = 0; offset < jobs.length; offset += 1) {
+    const index = (start + offset) % jobs.length
+    next = index
+    if (clock() >= limit) { deferredWork = true; break }
+    const job = jobs[index]
+    let state = await stateOf(env, store, job)
+    next = (index + 1) % jobs.length
     if (state === null) continue
     if (!await trustedPublication(env, state)) throw new Error("context_publication_receipt_invalid")
+    if (state.phase !== "ready" && state.published_sha === null && state.pr === null && state.sent_sha === null) {
+      unfinished ||= ["candidate", "privacy"].includes(state.phase)
+      states.push({ state, withdrawn: false })
+      continue
+    }
     const input = await inputOf(env, store, state, { current: false })
     if (input === null) continue
+    if (clock() >= limit) { next = states.length === 0 ? next : index; deferredWork = true; break }
     const route = declared(input.desk_root)
     const permission = contextPermission(input.desk_root, store)
     const withdrawn = isFolder(input.desk_root) && route.kind === "store" &&
       (!sameStore(route.store, store) || permission === "not_opted_in")
+    let item = !withdrawn && groups.has(job) ? await readyContext(env, store, state, groups.get(job)) : null
+    if (item === null && !withdrawn && state.published_sha !== null && groups.has(job) && clock() < limit) {
+      try {
+        await prepareTaskContexts(env, {
+          store, entries: groups.get(job).entries, pluginVersion, deadline: limit, clock, ...readers,
+        })
+        state = await stateOf(env, store, job)
+        if (state !== null) item = await readyContext(env, store, state, groups.get(job))
+      } catch (error) {
+        if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+        deferredWork = true
+      }
+    }
+    if (state === null) continue
+    if (clock() >= limit) { deferredWork = true; break }
     states.push({ state, withdrawn })
+    if (item !== null) ready.push(item)
+    if (ready.length >= 8 && offset + 1 < jobs.length) { deferredWork = true; break }
+  }
+  if (cursorJob !== undefined && (deferredWork || start !== 0)) {
+    await writeTaskContextFile(env, store, cursorJob, "publication.json", {
+      schema: "desk.factory.context-publication-cursor/1", cursor: next,
+    })
+  }
+  let prepared = { prepared: 0, deferred: [] }
+  if (clock() < limit) {
+    try {
+      prepared = await prepareTaskContexts(env, { store, entries, pluginVersion, deadline: limit, clock, ...readers })
+    } catch (error) {
+      if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+      deferredWork = true
+    }
+  } else {
+    deferredWork = true
   }
   const cached = (await readStatus(env)).context_publication?.[store]
   const held = Number.isFinite(cached?.hold_until) && cached.hold_until > now
@@ -442,8 +509,8 @@ export async function planContextPublication(env, { store, entries, pluginVersio
   const retracting = states.some(({ state, withdrawn }) => withdrawn && state.published_sha !== null)
   const unsent = ready.some((item) => states.some(({ state }) => state.job === item.job &&
     state.published_sha !== item.sha && !(Number.isFinite(state.hold_until) && state.hold_until > now)))
-  const unfinished = states.some(({ state }) => ["candidate", "privacy"].includes(state.phase))
-  return { work: prPending || retracting || (!held && (unsent || (stale && (unfinished || prepared.prepared > 0)))), ready, states, deferred: prepared.deferred.length > 0, prs: new Set(states.map(({ state }) => state.pr).filter(Number.isSafeInteger)) }
+  unfinished ||= states.some(({ state }) => ["candidate", "privacy"].includes(state.phase))
+  return { work: prPending || retracting || (!held && (unsent || (stale && (unfinished || prepared.prepared > 0)))), ready, states, deferred: deferredWork || prepared.deferred.length > 0, prs: new Set(states.map(({ state }) => state.pr).filter(Number.isSafeInteger)) }
 }
 
 export async function contextOnBranch(read, tree) {
