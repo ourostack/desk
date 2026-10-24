@@ -106,9 +106,9 @@ function artifactFamily(family, sourceFiles) {
   // keep verifyAssets, which requires every helper.
   function verifyHostAssets(root, platform, arch) {
     var host = platform + "-" + arch, targets = [], missing = [];
-    function absent(file) {
-      try { fs.lstatSync(file); return false; }
-      catch (error) { if (error.code === "ENOENT") return true; throw error; }
+    function stat(file) {
+      try { return fs.lstatSync(file); }
+      catch (error) { if (error.code === "ENOENT") return null; throw error; }
     }
     try { manifest(root); } catch (error) { throw integrity(); }
     TARGETS.forEach(function (target) {
@@ -116,7 +116,8 @@ function artifactFamily(family, sourceFiles) {
       var directory = path.join.apply(path, [root].concat(relative.slice(0, 3)));
       try {
         // lstat reports a symlinked folder as not a directory, so it goes to selectAsset and fails.
-        if (target !== host && (absent(directory) || (fs.lstatSync(directory).isDirectory() && absent(path.join(directory, relative[3]))))) {
+        var folder = target === host ? null : stat(directory);
+        if (target !== host && (!folder || (folder.isDirectory() && !stat(path.join(directory, relative[3]))))) {
           missing.push({ target: target, file: relative.join("/") });
           return;
         }
