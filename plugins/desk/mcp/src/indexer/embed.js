@@ -269,7 +269,7 @@ export function isChunkLocalEmbeddingFailure(diagnostic) {
 }
 
 // How many times a section the model refuses as too long is halved and sent again before it is skipped.
-export const TOO_LONG_SHORTENINGS = 6
+const TOO_LONG_SHORTENINGS = 6
 
 /**
  * Embed a section the model refused as too long (`refusal`): halve the text
