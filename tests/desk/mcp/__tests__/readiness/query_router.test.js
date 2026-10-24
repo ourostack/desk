@@ -342,6 +342,86 @@ test("with no deadline, a recall whose index keeps moving on stops after a bound
   assert.equal(result.results, undefined)
 })
 
+// A controller whose status, read after the lexical barrier came back current, reports a change marked in between
+// (`pending_change`) until the next catch-up, or for every read when `staysUncertain` is set.
+async function changeMarkedBeforeStatus(t, { staysUncertain = false, semanticDeadlineMs = 5_000, signal, onStatus } = {}) {
+  const deskRoot = await fs.realpath(await mkTempDeskRoot())
+  const embed = { fetch: makeEmbedFetch() }
+  const cursor = { journal_id: "change-before-status", sequence: 0 }
+  let current = true
+  let certain = true
+  let statusCalls = 0
+  let convergences = 0
+  await writeFile(deskRoot, "track/work/task.md", "old quartz")
+  await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
+  const controller = {
+    identity: { semantic_contract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } },
+    async fenceEvents() { return { certain: true, cursor: { ...cursor } } },
+    async barrier({ capability }) { return { capability, current, certain: true, state: current ? "READY" : "RECOVERING" } },
+    async beginConvergence() {
+      convergences++
+      await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
+      current = true
+      if (!staysUncertain) certain = true
+      return { accepted: true }
+    },
+    async status() {
+      statusCalls++
+      // The change is marked while this status request is in flight.
+      if (statusCalls === 1) { current = false; certain = false }
+      onStatus?.(statusCalls)
+      return {
+        state: current ? "READY" : "RECOVERING",
+        owner: { token: "fixture-owner" },
+        freshness: { certain, reason: certain ? null : "pending_change", cursor: { ...cursor } },
+        convergence: {
+          status: current ? "succeeded" : "pending",
+          semantic: {
+            chunks_total: 1, vectors_indexed: 1, missing_vectors: 0, provenance_current: true,
+            query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } },
+          },
+        },
+      }
+    },
+  }
+  const router = createQueryRouter({
+    controller, semanticDeadlineMs,
+    semanticBackend: (request) => indexedRecall({ deskRoot, db: request.db, input: request, opts: { embed: { ...embed, ...request.opts?.embed } } }),
+  })
+  const started = Date.now()
+  const result = await router.semantic({ deskRoot, kind: "recall", topic: "quartz", limit: 3, ...(signal ? { signal } : {}) })
+  return { result, ms: Date.now() - started, convergences, statusCalls }
+}
+
+test("a change marked after the lexical barrier but before the status read sends recall back to wait, and it answers", async (t) => {
+  const { result, convergences } = await changeMarkedBeforeStatus(t)
+  assert.ok(Array.isArray(result.results) && result.results.length > 0, JSON.stringify(result.diagnostic))
+  assert.equal(convergences, 1, "recall waited for the controller to catch up")
+})
+
+test("a status that never becomes certain does not make recall spin: it pauses between reads and refuses at its deadline", async (t) => {
+  const { result, ms, statusCalls } = await changeMarkedBeforeStatus(t, { staysUncertain: true, semanticDeadlineMs: 400 })
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "pending_change")
+  assert.ok(ms >= 350, `recall waited out its deadline (${ms} ms)`)
+  assert.ok(statusCalls <= 20, `recall paused between reads (${statusCalls} status reads in ${ms} ms)`)
+})
+
+test("with no deadline, a status that never becomes certain stops recall after a bounded number of paused reads", async (t) => {
+  const { result, ms } = await changeMarkedBeforeStatus(t, { staysUncertain: true, semanticDeadlineMs: 0 })
+  assert.equal(result.diagnostic.reason, "pending_change")
+  assert.ok(ms >= 19 * 45, `recall paused before each of its reads (${ms} ms)`)
+})
+
+test("a recall cancelled while it pauses between reads stops at once", async (t) => {
+  const stop = new AbortController()
+  // The pause starts as soon as this status answer is read, and lasts 50 ms.
+  const onStatus = (call) => { if (call === 1) setTimeout(() => stop.abort(new Error("the caller went away")), 20) }
+  const started = Date.now()
+  await assert.rejects(changeMarkedBeforeStatus(t, { staysUncertain: true, signal: stop.signal, onStatus }), /the caller went away/)
+  assert.ok(Date.now() - started < 1_000)
+})
+
 test("a router with no controller reports no automatic work and no semantic mode", async () => {
   const deskRoot = await fs.realpath(await mkTempDeskRoot())
   const snapshot = await createQueryRouter({}).snapshot({ deskRoot })

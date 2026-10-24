@@ -240,6 +240,18 @@ function semanticDiagnostic(proof) {
   }
 }
 
+// How long recall waits before it reads again when status was not yet certain and no catch-up was there to wait for.
+const UNCERTAIN_READ_PAUSE_MS = 50
+
+function pauseBeforeReadingAgain(deadlineAt, signal) {
+  const ms = deadlineAt === null ? UNCERTAIN_READ_PAUSE_MS : Math.max(0, Math.min(UNCERTAIN_READ_PAUSE_MS, deadlineAt - Date.now()))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", stop); resolve() }, ms)
+    const stop = () => { clearTimeout(timer); reject(signal.reason) }
+    signal?.addEventListener("abort", stop, { once: true })
+  })
+}
+
 async function semanticBarrierState(controller, request, semanticDeadlineMs) {
   const signal = request.signal
   try {
@@ -521,6 +533,12 @@ export function createQueryRouter({
         if (!before.semanticProven) {
           // The controller is catching up with a change that arrived after the wait.
           if (before.lexicalBarrier.current !== true && mayReadAgain(attempt)) continue
+          // A change marked after the lexical barrier read but before the status read: status is not certain yet. The next
+          // wait finds the catch-up it scheduled; the pause keeps a status that stays uncertain from looping without one.
+          if (before.observed?.freshness?.certain !== true && mayReadAgain(attempt)) {
+            await pauseBeforeReadingAgain(deadlineAt, signal)
+            if (mayReadAgain(attempt)) continue
+          }
           const diagnostic = before.lexicalProven ? before.semanticDiagnostic : { reason: before.diagnostic.reason, message: INDEX_CATCHING_UP }
           return refuse(diagnostic.reason, diagnostic.message)
         }
