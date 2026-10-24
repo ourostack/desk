@@ -218,7 +218,8 @@ test("semantic request starts or reuses convergence and executes one proven sema
 
 // The controller/watcher boundary is the only concurrency double: publication,
 // snapshots, query routing and indexed recall all use their real implementations.
-async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) {
+// `changesDuringEvaluation` is how many backend reads see a desk change land while they run (Infinity: every read).
+async function queuedSemanticChange(t, { changesDuringEvaluation = 0, changesAfterWait = 0, semanticDeadlineMs } = {}) {
   const deskRoot = await fs.realpath(await mkTempDeskRoot())
   t.diagnostic(`queued semantic fixture: ${deskRoot}`)
   const documentPath = "track/work/task.md"
@@ -227,6 +228,7 @@ async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) 
   let current = true
   let discovered = false
   let evaluations = 0
+  let waitChanges = 0
   await writeFile(deskRoot, documentPath, "old quartz")
   await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
   const controller = {
@@ -240,9 +242,17 @@ async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) 
       }
       return { certain: true, cursor: { ...cursor } }
     },
-    barrier: async ({ capability }) => ({
-      capability, current, certain: true, state: current ? "READY" : "LEXICAL_CONVERGING",
-    }),
+    async barrier({ capability, wait }) {
+      const result = { capability, current, certain: true, state: current ? "READY" : "LEXICAL_CONVERGING" }
+      // A change that lands just after the semantic wait reports the index current.
+      if (capability === "semantic" && wait === true && current && waitChanges < changesAfterWait) {
+        waitChanges++
+        await writeFile(deskRoot, documentPath, `moved quartz ${waitChanges}`)
+        cursor = { ...cursor, sequence: cursor.sequence + 1 }
+        current = false
+      }
+      return result
+    },
     async beginConvergence() {
       await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
       current = true
@@ -264,21 +274,22 @@ async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) 
   }
   const router = createQueryRouter({
     controller,
+    ...(semanticDeadlineMs === undefined ? {} : { semanticDeadlineMs }),
     async semanticBackend(request) {
       evaluations++
       const result = await indexedRecall({
         deskRoot, db: request.db, input: request, opts: { embed },
       })
-      if (changeDuringEvaluation) {
-        await writeFile(deskRoot, documentPath, "later quartz")
-        cursor = { ...cursor, sequence: 2 }
+      if (evaluations <= changesDuringEvaluation) {
+        await writeFile(deskRoot, documentPath, `later quartz ${evaluations}`)
+        cursor = { ...cursor, sequence: cursor.sequence + 1 }
         current = false
       }
       return result
     },
   })
   const result = await router.semantic({ deskRoot, kind: "recall", topic: "quartz", limit: 3 })
-  return { result, evaluations }
+  return { result, evaluations, waitChanges }
 }
 
 test("semantic recall refreshes proof after a fenced change finishes convergence", async (t) => {
@@ -288,12 +299,53 @@ test("semantic recall refreshes proof after a fenced change finishes convergence
   assert.equal(evaluations, 1, "recall must evaluate once, never replay its backend")
 })
 
-test("refreshed semantic proof still discards a change during backend evaluation", async (t) => {
-  const { result, evaluations } = await queuedSemanticChange(t, { changeDuringEvaluation: true })
-  assert.equal(evaluations, 1)
+test("a read whose index moves on once is discarded, and recall reads again once the controller catches up", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesDuringEvaluation: 1 })
+  assert.equal(evaluations, 2, "the first read is discarded and the recall reads once more")
+  assert.equal(result.results?.[0]?.snippet, "later quartz 1", JSON.stringify(result))
+})
+
+test("a recall whose index keeps moving on never answers from a moved index, and refuses when its deadline runs out", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesDuringEvaluation: Infinity, semanticDeadlineMs: 300 })
+  assert.ok(evaluations >= 2, `the recall read again (${evaluations} reads)`)
   assert.equal(result.code, "required_capability_unavailable")
+  // The deadline can run out during a read or during a wait for the controller.
+  assert.ok(["readiness_changed_during_read", "semantic_deadline"].includes(result.diagnostic.reason), result.diagnostic.reason)
+  assert.equal(result.results, undefined)
+})
+
+test("a change landing just after the wait sends recall back to wait for the controller before it reads", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesAfterWait: 1 })
+  assert.equal(evaluations, 1, "recall reads only once the controller has caught up")
+  assert.equal(result.results?.[0]?.snippet, "moved quartz 1", JSON.stringify(result))
+})
+
+test("with no deadline, a recall whose index moves on after every wait stops waiting after a bounded number of tries", async (t) => {
+  const { result, evaluations, waitChanges } = await queuedSemanticChange(t, { changesAfterWait: Infinity, semanticDeadlineMs: 0 })
+  assert.equal(evaluations, 0, "recall never reads a moved index")
+  assert.ok(waitChanges >= 20 && waitChanges < 60, `about 20 tries (${waitChanges} waits)`)
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.results, undefined)
+})
+
+test("with no deadline, a recall whose index keeps moving on stops after a bounded number of reads", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesDuringEvaluation: Infinity, semanticDeadlineMs: 0 })
+  assert.equal(evaluations, 20)
   assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
   assert.equal(result.results, undefined)
+})
+
+test("a router with no controller reports no automatic work and no semantic mode", async () => {
+  const deskRoot = await fs.realpath(await mkTempDeskRoot())
+  const snapshot = await createQueryRouter({}).snapshot({ deskRoot })
+  assert.equal(snapshot.lexical.current_automatic_action, null)
+  assert.equal(snapshot.semantic.current_automatic_action, null)
+  assert.equal(snapshot.semantic.mode, "unsupported")
+  const pending = await createQueryRouter({
+    controller: { status: async () => ({ state: "LEXICAL_CONVERGING", convergence: { status: "pending" } }) },
+  }).snapshot({ deskRoot })
+  assert.equal(pending.lexical.current_automatic_action, "reconciling")
+  assert.equal(pending.semantic.current_automatic_action, "converging")
 })
 
 test("semantic request never executes against an unproven generation", async (t) => {
