@@ -158,7 +158,7 @@ test("normal parent entry files parse as ES5 before selecting a compatible worke
     }
     for(const [key,child]of Object.entries(value))if(!["loc","extra","start","end"].includes(key))visit(child)
   }
-  for(const name of ["browser-context-common.cjs","browser-context.cjs","browser-context-mcp.cjs","browser-private.cjs","web.cjs"])
+  for(const name of ["browser-context-common.cjs","browser-context.cjs","browser-context-mcp.cjs","browser-private.cjs","browser-local.cjs","browser-native.cjs","web.cjs"])
     visit(parser.parse(fs.readFileSync(path.join(mcpRoot,name),"utf8"),{sourceType:"script"}))
 })
 

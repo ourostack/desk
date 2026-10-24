@@ -42,8 +42,9 @@ async function fixture() {
   const modules = path.join(root, "generation", "node_modules", "playwright-core", "lib", "tools", "cli-client")
   put(path.join(modules, "registry.js"), `
 const fs = require("fs"), path = require("path");
-exports.createClientInfo = () => ({ version:"1", workspaceDir:process.cwd(), daemonProfilesDir:path.join(process.env.HOME,"registry") });
-exports.baseDaemonDir = () => path.join(process.env.HOME,"registry");
+const daemonDir=()=>process.env.PWTEST_DAEMON_SESSION_DIR||path.join(process.env.HOME,"registry");
+exports.createClientInfo = () => ({ version:"1", workspaceDir:process.cwd(), daemonProfilesDir:daemonDir() });
+exports.baseDaemonDir = daemonDir;
 exports.Registry = { load: async () => ({ entry: (c,n) => {
   const file=path.join(c.daemonProfilesDir,n+".session");
   if (!fs.existsSync(file)) return undefined;
@@ -100,7 +101,7 @@ require("net").createConnection=(socketPath,connected)=>{
   socket.destroy=()=>{socket.destroyed=true;queueMicrotask(()=>socket.emit("close"));};
   socket.write=(text,callback)=>{
     const message=JSON.parse(text);
-    const dir=path.join(process.env.HOME,"registry");
+    const dir=process.env.PWTEST_DAEMON_SESSION_DIR||path.join(process.env.HOME,"registry");
     const file=fs.readdirSync(dir).filter(n=>n.endsWith(".session")).map(n=>path.join(dir,n)).find(f=>JSON.parse(fs.readFileSync(f)).socketPath===socketPath);
     const config=JSON.parse(fs.readFileSync(file));
     callback();
@@ -125,7 +126,7 @@ require("net").createConnection=(socketPath,connected)=>{
   queueMicrotask(()=>{
     if(controls.connectHang) return;
     try {
-      const dir=path.join(process.env.HOME,"registry");
+      const dir=process.env.PWTEST_DAEMON_SESSION_DIR||path.join(process.env.HOME,"registry");
       const file=fs.readdirSync(dir).filter(n=>n.endsWith(".session")).map(n=>path.join(dir,n)).find(f=>JSON.parse(fs.readFileSync(f)).socketPath===socketPath);
       if(!file || !transport.connect(file)) throw Object.assign(Error("fixture absent"),{code:"ENOENT"});
       connected();
@@ -146,7 +147,9 @@ exports.SocketConnection=class {
 };
 `)
   put(path.join(modules, "minimist.js"), `exports.minimist=args=>({_:args});`)
-  put(path.join(modules, "help.json"), JSON.stringify({ booleanOptions: [], commands: {} }))
+  put(path.join(modules, "help.json"), JSON.stringify({ booleanOptions: [], commands: {
+    snapshot: { flags: {}, args: [] },
+  } }))
   put(path.join(modules, "program.js"), `
 const fs=require("fs"),path=require("path"),r=require("./registry");
 exports.program=async () => {
@@ -155,8 +158,12 @@ exports.program=async () => {
   if(args.includes("open")) {
     const slash=String.fromCharCode(92),pipe=slash+slash+"."+slash+"pipe"+slash+"pw-test-cli-"+id;
     fs.mkdirSync(c.daemonProfilesDir,{recursive:true});
+    const persistent=args.includes("--persistent");
+    const configFile=args.find(a=>a.startsWith("--config="))?.slice(9);
+    const browser=persistent?JSON.parse(fs.readFileSync(configFile)).browser:{browserName:"chromium",launchOptions:{}};
     fs.writeFileSync(file,JSON.stringify({ name:id,version:"1",workspaceDir:process.cwd(),
-      socketPath:process.platform==="win32"?pipe:path.join(process.env.TMPDIR,"pw-test","cli","test.sock"),cli:{},browser:{browserName:"chromium",launchOptions:{}},running:true }));
+      socketPath:process.platform==="win32"?pipe:path.join(process.env.TMPDIR,"pw-test","cli","test.sock"),
+      cli:persistent?{persistent:true}:{},browser,running:true }));
   }
   if(args.includes("fail-start")) throw Error("startup failure");
   if(args.includes("json-error")) { console.log(JSON.stringify({isError:true,error:"upstream command failed"})); return; }
@@ -215,6 +222,86 @@ process.exitCode=result.status===null?1:result.status;
     prepareBrowserRuntime: async () => ({ ...await f.options.prepareBrowserRuntime(), nodePath: node }),
   }
 }
+
+function managedOptions(f,id) {
+  return {...f.options,nativeHome:f.root,contextId:()=>id,
+    env:{...f.options.env,PROGRAMFILES:f.root,"PROGRAMFILES(X86)":f.root,LOCALAPPDATA:f.root},
+    browserExists:file=>/msedge|Microsoft Edge/i.test(file)}
+}
+
+test("managed worker retains its persistent profile across frontend calls without a native extension", async t => {
+  const f = await fixture()
+  const id = "11111111-1111-4111-8111-111111111111"
+  t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
+  const options = managedOptions(f,id)
+  const controller = require(path.join(mcpRoot, "browser-context.cjs"))
+  const created = await controller.context({ action: "create", label: "Managed worker" }, options)
+  assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
+  const resumed = await controller.context({ action: "resume", contextId: id }, options)
+  assert.equal(resumed.exitCode, 0, JSON.stringify(resumed.payload))
+  const snapshot = await controller.command({ contextId: id, args: ["snapshot"] }, options)
+  assert.equal(snapshot.exitCode, 0, JSON.stringify(snapshot.payload))
+  assert.equal(snapshot.payload.result.home, f.root)
+  const discarded = await controller.context({ action: "discard", contextId: id }, options)
+  assert.equal(discarded.exitCode, 0, JSON.stringify(discarded.payload))
+  assert.equal(discarded.payload.state, "discarded")
+})
+
+test("managed worker refuses a foreign persistent profile in daemon metadata", async t => {
+  const f = await fixture()
+  const id = "11111111-1111-4111-8111-111111111111"
+  t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
+  const options = managedOptions(f,id)
+  const controller = require(path.join(mcpRoot, "browser-context.cjs"))
+  const created = await controller.context({ action: "create", label: "Managed worker" }, options)
+  assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
+  const metadata = path.join(created.payload.contextResources.contextDirectory, "registry", id + ".session")
+  const config = JSON.parse(fs.readFileSync(metadata, "utf8"))
+  config.browser.userDataDir = path.join(f.root, "foreign-profile")
+  fs.writeFileSync(metadata, JSON.stringify(config))
+  const result = await controller.command({ contextId: id, args: ["snapshot"] }, options)
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "unsafe_registry")
+})
+
+test("explicit sign-in completion reopens only the same owned profile headlessly without replaying its pages", async t => {
+  const f = await fixture()
+  const id = "11111111-1111-4111-8111-111111111111"
+  t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
+  const options = managedOptions(f,id)
+  const controller = require(path.join(mcpRoot, "browser-context.cjs"))
+  const created = await controller.context({ action: "create", label: "Human sign-in", interactive: true }, options)
+  assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
+  const root = created.payload.contextResources.contextDirectory
+  const file = created.payload.contextResources.configFile
+  fs.writeFileSync(path.join(root, "profile", "auth-marker"), "fake session fixture")
+  assert.equal(JSON.parse(fs.readFileSync(file)).browser.launchOptions.headless, false)
+  const result = await controller.context({ action: "finish-sign-in", contextId: id }, options)
+  assert.equal(result.exitCode, 0, JSON.stringify(result.payload))
+  assert.equal(result.payload.contextId, id)
+  assert.equal(result.payload.result.interactive, false)
+  assert.equal(result.payload.result.authentication, "inspect-page")
+  assert.equal(result.payload.result.previousPages, "closed-without-replay")
+  assert.equal(JSON.parse(fs.readFileSync(file)).browser.launchOptions.headless, true)
+  assert.equal(fs.readFileSync(path.join(root, "profile", "auth-marker"), "utf8"), "fake session fixture")
+  assert.equal((await controller.context({ action: "discard", contextId: id }, options)).exitCode, 0)
+})
+
+test("sign-in completion cannot restart an ordinary background work context", async t => {
+  const f = await fixture()
+  const id = "11111111-1111-4111-8111-111111111111"
+  t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
+  const options = managedOptions(f,id)
+  const controller = require(path.join(mcpRoot, "browser-context.cjs"))
+  const created = await controller.context({ action: "create", label: "Background work" }, options)
+  assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
+  const result = await controller.context({ action: "finish-sign-in", contextId: id }, options)
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.payload.code, "invalid_context_state")
+  const metadata = path.join(created.payload.contextResources.contextDirectory, "registry", id + ".session")
+  assert.equal(JSON.parse(fs.readFileSync(metadata)).running, true)
+  assert.equal((await controller.context({ action: "discard", contextId: id }, options)).exitCode, 0)
+})
 
 test("default executor runs the selected compatible child and confirms its result", { skip: process.platform === "win32" ? "Unix executable shim" : false }, async () => {
   const f = await fixture()

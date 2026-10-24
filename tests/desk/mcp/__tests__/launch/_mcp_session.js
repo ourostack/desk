@@ -106,15 +106,21 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
     })
   }
 
-  const initialize = await request("initialize", {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "desk-session-test", version: "1.0.0" },
-  })
-  // Paced like a real host: notifications/initialized and tools/list are separate writes with a gap between them.
-  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
-  await new Promise((resolve) => setTimeout(resolve, paceMs))
-  const tools = await request("tools/list")
+  let initialize, tools
+  try {
+    initialize = await request("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "desk-session-test", version: "1.0.0" },
+    })
+    // Paced like a real host: notifications/initialized and tools/list are separate writes with a gap between them.
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
+    await new Promise((resolve) => setTimeout(resolve, paceMs))
+    tools = await request("tools/list")
+  } catch (error) {
+    await close()
+    throw error
+  }
   const handshakeMs = Date.now() - started
   /** Send `method` and resolve with how long its answer took, in ms. */
   async function timed(method, params = {}, options) {

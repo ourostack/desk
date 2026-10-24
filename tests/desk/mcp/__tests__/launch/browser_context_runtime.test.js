@@ -853,7 +853,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
     const before=fs.readFileSync(f.descriptor.sessionFile)
     const peer=path.join(f.request.stateRoot,"signed-in","22222222-2222-4222-8222-222222222222")
     f.put(path.join(peer,"retained-evidence"),"peer is untouched")
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const result=await controller.context({action:"discard",contextId:f.id},{
       ...f.controllerOptions,
       execute:(_node,args)=>f.run(JSON.parse(args[1])),
@@ -884,7 +884,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
         }
         return rename(from,to)
       })
-      const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+      const controller=require(path.join(mcpRoot,"browser-native.cjs"))
       const result=await controller.context({action:"discard",contextId:f.id},{
         ...f.controllerOptions,
         execute:(_node,args)=>f.run(JSON.parse(args[1])),
@@ -901,7 +901,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
     test("signed parent retains active owner when "+changed+" prevents confirmed retirement",async t=>{
       const f=await signedWorkerFixture(t)
       if(changed==="worker-error")f.setNativeFailure({code:"native_context_busy",resources:{contextId:f.id,disposition:"unknown"}})
-      const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+      const controller=require(path.join(mcpRoot,"browser-native.cjs"))
       const result=await controller.context({action:"discard",contextId:f.id},{
         ...f.controllerOptions,
         async execute(_node,args) {
@@ -933,7 +933,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
       if(from===f.l.root)throw Object.assign(Error("owned retirement move denied"),{code:"EACCES"})
       return rename(from,to)
     })
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const result=await controller.context({action:"discard",contextId:f.id},{
       ...f.controllerOptions,
       execute:(_node,args)=>f.run(JSON.parse(args[1])),
@@ -959,7 +959,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
       }
       return rename(from,to)
     })
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const result=await controller.context({action:"discard",contextId:f.id},{
       ...f.controllerOptions,
       execute:(_node,args)=>f.run(JSON.parse(args[1])),
@@ -975,7 +975,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
     const metadata=JSON.parse(fs.readFileSync(f.descriptor.sessionFile))
     metadata.timestamp=0
     f.put(f.descriptor.sessionFile,metadata)
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     let executions=0
     const result=await controller.context({action:"discard",contextId:f.id},{
       ...f.controllerOptions,execute:()=>{executions++;assert.fail("unknown owner must not dispatch")},
@@ -989,7 +989,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
 
   test("signed parent rejects a crossed native retirement result",async t=>{
     const f=await signedWorkerFixture(t)
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const result=await controller.context({action:"discard",contextId:f.id},{
       ...f.controllerOptions,
       execute:()=>({state:"discarded",result:{contextId:"22222222-2222-4222-8222-222222222222",discarded:true}}),
@@ -1008,7 +1008,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
       if(String(dir).startsWith(path.join(f.request.stateRoot,"artifacts")+path.sep))f.setActive(true)
       return result
     })
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const result=await controller.context({action:"discard",contextId:f.id},{
       ...f.controllerOptions,execute:(_node,args)=>f.run(JSON.parse(args[1])),
     })
@@ -1042,7 +1042,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
           throw Object.assign(Error("owned post-move observation denied"),{code:"EACCES"})
         return lstat(file,...args)
       })
-      const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+      const controller=require(path.join(mcpRoot,"browser-native.cjs"))
       const result=await controller.context({action:"discard",contextId:f.id},{
         ...f.controllerOptions,execute:(_node,args)=>f.run(JSON.parse(args[1])),
       })
@@ -1055,7 +1055,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
 
   test("signed parent rejects malformed worker output before retirement",async t=>{
     const f=await signedWorkerFixture(t)
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     for(const output of [null,{isError:true,state:"discarded"},{state:"running"}]) {
       const result=await controller.context({action:"discard",contextId:f.id},{
         ...f.controllerOptions,execute:()=>output,
@@ -1082,7 +1082,7 @@ for(const failAt of [1,2]) test("initial signed worker "+phase+" reports safe re
       if(file===f.l.socketDir && ++preparations===2)prepared()
       return result
     })
-    const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const options={...f.controllerOptions,async execute(_node,args) {
       executions++
       if(executions===1){entered();await held}
@@ -1128,7 +1128,7 @@ test("original C error deep-equals its privacy projection through Core, worker J
   f.setError(original)
   f.setRelated(await f.originalError({contextId:f.id,disposition:"retained",remainingTabIds:[9]}))
   const common=require(path.join(mcpRoot,"browser-context-common.cjs"))
-  const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+  const controller=require(path.join(mcpRoot,"browser-native.cjs"))
   const beforeHome=process.env.HOME,mask=process.umask()
   let children=0
   t.mock.method(childProcess,"execFile",(node,args,options,callback)=>{
@@ -1513,14 +1513,14 @@ test("metadata changed at stop cannot be re-anchored by an otherwise exact ackno
   assert.ok(fs.existsSync(f.descriptor.sessionFile))
 })
   test("normal parent refuses an unqualified generation before selecting a profile or allocating an owner",async t=>{
-    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-native.cjs"))
     fs.appendFileSync(path.join(f.request.installed.dir,"node_modules/playwright-core/lib/coreBundle.js"),"\n// owned integrity corruption\n")
     const result=await controller.context({action:"create",label:"No allocation"},f.controllerOptions)
     assert.equal(result.payload.code,"unsupported_cli")
     assert.equal(Object.hasOwn(result.payload,"contextResources"),false)
   })
   test("normal parent preflights current native readiness and refuses every mismatched binding or non-private file before allocation",async t=>{
-    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const file=f.request.selection.nativeReadyFile,original=JSON.parse(fs.readFileSync(file))
     for(const amend of [
       ready=>{ready.profileRoot=f.root},
@@ -1551,7 +1551,7 @@ test("metadata changed at stop cannot be re-anchored by an otherwise exact ackno
     else fs.chmodSync(file,0o600)
   })
   test("normal parent never rebinds an existing strict owner config to another handle or normal selection",async t=>{
-    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-native.cjs"))
     const original=JSON.parse(fs.readFileSync(f.l.configFile))
     for(const [key,value]of [["contextId","22222222-2222-4222-8222-222222222222"],["sourceDigest","0".repeat(64)]]){
       const config=structuredClone(original);config.deskNativeContext[key]=value;f.put(f.l.configFile,config)
@@ -1561,7 +1561,7 @@ test("metadata changed at stop cannot be re-anchored by an otherwise exact ackno
     }
   })
   test("normal parent validates plain worker success shape independently of native and keeps the named context resources",async t=>{
-    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-context.cjs"))
+    const f=await signedWorkerFixture(t),controller=require(path.join(mcpRoot,"browser-native.cjs"))
     for(const worker of [null,{isError:true},{state:"absent"}]){
       const result=await controller.context({action:"keep",contextId:f.id},{...f.controllerOptions,execute:async()=>worker})
       assert.equal(result.payload.code,"runner_failed")
@@ -1574,7 +1574,7 @@ test("metadata changed at stop cannot be re-anchored by an otherwise exact ackno
 test("two actual agent handles on one SDK connection keep independent native Core DOM models and only discard their own group",async t=>{
   const f=await signedWorkerFixture(t,{skipNative:true})
   f.setLaunchSuccess()
-  const controller=require(path.join(mcpRoot,"browser-context.cjs"))
+  const controller=require(path.join(mcpRoot,"browser-native.cjs"))
   t.mock.method(childProcess,"execFile",(node,args,options,callback)=>{
     assert.equal(args[0],path.join(mcpRoot,"browser-context-runtime.cjs"))
     const request=JSON.parse(args[1])

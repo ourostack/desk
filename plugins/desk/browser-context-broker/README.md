@@ -13,7 +13,16 @@ The host overlay owns the runtime contract:
 3. Run `npm ci --omit=dev --ignore-scripts` in that runtime package.
 4. Supply the exact installed executable path to its launcher as `BROWSER_CONTEXT_BROKER_BIN`.
 
-Without an overlay, the same copy and `npm ci --omit=dev --ignore-scripts` steps work by hand; `desk:cdp-headed-browser` lists the exact commands. The broker's `status` then runs, and `acquire` still needs a provider.
+This optional provider interface is not the ordinary `desk-web` browser path. Without an overlay, a private copy can expose diagnostics, but `acquire` still needs a provider:
+
+```bash
+DESK_PLUGIN_DIR="<installed Desk plugin folder>"
+RUNTIME="${XDG_STATE_HOME:-$HOME/.local/state}/ouroboros-skills/desk/browser-context-broker"
+mkdir -p "$RUNTIME" && cp -R "$DESK_PLUGIN_DIR/browser-context-broker/." "$RUNTIME/"
+(cd "$RUNTIME" && npm ci --omit=dev --ignore-scripts)
+export BROWSER_CONTEXT_BROKER_BIN="$RUNTIME/bin/browser-context-broker.mjs"
+node "$BROWSER_CONTEXT_BROKER_BIN" status --state-dir "$RUNTIME/state" --json
+```
 
 The shared error, lock and private-state primitives live inside this package, so a POSIX package copy does not need the MCP sibling to load them. MCP consumers re-export the same implementations rather than maintaining copies. Windows native ACL and process-start operations still use the existing helpers in the complete plugin's sibling `mcp/` directory; a broker-only Windows copy does not supply those helpers.
 
