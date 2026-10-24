@@ -1153,24 +1153,26 @@ for (const code of ["context_preparation_deferred", "synthetic_source_failure"])
     await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
     const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
     let reads = 0
+    let discoveryPasses = 0
     const run = () => withFsFault(t, {
       readFile: (original, file, ...args) => {
         if (String(file) === stateFile && ++reads === 2) throw Object.assign(new Error(code), { code })
         return original(file, ...args)
       },
-    }, () => queue.planContextPublication(f.env, { ...f.options, now: 1000 }), fsNative.promises)
+    }, () => queue.planContextPublication(f.env, {
+      ...f.options, now: 1000,
+      readRemote: () => {
+        if (++discoveryPasses === 1) throw Object.assign(new Error("deferred first discovery"), { code: "context_preparation_deferred" })
+        return null
+      },
+    }), fsNative.promises)
     if (code === "synthetic_source_failure") await assert.rejects(run(), { code })
     else {
       const plan = await run()
       assert.equal(plan.deferred, true)
-      assert.ok(plan.ready.every((item) => item.invalidation === true))
-      for (const item of plan.ready) {
-        const record = JSON.parse(item.bytes)
-        assert.equal(record.heading, null)
-        assert.deepEqual(record.events, [])
-        assert.equal(record.privacy.verdict, "not_required")
-      }
+      assert.deepEqual(plan.ready, [])
     }
+    assert.equal(discoveryPasses, 2)
   })
 }
 
