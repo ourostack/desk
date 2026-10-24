@@ -27,7 +27,8 @@ async function workerFixture() {
   fs.writeFileSync(receipt,JSON.stringify({version:1,contextId:ID,pid:123456,started:"fixture:original"}),{mode:0o600})
   const sessionFile = path.join(root,"registry",ID+".session")
   const state = {entry:null,receiptReads:0,starts:0,stops:0,processReads:0,generation:null,unknown:false,
-    startError:false,spawnError:false,afterSpawnError:false,replacementAlive:false,replacementPid:123457,launches:0,stopWithoutAck:false}
+    startError:false,spawnError:false,afterSpawnError:false,replacementAlive:false,replacementPid:123457,launches:0,stopWithoutAck:false,
+    connectionErrors:[],deletes:0,deleteBlocked:false,onProcessRead:null}
   const info = {daemonProfilesDir:path.dirname(sessionFile)}
   function installEntry() {
     const browser = JSON.parse(fs.readFileSync(configFile)).browser
@@ -46,10 +47,16 @@ async function workerFixture() {
   const fakeProcess = {...process,platform:"win32",argv:[],stdout:{write(){}},
     kill(pid){if(state.unknown)throw Object.assign(Error("unknown"),{code:"EPERM"})
       if(!(pid===123456?state.generation:pid===state.replacementPid&&state.replacementAlive))throw Object.assign(Error("absent"),{code:"ESRCH"})}}
-  const reader = {async readProcessStart(pid){state.processReads++;return state.unknown?null:
+  const reader = {async readProcessStart(pid){state.processReads++;if(state.onProcessRead)state.onProcessRead();return state.unknown?null:
     pid===123456?state.generation:pid===state.replacementPid&&state.replacementAlive?"fixture:replacement:"+state.launches:null}}
   class Session {
     isCompatible(){return true}
+    async deleteSessionConfig(){
+      state.deletes++
+      if(state.deleteBlocked)return
+      fs.unlinkSync(sessionFile)
+      state.entry=null
+    }
     static async startDaemon(){
       if(state.spawnError)throw Error("unknown replacement launch")
       state.replacementAlive=true
@@ -89,8 +96,10 @@ async function workerFixture() {
     require(name){
       if(name==="fs")return fsBoundary
       if(name==="net")return {createConnection(_path,connected){
-        const socket={on(){},destroy(){}}
-        queueMicrotask(connected)
+        const handlers={}
+        const socket={on(event,handler){handlers[event]=handler;return socket},destroy(){}}
+        const error=state.connectionErrors.shift()
+        queueMicrotask(()=>error?handlers.error(Object.assign(Error("owned socket unavailable"),{code:error})):connected())
         return socket
       }}
       if(name===path.join(root,"cli/registry.js"))return registry
@@ -103,6 +112,8 @@ async function workerFixture() {
   const request={contextId:ID,mode:"signed-in",backend:"managed",root,cliDir:path.join(root,"cli"),
     socketDir:root,browserArgs:[]}
   return {root,state,receipt,configFile,sessionFile,installEntry,
+    retainDiscard:()=>common.atomicJson(path.join(root,".managed-discard.json"),
+      {version:1,contextId:ID,profile:common.profileIdentity(root)}),
     invoke:operation=>module.exports.main({...request,operation})}
 }
 
@@ -219,3 +230,71 @@ for(const condition of ["same-generation-live","unknown-liveness"]){
     assert.ok(f.state.receiptReads>0)
   })
 }
+
+for(const code of ["ENOENT","ECONNREFUSED"]){
+  test("managed discard reconciles stale metadata after exact daemon exit and "+code,async()=>{
+    const f=await workerFixture()
+    f.retainDiscard()
+    f.state.connectionErrors.push(code)
+    assert.equal((await f.invoke("discard")).state,"discarded")
+    assert.equal(fs.existsSync(f.sessionFile),false)
+    assert.ok(f.state.processReads>0)
+    assert.ok(f.state.receiptReads>0)
+    assert.equal(f.state.deletes,1)
+    assert.equal(f.state.stops,0)
+    assert.equal(f.state.starts,0)
+  })
+}
+
+for(const condition of ["same-generation-live","unknown-liveness","invalid-receipt","profile-in-use","changed-session"]){
+  test("stale managed metadata is retained when "+condition,async()=>{
+    const f=await workerFixture()
+    f.retainDiscard()
+    f.state.connectionErrors.push("ECONNREFUSED")
+    if(condition==="same-generation-live")f.state.generation="fixture:original"
+    else if(condition==="unknown-liveness")f.state.unknown=true
+    else if(condition==="invalid-receipt")fs.writeFileSync(f.receipt,JSON.stringify({version:0,contextId:ID}))
+    else if(condition==="profile-in-use")fs.writeFileSync(path.join(f.root,"profile/SingletonLock"),"owned active fixture")
+    else f.state.onProcessRead=()=>fs.appendFileSync(f.sessionFile," ")
+    await assert.rejects(f.invoke("discard"),{code:"cleanup_unconfirmed"})
+    assert.equal(fs.existsSync(f.sessionFile),true)
+    assert.equal(fs.existsSync(path.join(f.root,"profile")),true)
+    assert.equal(f.state.deletes,0)
+    assert.equal(f.state.starts,0)
+  })
+}
+
+test("stale managed metadata cleanup can retry a failed metadata removal without replaying stop",async()=>{
+  const f=await workerFixture()
+  f.retainDiscard()
+  f.state.connectionErrors.push("ECONNREFUSED")
+  f.state.deleteBlocked=true
+  await assert.rejects(f.invoke("discard"),{code:"cleanup_unconfirmed"})
+  assert.equal(fs.existsSync(f.sessionFile),true)
+  f.state.deleteBlocked=false
+  f.state.connectionErrors.push("ECONNREFUSED")
+  assert.equal((await f.invoke("discard")).state,"discarded")
+  assert.equal(f.state.deletes,2)
+  assert.equal(f.state.stops,0)
+})
+
+for(const code of ["EACCES","ETIMEDOUT"]){
+  test("managed discard preserves metadata after ambiguous socket failure "+code,async()=>{
+    const f=await workerFixture()
+    f.retainDiscard()
+    f.state.connectionErrors.push(code)
+    await assert.rejects(f.invoke("discard"),{code})
+    assert.equal(fs.existsSync(f.sessionFile),true)
+    assert.equal(f.state.deletes,0)
+    assert.equal(f.state.receiptReads,0)
+  })
+}
+
+test("explicit sign-in handoff reconciles stale original metadata before starting its replacement",async()=>{
+  const f=await workerFixture()
+  f.state.connectionErrors.push("ECONNREFUSED")
+  assert.equal((await f.invoke("finish-sign-in")).state,"running")
+  assert.equal(f.state.deletes,1)
+  assert.equal(f.state.stops,0)
+  assert.equal(f.state.starts,1)
+})

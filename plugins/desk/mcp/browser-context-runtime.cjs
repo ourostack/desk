@@ -124,7 +124,7 @@ function runPage(request, socket, SocketConnection, native) {
   });
 }
 function privateMain(request, registryModule, Session, program, SocketConnection, info) {
-  var entry,session,handoff;
+  var entry,session,handoff,entryContents;
   function load() {
     var expected = path.join(info.daemonProfilesDir,request.contextId+".session");
     noLinks(expected,request.root);
@@ -132,7 +132,10 @@ function privateMain(request, registryModule, Session, program, SocketConnection
     return registryModule.Registry.load().then(function(registry) {
       entry = registry.entry(info,request.contextId);
       if (!entry && fs.existsSync(expected)) fail("session_metadata_invalid","Private session metadata is present but unreadable");
-      if (entry) { validatePrivate(entry,info,request); session = new Session(entry); }
+      if (entry) {
+        validatePrivate(entry,info,request); session = new Session(entry);
+        if (request.backend === "managed") entryContents = fs.readFileSync(entry.file,"utf8");
+      }
     });
   }
   function live() {
@@ -187,7 +190,23 @@ function privateMain(request, registryModule, Session, program, SocketConnection
       }
       if (!entry) return request.backend === "managed" ? managedDaemonExited(request)
         .then(function() { return {state:"discarded"}; }) : {state:"absent"};
-      return live().then(function(socket) { return send(socket,SocketConnection,"stop",{}); }).then(function(ack) {
+      var reconciled = false;
+      return live().then(function(socket) { return send(socket,SocketConnection,"stop",{}); },function(error) {
+        if (request.backend !== "managed" || (error.code !== "ENOENT" && error.code !== "ECONNREFUSED")) throw error;
+        return managedDaemonExited(request).then(function() {
+          var cleanup = common.readManagedState(request.root,".managed-discard.json",request.contextId) ||
+            common.readManagedState(request.root,".managed-sign-in-handoff.json",request.contextId);
+          if (!cleanup || !cleanup.profile) fail("cleanup_unconfirmed","Retained profile identity is unavailable");
+          common.profileUnused(request.root,cleanup.profile,false);
+          if (process.platform !== "win32" && fs.existsSync(entry.config.socketPath))
+            fail("cleanup_unconfirmed","Private socket disposition remains unconfirmed");
+          noLinks(entry.file,request.root); common.checkOwned(entry.file,false);
+          if (fs.readFileSync(entry.file,"utf8") !== entryContents)
+            fail("cleanup_unconfirmed","Session metadata changed during daemon-exit reconciliation");
+          return session.deleteSessionConfig();
+        }).then(function() { reconciled = true; });
+      }).then(function(ack) {
+        if (reconciled) return;
         if (ack !== "ok") fail("cleanup_unconfirmed","Private browser did not confirm stop");
         if (process.platform !== "win32" && fs.existsSync(entry.config.socketPath)) fail("cleanup_unconfirmed","Private socket remains after stop");
         if (fs.existsSync(entry.file)) return connect(entry.config.socketPath).then(function(socket) {
