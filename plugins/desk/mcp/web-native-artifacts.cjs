@@ -99,6 +99,34 @@ function artifactFamily(family, sourceFiles) {
       return { targets: TARGETS.slice() };
     } catch (error) { throw integrity(); }
   }
+  // On-device check: this computer's helper must be present and match, and a
+  // present helper for another platform must still match. Only a helper that
+  // is absent for another platform is reported instead of refused (antivirus
+  // can remove one), since setup here never runs it. Release and packaging
+  // keep verifyAssets, which requires every helper.
+  function verifyHostAssets(root, platform, arch) {
+    var host = platform + "-" + arch, targets = [], missing = [];
+    function absent(file) {
+      try { fs.lstatSync(file); return false; }
+      catch (error) { if (error.code === "ENOENT") return true; throw error; }
+    }
+    try { manifest(root); } catch (error) { throw integrity(); }
+    TARGETS.forEach(function (target) {
+      var relative = ["artifacts", family, target, "desk-" + family + (target.indexOf("win32-") === 0 ? ".exe" : "")];
+      var directory = path.join.apply(path, [root].concat(relative.slice(0, 3)));
+      try {
+        if (target !== host && (absent(directory) ||
+            (fs.lstatSync(directory).isDirectory() && !fs.lstatSync(directory).isSymbolicLink() && absent(path.join(directory, relative[3]))))) {
+          missing.push({ target: target, file: relative.join("/") });
+          return;
+        }
+        var parts = target.split("-");
+        selectAsset(root, parts[0], parts[1]);
+        targets.push(target);
+      } catch (error) { throw Object.assign(integrity(), { target: target }); }
+    });
+    return { targets: targets, missing: missing };
+  }
   function copyPrivateAsset(root, platform, arch, destination) {
     var asset = selectAsset(root, platform, arch);
     fs.copyFileSync(asset.file, destination, fs.constants.COPYFILE_EXCL);
@@ -109,7 +137,7 @@ function artifactFamily(family, sourceFiles) {
     return { file: destination, sha256: asset.sha256 };
   }
   return { TARGETS: TARGETS.slice(), sourceHash: sourceHash, checkAsset: checkAsset,
-    selectAsset: selectAsset, verifyAssets: verifyAssets, copyPrivateAsset: copyPrivateAsset,
+    selectAsset: selectAsset, verifyAssets: verifyAssets, verifyHostAssets: verifyHostAssets, copyPrivateAsset: copyPrivateAsset,
     provenance: provenance };
 }
 

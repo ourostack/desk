@@ -128,3 +128,26 @@ for (const link of ['output-directory', 'manifest']) {
     assert.deepEqual(fs.readdirSync(outside), [], 'no foreign directory or dangling-link destination was written');
   });
 }
+
+// Only on-device setup tolerates another platform's missing helper. The
+// release and packaging checks must still refuse any missing helper.
+const windowsHelper = 'artifacts/browser-messaging/win32-x64/desk-browser-messaging.exe';
+test('release verify-only check still refuses a missing Windows helper', async t => {
+  const { root } = await familyFixture(t);
+  fs.renameSync(path.join(root, windowsHelper), path.join(root, `${windowsHelper}.owned-away`));
+  const builder = require(path.join(mcp, 'scripts/build-browser-messaging-assets.cjs'));
+  assert.throws(() => builder.run(['--verify'], { root, stdout: { write() {} } }), /browser_native_messaging_integrity/u);
+});
+
+test('generated-artifact gate still refuses a missing Windows helper', async t => {
+  const gate = require(path.join(repository, 'scripts/test-desk-generated-artifacts.cjs'));
+  const original = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', function (file, ...args) {
+    if (path.resolve(String(file)) === path.join(mcp, windowsHelper))
+      throw Object.assign(Error('owned missing-helper fixture'), { code: 'ENOENT' });
+    return original.call(this, file, ...args);
+  });
+  const result = await gate.verifyGeneratedArtifacts({ io: { stdout: { write() {} }, stderr: { write() {} } } });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes('browser-messaging native source/asset integrity verification failed'), result.errors.join('\n'));
+});
