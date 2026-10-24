@@ -1,1 +1,0 @@
-Prepare current task inputs before scanning large reviewed publication records, reusing validated source groups while rechecking prose consent. Keep the existing discovery, publication and overall time limits.
