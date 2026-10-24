@@ -152,6 +152,8 @@ test("beside older builds that keep re-indexing a 1,000-section card, recall sta
       await sleep(500)
     }
   })()
+  // A failed assertion must not leave the sampler running, or the test process never exits.
+  t.after(async () => { sampling = false; await sampler })
 
   let appends = 0
   let writing = true
