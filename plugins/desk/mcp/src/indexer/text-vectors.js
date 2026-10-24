@@ -111,32 +111,43 @@ export async function removeUnusableVectors(db, {
   const started = now()
   const summary = { text_vectors_removed: 0, row_vectors_removed: 0, complete: false }
   const unused = "NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = text_vectors.text_hash)"
-  db.transaction(() => {
-    db.prepare(`UPDATE text_vectors SET unused_since = NULL WHERE unused_since IS NOT NULL AND NOT ${unused}`).run()
-    db.prepare(`UPDATE text_vectors SET unused_since = ? WHERE unused_since IS NULL AND ${unused}`).run(started)
-  }).immediate()
-  const deleteTextVectors = db.prepare(
-    `DELETE FROM text_vectors WHERE rowid IN (
-       SELECT rowid FROM text_vectors
-       WHERE unused_since <= ? AND ${unused}
-       LIMIT ?)`,
+  // Each step looks first and takes the write lock only when it has something to write: on a busy desk every
+  // write waits its turn behind the other builds' commits.
+  const toUnmark = db.prepare(`SELECT 1 FROM text_vectors WHERE unused_since IS NOT NULL AND NOT ${unused} LIMIT 1`)
+  const toMark = db.prepare(`SELECT 1 FROM text_vectors WHERE unused_since IS NULL AND ${unused} LIMIT 1`)
+  if (toUnmark.get() || toMark.get()) {
+    db.transaction(() => {
+      db.prepare(`UPDATE text_vectors SET unused_since = NULL WHERE unused_since IS NOT NULL AND NOT ${unused}`).run()
+      db.prepare(`UPDATE text_vectors SET unused_since = ? WHERE unused_since IS NULL AND ${unused}`).run(started)
+    }).immediate()
+  }
+  const findTextVectors = db.prepare(
+    `SELECT rowid FROM text_vectors WHERE unused_since <= ? AND ${unused} LIMIT ?`,
   )
   const findRowVectors = db.prepare(
     `SELECT v.chunk_id FROM chunk_vecs v
      WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.id = v.chunk_id)
      LIMIT ?`,
   )
+  const deleteTextVector = db.prepare(`DELETE FROM text_vectors WHERE rowid = ? AND ${unused}`)
   const deleteRowVector = db.prepare("DELETE FROM chunk_vecs WHERE chunk_id = ?")
-  const deleteRowVectors = db.transaction((ids) => {
-    for (const id of ids) deleteRowVector.run(BigInt(id))
+  // The checks run again inside the write, so a section that came back in between keeps its vector.
+  const deleteBatch = db.transaction((textRows, rowIds) => {
+    let removedText = 0
+    for (const rowid of textRows) removedText += deleteTextVector.run(rowid).changes
+    for (const id of rowIds) deleteRowVector.run(BigInt(id))
+    return removedText
   }).immediate
   for (;;) {
-    const removedText = deleteTextVectors.run(started - UNUSED_TEXT_VECTOR_GRACE_MS, batchSize).changes
-    const ids = removedText < batchSize ? findRowVectors.all(batchSize - removedText).map((row) => row.chunk_id) : []
-    deleteRowVectors(ids)
-    summary.text_vectors_removed += removedText
-    summary.row_vectors_removed += ids.length
-    if (removedText + ids.length < batchSize) {
+    const textRows = findTextVectors.all(started - UNUSED_TEXT_VECTOR_GRACE_MS, batchSize).map((row) => row.rowid)
+    const rowIds = findRowVectors.all(batchSize - textRows.length).map((row) => row.chunk_id)
+    if (textRows.length + rowIds.length === 0) {
+      summary.complete = true
+      return summary
+    }
+    summary.text_vectors_removed += deleteBatch(textRows, rowIds)
+    summary.row_vectors_removed += rowIds.length
+    if (textRows.length + rowIds.length < batchSize) {
       summary.complete = true
       return summary
     }

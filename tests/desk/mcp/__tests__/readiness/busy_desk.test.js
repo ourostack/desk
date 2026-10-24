@@ -61,7 +61,7 @@ function startLegacyWriter(root, { journal, record, intervalMs, embedDelayMs = n
 }
 
 // The owning build's controller, catching up the way the production handler in server.js does.
-async function ownerController(t, root, stateHome, embed) {
+async function ownerController(t, root, stateHome, embed, catchUps = []) {
   const build = "0".repeat(64)
   const version = "3.2.0-alpha.900"
   const contracts = { ...readinessContracts({ lexical: "required" }, { build }), semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } }
@@ -70,6 +70,7 @@ async function ownerController(t, root, stateHome, embed) {
     root, stateHome, ephemeral: true, ...contracts, version,
     watcher: { fence: async () => ({ certain: true }) },
     handlers: { async beginConvergence({ eventCursor, journal }) {
+      const started = performance.now()
       const options = { startup: false, snapshots: false, vectorPacks: false, embed: { fetch: embed.fetch }, eventCursor, writer: { version, build, controller: id } }
       const result = await ensureIndex(root, options)
       const db = openDb(root)
@@ -81,6 +82,7 @@ async function ownerController(t, root, stateHome, embed) {
         await journal.compact({ db, generationId: result.summary.lexical_generation })
       } finally { closeDb(db) }
       result.semantic.query_embedding = { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } }
+      catchUps.push(Math.round(performance.now() - started))
       return result
     } },
   })
@@ -102,7 +104,8 @@ test("beside older builds that keep re-indexing a 1,000-section card, recall sta
   const stateHome = path.join(root, "controller-state")
   mkdirSync(stateHome, { recursive: true, mode: 0o700 })
   const ownerEmbed = slowEmbed(2)
-  const owner = await ownerController(t, root, stateHome, ownerEmbed)
+  const catchUps = []
+  const owner = await ownerController(t, root, stateHome, ownerEmbed, catchUps)
   await owner.controller.beginConvergence()
   assert.equal(missingVectors(root), 0, "the owner embedded the desk once")
 
@@ -148,6 +151,9 @@ test("beside older builds that keep re-indexing a 1,000-section card, recall sta
   const embedded = ownerEmbed.sections - embeddedBefore
   const answered = outcomes.filter((outcome) => outcome.answered).length
   t.diagnostic(`${appends} appends, ${embedded} sections embedded, ${answered} of ${outcomes.length} recalls answered, answered ${settledMs} ms after the writes stopped`)
+  const sorted = catchUps.slice(1).sort((a, b) => a - b)
+  const refusals = Object.entries(Object.groupBy(outcomes.filter((outcome) => !outcome.answered), (outcome) => outcome.reason)).map(([reason, list]) => `${reason} ${list.length}`)
+  t.diagnostic(`${sorted.length} catch-ups after the first: median ${sorted[Math.floor(sorted.length / 2)]} ms, slowest ${sorted.at(-1)} ms; recall times ${outcomes.map((outcome) => outcome.ms).join(" ")} ms; refusals: ${refusals.join(", ") || "none"}`)
   assert.ok(appends >= 15, `the run appended ${appends} times`)
   assert.ok(embedded <= appends, `the owner embedded ${embedded} sections for ${appends} appended sections`)
   assert.ok(answered >= 0.9 * outcomes.length,

@@ -500,7 +500,7 @@ async function embedMissingRound(db, opts, summary, docIds) {
     else entries.push(entry)
   }
   // Texts back after their section vanished mid-pass are saved from memory, not embedded again.
-  save(known.map(({ entry }) => entry), known.map(({ vector }) => ({ vector })), new Date().toISOString())
+  if (known.length > 0) save(known.map(({ entry }) => entry), known.map(({ vector }) => ({ vector })), new Date().toISOString())
   for (let start = 0; start < entries.length; start += EMBED_SAVE_BATCH_SIZE) {
     const batch = entries.slice(start, start + EMBED_SAVE_BATCH_SIZE)
     const results = await embedChunksDetailed(batch.map((entry) => entry.text), embedOptions)
