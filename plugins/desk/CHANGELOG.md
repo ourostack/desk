@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.354 — 2026-10-24
+
+Keep the full existing one-second preparation window after inventory work, rather than halving the remaining allowance again. Alternate which stage runs first so preparation and publication both make progress across turns, within the unchanged one-second stage caps and two-second overall deadline.
+
+The operator's own records now stay in the desk. Agents read "customer data" and "screenshots with personal data" as covering the operator's own financial and legal case files, and moved complaint drafts and evidence out of Git into session folders, where the next session on another computer could not find them. [`session-resumption`](skills/session-resumption/SKILL.md) now defines customer data as data about other people that a product or employer holds, and says the operator's own records, correspondence, drafts and screenshots of their own accounts go in the task's folder and are committed; only secrets and credentials stay out. [`evaluate-release`](skills/evaluate-release/SKILL.md) keeps only screenshots that show other people's data outside Git.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.353 — 2026-10-24
 
 Prepare current task inputs before scanning large reviewed publication records, reusing validated source groups while rechecking prose consent. Keep the existing discovery, publication and overall time limits.
