@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
-import { readStatus, serializeTaskContext, setConsent, taskContextPath, updateTaskContextState, writeTaskContextFile } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { readStatus, serializeTaskContext, setConsent, taskContextPath, updateStatus, updateTaskContextState, writeTaskContextFile } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { contextPayloadHash } from "../../../../../plugins/desk/mcp/src/factory/context-schema.js"
 import { contextFacts, contextRecord, CONTEXT_JOB } from "./_context_fixture.js"
 import { osEnv } from "../_os_env.js"
@@ -1041,6 +1041,7 @@ test("invalid publication cursors cannot select or publish task evidence", async
 
 test("preparation exhaustion before publication returns no unvalidated records", async (t) => {
   const f = await reviewed()
+  await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "prepare" } }))
   let elapsed = 0
   let consentReads = 0
   const plan = await withFsFault(t, {
@@ -1113,6 +1114,7 @@ test("a freshness check that spends the publication allowance cannot return a la
 
 test("a refreshed publication state disappearing before readback cannot publish old wording", async (t) => {
   const f = await reviewed()
+  await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "prepare" } }))
   await queue.saveContextSent(f.env, STORE, [f.item], 102)
   await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
   await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
@@ -1148,6 +1150,7 @@ test("a refreshed publication state disappearing before readback cannot publish 
 for (const code of [null, "context_preparation_deferred", "synthetic_source_failure"]) {
   test(`a stale replacement ${code ?? "succeeding after early discovery defers"} never republishes its earlier wording`, async (t) => {
     const f = await reviewed()
+    await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "prepare" } }))
     await queue.saveContextSent(f.env, STORE, [f.item], 102)
     await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
     await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
@@ -1344,6 +1347,86 @@ test("inventory overhead cannot halve the first preparation stage below a comple
   assert.equal(current[0].source.evaluator.plugin_version, "3.2.0-alpha.2")
   assert.equal(current[0].source.task_card.path, f.card)
   assert.ok(elapsed <= 2000)
+})
+
+for (const withdraw of [false, true]) {
+  test(`unchanged preparation cannot starve ${withdraw ? "a published withdrawal" : "reviewed publication"} across planning turns`, async (t) => {
+    const f = await reviewedJobs(2)
+    const activeFiles = new Set(await Promise.all(f.entries.map((entry) =>
+      taskContextPath(f.env, STORE, entry.localJobs[0].published, "state.json"))))
+    let withdrawnJob = null
+    if (withdraw) {
+      const g = await fixture()
+      const entry = g.entries[0]
+      withdrawnJob = `${"0".repeat(31)}1`
+      entry.facts.session.id = "11111111-1234-4abc-8abc-123456789abc"
+      entry.facts.jobs[0].job = withdrawnJob
+      entry.facts.outcomes[0].job = withdrawnJob
+      entry.localJobs = [{ local: withdrawnJob, published: withdrawnJob }]
+      f.entries.push(entry)
+      await queue.prepareTaskContexts(f.env, f.options)
+      const work = (await queue.listContextWork(f.env, { store: STORE })).find((item) => item.job === withdrawnJob)
+      const accepted = await queue.acceptContextCandidate(f.env, {
+        store: STORE, job: work.job, basis: work.basis, bytes: json(candidate(entry.facts, work.job)),
+      })
+      await queue.acceptContextPrivacy(f.env, {
+        store: STORE, job: work.job, basis: work.basis, bytes: json(review(accepted.payload_sha256)),
+      })
+      const plan = await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+      const item = plan.ready.find((record) => record.job === withdrawnJob)
+      await queue.saveContextSent(f.env, STORE, [item], 102)
+      await online(f, { plan, readMain: async () => ({ blobs: new Map([[item.path, item.sha]]), unknown: false }) })
+      await writeFile(join(g.desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores: { [STORE]: false } }))
+    }
+    await updateStatus(f.env, (status) => ({ ...status, context_planning: { [STORE]: "prepare" } }))
+    const storeDir = join([...activeFiles][0], "..", "..")
+    const published = new Set()
+    let withdrawal = false
+    for (let turn = 0; turn < 4; turn += 1) {
+      let elapsed = 0
+      const plan = await withFsFault(t, {
+        readdir: async (original, file, ...args) => {
+          const result = await original(file, ...args)
+          if (String(file) === storeDir) elapsed += 1200
+          return result
+        },
+        readFile: (original, file, ...args) => {
+          if (activeFiles.has(String(file))) elapsed += 400
+          return original(file, ...args)
+        },
+      }, () => queue.planContextPublication(f.env, {
+        ...f.options, now: 1000, deadline: 2000, clock: () => elapsed,
+      }), fsNative.promises)
+      for (const item of plan.ready) published.add(item.job)
+      withdrawal ||= plan.work && plan.states.some((item) => item.state.job === withdrawnJob && item.withdrawn)
+      assert.ok(elapsed <= 2000)
+    }
+    assert.equal(published.size, 2, "reviewed tasks must advance even when preparation uses all of its first turn")
+    if (withdraw) assert.equal(withdrawal, true, "revoked prose cannot wait forever behind unchanged preparation")
+  })
+}
+
+test("corrupt planning turns cannot silently choose a phase or publish wording", async () => {
+  const f = await reviewed()
+  for (const value of [null, [], "prepare", { [STORE]: null }, { [STORE]: "unexpected" }]) {
+    await updateStatus(f.env, (status) => ({ ...status, context_planning: value }))
+    await assert.rejects(queue.planContextPublication(f.env, { ...f.options, now: 1000 }),
+      { message: "context_planning_state_invalid" })
+  }
+})
+
+test("planning turns keep other stores' scheduling and readiness records intact", async () => {
+  const f = await reviewed()
+  await updateStatus(f.env, (status) => ({
+    ...status,
+    context_planning: { [STORE]: "prepare", "synthetic/other": "publish" },
+    context_publication: { "synthetic/other": { ready: false, code: "context_store_not_ready" } },
+  }))
+  await queue.planContextPublication(f.env, { ...f.options, now: 1000 })
+  const status = await readStatus(f.env)
+  assert.equal(status.context_planning[STORE], "publish")
+  assert.equal(status.context_planning["synthetic/other"], "publish")
+  assert.deepEqual(status.context_publication["synthetic/other"], { ready: false, code: "context_store_not_ready" })
 })
 
 test("prevalidated task groups cannot prepare new inputs after the prose policy is withdrawn", async (t) => {
