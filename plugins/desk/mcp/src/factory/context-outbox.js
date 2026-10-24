@@ -434,6 +434,18 @@ async function publicationStatus(env, store, patch) {
   }))
 }
 
+async function planningTurn(env, store) {
+  let first
+  await updateStatus(env, (status) => {
+    const turns = status.context_planning
+    if (turns !== undefined && !isPlainObject(turns)) throw new Error("context_planning_state_invalid")
+    first = turns?.[store] ?? "prepare"
+    if (turns?.[store] === null || !["prepare", "publish"].includes(first)) throw new Error("context_planning_state_invalid")
+    return { ...status, context_planning: { ...turns, [store]: first === "prepare" ? "publish" : "prepare" } }
+  })
+  return first
+}
+
 /** Local planning only; cached negative readiness never sends an unchanged queue online every start. */
 export async function planContextPublication(env, { store, entries, pluginVersion, now, deadline = Infinity, clock = Date.now, ...readers }) {
   const limit = Math.min(deadline, clock() + PREPARATION_MS)
@@ -460,20 +472,24 @@ export async function planContextPublication(env, { store, entries, pluginVersio
       start = value.cursor % jobs.length
     }
   }
-  // Large reviewed inputs must not spend the preparation window before discovery starts.
+  // Each stage gets first use of the remaining turn on alternate calls.
+  const first = await planningTurn(env, store)
   let prepared = { prepared: 0, deferred: [] }
-  if (clock() < limit) {
-    try {
-      prepared = await prepareContextGroups(env, {
-        store, pluginVersion, deadline: (clock() + limit) / 2, clock, ...readers,
-      }, [...groups.values()])
-    } catch (error) {
-      if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+  const prepare = async () => {
+    if (clock() < limit) {
+      try {
+        prepared = await prepareContextGroups(env, {
+          store, pluginVersion, deadline: Math.min(limit, clock() + PREPARATION_MS / 2), clock, ...readers,
+        }, [...groups.values()])
+      } catch (error) {
+        if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+        deferredWork = true
+      }
+    } else {
       deferredWork = true
     }
-  } else {
-    deferredWork = true
   }
+  if (first === "prepare") await prepare()
   const publicationLimit = Math.min(limit, clock() + PREPARATION_MS / 2)
   for (let offset = 0; offset < jobs.length; offset += 1) {
     const index = (start + offset) % jobs.length
@@ -520,6 +536,7 @@ export async function planContextPublication(env, { store, entries, pluginVersio
       schema: "desk.factory.context-publication-cursor/1", cursor: next,
     })
   }
+  if (first === "publish") await prepare()
   const cached = (await readStatus(env)).context_publication?.[store]
   const held = Number.isFinite(cached?.hold_until) && cached.hold_until > now
   const stale = !Number.isFinite(Date.parse(cached?.checked_at)) || now - Date.parse(cached.checked_at) > DAY_MS
