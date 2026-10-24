@@ -466,3 +466,49 @@ test(`${finding} failed compaction keeps controller barriers uncertain and sched
   } finally { release.resolve(); await client.close(); closeDb(db) }
 })
 }
+
+test("a generation's content ignores document order and how the embedding settings are stored", async () => {
+  const { generationContent } = await generationModule()
+  const docs = [{ path: "b.md", hash: "sha256:b" }, { path: "a.md", hash: "sha256:a" }, { path: "a.md", hash: "sha256:a" }]
+  const content = generationContent(docs, identities)
+  assert.match(content, /^sha256:[0-9a-f]{64}$/)
+  assert.equal(generationContent([...docs].reverse(), identities), content, "the same documents in another order are the same content")
+  const stored = { ...identities, embedding_spec: JSON.stringify(identities.embedding_spec) }
+  assert.notEqual(generationContent(docs, stored), generationContent(docs, { ...stored, policy_identity: "other-policy" }), "other settings are other content")
+  assert.notEqual(generationContent(docs.slice(1), identities), content, "other documents are other content")
+})
+
+test("a stored generation's content is unknown when its row is gone or its documents are unreadable", async () => {
+  const { commitLexicalGeneration, generationContent, readGenerationContent } = await generationModule()
+  const root = await mkTempRoot("desk-generation-content-")
+  const db = openDb(root)
+  try {
+    const documents = [{ path: "task.md", hash: "sha256:fixture" }]
+    const id = commitLexicalGeneration({ db, documents, eventCursor, identities, apply() {
+      db.prepare("INSERT INTO docs(path, kind, hash, mtime) VALUES (?, 'task', ?, 1)").run("task.md", "sha256:fixture")
+    } })
+    const stored = db.prepare("SELECT * FROM lexical_generations WHERE id = ?").get(id)
+    assert.equal(readGenerationContent(db, id), generationContent(documents, stored))
+    assert.equal(readGenerationContent(db, id), generationContent(documents, stored), "a second read of the same row is answered from the cache")
+    assert.equal(readGenerationContent(db, id + 100), null)
+    db.prepare("UPDATE lexical_generations SET documents = ? WHERE id = ?").run("not json", id)
+    assert.equal(readGenerationContent(db, id), null)
+    db.prepare("UPDATE lexical_generations SET documents = ? WHERE id = ?").run("{}", id)
+    assert.equal(readGenerationContent(db, id), null)
+  } finally { closeDb(db) }
+})
+
+test("the active index reads as nothing before any generation is committed", async () => {
+  const { readActiveIndex, readCommittedContent } = await import("../../../../../plugins/desk/mcp/src/db/status-read.js")
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-generation-active-")
+  const db = openDb(root)
+  try { runMigrations(db) } finally { closeDb(db) }
+  assert.equal(readActiveIndex(root), null)
+  const writer = openDb(root)
+  let id
+  try { id = commitLexicalGeneration({ db: writer, documents: [], eventCursor, identities }) } finally { closeDb(writer) }
+  const active = readActiveIndex(root)
+  assert.equal(active.generation, id)
+  assert.equal(active.content, readCommittedContent(root, id))
+})

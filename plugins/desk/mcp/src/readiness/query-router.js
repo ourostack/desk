@@ -75,13 +75,13 @@ export const READINESS_WORDING = Object.freeze([
   NOT_CONNECTED, INDEX_BEHIND, INDEX_CATCHING_UP, INDEX_CHANGED, `${INDEX_CHANGED} Retry the search.`,
   `${INDEX_CHANGED} These results come from reading the files.`, SERVICE_FAILED, NO_CONNECTION_READS_FILES,
   OTHER_EMBEDDING_SETTINGS, TEXT_NOT_PREPARED, EMBEDDING_NOT_ANSWERING, SETTINGS_TURN_OFF, DOCUMENT_HAS_NO_TEXT,
-  REINDEX_NO_CONNECTION, REINDEX_NOT_CAUGHT_UP, UNKNOWN_KIND, DEADLINE_DETAIL, cannotReadOwnersIndex("3.2.0-alpha.349"),
+  REINDEX_NO_CONNECTION, REINDEX_NOT_CAUGHT_UP, UNKNOWN_KIND, DEADLINE_DETAIL, cannotReadOwnersIndex("1.2.3"),
   ...Object.values(PLAIN_REASONS),
   SEMANTIC_UNAVAILABLE, SEMANTIC_FIX, EMBEDDING_FIX,
   ...[SEMANTIC_OFF_REFUSAL, NEWER_DESK_REFUSAL, UNINDEXED_DOCUMENT_REFUSAL].flatMap(({ message, fix }) => [message, fix]),
   deadlineMessage(30_000), deadlineMessage(1_000), deadlineMessage(0),
-  indexOwnerSentence({ version: "3.2.0-alpha.349", this_controller: true }),
-  indexOwnerSentence({ version: "3.2.0-alpha.349", this_controller: false }),
+  indexOwnerSentence({ version: "1.2.3", this_controller: true }),
+  indexOwnerSentence({ version: "1.2.3", this_controller: false }),
 ])
 
 function semanticCapabilityError(reason, detail, { message = SEMANTIC_UNAVAILABLE, fix = SEMANTIC_FIX, observed = null, technical = null } = {}) {
@@ -455,7 +455,8 @@ export function createQueryRouter({
     // Each refusal names the Desk build that owns the search index, read from the controller's status.
     const refuse = async (reason, detail, options = {}) => {
       observed ??= await observedStatus(controller, signal)
-      return semanticCapabilityError(reason, detail, { ...embeddingRefusal(observed), ...options, observed })
+      // A refusal whose detail already names the owner passes `observed: null`, so the owner is not named twice.
+      return semanticCapabilityError(reason, detail, { ...embeddingRefusal(observed), observed, ...options })
     }
     try {
       const barrier = await semanticBarrierState(controller, request, remaining())
@@ -480,7 +481,7 @@ export function createQueryRouter({
       }
       if (!before.semanticProven) {
         const diagnostic = before.lexicalProven ? before.semanticDiagnostic : { reason: before.diagnostic.reason, message: INDEX_CATCHING_UP }
-        return refuse(diagnostic.reason, diagnostic.message, diagnostic.technical ? { technical: diagnostic.technical } : {})
+        return refuse(diagnostic.reason, diagnostic.message)
       }
       const result = await cancellable(() => semanticBackend({
         ...request,

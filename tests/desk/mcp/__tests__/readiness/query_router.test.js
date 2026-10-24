@@ -809,6 +809,25 @@ test("desk_similar on a document without vectors says the document is not indexe
   assert.equal(result.fix, "Pick another document; if this one has text, call desk_reindex and try again. desk_search answers now with exact-word matches.")
 })
 
+test("desk_similar on a document without vectors and no backend note gives no technical text", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({ controller: f.controller, semanticBackend: async () => ({ error: "semantic_unavailable" }) })
+  const result = await router.semantic({ deskRoot: f.deskRoot, kind: "similar", path: "track/work/task.md" })
+  assert.equal(result.diagnostic.message, "This document has not been indexed for meaning-based search yet.")
+  assert.equal(result.diagnostic.technical, undefined)
+})
+
+test("the controller's own generation is proven by its position even when its document list cannot be read", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
+  try { db.prepare("UPDATE lexical_generations SET documents = 'not json'").run() } finally { db.close() }
+  const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+  assert.equal(result.results[0].snippet, "canonical quartz")
+  assert.equal(result.readiness_diagnostic, undefined, JSON.stringify(result.readiness_diagnostic))
+  assert.deepEqual(f.used, ["indexed"])
+})
+
 test("semantic backend exceptions are converted without leaking partial results", async (t) => {
   const f = await fixture(t, { semanticCurrent: true })
   const router = createQueryRouter({

@@ -347,3 +347,29 @@ test("a lower build started while a higher build runs stands aside, reads the hi
   assert.equal((await recall(low)).results?.length, 3)
   assert.equal(low.converged.count, 0)
 })
+
+test("a lower build that finds the owner's index rebuilt under other settings refuses, naming the owner, and writes nothing", async (t) => {
+  const { root, stateHome } = await deskWithThreeTasks()
+  const embed = countingEmbed()
+  const high = { build: "0".repeat(64), version: "3.2.0-alpha.349", converged: { count: 0 }, verified: { count: 0 } }
+  const low = { build: "f".repeat(64), version: "3.2.0-alpha.348", converged: { count: 0 }, verified: { count: 0 } }
+  high.controller = await controllerFor(t, root, stateHome, high.build, embed, high)
+  await high.controller.beginConvergence()
+  low.controller = await controllerFor(t, root, stateHome, low.build, embed, low)
+  await low.controller.beginConvergence()
+  assert.equal((await low.controller.status()).state, "READY")
+
+  // The owner indexes the same files again under settings this build does not use, before this build has looked again.
+  const db = openDb(root)
+  let eventCursor
+  try { eventCursor = JSON.parse(db.prepare("SELECT event_cursor FROM lexical_generations ORDER BY id DESC LIMIT 1").get().event_cursor) } finally { closeDb(db) }
+  const highId = controllerIdentity({ root, ...readinessContracts({ lexical: "required" }, { build: high.build }), semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } }).id
+  await rebuildIndex(root, { eventCursor, embed: { fetch: embed.fetch }, writer: { version: high.version, build: high.build, controller: highId }, identities: { policy_identity: "newer-policy" } })
+
+  const router = createDeskQueryRouter({ controller: low.controller, version: low.version })
+  const refused = await desk_recall({ deskRoot: root, queryRouter: router, input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
+  assert.equal(refused.status, "error", JSON.stringify(refused))
+  assert.equal(refused.diagnostic.reason, "index_owned_by_newer_desk")
+  assert.equal(refused.diagnostic.detail, "Desk 3.2.0-alpha.349 (another session) owns the search index, and this session's Desk cannot read it.")
+  assert.equal(low.converged.count, 0)
+})
