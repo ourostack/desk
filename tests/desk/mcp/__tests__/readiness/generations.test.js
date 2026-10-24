@@ -324,11 +324,29 @@ test("F1 compaction rejects generation A when B becomes active before queued com
     const covered = journal.cursor
     const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities })
     const compacting = journal.compact({ db, generationId: generationA })
-    // Even B with identical coverage supersedes A: the active generation must be checked.
-    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities })
+    // Even B with identical coverage supersedes A when it indexes the desk differently: the active generation must be checked.
+    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities: { ...identities, policy_identity: "other-policy" } })
     await assert.rejects(compacting, { code: "generation_superseded" })
     assert.equal(getMeta(db, "active_lexical_generation"), String(generationB))
     assert.deepEqual(fs.readFileSync(path.join(stateDir, "changes.jsonl")), original)
+  } finally { await journal.close(); closeDb(db) }
+})
+
+test("compaction goes ahead when another Desk build committed a generation with the same content", async () => {
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-r1-generation-")
+  const stateDir = path.join(root, "journal")
+  const journal = await openChangeJournal({ root, stateDir })
+  const db = openDb(root)
+  try {
+    await journal.appendChange({ path: "task.md" })
+    const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: journal.cursor, identities })
+    const compacting = journal.compact({ db, generationId: generationA })
+    // An older build that cannot stand aside commits the unchanged desk under its own journal and records no writer.
+    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: { journal_id: "older-build", sequence: 7 }, identities })
+    await compacting
+    assert.equal(getMeta(db, "active_lexical_generation"), String(generationB))
+    assert.deepEqual(journal.replay().changes, [], "the change log is cleaned up: B covers the same desk as A")
   } finally { await journal.close(); closeDb(db) }
 })
 
@@ -412,7 +430,7 @@ test(`${finding} failed compaction keeps controller barriers uncertain and sched
         }
         original = fs.readFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"))
         if (failure === "generation_superseded") {
-          commitLexicalGeneration({ db, documents: [], eventCursor: null, identities })
+          commitLexicalGeneration({ db, documents: [], eventCursor: null, identities: { ...identities, policy_identity: "other-policy" } })
         }
         try {
           await compacting
@@ -448,3 +466,48 @@ test(`${finding} failed compaction keeps controller barriers uncertain and sched
   } finally { release.resolve(); await client.close(); closeDb(db) }
 })
 }
+
+test("a generation's content ignores document order and how the embedding settings are stored", async () => {
+  const { generationContent } = await generationModule()
+  const docs = [{ path: "b.md", hash: "sha256:b" }, { path: "a.md", hash: "sha256:a" }, { path: "a.md", hash: "sha256:a" }]
+  const content = generationContent(docs, identities)
+  assert.match(content, /^sha256:[0-9a-f]{64}$/)
+  assert.equal(generationContent([...docs].reverse(), identities), content, "the same documents in another order are the same content")
+  const stored = { ...identities, embedding_spec: JSON.stringify(identities.embedding_spec) }
+  assert.notEqual(generationContent(docs, stored), generationContent(docs, { ...stored, policy_identity: "other-policy" }), "other settings are other content")
+  assert.notEqual(generationContent(docs.slice(1), identities), content, "other documents are other content")
+})
+
+test("a stored generation's content is unknown when its row is gone or its documents are unreadable", async () => {
+  const { commitLexicalGeneration, generationContent, readGenerationContent } = await generationModule()
+  const root = await mkTempRoot("desk-generation-content-")
+  const db = openDb(root)
+  try {
+    const documents = [{ path: "task.md", hash: "sha256:fixture" }]
+    const id = commitLexicalGeneration({ db, documents, eventCursor, identities, apply() {
+      db.prepare("INSERT INTO docs(path, kind, hash, mtime) VALUES (?, 'task', ?, 1)").run("task.md", "sha256:fixture")
+    } })
+    const stored = db.prepare("SELECT * FROM lexical_generations WHERE id = ?").get(id)
+    assert.equal(readGenerationContent(db, id), generationContent(documents, stored))
+    assert.equal(readGenerationContent(db, id), generationContent(documents, stored), "a second read of the same row is answered from the cache")
+    assert.equal(readGenerationContent(db, id + 100), null)
+    db.prepare("UPDATE lexical_generations SET documents = ? WHERE id = ?").run("not json", id)
+    assert.equal(readGenerationContent(db, id), null)
+    db.prepare("UPDATE lexical_generations SET documents = ? WHERE id = ?").run("{}", id)
+    assert.equal(readGenerationContent(db, id), null)
+  } finally { closeDb(db) }
+})
+
+test("the active index reads as nothing before any generation is committed", async () => {
+  const { readActiveIndex, readCommittedContent } = await import("../../../../../plugins/desk/mcp/src/db/status-read.js")
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-generation-active-")
+  const db = openDb(root)
+  try { runMigrations(db) } finally { closeDb(db) }
+  assert.equal(readActiveIndex(root), null)
+  const writer = openDb(root)
+  let id
+  try { id = commitLexicalGeneration({ db: writer, documents: [], eventCursor, identities }) } finally { closeDb(writer) }
+  assert.deepEqual(readActiveIndex(root), { generation: id, writer: null })
+  assert.match(readCommittedContent(root, id), /^sha256:/)
+})

@@ -327,7 +327,7 @@ test("semantic request without a controller returns the alpha semantic scope ref
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.capability, "semantic")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.match(result.diagnostic.detail, /not connected to Desk's search controller/u)
+  assert.equal(result.diagnostic.detail, "This session has no connection to Desk's search service yet.")
   assert.equal(result.diagnostic.message, "Meaning-based search is not available right now.")
   assert.equal(result.fix, "Retry in about a minute; if it keeps failing, call desk_status. desk_search answers now with exact-word matches.")
 })
@@ -429,7 +429,8 @@ test("semantic barrier exceptions become semantic capability diagnostics", async
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "query_embedding_failed")
-  assert.equal(result.diagnostic.detail, "query embedding probe failed")
+  assert.equal(result.diagnostic.detail, "Desk's search service could not answer this request.")
+  assert.equal(result.diagnostic.technical, "query embedding probe failed")
 })
 
 test("semantic barrier exceptions without codes use the semantic unavailable diagnostic", async () => {
@@ -444,7 +445,8 @@ test("semantic barrier exceptions without codes use the semantic unavailable dia
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "semantic probe threw without code")
+  assert.equal(result.diagnostic.detail, "Desk's search service could not answer this request.")
+  assert.equal(result.diagnostic.technical, "semantic probe threw without code")
 })
 
 test("semantic barrier string failures use semantic-unavailable string diagnostics", async () => {
@@ -458,7 +460,8 @@ test("semantic barrier string failures use semantic-unavailable string diagnosti
   })
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "semantic string failure")
+  assert.equal(result.diagnostic.detail, "Desk's search service could not answer this request.")
+  assert.equal(result.diagnostic.technical, "semantic string failure")
 })
 
 test("semantic proof without a durable snapshot reports missing lexical proof", async () => {
@@ -477,7 +480,7 @@ test("semantic proof without a durable snapshot reports missing lexical proof", 
   const result = await router.semantic({ deskRoot: root, kind: "similar", path: "track/work/task.md" })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "generation_unproven")
-  assert.match(result.diagnostic.detail, /current.*lexical generation.*not proven/u)
+  assert.equal(result.diagnostic.detail, "The search index is still catching up with recent desk changes.")
 })
 
 test("semantic proof still rejects a genuinely mismatched active embedding specification", async (t) => {
@@ -493,7 +496,7 @@ test("semantic proof still rejects a genuinely mismatched active embedding speci
   })
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.match(result.diagnostic.detail, /embedding specification.*does not match/u)
+  assert.equal(result.diagnostic.detail, "The search index was built with other embedding settings than this Desk uses.")
   assert.deepEqual(f.used, [])
 })
 
@@ -512,7 +515,7 @@ test("semantic proof rejects snapshots with missing vectors", async (t) => {
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.equal(result.status, "error")
-  assert.equal(result.diagnostic.detail, "Semantic vectors are incomplete for the proven generation.")
+  assert.equal(result.diagnostic.detail, "Some desk text is not yet prepared for meaning-based search.")
 })
 
 test("semantic proof rejects unavailable query embedding diagnostics", async (t) => {
@@ -537,7 +540,7 @@ test("semantic proof rejects unavailable query embedding diagnostics", async (t)
     path: "track/work/task.md",
   })
   assert.equal(result.status, "error")
-  assert.equal(result.diagnostic.detail, "Query embedding is not available for the active semantic generation.")
+  assert.equal(result.diagnostic.detail, "The embedding service did not answer, so the question cannot be compared by meaning.")
   assert.equal(result.fix, EMBEDDING_FIX)
 })
 
@@ -641,7 +644,8 @@ test("lexical readiness errors without a code become readiness-unavailable diagn
   const result = await router.lexical({ deskRoot: root, query: "quartz" })
   assert.equal(result.results[0].snippet, "fallback")
   assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
-  assert.equal(result.readiness_diagnostic.message, "barrier offline")
+  assert.equal(result.readiness_diagnostic.message, "The search index has not caught up with recent desk changes, so these results come from reading the files.")
+  assert.equal(result.readiness_diagnostic.technical, "barrier offline")
 })
 
 test("lexical readiness string errors become readiness-unavailable diagnostics", async () => {
@@ -654,7 +658,8 @@ test("lexical readiness string errors become readiness-unavailable diagnostics",
   })
   const result = await router.lexical({ deskRoot: root, query: "quartz" })
   assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
-  assert.equal(result.readiness_diagnostic.message, "lexical string barrier")
+  assert.equal(result.readiness_diagnostic.message, "The search index has not caught up with recent desk changes, so these results come from reading the files.")
+  assert.equal(result.readiness_diagnostic.technical, "lexical string barrier")
 })
 
 test("lexical recheck errors without codes become readiness-unavailable diagnostics", async (t) => {
@@ -670,7 +675,8 @@ test("lexical recheck errors without codes become readiness-unavailable diagnost
   const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
   assert.equal(result.results[0].snippet, "canonical quartz")
   assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
-  assert.equal(result.readiness_diagnostic.message, "post-read proof unavailable")
+  assert.equal(result.readiness_diagnostic.message, "The search index has not caught up with recent desk changes, so these results come from reading the files.")
+  assert.equal(result.readiness_diagnostic.technical, "post-read proof unavailable")
   assert.deepEqual(f.used, ["indexed", "direct"])
 })
 
@@ -686,7 +692,8 @@ test("lexical recheck string failures become readiness-unavailable diagnostics",
   }
   const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
   assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
-  assert.equal(result.readiness_diagnostic.message, "post-read string failure")
+  assert.equal(result.readiness_diagnostic.message, "The search index has not caught up with recent desk changes, so these results come from reading the files.")
+  assert.equal(result.readiness_diagnostic.technical, "post-read string failure")
 })
 
 test("lexical readiness preserves artifact tombstone failures before fallback", async () => {
@@ -736,7 +743,7 @@ test("semantic deadline failures are returned as semantic deadline diagnostics",
   })
   const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
   assert.equal(result.diagnostic.reason, "semantic_deadline")
-  assert.match(result.diagnostic.detail, /did not become current/u)
+  assert.equal(result.diagnostic.detail, "The search index was still being updated when the wait ran out.")
 })
 
 test("semantic indexed evaluation preserves artifact tombstone failures", async (t) => {
@@ -767,7 +774,8 @@ test("semantic backend unavailability is converted to the typed capability diagn
   assert.equal(result.status, "error")
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "backend vector read unavailable")
+  assert.equal(result.diagnostic.detail, "The embedding service did not answer, so the question cannot be compared by meaning.")
+  assert.equal(result.diagnostic.technical, "backend vector read unavailable")
   assert.equal(result.fix, EMBEDDING_FIX, "a retry cannot help while the embedding service is down")
 })
 
@@ -786,7 +794,7 @@ test("semantic backend unavailability without a note uses the standard semantic 
   })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "Semantic serving is unavailable for this request.")
+  assert.equal(result.diagnostic.detail, "The embedding service did not answer, so the question cannot be compared by meaning.")
 })
 
 test("desk_similar on a document without vectors says the document is not indexed yet, not to start Ollama", async (t) => {
@@ -799,6 +807,25 @@ test("desk_similar on a document without vectors says the document is not indexe
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
   assert.equal(result.diagnostic.message, "This document has not been indexed for meaning-based search yet.")
   assert.equal(result.fix, "Pick another document; if this one has text, call desk_reindex and try again. desk_search answers now with exact-word matches.")
+})
+
+test("desk_similar on a document without vectors and no backend note gives no technical text", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({ controller: f.controller, semanticBackend: async () => ({ error: "semantic_unavailable" }) })
+  const result = await router.semantic({ deskRoot: f.deskRoot, kind: "similar", path: "track/work/task.md" })
+  assert.equal(result.diagnostic.message, "This document has not been indexed for meaning-based search yet.")
+  assert.equal(result.diagnostic.technical, undefined)
+})
+
+test("the controller's own generation is proven by its position even when its document list cannot be read", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
+  try { db.prepare("UPDATE lexical_generations SET documents = 'not json'").run() } finally { db.close() }
+  const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+  assert.equal(result.results[0].snippet, "canonical quartz")
+  assert.equal(result.readiness_diagnostic, undefined, JSON.stringify(result.readiness_diagnostic))
+  assert.deepEqual(f.used, ["indexed"])
 })
 
 test("semantic backend exceptions are converted without leaking partial results", async (t) => {
@@ -816,7 +843,8 @@ test("semantic backend exceptions are converted without leaking partial results"
   assert.equal(result.status, "error")
   assert.equal(result.code, "required_capability_unavailable")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "backend exploded")
+  assert.equal(result.diagnostic.detail, "Desk's search service could not answer this request.")
+  assert.equal(result.diagnostic.technical, "backend exploded")
 })
 
 test("semantic backend exceptions without codes use semantic-unavailable diagnostics", async (t) => {
@@ -834,7 +862,8 @@ test("semantic backend exceptions without codes use semantic-unavailable diagnos
   })
   assert.equal(result.status, "error")
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "plain semantic failure")
+  assert.equal(result.diagnostic.detail, "Desk's search service could not answer this request.")
+  assert.equal(result.diagnostic.technical, "plain semantic failure")
 })
 
 test("semantic backend string failures use semantic-unavailable string diagnostics", async (t) => {
@@ -851,7 +880,8 @@ test("semantic backend string failures use semantic-unavailable string diagnosti
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.equal(result.diagnostic.reason, "semantic_unavailable")
-  assert.equal(result.diagnostic.detail, "semantic string backend failure")
+  assert.equal(result.diagnostic.detail, "Desk's search service could not answer this request.")
+  assert.equal(result.diagnostic.technical, "semantic string backend failure")
 })
 
 for (const invalidKind of [undefined, null, "", "timeline", "thread"]) {
@@ -1197,13 +1227,14 @@ for (const kind of ["lexical", "timeline", "thread"]) {
 
 test("read consistency rechecks every indexed service proof component on a fresh snapshot", async (t) => {
   const changes = [
+    // A new generation voids the read when it indexes something else; one with the same content answers alike (two_builds.test.js).
     ["generation", async (f) => {
       const { freshness } = await f.controller.status()
+      await writeFile(f.deskRoot, "track/other/task.md", "unrelated note")
       await rebuildIndex(f.deskRoot, { skipEmbed: true, eventCursor: freshness.cursor })
     }],
-    ["covered cursor", async (f, db) => {
-      db.prepare("UPDATE meta SET value = ? WHERE key = 'covered_event_cursor'")
-        .run(JSON.stringify({ journal_id: "different-journal", sequence: 0 }))
+    ["content", async (f, db) => {
+      db.prepare("UPDATE lexical_generations SET documents = '[]' WHERE id = 1").run()
     }],
     ...[
       ["schema_version", 2], ["chunker_id", "other-chunker"], ["normalization_id", "other-normalization"],
@@ -1282,6 +1313,7 @@ test("read consistency fails closed for a non-direct request if indexed proof ch
     controller: f.controller,
     directBackend: () => assert.fail("this request has no direct equivalent"),
     indexedBackend: async () => {
+      await writeFile(f.deskRoot, "track/work/task.md", "replacement quartz")
       await f.controller.beginConvergence()
       return { stale: true }
     },
@@ -1499,4 +1531,58 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   })
   held.resolve()
   await restarted.call("desk_reindex")
+})
+
+// A controller whose index never catches up within the call: a lower build whose owner is still behind. The deadline timer does not hold the process open, and in a session the controller's socket does; here a test timer stands in for it.
+function waitingController(owner, t) {
+  const open = setInterval(() => {}, 1_000)
+  t.after(() => clearInterval(open))
+  return {
+    status: async () => ({ state: "LEXICAL_CONVERGING", freshness: { certain: false, reason: "index_owner_catching_up", cursor: null }, index_owner: owner }),
+    beginConvergence: async () => ({}),
+    barrier: async (request) => (request?.wait ? new Promise(() => {}) : { current: false }),
+  }
+}
+
+test("desk_thread stops waiting at the call's deadline and says so plainly, naming the owner", async (t) => {
+  const deskRoot = await mkTempDeskRoot()
+  const owner = { version: "1.2.3", build: "0".repeat(64), this_controller: false }
+  const router = createQueryRouter({ controller: waitingController(owner, t), indexDeadlineMs: 1_000 })
+  const started = Date.now()
+  const result = await router.lexical({ deskRoot, kind: "thread", start_path: "a.md" })
+  assert.ok(Date.now() - started < 5_000)
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "index_deadline")
+  assert.equal(result.diagnostic.message, "The search index did not finish catching up within 1 second.")
+  assert.equal(result.diagnostic.detail, "The search index was still being updated when the wait ran out. Desk 1.2.3 (another session) owns the search index; this session only reads it.")
+})
+
+test("desk_reindex stops waiting at the call's deadline, and on a build that does not own the index says it reindexed nothing", async (t) => {
+  const deskRoot = await mkTempDeskRoot()
+  const own = { version: "1.2.3", build: "0".repeat(64), this_controller: true }
+  const late = await createQueryRouter({ controller: waitingController(own, t), indexDeadlineMs: 1_000 }).reindex({ deskRoot })
+  assert.equal(late.status, "error")
+  assert.equal(late.diagnostic.reason, "index_deadline")
+  assert.equal(late.diagnostic.message, "The search index did not finish catching up within 1 second.")
+  assert.equal(late.diagnostic.detail, "The search index was still being updated when the wait ran out. Desk 1.2.3 (this session) owns the search index.")
+
+  const other = { ...own, this_controller: false }
+  const behind = await createQueryRouter({ controller: waitingController(other, t), indexDeadlineMs: 1_000 }).reindex({ deskRoot })
+  assert.deepEqual(behind, {
+    status: "not_reindexed", action: "none", index_current: false,
+    message: "This session reindexed nothing. Desk 1.2.3 (another session) owns the search index; this session only reads it. That session has not finished updating it, so searches here read the files until it does.",
+  })
+  const current = await createQueryRouter({ controller: { ...waitingController(other, t), barrier: async () => ({ current: true }) } }).reindex({ deskRoot })
+  assert.deepEqual(current, {
+    status: "not_reindexed", action: "none", index_current: true,
+    message: "This session reindexed nothing. Desk 1.2.3 (another session) owns the search index; this session only reads it. The index already covers the desk's files.",
+  })
+})
+
+test("a deadline refusal without a known owner gives the plain detail alone, and a reindex whose wait fails reports the failure", async (t) => {
+  const deskRoot = await mkTempDeskRoot()
+  const thread = await createQueryRouter({ controller: waitingController(null, t), indexDeadlineMs: 1_000 }).lexical({ deskRoot, kind: "thread", start_path: "a.md" })
+  assert.equal(thread.diagnostic.detail, "The search index was still being updated when the wait ran out.")
+  const broken = { ...waitingController(null, t), barrier: async () => { throw new Error("socket closed") } }
+  await assert.rejects(createQueryRouter({ controller: broken }).reindex({ deskRoot }), /socket closed/)
 })

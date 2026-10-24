@@ -4,6 +4,7 @@ import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "./init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { INDEX_WRITER_KEY, readIndexWriter } from "../readiness/index-writer.js"
+import { readGenerationContent } from "../readiness/generations.js"
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 
@@ -216,19 +217,52 @@ function metaValue(db, key) {
   return row?.value ?? null
 }
 
+function activeGeneration(db) {
+  return db.prepare(`
+    SELECT g.id, g.event_cursor, g.schema_version, g.chunker_id, g.normalization_id,
+           g.embedding_spec, g.tombstone_identity, g.policy_identity
+    FROM lexical_generations g
+    JOIN meta m ON m.key = 'active_lexical_generation' AND m.value = CAST(g.id AS TEXT)
+    JOIN readiness_operations o ON o.id = g.operation_id AND o.status = 'committed'
+  `).get()
+}
+
+// Runs `read` on one read-only snapshot of the index, or returns null when there is no index.
+function readIndex(deskRoot, read) {
+  if (!deskRoot || !existsSync(indexDbPath(deskRoot))) return null
+  const db = new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
+  try {
+    db.exec("BEGIN")
+    return read(db)
+  } finally { db.close() }
+}
+
+// Who wrote the active generation, without counting vectors or reading its documents: a controller reads this before each catch-up and each status answer to learn whether another Desk build owns the index.
+export function readActiveIndex(deskRoot) {
+  return readIndex(deskRoot, (db) => {
+    const generation = activeGeneration(db)
+    if (!generation) return null
+    const cursor = JSON.parse(generation.event_cursor)
+    return {
+      generation: generation.id,
+      writer: readIndexWriter(db.prepare("SELECT value FROM meta WHERE key = ?").get(INDEX_WRITER_KEY)?.value, cursor),
+    }
+  })
+}
+
+// What the stored generation `generationId` indexes, or null when it is gone.
+export function readCommittedContent(deskRoot, generationId) {
+  if (!Number.isSafeInteger(generationId)) return null
+  return readIndex(deskRoot, (db) => readGenerationContent(db, generationId))
+}
+
 export function openSnapshot(deskRoot) {
   if (!deskRoot || !existsSync(indexDbPath(deskRoot))) return null
   const db = new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
   try {
     sqliteVec.load(db)
     db.exec("BEGIN")
-    const generation = db.prepare(`
-      SELECT g.id, g.event_cursor, g.schema_version, g.chunker_id, g.normalization_id,
-             g.embedding_spec, g.tombstone_identity, g.policy_identity
-      FROM lexical_generations g
-      JOIN meta m ON m.key = 'active_lexical_generation' AND m.value = CAST(g.id AS TEXT)
-      JOIN readiness_operations o ON o.id = g.operation_id AND o.status = 'committed'
-    `).get()
+    const generation = activeGeneration(db)
     const covered = db.prepare("SELECT value FROM meta WHERE key = 'covered_event_cursor'").get()
     const activeEmbeddingSpecId = db.prepare("SELECT value FROM meta WHERE key = 'active_embedding_spec_id'").get()?.value ?? null
     const vectorsIndexed = db.prepare(
@@ -247,6 +281,7 @@ export function openSnapshot(deskRoot) {
     const cursor = generation ? JSON.parse(generation.event_cursor) : null
     const writer = readIndexWriter(db.prepare("SELECT value FROM meta WHERE key = ?").get(INDEX_WRITER_KEY)?.value, cursor)
     return { db, generation: generation?.id ?? null, identities: generation, cursor, writer,
+      content: generation ? readGenerationContent(db, generation.id) : null,
       covered: covered ? JSON.parse(covered.value) : null,
       semantic: {
         active_embedding_spec_id: activeEmbeddingSpecId,

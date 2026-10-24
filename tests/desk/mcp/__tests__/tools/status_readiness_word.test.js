@@ -63,14 +63,44 @@ test("a desk_status with no readiness controller reports not_checked, and a cont
 test("the degraded meaning tells agents the top-level state decides whether Desk's tools work", async () => {
   const readiness = await readinessFor({ status: async () => ({ state: "RECOVERING", convergence: failed }) })
   assert.match(readiness.meaning, /top-level `state`/u)
-  assert.match(readiness.meaning, /search falls back to direct reads/u)
+  assert.match(readiness.meaning, /searches read the files directly/u)
 })
 
-test("LEXICAL_READY's meaning does not claim full convergence, while READY's does", async () => {
+test("LEXICAL_READY's meaning says meaning-based search is not fully available, while READY's says the index is current", async () => {
   const lexical = await readinessFor({ status: async () => ({ state: "LEXICAL_READY", convergence: ok }) })
   assert.equal(lexical.state, "ready")
-  assert.match(lexical.meaning, /semantic \(embedding\) search is not fully available/u)
-  assert.doesNotMatch(lexical.meaning, /has converged/u)
+  assert.match(lexical.meaning, /meaning-based search is not fully available/u)
   const full = await readinessFor({ status: async () => ({ state: "READY", convergence: ok }) })
-  assert.match(full.meaning, /has converged/u)
+  assert.equal(full.meaning, "The search index is current; nothing to do.")
+})
+
+const lowerBuild = (state, reason) => ({ status: async () => ({
+  state, convergence: ok, freshness: { certain: reason === null, reason, cursor: null },
+  index_owner: { version: "1.2.3", build: "0".repeat(64), this_controller: false },
+}) })
+
+test("a build that cannot read the newer owner's index says so and what helps, instead of 'still catching up'", async () => {
+  const readiness = await readinessFor(lowerBuild("LEXICAL_CONVERGING", "index_owned_by_newer_desk"))
+  assert.equal(readiness.state, "degraded")
+  assert.equal(readiness.meaning, "A newer Desk in another session owns the search index and builds it with other settings, so this session cannot read it and writes nothing to it. Searches here read the files and stay correct, but meaning-based search is not available in this session. To use the index here, restart this session on the newer Desk; once the other session ends, this session takes the index over.")
+  assert.doesNotMatch(readiness.meaning, /Nothing to fix/u)
+})
+
+test("a build waiting for the owner says it waits for the owner", async () => {
+  const catchingUp = await readinessFor(lowerBuild("LEXICAL_CONVERGING", "index_owner_catching_up"))
+  assert.equal(catchingUp.state, "converging")
+  assert.equal(catchingUp.meaning, "The Desk session that owns the search index has not finished updating it. Searches here read the files meanwhile and stay correct; this session checks again shortly, and again at its next meaning-based search or desk change. Nothing to fix.")
+  const embedding = await readinessFor(lowerBuild("LEXICAL_READY", null))
+  assert.equal(embedding.state, "ready")
+  assert.equal(embedding.meaning, "Exact-word search uses the search index, which the Desk session that owns it keeps current. That session has not finished preparing all desk text for meaning-based search; this session checks again shortly, and again at its next meaning-based search.")
+})
+
+test("every search status meaning is plain", async () => {
+  const { READINESS_STATUS_WORDING } = await import("../../../../../plugins/desk/mcp/src/tools/status.js")
+  assert.ok(READINESS_STATUS_WORDING.length >= 9)
+  const jargon = /converg|semantic|generation|lexical|controller|barrier|journal|reconcil|\bproo?f\b|\bproven\b|RECOVERING|_READY\b|embedding probe/iu
+  for (const text of READINESS_STATUS_WORDING) {
+    const prose = text.replace(/`[^`]*`|"[^"]*"|\b[a-z]+(?:[_.][a-z]+)+\b/gu, "")
+    assert.doesNotMatch(prose, jargon, text)
+  }
 })

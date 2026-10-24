@@ -60,6 +60,8 @@ export async function connectOrStartController({
   lexicalContract = {},
   semanticContract = null,
   build = null,
+  // The Desk version of the controller this call may start (controller-server.js); the production runtime sets its own.
+  version = null,
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
   watcher,
@@ -103,6 +105,7 @@ export async function connectOrStartController({
         stateDir,
         startController,
         electionWaitMs,
+        version,
       })
       controllerStarts.set(identity.id, start)
     }
@@ -137,6 +140,7 @@ async function startOrReuseController({
   stateDir,
   startController,
   electionWaitMs,
+  version,
 }) {
   const existing = await tryHandshake({ endpoint, identity, stateDir })
   if (existing) {
@@ -154,6 +158,7 @@ async function startOrReuseController({
       handlers,
       watcher: ownedWatcher,
       ephemeral,
+      ...(version === null ? {} : { version }),
     })
     const local = { controller, clients: 0 }
     localControllers.set(identity.id, local)

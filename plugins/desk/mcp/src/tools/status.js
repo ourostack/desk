@@ -5,6 +5,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { deskVersion } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { indexOwnerSentence } from "../readiness/index-writer.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatusAsync } from "./factory-context.js"
 import { pullStillFailing } from "../runtime/health.js"
@@ -195,11 +196,11 @@ async function statusCall({ deskRoot, person, statusContext = {}, queryRouter, s
 // there (round 5: 7 of 16 runs raised it). The top-level `state` (admission) still decides whether Desk's tools work;
 // `readiness` only describes the search index's controller.
 const READINESS_MEANING = {
-  ready: "The readiness controller is serving and the index has converged; nothing to do.",
-  converging: "The index is still catching up in the background; reads fall back to the files and stay correct. Nothing to fix.",
-  degraded: "The index controller is recovering or its last convergence failed (see detail.convergence.diagnostic). Task, track and file tools are governed by the top-level `state`; search falls back to direct reads. Mention it in one line only if the work needs search.",
-  unavailable: "The readiness controller did not answer; search falls back to direct reads. The top-level `state` still decides whether Desk's tools work.",
-  not_checked: "desk_status did not ask the readiness controller.",
+  ready: "The search index is current; nothing to do.",
+  converging: "The search index is still catching up in the background; searches read the files meanwhile and stay correct. Nothing to fix.",
+  degraded: "Desk's search service hit a problem and is trying again, or its last update of the search index failed (see `detail.convergence.diagnostic`). The top-level `state` decides whether task, track and file tools work; searches read the files directly. Mention it in one line only if the work needs search.",
+  unavailable: "Desk's search service did not answer; searches read the files directly. The top-level `state` still decides whether Desk's tools work.",
+  not_checked: "desk_status did not ask Desk's search service.",
 }
 
 function readinessWord({ state, convergence }) {
@@ -210,12 +211,34 @@ function readinessWord({ state, convergence }) {
   return "converging"
 }
 
-const LEXICAL_MEANING = "Lexical search and the index are current; semantic (embedding) search is not fully available, for example because the embedding probe failed. Tools work; semantic ranking may be missing."
+const LEXICAL_MEANING = "Exact-word search and the search index are current, but meaning-based search is not fully available, for example because the embedding service did not answer. Tools work; results may not be ranked by meaning."
+
+// A build that stands aside because a newer build's session owns the shared index (readiness/index-writer.js).
+const OWNER_INDEXES_DIFFERENTLY = "A newer Desk in another session owns the search index and builds it with other settings, so this session cannot read it and writes nothing to it. Searches here read the files and stay correct, but meaning-based search is not available in this session. To use the index here, restart this session on the newer Desk; once the other session ends, this session takes the index over."
+const OWNER_CATCHING_UP = "The Desk session that owns the search index has not finished updating it. Searches here read the files meanwhile and stay correct; this session checks again shortly, and again at its next meaning-based search or desk change. Nothing to fix."
+const OWNER_PREPARING_TEXT = "Exact-word search uses the search index, which the Desk session that owns it keeps current. That session has not finished preparing all desk text for meaning-based search; this session checks again shortly, and again at its next meaning-based search."
+
+// Every meaning desk_status can give for search, for the plain-wording test.
+export const READINESS_STATUS_WORDING = Object.freeze([
+  ...Object.values(READINESS_MEANING), LEXICAL_MEANING, OWNER_INDEXES_DIFFERENTLY, OWNER_CATCHING_UP, OWNER_PREPARING_TEXT,
+])
 
 function presentReadiness(readiness) {
-  const word = readinessWord(readiness)
-  const meaning = word === "ready" && readiness.state === "LEXICAL_READY" ? LEXICAL_MEANING : READINESS_MEANING[word]
-  return { state: word, meaning, detail: { controller_state: readiness.state, convergence: readiness.convergence } }
+  const standingAside = readiness.index_owner?.this_controller === false
+  const reason = readiness.freshness_reason ?? null
+  const differently = standingAside && reason === "index_owned_by_newer_desk"
+  const word = differently ? "degraded" : readinessWord(readiness)
+  const meaning = differently ? OWNER_INDEXES_DIFFERENTLY
+    : standingAside && word === "converging" && reason === "index_owner_catching_up" ? OWNER_CATCHING_UP
+      : word === "ready" && readiness.state === "LEXICAL_READY" ? (standingAside ? OWNER_PREPARING_TEXT : LEXICAL_MEANING)
+        : READINESS_MEANING[word]
+  // Which Desk build owns the shared search index, and whether it is this session's: several builds can share one desk, and only the owner writes the index.
+  const owner = indexOwnerSentence(readiness.index_owner)
+  return {
+    state: word, meaning,
+    ...(owner === null ? {} : { owner, owned_by_this_session: readiness.index_owner.this_controller === true }),
+    detail: { controller_state: readiness.state, convergence: readiness.convergence },
+  }
 }
 
 // Settles as `promise` does, or rejects with the signal's reason once it aborts.
@@ -236,7 +259,8 @@ async function controllerReadiness(admission, signal) {
   try {
     // An aborted run stops waiting for the controller, so the session's close does not wait for it either.
     const snapshot = await untilAborted(Promise.resolve().then(() => admission.controller.status()), signal)
-    return { state: snapshot.state, convergence: snapshot.convergence ?? empty }
+    return { state: snapshot.state, convergence: snapshot.convergence ?? empty, index_owner: snapshot.index_owner ?? null,
+      freshness_reason: snapshot.freshness?.reason ?? null }
   } catch (error) {
     return {
       state: "unavailable",

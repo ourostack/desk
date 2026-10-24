@@ -139,6 +139,8 @@ export function compactStatus(payload) {
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),
     search,
+    // Which Desk build owns the shared search index, in one sentence, when the search controller said.
+    ...(typeof payload.readiness?.owner === "string" ? { search_owner: payload.readiness.owner } : {}),
     notes: notesFor(payload, search),
     ...(detailPending ? { detail_pending: true } : {}),
     ...(statusError === null ? {} : { status_error: statusError }),

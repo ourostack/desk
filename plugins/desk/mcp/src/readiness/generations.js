@@ -75,14 +75,49 @@ export function commitLexicalGeneration({ db, documents, eventCursor = null, ide
   })()
 }
 
-// Hold SQLite's writer reservation across the final check and synchronous journal swap.
+// What a generation indexes: its documents (path and content hash) and the identities that decide how they were chunked and embedded. Two generations with the same content index the same desk the same way, whichever controller committed them, so either one serves the same answers.
+export function generationContent(documents, identities) {
+  const docs = documents.map((doc) => [doc.path, doc.hash]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  const embeddingSpec = identities.embedding_spec
+  return `sha256:${createHash("sha256").update(stableStringify({
+    documents: docs,
+    schema_version: identities.schema_version,
+    chunker_id: identities.chunker_id,
+    normalization_id: identities.normalization_id,
+    embedding_spec: typeof embeddingSpec === "string" ? embeddingSpec : stableStringify(embeddingSpec),
+    tombstone_identity: identities.tombstone_identity,
+    policy_identity: identities.policy_identity,
+  })).digest("hex")}`
+}
+
+// The content of the stored generation `generationId`, or null when the row is gone or unreadable. The last digest is kept with the row text it was computed from: the documents list of a large desk is long, every search reads it, and comparing the text is much cheaper than parsing and hashing it again.
+const contentCache = { key: null, content: null }
+export function readGenerationContent(db, generationId) {
+  const row = db.prepare(`SELECT documents, schema_version, chunker_id, normalization_id, embedding_spec,
+    tombstone_identity, policy_identity FROM lexical_generations WHERE id = ?`).get(generationId)
+  if (!row) return null
+  const key = stableStringify(row)
+  if (contentCache.key === key) return contentCache.content
+  let documents
+  try { documents = JSON.parse(row.documents) } catch { return null }
+  if (!Array.isArray(documents)) return null
+  const content = generationContent(documents, row)
+  contentCache.key = key
+  contentCache.content = content
+  return content
+}
+
+// Hold SQLite's writer reservation across the final check and synchronous journal swap. The change log may be cleaned up when the active generation is this controller's own, or when another controller has since committed a generation with the same content: that one covers the same desk changes just as well. An older Desk build that cannot stand aside keeps committing the unchanged desk, and refusing then would leave the owning build catching up forever.
 export function withActiveLexicalGeneration({ db, generationId, eventCursor }, replace) {
   if (db.inTransaction) throw new Error("journal compaction requires a committed generation")
   return db.transaction(() => {
     const row = db.prepare("SELECT event_cursor FROM lexical_generations WHERE id = ?").get(generationId)
-    if (getMeta(db, "active_lexical_generation") !== String(generationId) ||
-        !sameCursor(row?.event_cursor, eventCursor) ||
-        !sameCursor(getMeta(db, "covered_event_cursor"), eventCursor)) {
+    const active = getMeta(db, "active_lexical_generation")
+    const own = active === String(generationId) && sameCursor(getMeta(db, "covered_event_cursor"), eventCursor)
+    const covers = sameCursor(row?.event_cursor, eventCursor) && (own || (active !== null && active !== String(generationId) &&
+      readGenerationContent(db, generationId) !== null &&
+      readGenerationContent(db, Number(active)) === readGenerationContent(db, generationId)))
+    if (!covers) {
       const error = new Error("active lexical generation or journal coverage changed before compaction")
       error.code = "generation_superseded"
       throw error

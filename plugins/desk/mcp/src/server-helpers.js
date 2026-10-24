@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
 import { discover } from "./indexer/discover.js"
 import { isIndexFresh, rebuildIndex } from "./indexer/index.js"
+import { openSnapshot } from "./db/status-read.js"
+import { expectedLexicalGenerationIdentity, generationContent } from "./readiness/generations.js"
+import { loadTombstoneLedger, tombstoneDecisionForDoc } from "./artifacts/tombstones.js"
 import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
@@ -381,6 +384,39 @@ function textOrNull(value) {
   return typeof value === "string" && value.trim().length > 0
     ? value
     : null
+}
+
+/**
+ * For a Desk build that stands aside because another build owns the shared index: whether the index's active generation indexes exactly the desk's files as they are now, and how far its vectors are. Writes nothing.
+ *
+ * @returns {Promise<{ verified: boolean, same_settings: boolean, content: string, semantic: object|null }>}
+ */
+export async function verifyIndexCoversDesk(deskRoot, opts = {}) {
+  const ledger = await loadTombstoneLedger({ pluginRoot: resolveArtifactPluginRoot(opts), ...(opts.tombstones ?? {}) })
+  if (!ledger.valid) {
+    throw Object.assign(new Error("artifact tombstone ledger is invalid"), { code: "artifact_tombstone_ledger_invalid", diagnostics: ledger.diagnostics })
+  }
+  // The documents and settings a generation of this desk would hold now, as the indexer would commit them (rebuildIndex).
+  const documents = (await discover(deskRoot)).filter((doc) => !tombstoneDecisionForDoc({ ledger, doc }).tombstoned)
+  const identities = expectedLexicalGenerationIdentity({ ledger, policyIdentity: opts.identities?.policy_identity })
+  const content = generationContent(documents, identities)
+  const settings = generationContent([], identities)
+  const snapshot = openSnapshot(deskRoot)
+  try {
+    if (snapshot?.generation == null) return { verified: false, same_settings: true, content, semantic: null }
+    return {
+      verified: snapshot.content === content,
+      // Built with other settings (another chunker, policy or tombstone list), the index never matches this build's view of the desk, so waiting for the owner cannot help.
+      same_settings: generationContent([], snapshot.identities) === settings,
+      content,
+      semantic: {
+        ...getSemanticCoverage(snapshot.db),
+        provenance_current: getMeta(snapshot.db, ACTIVE_VECTOR_PROVENANCE_META_KEY) === ACTIVE_VECTOR_PROVENANCE,
+      },
+    }
+  } finally {
+    snapshot?.db.close()
+  }
 }
 
 export function getSemanticCoverage(db) {
