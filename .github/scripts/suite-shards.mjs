@@ -16,6 +16,9 @@ export function loadDurations(file = defaultTablePath) {
 
 export const weightOf = (file, table) => table.files[file] ?? table.defaultSeconds
 
+// A file that ran for more than five minutes and more than three times its weight makes the plan wrong enough to put two long files in one shard; the run names it so the table gets refreshed.
+export const underweighted = (file, seconds, table) => seconds > 300 && seconds > 3 * weightOf(file, table)
+
 // Longest first: each file, heaviest first (ties by name), goes to the shard with the least load so far (ties to the lowest shard number). Nothing but the inputs decides the result, so every shard job computes the same plan.
 // Returns one { files, seconds } per shard; the files of a shard are in name order.
 export function assignShards(files, total, table = loadDurations()) {

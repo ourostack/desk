@@ -3,18 +3,20 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { promises as fs, readFileSync, realpathSync } from "node:fs"
+import { promises as fs, readFileSync, realpathSync, lstatSync } from "node:fs"
 import * as path from "node:path"
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
+import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
-import { openImprovement } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
+import { cardFile, openImprovement } from "../../../../../plugins/desk/mcp/src/desk/improvement-cards.js"
 import { installCardGuard } from "../../../../../plugins/desk/mcp/src/desk/card-commit-guard.js"
 import { acquireSyncLock } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
-import { readTriageBasis } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
+import { readCanonicalCard, readTriageBasis } from "../../../../../plugins/desk/mcp/src/factory/triage-basis.js"
 import {
   readAcknowledgedAnnotations, refreshTriage, resolveAcknowledgedTriage, toSafeTriageReview, triagePaths, validateTriageAnnotation, validateTriageIdentities,
 } from "../../../../../plugins/desk/mcp/src/factory/triage-state.js"
 import { publishOwnedTriage, writeProtectedTriageFile } from "../../../../../plugins/desk/mcp/src/factory/triage-write.js"
+import { hookArgvScript } from "./_hook_argv.js"
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/v12-triage-local.json", import.meta.url)))
 const KEY = fixture.key
@@ -22,12 +24,1009 @@ const STORE = fixture.store
 const T0 = Date.parse("2026-10-11T12:00:00.000Z")
 const HOUR = 3600 * 1000
 const posix = process.platform !== "win32"
+// Hosted Desk (DESK_ISOLATED_HOSTED) runs only on Linux Container Apps; local Windows Desk never takes this path.
+const HOSTED_LINUX_ONLY = "hosted private-profile Git runs only on Linux Container Apps; the Windows owned-Git channel is tracked separately"
 const RESOURCE_ALARM = "triage_resource_unrecoverable"
 const hex = (n) => randomBytes(n).toString("hex")
 const slash = (p) => p.split(path.sep).join("/")
 const resolveIssue = async (pointer) => ({ revision: 3, public: { kind: "issue", ref: `https://github.com/example-org/example-repo/issues/${pointer.split("#")[1]}`, revision: 3 } })
 const HUMAN = fixture.safe_review
 const AGENT = { ...HUMAN, route: "agent_ready", gate: null, authority_code: "existing_scope", summary_codes: ["source:andon", "route:agent_ready"] }
+const PRIVATE_HOOKS = fileURLToPath(new URL("../../../../../hosted/bin/private-hooks", import.meta.url))
+
+function assertPrivateArgv(root, args, message = "private paths never enter process argv") {
+  const normalizedRoot = root.replaceAll("\\", "/")
+  assert.ok(!args.some((arg) => arg.replaceAll("\\", "/").includes(normalizedRoot)), message)
+}
+
+function tracedSpawn(trace, command, args, options) {
+  const startedMs = performance.now()
+  const row = {
+    command, args, cwd: options.cwd ?? null, pid: null, startedMs, elapsedMs: null,
+    status: null, signal: null, error: null, exit: null, close: null, stdout: "", stderr: "",
+    commonDir: options.env?.GIT_COMMON_DIR, gitDir: options.env?.GIT_DIR, killRequests: [],
+  }
+  trace.push(row)
+  let child
+  try {
+    child = spawn(command, args, options)
+  } catch (error) {
+    row.error = processError(error)
+    row.elapsedMs = performance.now() - startedMs
+    throw error
+  }
+  row.pid = child.pid ?? null
+  row.spawnReturnedMs = performance.now() - startedMs
+  child.once("spawn", () => { row.spawnEventMs = performance.now() - startedMs })
+  child.stdout?.on("data", (chunk) => { row.stdout += chunk })
+  child.stderr?.on("data", (chunk) => { row.stderr += chunk })
+  child.on("error", (error) => { row.error = processError(error) })
+  child.once("exit", (code, signal) => { row.exit = { code, signal, elapsedMs: performance.now() - startedMs } })
+  child.once("close", (code, signal) => {
+    row.status = code
+    row.signal = signal
+    row.elapsedMs = performance.now() - startedMs
+    row.close = { code, signal, elapsedMs: row.elapsedMs }
+  })
+  return child
+}
+
+function processError(error) {
+  return { name: error.name, code: error.code ?? null, errno: error.errno ?? null, syscall: error.syscall ?? null, message: error.message, stack: error.stack }
+}
+
+function observeKillRequests(t, trace) {
+  const kill = process.kill.bind(process)
+  t.mock.method(process, "kill", (pid, signal) => {
+    const row = trace.findLast((entry) => entry.pid === Math.abs(pid))
+    const request = row ? { pid, signal, elapsedMs: performance.now() - row.startedMs, stage: row.close ? "after-close" : row.exit ? "after-exit-before-close" : "before-exit", error: null } : null
+    if (request) row.killRequests.push(request)
+    try {
+      return kill(pid, signal)
+    } catch (error) {
+      if (request) request.error = processError(error)
+      throw error
+    }
+  })
+}
+
+function observeFilesystemErrors(t, errors) {
+  for (const method of ["access", "chmod", "lstat", "mkdir", "open", "readFile", "readdir", "realpath", "rename", "stat", "symlink", "unlink", "writeFile"]) {
+    const original = fs[method].bind(fs)
+    t.mock.method(fs, method, async (...args) => {
+      const startedMs = performance.now()
+      try {
+        return await original(...args)
+      } catch (error) {
+        errors.push({ method, path: String(args[0]), elapsedMs: performance.now() - startedMs, error: processError(error) })
+        throw error
+      }
+    })
+  }
+}
+
+function diagnostic(t, label, details) {
+  if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") t.diagnostic(JSON.stringify({ label, ...details }))
+}
+
+async function replaceExistingMetadata(file, bytes) {
+  const handle = await fs.open(file, "r+")
+  try {
+    await handle.truncate(0)
+    await handle.writeFile(bytes, "utf8")
+  } finally {
+    await handle.close()
+  }
+}
+
+function withinRoot(root, observed, paths = path) {
+  const relative = paths.relative(root, observed)
+  return relative === "" || (!paths.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${paths.sep}`))
+}
+
+function withShellPwdProvider(script) {
+  if (process.platform === "win32") return script
+  return script.replace("#!/bin/sh\n", "#!/bin/sh\npwd() { printf '%s\\n' '/c/deskstd-tmp/shell-spelling-witness'; }\n")
+}
+
+async function hookReceipt(file) {
+  try {
+    return { text: await fs.readFile(file, "utf8"), error: null }
+  } catch (error) {
+    return { text: null, error: processError(error) }
+  }
+}
+
+function assertSubdirectoryReceipt(receipt, worktree) {
+  const rows = receipt.text.trim().split("\n").map(JSON.parse)
+  assert.equal(rows.length, 1, JSON.stringify(rows))
+  const row = rows[0]
+  assert.equal(path.relative(path.join(worktree, "project"), row.cwdReal), "", JSON.stringify(row))
+  assert.equal(path.relative(worktree, row.topReal), "", JSON.stringify(row))
+  assert.equal(row.topReal, row.parentReal, JSON.stringify(row))
+  assert.ok(row.shellPwdRaw.length > 0, JSON.stringify(row))
+  if (process.platform !== "win32") assert.equal(row.shellPwdRaw, "/c/deskstd-tmp/shell-spelling-witness\n")
+}
+
+function receiptRows(receipt) {
+  if (receipt?.error) return { code: receipt.error.code ?? receipt.error.name, rows: [] }
+  if (typeof receipt?.text !== "string") return { code: "UNOBSERVED", rows: [] }
+  try {
+    const rows = receipt.text.trim().split("\n").filter(Boolean).map(JSON.parse)
+    return rows.some((row) => row === null || typeof row !== "object" || Array.isArray(row)) ? { code: "ROW_TYPE", rows: [] } : { code: null, rows }
+  } catch {
+    return { code: "PARSE_ERROR", rows: [] }
+  }
+}
+
+function nestedFailureMessage(evidence) {
+  const hooks = receiptRows(evidence.hooksReceipt), context = receiptRows(evidence.discoveryReceipt), journal = receiptRows(evidence.nestedReceipt)
+  const commits = evidence.trace.filter((row) => row.args[0] === "commit")
+  const event = (phase, nested = false) => journal.rows.findLast((row) => row.phase === phase && row.nested === nested)
+  const status = (phase, nested = false) => event(phase, nested)?.status ?? null
+  const head = (name) => evidence.trace.findLast((row) => row.args.length === 2 && row.args[0] === "rev-parse" && row.args[1] === name)?.stdout?.trim() ?? null
+  const snapshot = (value) => value?.status === 0 ? value.stdout.trim() : value ? { status: value.status, error: value.error?.code ?? null } : null
+  const post = hooks.rows.findLast((row) => typeof row.hook === "string" && row.hook.includes("post-commit"))
+  const project = context.rows.at(-1)
+  for (const limit of [160, 96, 48, 16]) {
+    const preview = (value) => {
+      if (typeof value !== "string") return null
+      const bytes = Buffer.from(value)
+      if (bytes.length <= limit) return value
+      const half = Math.floor(limit / 2)
+      return { first: bytes.subarray(0, half).toString("utf8"), last: bytes.subarray(-half).toString("utf8"), bytes: bytes.length }
+    }
+    const summary = {
+      schema: "nested-git/1", configured: evidence.configured, state: evidence.result?.state,
+      installed: evidence.installed ?? null, initialNestedFlag: preview(evidence.initialNestedFlag),
+      errors: { hooks: hooks.code, context: context.code, journal: journal.code },
+      commitCount: commits.length,
+      commits: commits.slice(-2).map((row) => ({
+        argv: row.args, status: row.status, signal: row.signal, error: row.error ? { code: row.error.code, errno: row.error.errno, syscall: preview(row.error.syscall) } : null,
+        stderr: preview(row.stderr), elapsedMs: Number.isFinite(row.elapsedMs) ? Math.round(row.elapsedMs) : null,
+      })),
+      post: {
+        events: journal.rows.length, last: preview(journal.rows.at(-1)?.phase),
+        outerProbe: status("post-probe"), nestedProbe: status("post-probe", true), guard: status("guard-exit", true),
+        cd: status("project-cd"), discovery: status("discovery-exit"), argv: event("nested-start")?.argv ?? null,
+        nestedExit: status("nested-exit"), outerExit: status("post-exit"),
+      },
+      heads: {
+        nestedBefore: event("head-before")?.head ?? null, nestedAfter: event("head-after")?.head ?? null,
+        candidate: head("HEAD"), parent: head("HEAD^"),
+        remote: [snapshot(evidence.refs?.remoteBefore), snapshot(evidence.refs?.remoteAfter)],
+        live: [snapshot(evidence.refs?.liveBefore), snapshot(evidence.refs?.liveAfter)],
+      },
+      hookCounts: ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"].map((name) => [
+        name, hooks.rows.filter((row) => typeof row.hook === "string" && path.basename(row.hook) === name && !row.nestedCommit).length,
+        hooks.rows.filter((row) => typeof row.hook === "string" && path.basename(row.hook) === name && row.nestedCommit).length,
+      ]),
+      rawPost: post ? { nested: post.nestedCommit, cwd: preview(post.cwd), top: preview(post.topRaw) } : null,
+      rawProject: project ? { pwd: preview(project.shellPwdRaw), cwd: preview(project.cwd), top: preview(project.topRaw), samePhysical: typeof project.topReal === "string" && typeof project.parentReal === "string" ? project.topReal === project.parentReal : null } : null,
+      previewBytes: limit,
+    }
+    const prefix = JSON.stringify(summary)
+    if (Buffer.byteLength(prefix) <= 2200) return `${prefix}\nFULL_EVIDENCE ${JSON.stringify(evidence)}`
+  }
+  throw new Error("nested diagnostic prefix exceeds its independently tested retention budget")
+}
+
+function headSnapshot(root) {
+  const result = spawnSync("git", ["-C", root, "rev-parse", "--verify", "HEAD"], { encoding: "utf8", timeout: 10_000 })
+  return { status: result.status, signal: result.signal, error: result.error ? processError(result.error) : null, stdout: result.stdout, stderr: result.stderr }
+}
+
+test("restrictive Git profile survives private routing and real nested hooks", async () => {
+  for (const privateMode of [false, true]) {
+    const w = await world({ attributes: "*.md ident\n" })
+    const desk = w.clone(`profile-routing-${privateMode}`)
+    const card = cardFile(desk.deskRoot, "", KEY)
+    const expanded = Buffer.concat([await fs.readFile(card), Buffer.from("\n$Id: fixture expansion $\n")])
+    const relative = path.relative(desk.deskRoot, card).split(path.sep).join("/")
+    const log = path.join(w.base, `profile-hooks-${privateMode}.jsonl`)
+    await fs.writeFile(path.join(desk.deskRoot, ".git/hooks/pre-commit"), hookArgvScript({ nestedMutation: true }), { mode: 0o755 })
+    await fs.writeFile(path.join(desk.deskRoot, ".git/hooks/post-index-change"), hookArgvScript(), { mode: 0o755 })
+    desk.env = {
+      ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: privateMode ? "1" : "0",
+      DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath,
+      DESK_HOOK_PROFILE_PROBE: "1", GIT_OPTIONAL_LOCKS: "0",
+      GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "false",
+      GIT_CONFIG_KEY_1: "safe.bareRepository", GIT_CONFIG_VALUE_1: "explicit",
+      GIT_CONFIG_KEY_2: "credential.interactive", GIT_CONFIG_VALUE_2: "never",
+    }
+    const originalEnv = { ...desk.env }
+    const trace = []
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      if (privateMode) assertPrivateArgv(desk.deskRoot, [command, ...args])
+      return tracedSpawn(trace, command, args, options)
+    } } })
+    assert.equal(result.state, "acknowledged", JSON.stringify({ privateMode, result, trace }))
+    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    assert.ok(rows.some((row) => row.hook.includes("pre-commit")))
+    assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), "real nested index hook executed")
+    for (const row of rows) {
+      assert.equal(row.profile.count, privateMode ? "4" : "3")
+      assert.equal(row.profile.optionalLocks, "0")
+      assert.deepEqual(row.profile.slots.slice(0, 3), [
+        ["core.fsmonitor", "false"], ["safe.bareRepository", "explicit"], ["credential.interactive", "never"],
+      ])
+      assert.deepEqual(row.profile.effective, ["explicit", "never", "false"])
+      if (privateMode) {
+        assert.deepEqual(row.profile.slots[3], ["core.hooksPath", PRIVATE_HOOKS])
+        assertPrivateArgv(desk.deskRoot, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()])
+      }
+    }
+    const version = trace.find((row) => row.args.length === 1 && row.args[0] === "--version")
+    assert.ok(version, "selected Git was version-qualified")
+    assert.equal(version.cwd, path.parse(desk.deskRoot).root)
+    assert.ok(trace.every((row) => row.command === version.command), "one selected Git for every writer command")
+    await fs.writeFile(card, expanded)
+    const expectedBlob = git(desk.deskRoot, ["hash-object", `--path=${relative}`, relative])
+    assert.notEqual(createHash("sha1").update(`blob ${expanded.length}\0`).update(expanded).digest("hex"), expectedBlob)
+    const canonical = await readCanonicalCard({
+      deskRoot: desk.deskRoot, personPrefix: "", key: KEY, gitExecutable: version.command,
+      env: { ...desk.env, PATH: "" },
+    })
+    assert.ok(canonical, "the real reader accepts the LF card with an expanded ident")
+    assert.equal(canonical.revision, expectedBlob, "filtered canonical hash uses the selected Git even after PATH disappears")
+    assert.deepEqual(desk.env, originalEnv, "caller profile was not mutated")
+    assert.ok(remoteJson(w.origin, paths.annotation))
+  }
+})
+
+test("private profile refuses private executable targets and unproved realm boundaries before exec", async () => {
+  for (const mode of ["direct", "public-alias", "unknown-realm"]) {
+    const w = await world()
+    await fs.mkdir(path.join(w.base, "realm"))
+    const desk = w.clone("realm/desk")
+    const bin = path.join(w.base, "realm", "bin")
+    await fs.mkdir(bin)
+    await fs.writeFile(path.join(bin, posix ? "git" : "git.exe"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+    const alias = path.join(w.base, "public-bin")
+    await fs.symlink(bin, alias, posix ? "dir" : "junction")
+    desk.env = {
+      ...desk.env, ...restrictiveProfile, DESK_ISOLATED_HOSTED: "1", DESK: desk.deskRoot,
+      DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS,
+      PATH: mode === "unknown-realm" ? process.env.PATH : `${mode === "direct" ? bin : alias}${path.delimiter}${process.env.PATH}`,
+    }
+    if (mode === "unknown-realm") desk.env.DESK = path.join(w.base, "missing", "desk")
+    const calls = []
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      calls.push({ command, args })
+      return spawn(command, args, options)
+    } } })
+    assert.deepEqual(calls, [], `${mode}: no selected executable may run before public-path admission`)
+    assert.equal(result.state, "policy_refused")
+    assert.deepEqual(result.resources, [])
+    assert.equal(remoteJson(w.origin, paths.annotation), null)
+  }
+})
+
+test("private commit carries the physical common directory across lexical junction traversal", async (t) => {
+  for (const root of [String.raw`C:\deskstd-tmp\fixture`, "C:/deskstd-tmp/fixture"]) {
+    for (const operand of [String.raw`C:\deskstd-tmp\fixture\.git`, "C:/deskstd-tmp/fixture/.git", String.raw`--git-dir=C:\deskstd-tmp/fixture\.git`]) {
+      assert.throws(() => assertPrivateArgv(root, ["rev-parse", operand]), assert.AssertionError, `${root}: ${operand}`)
+    }
+    assert.doesNotThrow(() => assertPrivateArgv(root, ["commit", "-m", "public message", "../worktrees/wt", "C:/public-hooks/dispatch.cjs"]))
+  }
+  const observed = []
+  const exited = tracedSpawn(observed, process.execPath, ["-e", "process.stdout.write('trace-out'); process.stderr.write('trace-err'); process.exit(17)"], { stdio: ["ignore", "pipe", "pipe"] })
+  await new Promise((resolve) => exited.once("close", resolve))
+  assert.equal(observed[0].status, 17)
+  assert.equal(observed[0].signal, null)
+  assert.equal(observed[0].stdout, "trace-out")
+  assert.equal(observed[0].stderr, "trace-err")
+  assert.equal(observed[0].error, null)
+  assert.equal(observed[0].exit.code, 17)
+  assert.ok(observed[0].elapsedMs >= 0)
+  const missing = tracedSpawn(observed, path.join(path.dirname(process.execPath), "desk-triage-observation-missing-executable"), [], { stdio: ["ignore", "pipe", "pipe"] })
+  await new Promise((resolve) => missing.once("close", resolve))
+  assert.equal(observed[1].error.code, "ENOENT")
+  assert.equal(observed[1].signal, null)
+  assert.ok(observed[1].elapsedMs >= 0)
+  const w = await world()
+  const desk = w.clone("junction-common")
+  const root = desk.deskRoot
+  const log = path.join(w.base, "junction-hook.jsonl")
+  await fs.writeFile(path.join(root, ".git/hooks/pre-commit"), hookArgvScript(), { mode: 0o755 })
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath }
+  const before = git(w.origin, ["rev-parse", "main"])
+  let candidate, administrative, commonBytes
+  const trace = []
+  if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") observeKillRequests(t, trace)
+  const result = await publish(desk, { git: {
+    async onStep(name) {
+      if (name !== "before_commit") return
+      const [token] = await fs.readdir(path.join(root, ".git/desk-triage"))
+      candidate = path.join(root, ".git/desk-triage", token, "wt")
+      const bytes = await fs.readFile(path.join(candidate, ".git"), "utf8")
+      administrative = path.resolve(candidate, bytes.slice(8).trim())
+      commonBytes = await fs.readFile(path.join(administrative, "commondir"), "utf8")
+      assert.equal(commonBytes.trim(), "../..")
+      assert.equal(path.resolve(administrative, commonBytes.trim()), path.join(root, ".git"))
+      assert.notEqual(path.resolve(candidate, ".git", commonBytes.trim()), path.join(root, ".git"))
+    },
+    spawn(command, args, options) {
+      // Git for Windows resolves ".." lexically across a junction. Model only
+      // that provider boundary; the failed/successful Git and hooks remain real.
+      const linked = options.cwd === candidate && lstatSync(path.join(candidate, ".git")).isSymbolicLink()
+      const env = linked && !options.env.GIT_COMMON_DIR
+        ? { ...options.env, GIT_COMMON_DIR: path.resolve(candidate, ".git", commonBytes.trim()) }
+        : options.env
+      assertPrivateArgv(root, args)
+      return tracedSpawn(trace, command, args, { ...options, env })
+    },
+  } })
+  diagnostic(t, "common-directory", { result, trace, observerProof: observed })
+  assert.equal(result.state, "acknowledged", JSON.stringify({ result, trace }))
+  assert.ok(trace.some((row) => row.args[0] === "commit" && row.status === 0), "actual successful commit")
+  const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+  assert.ok(rows.some((row) => row.hook.includes("pre-commit")), "original hook executed")
+  for (const row of rows) {
+    assert.equal(path.resolve(row.top), candidate, "nested Git discovers the same candidate")
+    assert.equal(row.commonDir, path.join(root, ".git"), "original hooks inherit physical common-directory routing")
+    assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+  }
+  assert.notEqual(git(w.origin, ["rev-parse", "main"]), before)
+  assert.ok(remoteJson(w.origin, paths.annotation))
+  assert.equal(git(root, ["worktree", "list", "--porcelain"]).split("worktree ").length - 1, 1)
+  assert.equal(await fs.lstat(candidate).catch((error) => error.code), "ENOENT")
+  assert.equal(desk.env.GIT_COMMON_DIR, undefined, "transport never mutates the caller environment")
+})
+
+test("private commit refuses damaged or foreign common-directory metadata before its gitfile swap", async () => {
+  for (const mode of ["missing", "foreign"]) {
+    const w = await world()
+    const desk = w.clone("damaged-common")
+    const root = desk.deskRoot
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const before = git(w.origin, ["rev-parse", "main"])
+    let dot, dotBytes, common, bytes, retained
+    const result = await publish(desk, { git: { async onStep(name) {
+      if (name !== "before_commit") return
+      const [token] = await fs.readdir(path.join(root, ".git/desk-triage"))
+      dot = path.join(root, ".git/desk-triage", token, "wt/.git")
+      dotBytes = await fs.readFile(dot, "utf8")
+      common = path.join(path.resolve(path.dirname(dot), dotBytes.slice(8).trim()), "commondir")
+      bytes = await fs.readFile(common, "utf8")
+      if (mode === "missing") {
+        retained = path.join(w.base, "retained-commondir")
+        await fs.rename(common, retained)
+      } else {
+        await fs.writeFile(common, `${w.base}\n`)
+      }
+    } } })
+    assert.equal(result.state, "write_failed", mode)
+    assert.equal(git(w.origin, ["rev-parse", "main"]), before)
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    assert.equal(await fs.readFile(dot, "utf8"), dotBytes, "failed admission never replaces the gitfile")
+    assert.equal(await fs.lstat(path.join(path.dirname(path.dirname(dot)), "gitfile")).catch((error) => error.code), "ENOENT")
+    if (mode === "missing") {
+      assert.equal(await fs.readFile(retained, "utf8"), bytes)
+      await fs.rename(retained, common)
+    } else {
+      assert.equal(await fs.readFile(common, "utf8"), `${w.base}\n`, "foreign metadata is preserved")
+      await fs.writeFile(common, bytes)
+    }
+    assert.equal((await publish(desk)).state, "acknowledged", "exact fixture repair permits recovery")
+    assert.equal(await fs.lstat(path.dirname(dot)).catch((error) => error.code), "ENOENT")
+  }
+})
+
+test("private hook context failures and disabled policy never publish a candidate", async () => {
+  for (const mode of ["config-failed", "location-failed", "dispatcher-parent", "dispatcher-child", "disabled"]) {
+    const w = await world()
+    const desk = w.clone("private-context-failure")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: mode === "dispatcher-parent" ? w.base : mode === "dispatcher-child" ? desk.deskRoot : PRIVATE_HOOKS }
+    if (mode === "disabled") git(desk.deskRoot, ["config", "core.hooksPath", "/dev/null"])
+    const before = git(w.origin, ["rev-parse", "main"])
+    let rejected = 0
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      if ((mode === "config-failed" && args[0] === "config") ||
+          (mode === "location-failed" && args[0] === "rev-parse" && args[1] === "--git-path")) {
+        rejected += 1
+        return spawn(command, ["rev-parse", "--verify", "refs/heads/nonexistent-private-context"], options)
+      }
+      return spawn(command, args, options)
+    } } })
+    assert.equal(result.state, mode === "disabled" ? "policy_refused" : "unsynchronized", mode)
+    if (mode.endsWith("-failed")) assert.ok(rejected > 0, "the actual metadata command failed")
+    assert.equal(git(w.origin, ["rev-parse", "main"]), before, mode)
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+  }
+})
+
+test("private hook preparation respects expiry both between metadata reads and before the Git spawn", async (t) => {
+  for (const after of ["config", "location"]) {
+    const w = await world()
+    const desk = w.clone("private-budget")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const realNow = Date.now.bind(Date)
+    let virtualNow = realNow(), expired = false
+    const calls = []
+    const trace = []
+    t.mock.method(Date, "now", () => virtualNow)
+    if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") observeKillRequests(t, trace)
+    try {
+      const result = await publish(desk, { git: { spawn(command, args, options) {
+        calls.push(args)
+        const child = tracedSpawn(trace, command, args, options)
+        if (!expired && (after === "config" ? args[0] === "config" : args[0] === "rev-parse" && args[1] === "--git-path")) {
+          child.once("close", () => { virtualNow += 10_001; expired = true })
+        }
+        return child
+      } } })
+      diagnostic(t, `expiry-${after}-initial`, { result, trace, expired })
+      assert.equal(expired, true)
+      assert.equal(result.state, "unsynchronized")
+      assert.ok(!calls.some((args) => args[0] === "fetch"), "expired preparation never starts the requested Git operation")
+      assert.equal(calls.some((args) => args[1] === "--git-path"), after === "location", "expiry between reads avoids the second metadata read")
+      assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    } finally {
+      t.mock.restoreAll()
+    }
+    const followOnTrace = [], filesystemErrors = []
+    let followOn
+    if (process.env.DESK_TRIAGE_DIAGNOSTICS === "1") {
+      observeKillRequests(t, followOnTrace)
+      observeFilesystemErrors(t, filesystemErrors)
+    }
+    try {
+      followOn = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(followOnTrace, command, args, options) } })
+    } finally {
+      t.mock.restoreAll()
+    }
+    diagnostic(t, `expiry-${after}-follow-on`, { result: followOn, trace: followOnTrace, filesystemErrors })
+    assert.equal(followOn.state, "acknowledged", `expiry left no candidate or persistent routing mutation: ${JSON.stringify({ after, result: followOn, trace: followOnTrace, filesystemErrors })}`)
+  }
+})
+
+test("private commit metadata damage and syscall denial hold without overwriting evidence", async (t) => {
+  for (const mode of ["not-file", "invalid-gitfile", "backup-present", "backup-stat-denied", "link-denied"]) {
+    const w = await world()
+    const desk = w.clone("private-metadata")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    let dot, backup, bytes, moved, mutationError = null, installedBytes = null, nativeAttributes = null
+    const realLstat = fs.lstat.bind(fs), realSymlink = fs.symlink.bind(fs), realWriteFile = fs.writeFile.bind(fs)
+    let denied = 0
+    let result
+    try {
+      result = await publish(desk, { git: { onStep: async (name) => {
+        if (name !== "before_commit") return
+        const [token] = await fs.readdir(path.join(desk.deskRoot, ".git/desk-triage"))
+        dot = path.join(desk.deskRoot, ".git/desk-triage", token, "wt/.git")
+        backup = path.join(path.dirname(path.dirname(dot)), "gitfile")
+        bytes = await fs.readFile(dot, "utf8")
+        if (mode === "not-file") {
+          moved = path.join(w.base, "original-gitfile")
+          await fs.rename(dot, moved)
+          await fs.mkdir(dot)
+        } else if (mode === "invalid-gitfile") {
+          if (process.platform === "win32") {
+            const observed = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-Item -Force -LiteralPath $env:DESK_METADATA_PROBE).Attributes.ToString()"], {
+              env: { ...desk.env, DESK_METADATA_PROBE: dot }, encoding: "utf8", windowsHide: true, timeout: 10_000,
+            })
+            nativeAttributes = { status: observed.status, signal: observed.signal, error: observed.error ? processError(observed.error) : null, stdout: observed.stdout, stderr: observed.stderr }
+          }
+          t.mock.method(fs, "writeFile", async (file, data, options) => {
+            const flag = typeof options === "object" ? options?.flag ?? "w" : "w"
+            if (file === dot && flag === "w") throw Object.assign(new Error("Windows hidden-file w open refused"), { code: "EPERM" })
+            return realWriteFile(file, data, options)
+          })
+          try {
+            await replaceExistingMetadata(dot, "foreign metadata\n")
+            installedBytes = await fs.readFile(dot, "utf8")
+            assert.equal(installedBytes, "foreign metadata\n", "the metadata fault was actually installed before production resumed")
+          } catch (error) {
+            mutationError = processError(error)
+            throw error
+          }
+        } else if (mode === "backup-present") {
+          await fs.writeFile(backup, "retained foreign backup\n")
+        } else if (mode === "backup-stat-denied") {
+          t.mock.method(fs, "lstat", async (file, ...args) => {
+            if (file === backup) { denied += 1; throw Object.assign(new Error("backup inspection denied"), { code: "EACCES" }) }
+            return realLstat(file, ...args)
+          })
+        } else {
+          t.mock.method(fs, "symlink", async (target, file, ...args) => {
+            if (file === dot) { denied += 1; throw Object.assign(new Error("directory link denied"), { code: "EACCES" }) }
+            return realSymlink(target, file, ...args)
+          })
+        }
+      } } })
+    } finally {
+      t.mock.restoreAll()
+    }
+    const metadataEvidence = { mode, result, mutationError, installedBytes, nativeAttributes, dot, backup }
+    diagnostic(t, `metadata-${mode}`, metadataEvidence)
+    assert.equal(mutationError, null, JSON.stringify(metadataEvidence))
+    assert.equal(result.state, "write_failed", mode)
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    assert.equal(result.resources.find((resource) => resource.kind === "worktree").disposition, "active")
+    if (mode === "not-file") {
+      assert.equal((await fs.lstat(dot)).isDirectory(), true)
+      assert.equal(await fs.readFile(moved, "utf8"), bytes)
+      await fs.rename(dot, path.join(w.base, "retained-foreign-directory"))
+      await fs.rename(moved, dot)
+    } else if (mode === "invalid-gitfile") {
+      assert.equal(installedBytes, "foreign metadata\n")
+      assert.equal(await fs.readFile(dot, "utf8"), "foreign metadata\n", JSON.stringify(metadataEvidence))
+      assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT", "production never swapped the invalid gitfile")
+      await replaceExistingMetadata(dot, bytes)
+    } else if (mode === "backup-present") {
+      assert.equal(await fs.readFile(backup, "utf8"), "retained foreign backup\n")
+      assert.equal((await publish(desk)).alarm, RESOURCE_ALARM)
+      await fs.rename(backup, path.join(w.base, "retained-foreign-backup"))
+    } else {
+      assert.ok(denied > 0)
+      assert.equal(await fs.readFile(dot, "utf8"), bytes, "the original gitfile survives the failed filesystem boundary")
+      assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT")
+    }
+    assert.equal((await publish(desk)).state, "acknowledged", `${mode}: the fixture's repair permits normal recovery`)
+  }
+})
+
+test("private interrupted recovery handles the pre-link gap and retains malformed or inaccessible metadata", async (t) => {
+  for (const mode of ["gap", "backup-directory", "backup-invalid", "backup-missing-target", "dot-regular", "backup-stat-denied", "dot-stat-denied"]) {
+    const w = await world()
+    const desk = w.clone("interrupted-metadata")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const stopped = await publish(desk, { git: { onStep(name) { if (name === "before_commit") throw new Error("interrupted candidate") } } })
+    assert.equal(stopped.state, "write_failed")
+    const resource = stopped.resources.find((resource) => resource.kind === "worktree")
+    const dot = path.join(resource.path, ".git"), backup = path.join(path.dirname(resource.path), "gitfile")
+    const bytes = await fs.readFile(dot, "utf8")
+    const target = path.resolve(resource.path, bytes.slice(8).trim())
+    if (mode === "backup-directory") await fs.mkdir(backup)
+    else if (mode === "backup-invalid") await fs.writeFile(backup, "foreign backup\n")
+    else if (mode === "backup-missing-target") await fs.writeFile(backup, `gitdir: ${path.join(desk.deskRoot, ".git/missing-admin")}\n`)
+    else if (mode !== "backup-stat-denied") {
+      await fs.rename(dot, backup)
+      if (mode === "dot-regular") await fs.writeFile(dot, "foreign gitfile\n")
+      if (mode === "dot-stat-denied") await fs.symlink(target, dot, process.platform === "win32" ? "junction" : "dir")
+    }
+    const realLstat = fs.lstat.bind(fs)
+    let denied = 0, result
+    try {
+      if (mode.endsWith("stat-denied")) t.mock.method(fs, "lstat", async (file, ...args) => {
+        if (file === (mode === "backup-stat-denied" ? backup : dot)) {
+          denied += 1
+          throw Object.assign(new Error("interrupted metadata inspection denied"), { code: "EACCES" })
+        }
+        return realLstat(file, ...args)
+      })
+      result = await publish(desk)
+    } finally {
+      t.mock.restoreAll()
+    }
+    if (mode === "gap") {
+      assert.equal(result.state, "acknowledged")
+    } else {
+      assert.equal(result.state, "busy", mode)
+      assert.equal(result.alarm, RESOURCE_ALARM)
+      assert.equal(result.resources[0].disposition, "retained")
+      if (mode === "backup-directory") {
+        assert.equal((await fs.lstat(backup)).isDirectory(), true)
+        await fs.rename(backup, path.join(w.base, "retained-backup-directory"))
+      } else if (mode.startsWith("backup-") && !mode.endsWith("stat-denied")) {
+        assert.equal((await fs.lstat(backup)).isFile(), true)
+        await fs.rename(backup, path.join(w.base, "retained-foreign-backup"))
+      } else if (mode === "dot-regular") {
+        assert.equal(await fs.readFile(dot, "utf8"), "foreign gitfile\n")
+        assert.equal(await fs.readFile(backup, "utf8"), bytes)
+        await fs.rename(dot, path.join(w.base, "retained-foreign-dot"))
+      } else {
+        assert.ok(denied > 0)
+      }
+      assert.equal((await publish(desk)).state, "acknowledged", mode)
+    }
+    assert.equal(await fs.lstat(resource.path).catch((error) => error.code), "ENOENT")
+    assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT")
+  }
+})
+
+test("a hook replacing private Git metadata is retained and never acknowledged", async () => {
+  const w = await world()
+  const desk = w.clone("foreign-post-commit")
+  desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  const hook = path.join(desk.deskRoot, ".git/hooks/post-commit")
+  const body = "#!/bin/sh\nmv .git .git.foreign-link || exit $?\nprintf 'foreign metadata\\n' > .git\n"
+  await fs.writeFile(hook, body, { mode: 0o755 })
+  const result = await publish(desk)
+  assert.equal(result.state, "write_failed")
+  const resource = result.resources.find((resource) => resource.kind === "worktree")
+  const dot = path.join(resource.path, ".git"), backup = path.join(path.dirname(resource.path), "gitfile")
+  assert.equal(await fs.readFile(dot, "utf8"), "foreign metadata\n")
+  assert.ok((await fs.readFile(backup, "utf8")).startsWith("gitdir: "))
+  assert.equal((await publish(desk)).alarm, RESOURCE_ALARM)
+  assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+  assert.equal(await fs.readFile(hook, "utf8"), body, "the original hook was not rewritten")
+  await fs.rename(dot, path.join(w.base, "retained-foreign-dot"))
+  await fs.rename(path.join(resource.path, ".git.foreign-link"), dot)
+  await fs.rename(hook, path.join(w.base, "retained-post-commit"))
+  assert.equal((await publish(desk)).state, "acknowledged")
+})
+
+test("protected triage file defaults write real owner-protected state", async () => {
+  const w = await world()
+  const desk = w.clone("protected-defaults")
+  const file = await writeProtectedTriageFile(desk.env, ["basis", "default-options.json"], "{}\n")
+  assert.equal(await fs.readFile(file, "utf8"), "{}\n")
+  assert.ok(file.startsWith(`${w.base}${path.sep}`))
+  if (posix) assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+})
+
+test("a self-referential Git metadata report is refused by real Git without publication", async () => {
+  const w = await world()
+  const desk = w.clone("self-referential-admin")
+  desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  const before = git(w.origin, ["rev-parse", "main"])
+  let reports = 0, actualCommit
+  const result = await publish(desk, { git: { spawn(command, args, options) {
+    if (args.includes("--absolute-git-dir")) {
+      reports += 1
+      // Fault at the metadata boundary: return Git's real worktree path in the admin slot.
+      // The subsequent commit is still the real Git command against that unusable context.
+      return spawn(command, args.map((arg) => arg === "--absolute-git-dir" ? "--show-toplevel" : arg), options)
+    }
+    const child = spawn(command, args, options)
+    if (args[0] === "commit") {
+      actualCommit = { gitDir: options.env.GIT_DIR, status: null, stderr: "" }
+      child.stderr.on("data", (chunk) => { actualCommit.stderr += chunk })
+      child.once("close", (status) => { actualCommit.status = status })
+    }
+    return child
+  } } })
+  assert.equal(reports, 1)
+  assert.equal(actualCommit.gitDir, ".")
+  assert.notEqual(actualCommit.status, 0, "an actual Git commit rejects the worktree as its own administrative directory")
+  assert.match(actualCommit.stderr, /not a git repository/)
+  assert.equal(result.state, "policy_refused")
+  assert.equal(git(w.origin, ["rev-parse", "main"]), before)
+  assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+  assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+})
+
+test("private triage keeps guarded nested commit message operands private before honest parent refusal", async (t) => {
+  const clippedEvidence = {
+    configured: null, result: { state: "acknowledged" },
+    trace: [
+      { args: ["config"], stdout: "preparation".repeat(1000) },
+      { args: ["commit", "-q", "-m", "Record factory triage annotation"], status: 0, error: null, signal: null, stderr: "NESTED_RECEIPT_MARKER" },
+    ],
+    hooksReceipt: { text: null, error: { code: "ENOENT" } },
+    discoveryReceipt: { text: null, error: { code: "EACCES" } },
+    nestedReceipt: { text: '{"phase":"nested-exit","nested":false,"status":1}\n', error: null },
+  }
+  const retained = nestedFailureMessage(clippedEvidence).slice(0, 3000)
+  assert.ok(retained.includes("NESTED_RECEIPT_MARKER"), "relevant commit diagnostics survive the native runner's 3000-character retention limit")
+  const firstLine = retained.split("\n")[0]
+  assert.ok(Buffer.byteLength(firstLine) <= 2200)
+  const compact = JSON.parse(firstLine)
+  assert.equal(compact.post.nestedExit, 1)
+  assert.equal(compact.errors.hooks, "ENOENT")
+  assert.equal(compact.errors.context, "EACCES")
+  clippedEvidence.trace[1].stderr += "large stderr".repeat(1000)
+  clippedEvidence.hooksReceipt = { text: `${JSON.stringify({ hook: "post-commit", cwd: String.raw`C:\long\path`.repeat(500), topRaw: "C:/long/path".repeat(500), nestedCommit: false })}\n`, error: null }
+  clippedEvidence.discoveryReceipt = { text: `${JSON.stringify({ shellPwdRaw: "/c/long/path".repeat(500), cwd: String.raw`C:\long\path`.repeat(500), topRaw: "C:/long/path".repeat(500) })}\n`, error: null }
+  const stressPrefix = nestedFailureMessage(clippedEvidence).slice(0, 3000).split("\n")[0]
+  assert.ok(Buffer.byteLength(stressPrefix) <= 2200)
+  assert.equal(JSON.parse(stressPrefix).post.nestedExit, 1)
+  assert.ok(stressPrefix.includes("NESTED_RECEIPT_MARKER"))
+  if (process.platform === "win32") {
+    t.skip(HOSTED_LINUX_ONLY)
+    return
+  }
+  for (const configured of [null, "nested message hooks", "relative hooks"]) {
+    const w = await world()
+    const desk = w.clone("nested-message-hook")
+    const root = desk.deskRoot
+    await fs.mkdir(path.join(root, "project"))
+    await fs.writeFile(path.join(root, "project/.keep"), "")
+    const hooks = configured === "relative hooks" ? path.join(root, configured) : path.join(root, ".git", configured ?? "hooks")
+    await fs.mkdir(hooks, { recursive: true })
+    const originals = new Map()
+    for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      const script = hookArgvScript({ nestedCommit: name === "post-commit" })
+      const body = name === "post-commit" ? withShellPwdProvider(script) : script
+      originals.set(name, body)
+      if (configured !== null) await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
+    }
+    // Seed without enabling the fixture hooks; the nested operation belongs only to triage.
+    git(root, ["add", "--", "project", ...(configured === "relative hooks" ? [configured] : [])])
+    git(root, ["commit", "-qm", "seed project and policy"])
+    git(root, ["push", "-q", "origin", "main"])
+    if (configured === null) for (const [name, body] of originals) await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
+    const hooksPath = configured === "relative hooks" ? configured : hooks
+    if (configured !== null) git(root, ["config", "core.hooksPath", hooksPath])
+    const log = path.join(w.base, "nested-message-argv.jsonl")
+    const subdirectoryLog = path.join(w.base, "nested-message-discovery.txt")
+    const nestedLog = path.join(w.base, "nested-commit-events.jsonl")
+    await fs.writeFile(nestedLog, "", { flag: "wx", mode: 0o600 })
+    const postReceipt = await hookReceipt(path.join(hooks, "post-commit"))
+    const installed = { postMatches: postReceipt.text === originals.get("post-commit"), postError: postReceipt.error?.code ?? null, journalCreated: true }
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog, DESK_HOOK_NESTED_LOG: slash(nestedLog) }
+    const refs = { remoteBefore: headSnapshot(w.origin), liveBefore: headSnapshot(root) }
+    const trace = []
+    const result = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(trace, command, args, options) } })
+    refs.remoteAfter = headSnapshot(w.origin)
+    refs.liveAfter = headSnapshot(root)
+    const hooksReceipt = await hookReceipt(log), discoveryReceipt = await hookReceipt(subdirectoryLog), nestedReceipt = await hookReceipt(nestedLog)
+    const evidence = { configured, result, trace, hooksReceipt, discoveryReceipt, nestedReceipt, installed, refs, initialNestedFlag: desk.env.DESK_HOOK_NESTED_COMMIT ?? null }
+    const failureMessage = nestedFailureMessage(evidence)
+    diagnostic(t, "nested-message-context", { summary: JSON.parse(failureMessage.split("\n")[0]), ...evidence })
+    assert.equal(installed.postMatches, true, failureMessage)
+    assert.equal(result.state, "policy_unknown", failureMessage)
+    assert.equal(typeof hooksReceipt.text, "string", failureMessage)
+    assert.equal(typeof discoveryReceipt.text, "string", failureMessage)
+    const journal = receiptRows(nestedReceipt)
+    assert.equal(journal.code, null, failureMessage)
+    const event = (phase, nested = false) => journal.rows.findLast((row) => row.phase === phase && row.nested === nested)
+    assert.equal(event("nested-exit")?.status, 0, failureMessage)
+    assert.equal(event("post-probe")?.status, 0, failureMessage)
+    assert.equal(event("post-probe", true)?.status, 0, failureMessage)
+    assert.equal(event("guard-exit", true)?.status, 0, failureMessage)
+    assert.equal(event("post-exit")?.status, 0, failureMessage)
+    assert.deepEqual(event("nested-start")?.argv, ["git", "commit", "--allow-empty", "-qm", "nested message witness"], failureMessage)
+    const before = event("head-before"), after = event("head-after")
+    assert.equal(before?.status, 0, failureMessage)
+    assert.equal(after?.status, 0, failureMessage)
+    assert.notEqual(before.head, after.head, failureMessage)
+    const outerCommits = trace.filter((row) => row.args[0] === "commit")
+    assert.equal(outerCommits.length, 1, failureMessage)
+    assert.equal(outerCommits[0].status, 0, failureMessage)
+    assert.equal(outerCommits[0].signal, null, failureMessage)
+    assert.equal(outerCommits[0].error, null, failureMessage)
+    assert.equal(trace.findLast((row) => row.args.length === 2 && row.args[0] === "rev-parse" && row.args[1] === "HEAD")?.stdout.trim(), after.head, failureMessage)
+    assert.equal(trace.findLast((row) => row.args.length === 2 && row.args[0] === "rev-parse" && row.args[1] === "HEAD^")?.stdout.trim(), before.head, failureMessage)
+    for (const scope of ["remote", "live"]) {
+      assert.equal(refs[`${scope}Before`].status, 0, failureMessage)
+      assert.equal(refs[`${scope}After`].status, 0, failureMessage)
+      assert.equal(refs[`${scope}After`].stdout, refs[`${scope}Before`].stdout, failureMessage)
+    }
+    assert.ok(!trace.some((row) => row.args[0] === "push"), failureMessage)
+    const rows = hooksReceipt.text.trim().split("\n").map(JSON.parse)
+    const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
+    assert.equal(path.relative(result.resources.find((resource) => resource.kind === "worktree").path, worktree), "")
+    assertSubdirectoryReceipt(discoveryReceipt, worktree)
+    for (const name of ["prepare-commit-msg", "commit-msg", "post-commit"]) {
+      assert.ok(rows.some((row) => row.hook.includes(name) && row.nestedCommit), `guarded nested original ${name} executed`)
+    }
+    if (process.platform === "darwin") {
+      for (const name of ["prepare-commit-msg", "commit-msg"]) {
+        const row = rows.find((row) => row.hook.includes(name) && row.nestedCommit)
+        assert.ok(row.ancestors.flat().some((arg) => arg.includes("private-hooks/dispatch.cjs") && arg.includes(`${name} .git/COMMIT_EDITMSG`)), "actual public dispatcher kernel argv, not only original forwarded arguments")
+      }
+    }
+    for (const row of rows) {
+      assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+      assert.equal(path.relative(worktree, row.topReal), "", JSON.stringify(row))
+      assert.equal(row.hooksPath, configured === null ? "" : hooksPath)
+      assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS)
+      if (row.hook.includes("commit-msg")) assert.ok(row.message.includes(row.nestedCommit ? "nested message witness" : "Record factory triage annotation"))
+    }
+    assert.equal(result.state, "policy_unknown", "a second commit must still fail the unchanged parent check")
+    assert.equal(remoteText(w.origin, paths.annotation).status, 128)
+    assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    for (const [name, body] of originals) assert.equal(await fs.readFile(path.join(hooks, name), "utf8"), body, `original ${name} unchanged`)
+  }
+})
+
+test("private triage recovers its interrupted gitfile swap but retains foreign replacement metadata", async () => {
+  for (const foreign of [false, true]) {
+    const w = await world()
+    const desk = w.clone("gitfile-recovery")
+    desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+    const stopped = await publish(desk, { git: { onStep(name) { if (name === "before_commit") throw new Error("interrupted candidate") } } })
+    assert.equal(stopped.state, "write_failed")
+    const resource = stopped.resources.find((resource) => resource.kind === "worktree")
+    const dot = path.join(resource.path, ".git")
+    const backup = path.join(path.dirname(resource.path), "gitfile")
+    const bytes = await fs.readFile(dot, "utf8")
+    const target = path.resolve(resource.path, bytes.slice(8).trim())
+    // Reproduce the exact durable metadata shape left by a stopped process during privateCommit.
+    await fs.rename(dot, backup)
+    await fs.symlink(foreign ? desk.deskRoot : target, dot, process.platform === "win32" ? "junction" : "dir")
+    if (foreign) {
+      const blocked = await publish(desk)
+      assert.equal(blocked.state, "busy")
+      assert.equal(blocked.alarm, RESOURCE_ALARM)
+      assert.equal(blocked.resources[0].disposition, "retained")
+      assert.equal(await fs.realpath(dot), await fs.realpath(desk.deskRoot), "foreign metadata was not replaced")
+      assert.equal(await fs.readFile(backup, "utf8"), bytes, "the original gitfile is still retained")
+      await fs.unlink(dot)
+      await fs.symlink(target, dot, process.platform === "win32" ? "junction" : "dir")
+    }
+    const recovered = await publish(desk)
+    assert.equal(recovered.state, "acknowledged", JSON.stringify(recovered))
+    assert.ok(recovered.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    assert.equal(await fs.lstat(backup).catch((error) => error.code), "ENOENT")
+    assert.equal(await fs.lstat(resource.path).catch((error) => error.code), "ENOENT")
+  }
+})
+
+test("private triage keeps same-worktree subdirectory Git, nested hooks and message argv valid together", async (t) => {
+  const w = await world()
+  const desk = w.clone("subdirectory-hook")
+  const root = desk.deskRoot
+  await fs.mkdir(path.join(root, "project"))
+  await fs.writeFile(path.join(root, "project/.keep"), "")
+  git(root, ["add", "--", "project"])
+  git(root, ["commit", "-qm", "seed project"])
+  git(root, ["push", "-q", "origin", "main"])
+  const hooks = path.join(root, ".git/hooks")
+  const originals = new Map()
+  for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-index-change"]) {
+    const script = hookArgvScript({ nestedMutation: name === "pre-commit", subdirectory: name === "pre-commit" })
+    const body = name === "pre-commit" ? withShellPwdProvider(script) : script
+    originals.set(name === "pre-commit" ? "pre-commit.desk-chained" : name, body)
+    await fs.writeFile(path.join(hooks, name), body, { mode: 0o755 })
+  }
+  assert.equal(installCardGuard(root).state, "installed")
+  const log = path.join(w.base, "subdirectory-hook-argv.jsonl")
+  const subdirectoryLog = path.join(w.base, "subdirectory-git.txt")
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_SUBDIRECTORY_LOG: subdirectoryLog }
+  const trace = []
+  const result = await publish(desk, { git: { spawn: (command, args, options) => tracedSpawn(trace, command, args, options) } })
+  const hooksReceipt = await hookReceipt(log), discoveryReceipt = await hookReceipt(subdirectoryLog)
+  const evidence = { result, trace, hooksReceipt, discoveryReceipt }
+  diagnostic(t, "subdirectory-context", evidence)
+  assert.equal(result.state, "acknowledged", JSON.stringify(evidence))
+  assert.equal(typeof hooksReceipt.text, "string", JSON.stringify(evidence))
+  assert.equal(typeof discoveryReceipt.text, "string", JSON.stringify(evidence))
+  const rows = hooksReceipt.text.trim().split("\n").map(JSON.parse)
+  const worktree = rows.find((row) => row.hook.includes("pre-commit")).cwd
+  assert.equal(path.relative(result.resources.find((resource) => resource.kind === "worktree").path, worktree), "")
+  assertSubdirectoryReceipt(discoveryReceipt, worktree)
+  assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), "subdirectory mutation triggered the original nested hook")
+  for (const row of rows) {
+    assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+    assert.ok(withinRoot(root, row.topReal), JSON.stringify(row))
+    assert.equal(row.hooksPath, "")
+    assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS)
+    if (row.hook.includes("commit-msg")) assert.ok(row.message.includes("Record factory triage annotation"))
+  }
+  for (const [name, body] of originals) assert.equal(await fs.readFile(path.join(hooks, name), "utf8"), body, `original ${name} is unchanged`)
+})
+
+test("private triage preserves routing for a nested hook-triggering Git mutation", async () => {
+  const windowsRoot = String.raw`C:\deskstd-tmp\fixture`
+  assert.equal(withinRoot(windowsRoot, "C:/deskstd-tmp/fixture/.git/work", path.win32), true)
+  for (const outside of ["C:/deskstd-tmp/fixture-other", "C:/deskstd-tmp", "D:/deskstd-tmp/fixture", "C:/deskstd-tmp/fixture/../outside"]) {
+    assert.equal(withinRoot(windowsRoot, outside, path.win32), false, outside)
+  }
+  for (const configured of [null, "nested policy hooks"]) {
+    const w = await world()
+    const desk = w.clone("nested-hook")
+    const root = desk.deskRoot
+    const hooks = path.join(root, ".git", configured ?? "hooks")
+    await fs.mkdir(hooks, { recursive: true })
+    if (configured !== null) git(root, ["config", "core.hooksPath", hooks])
+    const probe = hookArgvScript()
+    await fs.writeFile(path.join(hooks, "pre-commit"), hookArgvScript({ nestedMutation: true }), { mode: 0o755 })
+    await fs.writeFile(path.join(hooks, "post-index-change"), probe, { mode: 0o755 })
+    assert.equal(installCardGuard(root).state, "installed")
+    const log = path.join(w.base, "nested-hook-argv.jsonl")
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath }
+    const result = await publish(desk)
+    assert.equal(result.state, "acknowledged", JSON.stringify(result))
+    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    assert.ok(rows.some((row) => row.hook.includes("pre-commit")), "original pre-commit ran")
+    assert.ok(rows.some((row) => row.hook.includes("post-index-change") && row.nestedMutation), `original nested post-index-change ran: ${JSON.stringify(rows)}`)
+    for (const row of rows) {
+      assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+      assert.ok(withinRoot(root, row.topReal), `nested Git retains its linked worktree context: ${JSON.stringify(row)}`)
+      assert.equal(row.hooksPath, configured === null ? "" : hooks)
+      assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS, "nested Git retains public routing over the original policy")
+      if (row.toolCommit === "1") assert.equal(row.gitDir, undefined, "original hooks use same-worktree discovery, not a cwd-bound Git directory")
+    }
+    assert.equal(git(root, ["config", "--get", "core.hooksPath"], { allowFail: true }), configured === null ? "" : hooks)
+    assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+  }
+})
+
+test("private triage executable hook descendants keep policy, execution and message paths private", async () => {
+  for (const configured of [null, "policy hooks", "relative hooks"]) {
+    const world_ = await world()
+    const desk = world_.clone("private-hook")
+    const root = desk.deskRoot
+    const hooks = configured === null ? path.join(root, ".git/hooks") : path.join(root, configured === "relative hooks" ? "" : ".git", configured)
+    await fs.mkdir(hooks, { recursive: true })
+    for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      await fs.writeFile(path.join(hooks, name), hookArgvScript(), { mode: 0o755 })
+    }
+    if (configured === "relative hooks") {
+      git(root, ["add", "--", configured])
+      git(root, ["commit", "-qm", "seed relative hook policy"])
+      git(root, ["push", "-q", "origin", "main"])
+    }
+    const hooksPath = configured === "relative hooks" ? configured : hooks
+    if (configured !== null) git(root, ["config", "core.hooksPath", hooksPath])
+    assert.equal(installCardGuard(root).state, configured === "relative hooks" ? "tracked" : "installed")
+    const log = path.join(world_.base, "hook-argv.jsonl")
+    desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath }
+    const trace = []
+    const result = await publish(desk, { git: { spawn(command, args, options) {
+      const child = spawn(command, args, options)
+      let stdout = "", stderr = ""
+      child.stdout.on("data", (chunk) => { stdout += chunk })
+      child.stderr.on("data", (chunk) => { stderr += chunk })
+      child.on("close", (status) => trace.push({ args, status, stdout: stdout.slice(0, 512), stderr: stderr.slice(0, 512) }))
+      return child
+    } } })
+    const hookLog = await fs.readFile(log, "utf8").catch(() => "")
+    assert.equal(result.state, "acknowledged", JSON.stringify({ result, trace: trace.slice(-16), hookLog }))
+    const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+    for (const name of ["post-checkout", "pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      assert.ok(rows.some((row) => row.hook.includes(name)), `hook did not execute: ${name}`)
+    }
+    for (const row of rows) {
+      assertPrivateArgv(root, [row.hook, ...row.args, ...row.kernel, ...row.ancestors.flat()], JSON.stringify(row))
+      assert.ok(withinRoot(root, row.topReal), `original hooks must retain their Git context: ${JSON.stringify(row)}`)
+      assert.equal(row.hooksPath, configured === null ? "" : hooksPath, "the original hook must observe the original hook policy")
+      assert.equal(row.effectiveHooksPath, PRIVATE_HOOKS, "original hooks retain the effective private routing overlay")
+      if (row.toolCommit === "1") assert.equal(row.gitDir, undefined, "original hooks have no cwd-bound Git directory")
+      if (configured === "relative hooks") assert.equal(path.dirname(path.resolve(row.cwd, row.hook)), path.join(row.cwd, configured), "relative policy resolves in the actual hook cwd")
+      if (row.hook.includes("commit-msg")) assert.ok(row.message.includes("Record factory triage annotation"))
+    }
+    assert.ok(result.resources.filter((r) => r.kind === "worktree").every((r) => r.disposition === "removed"))
+    assert.equal(git(root, ["config", "--get", "core.hooksPath"], { allowFail: true }), configured === null ? "" : hooksPath)
+  }
+})
+
+test("private triage still obeys an executable rejecting hook and never acknowledges its commit", async () => {
+  const world_ = await world()
+  const desk = world_.clone("private-reject")
+  const root = desk.deskRoot
+  const log = path.join(world_.base, "rejected-hook.jsonl")
+  await fs.writeFile(path.join(root, ".git/hooks/pre-commit"), hookArgvScript(), { mode: 0o755 })
+  installCardGuard(root)
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS, DESK_HOOK_LOG: log, DESK_HOOK_NODE: process.execPath, DESK_HOOK_EXIT: "23" }
+  const trace = []
+  const result = await publish(desk, { git: { spawn(command, args, options) {
+    const started = performance.now()
+    const child = spawn(command, args, options)
+    let stdout = "", stderr = ""
+    child.stdout.on("data", (chunk) => { stdout += chunk })
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.once("close", (status) => trace.push({ args, status, stdout, stderr, elapsedMs: performance.now() - started, commonDir: options.env.GIT_COMMON_DIR, gitDir: options.env.GIT_DIR }))
+    return child
+  } } })
+  assert.equal(result.state, "policy_refused", JSON.stringify({ result, trace }))
+  const rows = (await fs.readFile(log, "utf8")).trim().split("\n").map(JSON.parse)
+  assert.ok(rows.some((row) => row.hook.includes("pre-commit")))
+  assert.equal(remoteText(world_.origin, paths.annotation).status, 128)
+})
+
+test("private triage does not turn an unexecutable hook directory into a successful commit", async () => {
+  const world_ = await world()
+  const desk = world_.clone("private-hook-directory")
+  await fs.mkdir(path.join(desk.deskRoot, ".git/hooks/pre-commit"))
+  desk.env = { ...desk.env, DESK: desk.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  assert.equal((await publish(desk)).state, "policy_refused")
+})
+
+test("private built-in triage keeps worktree operands desk-relative and completes real acknowledgement", async () => {
+  const world_ = await world()
+  const desk = world_.clone("private")
+  const root = desk.deskRoot
+  desk.env = { ...desk.env, DESK: root, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS }
+  const calls = []
+  const spawnPrivate = (command, args, options) => {
+    assert.ok(!args.includes("-C"))
+    assert.ok(!args.some((arg) => arg.includes(root) || arg.includes(world_.base)))
+    assert.ok(options.cwd === root || options.cwd.startsWith(`${root}${path.sep}`))
+    calls.push(args)
+    return spawn(command, args, options)
+  }
+  const result = await publish(desk, { git: { spawn: spawnPrivate } })
+  assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  assert.ok(calls.some((args) => args[0] === "worktree" && args[1] === "add"))
+  assert.ok(calls.some((args) => args[0] === "push"))
+  assert.ok(result.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+  assert.ok(remoteJson(world_.origin, paths.annotation))
+})
 
 const restrictiveProfile = {
   GIT_CONFIG_COUNT: "3",
@@ -1230,6 +2229,55 @@ test("windows_platform_paths_use_tree_kill_and_acl_protection", async (t) => {
   assert.ok(protectedPaths.includes(file))
   const result = await publish({ ...a, env }, { git: { platform: "win32", aclRunner, spawn: spawnGit } })
   assert.equal(result.state, "acknowledged", JSON.stringify(result))
+  for (const platform of ["linux", "win32"]) {
+    let committed = false
+    let candidateDot
+    let linked = 0
+    const before = git(w.origin, ["rev-parse", "main"])
+    const realSymlink = fs.symlink.bind(fs)
+    // Simulate an ordinary Windows provider, without Developer Mode, on every host.
+    const windowsLink = async (target, file, type) => {
+      if (type !== "junction") throw Object.assign(new Error("unprivileged directory symlink denied"), { code: "EPERM" })
+      assert.equal(path.isAbsolute(target), true)
+      return realSymlink(target, file, process.platform === "win32" ? "junction" : "dir")
+    }
+    let privateResult
+    try {
+      privateResult = await publish({ ...a, env: { ...env, DESK: a.deskRoot, DESK_ISOLATED_HOSTED: "1", DESK_PRIVATE_HOOKS_DIR: PRIVATE_HOOKS } }, {
+        review: platform === "linux" ? { ...AGENT, protected_result: hex(16) } : { ...HUMAN, gate: "spend", summary_codes: ["source:andon", "route:human_decision", "gate:spend"], protected_result: hex(16) },
+        git: { platform, aclRunner, onStep: async (name) => {
+          if (name !== "before_commit") return
+          const [token] = await fs.readdir(path.join(a.deskRoot, ".git/desk-triage"))
+          candidateDot = path.join(a.deskRoot, ".git/desk-triage", token, "wt/.git")
+          t.mock.method(fs, "symlink", async (target, file, type) => {
+            if (file !== candidateDot) return realSymlink(target, file, type)
+            assert.equal(type, platform === "linux" ? "dir" : "junction")
+            assert.equal(path.isAbsolute(target), platform === "win32")
+            linked += 1
+            return windowsLink(path.resolve(path.dirname(file), target), file, "junction")
+          })
+        }, spawn(command, args, options) {
+          if (args[0] === "commit") {
+            committed = true
+            assert.equal(options.env.DESK_PRIVATE_HOOK_RUNNER, platform === "linux" ? "/bin/sh" : process.execPath)
+            assert.equal(options.env.DESK_PRIVATE_HOOK_DISPATCH, path.join(PRIVATE_HOOKS, platform === "linux" ? "dispatch.sh" : "dispatch.cjs"))
+          }
+          assert.ok(!args.some((arg) => arg.includes(a.deskRoot)))
+          return spawn(command, args, options)
+        } },
+      })
+    } finally {
+      t.mock.restoreAll()
+    }
+    assert.equal(privateResult.state, "acknowledged", `${platform}: ${JSON.stringify(privateResult)}`)
+    assert.equal(committed, true, "platform transport performs a real commit, not adoption")
+    assert.equal(linked, 1, "only the exact candidate metadata uses the host-safe provider")
+    assert.notEqual(git(w.origin, ["rev-parse", "main"]), before, "the real commit reached the remote")
+    assert.equal(remoteText(w.origin, paths.annotation).status, 0)
+    assert.equal(privateResult.resources.filter((resource) => resource.kind === "worktree").length, 1)
+    assert.ok(privateResult.resources.filter((resource) => resource.kind === "worktree").every((resource) => resource.disposition === "removed"))
+    assert.equal(await fs.lstat(path.dirname(candidateDot)).catch((error) => error.code), "ENOENT", "the real candidate directory was removed")
+  }
   // On Windows a timed-out call is ended with its process tree (taskkill /T); here the stand-in push ends by itself, so the call
   // settles either way and is never taken for a refused push.
   let delayedPolicyProbe = false

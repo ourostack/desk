@@ -5,6 +5,7 @@
 // `spawnGit` (over `spawnSync`) and `schedulePush` are test seams; real callers never pass them.
 
 import { spawnSync } from "node:child_process"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as path from "node:path"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
@@ -50,7 +51,8 @@ const CARD_NAME = /^[a-z_]+--[0-9a-f]{12}\.md$/u
 const SET_ASIDE_NAME = /^[^/]+\.[0-9a-f]{6}$/u
 
 function git(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const invocation = deskGitInvocation({ root, args })
+  return spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
 }
 
 // The files under `folder` that hold unstaged or staged changes or are untracked; null when Git cannot say.

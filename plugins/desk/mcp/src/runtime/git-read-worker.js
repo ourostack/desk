@@ -2,10 +2,11 @@
 //
 // Starting a process is synchronous in Node, even through the asynchronous child_process calls: the thread that asks waits until the operating system has created the process. On Windows that wait is usually a few milliseconds, but it took about 600 ms once on a CI runner, and desk_status asked from the thread that answers the host, so the call took 619 ms. Here the thread that asks is a worker, so the host's thread only posts a message.
 //
-// One worker serves every read of the process. It starts each Git process itself and waits for it asynchronously, so reads overlap as they did on the host's thread, and the process can still exit while a read is running. It keeps the process alive only while a read is waiting for its answer. It imports nothing but Node's own modules; it never imports index.js, which would start Desk inside the worker.
+// One worker serves every read of the process. It starts each Git process itself and waits for it asynchronously, so reads overlap as they did on the host's thread, and the process can still exit while a read is running. It keeps the process alive only while a read is waiting for its answer. Its shared Git context uses only Node built-ins; it never imports index.js, which would start Desk inside the worker.
 
 import { execFile } from "node:child_process"
 import { parentPort, Worker, workerData } from "node:worker_threads"
+import { deskGitInvocation } from "./desk-git-context.js"
 
 const FAILED = { status: 1, stdout: "" }
 
@@ -16,7 +17,8 @@ export function runGitRead({ root, args, env, timeoutMs }, { execGit = execFile,
     try {
       // Not execFile's own `signal` option: with it Node calls back as soon as it has sent the kill, while the process may still be working in the folder. A killed child calls back when it has closed.
       const kill = () => child?.kill()
-      const child = execGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: timeoutMs, env, windowsHide: true }, (error, stdout) => {
+      const invocation = deskGitInvocation({ root, args, env })
+      const child = execGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: timeoutMs, env, windowsHide: true }, (error, stdout) => {
         signal?.removeEventListener("abort", kill)
         resolve(error || typeof stdout !== "string" ? FAILED : { status: 0, stdout })
       })

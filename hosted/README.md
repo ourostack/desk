@@ -46,11 +46,156 @@ The gateway derives `DESK_MCP_ICON_URL` for each Desk child from `DESK_PUBLIC_UR
 | `DESK_LEGACY_CUTOFF` | ISO time after which legacy tokens, and every token refreshed from them, are refused. Set once, 14 days after the release is confirmed live; unset, legacy tokens keep working. Tokens from an Ouro or GitHub-fallback sign-in can't be refreshed more than 30 days after that sign-in, whatever the cutoff. |
 | `DESK_REDIRECTS` | Comma-separated exact redirect URLs a client may register or name, each an `https` (or loopback `http`) URL written as a URL parser writes it (lower-case host, no default port), with no fragment or user info; the gateway refuses to start otherwise. Unset, the default is `https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect` (Claude's callbacks and VS Code's, which VS Code registers alongside its loopback ones). Setting it replaces the whole default, so copy every entry you still want; without claude.ai's callback, Ari's claude.ai connector stops working at its next request. The gateway logs the allowlist in force at start and warns when claude.ai's callback is missing. Set it with `DESK_REDIRECTS=<url>,<url> hosted/infra/provision.sh`; a rerun without it keeps the app's current value, and passing it empty returns to the default. Loopback (`http://localhost` and `http://127.0.0.1` on any port) and ChatGPT's per-connector callback (`https://chatgpt.com/connector/oauth/<one segment of letters, digits, - and _>`) are always allowed. Every client's redirects are checked again on each use, so removing one shuts out clients that registered it before. |
 | `DESK_CLONE_DIR` | Where the desk is cloned. The image sets `/data/desk`. |
+| `DESK_MULTI_USER` | Experimental owning-UID runtime gate. Unset or `0` preserves the legacy shared clone; only `1` enables account-keyed realms. Other values fail startup. Leave off until complete v1b-2 staging/P3 qualification. Set it with `provision.sh` ([Turn on per-account desks](#turn-on-per-account-desks)), not by hand. Requires Ouro identity and the Linux image entrypoint's kernel boundary; never falls back to legacy execution. |
 | `DESK_PLUGIN_DIR` | Desk's plugin directory. The image sets `/app/plugins/desk`. |
 | `DESK_REAL_GH` | Optional path to the real `gh`. By default the shim uses the next `gh` on `PATH`; the image installs it at `/usr/bin/gh`. |
 | `PORT` | Listening port. Default `8080`. |
 
 Until the GitHub App exists, its four settings hold the placeholder `unset`. The gateway then serves `/healthz` and refuses sign-in with "Hosted Desk is not set up yet: its GitHub App is missing."
+
+### Gated account runtime
+
+`createAccountRuntime({ config, store, mint, baseEnv?, rootDir? })` returns
+`{ prepare(accountId), close() }`. `rootDir` defaults to `/data/realms`; its
+existing ancestors must be protected directories. `mint(repo)` receives only
+the repository verified from the account's committed binding, never HTTP client
+input. Existing admission remains unchanged: the binding must name `DESK_REPO`.
+Repository selection, account administration, capacity policy and initialization
+are separate later units.
+
+`await prepare(accountId)` returns a frozen
+`{ realm: { uid, gid, root }, env, launch(args), git(args), push(), close(), purge() }`.
+Preparation deduplicates concurrent callers, rechecks account access and freezes
+repository/installation/author authority for that manager. UID reservations
+survive preparation failures and manager replacement within the process.
+`launch` returns a relay-compatible service handle whose `kill("SIGTERM"|"SIGKILL")`
+uses an inherited owning-UID supervisor channel, not a gateway PID signal.
+`git` rejects private cwd/repository overrides. `close` stops owned children,
+runs Desk's own sync lock/rebase/push loop, and only then closes its private token
+broker. Push/count failures reject shutdown and retain the broker rather than
+reporting a successful loss of writes. `purge` first closes successfully, then
+deletes that UID's contents; its 0700 root/UID tombstone remains reserved.
+
+Only realm children receive `DESK_ISOLATED_HOSTED=1`; ordinary local sessions
+and legacy `DESK_HOSTED=1` retain their existing subprocess contracts. The
+built-in Git callers use `deskGitInvocation({root,args,env})`: private mode
+validates the root's real containment within `env.DESK`, including symlinks,
+then uses cwd instead of `git -C <root>`. Git's `diff-tree --root` flag is
+unchanged. Private triage candidate worktrees live below `.git/desk-triage`,
+with desk-relative Git operands; protected operation records stay in the
+realm's factory state.
+
+Private triage also keeps Git's hook descendants private. Realm environments
+provide `DESK_PRIVATE_HOOKS_DIR`, a fixed public, read-only dispatcher directory.
+Git invokes those public entrypoints; they execute the original configured
+hooks through relative filenames, forwarding stdin, arguments and exit status.
+Original configured hook policy is still fingerprinted before/after commit;
+the ephemeral public routing override remains effective inside original hooks
+so ordinary nested Git mutations also execute the original hooks privately.
+No persisted configuration is changed. The outer commit keeps its message-file
+arguments relative. During that commit, the owned candidate's `.git` gitfile is
+held outside its worktree and replaced by a directory link to the same validated
+private administrative directory. Git discovery through this link retains a
+relative `.git/COMMIT_EDITMSG` operand even for a guarded nested commit.
+The exact gitfile is restored after the bounded commit, also before recovery
+removes an interrupted candidate; foreign replacement metadata is retained,
+not overwritten. Original hooks use normal Git discovery within the same
+linked worktree, without a forced `GIT_DIR` or `GIT_WORK_TREE`; subdirectory Git
+calls therefore work too. The private context marker and normalized index
+context stay in environment, never argv.
+No executable hook or triage operation is disabled by this transport.
+
+Sync workers/session sync and shared remote/ahead-behind readers use their
+supplied environment for both context selection and actual Git children,
+including when it differs from the ambient process environment.
+
+Detached sync and identity-refresh scripts read their root from `DESK`.
+Their admitted source-mirror filename also travels in environment
+(`DESK_BUILTIN_SCRIPT`), through a fixed Node module loader, never argv.
+Readiness-controller and status-inspection forks use the same private loader,
+retaining their IPC channel and serialization. The controller's guarded entry
+recognizes only its matching admitted script URL in private mode; an ordinary
+module import does not start a controller.
+Explicit script `--root` remains supported for local callers. Automatic
+host-package upgrades and product issue filing are unavailable in the private
+customer context and return an explicit unavailable/not-filed reason before
+spawning or claiming host-side work.
+
+MCP services also run below an owning-UID `tini -s` and a retained worker-session
+leader. The service handle's stdout/stderr bytes and protocol close are relayed
+in order over inherited IPC; protocol EOF is not a synthetic guardian exit.
+Natural MCP exit and individual session signals leave the guardian tracked
+while descendants remain. In particular, closing one session does not signal
+the group containing readiness/sync activity another session may still use.
+Realm close retires all of its service groups, then positively confirms each
+guardian's quiescence before final push or broker close. Detached writers may
+finish within the five-second retirement watchdog; an escaped writer that
+cannot retire in time fails closed instead of being blindly PID-signalled.
+The service-close boundary retains its existing ten-second deadline. Failed,
+missing or malformed retirement proof is sticky preservation, even if the MCP
+protocol already ended or descendants eventually finish later.
+
+Service output uses end-to-end credit: at most one 16 KiB frame per stdout/
+stderr stream is outstanding across the two IPC hops. The worker reads again
+only after the gateway's bounded stream accepts/drains that frame. The helper
+validates frame size/order and credit; it never pauses the shared IPC channel,
+so termination and retirement control remain deliverable under output pressure.
+Normal protocol close waits for both output streams to drain and finish.
+Malformed/excess output, pipe failure or unproved guardian disconnect instead
+ends the protocol with an explicit preservation error, without fabricating a
+guardian exit. The runtime retains the real guardian and sticky recovery state;
+relay shutdown can reach that rejection rather than wait indefinitely. Forced
+session cancellation can also terminate pressured protocol output with this
+explicit preservation outcome. Kernel retirement is still proved separately.
+
+The realm retains each service's outstanding protocol outcome even after its
+guardian has positively retired. Both outcomes must settle within the existing
+service-close budget before final push can begin; credited but unread output
+cannot leave a live failure window inside finalization. Successful protocol
+termination is not substituted for kernel proof: before broker close or cached
+success, every service handle has reached its observed terminal outcome, so
+later teardown cannot introduce a new protocol preservation failure. Sticky
+failure is checked across each async
+finalization boundary and before returning cached close or authorizing purge;
+a fulfilled close promise alone is never purge authority after a failure.
+
+Gateway filesystem/Git jobs use a dedicated owning-UID `tini -s` subreaper and
+a fresh worker session. A worker's result or exit is not retirement proof:
+completion requires the worker and all its descendants, including reparented
+detached children, to be gone. The existing 60-second operation deadline is
+unchanged; cancellation signals the fresh process group only while its exact
+ChildProcess leader is still owned and unreaped. No CAP_KILL or blind PID
+cleanup is used. A separate five-second retirement watchdog does not extend
+the work deadline.
+
+If retirement cannot be proved, `DESK_OPERATION_UNQUIESCENT` puts the account
+in sticky failed-preservation state. Its broker/private root remain intact;
+new preparation and destructive cleanup are refused, and manager shutdown
+rejects even when that account's preparation never returned a prepared object.
+A proved-retired timeout reports `DESK_OPERATION_TIMEOUT` with `quiescent:true`
+and permits safe cleanup/retry or a subsequent final push. Neither rejection
+is silently discarded as an ordinary completed operation.
+The final ahead-count is checked again after the push job's descendants retire,
+within the existing push budget. A hook-produced write omitted from the earlier
+count rejects close and retains the broker rather than producing a success
+based on stale Git state.
+
+The root entrypoint drops into UID 1000 **before tini**. Enabled gateway/tini
+have exactly chown/setgid/setuid and NoNewPrivs; each desk helper/child has no
+active capabilities and NoNewPrivs. Disabled gateway/tini and children retain
+none of those capabilities. Realm roots are opaque 0700 directories under a
+711 common parent; writable HOME/TMP/XDG/config/clone all belong to their UID.
+App key files (and any Azure federated-token file) must be regular, gateway-UID
+owned, inaccessible to group/other, with protected non-symlink ancestors.
+Unsafe mounts fail startup; the runtime does not chmod mounted secrets wider.
+
+Gateway Git uses the private `desk::origin` transport. Its real HTTPS helper
+receives only a fixed public alias, with the verified repository in private Git
+configuration, not argv. `GH_REPO` preserves gh's binding-derived repository
+default. The token socket remains 0600 in its UID's private realm and is ready
+before any clone operation. This milestone does **not** claim that Desk's
+internal detached workers, problem filer, or all internal Git/root arguments
+have completed v1b-2 qualification.
 
 ## Run the tests
 
@@ -78,6 +223,59 @@ DESK_AZURITE=1 npm test
 Set `DESK_AZURITE_ENDPOINT` if Azurite listens somewhere other than `http://127.0.0.1:10002/devstoreaccount1`.
 
 The workflow `.github/workflows/hosted-tests.yml` runs every test, the end-to-end and Azurite tests included, on each pull request and push to main that touches `hosted/`, `plugins/desk/mcp/`, or the `hosted-tests.yml`, `hosted-deploy.yml` or `identity-checks.yml` workflows.
+
+The owning-UID fixture is a **native Linux** gate, not a cloud or credential
+test. First build the actual `hosted/Dockerfile` production image as
+`desk-hosted-native:production`, including its real compiled native dependencies.
+Then build `hosted/test/fixtures/runtime-native.Dockerfile` using a separate
+small context containing it as `Dockerfile` and `runtime-native.js`,
+`runtime-child.js`, `runtime-timeout-native.js`, `runtime-service-native.js`.
+The overlay is COPY-only and inherits the production entrypoint; it does not
+install or replace any dependency. A separate context is necessary because
+the production root `.dockerignore` excludes `hosted/test`.
+Create an exact-owned container with `--network none`, `--cap-drop ALL` and
+only `CHOWN`, `SETUID`, `SETGID` added, with `DESK_MULTI_USER=1`, command
+`node /app/hosted/test/fixtures/runtime-native.js`. It uses a synthetic loopback
+Git HTTP origin and verifies kernel/UID/cwd/socket/argv/signal boundaries,
+concurrent preparation/retry, immutable authority and shutdown preservation.
+No host credentials or credential directories should be mounted.
+Adding `DESK_NATIVE_TIMEOUTS=1` and copying `runtime-timeout-native.js` into the
+same fixture directory runs the bounded real-deadline regression: an actual
+65-second Git pre-commit hook, normal delayed HTTP fetch, and detached delayed
+Git fetch. It checks close **after** timeout rejection, cleanup only after
+quiescence, and retained failed-preparation state when descendants remain.
+These cases exercise the actual 60-second deadline, not a shorter test-only
+timeout; they run concurrently within a 100-second fixture bound.
+
+In this production fixture overlay, `DESK_NATIVE_SERVICES=1` selects actual
+MCP SDK initialize/status/save/reindex/
+search, native SQLite inspection, automatic Git sync, natural protocol EOF,
+explicit termination, same-realm concurrent sessions and a neighboring realm.
+An actual MCP-triggered Git hook starts a detached writer with ignored stdio;
+successful realm close must preserve its commit on the loopback origin.
+Adding `DESK_SERVICE_UNPROVEN=1` instead checks the real five-second retirement
+failure, retained broker/root and sticky repeated refusal while the escaped
+writer finishes later. These service cases have a 180-second outer fixture
+guard; production operation/push/retirement budgets are unchanged. They use
+arbitrary kernel UIDs absent from passwd, not fixture NSS entries or native
+dependency substitutes. This is two-realm single-configured-repository
+qualification, not multirepository admission or cloud deployment qualification.
+
+The existing `.github/workflows/hosted-tests.yml` also maintains a separate
+native Linux/amd64 job on `ubuntu-latest`, alongside the unchanged gateway
+E2E/Azurite job. It builds the production image once, adds this small fixture
+overlay, then runs service success, sticky service preservation and the
+**unchanged** `DESK_NATIVE_TIMEOUTS=1` I1 fixture sequentially. Each container
+has two CPUs and 4 GiB of memory; this is a consuming boundary, not a
+twelve-session capacity qualification. Any case or evidence-collection failure
+makes the job fail; later cases still produce diagnostic evidence. An always-run
+artifact step retains the exact checkout/tree and hashes, image IDs/metadata,
+runner kernel/architecture, actual fixture kernel/native-source observations,
+separate stdout/stderr, exit status, container configuration/state and synthetic
+realm filesystem archives. The twenty-minute outer job allowance covers builds
+and all three cases; it does not change production deadlines, I1's 100-second
+fixture guard or its 75-second observation. A native I1 failure remains red,
+and a later native pass does not relabel an earlier emulated run as passing.
 
 ## Build the image
 
@@ -135,6 +333,12 @@ To turn Ouro sign-in off again, run `REMOVE_OURO_SETTINGS=1 hosted/infra/provisi
 
 Staging stays apart from production. It has its own gateway identity, `id-ouro-desk-hosted-staging`, which holds `AcrPull` on the registry and data roles only on `entra-client-secret-test` and the test accounts storage. It never holds production's pull identity `ouro-prod-services-mi`, and both scripts refuse a staging app that does. Production's GitHub App secrets reach staging only through `node hosted/infra/provision-identity.mjs --env test --copy-app-secrets`, for a rehearsal. Afterwards, `--env test --clear-app-secrets` writes `unset` over them.
 
+### Turn on per-account desks
+
+`provision.sh` owns `DESK_MULTI_USER`, so neither stage depends on a hand-run `az containerapp update` flag. Run `DESK_MULTI_USER=1 STAGE=staging hosted/infra/provision.sh` for test, or `DESK_MULTI_USER=1 hosted/infra/provision.sh` for production, with `DRY_RUN=1` first. A rerun keeps the app's value unless you pass `DESK_MULTI_USER=1` or `DESK_MULTI_USER=0`. `1` is refused before any write unless the identity record is complete, because the gateway won't start in multi-user mode without Ouro accounts, and a create gets it only through the update that adds the Ouro settings. `REMOVE_OURO_SETTINGS=1` takes it off as well, and passing both is refused. To go back to the single shared desk, run `DESK_MULTI_USER=0 hosted/infra/provision.sh`.
+
+Every update also sets the shutdown grace period to 120 s (`terminationGracePeriodSeconds`), so an app created when it was 90 s gets the new value on its next rerun. Its probes, scale and resources still change only on a create.
+
 ## Deploy
 
 Hosted Desk serves only released Desk. `.github/workflows/hosted-deploy.yml` runs after each successful "Desk release" run and by hand (`workflow_dispatch` on main). Either way it deploys the newest `Release Desk` commit on main, not main's head, so a gateway change ships with the next Desk release. As a check it refuses a commit whose `plugins/desk/changelog.d/` holds a fragment no release has carried (anything but `README.md`). It builds the image with `az acr build`, tagged with the commit SHA, points the app at it, waits for the new revision and fails unless `/healthz` answers 200 and then `/healthz/deep` answers 200 within 5 minutes (a 404, from an image that predates the route, is a notice). A failing deep check fails the workflow but rolls nothing back. Each deploy writes the image it replaced to its run's summary page, which is the target for a [rollback](#rollback).
@@ -149,10 +353,11 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 
 | Piece | Name | What it does |
 | --- | --- | --- |
-| Gateway app registration | `ouro-desk-hosted`, in each tenant | The app the gateway signs people in as. Its 12-month client secret lives in Key Vault. |
+| Gateway app registration | `ouro-desk-hosted`, in each tenant | The app the gateway signs people in as. Its 12-month client secret lives in Key Vault. It also exposes the delegated scope `desk.admin` at `api://<appId>` and defines the user app role `ouro.admin`, which the admin routes require ([Admin API](#admin-api)). |
+| CLI client | `ouro-cli`, in each tenant | The public client `ouro desk` signs in with, on the loopback redirect `http://127.0.0.1/callback` (any port). The gateway app preauthorizes it for `desk.admin`, so sign-in shows no consent page, and the user flow includes it. |
 | User flow | `Ouro sign-in` (prod), `Ouro sign-in (test)` (test) | Offers the email code and Apple to the gateway app. |
 | Apple provider | Sign in with Apple | Signs people in with Apple, using one of the tenant's two Apple keys. Graph gives it a GUID id in an external tenant (`apple.providerId` in the record), not B2C's `Apple-Managed-OIDC`, so the scripts find it by its type. |
-| Admin app | `ouro-identity-admin`, in each tenant | The scripts call Graph as this app, on your machine, for what `az` can't reach: the Apple provider, the user flow and the email one-time-code policy. `provision-identity.mjs` grants it four Graph application roles, one for each kind of call it makes: `IdentityProvider.ReadWrite.All` (the Apple provider), `EventListener.ReadWrite.All` (the user flow), `Policy.ReadWrite.AuthenticationMethod` (the email code) and `Application.ReadWrite.All` (the user flow's app link and the gateway secret's expiry). The apps the 2026-10-11 spike made in both tenants also hold `IdentityUserFlow.ReadWrite.All`, `Policy.ReadWrite.AuthenticationFlows`, `User.Read.All` and `AuditLog.Read.All`; the script never removes a role, so those stay until someone removes them by hand. Its secret is only in your macOS keychain. |
+| Admin app | `ouro-identity-admin`, in each tenant | The scripts call Graph as this app, on your machine, for what `az` can't reach: the Apple provider, the user flow and the email one-time-code policy. `provision-identity.mjs` grants it four Graph application roles, one for each kind of call it makes: `IdentityProvider.ReadWrite.All` (the Apple provider), `EventListener.ReadWrite.All` (the user flow), `Policy.ReadWrite.AuthenticationMethod` (the email code) and `Application.ReadWrite.All` (the user flow's app link, the gateway secret's expiry and the [admin API](#admin-api)). The apps the 2026-10-11 spike made in both tenants also hold `IdentityUserFlow.ReadWrite.All`, `Policy.ReadWrite.AuthenticationFlows`, `User.Read.All` and `AuditLog.Read.All`; the script never removes a role, so those stay until someone removes them by hand. Its secret is only in your macOS keychain. |
 | Automation app | `ouro-identity-automation`, in each tenant | The identity checks sign in to the tenant as this app, through a federated credential with no secret. It holds Graph's `IdentityProvider.ReadWrite.All` and `Application.Read.All`. |
 | Key Vault | `kv-ouro-identity-261e0b`, in resource group `rg-ouro-identity` | Holds the gateway's Entra client secret and the Apple keys, with access granted per secret. It was made with the tenants; the scripts never create it. |
 | Accounts store | Storage accounts `stouroaccounts261e0b` (prod) and `stouroacctstest261e0b` (test) | Tables `accounts`, `identities`, `invites` and `bindings`. Shared keys are off, so it is reached only through Entra roles. |
@@ -172,7 +377,18 @@ People sign in to hosted Desk through an Ouro tenant, a Microsoft Entra External
 | `--migrate client-key` | Copies the signing key into the client key, checked by fingerprint. |
 | `--rotate signing-key` | Test only in v1b-1. Rotates the signing key with a 30-day overlap ([Rotate the signing key](#rotate-the-signing-key)). |
 | `--rotate signing-key --emergency` | For a leaked signing key, in production too: new signing and client keys, no previous key ([If the signing key leaks](#if-the-signing-key-leaks)). |
+| `--admin-api` | Reconciles only the [admin API](#admin-api), as the admin app from the keychain, so `az` needn't be signed in to the tenant. Run it after a full run. |
 | `--rotate entra-secret` | Rotates the gateway's Entra client secret, deleting the old credential only once the gateway shows the new one ([Rotate the gateway's Entra client secret](#rotate-the-gateways-entra-client-secret)). |
+
+### Admin API
+
+`ouro desk invite`, `access` and `delete-account` call the gateway's admin routes with a delegated access token for the scope `api://<gateway appId>/desk.admin`, and the routes refuse every token without the app role `ouro.admin`. `hosted/infra/admin-api.mjs` keeps this in place through the admin app's Graph token:
+
+- the gateway app's `desk.admin` scope (a user scope, because the role is what grants admin), its `ouro.admin` role for users, its identifier URI `api://<appId>` and v2 access tokens;
+- the CLI client `ouro-cli`, its service principal, its preauthorization for the scope and its place in the user flow. An external tenant's users can't consent to anything, so the CLI asks for `desk.admin` alone, never `openid` or `offline_access`. It is not a fallback public client, so device-code and password sign-ins can't get an admin token. Once the record has `cliApp`, the client is read by its object id, so another app given its name is never adopted;
+- the role for exactly the users listed in the record's `adminApi.admins` (Entra user object ids): a missing assignment is made, and an assignment for anyone else is removed, but only once every listed admin holds the role, so a mistyped id never leaves the tenant without an admin.
+
+The scope and role ids are fixed in the script, the same in both tenants. A scope or role with the same name and another id stops the run before any write. After a run the record gains `cliApp` and the full `adminApi` (the scope URI and both ids), which the gateway and the CLI need. To make someone an admin, add their user object id to `adminApi.admins` in `identity-<env>.json` and run `node hosted/infra/provision-identity.mjs --env <env> --admin-api`.
 
 ### az sign-ins
 

@@ -54,11 +54,10 @@ function reasonOf(error) {
   }
 }
 
-// `now()` is the clock in milliseconds. `fetch` reads the JWKS.
-export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fetch = globalThis.fetch, now = Date.now, timeoutMs = JWKS_TIMEOUT_MS }) {
-  for (const [name, value] of Object.entries({ issuer, clientId, tenantId, jwksUri })) {
-    if (typeof value !== "string" || value === "") throw new Error(`createIdTokenVerifier needs ${name}`);
-  }
+// The tenant's signing keys as jose's key lookup: the cached JWKS, refreshed when a day old, and refetched at most
+// once per 5 minutes for an unknown `kid`. `now()` is the clock in milliseconds. `fetch` reads the JWKS.
+export function createTenantKeys({ jwksUri, fetch = globalThis.fetch, now = Date.now, timeoutMs = JWKS_TIMEOUT_MS }) {
+  if (typeof jwksUri !== "string" || jwksUri === "") throw new Error("createTenantKeys needs jwksUri");
   let keySet = null;
   let fetchedAt = -Infinity;
   let refetchedAt = -Infinity;
@@ -90,7 +89,7 @@ export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fet
     return keySet;
   }
 
-  async function keyFor(header, token) {
+  return async function keyFor(header, token) {
     try {
       return await (await currentKeys())(header, token);
     } catch (error) {
@@ -105,7 +104,15 @@ export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fet
       await refetching;
       return keySet(header, token);
     }
+  };
+}
+
+// `now()` is the clock in milliseconds. `fetch` reads the JWKS.
+export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fetch = globalThis.fetch, now = Date.now, timeoutMs = JWKS_TIMEOUT_MS }) {
+  for (const [name, value] of Object.entries({ issuer, clientId, tenantId, jwksUri })) {
+    if (typeof value !== "string" || value === "") throw new Error(`createIdTokenVerifier needs ${name}`);
   }
+  const keyFor = createTenantKeys({ jwksUri, fetch, now, timeoutMs });
 
   return {
     async verify(idToken, { nonce } = {}) {
@@ -132,6 +139,50 @@ export function createIdTokenVerifier({ issuer, clientId, tenantId, jwksUri, fet
       if (!sameText(payload.nonce, nonce)) throw new IdTokenError("claim_nonce");
       if (typeof payload.oid !== "string" || payload.oid === "") throw new IdTokenError("claim_oid");
       return { tid: payload.tid, oid: payload.oid, name: typeof payload.name === "string" ? payload.name : null };
+    },
+  };
+}
+
+// Validates an access token the tenant issued to another client (the `ouro` CLI) for the gateway's own app, as the
+// admin routes need: RS256 under the tenant's keys, the same `iss`, `aud` (the gateway's client id), `tid` and time
+// checks as an ID token, plus what makes it a person's access token and not an ID token or an app's own token: `azp`
+// (the client it was issued to) and `scp` (the delegated scopes, which an app-only token never has) are present and
+// `nonce` is absent. `roles` must be a list naming `role`. Entra puts app roles assigned to a person in `roles`. The
+// app must expose a delegated scope for the CLI to ask for, and its manifest must set accessTokenAcceptedVersion 2
+// so `iss` is the v2 issuer.
+//
+// Returns `{ tid, oid, azp }`; a refusal is an IdTokenError naming the failed check, without the token's claims.
+export function createAccessTokenVerifier({ issuer, clientId, tenantId, jwksUri, role, fetch = globalThis.fetch, now = Date.now, timeoutMs = JWKS_TIMEOUT_MS }) {
+  for (const [name, value] of Object.entries({ issuer, clientId, tenantId, jwksUri, role })) {
+    if (typeof value !== "string" || value === "") throw new Error(`createAccessTokenVerifier needs ${name}`);
+  }
+  const keyFor = createTenantKeys({ jwksUri, fetch, now, timeoutMs });
+  return {
+    async verify(token) {
+      if (typeof token !== "string") throw new IdTokenError("malformed");
+      let payload;
+      try {
+        ({ payload } = await jwtVerify(token, keyFor, {
+          algorithms: ["RS256"],
+          issuer,
+          audience: clientId,
+          clockTolerance: SKEW_SEC,
+          currentDate: new Date(now()),
+          requiredClaims: ["exp", "iat"],
+        }));
+      } catch (error) {
+        throw new IdTokenError(reasonOf(error));
+      }
+      if (payload.iss !== issuer) throw new IdTokenError("claim_iss");
+      if (payload.aud !== clientId) throw new IdTokenError("claim_aud");
+      if (payload.tid !== tenantId) throw new IdTokenError("claim_tid");
+      if (!(typeof payload.iat === "number" && payload.iat <= now() / 1000 + SKEW_SEC)) throw new IdTokenError("claim_iat");
+      if (payload.nonce !== undefined) throw new IdTokenError("not_access_token");
+      if (typeof payload.azp !== "string" || payload.azp === "") throw new IdTokenError("claim_azp");
+      if (typeof payload.scp !== "string" || payload.scp.trim() === "") throw new IdTokenError("claim_scp");
+      if (typeof payload.oid !== "string" || payload.oid === "") throw new IdTokenError("claim_oid");
+      if (!Array.isArray(payload.roles) || !payload.roles.includes(role)) throw new IdTokenError("role");
+      return { tid: payload.tid, oid: payload.oid, azp: payload.azp };
     },
   };
 }

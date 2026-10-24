@@ -1,0 +1,1 @@
+Hosted Desk's tests now prove two realm guarantees directly: Desk's readiness reaches `ready` for a realm UID that has no passwd entry, and closing a realm retires every Desk service before its final push, with the push finishing before the token broker closes. A realm preparation that fails and is purged releases its repository, and repository names compare without case.

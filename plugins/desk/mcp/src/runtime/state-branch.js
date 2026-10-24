@@ -14,6 +14,7 @@
 // Git runs asynchronously, never blocking the thread that answers the host.
 
 import { execFile } from "node:child_process"
+import { deskGitInvocation } from "./desk-git-context.js"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
 
@@ -33,8 +34,15 @@ export function isStateBranchName(value) {
 export function runGit({ cwd, args, execFileImpl = execFile, env = process.env }) {
   const childEnv = { ...env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }
   for (const name of GIT_LOCATION_VARIABLES) delete childEnv[name]
+  let invocation
+  try {
+    invocation = deskGitInvocation({ root: cwd, args, env: childEnv })
+  } catch (error) {
+    return Promise.resolve({ ok: false, stdout: "", stderr: error.message })
+  }
   return new Promise((resolve) => {
-    execFileImpl("git", ["-C", cwd, ...args], {
+    execFileImpl("git", invocation.args, {
+      ...invocation.options,
       encoding: "utf8",
       env: childEnv,
       timeout: 15000,

@@ -10,7 +10,9 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { githubCallbackHandler } from "./auth/github.js";
 import { entraCallbackHandler, inviteHandlers } from "./auth/entra.js";
 import { consentHandler } from "./auth/provider.js";
-import { page, sendPage } from "./auth/pages.js";
+import { accountPage, page, pageRefusedPage, sendPage, signedOutPage, signInUnavailablePage } from "./auth/pages.js";
+import { parseCookies } from "./auth/signin-cookie.js";
+import { safeNext } from "./auth/browser-session.js";
 
 // How long one deep check's result is served before the next is run.
 export const DEEP_HEALTH_TTL_MS = 10_000;
@@ -76,7 +78,12 @@ export function createDeepHealth({ discovery, store, accountIds = [], ttlMs = DE
 //
 // `deepHealth` is createDeepHealth's, with the Ouro tenant and accounts configured; without them /healthz/deep
 // answers ok, as there is nothing deeper to check.
-export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites, deepHealth, log = provider.log }) {
+//
+// `sessions` (createBrowserSession's), with `entra`, adds the gateway's own pages: GET /signin?next=<path>, which
+// signs the browser in through the Ouro tenant and returns to that path, GET /account and POST /signout. `admin`
+// (admin.js createAdmin's router) is mounted at /admin. `githubLink` (github-link.js createGitHubLink's), which needs
+// `sessions`, adds GET and POST /link/github and takes the linking answers that come back to /oauth/github/callback.
+export function createApp({ provider, relay, githubCallback, issuer, resource, unavailable, entra, invites, deepHealth, sessions, admin, adminDiscovery, githubLink, log = provider.log }) {
   const app = express();
   // Container Apps terminates TLS one hop in front of the app; the SDK's
   // rate limiters read the client address from X-Forwarded-For.
@@ -124,13 +131,20 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   app.use("/.well-known/oauth-authorization-server", metadataHandler(authorizationServerMetadata));
   app.use(mcpAuthRouter(routerOptions));
   app.post("/oauth/consent", express.urlencoded({ extended: false, limit: "16kb" }), consentHandler(provider, { issuer }));
-  app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback }));
+  if (githubLink && !sessions) throw new Error("linking GitHub needs the browser session");
+  app.get("/oauth/github/callback", githubCallbackHandler({ githubCallback, link: githubLink }));
   if (entra) app.get("/oauth/entra/callback", entraCallbackHandler(entra, { log }));
   if (invites) {
-    const handlers = inviteHandlers(invites);
+    const handlers = inviteHandlers(invites, { linkGitHub: Boolean(githubLink) });
     app.get("/invite/:token", handlers.landing);
     app.get("/invite", handlers.page);
   }
+  if (sessions && !entra?.pageSignIn) throw new Error("the browser session's pages need the Ouro tenant's sign-in built with the same sessions");
+  if (sessions) mountSessionPages(app, { entra, sessions, linkGitHub: Boolean(githubLink), log });
+  if (admin) app.use("/admin", admin);
+  // What the ouro CLI needs to sign in for the admin routes: public settings, no secret.
+  if (admin && adminDiscovery) app.get("/.well-known/ouro-desk-admin", (_req, res) => res.set("cache-control", "no-store").json(adminDiscovery));
+  if (githubLink) app.use(githubLink.router());
 
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resource));
   app.all(
@@ -146,4 +160,49 @@ export function createApp({ provider, relay, githubCallback, issuer, resource, u
   );
 
   return app;
+}
+
+// The browser session's routes. Every page here is behind the session; one without it goes to sign in and back.
+function mountSessionPages(app, { entra, sessions, linkGitHub, log }) {
+  const toSignIn = (res, next) => res.redirect(303, `/signin?next=${encodeURIComponent(next)}`);
+
+  app.get("/signin", (req, res) => {
+    res.setHeader("cache-control", "no-store");
+    const outcome = entra.beginPage(safeNext(typeof req.query.next === "string" ? req.query.next : undefined), parseCookies(req.headers.cookie));
+    if (!outcome.redirectTo) return sendPage(res, outcome);
+    for (const header of outcome.setCookies ?? []) res.append("set-cookie", header);
+    res.redirect(302, outcome.redirectTo);
+  });
+
+  app.get("/account", async (req, res) => {
+    res.setHeader("cache-control", "no-store");
+    let accountId;
+    try {
+      accountId = await sessions.require(req);
+      if (!accountId) return toSignIn(res, "/account");
+      const account = await sessions.account(accountId);
+      sendPage(res, accountPage({ displayName: account?.displayName, csrf: sessions.csrfToken(req), linkGitHub }));
+    } catch (error) {
+      log(`page failed: store_unavailable (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
+      sendPage(res, signInUnavailablePage());
+    }
+  });
+
+  app.post("/signout", express.urlencoded({ extended: false, limit: "4kb" }), async (req, res) => {
+    // With no session left (it expired, say) there is nothing to protect: the browser is signed out either way.
+    if (sessions.csrfToken(req) === null) return sendPage(res, { ...signedOutPage(), headers: { "set-cookie": sessions.clear() } });
+    if (!sessions.checkCsrf(req)) {
+      log("sign-out refused: csrf");
+      return sendPage(res, pageRefusedPage());
+    }
+    // Ends every copy of the session, not only this browser's cookie. If the store can't record that, this browser
+    // is still signed out, and the page says the other sessions may not be.
+    try {
+      await sessions.revoke(req);
+    } catch (error) {
+      log(`sign-out: revoke failed (${typeof error?.name === "string" && /^\w{1,64}$/.test(error.name) ? error.name : "error"})`);
+      return sendPage(res, { ...signedOutPage({ everywhere: false }), headers: { "set-cookie": sessions.clear() } });
+    }
+    sendPage(res, { ...signedOutPage(), headers: { "set-cookie": sessions.clear() } });
+  });
 }

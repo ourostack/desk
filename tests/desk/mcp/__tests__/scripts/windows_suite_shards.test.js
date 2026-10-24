@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const scripts = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", ".github", "scripts")
-const { assignShards, shardFiles, loadDurations, defaultTablePath } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
+const { assignShards, shardFiles, loadDurations, defaultTablePath, underweighted } = await import(pathToFileURL(path.join(scripts, "suite-shards.mjs")).href)
 const { checkTable, refreshTable } = await import(pathToFileURL(path.join(scripts, "suite-durations.mjs")).href)
 const { suiteFiles } = await import(pathToFileURL(path.join(scripts, "suite-files.mjs")).href)
 const require = createRequire(import.meta.url)
@@ -69,7 +69,9 @@ test("the checked-in table plans eight shards inside the budget: none over 30 mi
   const mean = plan.reduce((n, s) => n + s.seconds, 0) / plan.length
   const worst = Math.max(...plan.map((s) => s.seconds))
   assert.ok(worst <= 30 * 60, `the longest shard is predicted at ${Math.round(worst / 60)} min`)
-  assert.ok(worst <= mean * 1.1, `the longest shard (${Math.round(worst)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
+  // One file cannot be split, so a shard holding a single file may sit above the mean; a shard of several files may not.
+  for (const shard of plan.filter((s) => s.files.length > 1))
+    assert.ok(shard.seconds <= mean * 1.1, `a shard of ${shard.files.length} files (${Math.round(shard.seconds)} s) is more than 10% above the mean (${Math.round(mean)} s)`)
   // The per-file limit is 30 minutes; a file near it cannot be balanced away and needs its own fix.
   assert.ok(Math.max(...Object.values(real.files)) < 25 * 60, "a single file is near the 30 minute limit")
 })
@@ -159,4 +161,12 @@ test("the shard runner runs only its own files and reports its predicted load", 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("a file that ran for minutes far past its table weight is named, so a stale table shows up in the run", () => {
+  const table = { defaultSeconds: 16, files: { "known.test.js": 600 } }
+  assert.equal(underweighted("new.test.js", 1143, table), true, "an unlisted file that ran 19 minutes")
+  assert.equal(underweighted("new.test.js", 200, table), false, "a short file is never worth a warning")
+  assert.equal(underweighted("known.test.js", 1143, table), false, "under three times its weight")
+  assert.equal(underweighted("known.test.js", 1900, table), true, "over three times its weight")
 })

@@ -12,6 +12,9 @@ import { fingerprint } from "./auth/seal.js";
 import { createRedirectPolicy } from "./auth/redirects.js";
 import { createDiscovery, createEntraSignIn, createInvites, DISCOVERY_TIMEOUT_MS } from "./auth/entra.js";
 import { createTableStore } from "./accounts/store.js";
+import { createBrowserSession } from "./auth/browser-session.js";
+import { createAdmin, createAdminTokenVerifier } from "./admin.js";
+import { createGitHubLink } from "./auth/github-link.js";
 import { createAccountCache } from "./accounts/cache.js";
 import { ensureClone, runGit } from "./clone.js";
 import { installationToken } from "./github-app.js";
@@ -19,6 +22,8 @@ import { createRelay } from "./relay.js";
 import { createApp, createDeepHealth } from "./server.js";
 import { serveTokens } from "./token-socket.js";
 import { ISO_TIME, isSet, keySetting, readIdentity } from "./identity-config.js";
+import { isolatedDeskEnv } from "./isolation.js";
+import { assertAccountRuntimeBoundary, createAccountRuntime } from "./account-runtime.js";
 
 export const NOT_SET_UP = "Hosted Desk is not set up yet: its GitHub App is missing.";
 const APP_SETTINGS = ["DESK_APP_ID", "DESK_APP_KEY_FILE", "DESK_APP_CLIENT_ID", "DESK_APP_CLIENT_SECRET"];
@@ -86,6 +91,7 @@ export function identityStartupLines({ identity }) {
 }
 
 export function readConfig(env) {
+  if (env.DESK_MULTI_USER !== undefined && !["0", "1"].includes(env.DESK_MULTI_USER)) throw new Error("DESK_MULTI_USER must be 0 or 1.");
   const { signingKeys, clientKey, clientKeyFrom } = readKeys(env);
   const publicUrl = (env.DESK_PUBLIC_URL || "https://desk.ouro.bot").replace(/\/+$/, "");
   const appReady = APP_SETTINGS.every((name) => isSet(env[name]));
@@ -113,7 +119,9 @@ export function readConfig(env) {
     cloneDir: env.DESK_CLONE_DIR,
     pluginDir: env.DESK_PLUGIN_DIR,
     identity: readIdentity(env, publicUrl),
+    multiUser: env.DESK_MULTI_USER === "1",
   };
+  if (config.multiUser && !config.identity) throw new Error("DESK_MULTI_USER requires Ouro account identity.");
   if (appReady) {
     for (const name of ["DESK_CLONE_DIR", "DESK_PLUGIN_DIR"]) if (!isSet(env[name])) throw new Error(`${name} must be set.`);
   }
@@ -222,9 +230,16 @@ export function startAccountSweep({ relay, accounts, intervalMs = 60_000, retryM
   return { sweepOnce, stop: () => clearInterval(timer) };
 }
 
+// The one desk repository a signed-in account's binding must name: DESK_REPO on a single-desk gateway, none (null)
+// on a multi-user one, where each account is served from the repository its own binding names.
+export const deskRepoOf = (config) => (config.multiUser ? null : config.repo);
+
 // The Ouro tenant's parts, built from config.identity: the accounts store and its cache, discovery (fetched, within
 // its bound, before the gateway listens), the tenant's sign-in, invites and the deep health check. `deps.store` and
 // `deps.fetch` stand in for the Table store and the network in tests.
+// Whether the gateway mounts GitHub linking (/link/github): a multi-user gateway whose GitHub App is set up.
+const linksGitHub = (config) => Boolean(config.multiUser && config.appReady);
+
 export async function startIdentity(config, deps = {}) {
   const { identity } = config;
   const fetch = deps.fetch ?? globalThis.fetch;
@@ -232,6 +247,9 @@ export async function startIdentity(config, deps = {}) {
   const accounts = createAccountCache({ store });
   const discovery = createDiscovery({ subdomain: identity.subdomain, tenantId: identity.tenantId, fetch });
   await startDiscovery(discovery, deps.discoveryBoundMs ? { boundMs: deps.discoveryBoundMs } : {});
+  // A multi-user gateway's own pages (sign-in, account, sign-out) share one browser session with the tenant's page
+  // sign-in, which starts it.
+  const sessions = config.multiUser ? createBrowserSession({ keys: config.signingKeys, store, issuer: config.issuer }) : null;
   const entra = createEntraSignIn({
     keys: config.signingKeys,
     discovery,
@@ -240,18 +258,53 @@ export async function startIdentity(config, deps = {}) {
     clientSecret: identity.clientSecret,
     callbackUrl: identity.callbackUrl,
     store,
-    repo: config.repo,
+    repo: deskRepoOf(config),
+    ...(sessions ? { sessions } : {}),
+    linkGitHub: linksGitHub(config),
     fetch,
   });
   const invites = createInvites({ keys: config.signingKeys, store, issuer: config.issuer });
   const accountIds = [...identity.legacy.byUserId.values()].map(({ accountId }) => accountId);
   const deepHealth = createDeepHealth({ discovery, store, accountIds });
-  return { store, accounts, discovery, entra, invites, deepHealth, accountIds };
+  return { store, accounts, discovery, entra, invites, deepHealth, accountIds, sessions };
 }
+
+// A multi-user gateway's admin routes (spec item 16), for tokens carrying the Entra app role `ouro.admin`. A change
+// to an account reaches its open sessions through the account cache at once. Deleting an account ends its sessions
+// (`relay`, absent until the GitHub App is set up) and purges its realm as its own UID (`runtime.purgeAccount`).
+export function createGatewayAdmin({ config, parts, relay, runtime, fetch = globalThis.fetch }) {
+  const { identity } = config;
+  return createAdmin({
+    store: parts.store,
+    verifier: createAdminTokenVerifier({ discovery: parts.discovery, tenantId: identity.tenantId, clientId: identity.clientId, fetch }),
+    issuer: config.issuer,
+    forget: (accountId) => parts.accounts.forget(accountId),
+    onAccountDeleted: async (accountId) => {
+      relay?.closeAccount(accountId);
+      await runtime.purgeAccount(accountId);
+    },
+  });
+}
+
+// A multi-user gateway's relay (spec item 20): 3 sessions per account and 12 in all on a 2 vCPU / 4 GiB replica. A
+// session quiet for 10 minutes was most likely left behind, so it may give way to a new one, the same account's
+// first; one in use never does, so a 4th app in use is refused rather than evicting another.
+export const MULTI_USER_LIMITS = Object.freeze({ maxSessions: 12, maxPerAccount: 3, minIdleOwnMs: 600_000, minIdleForeignMs: 600_000 });
+
+// Every desk's shutdown push must finish within this long of SIGTERM: Container Apps kills the replica after its
+// 120 s termination grace period (provision.sh), and the token brokers still need a few seconds after the pushes.
+export const SHUTDOWN_PUSH_DEADLINE_MS = 80_000;
+
+// The ouro CLI's admin sign-in settings, published on a multi-user gateway that has them.
+const adminDiscoveryOf = (config) => {
+  const { identity } = config;
+  if (!config.multiUser || !identity?.adminCli) return undefined;
+  return { tenantId: identity.tenantId, subdomain: identity.subdomain, clientId: identity.adminCli.clientId, scope: identity.adminCli.scope };
+};
 
 // The provider and the Express app. `parts` is startIdentity's, or absent on a gateway without the Ouro tenant, which
 // then serves exactly what it always has.
-export function buildGateway({ config, relay, parts, log: write }) {
+export function buildGateway({ config, relay, parts, admin, githubLink, log: write }) {
   const provider = createProvider({
     signingKeys: config.signingKeys,
     clientKey: config.clientKey,
@@ -261,7 +314,7 @@ export function buildGateway({ config, relay, parts, log: write }) {
     resource: config.resource,
     redirects: config.redirects,
     ...(write ? { log: write } : {}),
-    ...(parts ? { accounts: parts.accounts, store: parts.store, repo: config.repo, entra: parts.entra, legacy: config.identity.legacy } : {}),
+    ...(parts ? { accounts: parts.accounts, store: parts.store, repo: deskRepoOf(config), entra: parts.entra, legacy: config.identity.legacy, linkGitHub: linksGitHub(config) } : {}),
   });
   const app = createApp({
     provider,
@@ -273,11 +326,108 @@ export function buildGateway({ config, relay, parts, log: write }) {
     entra: parts?.entra,
     invites: parts?.invites,
     deepHealth: parts?.deepHealth,
+    ...(parts?.sessions ? { sessions: parts.sessions } : {}),
+    ...(admin ? { admin, adminDiscovery: adminDiscoveryOf(config) } : {}),
+    ...(githubLink ? { githubLink } : {}),
   });
   return { provider, app };
 }
 
-export const deskChildArgs = (config) => [join(config.pluginDir, "mcp", "index.js"), "--root", config.cloneDir];
+// Session start on a multi-user gateway: the account's GitHub binding is rechecked with GitHub first (a suspended
+// or unconfirmed link refuses the session with a message the person can act on), any reset that recheck or a
+// relink started is awaited, then the account's realm is prepared and its Desk child launched in it.
+export function createSessionStart({ config, runtime, githubLink, hooks }) {
+  if (!githubLink) throw new Error("a multi-user session start needs the GitHub link recheck");
+  return async ({ auth }) => {
+    const accountId = auth?.extra?.accountId;
+    const refusal = typeof accountId === "string" ? await githubLink.sessionRefusal(accountId) : null;
+    if (refusal) throw Object.assign(new Error(refusal), { code: "DESK_SESSION_REFUSED" });
+    await hooks?.settled(accountId);
+    const prepared = await runtime.prepare(accountId);
+    return prepared.launch(deskChildArgs(config, prepared.realm));
+  };
+}
+
+// desk-init in a realm: its root comes from the realm's DESK, so no path is on the command line.
+export const deskInitArgs = (config) => [join(config.pluginDir, "mcp", "scripts", "desk-init.js")];
+export const DESK_INIT_TIMEOUT_MS = 120_000;
+const DESK_INIT_STDOUT_LIMIT = 64 * 1024;
+
+// Runs desk-init in a prepared realm and returns its one JSON result. stderr is passed through, since a child's
+// handle closes only once both streams are drained; a desk-init that runs past `timeoutMs` is killed.
+async function runDeskInit(prepared, config, timeoutMs) {
+  const child = prepared.launch(deskInitArgs(config));
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    if (stdout.length < DESK_INIT_STDOUT_LIMIT) stdout += chunk;
+  });
+  child.stderr?.pipe(process.stderr, { end: false });
+  child.stdin?.end();
+  let timer;
+  const timedOut = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("desk-init did not finish in time"));
+    }, timeoutMs);
+  });
+  try {
+    await Promise.race([once(child, "close"), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+  const line = stdout.slice(0, DESK_INIT_STDOUT_LIMIT).split("\n").map((text) => text.trim()).filter(Boolean).pop();
+  if (!line) throw new Error("desk-init printed no result");
+  return JSON.parse(line);
+}
+
+// What GitHub linking needs from the gateway. Linking changes the account's binding, so its cached account row,
+// its open sessions and its prepared realm (cloned from the old repository, with the old authority pinned) are
+// dropped; the next session prepares a realm from the new binding. `initDesk` runs desk-init in that new realm as
+// the account's own UID and pushes the commit it makes; when it fails, its realm is discarded unpushed, so a link
+// that is rolled back leaves nothing in the repository. One reset runs at a time per account, and `settled`
+// waits for it. `relay()` returns the relay, built after these hooks.
+export function createLinkHooks({ config, parts, runtime, relay = () => null, timeoutMs = DESK_INIT_TIMEOUT_MS, log: write = log }) {
+  const resets = new Map();
+  const reset = (accountId) => {
+    parts.accounts.forget(accountId);
+    relay()?.closeAccount(accountId);
+    const done = runtime.release(accountId);
+    resets.set(accountId, done);
+    done.catch(() => {}).finally(() => {
+      if (resets.get(accountId) === done) resets.delete(accountId);
+    });
+    return done;
+  };
+  return {
+    async initDesk({ accountId }) {
+      await reset(accountId);
+      const prepared = await runtime.prepare(accountId);
+      try {
+        const result = await runDeskInit(prepared, config, timeoutMs);
+        if (result?.status === "created") await prepared.push();
+        // An existing desk keeps its realm (and any session using it); any other refusal is rolled back.
+        else if (result?.reason !== "already_a_desk") await runtime.release(accountId, { discard: true });
+        return result;
+      } catch (error) {
+        await runtime.release(accountId, { discard: true }).catch((discardError) =>
+          write(`desk init: account ${accountId}'s realm could not be discarded (${discardError?.code ?? discardError?.name ?? "error"})`));
+        throw error;
+      }
+    },
+    onLinked(accountId) {
+      reset(accountId).catch((error) => write(`relink: account ${accountId}'s previous realm could not be released (${error?.code ?? error?.name ?? "error"})`));
+    },
+    async settled(accountId) {
+      await resets.get(accountId)?.catch(() => {});
+    },
+  };
+}
+
+export const deskChildArgs = (config, realm) => [
+  join(config.pluginDir, "mcp", "index.js"),
+  ...(realm ? [] : ["--root", config.cloneDir]),
+];
 
 const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((name) => baseEnv[name] !== undefined).map((name) => [name, baseEnv[name]]));
 
@@ -288,7 +438,8 @@ const passedThrough = (baseEnv) => Object.fromEntries(PASSED_THROUGH.filter((nam
 //
 // `author` is the Git author: with Ouro accounts, the account's binding's
 // (createAuthorLookup); without, the GitHub user of the token (`user`).
-export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv }) {
+export function deskChildEnv({ config, user, author = authorOf(user), socketPath, baseEnv, realm }) {
+  if (realm) return isolatedDeskEnv({ realm, baseEnv, author, issuer: config.issuer });
   const { name, email } = author;
   return {
     ...passedThrough(baseEnv),
@@ -355,9 +506,24 @@ export async function pushDesk({ dir, args, env, git, timeoutMs = 60_000, retryM
 // sessions, every Desk child stopped, then Desk's own push of whatever the
 // clone still holds, and only then the token socket that push authenticates
 // through.
-export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket }) {
+//
+// The wait for Desk children is bounded: a multi-user session's stop is a
+// message to its realm's supervisor, which a wedged or stopped supervisor never
+// answers, and every realm's push must still run before Container Apps kills
+// the replica.
+export const RELAY_CLOSE_DEADLINE_MS = 12_000;
+
+export async function stopGateway({ server, relay, pushDesk: push, closeTokenSocket, relayCloseMs = RELAY_CLOSE_DEADLINE_MS }) {
   server.close();
-  await relay?.close();
+  if (relay) {
+    let timer;
+    const closed = await Promise.race([
+      relay.close().then(() => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), relayCloseMs); }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) log(`Desk sessions did not all close within ${relayCloseMs / 1000} s; pushing the desks anyway`);
+  }
   await push?.();
   await closeTokenSocket?.();
   server.closeAllConnections();
@@ -365,23 +531,53 @@ export async function stopGateway({ server, relay, pushDesk: push, closeTokenSoc
 
 export async function main(env = process.env, deps = {}) {
   const config = readConfig(env);
+  if (config.multiUser) assertAccountRuntimeBoundary(config, env);
   log(keysStartupLine(config));
   for (const line of identityStartupLines(config)) log(line);
   let relay = null;
+  let admin;
+  let githubLink = null;
   let push;
   let closeTokenSocket;
+  let shutdownStartedAt;
   // The Ouro tenant comes first, so a tenant naming another issuer stops the start before the clone.
   const parts = config.identity ? await startIdentity(config, deps) : null;
   if (parts) checkLegacyAccounts({ store: parts.store, accountIds: parts.accountIds });
   const authorFor = parts ? createAuthorLookup({ store: parts.store, repo: config.repo }) : null;
 
-  if (config.appReady) {
+  if (config.multiUser) {
+    // Prepare a realm only after an authenticated account opens a session.
+    const runtime = createAccountRuntime({
+      config, store: parts?.store, baseEnv: env,
+      mint: (repo, installationId) => installationToken({ appId: config.appId, privateKeyPem: readFileSync(config.appKeyFile, "utf8"), repo, installationId }),
+    });
+    if (config.appReady) {
+      const hooks = createLinkHooks({ config, parts, runtime, relay: () => relay });
+      githubLink = createGitHubLink({
+        keys: config.signingKeys,
+        store: parts.store,
+        sessions: parts.sessions,
+        issuer: config.issuer,
+        clientId: config.appClientId,
+        clientSecret: config.appClientSecret,
+        callbackUrl: config.githubCallbackUrl,
+        appId: config.appId,
+        privateKeyPem: readFileSync(config.appKeyFile, "utf8"),
+        initDesk: hooks.initDesk,
+        onLinked: hooks.onLinked,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      });
+      relay = createRelay({ spawnDesk: createSessionStart({ config, runtime, githubLink, hooks }), ...MULTI_USER_LIMITS });
+      push = () => runtime.close({ deadline: (shutdownStartedAt ?? Date.now()) + SHUTDOWN_PUSH_DEADLINE_MS });
+    }
+    admin = createGatewayAdmin({ config, parts, relay, runtime, fetch: deps.fetch });
+  } else if (config.appReady) {
     const runtimeDir = mkdtempSync(join(tmpdir(), "desk-hosted-")); // mode 0700
     const socketPath = join(runtimeDir, "git-token.sock");
     const privateKeyPem = readFileSync(config.appKeyFile, "utf8");
     const mint = () => installationToken({ appId: config.appId, privateKeyPem, repo: config.repo });
     const tokenServer = serveTokens({ socketPath, mint });
-    await once(tokenServer, "listening");
+    await tokenServer.ready;
     closeTokenSocket = () => {
       tokenServer.close();
       rmSync(runtimeDir, { recursive: true, force: true });
@@ -416,7 +612,7 @@ export async function main(env = process.env, deps = {}) {
     log(NOT_SET_UP);
   }
 
-  const { app } = buildGateway({ config, relay, parts });
+  const { app } = buildGateway({ config, relay, parts, admin, githubLink });
   const server = app.listen(config.port);
   await once(server, "listening");
   log(`listening on ${config.port} for ${config.resource}; GitHub callback ${config.githubCallbackUrl}`);
@@ -425,6 +621,7 @@ export async function main(env = process.env, deps = {}) {
 
   let stopping = null;
   const shutdown = () => {
+    shutdownStartedAt ??= Date.now();
     sweep?.stop();
     parts?.discovery.stop();
     stopping ??= stopGateway({ server, relay, pushDesk: push, closeTokenSocket }).then(

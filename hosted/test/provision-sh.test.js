@@ -126,6 +126,13 @@ test("STAGE=staging creates ouro-desk-hosted-staging on the pinned image, scalin
   assert.ok(!output.includes("gh variable set"), "no deploy variables for staging");
 });
 
+test("the app gives shutdown 120 s: Desk sessions (up to 12 s) and every realm's push and rescue within 80 s, then the token broker", (t) => {
+  for (const env of [{}, { STAGE: "staging", IMAGE: "abc123" }]) {
+    const { documents } = runProvision(t, { env });
+    assert.match(documents.at(-1), /^\s+terminationGracePeriodSeconds: 120$/m);
+  }
+});
+
 test("the Ouro settings come from identity-<env>.json with the names readConfig reads, and DESK_ALLOWED_LOGINS stays", (t) => {
   const { documents } = runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") });
   const written = JSON.parse(documents[0]);
@@ -457,4 +464,115 @@ test("round N-1 m3: a cutoff that isn't about 14 days after releasedAt is writte
   const { output } = runProvision(t, { app: shown, env: { STAGE: "staging" }, record });
   assert.match(output, /WARNING: .*legacyCutoff .* is 2 days after releasedAt/);
   assert.ok(!/WARNING: .*legacyCutoff/.test(runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") }).output));
+});
+
+test("a record with the admin CLI app and admin API scope passes both to the gateway; one without passes neither", (t) => {
+  const record = {
+    ...completeRecord("test"),
+    cliApp: { appId: "20a65c9b-2fe5-45c1-8af9-79b4e22b958c" },
+    adminApi: { scope: "api://55555555-5555-5555-5555-555555555555/desk.admin" },
+  };
+  const withAdmin = JSON.parse(runProvision(t, { app: shown, env: { STAGE: "staging" }, record }).documents[0]);
+  const value = (app, name) => envOf(app).find((entry) => entry.name === name)?.value;
+  assert.equal(value(withAdmin, "DESK_ADMIN_CLIENT_ID"), "20a65c9b-2fe5-45c1-8af9-79b4e22b958c");
+  assert.equal(value(withAdmin, "DESK_ADMIN_SCOPE"), "api://55555555-5555-5555-5555-555555555555/desk.admin");
+  const without = JSON.parse(runProvision(t, { app: shown, env: { STAGE: "staging" }, record: completeRecord("test") }).documents[0]);
+  assert.equal(value(without, "DESK_ADMIN_CLIENT_ID"), undefined);
+  assert.equal(value(without, "DESK_ADMIN_SCOPE"), undefined);
+});
+
+// v1b-2 rollout: provision.sh owns DESK_MULTI_USER and the shutdown grace period on reruns too, so neither depends
+// on a hand-run `az containerapp update` flag.
+const multiUserOf = (written) => envOf(JSON.parse(written)).find(({ name }) => name === "DESK_MULTI_USER")?.value;
+
+test("a rerun raises an existing app's shutdown grace period to 120 s and keeps its probes, scale and resources", (t) => {
+  assert.equal(shown.properties.template.terminationGracePeriodSeconds, 90, "the fixture starts at 90 s");
+  for (const [name, app, env] of [["staging", shown, { STAGE: "staging" }], ["production", todaysProduction(), {}]]) {
+    const written = JSON.parse(runProvision(t, { app, env }).documents[0]);
+    assert.equal(written.properties.template.terminationGracePeriodSeconds, 120, name);
+    assert.deepEqual(written.properties.template.scale, app.properties.template.scale, name);
+    assert.deepEqual(written.properties.template.containers[0].probes, app.properties.template.containers[0].probes, name);
+    assert.deepEqual(written.properties.template.containers[0].resources, app.properties.template.containers[0].resources, name);
+  }
+});
+
+test("DESK_MULTI_USER keeps the app's value unless it is passed, and 1 or 0 is written on a rerun", (t) => {
+  const on = structuredClone(shown);
+  envOf(on).push({ name: "DESK_MULTI_USER", value: "1" });
+  const record = completeRecord("test");
+  assert.equal(multiUserOf(runProvision(t, { app: on, env: { STAGE: "staging" }, record }).documents[0]), "1", "kept on");
+  assert.equal(multiUserOf(runProvision(t, { app: shown, env: { STAGE: "staging" }, record }).documents[0]), undefined, "kept absent");
+  assert.equal(multiUserOf(runProvision(t, { app: shown, env: { STAGE: "staging", DESK_MULTI_USER: "1" }, record }).documents[0]), "1", "turned on");
+  assert.equal(multiUserOf(runProvision(t, { app: on, env: { STAGE: "staging", DESK_MULTI_USER: "0" }, record }).documents[0]), "0", "turned off");
+  const bad = runProvision(t, { app: shown, env: { STAGE: "staging", DESK_MULTI_USER: "yes" }, record, expectFailure: true });
+  assert.deepEqual(bad.argv, [], "refused before any az call");
+  assert.match(bad.output, /DESK_MULTI_USER must be 0 or 1/);
+});
+
+test("a created app gets DESK_MULTI_USER=1 only through the update that adds its Ouro settings", (t) => {
+  const created = structuredClone(shown);
+  created.properties.configuration.secrets = secretsOf(created).filter((secret) => secret.name !== "entra-client-secret");
+  created.properties.template.containers[0].env = envOf(created).filter((entry) => entry.name !== "DESK_ENTRA_CLIENT_SECRET");
+  delete created.identity.userAssignedIdentities[GATEWAY_IDENTITY];
+  const { documents } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", DESK_MULTI_USER: "1" }, record: completeRecord("test"), created });
+  assert.equal(documents.length, 2);
+  assert.ok(!documents[0].includes("DESK_MULTI_USER"), "the create spec has no multi-user setting");
+  assert.equal(multiUserOf(documents[1]), "1");
+});
+
+test("DESK_MULTI_USER=1 without a complete identity record is refused before any write, as the gateway would refuse to start", (t) => {
+  const incomplete = { ...completeRecord("prod"), ari: null };
+  for (const [name, record] of [["incomplete record", incomplete], ["no record", undefined]]) {
+    const { argv, output } = runProvision(t, { app: todaysProduction(), env: { DESK_MULTI_USER: "1" }, record, expectFailure: true });
+    assert.deepEqual(updates(argv), [], name);
+    assert.ok(!argv.some((args) => args.slice(0, 3).join(" ") === "containerapp identity assign"), name);
+    assert.match(output, /DESK_MULTI_USER requires Ouro account identity/, name);
+  }
+  // A create is refused before any write at all: no staging identity, role, image build or app (review I1).
+  const WRITES = ["identity create", "role assignment", "acr build", "containerapp create", "containerapp update", "containerapp identity"];
+  const writes = (argv) => argv.filter((args) => WRITES.includes(args.slice(0, 2).join(" ")));
+  for (const [name, env, record] of [
+    ["staging, no record", { STAGE: "staging", FAKE_NO_STAGING_IDENTITY: "1" }, undefined],
+    ["staging, incomplete record", { STAGE: "staging", FAKE_NO_STAGING_IDENTITY: "1" }, { ...completeRecord("test"), ari: null }],
+    ["production, no record", {}, undefined],
+  ]) {
+    const create = runProvision(t, { env: { ...env, DESK_MULTI_USER: "1" }, record, expectFailure: true });
+    assert.deepEqual(writes(create.argv), [], name);
+    assert.match(create.output, /DESK_MULTI_USER requires Ouro account identity/, name);
+    assert.match(create.output, /DESK_MULTI_USER=0/, name);
+  }
+  // A complete record the gateway would still refuse stops a create before the app exists, too (review m2).
+  const badEndpoint = { ...completeRecord("test"), storage: { account: "x", endpoint: "https://x.blob.core.windows.net" } };
+  const refused = runProvision(t, { env: { STAGE: "staging", DESK_MULTI_USER: "1" }, record: badEndpoint, expectFailure: true });
+  assert.deepEqual(writes(refused.argv), []);
+  assert.match(refused.output, /storage\.endpoint must be/);
+  // An app that can't be read is never taken for absent: the gate stops instead of falling through (re-review m1).
+  const throttled = runProvision(t, { env: { STAGE: "staging", DESK_MULTI_USER: "1", FAKE_SHOW_THROTTLED: "1", FAKE_NO_STAGING_IDENTITY: "1" }, expectFailure: true });
+  assert.deepEqual(writes(throttled.argv), []);
+  assert.match(throttled.output, /Could not read Container App ouro-desk-hosted-staging/);
+});
+
+test("an app already holding DESK_MULTI_USER=1 without Ouro settings is refused with both ways out (review m3)", (t) => {
+  const app = todaysProduction();
+  envOf(app).push({ name: "DESK_MULTI_USER", value: "1" });
+  const { argv, output } = runProvision(t, { app, expectFailure: true });
+  assert.deepEqual(updates(argv), []);
+  assert.match(output, /DESK_MULTI_USER=0/);
+  assert.equal(multiUserOf(runProvision(t, { app, env: { DESK_MULTI_USER: "0" } }).documents[0]), "0");
+});
+
+test("a dry run of a create says the update after it would add DESK_MULTI_USER=1 with the Ouro settings (review m4)", (t) => {
+  const { argv, output } = runProvision(t, { env: { STAGE: "staging", IMAGE: "abc123", DRY_RUN: "1", DESK_MULTI_USER: "1" }, record: completeRecord("test") });
+  assert.deepEqual(updates(argv), []);
+  assert.match(output, /after the create.*DESK_MULTI_USER=1/i);
+});
+
+test("REMOVE_OURO_SETTINGS=1 also takes DESK_MULTI_USER off, and refuses DESK_MULTI_USER=1 alongside it", (t) => {
+  const full = runProvision(t, { app: shown, env: { STAGE: "staging", DESK_MULTI_USER: "1" }, record: completeRecord("test") }).final;
+  assert.equal(envOf(full).find(({ name }) => name === "DESK_MULTI_USER")?.value, "1");
+  const removed = runProvision(t, { app: full, env: { STAGE: "staging", REMOVE_OURO_SETTINGS: "1" } });
+  assert.equal(multiUserOf(removed.documents[0]), undefined);
+  assert.match(removed.output, /DESK_MULTI_USER/);
+  const both = runProvision(t, { app: full, env: { STAGE: "staging", REMOVE_OURO_SETTINGS: "1", DESK_MULTI_USER: "1" }, expectFailure: true });
+  assert.deepEqual(updates(both.argv), []);
 });

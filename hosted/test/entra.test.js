@@ -50,7 +50,7 @@ function browser() {
   };
 }
 
-async function setup({ discoveryDown = false, retryMs = 30_000 } = {}) {
+async function setup({ discoveryDown = false, retryMs = 30_000, repo = REPO, linkGitHub } = {}) {
   let clock = START;
   const now = () => clock;
   const tenant = await stubTenant({ now });
@@ -67,7 +67,8 @@ async function setup({ discoveryDown = false, retryMs = 30_000 } = {}) {
     clientSecret: CLIENT_SECRET,
     callbackUrl: CALLBACK,
     store,
-    repo: REPO,
+    repo,
+    ...(linkGitHub === undefined ? {} : { linkGitHub }),
     fetch: tenant.fetch,
     now,
     log,
@@ -349,6 +350,37 @@ test("an account bound to another repository gets the no-desk page", async () =>
   assert.match(outcome.html, /no desk/i);
 });
 
+test("a multi-user gateway (repo null) admits an account bound to its own repository", async () => {
+  const ctx = await setup({ repo: null });
+  await identityFor(ctx, OID);
+  await ctx.store.putBinding(ctx.accountId, { ...BINDING, repo: "someone/desk" });
+  const { back, code } = codeIn(await signIn(ctx, browser(), { oid: OID }));
+  assert.equal(`${back.origin}${back.pathname}`, CLAUDE_CALLBACK);
+  assert.equal(code.accountId, ctx.accountId);
+});
+
+test("a multi-user gateway (repo null) still gives an account with no binding the no-desk page", async () => {
+  const ctx = await setup({ repo: null, linkGitHub: true });
+  const accountId = "acct-without-binding";
+  await ctx.store.putAccount({ accountId, displayName: "Nobody", deskAccess: true });
+  await ctx.store.tables.create("identities", { partitionKey: TENANT_ID, rowKey: OID, accountId });
+  const outcome = await signIn(ctx, browser(), { oid: OID });
+  assert.equal(outcome.status, 403);
+  assert.match(outcome.html, /no desk/i);
+  assert.match(outcome.html, /<a href="\/link\/github">/, "it links to where the person links a GitHub desk");
+});
+
+test("a multi-user gateway whose GitHub linking isn't set up gives the no-desk page without a link to it", async () => {
+  const ctx = await setup({ repo: null, linkGitHub: false });
+  const accountId = "acct-without-binding";
+  await ctx.store.putAccount({ accountId, displayName: "Nobody", deskAccess: true });
+  await ctx.store.tables.create("identities", { partitionKey: TENANT_ID, rowKey: OID, accountId });
+  const outcome = await signIn(ctx, browser(), { oid: OID });
+  assert.equal(outcome.status, 403);
+  assert.match(outcome.html, /no desk/i);
+  assert.doesNotMatch(outcome.html, /link\/github/, "/link/github is mounted only once the GitHub App is set up");
+});
+
 test("an account with no binding gets the no-desk page", async () => {
   const ctx = await setup();
   const { accountId } = await ctx.store.putAccount({ accountId: "acct-without-binding", displayName: "Nobody", deskAccess: true }).then(() => ({ accountId: "acct-without-binding" }));
@@ -356,6 +388,7 @@ test("an account with no binding gets the no-desk page", async () => {
   const outcome = await signIn(ctx, browser(), { oid: OID });
   assert.equal(outcome.status, 403);
   assert.match(outcome.html, /no desk/i);
+  assert.doesNotMatch(outcome.html, /link\/github/, "a single-desk gateway has no GitHub linking");
 });
 
 test("a store that can't answer refuses the sign-in with a try-again page", async () => {

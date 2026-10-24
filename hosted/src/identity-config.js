@@ -20,7 +20,7 @@ export const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\
 // production, the gateway runs as it always has: GitHub sign-in for DESK_ALLOWED_LOGINS. With them, every setting in
 // IDENTITY_REQUIRED must be set; a partial set is refused, so a typo can't quietly leave the old sign-in running.
 const IDENTITY_REQUIRED = ["DESK_ENTRA_TENANT_ID", "DESK_ENTRA_SUBDOMAIN", "DESK_ENTRA_CLIENT_ID", "DESK_ENTRA_CLIENT_SECRET", "DESK_ACCOUNTS_ENDPOINT"];
-const IDENTITY_OPTIONAL = ["DESK_GITHUB_SIGNIN", "DESK_GITHUB_ACCOUNTS", "DESK_GITHUB_LOGINS", "DESK_LEGACY_CUTOFF"];
+const IDENTITY_OPTIONAL = ["DESK_GITHUB_SIGNIN", "DESK_GITHUB_ACCOUNTS", "DESK_GITHUB_LOGINS", "DESK_LEGACY_CUTOFF", "DESK_ADMIN_CLIENT_ID", "DESK_ADMIN_SCOPE"];
 // Every setting that turns Ouro sign-in on, plus the accounts store's identity: what provisioning removes to turn it off.
 export const OURO_SETTINGS = [...IDENTITY_REQUIRED, ...IDENTITY_OPTIONAL, "AZURE_CLIENT_ID"];
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,7 +68,21 @@ export function readIdentity(env, publicUrl) {
     cutoff = new Date(env.DESK_LEGACY_CUTOFF);
   }
 
+  // What the ouro CLI signs in with for the admin routes (served at /.well-known/ouro-desk-admin): its own public
+  // client and the gateway app's delegated admin scope. Both or neither.
+  let adminCli = null;
+  if (isSet(env.DESK_ADMIN_CLIENT_ID) || isSet(env.DESK_ADMIN_SCOPE)) {
+    for (const name of ["DESK_ADMIN_CLIENT_ID", "DESK_ADMIN_SCOPE"]) if (!isSet(env[name])) throw new Error(`The admin CLI sign-in is partly configured; also set ${name}.`);
+    if (!GUID.test(env.DESK_ADMIN_CLIENT_ID)) throw new Error("DESK_ADMIN_CLIENT_ID must be the ouro CLI app's client id, a GUID.");
+    const scope = /^api:\/\/([0-9a-f-]{36})\/[A-Za-z0-9._-]{1,64}$/i.exec(env.DESK_ADMIN_SCOPE);
+    if (!scope || scope[1].toLowerCase() !== env.DESK_ENTRA_CLIENT_ID.toLowerCase()) {
+      throw new Error("DESK_ADMIN_SCOPE must be a scope of the gateway app, api://<DESK_ENTRA_CLIENT_ID>/<scope name>.");
+    }
+    adminCli = { clientId: env.DESK_ADMIN_CLIENT_ID, scope: env.DESK_ADMIN_SCOPE };
+  }
+
   return {
+    adminCli,
     tenantId: env.DESK_ENTRA_TENANT_ID,
     subdomain: env.DESK_ENTRA_SUBDOMAIN,
     clientId: env.DESK_ENTRA_CLIENT_ID,

@@ -20,6 +20,7 @@
 // A card with no repos is unaffected here (`task.js` keeps its own per-kind shape checks for it).
 
 import { realpathSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { resolveLocalPath } from "../util/paths.js"
@@ -67,8 +68,20 @@ function describeRepos(repos) {
 }
 
 function git(spawnGit, dir, args) {
-  const result = spawnGit("git", ["-C", dir, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  const invocation = deskGitInvocation({ root: dir, args })
+  const result = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result?.status === 0 && typeof result.stdout === "string" ? result.stdout : null
+}
+
+// A clone's remote URLs, or null. deskGitInvocation's only refusal is DESK_GIT_CONTEXT_REFUSED: an isolated hosted
+// realm runs Git only inside its own desk, so a clone outside it adds no names and a PR still matches by the recorded
+// repo name. Commit evidence, which must look inside the clone, still gets the refusal.
+function remotesOf(spawnGit, dir) {
+  try {
+    return git(spawnGit, dir, ["config", "--get-regexp", "^remote\\..*\\.url$"])
+  } catch {
+    return null
+  }
 }
 
 function lastSegments(urlPath, count) {
@@ -104,7 +117,7 @@ function repoIdentities(repos, { spawnGit, homeDir, deskRoot }) {
     else plainNames.add(repo.name.toLowerCase())
     bare.add(lastSegments(repo.name, 1))
     if (repo.localPath === "") continue
-    const listed = git(spawnGit, resolveLocalPath(repo.localPath, { homeDir, deskRoot }), ["config", "--get-regexp", "^remote\\..*\\.url$"])
+    const listed = remotesOf(spawnGit, resolveLocalPath(repo.localPath, { homeDir, deskRoot }))
     for (const line of (listed ?? "").split("\n")) {
       const url = line.trim().split(/\s+/u)[1]
       if (url === undefined) continue

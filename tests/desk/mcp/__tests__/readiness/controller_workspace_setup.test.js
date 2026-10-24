@@ -112,6 +112,10 @@ test("cold real Git preparation admits a concurrent process before bounded statu
   mkdirSync(path.join(folder, "_archive"))
   const root = realpathSync(folder)
   const operation = `probe-${randomUUID()}.md`
+  // The preload below makes each of the child's Git checks this slow. The start window bounds the child's own start, so both deadlines get the injected delay on top; otherwise the 6.75 s it adds leaves an instrumented coverage child about 3 s to boot.
+  const gitDelayMs = 1350
+  const expectedGitChecks = ["rev-parse", "check-ignore", "rev-parse", "rev-parse", "ls-files"]
+  const startWindowMs = controllerStartTimeoutMs() + gitDelayMs * expectedGitChecks.length
   writeFileSync(path.join(root, operation), "# Real controller preparation\n")
   for (const args of [
     ["init", "-b", "main"], ["config", "user.name", "Fixture"],
@@ -132,7 +136,7 @@ test("cold real Git preparation admits a concurrent process before bounded statu
         calls.push(args[2]);
         writeFileSync(${JSON.stringify(callsFile)}, JSON.stringify(calls));
         if (calls.length === 3) writeFileSync(${JSON.stringify(preparingFile)}, "preparing");
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1350);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${gitDelayMs});
       }
       return spawn.call(this, command, args, ...rest);
     };
@@ -193,11 +197,12 @@ test("cold real Git preparation admits a concurrent process before bounded statu
         spawn: (file, args, options) => fork(file, args, {
           ...options, execArgv: ["--import", pathToFileURL(preload).href],
         }),
+        timeoutMs: startWindowMs,
       })
     },
   })
   t.after(() => starting.then(client => client.close(), () => {}))
-  const deadline = Date.now() + controllerStartTimeoutMs()
+  const deadline = Date.now() + startWindowMs
   while (!existsSync(preparingFile)) {
     assert.ok(Date.now() < deadline, "the real elected child must enter its published preparation")
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -209,7 +214,7 @@ test("cold real Git preparation admits a concurrent process before bounded statu
   let convergence
   try {
     const before = JSON.parse(readFileSync(callsFile, "utf8"))
-    assert.deepEqual(before, ["rev-parse", "check-ignore", "rev-parse", "rev-parse", "ls-files"],
+    assert.deepEqual(before, expectedGitChecks,
       "all real ignore/guard checks must finish before a controller is admitted")
     assert.ok(readFileSync(path.join(root, ".git", "hooks", "pre-commit"), "utf8").includes(HOOK_MARKER))
     git(root, ["check-ignore", "-q", ".state/desk-index.sqlite"])

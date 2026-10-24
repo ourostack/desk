@@ -47,6 +47,7 @@
 // it found is healthy.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process"
+import { deskGitInvocation } from "./desk-git-context.js"
 import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -499,7 +500,8 @@ const MIN_ACCOUNT_CALL_MS = 3000
 function resolveLocalStore(localPath, { spawnGit, homeDir, deskRoot, timeoutMs }) {
   if (typeof localPath !== "string" || localPath.trim() === "") return null
   const resolved = resolveLocalPath(localPath, { homeDir, deskRoot })
-  const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout: timeoutMs })
+  const invocation = deskGitInvocation({ root: resolved, args: ["config", "--get", "remote.origin.url"] })
+  const result = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: timeoutMs })
   if (!result || result.status !== 0 || typeof result.stdout !== "string") return null
   const url = result.stdout.trim()
   if (url === "") return null
@@ -727,15 +729,19 @@ export function repoStates({ cards, root, spawnGit = spawnSync, homeDir = os.hom
         pending.push(`repo state for ${label.repo} (${cardLocation(card)}): boot_budget_exceeded`)
         continue
       }
-      const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
-      const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
+      const context = (args) => deskGitInvocation({ root: dir, args })
+      const fetchContext = context(["fetch", "--quiet", "origin"])
+      const statusContext = context(["status", "--porcelain", "-b"])
+      const fetched = spawnGit("git", fetchContext.args, { ...fetchContext.options, encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
+      const status = spawnGit("git", statusContext.args, { ...statusContext.options, encoding: "utf8", timeout: 5000 })
       if (!status || status.status !== 0 || typeof status.stdout !== "string") {
         states.push({ ...label, local_path: repo.local_path, path: dir, ...(cloneUrl(repo.url) === null ? {} : { url: cloneUrl(repo.url) }), present: false })
         continue
       }
       const lines = status.stdout.split("\n").filter((line) => line !== "")
       // A clone with no remote at all has nowhere to push: its commits are the delivered work (`done-evidence.js`).
-      const remotes = spawnGit("git", ["-C", dir, "remote"], { encoding: "utf8", timeout: 5000 })
+      const remoteContext = context(["remote"])
+      const remotes = spawnGit("git", remoteContext.args, { ...remoteContext.options, encoding: "utf8", timeout: 5000 })
       states.push({
         ...label,
         present: true,

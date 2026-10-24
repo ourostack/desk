@@ -12,6 +12,7 @@
 // claim or an execution queue; both are written only by `publishOwnedTriage` (triage-write.js) through an acknowledged commit.
 
 import { promises as fs, readFileSync, readdirSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
@@ -315,7 +316,8 @@ export function selectTriageCards({ cards, attempts = {}, now, limit = 20 }) {
 
 const GIT_TIMEOUT_MS = 10_000
 function gitRead(deskRoot, args) {
-  const result = spawnSync("git", ["-C", deskRoot, ...args], { timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
+  const invocation = deskGitInvocation({ root: deskRoot, args })
+  const result = spawnSync("git", invocation.args, { ...invocation.options, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, windowsHide: true })
   return result.status === 0 ? result.stdout : null
 }
 
