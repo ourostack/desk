@@ -120,6 +120,36 @@ test("vectors survive re-indexing: an edit embeds only the sections it changes",
   assert.deepEqual(third.prompts, ["# Copy\n\nalpha section."], "a section whose text another card already has is not embedded")
 })
 
+test("re-indexing a card keeps the rows of its unchanged sections and replaces only the rest", async () => {
+  const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
+  await rebuildIndex(root, { embed: { fetch: recordingEmbed().fetch } })
+  const rows = () => inDb(root, (db) => db.prepare("SELECT id, chunk_index, text FROM chunks ORDER BY chunk_index").all())
+  const before = rows()
+  // An older build's vector for an unchanged row stays readable by row.
+  inDb(root, (db) => db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(before[0].id), new Float32Array(vector(0.3))))
+
+  await fs.appendFile(path.join(root, "track/a/task.md"), "\n## Four\n\ndelta section.\n", "utf8")
+  const appended = await rebuildIndex(root, { embed: { fetch: recordingEmbed().fetch } })
+  assert.equal(appended.chunks_inserted, 1)
+  const after = rows()
+  assert.deepEqual(after.slice(0, 3), before, "unchanged sections keep their rows")
+  inDb(root, (db) => assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs WHERE chunk_id = ?").get(BigInt(before[0].id)).n, 1))
+
+  // An edit in the middle moves the offsets of the sections after it, so those rows are replaced; a removed section's row goes, and so does a stray second row at the same position.
+  inDb(root, (db) => {
+    const { id: _id, ...row } = db.prepare("SELECT * FROM chunks WHERE chunk_index = 1").get()
+    db.prepare(`INSERT INTO chunks (${Object.keys(row).join(", ")}) VALUES (${Object.keys(row).map((key) => `@${key}`).join(", ")})`).run(row)
+  })
+  await fs.writeFile(path.join(root, "track/a/task.md"), THREE_SECTIONS.replace("bravo section.", "bravo section, longer now."), "utf8")
+  const edited = await rebuildIndex(root, { embed: { fetch: recordingEmbed().fetch } })
+  assert.equal(edited.chunks_inserted, 2)
+  const final = rows()
+  assert.equal(final.length, 3)
+  assert.deepEqual(final[0], before[0])
+  assert.match(final[1].text, /longer now/u)
+  assert.ok(!final.slice(1).some((row) => before.some((old) => old.id === row.id)), "changed sections get new rows")
+})
+
 test("after the embedding service did not answer, only the changed documents' sections are tried", async () => {
   const root = await deskWith({ "track/a/task.md": THREE_SECTIONS, "track/b/task.md": "# Other\n\ndelta section.\n" })
   await rebuildIndex(root, { skipEmbed: true })

@@ -19,7 +19,7 @@
     "arch": "portable",
     "node_abi": "portable"
   },
-  "artifact_source_scope_hash": "sha256:633f33fc0502e081c8405a18da5109ab79a873f6f58fd6cda58c84a49b871665",
+  "artifact_source_scope_hash": "sha256:3e289d69f67ded69d879fc51bb1b164b5dc71155e68621574a0283397fba83a7",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "included_pack_ids": [
     "repo-public-bootstrap-2026-06-15"

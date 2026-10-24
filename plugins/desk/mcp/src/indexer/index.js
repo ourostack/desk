@@ -319,20 +319,23 @@ function indexOneDoc(db, doc, summary) {
     })
     const docId = row.id
 
-    // Replace chunks. CASCADE on chunks doesn't fire for ON CONFLICT, so
-    // we explicitly delete by doc_id first. The triggers on the chunks
-    // table keep chunks_fts in sync. Vectors live by text in text_vectors and
-    // stay; the old rows' entries in the old row-keyed table go with them, so
-    // older builds that read it never find a vector under a vanished row.
-    const oldChunkIds = db
-      .prepare("SELECT id FROM chunks WHERE doc_id = ?")
-      .all(docId)
-      .map((r) => r.id)
-    if (oldChunkIds.length) {
-      const delVec = db.prepare("DELETE FROM chunk_vecs WHERE chunk_id = ?")
-      for (const id of oldChunkIds) delVec.run(id)
+    // Replace only the sections that changed. A row is kept when every stored
+    // field matches, so an append to a long card writes one row instead of
+    // rewriting them all. The triggers on the chunks table keep chunks_fts in
+    // sync. Vectors live by text in text_vectors and stay; a replaced row's
+    // entry in the old row-keyed table goes with it, so older builds that read
+    // it never find a vector under a vanished row.
+    const stored = new Map()
+    const deleteChunk = db.prepare("DELETE FROM chunks WHERE id = ?")
+    const deleteRowVector = db.prepare("DELETE FROM chunk_vecs WHERE chunk_id = ?")
+    const remove = (id) => {
+      deleteRowVector.run(BigInt(id))
+      deleteChunk.run(id)
     }
-    db.prepare("DELETE FROM chunks WHERE doc_id = ?").run(docId)
+    for (const old of db.prepare("SELECT * FROM chunks WHERE doc_id = ? ORDER BY id").all(docId)) {
+      if (stored.has(old.chunk_index)) remove(old.id)
+      else stored.set(old.chunk_index, old)
+    }
 
     const insertChunk = db.prepare(
       `INSERT INTO chunks (
@@ -348,11 +351,14 @@ function indexOneDoc(db, doc, summary) {
          start_offset,
          end_offset
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i]
-      insertChunk.get(
+    for (const c of chunks) {
+      const old = stored.get(c.index)
+      stored.delete(c.index)
+      if (old && sameChunk(old, c)) continue
+      if (old) remove(old.id)
+      insertChunk.run(
         docId,
         c.index,
         c.chunk_key,
@@ -367,9 +373,22 @@ function indexOneDoc(db, doc, summary) {
       )
       summary.chunks_inserted += 1
     }
+    for (const old of stored.values()) remove(old.id)
     return docId
   })
   return txn()
+}
+
+function sameChunk(row, chunk) {
+  return row.chunk_key === chunk.chunk_key &&
+    row.text_hash === chunk.text_hash &&
+    row.embedding_spec_id === chunk.embedding_spec_id &&
+    row.chunker_id === chunk.chunker_id &&
+    row.normalization_id === chunk.normalization_id &&
+    row.text === chunk.text &&
+    row.heading === chunk.heading &&
+    row.start_offset === chunk.start_offset &&
+    row.end_offset === chunk.end_offset
 }
 
 // Embeds each section text that has no vector yet, once however many sections share it; with `docIds`, only those documents' sections.
