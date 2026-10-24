@@ -1349,6 +1349,53 @@ test("inventory overhead cannot halve the first preparation stage below a comple
   assert.ok(elapsed <= 2000)
 })
 
+test("a cold multi-command identity finishes and persists before another discovery unit starts", async (t) => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, f.options)
+  const secondCard = join(f.desk, "sample", "second", "task.md")
+  await mkdir(join(f.desk, "sample", "second"), { recursive: true })
+  await writeFile(secondCard, f.original)
+  const job = jobId({ deskRemote: "https://github.com/synthetic/desk.git", personPrefix: "", track: "sample", slug: "second" })
+  const entry = structuredClone(f.entries[0])
+  entry.facts.session.id = "22222222-1234-4abc-8abc-123456789abc"
+  entry.facts.jobs[0].job = job
+  entry.facts.outcomes[0].job = job
+  entry.localJobs = [{ local: job, published: job }]
+  f.entries.push(entry)
+  const stateFile = await taskContextPath(f.env, STORE, f.job, "state.json")
+  const storeDir = join(stateFile, "..", "..")
+  let elapsed = 0
+  let consentReads = 0
+  await withFsFault(t, {
+    readdir: async (original, file, ...args) => {
+      const value = await original(file, ...args)
+      if (String(file) === storeDir) elapsed += 500
+      return value
+    },
+    readFile: (original, file, ...args) => {
+      if (String(file).endsWith("consent.json") && ++consentReads === 2) elapsed += 100
+      return original(file, ...args)
+    },
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, pluginVersion: "3.2.0-alpha.2", now: 1000, deadline: 2000, clock: () => elapsed,
+    readRemote: () => {
+      elapsed += 80
+      return "https://github.com/synthetic/desk.git"
+    },
+    resolveIdentity: ({ track, slug }) => {
+      elapsed += 120 + 528
+      return { track, slug }
+    },
+  }), fsNative.promises)
+  const work = (await queue.listContextWork(f.env, { store: STORE })).find((item) => item.job === f.job)
+  assert.equal(work.source.evaluator.plugin_version, "3.2.0-alpha.2")
+  assert.equal(work.source.task_card.path, f.card)
+  const anchor = [f.job, job].sort()[0]
+  const cursor = JSON.parse(await readFile(await taskContextPath(f.env, STORE, anchor, "discovery.json"), "utf8"))
+  assert.equal(cursor.cursor, 1)
+  assert.ok(elapsed <= 2000)
+})
+
 for (const withdraw of [false, true]) {
   test(`unchanged preparation cannot starve ${withdraw ? "a published withdrawal" : "reviewed publication"} across planning turns`, async (t) => {
     const f = await reviewedJobs(2)
@@ -1427,6 +1474,36 @@ test("planning turns keep other stores' scheduling and readiness records intact"
   assert.equal(status.context_planning[STORE], "publish")
   assert.equal(status.context_planning["synthetic/other"], "publish")
   assert.deepEqual(status.context_publication["synthetic/other"], { ready: false, code: "context_store_not_ready" })
+})
+
+test("prose revoked during discovery cannot create a task input at persistence", async () => {
+  const f = await fixture()
+  const result = await queue.prepareTaskContexts(f.env, {
+    ...f.options,
+    readRemote: () => {
+      fsNative.writeFileSync(join(f.desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores: { [STORE]: false } }))
+      return null
+    },
+  })
+  assert.equal(result.prepared, 0)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
+})
+
+test("source identities becoming duplicates during discovery cannot create an input", async () => {
+  const f = await fixture()
+  const entry = structuredClone(f.entries[0])
+  entry.facts.session.id = "22222222-1234-4abc-8abc-123456789abc"
+  f.entries.push(entry)
+  const result = await queue.prepareTaskContexts(f.env, {
+    ...f.options,
+    readRemote: () => {
+      entry.facts.session.id = f.facts.session.id
+      return null
+    },
+  })
+  assert.equal(result.prepared, 0)
+  assert.equal(result.held, 1)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
 })
 
 test("prevalidated task groups cannot prepare new inputs after the prose policy is withdrawn", async (t) => {
