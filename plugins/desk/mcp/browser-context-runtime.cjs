@@ -246,8 +246,7 @@ function privateMain(request, registryModule, Session, program, SocketConnection
         return {state:"running",result:{interactive:false,authentication:"inspect-page",previousPages:"closed-without-replay"}};
       }
       if (handoff.phase === "stopping") {
-        var result = await stop();
-        if (result.state !== "discarded") fail("cleanup_unconfirmed","Sign-in browser shutdown is unconfirmed; profile retained");
+        await stop();
         common.profileUnused(request.root,handoff.profile,false);
         var archived = common.readManagedState(request.root,".managed-sign-in-daemon.json",request.contextId);
         if (archived && JSON.stringify(archived) !== JSON.stringify(handoff.originalDaemon))

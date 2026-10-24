@@ -14,6 +14,8 @@ const names = {
   "browser-context.cjs": "browser-context.cjs",
   "browser-native.cjs": "browser-native.cjs",
   "browser-context-common.cjs": "browser-context-common.cjs",
+  "browser-context-runtime.cjs": "browser-context-runtime.cjs",
+  "browser-local.cjs": "browser-local.cjs",
   "web.cjs": "web.cjs",
   "desk-extension-credential.cjs": "web-extension-credential.cjs",
   "desk-native-relay.cjs": "web-native-relay.cjs",
@@ -24,7 +26,9 @@ const names = {
   "web-playwright-patch.cjs": "web-playwright-patch.cjs",
 };
 
-function loadTemplate(runtimeFile, context) {
+function loadTemplate(runtimeFile, context, options = {}) {
+  const execution = options.execution || "vm";
+  assert.ok(["vm", "function"].includes(execution), "known canonical execution mode");
   const canonical = path.join(root, names[path.basename(runtimeFile)]);
   const bytes = fs.readFileSync(runtimeFile);
   assert.deepEqual(bytes, fs.readFileSync(canonical), "execute unchanged actual template bytes");
@@ -49,7 +53,12 @@ function loadTemplate(runtimeFile, context) {
       instrumented = true;
     }
   }
-  vm.runInNewContext(source, context, { filename: canonical });
+  if (execution === "function") {
+    // Ordinary CJS import semantics with explicit dependency bindings, without
+    // rewriting the canonical source or its standard coverage positions.
+    const bindings = Object.keys(context);
+    new Function(...bindings, source)(...bindings.map(name => context[name]));
+  } else vm.runInNewContext(source, context, { filename: canonical });
   if (instrumented && !global.__coverage__) {
     assert.ok(context.__coverage__, "standard Istanbul template execution initialized its ordinary collector");
     global.__coverage__ = context.__coverage__;
