@@ -351,7 +351,7 @@ test("a rejected rotated intake accounts for its complete batch before advancing
   assert.ok((await readStatus(w.env)).last_flush[STORE].rejections_through >= sent.pr.number)
 }))
 
-test("failed refusal accounting preserves the watermark and a repaired retry counts the refusal once", () => scratch(async (base) => {
+for (const missingWatermark of [false, true]) test(`failed refusal accounting preserves the watermark and a repaired retry counts the refusal once${missingWatermark ? " without a saved watermark" : ""}`, () => scratch(async (base) => {
   const w = await world(base)
   await w.run()
   w.hub.mergeOpenPr()
@@ -359,6 +359,9 @@ test("failed refusal accounting preserves the watermark and a repaired retry cou
   await approve(w)
   const sent = await w.run()
   const before = JSON.parse((await readTaskContextFile(w.env, STORE, w.job, "state.json")).toString("utf8"))
+  if (missingWatermark) await updateStatus(w.env, (status) => ({
+    ...status, last_flush: { ...status.last_flush, [STORE]: { ...status.last_flush[STORE], rejections_through: null } },
+  }))
   const through = (await readStatus(w.env)).last_flush[STORE].rejections_through ?? 0
   w.hub.rejectOpenPr("factory-rejected: context_source_changed")
   await updateTaskContextState(w.env, STORE, w.job, (state) => ({ ...state, publication_seal: "f".repeat(64) }))
