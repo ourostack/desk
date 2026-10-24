@@ -3,6 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { Worker } from "node:worker_threads"
+import { execFileSync } from "node:child_process"
 import { promises as fs, mkdirSync } from "node:fs"
 import * as path from "node:path"
 import { desk_recall } from "../../../../../plugins/desk/mcp/src/tools/search.js"
@@ -97,6 +98,9 @@ function missingVectors(root) {
 
 test("beside older builds that keep re-indexing a 1,000-section card, recall stays ready and an edit embeds only its new sections", { timeout: 180_000 }, async (t) => {
   const root = await fs.realpath(await mkTempDeskRoot())
+  // A desk is a Git repository. Desk asks Git once per process whether the index folder is ignored, and asks again on
+  // every index opening when the folder is not a repository, which would add a Git start to every catch-up here.
+  execFileSync("git", ["init", "-q", root])
   await writeFile(root, CARD, cardBody())
   for (const name of ["one", "two"]) {
     await writeFile(root, `track/${name}/task.md`, `---\nstatus: processing\nschema_version: 1\n---\nquartz small card ${name}\n`)
