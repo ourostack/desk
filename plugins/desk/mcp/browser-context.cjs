@@ -32,7 +32,8 @@ function invoke(input, options, isCommand) {
       return isCommand ? legacy.command(input,o) : legacy.context(input,o);
     var args = isCommand ? ["run",input.contextId,"--"].concat(input.args) :
       input.action === "create" ? ["create"] : [input.action,input.contextId];
-    return require("./browser-local.cjs").run(args,Object.assign({},o,{interactive:input.interactive === true}),"signed-in");
+    var local = require("./browser-local.cjs");
+    return local.run(args,Object.assign({},o,{interactive:input.interactive === true}),"signed-in");
   }).catch(function(error) {
     return {exitCode:1,payload:common.scrub(common.errorPayload(error),o.env || process.env)};
   });
