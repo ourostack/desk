@@ -577,3 +577,30 @@ for (const window of ['verified-write', 'prelink']) {
     assert.deepEqual(await fs.readFile(stage), foreign, 'foreign staging name/bytes were not removed');
   });
 }
+
+// Antivirus removed the Windows helper from an installed Mac plugin, and setup
+// on the Mac then refused because it required every platform's helper.
+for (const which of ['other', 'host']) {
+  test(`normal bootstrap ${which === 'other' ? 'continues past' : 'refuses'} a missing ${which}-platform helper`, async t => {
+    const host = `${process.platform}-${process.arch}`, target = which === 'host' ? host : host === 'win32-x64' ? 'linux-x64' : 'win32-x64';
+    const file = fileURLToPath(new URL(`artifacts/browser-messaging/${target}/desk-browser-messaging${target.startsWith('win32-') ? '.exe' : ''}`, mcp));
+    const f = await fixture(t), original = fsSync.lstatSync;
+    t.mock.method(fsSync, 'lstatSync', function (name, ...args) {
+      if (path.resolve(String(name)) === file) throw Object.assign(Error('owned missing-helper fixture'), { code: 'ENOENT' });
+      return original.call(this, name, ...args);
+    });
+    const options = { env: f.options.env, homeDir: f.options.homeDir };
+    if (which === 'host') {
+      await assert.rejects(installer.installNativeMessagingBootstrap(options),
+        { code: 'NATIVE_DISTRIBUTION_INCOMPLETE', message: /for this computer, .* is missing or does not match this Desk release.*antivirus software such as Microsoft Defender may be removing it; check that software's quarantine or history/u });
+      await assert.rejects(fs.lstat(path.join(f.env.DESK_BROWSER_STATE_DIR, 'native-owned')), { code: 'ENOENT' });
+      return;
+    }
+    const got = await installer.installNativeMessagingBootstrap(options);
+    assert.deepEqual(got.missingHelpers.map(entry => entry.target), [target]);
+    assert.match(got.notice, /is missing from this install/u);
+    assert.match(got.notice, /until Desk is reinstalled there/u);
+    assert.equal(got.continuity, 'unknown');
+    await fs.access(got.executable);
+  });
+}

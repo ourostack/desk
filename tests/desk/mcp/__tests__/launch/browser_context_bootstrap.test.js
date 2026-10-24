@@ -91,7 +91,8 @@ async function fixture(t, options = {}) {
         return Function(...args);
       return async url => {
         if (url === pathToFileURL(path.join(mcpRoot, 'native-messaging-install.mjs')).href)
-          return { verifyNativeDistribution: distribution.verifyNativeDistribution,
+          return { verifyNativeDistribution: async root => ({ ...await distribution.verifyNativeDistribution(root),
+              ...options.notice && { notice: options.notice } }),
             async installNativeMessagingBootstrap(input) {
               seen.setup.push(input);
               assert.equal(fs.existsSync(path.join(stateRoot, 'signed-in')), false);
@@ -146,6 +147,17 @@ test('qualified existing readiness preserves the no-installer healthy fast path'
   assert.equal(f.seen.setup.length, 0);
   assert.equal(f.seen.attest.length, 1);
   assert.equal(f.seen.execute, 1);
+});
+
+test('signed-in result passes on a missing-helper notice from setup and omits it otherwise', async t => {
+  const notice = "Desk's browser helper for Windows (x64) is missing from this install.";
+  for (const ready of [false, true]) {
+    const f = await fixture(t, { ready, publishReady: !ready, notice });
+    assert.equal(f.result.exitCode, 0, JSON.stringify(f.result.payload));
+    assert.equal(f.result.payload.notice, notice);
+  }
+  const plain = await fixture(t, { ready: true });
+  assert.equal(Object.hasOwn(plain.result.payload, 'notice'), false);
 });
 
 test('normal setup retains the actual classified registration refusal without allocating an owner', async t => {

@@ -186,3 +186,51 @@ test("artifact copy/readback refusal retains its exact destination, never unlink
   assert.throws(() => retained.family.copyPrivateAsset(retained.root, "linux", "x64", destination), { code: "EACCES" });
   assert.equal(retained.nodes.get(destination).bytes.toString(), "linux-x64");
 });
+
+// On-device setup needs only this computer's helper. Antivirus removed the
+// Windows helper from an installed Mac plugin, and the all-targets check then
+// refused browser setup on the Mac too.
+const windowsHelper = "artifacts/browser-messaging/win32-x64/desk-browser-messaging.exe";
+test("host check accepts another platform's missing helper and names it", () => {
+  for (const removed of ["file", "directory"]) {
+    const f = fixture(), file = path.join(f.root, windowsHelper);
+    f.nodes.delete(file);
+    if (removed === "directory") f.nodes.delete(path.dirname(file));
+    const result = f.family.verifyHostAssets(f.root, "linux", "x64");
+    assert.deepEqual(Array.from(result.missing, entry => ({ ...entry })), [{ target: "win32-x64", file: windowsHelper }], removed);
+    assert.equal(result.targets.includes("win32-x64"), false, removed);
+    assert.equal(result.targets.length, 7, removed);
+    assert.throws(() => f.family.verifyAssets(f.root), /browser_native_messaging_integrity/, "the release check still needs every helper");
+  }
+  const complete = fixture();
+  assert.deepEqual(Array.from(complete.family.verifyHostAssets(complete.root, "linux", "x64").missing), []);
+});
+
+test("host check refuses this computer's missing or changed helper and any changed helper", () => {
+  for (const [change, target] of [["host-missing", "linux-x64"], ["host-bytes", "linux-x64"], ["other-bytes", "win32-x64"],
+    ["other-link", "win32-x64"], ["other-directory-file", "win32-x64"], ["other-directory-link", "win32-x64"], ["other-unreadable", "win32-x64"]]) {
+    const f = fixture();
+    const file = path.join(f.root, "artifacts/browser-messaging", target, "desk-browser-messaging" + (target.startsWith("win32") ? ".exe" : ""));
+    if (change === "host-missing") f.nodes.delete(file);
+    if (change.endsWith("bytes")) f.put(file, "changed helper bytes");
+    if (change === "other-link") f.nodes.get(file).link = true;
+    if (change === "other-directory-file") { f.nodes.delete(file); f.nodes.get(path.dirname(file)).directory = false; }
+    if (change === "other-directory-link") { f.nodes.delete(file); f.nodes.get(path.dirname(file)).link = true; }
+    if (change === "other-unreadable") f.statHook(name => {
+      if (name === file) throw Object.assign(Error("owned unreadable helper"), { code: "EACCES" });
+    });
+    assert.throws(() => f.family.verifyHostAssets(f.root, "linux", "x64"),
+      error => /browser_native_messaging_integrity/.test(error.message) && error.target === target, change);
+  }
+  const manifest = fixture();
+  manifest.writeManifest({ ...manifest.manifest, goVersion: "wrong" });
+  assert.throws(() => manifest.family.verifyHostAssets(manifest.root, "linux", "x64"),
+    error => /browser_native_messaging_integrity/.test(error.message) && error.target === undefined);
+});
+
+test("host check on a computer with no shipped helper treats every helper as another platform's", () => {
+  const f = fixture();
+  f.nodes.delete(path.join(f.root, windowsHelper));
+  const result = f.family.verifyHostAssets(f.root, "linux", "ia32");
+  assert.deepEqual(Array.from(result.missing, entry => entry.target), ["win32-x64"]);
+});
