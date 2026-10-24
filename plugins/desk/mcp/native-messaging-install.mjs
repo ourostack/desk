@@ -84,7 +84,8 @@ const listed = names => names.length === 1 ? names[0] : `${names.slice(0, -1).jo
 function helperFailure(target) {
   const message = !target ? "Desk's browser helper files do not match this Desk release, so browser setup stopped. Reinstall Desk."
     : target === `${process.platform}-${process.arch}`
-      ? `Desk's browser helper for this computer (${PLATFORM_NAMES[target]}) is missing or does not match this Desk release, so browser setup stopped. Reinstall Desk to restore ${helperFile(target)}.`
+      ? `Desk's browser helper for this computer, ${PLATFORM_NAMES[target]}, is missing or does not match this Desk release, so browser setup stopped. Reinstall Desk to restore ${helperFile(target)}. ` +
+        "If the file goes missing again after reinstalling, security or antivirus software such as Microsoft Defender may be removing it; check that software's quarantine or history."
       : `Desk's browser helper for ${PLATFORM_NAMES[target]} does not match this Desk release, so browser setup stopped: ${helperFile(target)} may have been altered. Reinstall Desk.`;
   return Object.assign(new Error(message), { code: 'NATIVE_DISTRIBUTION_INCOMPLETE', explained: true });
 }

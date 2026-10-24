@@ -592,7 +592,7 @@ for (const which of ['other', 'host']) {
     const options = { env: f.options.env, homeDir: f.options.homeDir };
     if (which === 'host') {
       await assert.rejects(installer.installNativeMessagingBootstrap(options),
-        { code: 'NATIVE_DISTRIBUTION_INCOMPLETE', message: /for this computer .* is missing or does not match this Desk release/u });
+        { code: 'NATIVE_DISTRIBUTION_INCOMPLETE', message: /for this computer, .* is missing or does not match this Desk release.*antivirus software such as Microsoft Defender may be removing it; check that software's quarantine or history/u });
       await assert.rejects(fs.lstat(path.join(f.env.DESK_BROWSER_STATE_DIR, 'native-owned')), { code: 'ENOENT' });
       return;
     }

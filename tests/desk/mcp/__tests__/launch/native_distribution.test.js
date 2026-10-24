@@ -133,9 +133,13 @@ for (const change of ['host-missing', 'host-bytes', 'other-bytes']) {
     const error = await verifyNativeDistribution(root).then(() => assert.fail('setup must refuse'), error => error);
     assert.equal(error.code, 'NATIVE_DISTRIBUTION_INCOMPLETE');
     assert.ok(error.message.includes(helper(target)), error.message);
-    assert.match(error.message, change.startsWith('host') ? /for this computer .* is missing or does not match/u : /does not match this Desk release/u);
+    assert.match(error.message, change.startsWith('host') ? /for this computer, .* is missing or does not match/u : /does not match this Desk release/u);
     assert.match(error.message, /Reinstall Desk/u);
-    assert.doesNotMatch(error.message, /NATIVE_|integrity/u);
+    // This computer's own helper can be removed again by antivirus after a reinstall; say where to look.
+    const antivirus = /If the file goes missing again after reinstalling, security or antivirus software such as Microsoft Defender may be removing it; check that software's quarantine or history\./u;
+    if (change.startsWith('host')) assert.match(error.message, antivirus);
+    else assert.doesNotMatch(error.message, antivirus);
+    assert.doesNotMatch(error.message, /NATIVE_|integrity|\(\w+ \(/u);
   });
 }
 

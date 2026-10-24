@@ -115,8 +115,8 @@ function artifactFamily(family, sourceFiles) {
       var relative = ["artifacts", family, target, "desk-" + family + (target.indexOf("win32-") === 0 ? ".exe" : "")];
       var directory = path.join.apply(path, [root].concat(relative.slice(0, 3)));
       try {
-        if (target !== host && (absent(directory) ||
-            (fs.lstatSync(directory).isDirectory() && !fs.lstatSync(directory).isSymbolicLink() && absent(path.join(directory, relative[3]))))) {
+        // lstat reports a symlinked folder as not a directory, so it goes to selectAsset and fails.
+        if (target !== host && (absent(directory) || (fs.lstatSync(directory).isDirectory() && absent(path.join(directory, relative[3]))))) {
           missing.push({ target: target, file: relative.join("/") });
           return;
         }
