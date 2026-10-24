@@ -614,6 +614,28 @@ test("a resumed mixed discovery cursor refreshes known work without traversing t
   assert.ok(refreshed.every((work) => jobs.includes(work.job)), "unrelated cards never become task evidence")
 })
 
+test("a shortened preparation turn can resolve and persist a real task within its remaining allowance", async () => {
+  const f = await cardFixture()
+  let elapsed = 0
+  const result = await queue.prepareTaskContexts(f.env, {
+    ...f.options, deadline: 417, clock: () => elapsed,
+    readRemote: () => {
+      elapsed += 115
+      return "https://github.com/synthetic/desk.git"
+    },
+    resolveIdentity: ({ track, slug }) => {
+      elapsed += 134
+      return { track, slug }
+    },
+  })
+  assert.equal(result.prepared, 1, "nested budget splits must not reject a task that fits the remaining preparation turn")
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(work.job, f.job)
+  assert.equal(work.source.task_card.path, f.card)
+  assert.equal(work.source.evaluator.plugin_version, VERSION)
+  assert.ok(elapsed < 417, "the ordinary preparation deadline must remain unchanged")
+})
+
 test("a previous association Git timeout cannot starve later prior and renamed candidates", async () => {
   const f = await fixture()
   const remote = "https://github.com/synthetic/desk.git"

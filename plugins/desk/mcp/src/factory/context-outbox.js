@@ -246,8 +246,11 @@ export async function prepareTaskContexts(env, {
       const peers = groups.filter((item) => item.desk_root === group.desk_root && item.person_prefix === group.person_prefix)
       const progressJob = peers.map((item) => item.job).sort()[0]
       const cursor = await discoveryCursor(env, store, progressJob)
+      const started = clock()
+      // Keep the one-second discovery ceiling while leaving a third of short turns for persistence.
+      const discoveryDeadline = Math.min(started + PREPARATION_MS / 2, (started + 2 * limit) / 3)
       const index = taskCardIndex(group.desk_root, group.person_prefix, {
-        wanted: new Set(peers.map((item) => item.local_job)), cursor, deadline: (clock() + limit) / 2, clock, readRemote, resolveIdentity,
+        wanted: new Set(peers.map((item) => item.local_job)), cursor, deadline: discoveryDeadline, clock, readRemote, resolveIdentity,
       })
       cardIndexes.set(deskKey, index)
       if (index.cursor !== cursor) await writeTaskContextFile(env, store, progressJob, "discovery.json", {
