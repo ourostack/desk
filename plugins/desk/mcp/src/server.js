@@ -136,6 +136,8 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
     root: deskRoot,
     ignoredPaths: [path.dirname(options.stateDir)],
   })
+  // What the last cleanup round saw of the index's texts, so the next round marks unused vectors only after they change.
+  let cleanupTextsSeen = null
   try {
     return await startReadinessController({
       ...options,
@@ -188,10 +190,12 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
           return result
         },
         // One round of removing vectors no section can use, run on the controller's own timer while this build owns the index.
-        async cleanupVectors() {
+        async cleanupVectors({ signal }) {
           const db = openDb(deskRoot)
           try {
-            return await removeUnusableVectors(db)
+            const result = await removeUnusableVectors(db, { signal, textsSeen: cleanupTextsSeen })
+            cleanupTextsSeen = result.texts
+            return result
           } finally {
             closeDb(db)
           }

@@ -142,19 +142,23 @@ export async function startReadinessController({
   }
 
   function runCleanup() {
+    const stop = new AbortController()
     const round = (async () => {
       let result = null
       try {
         // A catch-up in progress already writes the index; the round waits for it.
         await convergence?.catch(() => {})
-        if (!closing && ownsIndex) result = await handlers.cleanupVectors()
+        // A newer build may have started since the last catch-up without any desk change; it owns the index from then on.
+        if (!closing && ownsIndex && await readCurrentOwnership() !== null) ownsIndex = false
+        if (!closing && ownsIndex) result = await handlers.cleanupVectors({ signal: stop.signal })
       } catch {
         // A failed round leaves the vectors for the next one.
       }
       cleanup = null
+      // A build that stands aside runs no more rounds until a catch-up of its own makes it the owner again.
       scheduleCleanup(result?.complete === false ? cleanupBusyMs : cleanupIdleMs)
     })()
-    cleanup = { running: true, round }
+    cleanup = { running: true, round, stop }
   }
 
   // The next pause, or null once every pause is spent.
@@ -178,11 +182,16 @@ export async function startReadinessController({
     return indexOwnedBy
   }
 
-  // Status reads the owner afresh, so it never names a session that has ended or misses one that started since the last catch-up. Every query reads status, so owners are judged by their PID alone: reading a process's start time can take seconds on Windows.
+  // Owners judged by their PID alone: reading a process's start time can take seconds on Windows.
+  function readCurrentOwnership() {
+    return readOwnership({ inspect: ({ stateDir: dir }) => ownerState({ stateDir: dir, processStart: async () => null }) })
+  }
+
+  // Status reads the owner afresh, so it never names a session that has ended or misses one that started since the last catch-up. Every query reads status, so it uses the cheap read.
   async function currentIndexOwner() {
     if (self === null) return null
     const before = indexOwnedBy
-    await readOwnership({ inspect: ({ stateDir: dir }) => ownerState({ stateDir: dir, processStart: async () => null }) })
+    await readCurrentOwnership()
     // The owner's session ended while this build stood aside: catch up and take the index over now, not at the next desk change.
     if (before !== null && indexOwnedBy === null && STAND_ASIDE_REASONS.includes(freshnessReason)) scheduleReconciliation()
     return indexOwnerStatus()
@@ -510,6 +519,7 @@ export async function startReadinessController({
       reconcileScheduled?.cancel()
       reconcileScheduled = null
       clearTimeout(cleanup?.timer)
+      cleanup?.stop?.abort()
       await cleanup?.round
       await convergence?.catch(() => {})
       await journalWork

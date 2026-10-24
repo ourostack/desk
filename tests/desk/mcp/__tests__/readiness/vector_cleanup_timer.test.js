@@ -179,3 +179,79 @@ test("a catch-up that ends while a cleanup round runs does not start a second ro
   assert.ok(rounds >= 2, "the timer ran again after the first round finished")
   assert.equal(most, 1, "rounds never overlapped")
 })
+
+// A running controller of a newer Desk build beside this one, as its owner record.
+function newerBuildStarts({ stateHome, root }) {
+  const folder = path.join(stateHome, "e".repeat(64))
+  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  writeFileSync(path.join(folder, "owner.json"), JSON.stringify({
+    identity: { root, build: "f".repeat(64) },
+    owner: { pid: process.pid, token: "newer-owner", started_at: new Date().toISOString() },
+    desk_version: "99.0.0",
+  }))
+}
+
+test("a newer build that starts between catch-ups, with no desk edit, owns the index from this build's next round", async (t) => {
+  const fixture = await desk()
+  let rounds = 0
+  const controller = await controllerFor(t, fixture, {
+    async beginConvergence() {
+      return { summary: await rebuildIndex(fixture.root, { vectorCleanup: false, skipEmbed: true }) }
+    },
+    async cleanupVectors({ signal }) {
+      rounds += 1
+      const db = openDb(fixture.root)
+      try { return await removeUnusableVectors(db, { signal, pauseMs: 1 }) } finally { closeDb(db) }
+    },
+  })
+  await controller.beginConvergence()
+  await controller.barrier({ capability: "lexical", wait: true })
+  for (let waited = 0; waited < 5_000 && rounds === 0; waited += 10) await sleep(10)
+  assert.ok(rounds > 0, "the owner ran a round")
+
+  newerBuildStarts(fixture)
+  await sleep(150)
+  const before = rounds
+  // The newer build's index now holds vectors this build's cleanup would remove or mark.
+  const db = openDb(fixture.root)
+  try {
+    const insert = db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)")
+    db.transaction(() => { for (let id = 1_000_000; id < 1_000_100; id += 1) insert.run(BigInt(id), new Float32Array(768).fill(0.5)) })()
+    db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES ('newer-space', 'gone', NULL)").run()
+  } finally { closeDb(db) }
+  await sleep(400)
+  assert.equal(rounds, before, "no round ran after the newer build appeared")
+  assert.equal(orphanCount(fixture.root), 100, "nothing was deleted")
+  const marked = openDb(fixture.root)
+  try {
+    assert.equal(marked.prepare("SELECT unused_since FROM text_vectors WHERE text_hash = 'gone'").get().unused_since, null, "nothing was marked")
+  } finally { closeDb(marked) }
+})
+
+test("closing stops a running round before its next batch", async () => {
+  const fixture = await desk()
+  let started
+  const running = new Promise((resolve) => { started = resolve })
+  let stopped = false
+  const controller = await connectOrStartController({
+    root: fixture.root, stateHome: fixture.stateHome, ephemeral: true, version: "1.0.0", build: "a".repeat(64),
+    watcher: { fence: async () => ({ certain: true }) },
+    handlers: {
+      async beginConvergence() {
+        return { summary: await rebuildIndex(fixture.root, { vectorCleanup: false, skipEmbed: true }) }
+      },
+      async cleanupVectors({ signal }) {
+        started()
+        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+        stopped = true
+        return { complete: false }
+      },
+    },
+    startController: (options) => startReadinessController({ ...options, cleanupBusyMs: 10, cleanupIdleMs: 50 }),
+  })
+  await controller.beginConvergence()
+  await controller.barrier({ capability: "lexical", wait: true })
+  await running
+  await controller.close()
+  assert.equal(stopped, true, "the round saw the stop and returned before close finished")
+})
