@@ -226,17 +226,22 @@ function taskCardIndex(deskRoot, personPrefix, { wanted, cursor, deadline, clock
   }
 }
 
-export async function prepareTaskContexts(env, {
+export async function prepareTaskContexts(env, options) {
+  return prepareContextGroups(env, options)
+}
+
+async function prepareContextGroups(env, {
   store, entries, pluginVersion, deadline = Infinity, clock = Date.now, readRemote = readDeskRemote, resolveIdentity = resolveJobIdentity,
-}) {
+}, verifiedGroups) {
   const limit = Math.min(deadline, clock() + PREPARATION_MS)
   const within = () => withinBudget(limit, clock)
   const counts = { prepared: 0, unchanged: 0, held: 0, deferred: [] }
   if ((await readConsent(env)).stores[store]?.contribute !== true) return counts
   const cardIndexes = new Map()
-  const groups = [...groupsOf(entries, store).values()]
+  const groups = verifiedGroups ?? [...groupsOf(entries, store).values()]
   for (const group of groups) {
     within()
+    if (!allowed(group.desk_root, store)) continue
     group.entries.sort((left, right) => left.facts.session.id.localeCompare(right.facts.session.id))
     const sources = group.entries.map((entry) => entry.facts)
     if (sources.length > 512 || new Set(sources.map((entry) => entry.session.id)).size !== sources.length) { counts.held += 1; continue }
@@ -455,8 +460,21 @@ export async function planContextPublication(env, { store, entries, pluginVersio
       start = value.cursor % jobs.length
     }
   }
-  // Keep half the remaining allowance available for preparing newly discovered work.
-  const publicationLimit = (clock() + limit) / 2
+  // Large reviewed inputs must not spend the preparation window before discovery starts.
+  let prepared = { prepared: 0, deferred: [] }
+  if (clock() < limit) {
+    try {
+      prepared = await prepareContextGroups(env, {
+        store, pluginVersion, deadline: (clock() + limit) / 2, clock, ...readers,
+      }, [...groups.values()])
+    } catch (error) {
+      if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
+      deferredWork = true
+    }
+  } else {
+    deferredWork = true
+  }
+  const publicationLimit = Math.min(limit, clock() + PREPARATION_MS / 2)
   for (let offset = 0; offset < jobs.length; offset += 1) {
     const index = (start + offset) % jobs.length
     next = index
@@ -501,17 +519,6 @@ export async function planContextPublication(env, { store, entries, pluginVersio
     await writeTaskContextFile(env, store, cursorJob, "publication.json", {
       schema: "desk.factory.context-publication-cursor/1", cursor: next,
     })
-  }
-  let prepared = { prepared: 0, deferred: [] }
-  if (clock() < limit) {
-    try {
-      prepared = await prepareTaskContexts(env, { store, entries, pluginVersion, deadline: limit, clock, ...readers })
-    } catch (error) {
-      if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
-      deferredWork = true
-    }
-  } else {
-    deferredWork = true
   }
   const cached = (await readStatus(env)).context_publication?.[store]
   const held = Number.isFinite(cached?.hold_until) && cached.hold_until > now
