@@ -1,4 +1,5 @@
 import { test } from "node:test"
+import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import {
   existsSync,
@@ -716,8 +717,8 @@ test("desk_status reports vector coverage against the active embedding spec", as
       const vec = new Float32Array(ACTIVE_EMBEDDING_SPEC.dimension)
       // Vectors are stored by section text; only the active section counts toward coverage.
       const saveVector = db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)")
-      saveVector.run(ACTIVE_EMBEDDING_SPEC.id, "sha256:active", Buffer.from(vec.buffer))
-      saveVector.run(ACTIVE_EMBEDDING_SPEC.id, "sha256:inactive", Buffer.from(vec.buffer))
+      saveVector.run(ACTIVE_VECTOR_SPACE, "sha256:active", Buffer.from(vec.buffer))
+      saveVector.run(ACTIVE_VECTOR_SPACE, "sha256:inactive", Buffer.from(vec.buffer))
       assert.ok(activeChunkId && inactiveChunkId)
     } finally {
       closeDb(db)
@@ -806,7 +807,7 @@ test("desk_status treats a section an older build refused as too long as a non-r
       )
       const vec = new Float32Array(ACTIVE_EMBEDDING_SPEC.dimension)
       db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)")
-        .run(ACTIVE_EMBEDDING_SPEC.id, "sha256:vector", Buffer.from(vec.buffer))
+        .run(ACTIVE_VECTOR_SPACE, "sha256:vector", Buffer.from(vec.buffer))
       assert.ok(vectorChunkId)
     } finally {
       closeDb(db)

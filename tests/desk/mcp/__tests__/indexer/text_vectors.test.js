@@ -18,7 +18,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { inspectLocalDb, inspectStatusIndex } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
-import { indexedRecall } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { indexedRecall, indexedSearch } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { embedShortened } from "../../../../../plugins/desk/mcp/src/indexer/embed.js"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import Database from "better-sqlite3"
@@ -170,7 +170,7 @@ test("after the embedding service did not answer, only the changed documents' se
 test("vectors made with another model are kept apart from the active model's", async () => {
   const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
   await rebuildIndex(root, { embed: { model: "other-model", fetch: recordingEmbed().fetch } })
-  assert.equal(vectorSpaceFor("other-model"), `${ACTIVE_VECTOR_SPACE}+model:other-model`)
+  assert.notEqual(vectorSpaceFor("other-model"), ACTIVE_VECTOR_SPACE)
   inDb(root, (db) => {
     assert.deepEqual(db.prepare("SELECT DISTINCT vector_space FROM text_vectors").all().map((row) => row.vector_space), [vectorSpaceFor("other-model")])
   })
@@ -216,6 +216,33 @@ test("first start carries valid old vectors over by text, with no embedding, and
   })
 })
 
+test("the copy runs in bounded transactions, and marks the index as migrated only after the last one", async () => {
+  const { root, live } = await legacyIndex({ trusted: true })
+  inDb(root, (db) => {
+    const sizes = []
+    const counted = new Proxy(db, {
+      get(target, property) {
+        if (property === "transaction") return (body) => target.transaction(() => { sizes.push(getMeta(target, "text_vectors_migrated_from_chunk_vecs")); return body() })
+        const value = Reflect.get(target, property)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })
+    assert.deepEqual(migrateRowVectors(counted, { trusted: true, batchSize: 2 }), { migrated: true, vectors_copied: live.length })
+    assert.equal(sizes.length, Math.ceil(live.length / 2) + 1, "one transaction per two sections, then one for the mark")
+    assert.ok(sizes.every((mark) => mark === null), "no transaction ran after the mark")
+    assert.equal(getMeta(db, "text_vectors_migrated_from_chunk_vecs"), ACTIVE_VECTOR_SPACE)
+  })
+})
+
+test("an untrusted start copies nothing and leaves the copy for a later start that trusts the old vectors", async () => {
+  const { root, live } = await legacyIndex({ trusted: false })
+  inDb(root, (db) => {
+    assert.deepEqual(migrateRowVectors(db, { trusted: false }), { migrated: false, vectors_copied: 0 })
+    assert.equal(getMeta(db, "text_vectors_migrated_from_chunk_vecs"), null)
+    assert.deepEqual(migrateRowVectors(db, { trusted: true }), { migrated: true, vectors_copied: live.length })
+  })
+})
+
 test("old vectors of unknown provenance are not carried over", async () => {
   const { root, live } = await legacyIndex({ trusted: false })
   const embed = recordingEmbed()
@@ -227,7 +254,7 @@ test("old vectors of unknown provenance are not carried over", async () => {
   })
 })
 
-test("vectors no section can use are removed in bounded batches, and an older build still reads its own table afterwards", async () => {
+test("vectors no section can use are found in one read per round and removed in bounded transactions, and an older build still reads its own table afterwards", async () => {
   const { root, live } = await legacyIndex({ trusted: true })
   const db = openDb(root)
   try {
@@ -235,20 +262,28 @@ test("vectors no section can use are removed in bounded batches, and an older bu
     db.transaction(() => { for (let id = 1_000_000; id < 1_001_150; id += 1) insert.run(BigInt(id), new Float32Array(vector(0.9))) })()
     const orphans = () => db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs v WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.id = v.chunk_id)").get().n
     assert.equal(orphans(), 1_200)
+    // Each round finds at most 500 in one read and deletes them 100 rows per transaction.
+    const sizes = []
+    const counted = new Proxy(db, {
+      get(target, property) {
+        if (property === "transaction") return (body) => target.transaction((ids, ...rest) => { if (Array.isArray(ids)) sizes.push(ids.length); return body(ids, ...rest) })
+        const value = Reflect.get(target, property)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })
     const runs = []
     for (;;) {
-      const run = await removeUnusableVectors(db, { batchSize: 100, budgetMs: 0 })
+      const run = await removeUnusableVectors(counted, { scanLimit: 500, batchSize: 100, pauseMs: 0 })
       runs.push(run)
       if (run.complete) break
     }
     assert.equal(orphans(), 0)
-    assert.ok(runs.length >= 12, `each run stopped after one batch of at most 100 (${runs.length} runs)`)
-    assert.ok(runs.every((run) => run.row_vectors_removed <= 100))
-    assert.equal(runs.reduce((sum, run) => sum + run.row_vectors_removed, 0), 1_200)
+    assert.deepEqual(runs.map((run) => [run.row_vectors_removed, run.complete]), [[500, false], [500, false], [200, true]])
+    assert.deepEqual(sizes, Array(12).fill(100))
 
-    // A longer budget takes several batches in one run.
+    // With the default limits one round takes them all.
     db.transaction(() => { for (let id = 2_000_000; id < 2_000_250; id += 1) insert.run(BigInt(id), new Float32Array(vector(0.9))) })()
-    assert.deepEqual(await removeUnusableVectors(db, { batchSize: 100, budgetMs: 60_000 }),
+    assert.deepEqual(await removeUnusableVectors(db),
       { text_vectors_removed: 0, row_vectors_removed: 250, complete: true })
 
     // An older build reads its own table as before: by row, and by nearest neighbour.
@@ -466,14 +501,21 @@ test("status of an index with no sections table reports no shortened or skipped 
   assert.deepEqual([status.shortened_sections, status.skipped_sections, status.note], [0, 0, undefined])
 })
 
-test("meaning-based search never reads a skipped text", async () => {
-  const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
+test("meaning-based search never reads a skipped text: recall leaves its card out, and search finds it by its words alone", async () => {
+  const root = await deskWith({ "track/a/task.md": "# Card\n\nalpha section.\n", "track/b/task.md": `${BRAVO}\n` })
   const embed = refusingEmbed(refusesAtEveryLength(BRAVO))
   await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
+  assert.equal(inspectLocalDb(root).document_vectors.skipped_sections, 1)
   const db = openDb(root)
-  const recalled = await indexedRecall({ deskRoot: root, db, input: { topic: "alpha", limit: 5 }, opts: { embed } }).finally(() => closeDb(db))
-  assert.equal(recalled.error, undefined, JSON.stringify(recalled))
-  assert.ok(recalled.results.length > 0)
+  try {
+    const recalled = await indexedRecall({ deskRoot: root, db, input: { topic: "bravo section", limit: 5 }, opts: { embed } })
+    assert.equal(recalled.error, undefined, JSON.stringify(recalled))
+    assert.deepEqual(recalled.results.map((result) => result.path), ["track/a/task.md"], "the skipped section's card has no meaning-based score")
+    const searched = await indexedSearch({ deskRoot: root, db, input: { query: "bravo", limit: 5 }, opts: { embed } })
+    const card = searched.results.find((result) => result.path === "track/b/task.md")
+    assert.ok(card, JSON.stringify(searched))
+    assert.equal(card.score_breakdown.semantic, 0)
+  } finally { closeDb(db) }
 })
 
 test("an index an older build wrote, which has no text vectors yet, reads as having no vectors", async () => {

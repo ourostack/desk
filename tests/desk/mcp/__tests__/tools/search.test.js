@@ -1,6 +1,7 @@
 // search.test.js — desk_search hybrid lexical+semantic ranking + filters.
 
 import { test } from "node:test"
+import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import { mkdirSync } from "node:fs"
@@ -175,8 +176,8 @@ test("timeline hybrid keeps the strongest chunk per document", async () => {
       SELECT doc_id, 1, chunk_key || '-second', text_hash || '-second', embedding_spec_id, chunker_id, normalization_id, ?
       FROM chunks WHERE doc_id = ? AND chunk_index = 0`).run("alpha later stronger detail", doc.id)
     db.prepare("INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)").run(info.lastInsertRowid, "alpha later stronger detail")
-    db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) SELECT embedding_spec_id, text_hash, ? FROM chunks WHERE id = ?")
-      .run(Buffer.from(new Float32Array(topicVector("alpha later stronger detail")).buffer), info.lastInsertRowid)
+    db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) SELECT ?, text_hash, ? FROM chunks WHERE id = ?")
+      .run(ACTIVE_VECTOR_SPACE, Buffer.from(new Float32Array(topicVector("alpha later stronger detail")).buffer), info.lastInsertRowid)
   } finally {
     db.close()
   }

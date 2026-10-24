@@ -1,6 +1,7 @@
 // Unit 17d: red contract for artifact-aware desk_status output.
 
 import { test } from "node:test"
+import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -58,7 +59,7 @@ function storeVector(db, chunkId, vec) {
   db.prepare(
     `INSERT INTO text_vectors (vector_space, text_hash, embedding)
      SELECT ?, text_hash, ? FROM chunks WHERE id = ?`,
-  ).run(ACTIVE_EMBEDDING_SPEC.id, Buffer.from(vec.buffer), chunkId)
+  ).run(ACTIVE_VECTOR_SPACE, Buffer.from(vec.buffer), chunkId)
 }
 
 function seedPartialVectorDb(root) {

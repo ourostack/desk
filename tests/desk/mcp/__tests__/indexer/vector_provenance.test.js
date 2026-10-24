@@ -7,6 +7,7 @@ import { closeDb, getMeta, openDb, setMeta } from "../../../../../plugins/desk/m
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { ACTIVE_VECTOR_SPACE, vectorSpaceOf } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 
 const KEY = "active_vector_provenance"
 const NO_ARTIFACTS = { snapshots: false, vectorPacks: false }
@@ -158,20 +159,36 @@ test("matching provenance preserves vectors without reembedding", async (t) => {
 })
 
 for (const field of ["schema_version", "id", "model", "model_revision", "dimension", "chunker_id", "normalization_id"]) {
-  test(`provenance mismatch in ${field} is reset, while vectors keyed by their own settings stay`, async (t) => {
+  test(`vectors made under a different ${field} are never reused, and are made again`, async (t) => {
     const root = fixture(t)
     await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: async () => embedding(0.2) } })
     assert.notEqual(provenance(root), null)
+    // A build with that one setting changed made the stored vectors and wrote its own provenance marker.
     const stale = JSON.parse(provenance(root))
+    const changed = field === "dimension" ? 1024 : "different"
     if (field === "schema_version") stale.schema_version = 0
-    else stale.embedding_spec[field] = "different"
-    inDb(root, (db) => setMeta(db, KEY, JSON.stringify(stale)))
-    const result = await ensureIndex(root, {
+    else stale.embedding_spec[field] = changed
+    const staleSpace = field === "schema_version"
+      ? vectorSpaceOf(ACTIVE_EMBEDDING_SPEC, 0)
+      : vectorSpaceOf({ ...ACTIVE_EMBEDDING_SPEC, [field]: changed })
+    assert.notEqual(staleSpace, ACTIVE_VECTOR_SPACE)
+    inDb(root, (db) => {
+      setMeta(db, KEY, JSON.stringify(stale))
+      db.prepare("UPDATE text_vectors SET vector_space = ?").run(staleSpace)
+    })
+    const offline = await ensureIndex(root, {
       ...NO_ARTIFACTS, embed: { fetch: async () => { throw new Error("offline") } },
     })
-    // Each stored vector names the settings that made it, so a stale marker cannot pass vectors off as current ones.
-    assert.equal(result.semantic.vectors_indexed, 1)
-    assertCurrent(root, result)
+    assert.equal(offline.semantic.vectors_indexed, 0)
+    assert.equal(offline.semantic.missing_vectors, 1)
+    assert.equal(offline.semantic.provenance_current, false)
+    const prompts = []
+    const online = await ensureIndex(root, {
+      ...NO_ARTIFACTS, embed: { fetch: async (_url, request) => { prompts.push(JSON.parse(request.body).prompt); return embedding(0.3) } },
+    })
+    assert.ok(prompts.some((prompt) => prompt.includes("Legacy document")), "the section is embedded again")
+    assert.equal(online.semantic.vectors_indexed, 1)
+    assertCurrent(root, online)
   })
 }
 

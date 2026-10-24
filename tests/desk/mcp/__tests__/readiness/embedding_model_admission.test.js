@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import fsBuiltin from "node:fs"
 import fsPromises from "node:fs/promises"
@@ -235,8 +236,8 @@ for (const semantic of ["background", "required"]) {
       const db = openDb(context.root)
       try {
         const specs = db.prepare(
-          "SELECT DISTINCT c.embedding_spec_id, s.model FROM chunks c JOIN embedding_specs s ON s.id = c.embedding_spec_id JOIN text_vectors v ON v.text_hash = c.text_hash AND v.vector_space = c.embedding_spec_id",
-        ).all()
+          "SELECT DISTINCT c.embedding_spec_id, s.model FROM chunks c JOIN embedding_specs s ON s.id = c.embedding_spec_id JOIN text_vectors v ON v.text_hash = c.text_hash AND v.vector_space = ?",
+        ).all(ACTIVE_VECTOR_SPACE)
         assert.deepEqual(specs, [
           { embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id, model: ACTIVE_EMBEDDING_SPEC.model },
         ])

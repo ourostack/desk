@@ -1,6 +1,7 @@
 // Unit 13a: red contract for rebuilding local vectors from committed packs.
 
 import { test } from "node:test"
+import { ACTIVE_VECTOR_SPACE } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { strict as assert } from "node:assert"
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
@@ -137,7 +138,7 @@ function storedVector(db, docPath, chunkIndex) {
     .prepare(
       `SELECT v.embedding
        FROM chunks c
-       JOIN text_vectors v ON v.vector_space = '${ACTIVE_EMBEDDING_SPEC.id}' AND v.text_hash = c.text_hash
+       JOIN text_vectors v ON v.vector_space = '${ACTIVE_VECTOR_SPACE}' AND v.text_hash = c.text_hash
        JOIN docs d ON d.id = c.doc_id
        WHERE d.path = ? AND c.chunk_index = ?`,
     )
