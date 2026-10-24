@@ -142,3 +142,40 @@ test("a round due during a catch-up waits for it, and runs nothing once a higher
   await sleep(500)
   assert.equal(rounds, before)
 })
+
+test("a catch-up that ends while a cleanup round runs does not start a second round beside it", async (t) => {
+  const fixture = await desk()
+  let rounds = 0
+  let running = 0
+  let most = 0
+  let release
+  const held = new Promise((resolve) => { release = resolve })
+  let started
+  const firstRound = new Promise((resolve) => { started = resolve })
+  const controller = await controllerFor(t, fixture, {
+    async beginConvergence() {
+      return { summary: await rebuildIndex(fixture.root, { vectorCleanup: false, skipEmbed: true }) }
+    },
+    async cleanupVectors() {
+      rounds += 1
+      running += 1
+      most = Math.max(most, running)
+      started()
+      if (rounds === 1) await held
+      running -= 1
+      return { complete: true }
+    },
+  })
+  await controller.beginConvergence()
+  await controller.barrier({ capability: "lexical", wait: true })
+  await firstRound
+
+  // A catch-up starts and ends while the first round is still deleting.
+  await controller.beginConvergence()
+  await sleep(100)
+  assert.equal(rounds, 1, "no second round started while the first ran")
+  release()
+  for (let waited = 0; waited < 5_000 && rounds < 2; waited += 10) await sleep(10)
+  assert.ok(rounds >= 2, "the timer ran again after the first round finished")
+  assert.equal(most, 1, "rounds never overlapped")
+})
