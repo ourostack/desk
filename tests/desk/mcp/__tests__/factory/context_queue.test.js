@@ -1310,6 +1310,42 @@ test("preparation starts before a large reviewed input spends the remaining publ
   assert.ok(elapsed <= 2000, "the two-second preparation/publication allowance remains unchanged")
 })
 
+test("inventory overhead cannot halve the first preparation stage below a complete identity lookup", async (t) => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const stateFile = await taskContextPath(f.env, STORE, work.job, "state.json")
+  const storeDir = join(stateFile, "..", "..")
+  let elapsed = 0
+  let consentReads = 0
+  await withFsFault(t, {
+    readdir: async (original, file, ...args) => {
+      const result = await original(file, ...args)
+      if (String(file) === storeDir) elapsed += 500
+      return result
+    },
+    readFile: (original, file, ...args) => {
+      if (String(file).endsWith("consent.json") && ++consentReads === 2) elapsed += 100
+      return original(file, ...args)
+    },
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, pluginVersion: "3.2.0-alpha.2", now: 1000, deadline: 2000, clock: () => elapsed,
+    readRemote: () => {
+      elapsed += 52
+      return "https://github.com/synthetic/desk.git"
+    },
+    resolveIdentity: ({ track, slug }) => {
+      elapsed += 206 + 178
+      return { track, slug }
+    },
+  }), fsNative.promises)
+  const current = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(current.length, 1)
+  assert.equal(current[0].source.evaluator.plugin_version, "3.2.0-alpha.2")
+  assert.equal(current[0].source.task_card.path, f.card)
+  assert.ok(elapsed <= 2000)
+})
+
 test("prevalidated task groups cannot prepare new inputs after the prose policy is withdrawn", async (t) => {
   const f = await prepared()
   const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")

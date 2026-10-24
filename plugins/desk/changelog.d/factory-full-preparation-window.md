@@ -1,0 +1,1 @@
+Keep the full existing one-second preparation window after inventory work, rather than halving the remaining allowance again. Publication still resumes within its own one-second cap and the unchanged two-second overall deadline.

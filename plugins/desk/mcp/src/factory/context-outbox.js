@@ -465,7 +465,7 @@ export async function planContextPublication(env, { store, entries, pluginVersio
   if (clock() < limit) {
     try {
       prepared = await prepareContextGroups(env, {
-        store, pluginVersion, deadline: (clock() + limit) / 2, clock, ...readers,
+        store, pluginVersion, deadline: Math.min(limit, clock() + PREPARATION_MS / 2), clock, ...readers,
       }, [...groups.values()])
     } catch (error) {
       if (!["context_preparation_deferred", "boot_check_budget", "git_deadline"].includes(error.code)) throw error
