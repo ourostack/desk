@@ -120,9 +120,10 @@ test("beside older builds that keep re-indexing a 1,000-section card, recall sta
   let appends = 0
   let writing = true
   const appender = (async () => {
-    const end = Date.now() + 10_000
-    while (Date.now() < end) {
-      await sleep(500)
+    // On a fixed schedule, so a slow append or catch-up request does not stretch the gaps after it.
+    const start = Date.now()
+    while (Date.now() - start < 10_000) {
+      await sleep(Math.max(0, start + (appends + 1) * 500 - Date.now()))
       appends += 1
       await fs.appendFile(path.join(root, CARD), `\n## Appended ${appends}\n\nquartz appended note ${appends}: a new step was logged.\n`)
       await owner.controller.markUncertain("pending_change")
