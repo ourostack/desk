@@ -508,7 +508,6 @@ test("the active index reads as nothing before any generation is committed", asy
   const writer = openDb(root)
   let id
   try { id = commitLexicalGeneration({ db: writer, documents: [], eventCursor, identities }) } finally { closeDb(writer) }
-  const active = readActiveIndex(root)
-  assert.equal(active.generation, id)
-  assert.equal(active.content, readCommittedContent(root, id))
+  assert.deepEqual(readActiveIndex(root), { generation: id, writer: null })
+  assert.match(readCommittedContent(root, id), /^sha256:/)
 })

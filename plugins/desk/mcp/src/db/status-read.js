@@ -237,7 +237,7 @@ function readIndex(deskRoot, read) {
   } finally { db.close() }
 }
 
-// Who wrote the active generation and what it indexes, without counting vectors: a controller reads this before each catch-up to learn whether another Desk build owns the index.
+// Who wrote the active generation, without counting vectors or reading its documents: a controller reads this before each catch-up and each status answer to learn whether another Desk build owns the index.
 export function readActiveIndex(deskRoot) {
   return readIndex(deskRoot, (db) => {
     const generation = activeGeneration(db)
@@ -246,7 +246,6 @@ export function readActiveIndex(deskRoot) {
     return {
       generation: generation.id,
       writer: readIndexWriter(db.prepare("SELECT value FROM meta WHERE key = ?").get(INDEX_WRITER_KEY)?.value, cursor),
-      content: readGenerationContent(db, generation.id),
     }
   })
 }

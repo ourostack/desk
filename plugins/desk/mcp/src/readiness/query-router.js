@@ -12,10 +12,10 @@ function semanticScopeError() {
   return semanticCapabilityError("semantic_unavailable", NOT_CONNECTED)
 }
 
-function readinessError(reason, message) {
+function readinessError(reason, message, detail = null) {
   return {
     status: "error", code: "required_capability_unavailable", capability: "lexical",
-    diagnostic: { reason, message },
+    diagnostic: { reason, message, ...(detail === null ? {} : { detail }) },
   }
 }
 
@@ -35,6 +35,9 @@ const REINDEX_NO_CONNECTION = "Reindexing needs Desk's search service, and this 
 const REINDEX_NOT_CAUGHT_UP = "The search index has not finished catching up yet; retry shortly."
 const UNKNOWN_KIND = 'Meaning-based search answers only desk_recall and desk_similar (kind "recall" or "similar").'
 const DEADLINE_DETAIL = "The search index was still being updated when the wait ran out."
+const REINDEXED_NOTHING = "This session reindexed nothing."
+const OWNER_INDEX_CURRENT = "The index already covers the desk's files."
+const OWNER_INDEX_BEHIND = "That session has not finished updating it, so searches here read the files until it does."
 const cannotReadOwnersIndex = (version) => `Desk ${version} (another session) owns the search index, and this session's Desk cannot read it.`
 const PLAIN_REASONS = Object.freeze({
   semantic_unavailable: INDEX_CATCHING_UP,
@@ -76,6 +79,7 @@ export const READINESS_WORDING = Object.freeze([
   `${INDEX_CHANGED} These results come from reading the files.`, SERVICE_FAILED, NO_CONNECTION_READS_FILES,
   OTHER_EMBEDDING_SETTINGS, TEXT_NOT_PREPARED, EMBEDDING_NOT_ANSWERING, SETTINGS_TURN_OFF, DOCUMENT_HAS_NO_TEXT,
   REINDEX_NO_CONNECTION, REINDEX_NOT_CAUGHT_UP, UNKNOWN_KIND, DEADLINE_DETAIL, cannotReadOwnersIndex("1.2.3"),
+  REINDEXED_NOTHING, OWNER_INDEX_CURRENT, OWNER_INDEX_BEHIND, indexDeadlineMessage(30_000), indexDeadlineMessage(1_000), indexDeadlineMessage(0),
   ...Object.values(PLAIN_REASONS),
   SEMANTIC_UNAVAILABLE, SEMANTIC_FIX, EMBEDDING_FIX,
   ...[SEMANTIC_OFF_REFUSAL, NEWER_DESK_REFUSAL, UNINDEXED_DOCUMENT_REFUSAL].flatMap(({ message, fix }) => [message, fix]),
@@ -174,11 +178,31 @@ function hasQuery(request) {
   return typeof request.query === "string" && request.query.trim().length > 0
 }
 
-// What desk_recall and desk_similar say when meaning-based search did not catch up within the call's wait.
-function deadlineMessage(deadlineMs) {
-  if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) return "Meaning-based search did not finish catching up in time."
+// What a search says when what it waits for did not catch up within the call's wait.
+function catchUpDeadline(subject, deadlineMs) {
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) return `${subject} did not finish catching up in time.`
   const seconds = Math.max(1, Math.round(deadlineMs / 1000))
-  return `Meaning-based search did not finish catching up within ${seconds} ${seconds === 1 ? "second" : "seconds"}.`
+  return `${subject} did not finish catching up within ${seconds} ${seconds === 1 ? "second" : "seconds"}.`
+}
+function deadlineMessage(deadlineMs) {
+  return catchUpDeadline("Meaning-based search", deadlineMs)
+}
+// desk_thread and desk_reindex wait for the index itself.
+function indexDeadlineMessage(deadlineMs) {
+  return catchUpDeadline("The search index", deadlineMs)
+}
+const INDEX_DEADLINE = "index_deadline"
+
+// The deadline refusal of desk_thread and desk_reindex, naming the owner when the controller reports one.
+async function indexDeadlineError(controller, deadlineMs, signal) {
+  const owner = indexOwnerSentence((await observedStatus(controller, signal))?.index_owner)
+  return readinessError(INDEX_DEADLINE, indexDeadlineMessage(deadlineMs), owner === null ? DEADLINE_DETAIL : `${DEADLINE_DETAIL} ${owner}`)
+}
+
+// Waits for the index to catch up, but no longer than the call's deadline.
+function lexicalWait(controller, signal, deadlineMs) {
+  return withDeadline(() => cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal),
+    deadlineMs, INDEX_DEADLINE, DEADLINE_DETAIL)
 }
 
 function semanticDiagnostic(proof) {
@@ -249,6 +273,8 @@ export function createQueryRouter({
   semanticBackend,
   directBackend,
   semanticDeadlineMs = 30_000,
+  // How long desk_thread and desk_reindex wait for the index to catch up.
+  indexDeadlineMs = 30_000,
   version = RUNNING_VERSION,
 } = {}) {
   let lastProof = null
@@ -364,9 +390,8 @@ export function createQueryRouter({
       ["background", "required"].includes(controller?.identity?.semantic_contract?.mode)
     try {
       if (controller) {
-        const initial = await cancellable(() => controller.barrier({
-          capability: "lexical", ...(request.kind === "thread" ? { wait: true } : {}),
-        }), signal)
+        const initial = request.kind === "thread" ? await lexicalWait(controller, signal, indexDeadlineMs)
+          : await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
         diagnostic = { reason: "reconciliation_pending", message: INDEX_BEHIND }
         if (initial.current === true) {
           if (semanticDesired) {
@@ -386,6 +411,7 @@ export function createQueryRouter({
       before = null
       signal?.throwIfAborted()
       if (error.code === "artifact_tombstone_ledger_invalid") throw error
+      if (error.code === INDEX_DEADLINE) return indexDeadlineError(controller, indexDeadlineMs, signal)
       diagnostic = { reason: error.code ?? "readiness_unavailable", message: INDEX_BEHIND, technical: String(error.message ?? error) }
     }
     if (before?.proven) {
@@ -589,7 +615,21 @@ export function createQueryRouter({
       signal?.throwIfAborted()
       if (!controller) return readinessError("controller_unavailable", REINDEX_NO_CONNECTION)
       const result = await cancellable(() => controller.beginConvergence(), signal)
-      const barrier = await cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal)
+      let barrier
+      try {
+        barrier = await lexicalWait(controller, signal, indexDeadlineMs)
+      } catch (error) {
+        if (error.code !== INDEX_DEADLINE) throw error
+        barrier = null
+      }
+      // Only the build that owns the index writes it: a session of a lower build says so instead of reporting a reindex it did not do.
+      const owner = (await observedStatus(controller, signal))?.index_owner
+      if (owner?.this_controller === false) {
+        const current = barrier?.current === true
+        return { status: "not_reindexed", action: "none", index_current: current,
+          message: `${REINDEXED_NOTHING} ${indexOwnerSentence(owner)} ${current ? OWNER_INDEX_CURRENT : OWNER_INDEX_BEHIND}` }
+      }
+      if (barrier === null) return indexDeadlineError(controller, indexDeadlineMs, signal)
       if (barrier.current !== true) {
         return readinessError("reconciliation_pending", REINDEX_NOT_CAUGHT_UP)
       }
@@ -602,7 +642,7 @@ export function createDeskQueryRouter({ controller, version, semanticDeadlineMs 
   return createQueryRouter({
     controller,
     version,
-    ...(semanticDeadlineMs === undefined ? {} : { semanticDeadlineMs }),
+    ...(semanticDeadlineMs === undefined ? {} : { semanticDeadlineMs, indexDeadlineMs: semanticDeadlineMs }),
     directBackend: directLexicalSearch,
     indexedBackend: (request) => {
       const backend = request.kind === "thread" ? indexedThread

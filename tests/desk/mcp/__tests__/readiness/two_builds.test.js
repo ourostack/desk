@@ -15,6 +15,7 @@ import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { getSemanticCoverage, verifyIndexCoversDesk } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
+import { desk_reindex } from "../../../../../plugins/desk/mcp/src/tools/reindex.js"
 import { compactStatus } from "../../../../../plugins/desk/mcp/src/runtime/status-compact.js"
 import { makeEmbedFetch, mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
 
@@ -321,6 +322,12 @@ test("a lower build started while a higher build runs stands aside, reads the hi
   const recall = (side, options) => desk_recall({ deskRoot: root, queryRouter: router(side, options), input: { topic: "quartz rollout", limit: 3 }, opts: { embed: { fetch: makeEmbedFetch() } } })
   const read = await recall(low)
   assert.equal(read.results?.length, 3, JSON.stringify(read))
+  // A reindex asked of the lower build writes nothing and says so, naming the owner.
+  const reindexed = await desk_reindex({ deskRoot: root, queryRouter: router(low), input: {} })
+  assert.deepEqual(reindexed, { status: "not_reindexed", action: "none", index_current: true,
+    message: "This session reindexed nothing. Desk 3.2.0-alpha.349 (another session) owns the search index; this session only reads it. The index already covers the desk's files." })
+  assert.equal(low.converged.count, 0)
+  assert.equal((await desk_reindex({ deskRoot: root, queryRouter: router(high), input: {} })).status, "ok")
 
   const owner = "Desk 3.2.0-alpha.349 (another session) owns the search index; this session only reads it."
   const status = await desk_status({ deskRoot: root, statusContext: { admission: { controller: low.controller } } })

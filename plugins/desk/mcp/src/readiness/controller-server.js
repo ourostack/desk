@@ -12,9 +12,12 @@ import { fenceEvents } from "./watcher.js"
 import { exitRelease as defaultExitRelease } from "./exit-release.js"
 import { readOwnProcessStart } from "./process-start.js"
 import { indexOwner } from "./index-writer.js"
+import { ownerState } from "./owner-record.js"
 
 // A catch-up that another Desk build's commit undid, or a build standing aside whose owner has not caught up yet, tries again after a growing pause instead of at once: retrying at once is what kept two builds undoing each other's work. After the last pause the controller stops and stays uncertain; the next desk change or search starts it again.
 export const RETRY_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000])
+// Why a build standing aside for a higher build cannot answer from the index yet.
+const STAND_ASIDE_REASONS = Object.freeze(["index_owner_catching_up", "index_owned_by_newer_desk"])
 
 export async function startReadinessController({
   identity,
@@ -62,9 +65,8 @@ export async function startReadinessController({
   let closing = false
   let unregisterRelease
   const self = typeof version === "string" ? { version, build: identity.build ?? null, controller: identity.id } : null
-  // The build that owns the index when it is not this one, as of the last catch-up; `ownerKnown` is false until the first.
+  // The build that owns the index when it is not this one, as of the last catch-up or status answer.
   let indexOwnedBy = null
-  let ownerKnown = false
   // What the index held when this controller last proved it current (generationContent): another build's generation with the same content serves the same answers.
   let readyContent = null
   let retryAttempt = 0
@@ -126,7 +128,7 @@ export async function startReadinessController({
   }
 
   // Whether a running Desk build that ranks above this one owns the index; this controller then only reads it.
-  async function readOwnership() {
+  async function readOwnership({ inspect } = {}) {
     if (self === null) return null
     let indexWriter = null
     try {
@@ -135,9 +137,18 @@ export async function startReadinessController({
     } catch {
       // An unreadable index has no owner to defer to; the catch-up moves it aside and rebuilds it.
     }
-    indexOwnedBy = await indexOwner({ self, root: identity.root, stateDir, indexWriter })
-    ownerKnown = true
+    indexOwnedBy = await indexOwner({ self, root: identity.root, stateDir, indexWriter, inspect })
     return indexOwnedBy
+  }
+
+  // Status reads the owner afresh, so it never names a session that has ended or misses one that started since the last catch-up. Every query reads status, so owners are judged by their PID alone: reading a process's start time can take seconds on Windows.
+  async function currentIndexOwner() {
+    if (self === null) return null
+    const before = indexOwnedBy
+    await readOwnership({ inspect: ({ stateDir: dir }) => ownerState({ stateDir: dir, processStart: async () => null }) })
+    // The owner's session ended while this build stood aside: catch up and take the index over now, not at the next desk change.
+    if (before !== null && indexOwnedBy === null && STAND_ASIDE_REASONS.includes(freshnessReason)) scheduleReconciliation()
+    return indexOwnerStatus()
   }
 
   async function committedContent(generationId) {
@@ -150,7 +161,6 @@ export async function startReadinessController({
   }
 
   function indexOwnerStatus() {
-    if (self === null || !ownerKnown) return null
     return indexOwnedBy === null
       ? { version: self.version, build: self.build, this_controller: true }
       : { version: indexOwnedBy.version, build: indexOwnedBy.build, this_controller: false }
@@ -339,7 +349,7 @@ export async function startReadinessController({
       current,
       state,
       // Why a build standing aside cannot answer from the index yet.
-      ...(!current && ["index_owner_catching_up", "index_owned_by_newer_desk"].includes(freshnessReason) ? { reason: freshnessReason } : {}),
+      ...(!current && STAND_ASIDE_REASONS.includes(freshnessReason) ? { reason: freshnessReason } : {}),
     }
   }
 
@@ -361,14 +371,17 @@ export async function startReadinessController({
           owner,
           ...(diagnostic ? { diagnostic } : {}),
         }),
-        status: () => ({
-          state, identity, owner, convergence: convergenceStatus(),
-          freshness: {
-            certain: freshnessReason === null, reason: freshnessReason, cursor: journal?.cursor ?? null,
-            content: freshnessReason === null ? readyContent : null,
-          },
-          index_owner: indexOwnerStatus(),
-        }),
+        status: async () => {
+          const indexOwnerNow = await currentIndexOwner()
+          return {
+            state, identity, owner, convergence: convergenceStatus(),
+            freshness: {
+              certain: freshnessReason === null, reason: freshnessReason, cursor: journal?.cursor ?? null,
+              content: freshnessReason === null ? readyContent : null,
+            },
+            index_owner: indexOwnerNow,
+          }
+        },
         beginConvergence,
         barrier: () => barrier(request.params),
         recordChange: () => recordChange(request.params),

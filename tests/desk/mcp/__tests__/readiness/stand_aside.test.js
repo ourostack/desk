@@ -192,3 +192,32 @@ test("the check of the owner's index refuses an unreadable tombstone ledger", as
   writeFileSync(path.join(pluginRoot, "artifacts", "tombstones", "tombstones.jsonl"), "not json\n")
   await assert.rejects(verifyIndexCoversDesk(fixture.root, { tombstones: { pluginRoot } }), { code: "artifact_tombstone_ledger_invalid" })
 })
+
+test("status names the owner as it is now: a newer build that starts after this one's catch-up", async (t) => {
+  const fixture = await desk()
+  const controller = await controllerFor(t, fixture, { async beginConvergence() { return { indexed: true } } })
+  assert.deepEqual((await controller.status()).index_owner, { version: "1.0.0", build: "a".repeat(64), this_controller: true }, "known before any catch-up")
+  await controller.beginConvergence()
+  await controller.barrier({ capability: "lexical", wait: true })
+  newerOwnerBeside(fixture)
+  assert.deepEqual((await controller.status()).index_owner, { version: "99.0.0", build: "f".repeat(64), this_controller: false }, "no catch-up ran since the newer build started")
+})
+
+test("status names this session once the owner's session ends, and this build takes the index over", async (t) => {
+  const fixture = await desk()
+  newerOwnerBeside(fixture)
+  const calls = { converged: 0 }
+  const controller = await controllerFor(t, fixture, {
+    async beginConvergence() { calls.converged += 1; return { indexed: true } },
+    async verifyIndex() { return { verified: false, same_settings: false, content: "sha256:other", semantic: null } },
+  })
+  await controller.beginConvergence()
+  assert.equal((await controller.barrier({ capability: "lexical", wait: true })).reason, "index_owned_by_newer_desk")
+  assert.equal((await controller.status()).index_owner.this_controller, false)
+  // The owner's session ends: its owner record goes away.
+  await fs.rename(path.join(fixture.stateHome, OWNER_FOLDER, "owner.json"), path.join(fixture.stateHome, OWNER_FOLDER, "ended.json"))
+  assert.equal((await controller.status()).index_owner.this_controller, true)
+  const settled = await controller.barrier({ capability: "lexical", wait: true })
+  assert.equal(settled.current, true, "this build caught up without waiting for a desk change")
+  assert.equal(calls.converged, 1)
+})

@@ -1532,3 +1532,57 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   held.resolve()
   await restarted.call("desk_reindex")
 })
+
+// A controller whose index never catches up within the call: a lower build whose owner is still behind. The deadline timer does not hold the process open, and in a session the controller's socket does; here a test timer stands in for it.
+function waitingController(owner, t) {
+  const open = setInterval(() => {}, 1_000)
+  t.after(() => clearInterval(open))
+  return {
+    status: async () => ({ state: "LEXICAL_CONVERGING", freshness: { certain: false, reason: "index_owner_catching_up", cursor: null }, index_owner: owner }),
+    beginConvergence: async () => ({}),
+    barrier: async (request) => (request?.wait ? new Promise(() => {}) : { current: false }),
+  }
+}
+
+test("desk_thread stops waiting at the call's deadline and says so plainly, naming the owner", async (t) => {
+  const deskRoot = await mkTempDeskRoot()
+  const owner = { version: "1.2.3", build: "0".repeat(64), this_controller: false }
+  const router = createQueryRouter({ controller: waitingController(owner, t), indexDeadlineMs: 1_000 })
+  const started = Date.now()
+  const result = await router.lexical({ deskRoot, kind: "thread", start_path: "a.md" })
+  assert.ok(Date.now() - started < 5_000)
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "index_deadline")
+  assert.equal(result.diagnostic.message, "The search index did not finish catching up within 1 second.")
+  assert.equal(result.diagnostic.detail, "The search index was still being updated when the wait ran out. Desk 1.2.3 (another session) owns the search index; this session only reads it.")
+})
+
+test("desk_reindex stops waiting at the call's deadline, and on a build that does not own the index says it reindexed nothing", async (t) => {
+  const deskRoot = await mkTempDeskRoot()
+  const own = { version: "1.2.3", build: "0".repeat(64), this_controller: true }
+  const late = await createQueryRouter({ controller: waitingController(own, t), indexDeadlineMs: 1_000 }).reindex({ deskRoot })
+  assert.equal(late.status, "error")
+  assert.equal(late.diagnostic.reason, "index_deadline")
+  assert.equal(late.diagnostic.message, "The search index did not finish catching up within 1 second.")
+  assert.equal(late.diagnostic.detail, "The search index was still being updated when the wait ran out. Desk 1.2.3 (this session) owns the search index.")
+
+  const other = { ...own, this_controller: false }
+  const behind = await createQueryRouter({ controller: waitingController(other, t), indexDeadlineMs: 1_000 }).reindex({ deskRoot })
+  assert.deepEqual(behind, {
+    status: "not_reindexed", action: "none", index_current: false,
+    message: "This session reindexed nothing. Desk 1.2.3 (another session) owns the search index; this session only reads it. That session has not finished updating it, so searches here read the files until it does.",
+  })
+  const current = await createQueryRouter({ controller: { ...waitingController(other, t), barrier: async () => ({ current: true }) } }).reindex({ deskRoot })
+  assert.deepEqual(current, {
+    status: "not_reindexed", action: "none", index_current: true,
+    message: "This session reindexed nothing. Desk 1.2.3 (another session) owns the search index; this session only reads it. The index already covers the desk's files.",
+  })
+})
+
+test("a deadline refusal without a known owner gives the plain detail alone, and a reindex whose wait fails reports the failure", async (t) => {
+  const deskRoot = await mkTempDeskRoot()
+  const thread = await createQueryRouter({ controller: waitingController(null, t), indexDeadlineMs: 1_000 }).lexical({ deskRoot, kind: "thread", start_path: "a.md" })
+  assert.equal(thread.diagnostic.detail, "The search index was still being updated when the wait ran out.")
+  const broken = { ...waitingController(null, t), barrier: async () => { throw new Error("socket closed") } }
+  await assert.rejects(createQueryRouter({ controller: broken }).reindex({ deskRoot }), /socket closed/)
+})
