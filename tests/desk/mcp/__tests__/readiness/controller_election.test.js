@@ -1148,9 +1148,9 @@ for (const difference of ["mode", "endpoints"]) {
     let vectors, orphans, generations
     try {
       sqliteVec.load(db)
-      vectors = db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n
-      orphans = db.prepare(`SELECT COUNT(*) AS n FROM chunk_vecs v
-        LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL`).get().n
+      vectors = db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n
+      orphans = db.prepare(`SELECT COUNT(*) AS n FROM text_vectors t
+        WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = t.text_hash)`).get().n
       generations = db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n
     } finally { db.close() }
     assert.equal(owners.length, 1, JSON.stringify({ accepted: owners.length, orphans, generations }))

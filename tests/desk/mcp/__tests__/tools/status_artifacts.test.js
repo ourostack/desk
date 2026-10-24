@@ -54,15 +54,19 @@ function insertDocWithChunks(db, chunkCount = 2) {
   return chunkIds
 }
 
+function storeVector(db, chunkId, vec) {
+  db.prepare(
+    `INSERT INTO text_vectors (vector_space, text_hash, embedding)
+     SELECT ?, text_hash, ? FROM chunks WHERE id = ?`,
+  ).run(ACTIVE_EMBEDDING_SPEC.id, Buffer.from(vec.buffer), chunkId)
+}
+
 function seedPartialVectorDb(root) {
   const db = openDb(root)
   try {
     const [coveredChunkId] = insertDocWithChunks(db, 2)
     const vec = new Float32Array(ACTIVE_EMBEDDING_SPEC.dimension)
-    db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(
-      BigInt(coveredChunkId),
-      vec,
-    )
+    storeVector(db, coveredChunkId, vec)
     setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
   } finally {
     closeDb(db)
@@ -84,10 +88,7 @@ function seedFullyCoveredVectorDb(root) {
   try {
     for (const chunkId of insertDocWithChunks(db, 2)) {
       const vec = new Float32Array(ACTIVE_EMBEDDING_SPEC.dimension)
-      db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(
-        BigInt(chunkId),
-        vec,
-      )
+      storeVector(db, chunkId, vec)
     }
     setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
   } finally {

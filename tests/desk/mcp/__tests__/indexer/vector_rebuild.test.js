@@ -126,8 +126,8 @@ function storedVector(db, docPath, chunkIndex) {
   const row = db
     .prepare(
       `SELECT v.embedding
-       FROM chunk_vecs v
-       JOIN chunks c ON c.id = v.chunk_id
+       FROM chunks c
+       JOIN text_vectors v ON v.vector_space = '${ACTIVE_EMBEDDING_SPEC.id}' AND v.text_hash = c.text_hash
        JOIN docs d ON d.id = c.doc_id
        WHERE d.path = ? AND c.chunk_index = ?`,
     )
@@ -219,7 +219,7 @@ test("rebuildIndex imports fully covered vector packs without live embedding cal
   const db = openDb(deskRoot)
   try {
     assert.equal(
-      db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count,
+      db.prepare("SELECT count(*) AS count FROM text_vectors").get().count,
       1,
     )
     assertVectorApprox(storedVector(db, docPath, 0), vector(7))
@@ -260,7 +260,7 @@ test("rebuildIndex live-generates only chunks missing from vector packs", async 
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 2)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 2)
     assertVectorApprox(storedVector(db, docPath, 0), vector(3))
     assertVectorApprox(storedVector(db, docPath, 1), vector(11))
   } finally {
@@ -316,15 +316,15 @@ test("rebuildIndex continues live vector generation after an oversized chunk", a
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 1)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 1)
     assertVectorApprox(storedVector(db, smallPath, 0), vector(13))
     const missingOversize = db
       .prepare(
         `SELECT count(*) AS count
          FROM chunks c
          JOIN docs d ON d.id = c.doc_id
-         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
-         WHERE d.path = ? AND v.chunk_id IS NULL`,
+         LEFT JOIN text_vectors v ON v.text_hash = c.text_hash
+         WHERE d.path = ? AND v.text_hash IS NULL`,
       )
       .get(oversizePath).count
     assert.equal(missingOversize, 1)
@@ -670,7 +670,7 @@ test("rebuildIndex with disabled embeddings still succeeds when vector packs cov
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 1)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 1)
     assertVectorApprox(storedVector(db, docPath, 0), vector(5))
   } finally {
     closeDb(db)
@@ -704,7 +704,7 @@ test("rebuildIndex reports validated vector packs when no rows match local chunk
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 0)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 0)
   } finally {
     closeDb(db)
   }
@@ -995,7 +995,7 @@ test("ensureIndex calls embeddings only after vector-pack import leaves missing 
   const db = openDb(deskRoot)
   try {
     assertVectorApprox(storedVector(db, docPath, 0), vector(17))
-    assert.equal(db.prepare("SELECT count(*) AS count FROM chunk_vecs").get().count, 1)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 1)
   } finally {
     closeDb(db)
   }
@@ -1484,7 +1484,7 @@ test("desk_reindex force rebuild restores vector packs with live embeddings disa
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 0)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 0)
   } finally {
     closeDb(db)
   }

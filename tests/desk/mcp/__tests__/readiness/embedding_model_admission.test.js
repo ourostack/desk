@@ -235,7 +235,7 @@ for (const semantic of ["background", "required"]) {
       const db = openDb(context.root)
       try {
         const specs = db.prepare(
-          "SELECT DISTINCT c.embedding_spec_id, s.model FROM chunks c JOIN embedding_specs s ON s.id = c.embedding_spec_id JOIN chunk_vecs v ON v.chunk_id = c.id",
+          "SELECT DISTINCT c.embedding_spec_id, s.model FROM chunks c JOIN embedding_specs s ON s.id = c.embedding_spec_id JOIN text_vectors v ON v.text_hash = c.text_hash AND v.vector_space = c.embedding_spec_id",
         ).all()
         assert.deepEqual(specs, [
           { embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id, model: ACTIVE_EMBEDDING_SPEC.model },

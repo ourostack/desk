@@ -170,7 +170,7 @@ test("cold start restores the committed production snapshot without rebuild or e
         [{ path: productionDocPath }],
       )
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n, 2)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 2)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 2)
     } finally {
       closeDb(db)
     }
@@ -226,7 +226,7 @@ test("cold rebuild imports committed production vector packs without embeddings"
         [{ path: productionDocPath }],
       )
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n, 2)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 2)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 2)
     } finally {
       closeDb(db)
     }
@@ -253,7 +253,7 @@ test("cold rebuild live-generates only production vectors missing from committed
       snapshots: false,
       embed: {
         endpoint: "http://127.0.0.1:9/api/embeddings",
-        model: "unit-24a3-production-missing-vector",
+        model: ACTIVE_EMBEDDING_SPEC.model,
         fetch: async (url, request) => {
           embeddingRequests.push({
             url,
@@ -285,7 +285,7 @@ test("cold rebuild live-generates only production vectors missing from committed
       {
         url: "http://127.0.0.1:9/api/embeddings",
         body: {
-          model: "unit-24a3-production-missing-vector",
+          model: ACTIVE_EMBEDDING_SPEC.model,
           prompt: missingChunk,
         },
       },
@@ -305,7 +305,7 @@ test("cold rebuild live-generates only production vectors missing from committed
           { chunk_index: 2, heading: "Unit 24a3 Missing Vector" },
         ],
       )
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 3)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 3)
     } finally {
       closeDb(db)
     }

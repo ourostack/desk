@@ -251,7 +251,7 @@ function dbCounts(deskRoot) {
     return {
       docs: db.prepare("SELECT COUNT(*) AS count FROM docs").get().count,
       chunks: db.prepare("SELECT COUNT(*) AS count FROM chunks").get().count,
-      vectors: db.prepare("SELECT COUNT(*) AS count FROM chunk_vecs").get().count,
+      vectors: db.prepare("SELECT COUNT(*) AS count FROM text_vectors").get().count,
       refs: db.prepare("SELECT COUNT(*) AS count FROM refs_graph").get().count,
     }
   } finally {

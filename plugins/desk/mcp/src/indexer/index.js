@@ -4,8 +4,8 @@
 // re-chunks + re-embeds + upserts on change, and refreshes refs_graph.
 // Idempotent — running it twice on a clean tree results in 0 reindexed docs.
 //
-// Soft-fail: if Ollama is down, FTS5 still gets populated; chunk_vecs rows
-// for new chunks are left absent so semantic search degrades gracefully.
+// Soft-fail: if Ollama is down, FTS5 still gets populated; text_vectors rows
+// for new section texts are left absent so semantic search degrades gracefully.
 
 import { promises as fs } from "node:fs"
 import { createHash } from "node:crypto"
@@ -24,6 +24,7 @@ import {
   embedChunksDetailed,
   EMBEDDING_DIM,
   isChunkLocalEmbeddingFailure,
+  resolveEmbeddingModel,
 } from "./embed.js"
 import { computeRefs } from "./refs.js"
 import {
@@ -32,8 +33,11 @@ import {
   writeActiveEmbeddingSpec,
 } from "./spec.js"
 import { importVectorPacks } from "./vector-packs.js"
+import { discardedVector, prepareTextVectorSave, removeUnusableVectors, vectorSpaceFor } from "./text-vectors.js"
 
-const SQLITE_PARAMETER_BATCH_SIZE = 500
+// Vectors are saved after every this many embeddings, so a long pass keeps what it finished.
+const EMBED_SAVE_BATCH_SIZE = 32
+const MISSING_VECTOR_ROUNDS = 3
 const ACTIVE_CHUNK_FAILURE_JOIN = `
   f.chunk_key = c.chunk_key AND
   f.text_hash = c.text_hash AND
@@ -52,8 +56,12 @@ const ACTIVE_CHUNK_FAILURE_JOIN = `
  * @param {string} [opts.dbPath] — override DB path (tests).
  * @param {object} [opts.embed] — override embed options (endpoint/model/fetch).
  * @param {boolean} [opts.skipEmbed] — skip embedding entirely (testing).
- * @param {boolean} [opts.reembedMissing] — reindex unchanged docs whose
- *   chunks exist but do not have vectors.
+ * @param {boolean} [opts.reembedMissing] — accepted for older callers. Every
+ *   section text without a vector is embedded on each run that embeds,
+ *   whichever document it is in, and no document is reindexed for it.
+ * @param {boolean} [opts.embedChangedOnly] — embed only the sections of the
+ *   documents this run reindexes (the caller found the embedding service not
+ *   answering, so it tries only the new text). Ignored with reembedMissing.
  * @param {object|null} [opts.eventCursor] — journal identity/sequence captured before discovery.
  * @param {object} [opts.identities] — controller policy_identity recorded with the generation.
  * @param {object} [opts.vectorPacks] — import shared vector packs before
@@ -92,7 +100,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
     summary.docs_tombstoned = discoveredRaw.length - discovered.length
     throwIfAborted(opts.signal)
     const discoveredByPath = new Map(discovered.map((d) => [d.path, d]))
-    const reindexedDocIds = []
+    const reindexedDocIds = new Set()
     const identities = {
       schema_version: 1,
       chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
@@ -120,12 +128,11 @@ export async function rebuildIndex(deskRoot, opts = {}) {
           throwIfAborted(opts.signal)
           const existingRow = existingByPath.get(doc.path)
           if (existingRow && existingRow.hash === doc.hash &&
-              !docNeedsActiveChunkMetadata(db, existingRow.id, doc) &&
-              !(opts.reembedMissing && !opts.skipEmbed && docHasMissingActiveEmbeddings(db, existingRow.id))) {
+              !docNeedsActiveChunkMetadata(db, existingRow.id, doc)) {
             summary.docs_skipped += 1
             continue
           }
-          reindexedDocIds.push(indexOneDoc(db, doc, summary))
+          reindexedDocIds.add(indexOneDoc(db, doc, summary))
           summary.docs_indexed += 1
         }
         refreshRefs(db, discovered)
@@ -146,8 +153,10 @@ export async function rebuildIndex(deskRoot, opts = {}) {
 
     if (!opts.skipEmbed) {
       throwIfAborted(opts.signal)
-      await embedMissingVectors(db, opts, summary, reindexedDocIds)
+      // Every text without a vector, not only those of the documents just indexed: an older build sharing the desk may have indexed a change first.
+      await embedMissingVectors(db, opts, summary, opts.embedChangedOnly && !opts.reembedMissing ? reindexedDocIds : null)
     }
+    summary.vector_cleanup = await removeUnusableVectors(db)
 
   } finally {
     if (ownsDb) closeDb(db)
@@ -266,32 +275,6 @@ function docNeedsActiveChunkMetadata(db, docId, doc) {
   return storedKeys.some((chunkKey, index) => chunkKey !== expectedKeys[index])
 }
 
-function docHasMissingActiveEmbeddings(db, docId) {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS missing
-       FROM chunks c
-       LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
-       LEFT JOIN chunk_embedding_failures f ON ${ACTIVE_CHUNK_FAILURE_JOIN}
-       WHERE c.doc_id = ?
-         AND (
-           v.chunk_id IS NULL OR
-           c.embedding_spec_id IS NULL OR
-           c.embedding_spec_id != ? OR
-           c.chunker_id != ? OR
-           c.normalization_id != ?
-         )
-         AND f.chunk_key IS NULL`,
-    )
-    .get(
-      docId,
-      ACTIVE_EMBEDDING_SPEC.id,
-      ACTIVE_EMBEDDING_SPEC.chunker_id,
-      ACTIVE_EMBEDDING_SPEC.normalization_id,
-    )
-  return row.missing > 0
-}
-
 function indexOneDoc(db, doc, summary) {
   const chunks = chunkBody(doc.body).map((chunk) => ({
     ...chunk,
@@ -338,7 +321,9 @@ function indexOneDoc(db, doc, summary) {
 
     // Replace chunks. CASCADE on chunks doesn't fire for ON CONFLICT, so
     // we explicitly delete by doc_id first. The triggers on the chunks
-    // table keep chunks_fts in sync; chunk_vecs we update by hand below.
+    // table keep chunks_fts in sync. Vectors live by text in text_vectors and
+    // stay; the old rows' entries in the old row-keyed table go with them, so
+    // older builds that read it never find a vector under a vanished row.
     const oldChunkIds = db
       .prepare("SELECT id FROM chunks WHERE doc_id = ?")
       .all(docId)
@@ -387,56 +372,48 @@ function indexOneDoc(db, doc, summary) {
   return txn()
 }
 
+// Embeds each section text that has no vector yet, once however many sections share it; with `docIds`, only those documents' sections.
 async function embedMissingVectors(db, opts, summary, docIds) {
-  if (docIds.length === 0) return
-  const missing = []
-  for (let start = 0; start < docIds.length; start += SQLITE_PARAMETER_BATCH_SIZE) {
-    const batch = docIds.slice(start, start + SQLITE_PARAMETER_BATCH_SIZE)
-    const placeholders = batch.map(() => "?").join(", ")
-    const rows = db
-      .prepare(
-        `SELECT
-           c.id,
-           c.text,
-           c.chunk_key,
-           c.text_hash,
-           c.embedding_spec_id,
-           c.chunker_id,
-           c.normalization_id
-         FROM chunks c
-         LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
-         LEFT JOIN chunk_embedding_failures f ON ${ACTIVE_CHUNK_FAILURE_JOIN}
-         WHERE v.chunk_id IS NULL
-           AND c.doc_id IN (${placeholders})
-           AND f.chunk_key IS NULL
-         ORDER BY c.id`,
-      )
-      .all(...batch)
-    for (const row of rows) {
-      missing.push(row)
-    }
+  summary.vectors_saved = 0
+  summary.vectors_discarded = 0
+  // A vector is discarded when its section vanished during the pass, as when an older build re-commits a stale copy of the document; look once more, in case the text is back.
+  for (let round = 0; round < MISSING_VECTOR_ROUNDS; round += 1) {
+    const discarded = summary.vectors_discarded
+    if (!await embedMissingRound(db, opts, summary, docIds)) return
+    if (summary.vectors_discarded === discarded) return
   }
-  if (missing.length === 0) return
+}
 
-  const embeddingResults = await embedChunksDetailed(
-    missing.map((c) => c.text),
-    opts.embed ?? {},
-  )
-  const serviceFailure = embeddingResults.some((result) => (
-    result.vector == null && !isChunkLocalEmbeddingFailure(result.diagnostic)
-  ))
-  if (serviceFailure && summary.semantic_warnings === 0) {
-    summary.semantic_warnings += 1
-    // One log line per run is enough; downstream tools surface the
-    // semantic_unavailable warning at query time.
-    console.warn(
-      "[desk-mcp] semantic_unavailable: Ollama embeddings endpoint did not respond; index built with FTS5 only",
-    )
+// One pass over the missing texts. Returns false when there was nothing to embed or the embedding service failed.
+async function embedMissingRound(db, opts, summary, docIds) {
+  const embedOptions = opts.embed ?? {}
+  const vectorSpace = vectorSpaceFor(resolveEmbeddingModel(embedOptions))
+  const rows = db.prepare(
+    `SELECT
+       c.doc_id,
+       c.text,
+       c.chunk_key,
+       c.text_hash,
+       c.embedding_spec_id,
+       c.chunker_id,
+       c.normalization_id
+     FROM chunks c
+     LEFT JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
+     LEFT JOIN chunk_embedding_failures f ON ${ACTIVE_CHUNK_FAILURE_JOIN}
+     WHERE tv.text_hash IS NULL
+       AND c.text_hash IS NOT NULL
+       AND f.chunk_key IS NULL
+     ORDER BY c.id`,
+  ).all(vectorSpace).filter((row) => docIds === null || docIds.has(row.doc_id))
+  const missing = new Map()
+  for (const row of rows) {
+    const entry = missing.get(row.text_hash)
+    if (entry) entry.sections.push(row)
+    else missing.set(row.text_hash, { text_hash: row.text_hash, text: row.text, sections: [row] })
   }
+  if (missing.size === 0) return false
 
-  const insertVec = db.prepare(
-    `INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)`,
-  )
+  const saveVector = prepareTextVectorSave(db, vectorSpace)
   const upsertFailure = db.prepare(
     `INSERT INTO chunk_embedding_failures (
        chunk_key,
@@ -469,30 +446,60 @@ async function embedMissingVectors(db, opts, summary, docIds) {
        AND chunker_id = @chunker_id
        AND normalization_id = @normalization_id`,
   )
-  const failedAt = new Date().toISOString()
-  const txn = db.transaction(() => {
-    for (let i = 0; i < missing.length; i++) {
-      const row = missing[i]
-      const result = embeddingResults[i]
-      const vec = result.vector
-      if (vec) {
-        // sqlite-vec's vec0 virtual table requires BigInt for primary-key
-        // bind values — plain JS numbers raise "Only integers are allows
-        // for primary key values on chunk_vecs".
-        insertVec.run(BigInt(row.id), new Float32Array(vec))
-        deleteFailure.run(row)
+  // One transaction per batch: the check that the section still exists and the save are one commit. It takes the write lock first, so it waits for another build's commit instead of failing on it.
+  const saveTransaction = db.transaction((entries, results, failedAt) => {
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+      const result = results[i]
+      if (result.vector) {
+        if (saveVector(entry.text_hash, result.vector)) {
+          summary.vectors_saved += 1
+          for (const section of entry.sections) deleteFailure.run(section)
+        } else {
+          summary.vectors_discarded += 1
+        }
       } else if (isChunkLocalEmbeddingFailure(result.diagnostic)) {
-        upsertFailure.run({
-          ...row,
-          reason: result.diagnostic.reason,
-          message: result.diagnostic.message,
-          failed_at: failedAt,
-        })
-        summary.embedding_failures_recorded += 1
+        for (const section of entry.sections) {
+          upsertFailure.run({
+            ...section,
+            reason: result.diagnostic.reason,
+            message: result.diagnostic.message,
+            failed_at: failedAt,
+          })
+          summary.embedding_failures_recorded += 1
+        }
       }
     }
   })
-  txn()
+
+  const save = (...args) => saveTransaction.immediate(...args)
+  const entries = []
+  const known = []
+  for (const entry of missing.values()) {
+    const vector = discardedVector(vectorSpace, entry.text_hash)
+    if (vector) known.push({ entry, vector })
+    else entries.push(entry)
+  }
+  // Texts back after their section vanished mid-pass are saved from memory, not embedded again.
+  save(known.map(({ entry }) => entry), known.map(({ vector }) => ({ vector })), new Date().toISOString())
+  for (let start = 0; start < entries.length; start += EMBED_SAVE_BATCH_SIZE) {
+    const batch = entries.slice(start, start + EMBED_SAVE_BATCH_SIZE)
+    const results = await embedChunksDetailed(batch.map((entry) => entry.text), embedOptions)
+    save(batch, results, new Date().toISOString())
+    const serviceFailure = results.some((result) => (
+      result.vector == null && !isChunkLocalEmbeddingFailure(result.diagnostic)
+    ))
+    if (serviceFailure) {
+      // The run stops embedding here, so this is its one log line; downstream
+      // tools surface the semantic_unavailable warning at query time.
+      summary.semantic_warnings += 1
+      console.warn(
+        "[desk-mcp] semantic_unavailable: Ollama embeddings endpoint did not respond; index built with FTS5 only",
+      )
+      return false
+    }
+  }
+  return true
 }
 
 function pruneStaleEmbeddingFailures(db) {

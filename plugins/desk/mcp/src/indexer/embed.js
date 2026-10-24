@@ -260,11 +260,12 @@ export async function probeEmbeddingService(opts = {}) {
   }
 }
 
+// Ollama's refusals of one oversized input: the older "the input length exceeds the context length", and the current "input (13440 tokens) is too large to process. increase the physical batch size (current batch size: 2048)".
+const OVERSIZED_INPUT = /input length exceeds the context length|input \(\d+ tokens\) is too large to process/i
+
 export function isChunkLocalEmbeddingFailure(diagnostic) {
   if (!String(diagnostic.reason).startsWith("http_")) return false
-  return /input length exceeds the context length/i.test(
-    String(diagnostic.message),
-  )
+  return OVERSIZED_INPUT.test(String(diagnostic.message))
 }
 
 /**

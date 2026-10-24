@@ -3,6 +3,7 @@ import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "./init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
+import { ACTIVE_VECTOR_SPACE } from "../indexer/text-vectors.js"
 import { INDEX_WRITER_KEY, readIndexWriter } from "../readiness/index-writer.js"
 import { readGenerationContent } from "../readiness/generations.js"
 
@@ -25,7 +26,7 @@ export function inspectLocalDb(deskRoot) {
   }
   try {
     const chunksTableExists = tableExists(db, "chunks")
-    const vectorsTableExists = tableExists(db, "chunk_vecs")
+    const vectorsTableExists = tableExists(db, "text_vectors")
     const embeddingFailuresTableExists = tableExists(db, "chunk_embedding_failures")
     const lexicalAvailable = tableExists(db, "chunks_fts")
     const chunksTotal = chunksTableExists ? countRows(db, "chunks") : 0
@@ -67,11 +68,19 @@ export function inspectLocalDb(deskRoot) {
         known_unembeddable_vectors: knownUnembeddableVectors,
         repairable_missing_vectors: repairableMissingVectors,
         coverage: vectorsIndexed / Math.max(1, chunksTotal),
+        ...(knownUnembeddableVectors > 0 ? { note: tooLongNote(knownUnembeddableVectors) } : {}),
       },
     }
   } finally {
     db.close()
   }
+}
+
+// The embedding model refuses a section longer than it can read, so that section has no vector.
+function tooLongNote(count) {
+  return count === 1
+    ? "1 section is too long for the embedding model, so meaning-based search skips it; exact-word search (desk_search) still finds it."
+    : `${count} sections are too long for the embedding model, so meaning-based search skips them; exact-word search (desk_search) still finds them.`
 }
 
 export function unavailableLocalDb(dbPath, state) {
@@ -147,6 +156,7 @@ function tableHasColumns(db, table, columns) {
 function countActiveVectors(db, { chunksTableExists, vectorsTableExists }) {
   if (!chunksTableExists || !vectorsTableExists) return 0
   if (!tableHasColumns(db, "chunks", [
+    "text_hash",
     "embedding_spec_id",
     "chunker_id",
     "normalization_id",
@@ -156,11 +166,12 @@ function countActiveVectors(db, { chunksTableExists, vectorsTableExists }) {
   return db.prepare(
     `SELECT COUNT(*) AS count
      FROM chunks c
-     JOIN chunk_vecs v ON v.chunk_id = c.id
+     JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
      WHERE c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?`,
   ).get(
+    ACTIVE_VECTOR_SPACE,
     ACTIVE_EMBEDDING_SPEC.id,
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,
@@ -194,18 +205,19 @@ function countKnownUnembeddableVectors(db, {
   return db.prepare(
     `SELECT COUNT(*) AS count
      FROM chunks c
-     LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+     LEFT JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
      JOIN chunk_embedding_failures f
        ON f.chunk_key = c.chunk_key
       AND f.text_hash = c.text_hash
       AND f.embedding_spec_id = c.embedding_spec_id
       AND f.chunker_id = c.chunker_id
       AND f.normalization_id = c.normalization_id
-     WHERE v.chunk_id IS NULL
+     WHERE tv.text_hash IS NULL
        AND c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?`,
   ).get(
+    ACTIVE_VECTOR_SPACE,
     ACTIVE_EMBEDDING_SPEC.id,
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,
@@ -265,18 +277,20 @@ export function openSnapshot(deskRoot) {
     const generation = activeGeneration(db)
     const covered = db.prepare("SELECT value FROM meta WHERE key = 'covered_event_cursor'").get()
     const activeEmbeddingSpecId = db.prepare("SELECT value FROM meta WHERE key = 'active_embedding_spec_id'").get()?.value ?? null
-    const vectorsIndexed = db.prepare(
+    // An index no build of this version has opened yet has no text vectors.
+    const vectorsIndexed = tableExists(db, "text_vectors") ? db.prepare(
       `SELECT COUNT(*) AS n
        FROM chunks c
-       JOIN chunk_vecs v ON v.chunk_id = c.id
+       JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
        WHERE c.embedding_spec_id = ?
          AND c.chunker_id = ?
          AND c.normalization_id = ?`,
     ).get(
+      ACTIVE_VECTOR_SPACE,
       ACTIVE_EMBEDDING_SPEC.id,
       ACTIVE_EMBEDDING_SPEC.chunker_id,
       ACTIVE_EMBEDDING_SPEC.normalization_id,
-    ).n
+    ).n : 0
     const chunksTotal = db.prepare("SELECT COUNT(*) AS n FROM chunks").get().n
     const cursor = generation ? JSON.parse(generation.event_cursor) : null
     const writer = readIndexWriter(db.prepare("SELECT value FROM meta WHERE key = ?").get(INDEX_WRITER_KEY)?.value, cursor)

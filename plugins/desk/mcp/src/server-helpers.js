@@ -16,6 +16,7 @@ import { expectedLexicalGenerationIdentity, generationContent } from "./readines
 import { loadTombstoneLedger, tombstoneDecisionForDoc } from "./artifacts/tombstones.js"
 import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
+import { ACTIVE_VECTOR_SPACE, migrateRowVectors } from "./indexer/text-vectors.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
 import { artifactSourceScopeHash } from "./artifacts/source-scope.js"
 
@@ -79,14 +80,17 @@ export async function ensureIndex(deskRoot, opts = {}) {
     // Opening the database (the native driver's first load and any migrations) is one synchronous stretch; the checks below start on the next turn of the event loop, so a session's answers to its host wait for one stretch, not both.
     await new Promise((resolve) => setImmediate(resolve))
     if (!effectiveOpts.skipEmbed) {
-      const trustedSnapshot = snapshot?.restored
+      const snapshotSpecCurrent = snapshot?.restored
         && vectorProvenance(effectiveOpts.snapshots?.expectedSpec ?? ACTIVE_EMBEDDING_SPEC) === ACTIVE_VECTOR_PROVENANCE
-        && getSemanticCoverage(db).missing_vectors === 0
+      // The old row-keyed table's vectors are known to be active-model vectors only under current provenance.
+      migrateRowVectors(db, {
+        trusted: snapshotSpecCurrent || getMeta(db, ACTIVE_VECTOR_PROVENANCE_META_KEY) === ACTIVE_VECTOR_PROVENANCE,
+      })
+      const trustedSnapshot = snapshotSpecCurrent && getSemanticCoverage(db).missing_vectors === 0
       if ((!trustedSnapshot && getMeta(db, ACTIVE_VECTOR_PROVENANCE_META_KEY) !== ACTIVE_VECTOR_PROVENANCE)
         || effectiveOpts.embed.model !== ACTIVE_EMBEDDING_SPEC.model) {
-        // Only derived semantic rows are disposable. Lexical state and history survive.
+        // Stored vectors are keyed by the settings that made them, so they stay; every known failure is tried again.
         db.transaction(() => {
-          db.exec("DELETE FROM chunk_vecs")
           db.exec("DELETE FROM chunk_embedding_failures")
           db.prepare("DELETE FROM meta WHERE key IN (?, ?)")
             .run(ACTIVE_VECTOR_PROVENANCE_META_KEY, VECTOR_PACK_NOOP_REPAIR_SIGNATURE_META_KEY)
@@ -147,6 +151,8 @@ export async function ensureIndex(deskRoot, opts = {}) {
       ...effectiveOpts,
       db,
       reembedMissing: repairMissing,
+      // The service did not answer the check just now, so try only the text of the documents that changed.
+      embedChangedOnly: semanticBefore.embedding_available === false,
     })
     const semanticAfter = getSemanticCoverage(db)
     assignEmbeddingAvailability(semanticAfter, semanticBefore, summary)
@@ -424,11 +430,12 @@ export function getSemanticCoverage(db) {
   const vectors = db.prepare(
     `SELECT COUNT(*) AS n
      FROM chunks c
-     JOIN chunk_vecs v ON v.chunk_id = c.id
+     JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
      WHERE c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?`,
   ).get(
+    ACTIVE_VECTOR_SPACE,
     ACTIVE_EMBEDDING_SPEC.id,
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,
@@ -436,18 +443,19 @@ export function getSemanticCoverage(db) {
   const knownFailures = db.prepare(
     `SELECT COUNT(*) AS n
      FROM chunks c
-     LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+     LEFT JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
      JOIN chunk_embedding_failures f
        ON f.chunk_key = c.chunk_key
       AND f.text_hash = c.text_hash
       AND f.embedding_spec_id = c.embedding_spec_id
       AND f.chunker_id = c.chunker_id
       AND f.normalization_id = c.normalization_id
-     WHERE v.chunk_id IS NULL
+     WHERE tv.text_hash IS NULL
        AND c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?`,
   ).get(
+    ACTIVE_VECTOR_SPACE,
     ACTIVE_EMBEDDING_SPEC.id,
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,
@@ -569,14 +577,14 @@ function knownUnembeddableMissingChunks(db) {
        c.chunker_id,
        c.normalization_id
      FROM chunks c
-     LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+     LEFT JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
      JOIN chunk_embedding_failures f
        ON f.chunk_key = c.chunk_key
       AND f.text_hash = c.text_hash
       AND f.embedding_spec_id = c.embedding_spec_id
       AND f.chunker_id = c.chunker_id
       AND f.normalization_id = c.normalization_id
-     WHERE v.chunk_id IS NULL
+     WHERE tv.text_hash IS NULL
        AND c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?
@@ -587,6 +595,7 @@ function knownUnembeddableMissingChunks(db) {
        c.chunker_id,
        c.normalization_id`,
   ).all(
+    ACTIVE_VECTOR_SPACE,
     ACTIVE_EMBEDDING_SPEC.id,
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,

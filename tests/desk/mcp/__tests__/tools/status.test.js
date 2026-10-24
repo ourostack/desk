@@ -714,8 +714,11 @@ test("desk_status reports vector coverage against the active embedding spec", as
          RETURNING id`,
       ).get(docId).id
       const vec = new Float32Array(ACTIVE_EMBEDDING_SPEC.dimension)
-      db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(activeChunkId), vec)
-      db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(inactiveChunkId), vec)
+      // Vectors are stored by section text; only the active section counts toward coverage.
+      const saveVector = db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)")
+      saveVector.run(ACTIVE_EMBEDDING_SPEC.id, "sha256:active", Buffer.from(vec.buffer))
+      saveVector.run(ACTIVE_EMBEDDING_SPEC.id, "sha256:inactive", Buffer.from(vec.buffer))
+      assert.ok(activeChunkId && inactiveChunkId)
     } finally {
       closeDb(db)
     }
@@ -802,7 +805,9 @@ test("desk_status treats known unembeddable chunks as non-repairable vector skip
         ACTIVE_EMBEDDING_SPEC.normalization_id,
       )
       const vec = new Float32Array(ACTIVE_EMBEDDING_SPEC.dimension)
-      db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(vectorChunkId), vec)
+      db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)")
+        .run(ACTIVE_EMBEDDING_SPEC.id, "sha256:vector", Buffer.from(vec.buffer))
+      assert.ok(vectorChunkId)
     } finally {
       closeDb(db)
     }
@@ -819,6 +824,8 @@ test("desk_status treats known unembeddable chunks as non-repairable vector skip
     assert.equal(body.document_vectors.missing_vectors, 1)
     assert.equal(body.document_vectors.known_unembeddable_vectors, 1)
     assert.equal(body.document_vectors.repairable_missing_vectors, 0)
+    assert.equal(body.document_vectors.note,
+      "1 section is too long for the embedding model, so meaning-based search skips it; exact-word search (desk_search) still finds it.")
     assert.equal(body.degraded_modes.includes("document_vectors_partial"), false)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -834,7 +841,7 @@ test("desk_status reports lexical index absence without mutating an existing DB"
     try {
       db.exec(`
         CREATE TABLE chunks (id INTEGER PRIMARY KEY);
-        CREATE TABLE chunk_vecs (chunk_id INTEGER PRIMARY KEY);
+        CREATE TABLE text_vectors (vector_space TEXT, text_hash TEXT, embedding BLOB);
         CREATE TABLE chunk_embedding_failures (chunk_key TEXT PRIMARY KEY);
       `)
     } finally {
@@ -873,7 +880,7 @@ test("desk_status tolerates a malformed embedding failure table", async () => {
           chunker_id TEXT,
           normalization_id TEXT
         );
-        CREATE TABLE chunk_vecs (chunk_id INTEGER PRIMARY KEY);
+        CREATE TABLE text_vectors (vector_space TEXT, text_hash TEXT, embedding BLOB);
         CREATE TABLE chunk_embedding_failures (chunk_key TEXT PRIMARY KEY);
       `)
     } finally {

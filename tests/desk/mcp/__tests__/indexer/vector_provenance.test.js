@@ -46,11 +46,12 @@ function assertCurrent(root, result) {
   assert.equal(result.semantic.missing_vectors, 0)
 }
 
+// An index an older build left: every section has a vector in the old row-keyed table, of unknown provenance.
 async function legacy(root) {
-  await rebuildIndex(root, {
-    embed: { model: "historical-custom-model", fetch: async () => embedding(0.9) },
-  })
+  await rebuildIndex(root, { skipEmbed: true })
   inDb(root, (db) => {
+    const insert = db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)")
+    for (const { id } of db.prepare("SELECT id FROM chunks").all()) insert.run(BigInt(id), new Float32Array(vector(0.9)))
     setMeta(db, "preserved_history", "not derived vector state")
     db.prepare(`INSERT INTO chunk_embedding_failures
       (chunk_key, text_hash, embedding_spec_id, chunker_id, normalization_id, reason, failed_at)
@@ -80,7 +81,7 @@ for (const existing of [null, "obsolete-provenance"]) {
     inDb(root, (db) => {
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_embedding_failures").get().n, 0)
       assert.equal(getMeta(db, "preserved_history"), "not derived vector state")
-      const stored = db.prepare("SELECT embedding FROM chunk_vecs").get().embedding
+      const stored = db.prepare("SELECT embedding FROM text_vectors").get().embedding
       assert.ok(Math.abs(stored.readFloatLE(0) - 0.2) < 0.00001)
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunks_fts WHERE chunks_fts MATCH 'Legacy'").get().n, 1)
     })
@@ -110,7 +111,7 @@ test("unavailable migration preserves lexical rows and history, leaves provenanc
   inDb(root, (db) => {
     assert.deepEqual(db.prepare("SELECT * FROM docs").all(), before.docs)
     assert.deepEqual(db.prepare("SELECT * FROM chunks").all(), before.chunks)
-    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 0)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 0, "old vectors of unknown provenance are not carried over")
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_embedding_failures").get().n, 0)
     assert.equal(getMeta(db, "preserved_history"), "not derived vector state")
   })
@@ -149,7 +150,7 @@ test("matching provenance preserves vectors without reembedding", async (t) => {
   const root = fixture(t)
   const first = await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: async () => embedding(0.2) } })
   assertCurrent(root, first)
-  const before = inDb(root, (db) => db.prepare("SELECT * FROM chunk_vecs").all())
+  const before = inDb(root, (db) => db.prepare("SELECT * FROM text_vectors").all())
   const marker = provenance(root)
   let calls = 0
   const second = await ensureIndex(root, {
@@ -158,12 +159,12 @@ test("matching provenance preserves vectors without reembedding", async (t) => {
   assert.equal(calls, 0)
   assert.equal(second.built, false)
   assert.equal(provenance(root), marker)
-  assert.deepEqual(inDb(root, (db) => db.prepare("SELECT * FROM chunk_vecs").all()), before)
+  assert.deepEqual(inDb(root, (db) => db.prepare("SELECT * FROM text_vectors").all()), before)
   assertCurrent(root, second)
 })
 
 for (const field of ["schema_version", "id", "model", "model_revision", "dimension", "chunker_id", "normalization_id"]) {
-  test(`provenance mismatch in ${field} invalidates existing vectors`, async (t) => {
+  test(`provenance mismatch in ${field} is reset, while vectors keyed by their own settings stay`, async (t) => {
     const root = fixture(t)
     await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: async () => embedding(0.2) } })
     assert.notEqual(provenance(root), null)
@@ -174,10 +175,20 @@ for (const field of ["schema_version", "id", "model", "model_revision", "dimensi
     const result = await ensureIndex(root, {
       ...NO_ARTIFACTS, embed: { fetch: async () => { throw new Error("offline") } },
     })
-    assert.equal(result.semantic.vectors_indexed, 0)
-    assert.equal(provenance(root), null)
+    // Each stored vector names the settings that made it, so a stale marker cannot pass vectors off as current ones.
+    assert.equal(result.semantic.vectors_indexed, 1)
+    assertCurrent(root, result)
   })
 }
+
+test("vectors under other settings do not count, and are made again under the active ones", async (t) => {
+  const root = fixture(t)
+  await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: async () => embedding(0.2) } })
+  inDb(root, (db) => db.prepare("UPDATE text_vectors SET vector_space = 'other-settings'").run())
+  const offline = await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: async () => { throw new Error("offline") } } })
+  assert.equal(offline.semantic.vectors_indexed, 0)
+  assertCurrent(root, await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: async () => embedding(0.3) } }))
+})
 
 for (const existing of [null, "obsolete-provenance"]) {
   test(`skipEmbed preserves untrusted vectors and ${existing ?? "absent"} provenance without probing`, async (t) => {
@@ -185,7 +196,7 @@ for (const existing of [null, "obsolete-provenance"]) {
     await legacy(root)
     if (existing) inDb(root, (db) => setMeta(db, KEY, existing))
     const before = inDb(root, (db) => ({
-      vectors: db.prepare("SELECT * FROM chunk_vecs").all(),
+      vectors: db.prepare("SELECT * FROM text_vectors").all(),
       failures: db.prepare("SELECT * FROM chunk_embedding_failures").all(),
     }))
     let calls = 0
@@ -196,7 +207,7 @@ for (const existing of [null, "obsolete-provenance"]) {
     assert.equal(calls, 0)
     assert.equal(provenance(root), existing)
     assert.deepEqual(inDb(root, (db) => ({
-      vectors: db.prepare("SELECT * FROM chunk_vecs").all(),
+      vectors: db.prepare("SELECT * FROM text_vectors").all(),
       failures: db.prepare("SELECT * FROM chunk_embedding_failures").all(),
     })), before)
     assertCurrent(root, await ensureIndex(root, {

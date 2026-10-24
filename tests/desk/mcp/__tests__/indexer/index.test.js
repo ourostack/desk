@@ -292,7 +292,7 @@ test("unchanged docs with missing chunk rows are rebuilt only when chunks are ex
   }
 })
 
-test("reembedMissing treats vectors from inactive embedding specs as missing", async () => {
+test("vectors stored under another embedding specification do not count as the active specification's", async () => {
   const root = await mkRoot()
   await w(root, "trackA/task-1/task.md", "---\nstatus: processing\n---\nsemantic body")
 
@@ -303,8 +303,9 @@ test("reembedMissing treats vectors from inactive embedding specs as missing", a
 
   const db = openDb(root)
   try {
-    const vecCount = db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c
+    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
     assert.ok(vecCount > 0, "expected initial vector rows")
+    db.prepare("UPDATE text_vectors SET vector_space = 'inactive-spec-for-red-test'").run()
     const activeSpecId = getMeta(db, "active_embedding_spec_id")
     assert.ok(activeSpecId, "missing active_embedding_spec_id meta")
     const inactiveSpecId = "inactive-spec-for-red-test"
@@ -380,7 +381,7 @@ test("default embedding options use global fetch and archive docs keep archive m
   const db = openDb(root)
   try {
     const doc = db.prepare("SELECT is_archived FROM docs WHERE path = ?").get("trackA/_archive/old-task/task.md")
-    const vecCount = db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c
+    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
     assert.equal(doc.is_archived, 1)
     assert.ok(vecCount > 0, "expected default embedding path to store vectors")
   } finally {
@@ -448,14 +449,11 @@ test("deleting a doc removes it from the index on next pass", async () => {
   }
 })
 
-test("happy-path embedding writes chunk_vecs rows (BigInt PK binding)", async () => {
+test("happy-path embedding stores one vector per section text", async () => {
   const root = await mkRoot()
   await w(root, "trackA/t1/task.md", "---\nstatus: processing\n---\nhybrid retrieval body\n\n## H2\n\nmore text")
 
-  // Mock fetch that returns a deterministic 768-dim vector. This exercises
-  // the chunk_vecs INSERT path that requires BigInt-coerced primary keys —
-  // a plain JS number bind here raises "Only integers are allows for
-  // primary key values on chunk_vecs".
+  // Mock fetch that returns a deterministic 768-dim vector.
   const dim = 768
   const vec = Array.from({ length: dim }, (_, i) => (i % 7) / dim)
   const okFetch = async () => ({ ok: true, json: async () => ({ embedding: vec }) })
@@ -466,8 +464,9 @@ test("happy-path embedding writes chunk_vecs rows (BigInt PK binding)", async ()
 
   const db = openDb(root)
   try {
-    const vecCount = db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c
-    assert.equal(vecCount, summary.chunks_inserted, "one vec row per chunk")
+    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
+    assert.equal(vecCount, summary.chunks_inserted, "one vector per section text")
+    assert.equal(db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c, 0, "the row-keyed table is left to older builds")
   } finally {
     closeDb(db)
   }
@@ -496,14 +495,14 @@ test("ollama-down soft-fail still populates FTS chunks", async () => {
       .all("hybrid")
     assert.ok(hits.length >= 1, "expected FTS to have indexed the text")
     // No vec rows when ollama is down.
-    const vecCount = db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c
+    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
     assert.equal(vecCount, 0)
   } finally {
     closeDb(db)
   }
 })
 
-test("unchanged lexical-only docs do not live-embed unless reembedMissing is enabled", async () => {
+test("sections of unchanged docs that have no vector are embedded without re-indexing the docs", async () => {
   const root = await mkRoot()
   await w(root, "trackA/t1/task.md", "---\nstatus: processing\n---\nlexical-only body")
 
@@ -526,12 +525,12 @@ test("unchanged lexical-only docs do not live-embed unless reembedMissing is ena
   assert.equal(second.docs_indexed, 0)
   assert.equal(second.docs_skipped, 1)
   assert.equal(second.semantic_warnings, 0)
-  assert.equal(calls, 0)
+  assert.equal(calls, 1)
 
   const db = openDb(root)
   try {
-    const vecCount = db.prepare("SELECT count(*) AS c FROM chunk_vecs").get().c
-    assert.equal(vecCount, 0)
+    const vecCount = db.prepare("SELECT count(*) AS c FROM text_vectors").get().c
+    assert.equal(vecCount, 1)
   } finally {
     closeDb(db)
   }
@@ -670,7 +669,7 @@ test("an ignored vector-pack root that fails with a non-Error value is recorded 
     get(target, prop) {
       if (prop === "prepare") {
         return (sql) => {
-          if (sql.startsWith("INSERT INTO chunk_vecs")) throw "vector store unavailable"
+          if (sql.startsWith("INSERT INTO text_vectors")) throw "vector store unavailable"
           return target.prepare(sql)
         }
       }

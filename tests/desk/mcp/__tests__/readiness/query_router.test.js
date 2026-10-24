@@ -506,7 +506,7 @@ test("semantic proof rejects snapshots with missing vectors", async (t) => {
   const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
   try {
     sqliteVec.load(db)
-    db.prepare("DELETE FROM chunk_vecs").run()
+    db.prepare("DELETE FROM text_vectors").run()
   } finally { db.close() }
   const result = await f.router.semantic({
     deskRoot: f.deskRoot,
@@ -1496,10 +1496,12 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
     const db = new Database(path.join(deskRoot, ".state", "desk-index.sqlite"), { readonly: true })
     try {
       sqliteVec.load(db)
-      assert.ok(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n > 0)
-      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM chunk_vecs v
-        LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL`).get().orphan_count, 0, JSON.stringify({
-          orphanIds: db.prepare("SELECT v.chunk_id FROM chunk_vecs v LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL").all(),
+      assert.ok(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n > 0)
+      // A vector whose text no section has any more is kept for a grace period, marked unused, in case the text comes back.
+      const orphans = `FROM text_vectors t WHERE t.unused_since IS NULL
+        AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = t.text_hash)`
+      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count ${orphans}`).get().orphan_count, 0, JSON.stringify({
+          orphanHashes: db.prepare(`SELECT t.text_hash ${orphans}`).all(),
           chunks: db.prepare("SELECT c.id, d.path FROM chunks c JOIN docs d ON d.id = c.doc_id").all(),
           generations: db.prepare("SELECT id, documents FROM lexical_generations").all(),
         }))

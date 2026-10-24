@@ -142,6 +142,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vecs USING vec0(
 );
 
 -- ---------------------------------------------------------------------------
+-- text_vectors: one embedding per section text, keyed by the vector space
+-- (the embedding settings that make vectors comparable) and the section's
+-- text_hash. Re-indexing a document gives its sections new row numbers but
+-- leaves these rows alone, so unchanged text is never embedded again.
+-- chunk_vecs above is kept only for older Desk builds that still read it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS text_vectors (
+  vector_space TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  unused_since INTEGER,                     -- ms since epoch when no section had this text; NULL while in use
+  PRIMARY KEY (vector_space, text_hash)
+);
+
+-- ---------------------------------------------------------------------------
 -- chunk_embedding_failures: stable tombstones for chunks that the active
 -- embedding provider rejected for chunk-local reasons (for example context
 -- length). These rows prevent every startup/search from retrying known

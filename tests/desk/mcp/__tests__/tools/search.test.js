@@ -175,7 +175,8 @@ test("timeline hybrid keeps the strongest chunk per document", async () => {
       SELECT doc_id, 1, chunk_key || '-second', text_hash || '-second', embedding_spec_id, chunker_id, normalization_id, ?
       FROM chunks WHERE doc_id = ? AND chunk_index = 0`).run("alpha later stronger detail", doc.id)
     db.prepare("INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)").run(info.lastInsertRowid, "alpha later stronger detail")
-    db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(info.lastInsertRowid), new Float32Array(topicVector("alpha later stronger detail")))
+    db.prepare("INSERT INTO text_vectors (vector_space, text_hash, embedding) SELECT embedding_spec_id, text_hash, ? FROM chunks WHERE id = ?")
+      .run(Buffer.from(new Float32Array(topicVector("alpha later stronger detail")).buffer), info.lastInsertRowid)
   } finally {
     db.close()
   }
@@ -359,9 +360,9 @@ test("alpha consumer concurrent startup search and reindex leave zero orphan vec
     assert.equal(maxActive, 1, "only the controller serializes index passes, including uncertainty reconciliation")
     const db = openDb(root)
     try {
-      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM chunk_vecs v
-        LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL`).get().orphan_count, 0)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 1)
+      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM text_vectors t
+        WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = t.text_hash)`).get().orphan_count, 0)
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 1)
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, passes)
     } finally { closeDb(db) }
   } finally { release(); await Promise.allSettled([convergence, reindex]) }
