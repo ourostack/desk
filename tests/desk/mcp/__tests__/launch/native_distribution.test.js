@@ -103,3 +103,59 @@ test('readonly worker source changes invalidate the exact native distribution di
   assert.notEqual(after.distributionDigest, before.distributionDigest);
   assert.equal(after.extensionSourceDigest, before.extensionSourceDigest);
 });
+
+// Antivirus removed the Windows helper from an installed Mac plugin, and setup
+// on the Mac then refused because it required every platform's helper.
+const host = `${process.platform}-${process.arch}`;
+const other = host === 'win32-x64' ? 'linux-x64' : 'win32-x64';
+const otherName = other === 'win32-x64' ? 'Windows (x64)' : 'Linux (x64)';
+const helper = target => `mcp/artifacts/browser-messaging/${target}/desk-browser-messaging${target.startsWith('win32-') ? '.exe' : ''}`;
+
+test('setup check accepts a missing helper for another platform and says plainly what will not work', async t => {
+  const root = await fixture(t), complete = await verifyNativeDistribution(root);
+  assert.deepEqual(complete.missingHelpers, []);
+  assert.equal(complete.notice, null);
+  await fs.rename(path.join(root, helper(other)), path.join(root, `${helper(other)}.owned-away`));
+  const result = await verifyNativeDistribution(root);
+  assert.deepEqual(result.missingHelpers, [{ target: other, name: otherName, file: helper(other) }]);
+  assert.equal(result.distributionDigest, complete.distributionDigest);
+  assert.match(result.notice, new RegExp(`browser helper for ${otherName.replace(/[()]/gu, '\\$&')} is missing`, 'u'));
+  assert.ok(result.notice.includes(helper(other)));
+  assert.match(result.notice, /until Desk is reinstalled there/u);
+  assert.doesNotMatch(result.notice, /NATIVE_|integrity/u);
+});
+
+for (const change of ['host-missing', 'host-bytes', 'other-bytes']) {
+  test(`setup check refuses ${change} with a plain explanation`, async t => {
+    const root = await fixture(t), target = change.startsWith('host') ? host : other;
+    if (change === 'host-missing') await fs.rename(path.join(root, helper(target)), path.join(root, `${helper(target)}.owned-away`));
+    else await fs.appendFile(path.join(root, helper(target)), 'changed helper bytes');
+    const error = await verifyNativeDistribution(root).then(() => assert.fail('setup must refuse'), error => error);
+    assert.equal(error.code, 'NATIVE_DISTRIBUTION_INCOMPLETE');
+    assert.ok(error.message.includes(helper(target)), error.message);
+    assert.match(error.message, change.startsWith('host') ? /for this computer, .* is missing or does not match/u : /does not match this Desk release/u);
+    assert.match(error.message, /Reinstall Desk/u);
+    // This computer's own helper can be removed again by antivirus after a reinstall; say where to look.
+    const antivirus = /If the file goes missing again after reinstalling, security or antivirus software such as Microsoft Defender may be removing it; check that software's quarantine or history\./u;
+    if (change.startsWith('host')) assert.match(error.message, antivirus);
+    else assert.doesNotMatch(error.message, antivirus);
+    assert.doesNotMatch(error.message, /NATIVE_|integrity|\(\w+ \(/u);
+  });
+}
+
+test('setup check explains a changed helper list without naming one platform', async t => {
+  const root = await fixture(t), file = path.join(root, 'mcp/artifacts/browser-messaging/manifest.json');
+  const manifest = JSON.parse(await fs.readFile(file, 'utf8')); manifest.goVersion = '1.27.0';
+  await fs.writeFile(file, JSON.stringify(manifest));
+  await assert.rejects(verifyNativeDistribution(root), { code: 'NATIVE_DISTRIBUTION_INCOMPLETE',
+    message: /browser helper files do not match this Desk release.*Reinstall Desk/u });
+});
+
+test('setup check names every missing helper for other platforms in one notice', async t => {
+  const root = await fixture(t), targets = ['linux-arm', 'win32-ia32'].filter(target => target !== host);
+  for (const target of targets) await fs.rename(path.join(root, helper(target)), path.join(root, `${helper(target)}.owned-away`));
+  const result = await verifyNativeDistribution(root);
+  assert.deepEqual(result.missingHelpers.map(entry => entry.target), targets);
+  assert.match(result.notice, /helpers for Linux \(32-bit ARM\) and Windows \(32-bit\) are missing/u);
+  assert.match(result.notice, /may have removed them/u);
+});

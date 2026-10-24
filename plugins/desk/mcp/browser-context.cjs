@@ -40,7 +40,7 @@ function validate(input, command) {
 function moduleImport(file) {
   return new Function("url","return import(url)")(require("url").pathToFileURL(file).href);
 }
-function nativeSelection(runtime, source, input) {
+function nativeSelection(runtime, source, input, report) {
   var installer;
   return Promise.resolve().then(function() {
   var profile = require("./web-real-profile.cjs"), discovery = require("./web-browser-discovery.cjs");
@@ -59,6 +59,7 @@ function nativeSelection(runtime, source, input) {
     installer = distribution;
     return distribution.verifyNativeDistribution(path.dirname(__dirname));
   }).then(function(verified) {
+  report.notice = verified.notice;
   var nativeReadyFile = path.join(runtime.stateRoot,"native-owned","state","native-provider-"+
     crypto.createHash("sha256").update(executable+"\0"+path.join(userDataDir,profileDirName)).digest("hex")+".json");
   var client = require("./web-native-messaging.cjs");
@@ -270,7 +271,7 @@ function executeSigned(input, options, request, l, source, resources, nodePath) 
   });
 }
 function signed(input, options, isCommand) {
-  var source = options.env || process.env, id = input.contextId, contextResources, runtime, selection, l, native, acl;
+  var source = options.env || process.env, id = input.contextId, contextResources, runtime, selection, l, native, acl, report = {};
   var creating = input.action === "create";
   return Promise.resolve().then(function() {
     // This facade must execute in the normal parent, before environment().
@@ -279,7 +280,7 @@ function signed(input, options, isCommand) {
     runtime = prepared;
     if (require("./web-playwright-patch.cjs").readRevision(runtime.installed) !== 4)
       common.fail("unsupported_cli","A complete verified native browser generation is required");
-    return nativeSelection(runtime,source,input);
+    return nativeSelection(runtime,source,input,report);
   }).then(function(selected) {
     selection = selected;
     if (creating) id = common.generateId("signed-in");
@@ -323,7 +324,9 @@ function signed(input, options, isCommand) {
       cliDir:path.join(runtime.installed.dir,"node_modules","playwright-core","lib","tools","cli-client"),args:input.args || []};
     return executeSigned(input,options,request,l,source,contextResources,runtime.nodePath);
   }).then(function(result) {
-    return {exitCode:0,payload:common.scrub({contextId:id,mode:"signed-in",state:result.state,result:result.result,contextResources:contextResources},source)};
+    var payload = {contextId:id,mode:"signed-in",state:result.state,result:result.result,contextResources:contextResources};
+    if (report.notice) payload.notice = report.notice; // another platform's helper is missing; this computer still works
+    return {exitCode:0,payload:common.scrub(payload,source)};
   }).catch(function(error) {
     var payload = common.errorPayload(error);
     payload.contextId = id; payload.mode = "signed-in";

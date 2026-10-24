@@ -74,6 +74,31 @@ function inventoryDigest(entries) {
   return hash(JSON.stringify([...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, bytes]) => [name, hash(bytes)])));
 }
 
+const PLATFORM_NAMES = {
+  'darwin-arm64': 'macOS (Apple silicon)', 'darwin-x64': 'macOS (Intel)', 'linux-arm': 'Linux (32-bit ARM)',
+  'linux-arm64': 'Linux (ARM64)', 'linux-x64': 'Linux (x64)', 'win32-arm64': 'Windows (ARM64)',
+  'win32-ia32': 'Windows (32-bit)', 'win32-x64': 'Windows (x64)',
+};
+const helperFile = target => `mcp/artifacts/browser-messaging/${target}/desk-browser-messaging${target.startsWith('win32-') ? '.exe' : ''}`;
+const listed = names => names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+function helperFailure(target) {
+  const message = !target ? "Desk's browser helper files do not match this Desk release, so browser setup stopped. Reinstall Desk."
+    : target === `${process.platform}-${process.arch}`
+      ? `Desk's browser helper for this computer, ${PLATFORM_NAMES[target]}, is missing or does not match this Desk release, so browser setup stopped. Reinstall Desk to restore ${helperFile(target)}. ` +
+        "If the file goes missing again after reinstalling, security or antivirus software such as Microsoft Defender may be removing it; check that software's quarantine or history."
+      : `Desk's browser helper for ${PLATFORM_NAMES[target]} does not match this Desk release, so browser setup stopped: ${helperFile(target)} may have been altered. Reinstall Desk.`;
+  return Object.assign(new Error(message), { code: 'NATIVE_DISTRIBUTION_INCOMPLETE', explained: true });
+}
+// Setup still works when another platform's helper is absent (antivirus can
+// remove one); the result says which platforms cannot connect a browser.
+function missingNotice(missing) {
+  if (!missing.length) return null;
+  const names = listed(missing.map(entry => entry.name)), one = missing.length === 1;
+  return `Desk's browser ${one ? 'helper' : 'helpers'} for ${names} ${one ? 'is' : 'are'} missing from this install ` +
+    `(${missing.map(entry => entry.file).join(', ')}); antivirus software may have removed ${one ? 'it' : 'them'}. ` +
+    `Browser setup on this computer is not affected, but Desk cannot connect to a browser on ${names} until Desk is reinstalled there.`;
+}
+
 // Read-only inventory of a complete normal plugin distribution. A server source
 // mirror is not this distribution. Never execute code selected by this argument.
 export async function verifyNativeDistribution(pluginRoot = ownPlugin) {
@@ -84,7 +109,10 @@ export async function verifyNativeDistribution(pluginRoot = ownPlugin) {
     const pkg = JSON.parse(sourceBytes(mcpRoot, 'package.json'));
     if (plugin.name !== 'desk' || typeof plugin.version !== 'string' || pkg.name !== '@ourostack/desk-mcp' || pkg.type !== 'module') throw Error();
     const native = require('./web-native-artifacts.cjs').artifactFamily('browser-messaging', GO_SOURCES);
-    native.verifyAssets(mcpRoot);
+    let helpers;
+    try { helpers = native.verifyHostAssets(mcpRoot, process.platform, process.arch); }
+    catch (error) { throw helperFailure(error.target); }
+    const missingHelpers = helpers.missing.map(({ target }) => ({ target, name: PLATFORM_NAMES[target], file: helperFile(target) }));
     const sources = new Map(CAPSULE_FILES.map(name => [name, sourceBytes(pluginRoot, name)]));
     for (const [name, bytes] of sources) {
       if (!/\.(?:mjs|cjs|js)$/u.test(name)) continue;
@@ -116,8 +144,10 @@ export async function verifyNativeDistribution(pluginRoot = ownPlugin) {
       ...sources,
       ...[...extension].map(([name, bytes]) => [`extension/${name}`, bytes]), ['artifact-manifest.json', artifactManifest],
     ]));
-    return { mcpRoot, sources, extension, artifactManifest, extensionId, extensionSourceDigest, distributionDigest, native };
+    return { mcpRoot, sources, extension, artifactManifest, extensionId, extensionSourceDigest, distributionDigest, native,
+      missingHelpers, notice: missingNotice(missingHelpers) };
   } catch (error) {
+    if (error.explained) throw error;
     if (['NATIVE_CAPSULE_DEPENDENCY_MISSING', 'NATIVE_EXTENSION_SOURCE_INVALID', 'NATIVE_DISTRIBUTION_CHANGED'].includes(error.code)) throw error;
     throw failure('NATIVE_DISTRIBUTION_INCOMPLETE');
   }
@@ -434,7 +464,8 @@ async function installNativeMessagingMode(options, bootstrapMode) {
             bootstrapMode ? input.installerProcess : input.expectedBrowser)) throw failure('NATIVE_INSTALL_INPUT_CHANGED');
       const result = { executable, runtimeDirectory, extensionDirectory, extensionId: distribution.extensionId,
         extensionSourceDigest: distribution.extensionSourceDigest, registration, nativeReadyFile,
-        browserStateRoot: input.browserStateRoot, digest, continuity: 'unknown' };
+        browserStateRoot: input.browserStateRoot, digest, continuity: 'unknown',
+        missingHelpers: distribution.missingHelpers, notice: distribution.notice };
       if (bootstrapMode && await present(runtimeDirectory) && await present(extensionDirectory) &&
           await present(registration.file) && await present(stateDir) &&
           (process.platform !== 'win32' || registered === registration.file)) {
