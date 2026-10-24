@@ -1145,8 +1145,8 @@ test("a refreshed publication state disappearing before readback cannot publish 
   assert.deepEqual(plan.ready, [])
 })
 
-for (const code of ["context_preparation_deferred", "synthetic_source_failure"]) {
-  test(`a stale replacement ${code} never republishes its earlier wording`, async (t) => {
+for (const code of [null, "context_preparation_deferred", "synthetic_source_failure"]) {
+  test(`a stale replacement ${code ?? "succeeding after early discovery defers"} never republishes its earlier wording`, async (t) => {
     const f = await reviewed()
     await queue.saveContextSent(f.env, STORE, [f.item], 102)
     await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
@@ -1156,7 +1156,7 @@ for (const code of ["context_preparation_deferred", "synthetic_source_failure"])
     let discoveryPasses = 0
     const run = () => withFsFault(t, {
       readFile: (original, file, ...args) => {
-        if (String(file) === stateFile && ++reads === 2) throw Object.assign(new Error(code), { code })
+        if (String(file) === stateFile && ++reads === 2 && code !== null) throw Object.assign(new Error(code), { code })
         return original(file, ...args)
       },
     }, () => queue.planContextPublication(f.env, {
@@ -1170,7 +1170,20 @@ for (const code of ["context_preparation_deferred", "synthetic_source_failure"])
     else {
       const plan = await run()
       assert.equal(plan.deferred, true)
-      assert.deepEqual(plan.ready, [])
+      assert.ok(plan.ready.every((item) => item.invalidation === true))
+      for (const item of plan.ready) {
+        const record = JSON.parse(item.bytes)
+        assert.equal(record.heading, null)
+        assert.deepEqual(record.events, [])
+        assert.equal(record.privacy.verdict, "not_required")
+      }
+      if (code === null) {
+        const state = await storedState(f)
+        assert.notEqual(state.basis, f.work.basis)
+        assert.equal(state.phase, "candidate")
+      } else {
+        assert.deepEqual(plan.ready, [])
+      }
     }
     assert.equal(discoveryPasses, 2)
   })
