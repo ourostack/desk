@@ -120,30 +120,24 @@ test("unavailable migration preserves lexical rows and history, leaves provenanc
   }))
 })
 
-test("partial chunk-local regeneration cannot establish provenance or suppress the next retry", async (t) => {
+test("a section refused as too long is shortened, so regeneration still establishes provenance", async (t) => {
   const root = fixture(t, "# First\n\nGood chunk.\n\n## Second\n\nRejected chunk.\n")
   await legacy(root)
-  const partial = await ensureIndex(root, {
-    ...NO_ARTIFACTS,
-    embed: { endpoint: "http://fixture.invalid", fetch: async (_url, request) =>
-      JSON.parse(request.body).prompt.includes("Rejected")
-        ? new Response(JSON.stringify({ error: "input length exceeds the context length" }), { status: 500 })
-        : embedding(0.2) },
-  })
-  assert.equal(partial.semantic.vectors_indexed, 1)
-  assert.equal(partial.semantic.known_unembeddable_vectors, 1)
-  assert.equal(partial.semantic.provenance_current, false)
-  assert.equal(provenance(root), null)
   const prompts = []
-  const retried = await ensureIndex(root, {
-    ...NO_ARTIFACTS, embed: { fetch: async (_url, request) => {
-      prompts.push(JSON.parse(request.body).prompt)
-      return embedding(0.4)
+  const regenerated = await ensureIndex(root, {
+    ...NO_ARTIFACTS,
+    embed: { endpoint: "http://fixture.invalid", fetch: async (_url, request) => {
+      const prompt = JSON.parse(request.body).prompt
+      prompts.push(prompt)
+      return prompt.includes("Rejected")
+        ? new Response(JSON.stringify({ error: "input length exceeds the context length" }), { status: 500 })
+        : embedding(0.2)
     } },
   })
-  assert.ok(prompts.some((prompt) => prompt.includes("Rejected")))
-  assert.equal(retried.semantic.vectors_indexed, 2)
-  assertCurrent(root, retried)
+  assert.ok(prompts.some((prompt) => prompt.includes("Rejected")), "the whole text was sent first")
+  assert.equal(regenerated.semantic.vectors_indexed, 2)
+  assert.equal(regenerated.semantic.known_unembeddable_vectors, 0)
+  assertCurrent(root, regenerated)
 })
 
 test("matching provenance preserves vectors without reembedding", async (t) => {

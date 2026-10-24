@@ -268,6 +268,35 @@ export function isChunkLocalEmbeddingFailure(diagnostic) {
   return OVERSIZED_INPUT.test(String(diagnostic.message))
 }
 
+// How many times a section the model refuses as too long is halved and sent again before it is skipped.
+export const TOO_LONG_SHORTENINGS = 6
+
+/**
+ * Embed a section the model refused as too long (`refusal`): halve the text
+ * and send it again, up to TOO_LONG_SHORTENINGS times, so the start of the
+ * section stays searchable. Returns the vector for the first length the model
+ * accepts, with `kept_chars`; a service failure as soon as one happens; or,
+ * when every length is refused, the last refusal with `skipped: true`.
+ */
+export async function embedShortened(text, refusal, opts) {
+  let kept = text
+  let result = refusal
+  for (let attempt = 0; attempt < TOO_LONG_SHORTENINGS && kept.length > 1; attempt += 1) {
+    kept = firstHalf(kept)
+    result = await embedChunkDetailed(kept, opts)
+    if (result.vector) return { ...result, kept_chars: kept.length }
+    if (!isChunkLocalEmbeddingFailure(result.diagnostic)) return result
+  }
+  return { ...result, skipped: true }
+}
+
+// The first half of `text`, never splitting a surrogate pair.
+function firstHalf(text) {
+  const end = Math.floor(text.length / 2)
+  const last = text.charCodeAt(end - 1)
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end)
+}
+
 /**
  * Batch-embed an array of chunk texts. Returns an array of the same length
  * where each entry is either a 768-dim array or null.

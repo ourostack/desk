@@ -34,7 +34,8 @@ const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
 const SNIPPET_MAX_CHARS = 280
 // Each section's vector, found by its text in the active vector space.
-const ACTIVE_TEXT_VECTOR_JOIN = `text_vectors tv ON tv.vector_space = '${ACTIVE_VECTOR_SPACE}' AND tv.text_hash = c.text_hash`
+// A text skipped as too long has a row with no embedding; meaning-based search never reads it.
+const ACTIVE_TEXT_VECTOR_JOIN = `text_vectors tv ON tv.vector_space = '${ACTIVE_VECTOR_SPACE}' AND tv.text_hash = c.text_hash AND tv.embedding IS NOT NULL`
 
 // Every field each search tool reads off `input` — not in the exported
 // `desk_search`/`desk_recall`/`desk_similar`/`desk_timeline` themselves

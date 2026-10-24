@@ -18,6 +18,10 @@ import {
 } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { inspectLocalDb, inspectStatusIndex } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
+import { indexedRecall } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { embedShortened } from "../../../../../plugins/desk/mcp/src/indexer/embed.js"
+import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import Database from "better-sqlite3"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const NO_ARTIFACTS = { snapshots: false, vectorPacks: false }
@@ -300,20 +304,176 @@ test("the memory of discarded vectors stays bounded", async () => {
   })
 })
 
-test("status says in plain words how many sections are too long to embed", async () => {
+const TOO_LONG = "input (13440 tokens) is too large to process. increase the physical batch size (current batch size: 2048)"
+// One section of about 770 characters, which the chunker keeps whole.
+const LONG_SECTION = `# Card\n\nalpha section.\n\n## Long\n\n${"long words ".repeat(70)}\n`
+const BRAVO = "## Two\n\nbravo section."
+const DELTA = "## Two\n\ndelta section."
+// Refuses these sections' text, and every shortened start of it.
+const refusesAtEveryLength = (...texts) => (prompt) => texts.some((text) => text.startsWith(prompt))
+
+// An embedding service that refuses as too long every prompt `tooLong` picks, and answers the rest.
+function refusingEmbed(tooLong, { failShortened = false, during } = {}) {
+  const prompts = []
+  return {
+    prompts,
+    endpoint: "http://127.0.0.1:11434",
+    fetch: async (_url, request) => {
+      const prompt = JSON.parse(request.body).prompt
+      prompts.push(prompt)
+      await during?.(prompt)
+      if (failShortened && prompts.some((earlier) => earlier !== prompt && earlier.startsWith(prompt))) throw new Error("connect ECONNREFUSED")
+      return tooLong(prompt)
+        ? new Response(JSON.stringify({ error: TOO_LONG }), { status: 500 })
+        : new Response(JSON.stringify({ embedding: vector(0.2) }))
+    },
+  }
+}
+
+test("a section too long for the model is halved until the model accepts it, so readiness is reached and status names the card", async () => {
+  const root = await deskWith({ "track/a/task.md": LONG_SECTION })
+  const embed = refusingEmbed((prompt) => prompt.length > 300)
+  const summary = await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
+  assert.equal(summary.texts_shortened, 1)
+  assert.equal(summary.semantic_warnings, 0)
+  const long = embed.prompts.filter((prompt) => prompt.includes("long words"))
+  assert.ok(long.length >= 3, "the whole text is refused, then each half is shorter than the one before")
+  for (let i = 1; i < long.length; i++) assert.ok(long[i - 1].startsWith(long[i]) && long[i].length < long[i - 1].length)
+  const row = inDb(root, (db) => db.prepare("SELECT kept_chars, embedding IS NOT NULL AS embedded FROM text_vectors WHERE kept_chars IS NOT NULL").get())
+  assert.deepEqual({ ...row }, { kept_chars: long.at(-1).length, embedded: 1 })
+  assert.equal(inspectStatusIndex(root).semantic.missing_vectors, 0, "a shortened section counts as covered")
+  const status = inspectLocalDb(root).document_vectors
+  assert.equal(status.shortened_sections, 1)
+  assert.equal(status.skipped_sections, 0)
+  assert.equal(status.state, "available")
+  assert.equal(status.note,
+    "1 section was too long for the embedding model and was shortened, so meaning-based search reads only the start (track/a/task.md). Exact-word search (desk_search) still finds it in full.")
+})
+
+test("a section refused at every length is skipped, counts as covered, and is not sent again at the next catch-up", async () => {
+  const root = await deskWith({ "track/a/task.md": THREE_SECTIONS, "track/b/task.md": THREE_SECTIONS.replace("bravo", "delta") })
+  const embed = refusingEmbed(refusesAtEveryLength(BRAVO, DELTA))
+  const summary = await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
+  assert.equal(summary.texts_skipped, 2)
+  assert.equal(summary.semantic_warnings, 0)
+  assert.ok(embed.prompts.filter((prompt) => BRAVO.startsWith(prompt)).length > 1, "the section was shortened before it was skipped")
+  assert.deepEqual(inspectStatusIndex(root).semantic, {
+    active_embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id, chunks_total: 6, vectors_indexed: 6, missing_vectors: 0,
+  })
+  const status = inspectLocalDb(root).document_vectors
+  assert.equal(status.skipped_sections, 2)
+  assert.equal(status.repairable_missing_vectors, 0)
+  assert.equal(status.note,
+    "2 sections were too long even when shortened and are skipped by meaning-based search (track/a/task.md, track/b/task.md). Exact-word search (desk_search) still finds them in full.")
+
+  // The next catch-up embeds the edited text and never sends the skipped texts again.
+  embed.prompts.length = 0
+  await fs.writeFile(path.join(root, "track/a/task.md"), THREE_SECTIONS.replace("charlie", "echo"), "utf8")
+  await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
+  assert.deepEqual(embed.prompts.filter(refusesAtEveryLength(BRAVO, DELTA)), [])
+  assert.ok(embed.prompts.some((prompt) => prompt.includes("echo")))
+  assert.equal(inspectStatusIndex(root).semantic.missing_vectors, 0)
+})
+
+test("a service failure while a section is shortened stops the pass, and the section is tried again later", async () => {
+  const root = await deskWith({ "track/a/task.md": LONG_SECTION })
+  const failing = refusingEmbed((prompt) => prompt.length > 300, { failShortened: true })
+  const summary = await rebuildIndex(root, { ...NO_ARTIFACTS, embed: failing })
+  assert.equal(summary.semantic_warnings, 1)
+  assert.equal(summary.texts_skipped, 0)
+  assert.equal(summary.texts_shortened, 0)
+  assert.equal(inDb(root, (db) => db.prepare("SELECT COUNT(*) AS n FROM text_vectors WHERE embedding IS NULL OR kept_chars IS NOT NULL").get().n), 0)
+  assert.equal(inspectStatusIndex(root).semantic.missing_vectors, 1)
+
+  const answering = refusingEmbed((prompt) => prompt.length > 300)
+  await rebuildIndex(root, { ...NO_ARTIFACTS, reembedMissing: true, embed: answering })
+  assert.equal(inspectStatusIndex(root).semantic.missing_vectors, 0)
+  assert.equal(inspectLocalDb(root).document_vectors.shortened_sections, 1)
+})
+
+test("a section an older build refused as too long is tried again, so its refusal cannot block readiness", async () => {
   const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
-  await rebuildIndex(root, {
-    embed: {
-      endpoint: "http://127.0.0.1:11434",
-      fetch: async (_url, request) => JSON.parse(request.body).prompt.includes("alpha")
-        ? new Response(JSON.stringify({ embedding: vector(0.2) }))
-        : new Response(JSON.stringify({ error: "input (13440 tokens) is too large to process. increase the physical batch size (current batch size: 2048)" }), { status: 500 }),
+  await rebuildIndex(root, { ...NO_ARTIFACTS, embed: refusingEmbed(refusesAtEveryLength(BRAVO)) })
+  // An older build records only its own per-section refusal, and no text vector.
+  inDb(root, (db) => db.prepare("DELETE FROM text_vectors WHERE embedding IS NULL").run())
+  assert.equal(inDb(root, (db) => db.prepare("SELECT COUNT(*) AS n FROM chunk_embedding_failures").get().n), 1)
+  assert.equal(inspectStatusIndex(root).semantic.missing_vectors, 1)
+  assert.equal(inspectLocalDb(root).document_vectors.note,
+    "1 section refused as too long by an older Desk build waits to be shortened. Exact-word search (desk_search) still finds it in full.")
+  const embed = refusingEmbed((prompt) => prompt.includes("bravo"))
+  await rebuildIndex(root, { ...NO_ARTIFACTS, reembedMissing: true, embed })
+  assert.ok(embed.prompts.some((prompt) => prompt.includes("bravo")))
+  assert.equal(inspectStatusIndex(root).semantic.missing_vectors, 0)
+  assert.equal(inspectLocalDb(root).document_vectors.shortened_sections, 1)
+})
+
+test("a skipped text whose section vanished during the pass is not recorded", async () => {
+  const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
+  const embed = refusingEmbed(refusesAtEveryLength(BRAVO), {
+    // Another Desk build re-indexes the card without this section while it is being shortened.
+    during: (prompt) => {
+      if (prompt === BRAVO) inDb(root, (db) => db.prepare("DELETE FROM chunks WHERE text = ?").run(BRAVO))
     },
   })
-  const status = inspectLocalDb(root)
-  assert.equal(status.document_vectors.known_unembeddable_vectors, 2)
-  assert.equal(status.document_vectors.note,
-    "2 sections are too long for the embedding model, so meaning-based search skips them; exact-word search (desk_search) still finds them.")
+  const summary = await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
+  assert.equal(summary.texts_skipped, 0)
+  assert.equal(inDb(root, (db) => db.prepare("SELECT COUNT(*) AS n FROM text_vectors WHERE embedding IS NULL").get().n), 0)
+  assert.equal(inDb(root, (db) => db.prepare("SELECT COUNT(*) AS n FROM chunk_embedding_failures").get().n), 0)
+})
+
+test("a shortened text never ends in half a character", async () => {
+  const text = `${"a".repeat(9)}\u{1F600}${"b".repeat(9)}`
+  const prompts = []
+  const result = await embedShortened(text, null, {
+    endpoint: "http://127.0.0.1:11434",
+    fetch: async (_url, request) => {
+      const prompt = JSON.parse(request.body).prompt
+      prompts.push(prompt)
+      return prompt.length > 9
+        ? new Response(JSON.stringify({ error: TOO_LONG }), { status: 500 })
+        : new Response(JSON.stringify({ embedding: vector(0.2) }))
+    },
+  })
+  assert.equal(prompts[0], "a".repeat(9), "the cut falls before the emoji, not inside it")
+  assert.equal(result.kept_chars, 9)
+})
+
+test("status names the cards with shortened, skipped and waiting sections, in the singular or the plural", async () => {
+  const cards = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`track/c${i}/task.md`, THREE_SECTIONS.replace("bravo", `bravo${i}`)]))
+  const root = await deskWith({ ...cards, "track/long/task.md": LONG_SECTION, "track/long2/task.md": LONG_SECTION.replace("alpha", "other") })
+  assert.equal(inspectLocalDb(root).document_vectors.shortened_sections, 0)
+  const bravos = [0, 1, 2, 3, 4, 5].map((i) => `## Two\n\nbravo${i} section.`)
+  await rebuildIndex(root, { ...NO_ARTIFACTS, embed: refusingEmbed((prompt) => prompt.length > 300 || refusesAtEveryLength(...bravos)(prompt)) })
+  assert.equal(inspectLocalDb(root).document_vectors.note,
+    "2 sections were too long for the embedding model and were shortened, so meaning-based search reads only the start (track/long/task.md, track/long2/task.md); "
+    + "6 sections were too long even when shortened and are skipped by meaning-based search (track/c0/task.md, track/c1/task.md, track/c2/task.md, track/c3/task.md, track/c4/task.md and 1 more). "
+    + "Exact-word search (desk_search) still finds them in full.")
+  // Five of them as an older build leaves them: refused, and not yet tried by this build.
+  inDb(root, (db) => db.prepare("DELETE FROM text_vectors WHERE embedding IS NULL AND text_hash IN (SELECT text_hash FROM chunks WHERE text <> ? AND text LIKE '%bravo%')").run(bravos[0]))
+  assert.equal(inspectLocalDb(root).document_vectors.note,
+    "2 sections were too long for the embedding model and were shortened, so meaning-based search reads only the start (track/long/task.md, track/long2/task.md); "
+    + "1 section was too long even when shortened and is skipped by meaning-based search (track/c0/task.md); "
+    + "5 sections refused as too long by an older Desk build wait to be shortened. Exact-word search (desk_search) still finds them in full.")
+})
+
+test("status of an index with no sections table reports no shortened or skipped sections", async () => {
+  const root = await deskWith({})
+  await fs.mkdir(path.dirname(indexDbPath(root)), { recursive: true })
+  const db = new Database(indexDbPath(root))
+  db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE text_vectors (vector_space TEXT, text_hash TEXT, embedding BLOB, kept_chars INTEGER)")
+  db.close()
+  const status = inspectLocalDb(root).document_vectors
+  assert.deepEqual([status.shortened_sections, status.skipped_sections, status.note], [0, 0, undefined])
+})
+
+test("meaning-based search never reads a skipped text", async () => {
+  const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
+  const embed = refusingEmbed(refusesAtEveryLength(BRAVO))
+  await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
+  const db = openDb(root)
+  const recalled = await indexedRecall({ deskRoot: root, db, input: { topic: "alpha", limit: 5 }, opts: { embed } }).finally(() => closeDb(db))
+  assert.equal(recalled.error, undefined, JSON.stringify(recalled))
+  assert.ok(recalled.results.length > 0)
 })
 
 test("an index an older build wrote, which has no text vectors yet, reads as having no vectors", async () => {

@@ -333,6 +333,7 @@ function vectorPackRows(db) {
             v.embedding
      FROM chunks c
      JOIN text_vectors v ON v.vector_space = ? AND v.text_hash = c.text_hash
+      AND v.embedding IS NOT NULL AND v.kept_chars IS NULL
      WHERE c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?

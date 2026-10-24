@@ -31,29 +31,33 @@ export function vectorSpaceFor(model) {
 
 /**
  * Prepare the guarded save: a vector is stored only while a section with its
- * text still exists, checked in the caller's transaction. The returned
- * function reports false when that section has vanished and nothing was stored.
+ * text still exists, checked in the caller's transaction. `keptChars` says how
+ * many characters were embedded when the text was shortened, and a null
+ * vector records the text as skipped. The returned function reports false
+ * when that section has vanished and nothing was stored.
  */
 export function prepareTextVectorSave(db, vectorSpace) {
   const live = db.prepare("SELECT 1 FROM chunks WHERE text_hash = ? LIMIT 1")
   const insert = db.prepare(
-    "INSERT OR IGNORE INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)",
+    "INSERT OR IGNORE INTO text_vectors (vector_space, text_hash, embedding, kept_chars) VALUES (?, ?, ?, ?)",
   )
-  return (textHash, vector) => {
+  return (textHash, vector, keptChars = null) => {
     const key = `${vectorSpace}\0${textHash}`
     if (live.get(textHash) === undefined) {
-      discardedVectors.delete(key)
-      discardedVectors.set(key, vector)
-      if (discardedVectors.size > DISCARDED_VECTOR_LIMIT) discardedVectors.delete(discardedVectors.keys().next().value)
+      if (vector) {
+        discardedVectors.delete(key)
+        discardedVectors.set(key, { vector, keptChars })
+        if (discardedVectors.size > DISCARDED_VECTOR_LIMIT) discardedVectors.delete(discardedVectors.keys().next().value)
+      }
       return false
     }
-    insert.run(vectorSpace, textHash, Buffer.from(new Float32Array(vector).buffer))
+    insert.run(vectorSpace, textHash, vector ? Buffer.from(new Float32Array(vector).buffer) : null, keptChars)
     discardedVectors.delete(key)
     return true
   }
 }
 
-/** A vector this process embedded for the text but could not save because its section had vanished, or undefined. */
+/** The vector, and the characters it kept, that this process embedded for the text but could not save because its section had vanished, or undefined. */
 export function discardedVector(vectorSpace, textHash) {
   return discardedVectors.get(`${vectorSpace}\0${textHash}`)
 }

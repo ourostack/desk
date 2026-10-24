@@ -41,6 +41,8 @@ export function inspectLocalDb(deskRoot) {
       embeddingFailuresTableExists,
     })
     const repairableMissingVectors = Math.max(0, missingVectors - knownUnembeddableVectors)
+    const tooLong = tooLongSections(db, { chunksTableExists, vectorsTableExists })
+    const note = tooLongNote(tooLong, knownUnembeddableVectors)
     const freshness = inspectFreshness(deskRoot, db)
     return {
       local_db: {
@@ -67,8 +69,10 @@ export function inspectLocalDb(deskRoot) {
         missing_vectors: missingVectors,
         known_unembeddable_vectors: knownUnembeddableVectors,
         repairable_missing_vectors: repairableMissingVectors,
+        shortened_sections: tooLong.shortened.sections,
+        skipped_sections: tooLong.skipped.sections,
         coverage: vectorsIndexed / Math.max(1, chunksTotal),
-        ...(knownUnembeddableVectors > 0 ? { note: tooLongNote(knownUnembeddableVectors) } : {}),
+        ...(note ? { note } : {}),
       },
     }
   } finally {
@@ -76,11 +80,58 @@ export function inspectLocalDb(deskRoot) {
   }
 }
 
-// The embedding model refuses a section longer than it can read, so that section has no vector.
-function tooLongNote(count) {
-  return count === 1
-    ? "1 section is too long for the embedding model, so meaning-based search skips it; exact-word search (desk_search) still finds it."
-    : `${count} sections are too long for the embedding model, so meaning-based search skips them; exact-word search (desk_search) still finds them.`
+const NOTE_CARD_LIMIT = 5
+
+// Sections the embedding model refused as too long: shortened ones have a vector for their start, skipped ones none. Both count as covered.
+function tooLongSections(db, { chunksTableExists, vectorsTableExists }) {
+  const result = { shortened: { sections: 0, cards: [] }, skipped: { sections: 0, cards: [] } }
+  if (!chunksTableExists || !vectorsTableExists || !tableExists(db, "docs")) return result
+  const rows = db.prepare(
+    `SELECT d.path, tv.embedding IS NULL AS skipped, COUNT(*) AS sections
+     FROM chunks c
+     JOIN docs d ON d.id = c.doc_id
+     JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
+     WHERE (tv.embedding IS NULL OR tv.kept_chars IS NOT NULL)
+       AND c.embedding_spec_id = ?
+       AND c.chunker_id = ?
+       AND c.normalization_id = ?
+     GROUP BY d.path, skipped
+     ORDER BY d.path`,
+  ).all(
+    ACTIVE_VECTOR_SPACE,
+    ACTIVE_EMBEDDING_SPEC.id,
+    ACTIVE_EMBEDDING_SPEC.chunker_id,
+    ACTIVE_EMBEDDING_SPEC.normalization_id,
+  )
+  for (const row of rows) {
+    const entry = row.skipped ? result.skipped : result.shortened
+    entry.sections += row.sections
+    entry.cards.push(row.path)
+  }
+  return result
+}
+
+const sectionCount = (count) => count === 1 ? "1 section" : `${count} sections`
+
+function cardList(cards) {
+  const named = cards.slice(0, NOTE_CARD_LIMIT).join(", ")
+  return cards.length > NOTE_CARD_LIMIT ? `${named} and ${cards.length - NOTE_CARD_LIMIT} more` : named
+}
+
+// Says in plain words which sections the embedding model found too long, and that exact-word search still finds them.
+function tooLongNote({ shortened, skipped }, waiting) {
+  const parts = []
+  if (shortened.sections > 0) {
+    parts.push(`${sectionCount(shortened.sections)} ${shortened.sections === 1 ? "was" : "were"} too long for the embedding model and ${shortened.sections === 1 ? "was" : "were"} shortened, so meaning-based search reads only the start (${cardList(shortened.cards)})`)
+  }
+  if (skipped.sections > 0) {
+    parts.push(`${sectionCount(skipped.sections)} ${skipped.sections === 1 ? "was" : "were"} too long even when shortened and ${skipped.sections === 1 ? "is" : "are"} skipped by meaning-based search (${cardList(skipped.cards)})`)
+  }
+  if (waiting > 0) {
+    parts.push(`${sectionCount(waiting)} refused as too long by an older Desk build ${waiting === 1 ? "waits" : "wait"} to be shortened`)
+  }
+  if (parts.length === 0) return null
+  return `${parts.join("; ")}. Exact-word search (desk_search) still finds ${shortened.sections + skipped.sections + waiting === 1 ? "it" : "them"} in full.`
 }
 
 export function unavailableLocalDb(dbPath, state) {
@@ -103,6 +154,8 @@ export function unavailableLocalDb(dbPath, state) {
       missing_vectors: 0,
       known_unembeddable_vectors: 0,
       repairable_missing_vectors: 0,
+      shortened_sections: 0,
+      skipped_sections: 0,
       coverage: null,
     },
   }

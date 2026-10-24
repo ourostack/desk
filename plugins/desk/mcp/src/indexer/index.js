@@ -22,6 +22,7 @@ import { discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
   embedChunksDetailed,
+  embedShortened,
   EMBEDDING_DIM,
   isChunkLocalEmbeddingFailure,
   resolveEmbeddingModel,
@@ -38,13 +39,6 @@ import { discardedVector, prepareTextVectorSave, removeUnusableVectors, vectorSp
 // Vectors are saved after every this many embeddings, so a long pass keeps what it finished.
 const EMBED_SAVE_BATCH_SIZE = 32
 const MISSING_VECTOR_ROUNDS = 3
-const ACTIVE_CHUNK_FAILURE_JOIN = `
-  f.chunk_key = c.chunk_key AND
-  f.text_hash = c.text_hash AND
-  f.embedding_spec_id = c.embedding_spec_id AND
-  f.chunker_id = c.chunker_id AND
-  f.normalization_id = c.normalization_id
-`
 
 /**
  * Run the indexer against `deskRoot`. Creates/refreshes
@@ -395,6 +389,8 @@ function sameChunk(row, chunk) {
 async function embedMissingVectors(db, opts, summary, docIds) {
   summary.vectors_saved = 0
   summary.vectors_discarded = 0
+  summary.texts_shortened = 0
+  summary.texts_skipped = 0
   // A vector is discarded when its section vanished during the pass, as when an older build re-commits a stale copy of the document; look once more, in case the text is back.
   for (let round = 0; round < MISSING_VECTOR_ROUNDS; round += 1) {
     const discarded = summary.vectors_discarded
@@ -418,10 +414,8 @@ async function embedMissingRound(db, opts, summary, docIds) {
        c.normalization_id
      FROM chunks c
      LEFT JOIN text_vectors tv ON tv.vector_space = ? AND tv.text_hash = c.text_hash
-     LEFT JOIN chunk_embedding_failures f ON ${ACTIVE_CHUNK_FAILURE_JOIN}
      WHERE tv.text_hash IS NULL
        AND c.text_hash IS NOT NULL
-       AND f.chunk_key IS NULL
      ORDER BY c.id`,
   ).all(vectorSpace).filter((row) => docIds === null || docIds.has(row.doc_id))
   const missing = new Map()
@@ -471,21 +465,30 @@ async function embedMissingRound(db, opts, summary, docIds) {
       const entry = entries[i]
       const result = results[i]
       if (result.vector) {
-        if (saveVector(entry.text_hash, result.vector)) {
+        if (saveVector(entry.text_hash, result.vector, result.kept_chars ?? null)) {
           summary.vectors_saved += 1
-          for (const section of entry.sections) deleteFailure.run(section)
+          if (result.kept_chars == null) {
+            for (const section of entry.sections) deleteFailure.run(section)
+          } else {
+            summary.texts_shortened += 1
+          }
         } else {
           summary.vectors_discarded += 1
         }
-      } else if (isChunkLocalEmbeddingFailure(result.diagnostic)) {
-        for (const section of entry.sections) {
-          upsertFailure.run({
-            ...section,
-            reason: result.diagnostic.reason,
-            message: result.diagnostic.message,
-            failed_at: failedAt,
-          })
-          summary.embedding_failures_recorded += 1
+      } else if (result.skipped) {
+        // Skipped for these embedding settings: the text counts as covered and is not sent again. The refusal is also
+        // recorded per section, as older builds expect, so they do not send it again either.
+        if (saveVector(entry.text_hash, null)) {
+          summary.texts_skipped += 1
+          for (const section of entry.sections) {
+            upsertFailure.run({
+              ...section,
+              reason: result.diagnostic.reason,
+              message: result.diagnostic.message,
+              failed_at: failedAt,
+            })
+            summary.embedding_failures_recorded += 1
+          }
         }
       }
     }
@@ -500,15 +503,19 @@ async function embedMissingRound(db, opts, summary, docIds) {
     else entries.push(entry)
   }
   // Texts back after their section vanished mid-pass are saved from memory, not embedded again.
-  if (known.length > 0) save(known.map(({ entry }) => entry), known.map(({ vector }) => ({ vector })), new Date().toISOString())
+  if (known.length > 0) {
+    save(known.map(({ entry }) => entry), known.map(({ vector }) => ({ vector: vector.vector, kept_chars: vector.keptChars })), new Date().toISOString())
+  }
+  const serviceFailed = (result) => result.vector == null && !isChunkLocalEmbeddingFailure(result.diagnostic)
   for (let start = 0; start < entries.length; start += EMBED_SAVE_BATCH_SIZE) {
     const batch = entries.slice(start, start + EMBED_SAVE_BATCH_SIZE)
     const results = await embedChunksDetailed(batch.map((entry) => entry.text), embedOptions)
+    // A section refused as too long is shortened and sent again, unless the service itself failed; then it waits for the next pass.
+    for (let i = 0; i < results.length && !results.some(serviceFailed); i++) {
+      if (results[i].vector == null) results[i] = await embedShortened(batch[i].text, results[i], embedOptions)
+    }
     save(batch, results, new Date().toISOString())
-    const serviceFailure = results.some((result) => (
-      result.vector == null && !isChunkLocalEmbeddingFailure(result.diagnostic)
-    ))
-    if (serviceFailure) {
+    if (results.some(serviceFailed)) {
       // The run stops embedding here, so this is its one log line; downstream
       // tools surface the semantic_unavailable warning at query time.
       summary.semantic_warnings += 1

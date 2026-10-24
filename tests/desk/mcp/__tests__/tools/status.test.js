@@ -738,7 +738,7 @@ test("desk_status reports vector coverage against the active embedding spec", as
   }
 })
 
-test("desk_status treats known unembeddable chunks as non-repairable vector skips", async () => {
+test("desk_status treats a section an older build refused as too long as a non-repairable vector skip", async () => {
   const root = makeRoot()
   try {
     const db = openDb(root)
@@ -825,7 +825,7 @@ test("desk_status treats known unembeddable chunks as non-repairable vector skip
     assert.equal(body.document_vectors.known_unembeddable_vectors, 1)
     assert.equal(body.document_vectors.repairable_missing_vectors, 0)
     assert.equal(body.document_vectors.note,
-      "1 section is too long for the embedding model, so meaning-based search skips it; exact-word search (desk_search) still finds it.")
+      "1 section refused as too long by an older Desk build waits to be shortened. Exact-word search (desk_search) still finds it in full.")
     assert.equal(body.degraded_modes.includes("document_vectors_partial"), false)
   } finally {
     rmSync(root, { recursive: true, force: true })

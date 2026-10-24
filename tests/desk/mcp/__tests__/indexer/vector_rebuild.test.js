@@ -122,6 +122,16 @@ async function corruptPackChecksum({ pluginRoot, packId }) {
   )
 }
 
+// Leaves each refused section the way an older Desk build records it: a refusal per section and no text vector.
+function asOlderBuildRefusal(deskRoot) {
+  const db = openDb(deskRoot)
+  try {
+    db.prepare("DELETE FROM text_vectors WHERE embedding IS NULL").run()
+  } finally {
+    closeDb(db)
+  }
+}
+
 function storedVector(db, docPath, chunkIndex) {
   const row = db
     .prepare(
@@ -284,10 +294,11 @@ test("rebuildIndex continues live vector generation after an oversized chunk", a
   )
 
   const requests = []
+  // The model refuses the oversized section and every shortened start of it.
   const fetchWithOversizeFailure = async (_url, request) => {
     const prompt = JSON.parse(request.body).prompt
     requests.push(prompt)
-    if (/oversized semantic body/u.test(prompt)) {
+    if ("oversized semantic body".startsWith(prompt) || /oversized semantic body/u.test(prompt)) {
       return {
         ok: false,
         status: 500,
@@ -310,24 +321,27 @@ test("rebuildIndex continues live vector generation after an oversized chunk", a
   })
   assert.equal(summary.semantic_warnings, 0)
   assert.equal(summary.embedding_failures_recorded, 1)
-  assert.equal(requests.length, 2)
+  assert.equal(summary.texts_skipped, 1)
   assert.match(requests[0], /oversized semantic body/u)
   assert.match(requests[1], /small semantic body/u)
+  assert.ok(requests.length > 2, "the oversized section was shortened before it was skipped")
+  assert.ok(requests.slice(2).every((prompt) => "oversized semantic body".startsWith(prompt)))
+  const sent = requests.length
 
   const db = openDb(deskRoot)
   try {
-    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors").get().count, 1)
+    assert.equal(db.prepare("SELECT count(*) AS count FROM text_vectors WHERE embedding IS NOT NULL").get().count, 1)
     assertVectorApprox(storedVector(db, smallPath, 0), vector(13))
-    const missingOversize = db
+    const skippedOversize = db
       .prepare(
         `SELECT count(*) AS count
          FROM chunks c
          JOIN docs d ON d.id = c.doc_id
-         LEFT JOIN text_vectors v ON v.text_hash = c.text_hash
-         WHERE d.path = ? AND v.text_hash IS NULL`,
+         JOIN text_vectors v ON v.text_hash = c.text_hash
+         WHERE d.path = ? AND v.embedding IS NULL`,
       )
       .get(oversizePath).count
-    assert.equal(missingOversize, 1)
+    assert.equal(skippedOversize, 1)
     const failure = db
       .prepare(
         `SELECT reason, message
@@ -349,7 +363,7 @@ test("rebuildIndex continues live vector generation after an oversized chunk", a
   })
   assert.equal(second.docs_indexed, 0)
   assert.equal(second.docs_skipped, 2)
-  assert.equal(requests.length, 2)
+  assert.equal(requests.length, sent, "a skipped section is not sent again")
 
   const ensured = await ensureIndex(deskRoot, {
     ...NO_RELEASE_ARTIFACTS,
@@ -362,8 +376,8 @@ test("rebuildIndex continues live vector generation after an oversized chunk", a
   })
   assert.equal(ensured.built, false)
   assert.equal(ensured.reason, "fresh")
-  assert.equal(ensured.semantic.missing_vectors, 1)
-  assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
+  assert.equal(ensured.semantic.missing_vectors, 0, "a skipped section counts as covered")
+  assert.equal(ensured.semantic.known_unembeddable_vectors, 0)
   assert.equal(ensured.semantic.repairable_missing_vectors, 0)
 })
 
@@ -387,6 +401,7 @@ test("ensureIndex imports vector packs for chunks previously marked unembeddable
       }),
     },
   })
+  asOlderBuildRefusal(deskRoot)
 
   const before = await ensureIndex(deskRoot, {
     ...NO_RELEASE_ARTIFACTS,
@@ -460,6 +475,7 @@ test("ensureIndex skips repeated no-op vector-pack repair for unchanged known-un
       }),
     },
   })
+  asOlderBuildRefusal(deskRoot)
 
   await writePack({
     pluginRoot: deskRoot,
@@ -569,6 +585,7 @@ test("ensureIndex remembers absent vector-pack repair for known-unembeddable mis
       }),
     },
   })
+  asOlderBuildRefusal(deskRoot)
 
   const first = await ensureIndex(deskRoot, {
     snapshots: false,
@@ -625,6 +642,7 @@ test("ensureIndex still validates malformed vector packs with missing sidecars",
       }),
     },
   })
+  asOlderBuildRefusal(deskRoot)
 
   const packDir = path.join(
     deskRoot,
@@ -932,6 +950,7 @@ test("ensureIndex tolerates incomplete ignored vector packs while recording know
       }),
     },
   })
+  asOlderBuildRefusal(deskRoot)
   const packDir = path.join(
     pluginRoot,
     "artifacts",
@@ -1039,7 +1058,7 @@ test("ensureIndex reports failure diagnostics when probe succeeds but rebuild em
   assert.equal(ensured.semantic.missing_vectors, 1)
 })
 
-test("ensureIndex preserves probe diagnostics when repair records a known unembeddable chunk", async () => {
+test("ensureIndex preserves probe diagnostics when repair skips a section the model refuses at every length", async () => {
   const deskRoot = await tmpRoot()
   const docPath = "trackA/task-oversize/task.md"
   const body = "---\nstatus: processing\n---\noversized repair body"
@@ -1071,19 +1090,20 @@ test("ensureIndex preserves probe diagnostics when repair records a known unembe
       fetch: probeThenOversize,
     },
   })
-  assert.equal(calls, 2)
+  assert.ok(calls > 2, "the probe, the whole section, then shortened starts of it")
   assert.equal(ensured.built, true)
   assert.equal(ensured.reason, "semantic_missing")
   assert.equal(ensured.summary.semantic_warnings, 0)
   assert.equal(ensured.summary.embedding_failures_recorded, 1)
-  assert.equal(ensured.semantic.missing_vectors, 1)
-  assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
+  assert.equal(ensured.summary.texts_skipped, 1)
+  assert.equal(ensured.semantic.missing_vectors, 0)
+  assert.equal(ensured.semantic.known_unembeddable_vectors, 0)
   assert.equal(ensured.semantic.repairable_missing_vectors, 0)
   assert.equal(ensured.semantic.embedding_available, true)
   assert.equal(ensured.semantic.embedding_diagnostic.reason, "ok")
 })
 
-test("ensureIndex treats stale known-unembeddable-only coverage as semantically available", async () => {
+test("ensureIndex treats a stale index whose only gaps are skipped sections as semantically available", async () => {
   const deskRoot = await trustedRoot()
   const docPath = "trackA/task-oversize/task.md"
   const body = "---\nstatus: processing\n---\nstale known oversize body"
@@ -1118,10 +1138,9 @@ test("ensureIndex treats stale known-unembeddable-only coverage as semantically 
   assert.equal(ensured.reason, "stale")
   assert.equal(ensured.summary.docs_skipped, 1)
   assert.equal(ensured.summary.semantic_warnings, 0)
-  assert.equal(ensured.semantic.missing_vectors, 1)
-  assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
+  assert.equal(ensured.semantic.missing_vectors, 0)
+  assert.equal(ensured.semantic.known_unembeddable_vectors, 0)
   assert.equal(ensured.semantic.repairable_missing_vectors, 0)
-  assert.equal(ensured.semantic.embedding_available, true)
   assert.equal(ensured.semantic.embedding_diagnostic, undefined)
 })
 

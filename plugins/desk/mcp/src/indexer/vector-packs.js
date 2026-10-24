@@ -177,12 +177,14 @@ export async function importVectorPacks({
      WHERE chunk_key = ?
      ORDER BY id`,
   )
-  // Pack vectors are active-model vectors; one per section text serves every section with that text.
+  // Pack vectors are active-model vectors; one per section text serves every section with that text. A pack's
+  // vector of the whole text replaces a vector of a shortened text or a record that the text was skipped as too long.
   const hasVector = db.prepare(
-    "SELECT 1 FROM text_vectors WHERE vector_space = ? AND text_hash = ?",
+    "SELECT 1 FROM text_vectors WHERE vector_space = ? AND text_hash = ? AND embedding IS NOT NULL AND kept_chars IS NULL",
   )
   const insertVector = db.prepare(
-    "INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)",
+    `INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)
+     ON CONFLICT (vector_space, text_hash) DO UPDATE SET embedding = excluded.embedding, kept_chars = NULL`,
   )
   const deleteFailure = db.prepare(
     `DELETE FROM chunk_embedding_failures
