@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.353 — 2026-10-24
+
+Prepare current task inputs before scanning large reviewed publication records, reusing validated source groups while rechecking prose consent. Keep the existing discovery, publication and overall time limits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.352 — 2026-10-24
 
 Let task-context discovery use enough of a shortened preparation turn to resolve a task and save its input, while retaining the one-second discovery ceiling and two-second total allowance.
