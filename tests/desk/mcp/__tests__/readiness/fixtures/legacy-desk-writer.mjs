@@ -1,4 +1,4 @@
-// A Desk build from before vectors were keyed by text, run in its own thread the way an older session runs in its own process. Each catch-up commits a generation that re-indexes the busy card: it deletes the card's sections and their vectors in the old row-keyed table and inserts the sections again under new row numbers, even when the text is unchanged. A writer that embeds then asks for each new row's vector one request at a time and saves them all by row number at the end, without checking that the rows still exist.
+// A Desk build from before vectors were keyed by text, run in its own thread the way an older session runs in its own process. Each catch-up commits a generation that re-indexes the busy card: it deletes the card's sections and their vectors in the old row-keyed table and inserts the sections again under new row numbers, even when the text is unchanged. A writer that embeds then waits as long as embedding each new row would take and saves them all by row number at the end, without checking that the rows still exist.
 
 import { parentPort, workerData } from "node:worker_threads"
 import { createHash } from "node:crypto"
@@ -69,11 +69,10 @@ async function catchUp(sequence) {
   state.commits += 1
   if (embedDelayMs === null) return
   const vector = new Float32Array(768).fill(0.01)
-  for (let i = 0; i < rows.length; i += 1) {
-    if (state.stopped) return
-    await sleep(embedDelayMs)
-    state.embedded += 1
-  }
+  // One wait for the whole card: Windows rounds each timer up to about 15 ms, so a wait per section would take 15 s, not 2.
+  await sleep(embedDelayMs * rows.length)
+  if (state.stopped) return
+  state.embedded += rows.length
   const save = openDb(root)
   try {
     const insert = save.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)")
