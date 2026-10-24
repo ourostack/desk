@@ -164,6 +164,6 @@ export function remoteBlobs(origin) {
 }
 
 export const remoteJson = (origin, file) => {
-  const shown = spawnSync("git", ["-C", origin, "show", `main:${file}`], { encoding: "utf8" })
+  const shown = spawnSync("git", ["--git-dir", origin, "show", `main:${file}`], { encoding: "utf8" })
   return shown.status === 0 ? JSON.parse(shown.stdout) : null
 }

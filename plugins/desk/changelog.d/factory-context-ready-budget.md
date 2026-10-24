@@ -1,0 +1,1 @@
+Keep validated task explanations moving through bounded publication checks. Resume from a protected cursor instead of discarding ready progress when later work reaches the unchanged time limit, and preserve immediate withdrawal of stale wording.

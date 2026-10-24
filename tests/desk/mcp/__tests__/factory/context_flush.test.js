@@ -7,9 +7,9 @@ import * as path from "node:path"
 import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
   readConsent, readDelivered, readStatus, readTaskContextFile, setConsent, writeLocalFacts, writeStatus,
-  updateStatus,
+  taskContextPath, updateStatus, updateTaskContextState,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { acceptContextCandidate, acceptContextPrivacy, listContextWork, planContextPublication } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
+import { acceptContextCandidate, acceptContextPrivacy, listContextWork, planContextPublication, saveContextSent } from "../../../../../plugins/desk/mcp/src/factory/context-outbox.js"
 import { validatePr } from "../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 import { runEvaluatorStep } from "../../../../../plugins/desk/mcp/src/factory/evaluator-step.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
@@ -57,6 +57,38 @@ async function approve(w) {
   const review = { schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: accepted.payload_sha256, reviewer: work.source.evaluator, reason: "safe" }
   assert.equal((await acceptContextPrivacy(w.env, { store: STORE, job: work.job, basis: work.basis, bytes: json(review) })).result, "context_accepted")
   return work
+}
+async function reviewedBatch(base) {
+  const w = await world(base)
+  for (let index = 1; index < 9; index += 1) {
+    const local = structuredClone(w.local)
+    local.session.id = `${String(index).padStart(8, "0")}-1234-4abc-8abc-123456789abc`
+    local.jobs[0].job = String(index).repeat(32)
+    const written = await writeLocalFacts(w.env, STORE, local)
+    assert.equal(written.written, true)
+    await updateStatus(w.env, (status) => ({
+      ...status, derivations: { ...status.derivations, [written.name]: {
+        store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk",
+      } },
+    }))
+  }
+  await w.run()
+  w.hub.mergeOpenPr()
+  await w.run()
+  const work = await listContextWork(w.env, { store: STORE })
+  assert.equal(work.length, 9)
+  for (const item of work) {
+    const candidate = { ...contextRecord(item.source.sources[0], item.job), evaluator: item.source.evaluator, privacy: null }
+    const accepted = await acceptContextCandidate(w.env, { store: STORE, job: item.job, basis: item.basis, bytes: json(candidate) })
+    assert.equal(accepted.result, "candidate_accepted")
+    assert.equal((await acceptContextPrivacy(w.env, {
+      store: STORE, job: item.job, basis: item.basis, bytes: json({
+        schema: "desk.factory.context-review/1", verdict: "approved", payload_sha256: accepted.payload_sha256,
+        reviewer: item.source.evaluator, reason: "safe",
+      }),
+    })).result, "context_accepted")
+  }
+  return w
 }
 const contexts = (files) => [...files].filter(([name]) => name.startsWith("context/"))
 
@@ -285,6 +317,114 @@ test("a context refusal is isolated from numerical facts and retries without man
   assert.equal([...await w.files()].filter(([name]) => name.startsWith("facts/")).length, 1)
   await w.run({ now: () => T0 + 24 * 3600 * 1000 + 1 })
   assert.equal(contexts(await w.files()).length, 1)
+}))
+
+test("rotating bounded plans keep the actual open intake head unchanged until its batch merges", () => scratch(async (base) => {
+  const w = await reviewedBatch(base)
+  const sent = await w.run()
+  assert.equal(sent.result, "delivered_pr_open")
+  const branch = `intake/${(await readConsent(w.env)).stores[STORE].intake_id}`
+  const before = w.hub.ref(STORE, branch)
+  assert.equal(contexts(await w.files()).length, 8)
+  await w.run()
+  await w.run()
+  assert.equal(w.hub.ref(STORE, branch), before, "an ordinary retry must not restart checks for unchanged context")
+  w.hub.mergeOpenPr()
+  await w.run()
+  assert.equal(contexts(w.hub.mainFiles()).length, 8)
+  assert.equal(contexts(await w.files()).length, 9, "the later task enters intake only after the earlier batch settles")
+}))
+
+test("a rejected rotated intake accounts for its complete batch before advancing the rejection watermark", () => scratch(async (base) => {
+  const w = await reviewedBatch(base)
+  const sent = await w.run()
+  const sentJobs = contexts(await w.files()).map(([name]) => name.slice("context/".length, -".json".length))
+  assert.equal(sentJobs.length, 8)
+  w.hub.rejectOpenPr("factory-rejected: context_source_changed")
+  await w.run()
+  for (const job of sentJobs) {
+    const state = JSON.parse((await readTaskContextFile(w.env, STORE, job, "state.json")).toString("utf8"))
+    assert.equal(state.refusals, 1)
+    assert.equal(state.pr, null)
+    assert.equal(state.hold_until, T0 + 24 * 3600 * 1000)
+  }
+  assert.ok((await readStatus(w.env)).last_flush[STORE].rejections_through >= sent.pr.number)
+}))
+
+for (const missingWatermark of [false, true]) test(`failed refusal accounting preserves the watermark and a repaired retry counts the refusal once${missingWatermark ? " without a saved watermark" : ""}`, () => scratch(async (base) => {
+  const w = await world(base)
+  await w.run()
+  w.hub.mergeOpenPr()
+  await w.run()
+  await approve(w)
+  const sent = await w.run()
+  const before = JSON.parse((await readTaskContextFile(w.env, STORE, w.job, "state.json")).toString("utf8"))
+  if (missingWatermark) await updateStatus(w.env, (status) => ({
+    ...status, last_flush: { ...status.last_flush, [STORE]: { ...status.last_flush[STORE], rejections_through: null } },
+  }))
+  const through = (await readStatus(w.env)).last_flush[STORE].rejections_through ?? 0
+  w.hub.rejectOpenPr("factory-rejected: context_source_changed")
+  await updateTaskContextState(w.env, STORE, w.job, (state) => ({ ...state, publication_seal: "f".repeat(64) }))
+  await w.run()
+  const failed = await readStatus(w.env)
+  assert.equal(failed.last_flush[STORE].rejections_through, through)
+  assert.equal(failed.context_publication[STORE].code, "context_error")
+  await updateTaskContextState(w.env, STORE, w.job, (state) => ({ ...state, publication_seal: before.publication_seal }))
+  await w.run()
+  await w.run()
+  const repaired = JSON.parse((await readTaskContextFile(w.env, STORE, w.job, "state.json")).toString("utf8"))
+  assert.equal(repaired.refusals, 1)
+  assert.equal(repaired.pr, null)
+  assert.ok((await readStatus(w.env)).last_flush[STORE].rejections_through >= sent.pr.number)
+}))
+
+test("a refused receipt race holds context replay keys while numerical delivery continues", (t) => scratch(async (base) => {
+  const w = await world(base)
+  await w.run()
+  w.hub.mergeOpenPr()
+  await w.run()
+  await approve(w)
+  const sent = await w.run()
+  const file = await taskContextPath(w.env, STORE, w.job, "state.json")
+  const before = JSON.parse(await fs.readFile(file, "utf8"))
+  const through = (await readStatus(w.env)).last_flush[STORE].rejections_through ?? 0
+  await saveContextSent(w.env, STORE, [{ job: w.job, basis: before.basis, sha: "e".repeat(40) }], sent.pr.number)
+  const winner = JSON.parse(await fs.readFile(file, "utf8"))
+  await fs.writeFile(file, json(before))
+  w.hub.rejectOpenPr("factory-rejected: context_source_changed")
+  const local = structuredClone(w.local)
+  local.session.id = "99000000-1234-4abc-8abc-123456789abc"
+  local.jobs[0].job = "9".repeat(32)
+  const written = await writeLocalFacts(w.env, STORE, local)
+  await updateStatus(w.env, (status) => ({ ...status, derivations: { ...status.derivations, [written.name]: {
+    store: STORE, checked_route: STORE, desk_root: w.desk, desk_repo: "synthetic/context-desk",
+  } } }))
+  const open = fs.open.bind(fs)
+  let raced = false
+  t.mock.method(fs, "open", async (target, ...args) => {
+    if (String(target) === `${file}.lock` && !raced) {
+      raced = true
+      await fs.writeFile(file, json(winner))
+    }
+    return open(target, ...args)
+  })
+  try {
+    assert.equal((await w.run()).result, "intake_stale_retried", "numerical delivery stays admitted")
+  } finally {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
+  assert.equal(raced, true)
+  assert.equal([...(await w.files())].filter(([name]) => name.startsWith("facts/")).length, 2)
+  assert.equal(contexts(await w.files()).length, 0, "a failed refusal must not be republished under a new PR")
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).pr, sent.pr.number, "retain the original replay key")
+  assert.equal((await readStatus(w.env)).last_flush[STORE].rejections_through, through)
+  await w.run()
+  await w.run()
+  const after = JSON.parse(await fs.readFile(file, "utf8"))
+  assert.equal(after.refusals, 1)
+  assert.equal(after.pr, null)
+  assert.ok((await readStatus(w.env)).last_flush[STORE].rejections_through >= sent.pr.number)
 }))
 
 for (const contextRefused of [false, true]) test(`mixed intake keeps numeric quarantine separate from context refusal: ${contextRefused}`, () => scratch(async (base) => {
