@@ -1039,7 +1039,7 @@ test("invalid publication cursors cannot select or publish task evidence", async
   }
 })
 
-test("late discovery exhaustion keeps validated publication work and reports deferral", async (t) => {
+test("preparation exhaustion before publication returns no unvalidated records", async (t) => {
   const f = await reviewed()
   let elapsed = 0
   let consentReads = 0
@@ -1052,8 +1052,8 @@ test("late discovery exhaustion keeps validated publication work and reports def
     ...f.options, now: 1000, deadline: 2000, clock: () => elapsed,
   }), fsNative.promises)
   assert.equal(plan.deferred, true)
-  assert.equal(plan.work, true)
-  assert.deepEqual(plan.ready.map((item) => item.job), [CONTEXT_JOB])
+  assert.equal(plan.work, false)
+  assert.deepEqual(plan.ready, [])
 })
 
 test("unexpected discovery errors are not converted into a successful partial plan", async () => {
@@ -1093,14 +1093,20 @@ test("a ready input that spends the remaining budget is held rather than returne
 test("a freshness check that spends the publication allowance cannot return a late ready item", async (t) => {
   const f = await reviewed()
   let elapsed = 0
+  let inputRead = false
   const plan = await withFsFault(t, {
+    readFile: (original, file, ...args) => {
+      if (String(file) === f.work.input) inputRead = true
+      return original(file, ...args)
+    },
+  }, () => withFsFault(t, {
     lstatSync: (original, file, ...args) => {
-      if (String(file) === f.entries[0].logPath) elapsed = 1000
+      if (inputRead && String(file) === f.entries[0].logPath) elapsed = 1000
       return original(file, ...args)
     },
   }, () => queue.planContextPublication(f.env, {
     ...f.options, now: 1000, deadline: 2000, clock: () => elapsed,
-  }))
+  })), fsNative.promises)
   assert.equal(plan.deferred, true)
   assert.deepEqual(plan.ready, [])
 })
@@ -1114,6 +1120,7 @@ test("a refreshed publication state disappearing before readback cannot publish 
   let moved = false
   let installed = false
   let installedChecks = 0
+  let discoveryPasses = 0
   const plan = await withFsFault(t, {
     rename: async (original, from, to) => {
       const result = await original(from, to)
@@ -1127,31 +1134,58 @@ test("a refreshed publication state disappearing before readback cannot publish 
       }
       return original(file, ...args)
     },
-  }, () => queue.planContextPublication(f.env, { ...f.options, now: 1000 }), fsNative.promises)
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, now: 1000,
+    readRemote: () => {
+      if (++discoveryPasses === 1) throw Object.assign(new Error("deferred first discovery"), { code: "context_preparation_deferred" })
+      return null
+    },
+  }), fsNative.promises)
   assert.equal(moved, true)
   assert.deepEqual(plan.ready, [])
 })
 
-for (const code of ["context_preparation_deferred", "synthetic_source_failure"]) {
-  test(`a stale replacement ${code} never republishes its earlier wording`, async (t) => {
+for (const code of [null, "context_preparation_deferred", "synthetic_source_failure"]) {
+  test(`a stale replacement ${code ?? "succeeding after early discovery defers"} never republishes its earlier wording`, async (t) => {
     const f = await reviewed()
     await queue.saveContextSent(f.env, STORE, [f.item], 102)
     await online(f, { readMain: async () => ({ blobs: new Map([[f.item.path, f.item.sha]]), unknown: false }) })
     await writeFile(f.entries[0].logPath, '{"synthetic":"changed private evidence"}\n')
     const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
     let reads = 0
+    let discoveryPasses = 0
     const run = () => withFsFault(t, {
       readFile: (original, file, ...args) => {
-        if (String(file) === stateFile && ++reads === 2) throw Object.assign(new Error(code), { code })
+        if (String(file) === stateFile && ++reads === 2 && code !== null) throw Object.assign(new Error(code), { code })
         return original(file, ...args)
       },
-    }, () => queue.planContextPublication(f.env, { ...f.options, now: 1000 }), fsNative.promises)
+    }, () => queue.planContextPublication(f.env, {
+      ...f.options, now: 1000,
+      readRemote: () => {
+        if (++discoveryPasses === 1) throw Object.assign(new Error("deferred first discovery"), { code: "context_preparation_deferred" })
+        return null
+      },
+    }), fsNative.promises)
     if (code === "synthetic_source_failure") await assert.rejects(run(), { code })
     else {
       const plan = await run()
       assert.equal(plan.deferred, true)
-      assert.deepEqual(plan.ready, [])
+      assert.ok(plan.ready.every((item) => item.invalidation === true))
+      for (const item of plan.ready) {
+        const record = JSON.parse(item.bytes)
+        assert.equal(record.heading, null)
+        assert.deepEqual(record.events, [])
+        assert.equal(record.privacy.verdict, "not_required")
+      }
+      if (code === null) {
+        const state = await storedState(f)
+        assert.notEqual(state.basis, f.work.basis)
+        assert.equal(state.phase, "candidate")
+      } else {
+        assert.deepEqual(plan.ready, [])
+      }
     }
+    assert.equal(discoveryPasses, 2)
   })
 }
 
@@ -1241,6 +1275,59 @@ test("settled publication inventory leaves bounded preparation progress for a ne
   }
   assert.ok((await queue.listContextWork(f.env, { store: STORE })).some((work) => work.job === job),
     "already-delivered records cannot spend every turn's entire preparation allowance")
+})
+
+test("preparation starts before a large reviewed input spends the remaining publication turn", async (t) => {
+  const f = await cardFixture()
+  await queue.prepareTaskContexts(f.env, f.options)
+  const [work] = await queue.listContextWork(f.env, { store: STORE })
+  const accepted = await acceptedCandidate({ ...f, work })
+  await queue.acceptContextPrivacy(f.env, {
+    store: STORE, job: work.job, basis: work.basis, bytes: json(review(accepted.payload_sha256)),
+  })
+  let elapsed = 0
+  const version = "3.2.0-alpha.2"
+  await withFsFault(t, {
+    readFile: (original, file, ...args) => {
+      if (String(file) === work.input) elapsed += 1700
+      return original(file, ...args)
+    },
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, pluginVersion: version, now: 1000, deadline: 2000, clock: () => elapsed,
+    readRemote: () => {
+      elapsed += 115
+      return "https://github.com/synthetic/desk.git"
+    },
+    resolveIdentity: ({ track, slug }) => {
+      elapsed += 134
+      return { track, slug }
+    },
+  }), fsNative.promises)
+  const current = await queue.listContextWork(f.env, { store: STORE })
+  assert.equal(current.length, 1, "publication inventory must not keep the next generation unevaluable")
+  assert.equal(current[0].source.evaluator.plugin_version, version)
+  assert.equal(current[0].source.task_card.path, f.card)
+  assert.ok(elapsed <= 2000, "the two-second preparation/publication allowance remains unchanged")
+})
+
+test("prevalidated task groups cannot prepare new inputs after the prose policy is withdrawn", async (t) => {
+  const f = await prepared()
+  const stateFile = await taskContextPath(f.env, STORE, f.work.job, "state.json")
+  const storeDir = join(stateFile, "..", "..")
+  let revoked = false
+  await withFsFault(t, {
+    readdir: async (original, file, ...args) => {
+      const result = await original(file, ...args)
+      if (String(file) === storeDir && !revoked) {
+        revoked = true
+        await writeFile(join(f.desk, "_meta", "factory-context.json"), json({ schema_version: 1, stores: { [STORE]: false } }))
+      }
+      return result
+    },
+  }, () => queue.planContextPublication(f.env, { ...f.options, pluginVersion: "3.2.0-alpha.2", now: 1000 }), fsNative.promises)
+  assert.equal(revoked, true)
+  assert.equal(JSON.parse(await readFile(stateFile, "utf8")).basis, f.work.basis)
+  assert.deepEqual(await queue.listContextWork(f.env, { store: STORE }), [])
 })
 
 test("an atomic send cannot overwrite a different valid publication receipt written before it acquires the lock", async (t) => {
