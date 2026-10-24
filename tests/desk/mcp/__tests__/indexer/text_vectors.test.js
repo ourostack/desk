@@ -234,12 +234,37 @@ test("the copy runs in bounded transactions, and marks the index as migrated onl
   })
 })
 
-test("an untrusted start copies nothing and leaves the copy for a later start that trusts the old vectors", async () => {
-  const { root, live } = await legacyIndex({ trusted: false })
+test("an untrusted start copies nothing, and no later start copies the old vectors either", async () => {
+  const { root } = await legacyIndex({ trusted: false })
   inDb(root, (db) => {
     assert.deepEqual(migrateRowVectors(db, { trusted: false }), { migrated: false, vectors_copied: 0 })
-    assert.equal(getMeta(db, "text_vectors_migrated_from_chunk_vecs"), null)
-    assert.deepEqual(migrateRowVectors(db, { trusted: true }), { migrated: true, vectors_copied: live.length })
+    assert.equal(getMeta(db, "text_vectors_migrated_from_chunk_vecs"), ACTIVE_VECTOR_SPACE)
+    assert.deepEqual(migrateRowVectors(db, { trusted: true }), { migrated: false, vectors_copied: 0 })
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n, 0)
+  })
+})
+
+test("after an untrusted start embeds everything and writes the provenance marker, another model's old vectors are never copied", async () => {
+  // An older session configured with another model filled the old table with its vectors and cleared the marker.
+  const { root } = await legacyIndex({ trusted: false })
+  await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: recordingEmbed().fetch } })
+  assert.equal(inDb(root, (db) => getMeta(db, "active_vector_provenance")), PROVENANCE, "this build's own vectors are complete")
+
+  // That session adds a section and saves its other-model vector by row; the next catch-up must embed it, not copy it.
+  await fs.mkdir(path.join(root, "track/c"), { recursive: true })
+  await fs.writeFile(path.join(root, "track/c/task.md"), "# New\n\necho section.\n", "utf8")
+  await rebuildIndex(root, { skipEmbed: true })
+  inDb(root, (db) => {
+    const echo = db.prepare("SELECT id FROM chunks WHERE text LIKE '%echo section%'").get()
+    db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(echo.id), new Float32Array(vector(0.9)))
+  })
+  const embed = recordingEmbed()
+  await ensureIndex(root, { ...NO_ARTIFACTS, embed: { fetch: embed.fetch } })
+  assert.ok(embed.prompts.some((prompt) => prompt.includes("echo section")), "the new section is embedded under the active model")
+  inDb(root, (db) => {
+    const stored = db.prepare("SELECT embedding FROM text_vectors WHERE embedding IS NOT NULL").all()
+      .map((row) => new Float32Array(row.embedding.buffer, row.embedding.byteOffset, ACTIVE_EMBEDDING_SPEC.dimension)[0])
+    assert.ok(stored.length > 0 && stored.every((value) => Math.abs(value - 0.25) < 1e-6), `every stored vector is this build's own (${stored.join(" ")})`)
   })
 })
 
@@ -283,8 +308,9 @@ test("vectors no section can use are found in one read per round and removed in 
 
     // With the default limits one round takes them all.
     db.transaction(() => { for (let id = 2_000_000; id < 2_000_250; id += 1) insert.run(BigInt(id), new Float32Array(vector(0.9))) })()
-    assert.deepEqual(await removeUnusableVectors(db),
-      { text_vectors_removed: 0, row_vectors_removed: 250, complete: true })
+    const { texts, ...rest } = await removeUnusableVectors(db)
+    assert.deepEqual(rest, { text_vectors_removed: 0, row_vectors_removed: 250, complete: true, marking_skipped: false })
+    assert.match(texts, /^\d+:\d+:\d*:\d+$/)
 
     // An older build reads its own table as before: by row, and by nearest neighbour.
     const byRow = db.prepare("SELECT c.id FROM chunks c JOIN chunk_vecs v ON v.chunk_id = c.id ORDER BY c.id").all().map((row) => row.id)
@@ -526,4 +552,57 @@ test("an index an older build wrote, which has no text vectors yet, reads as hav
   assert.deepEqual(inspectStatusIndex(root).semantic, {
     active_embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id, chunks_total: 3, vectors_indexed: 0, missing_vectors: 3,
   })
+})
+
+test("marking reads every text vector, so a round skips it when no section or text vector changed since the last round", async () => {
+  const root = await deskWith({ "track/a/task.md": THREE_SECTIONS })
+  await rebuildIndex(root, { embed: { fetch: recordingEmbed().fetch } })
+  const db = openDb(root)
+  try {
+    const first = await removeUnusableVectors(db)
+    assert.equal(first.marking_skipped, false)
+    const same = await removeUnusableVectors(db, { textsSeen: first.texts })
+    assert.equal(same.marking_skipped, true)
+    assert.equal(same.texts, first.texts)
+
+    // A section goes away: the next round marks its vector.
+    const bravo = db.prepare("SELECT * FROM chunks WHERE text LIKE '%bravo%'").get()
+    db.prepare("DELETE FROM chunks WHERE id = ?").run(bravo.id)
+    const changed = await removeUnusableVectors(db, { textsSeen: same.texts })
+    assert.equal(changed.marking_skipped, false)
+    assert.notEqual(db.prepare("SELECT unused_since FROM text_vectors WHERE text_hash = ?").get(bravo.text_hash).unused_since, null)
+
+    // Removal after the grace period needs no marking, so it still happens in a skipped round.
+    const later = Date.now() + UNUSED_TEXT_VECTOR_GRACE_MS + 1
+    const removed = await removeUnusableVectors(db, { textsSeen: changed.texts, now: () => later })
+    assert.equal(removed.marking_skipped, true)
+    assert.equal(removed.text_vectors_removed, 1)
+  } finally { closeDb(db) }
+})
+
+test("a round that is stopped deletes no further batch and says it did not finish", async () => {
+  const { root } = await legacyIndex({ trusted: true })
+  const db = openDb(root)
+  try {
+    const insert = db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)")
+    db.transaction(() => { for (let id = 1_000_000; id < 1_000_250; id += 1) insert.run(BigInt(id), new Float32Array(vector(0.9))) })()
+    const stop = new AbortController()
+    let batches = 0
+    const stopping = new Proxy(db, {
+      get(target, property) {
+        if (property === "transaction") {
+          return (body) => target.transaction((ids, ...rest) => {
+            if (Array.isArray(ids)) { batches += 1; stop.abort() }
+            return body(ids, ...rest)
+          })
+        }
+        const value = Reflect.get(target, property)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })
+    const result = await removeUnusableVectors(stopping, { batchSize: 100, pauseMs: 0, signal: stop.signal })
+    assert.equal(batches, 1, "closing stopped the round after the batch in progress")
+    assert.equal(result.row_vectors_removed, 100)
+    assert.equal(result.complete, false)
+  } finally { closeDb(db) }
 })

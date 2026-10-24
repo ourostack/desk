@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS text_vectors (
   unused_since INTEGER,                     -- ms since epoch when no section had this text; NULL while in use
   PRIMARY KEY (vector_space, text_hash)
 );
+-- Cleanup finds the marked rows without reading every embedding.
+CREATE INDEX IF NOT EXISTS idx_text_vectors_unused ON text_vectors(unused_since) WHERE unused_since IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- chunk_embedding_failures: stable tombstones for chunks that the active

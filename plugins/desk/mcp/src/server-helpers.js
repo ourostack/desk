@@ -16,7 +16,7 @@ import { expectedLexicalGenerationIdentity, generationContent } from "./readines
 import { loadTombstoneLedger, tombstoneDecisionForDoc } from "./artifacts/tombstones.js"
 import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
-import { ACTIVE_VECTOR_SPACE, migrateRowVectors } from "./indexer/text-vectors.js"
+import { ACTIVE_VECTOR_SPACE, migrateRowVectors, vectorProvenance } from "./indexer/text-vectors.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
 import { artifactSourceScopeHash } from "./artifacts/source-scope.js"
 
@@ -181,20 +181,6 @@ export async function ensureIndex(deskRoot, opts = {}) {
   } finally {
     closeDb(db)
   }
-}
-
-function vectorProvenance(spec) {
-  return JSON.stringify({
-    schema_version: 1,
-    embedding_spec: {
-      id: spec.id,
-      model: spec.model,
-      model_revision: spec.model_revision,
-      dimension: spec.dimension,
-      chunker_id: spec.chunker_id,
-      normalization_id: spec.normalization_id,
-    },
-  })
 }
 
 export function resolveEnsureIndexOptions(opts = {}, context = {}) {

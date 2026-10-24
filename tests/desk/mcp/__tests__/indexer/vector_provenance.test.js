@@ -7,7 +7,8 @@ import { closeDb, getMeta, openDb, setMeta } from "../../../../../plugins/desk/m
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
-import { ACTIVE_VECTOR_SPACE, vectorSpaceOf } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
+import { createHash } from "node:crypto"
+import { ACTIVE_VECTOR_SPACE, vectorProvenance, vectorSpaceOf } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 
 const KEY = "active_vector_provenance"
 const NO_ARTIFACTS = { snapshots: false, vectorPacks: false }
@@ -158,6 +159,16 @@ test("matching provenance preserves vectors without reembedding", async (t) => {
   assertCurrent(root, second)
 })
 
+test("the vector space is a hash of the provenance marker, so bumping the provenance schema changes the space", () => {
+  const hashOf = (provenance) => `${ACTIVE_EMBEDDING_SPEC.id}#${createHash("sha256").update(provenance).digest("hex").slice(0, 16)}`
+  assert.equal(ACTIVE_VECTOR_SPACE, hashOf(vectorProvenance(ACTIVE_EMBEDDING_SPEC)))
+  const bumped = vectorProvenance(ACTIVE_EMBEDDING_SPEC, 2)
+  assert.equal(JSON.parse(bumped).schema_version, 2)
+  assert.notEqual(bumped, vectorProvenance(ACTIVE_EMBEDDING_SPEC))
+  assert.equal(vectorSpaceOf(ACTIVE_EMBEDDING_SPEC, 2), hashOf(bumped))
+  assert.notEqual(vectorSpaceOf(ACTIVE_EMBEDDING_SPEC, 2), ACTIVE_VECTOR_SPACE)
+})
+
 for (const field of ["schema_version", "id", "model", "model_revision", "dimension", "chunker_id", "normalization_id"]) {
   test(`vectors made under a different ${field} are never reused, and are made again`, async (t) => {
     const root = fixture(t)
@@ -171,6 +182,7 @@ for (const field of ["schema_version", "id", "model", "model_revision", "dimensi
     const staleSpace = field === "schema_version"
       ? vectorSpaceOf(ACTIVE_EMBEDDING_SPEC, 0)
       : vectorSpaceOf({ ...ACTIVE_EMBEDDING_SPEC, [field]: changed })
+    if (field === "schema_version") assert.deepEqual(JSON.parse(vectorProvenance(ACTIVE_EMBEDDING_SPEC, 0)), stale)
     assert.notEqual(staleSpace, ACTIVE_VECTOR_SPACE)
     inDb(root, (db) => {
       setMeta(db, KEY, JSON.stringify(stale))

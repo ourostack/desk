@@ -13,17 +13,33 @@ import { createHash } from "node:crypto"
 import { setMeta, getMeta } from "../db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
-// Bump when the way vectors are made changes in a way the specification's fields do not show.
-const VECTOR_SPACE_SCHEMA_VERSION = 1
+// Bump when the way vectors are made changes in a way the specification's fields do not show. It is part of both the
+// provenance marker and the vector space, so a bump resets the marker and leaves every stored vector unused.
+const VECTOR_PROVENANCE_SCHEMA_VERSION = 1
+
+/** What made a set of vectors: the value of the provenance marker that older builds also read. */
+export function vectorProvenance(spec, schemaVersion = VECTOR_PROVENANCE_SCHEMA_VERSION) {
+  return JSON.stringify({
+    schema_version: schemaVersion,
+    embedding_spec: {
+      id: spec.id,
+      model: spec.model,
+      model_revision: spec.model_revision,
+      dimension: spec.dimension,
+      chunker_id: spec.chunker_id,
+      normalization_id: spec.normalization_id,
+    },
+  })
+}
 
 /**
- * The vector space of vectors made under `spec`: everything that makes two
- * vectors comparable, so vectors made under any other model, model revision,
- * dimension, chunker or normalization are never reused.
+ * The vector space of vectors made under `spec`: a hash of their provenance,
+ * so vectors made under any other schema, model, model revision, dimension,
+ * chunker or normalization are never reused.
  */
-export function vectorSpaceOf(spec, schemaVersion = VECTOR_SPACE_SCHEMA_VERSION) {
-  const settings = JSON.stringify([schemaVersion, spec.id, spec.model, spec.model_revision ?? null, spec.dimension, spec.chunker_id, spec.normalization_id])
-  return `${spec.id}#${createHash("sha256").update(settings).digest("hex").slice(0, 16)}`
+export function vectorSpaceOf(spec, schemaVersion = VECTOR_PROVENANCE_SCHEMA_VERSION) {
+  const provenance = vectorProvenance({ ...spec, model_revision: spec.model_revision ?? null }, schemaVersion)
+  return `${spec.id}#${createHash("sha256").update(provenance).digest("hex").slice(0, 16)}`
 }
 
 export const ACTIVE_VECTOR_SPACE = vectorSpaceOf(ACTIVE_EMBEDDING_SPEC)
@@ -86,12 +102,18 @@ export function discardedVector(vectorSpace, textHash) {
  * exists are copied, keyed by that section's text hash; nothing is embedded.
  * The copy runs in transactions of MIGRATION_BATCH_SIZE sections, and the
  * index is marked as migrated only after the last one. An untrusted start
- * copies nothing and leaves the copy for a later start that trusts them.
+ * copies nothing and marks the index as migrated too: the old table's
+ * vectors are of unknown model, and a provenance marker written later says
+ * nothing about them, so this build embeds every section itself.
  *
  * @returns {{ migrated: boolean, vectors_copied: number }}
  */
 export function migrateRowVectors(db, { trusted, batchSize = MIGRATION_BATCH_SIZE }) {
-  if (!trusted || getMeta(db, MIGRATED_META_KEY) === ACTIVE_VECTOR_SPACE) return { migrated: false, vectors_copied: 0 }
+  if (getMeta(db, MIGRATED_META_KEY) === ACTIVE_VECTOR_SPACE) return { migrated: false, vectors_copied: 0 }
+  if (!trusted) {
+    db.transaction(() => setMeta(db, MIGRATED_META_KEY, ACTIVE_VECTOR_SPACE)).immediate()
+    return { migrated: false, vectors_copied: 0 }
+  }
   const active = "c.text_hash IS NOT NULL AND c.embedding_spec_id = ? AND c.chunker_id = ? AND c.normalization_id = ?"
   const spec = [ACTIVE_EMBEDDING_SPEC.id, ACTIVE_EMBEDDING_SPEC.chunker_id, ACTIVE_EMBEDDING_SPEC.normalization_id]
   const nextIds = db.prepare(`SELECT c.id FROM chunks c WHERE c.id > ? AND ${active} ORDER BY c.id LIMIT ?`)
@@ -123,25 +145,35 @@ export function migrateRowVectors(db, { trusted, batchSize = MIGRATION_BATCH_SIZ
  * transaction, because finding them costs about the same however many there
  * are. They are then deleted in transactions of at most `batchSize` rows with
  * a pause between them, so another build waits at most one batch to write.
- * `complete` is false when a read found as many as it could take, so more may
- * be left.
+ * `complete` is false when a read found as many as it could take, or the
+ * round was stopped, so more may be left.
  *
- * @returns {Promise<{ text_vectors_removed: number, row_vectors_removed: number, complete: boolean }>}
+ * Marking reads every text vector, so it is skipped when `textsSeen`, the
+ * `texts` a previous round returned, shows that no section or text vector was
+ * added or removed since. A `signal` that aborts stops the round before its
+ * next batch.
+ *
+ * @returns {Promise<{ text_vectors_removed: number, row_vectors_removed: number, complete: boolean, texts: string, marking_skipped: boolean }>}
  */
 export async function removeUnusableVectors(db, {
   scanLimit = CLEANUP_SCAN_LIMIT,
   batchSize = CLEANUP_BATCH_SIZE,
   pauseMs = CLEANUP_PAUSE_MS,
   now = Date.now,
+  textsSeen = null,
+  signal = null,
 } = {}) {
   const started = now()
-  const summary = { text_vectors_removed: 0, row_vectors_removed: 0, complete: false }
+  const texts = Object.values(db.prepare(
+    "SELECT (SELECT MAX(id) FROM chunks) AS last_chunk, (SELECT COUNT(*) FROM chunks) AS chunks, (SELECT MAX(rowid) FROM text_vectors) AS last_vector, (SELECT COUNT(*) FROM text_vectors) AS vectors",
+  ).get()).join(":")
+  const summary = { text_vectors_removed: 0, row_vectors_removed: 0, complete: false, texts, marking_skipped: texts === textsSeen }
   const unused = "NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = text_vectors.text_hash)"
   // Each step looks first and takes the write lock only when it has something to write: on a busy desk every
   // write waits its turn behind the other builds' commits.
   const toUnmark = db.prepare(`SELECT 1 FROM text_vectors WHERE unused_since IS NOT NULL AND NOT ${unused} LIMIT 1`)
   const toMark = db.prepare(`SELECT 1 FROM text_vectors WHERE unused_since IS NULL AND ${unused} LIMIT 1`)
-  if (toUnmark.get() || toMark.get()) {
+  if (!summary.marking_skipped && (toUnmark.get() || toMark.get())) {
     db.transaction(() => {
       db.prepare(`UPDATE text_vectors SET unused_since = NULL WHERE unused_since IS NOT NULL AND NOT ${unused}`).run()
       db.prepare(`UPDATE text_vectors SET unused_since = ? WHERE unused_since IS NULL AND ${unused}`).run(started)
@@ -163,11 +195,16 @@ export async function removeUnusableVectors(db, {
     ...chunked(textRows, batchSize).map((ids) => () => { summary.text_vectors_removed += deleteTextBatch(ids) }),
     ...chunked(rowIds, batchSize).map((ids) => () => { deleteRowBatch(ids); summary.row_vectors_removed += ids.length }),
   ]
+  let stopped = false
   for (let i = 0; i < batches.length; i += 1) {
     if (i > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs))
+    if (signal?.aborted) {
+      stopped = true
+      break
+    }
     batches[i]()
   }
-  summary.complete = textRows.length < scanLimit && rowIds.length < scanLimit
+  summary.complete = !stopped && textRows.length < scanLimit && rowIds.length < scanLimit
   return summary
 }
 
