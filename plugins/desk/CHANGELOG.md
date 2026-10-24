@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.350 — 2026-10-24
+
+Browser setup now works when the helper for another platform is missing from the installed plugin. Microsoft Defender removed the Windows browser helper from an installed Desk plugin on a Mac, and because setup required every platform's helper, browser setup on the Mac stopped too. Setup now requires only this computer's helper, which must be present and match the release, as before. A helper for another platform that is present must still match, so changed bytes still stop setup. A missing one no longer does: the setup result and the signed-in `browser_context` result carry a `notice` that names each missing file and says that Desk cannot connect to a browser on that platform until Desk is reinstalled there. The release, packaging and CI checks still require all eight helpers.
+
+When setup stops because a helper is missing or changed, its message now says which helper, for which platform, and to reinstall Desk, instead of only `NATIVE_DISTRIBUTION_INCOMPLETE`. When this computer's own helper is the one missing, it adds that if the file goes missing again after reinstalling, security or antivirus software such as Microsoft Defender may be removing it, and to check that software's quarantine or history. The error code is unchanged.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.349 — 2026-10-24
 
 Meaning-based search now becomes ready when several Desk builds share one desk. Before, every build's search controller wrote the shared search index in the background. When one build committed while another was embedding, the other's change-log cleanup was refused and it started again at once, which undid the first build's work. Neither ever finished, so `desk_recall` waited out its 30 s and refused.
