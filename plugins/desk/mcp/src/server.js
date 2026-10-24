@@ -65,6 +65,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { indexDbPath, openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
+import { removeUnusableVectors } from "./indexer/text-vectors.js"
 import { stableStringify } from "./readiness/identity.js"
 import { CanonicalWriteRecordingError } from "./readiness/journal.js"
 import { ensureStateIgnored } from "./util/state-ignore.js"
@@ -160,6 +161,8 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
             ...(embed === null ? {} : { embed }),
             eventCursor,
             identities: { policy_identity: stableStringify(policy) },
+            // The controller removes unusable vectors on its own timer, so a catch-up does not wait for that.
+            vectorCleanup: false,
             // Recorded with each generation, so every Desk build on this desk can tell which build owns the shared index.
             writer: { version: deskVersion(), build: options.identity.build, controller: options.identity.id },
           }, { deskRoot })
@@ -183,6 +186,15 @@ export async function startControllerRuntime({ policy, embed, artifactPluginRoot
             result.semantic.query_embedding = await probeEmbeddingService(embed)
           }
           return result
+        },
+        // One round of removing vectors no section can use, run on the controller's own timer while this build owns the index.
+        async cleanupVectors() {
+          const db = openDb(deskRoot)
+          try {
+            return await removeUnusableVectors(db)
+          } finally {
+            closeDb(db)
+          }
         },
         // A higher-ranked Desk build owns the index: check that its index covers the desk as this build sees it, and write nothing.
         async verifyIndex() {

@@ -150,7 +150,8 @@ export async function rebuildIndex(deskRoot, opts = {}) {
       // Every text without a vector, not only those of the documents just indexed: an older build sharing the desk may have indexed a change first.
       await embedMissingVectors(db, opts, summary, opts.embedChangedOnly && !opts.reembedMissing ? reindexedDocIds : null)
     }
-    summary.vector_cleanup = await removeUnusableVectors(db)
+    // A controller that owns the index removes them on its own timer instead (`vectorCleanup: false`).
+    if (opts.vectorCleanup !== false) summary.vector_cleanup = await removeUnusableVectors(db)
 
   } finally {
     if (ownsDb) closeDb(db)
