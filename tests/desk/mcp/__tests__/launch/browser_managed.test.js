@@ -7,6 +7,7 @@ import { createRequire } from "node:module"
 import { mcpRoot } from "./_mcp_handshake.js"
 import { mkTempRoot } from "../_temp_roots.js"
 import { removeTree } from "../_remove_tree.js"
+import {protectWindowsPaths} from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 
 const require = createRequire(import.meta.url)
 const common = require(path.join(mcpRoot, "browser-context-common.cjs"))
@@ -272,6 +273,8 @@ for(const change of ["replacement-profile","singleton-lock"]){
     if(change==="replacement-profile"){
       fs.renameSync(profile,path.join(root,"original-profile"))
       fs.mkdirSync(profile,{mode:0o700})
+      if(process.platform==="win32")
+        await protectWindowsPaths([{path:profile,kind:"directory",created:true}],{label:"managed_profile_fixture"})
     }else fs.writeFileSync(path.join(profile,"SingletonLock"),"fixture")
     const result=await f.controller.context({action:"discard",contextId:created.payload.contextId},f.options)
     assert.equal(result.exitCode,1)

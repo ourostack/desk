@@ -223,12 +223,17 @@ process.exitCode=result.status===null?1:result.status;
   }
 }
 
+function managedOptions(f,id) {
+  return {...f.options,nativeHome:f.root,contextId:()=>id,
+    env:{...f.options.env,PROGRAMFILES:f.root,"PROGRAMFILES(X86)":f.root,LOCALAPPDATA:f.root},
+    browserExists:file=>/msedge|Microsoft Edge/i.test(file)}
+}
+
 test("managed worker retains its persistent profile across frontend calls without a native extension", async t => {
   const f = await fixture()
   const id = "11111111-1111-4111-8111-111111111111"
   t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
-  const options = { ...f.options, nativeHome: f.root, contextId: () => id,
-    browserExists: file => /msedge|Microsoft Edge/i.test(file) }
+  const options = managedOptions(f,id)
   const controller = require(path.join(mcpRoot, "browser-context.cjs"))
   const created = await controller.context({ action: "create", label: "Managed worker" }, options)
   assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
@@ -246,8 +251,7 @@ test("managed worker refuses a foreign persistent profile in daemon metadata", a
   const f = await fixture()
   const id = "11111111-1111-4111-8111-111111111111"
   t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
-  const options = { ...f.options, nativeHome: f.root, contextId: () => id,
-    browserExists: file => /msedge|Microsoft Edge/i.test(file) }
+  const options = managedOptions(f,id)
   const controller = require(path.join(mcpRoot, "browser-context.cjs"))
   const created = await controller.context({ action: "create", label: "Managed worker" }, options)
   assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
@@ -264,8 +268,7 @@ test("explicit sign-in completion reopens only the same owned profile headlessly
   const f = await fixture()
   const id = "11111111-1111-4111-8111-111111111111"
   t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
-  const options = { ...f.options, nativeHome: f.root, contextId: () => id,
-    browserExists: file => /msedge|Microsoft Edge/i.test(file) }
+  const options = managedOptions(f,id)
   const controller = require(path.join(mcpRoot, "browser-context.cjs"))
   const created = await controller.context({ action: "create", label: "Human sign-in", interactive: true }, options)
   assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
@@ -288,8 +291,7 @@ test("sign-in completion cannot restart an ordinary background work context", as
   const f = await fixture()
   const id = "11111111-1111-4111-8111-111111111111"
   t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
-  const options = { ...f.options, nativeHome: f.root, contextId: () => id,
-    browserExists: file => /msedge|Microsoft Edge/i.test(file) }
+  const options = managedOptions(f,id)
   const controller = require(path.join(mcpRoot, "browser-context.cjs"))
   const created = await controller.context({ action: "create", label: "Background work" }, options)
   assert.equal(created.exitCode, 0, JSON.stringify(created.payload))
