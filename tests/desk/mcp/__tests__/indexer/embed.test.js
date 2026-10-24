@@ -530,3 +530,23 @@ test("embedChunks happy path returns one vector per chunk", async () => {
   assert.equal(out[0].length, EMBEDDING_DIM)
   assert.equal(out[1].length, EMBEDDING_DIM)
 })
+
+test("an explicit endpoint is used as given when it is a full embeddings URL or not a string", () => {
+  assert.deepEqual(resolveEmbeddingEndpoints({ endpoint: " http://127.0.0.1:9/api/embeddings " }), ["http://127.0.0.1:9/api/embeddings"])
+  const url = new URL("http://127.0.0.1:9/api/embeddings")
+  assert.deepEqual(resolveEmbeddingEndpoints({ endpoint: url }), [url])
+})
+
+test("every embedding entry point works without options, through the global fetch", async (t) => {
+  const original = globalThis.fetch
+  const vec = Array.from({ length: EMBEDDING_DIM }, () => 0.5)
+  let calls = 0
+  globalThis.fetch = async () => { calls += 1; return { ok: true, json: async () => ({ embedding: vec }) } }
+  t.after(() => { globalThis.fetch = original })
+  assert.deepEqual(await embedChunk("x"), vec)
+  assert.deepEqual((await embedChunkDetailed("x")).vector, vec)
+  assert.equal((await probeEmbeddingService()).available, true)
+  assert.deepEqual((await embedChunksDetailed(["x"])).map((result) => result.vector), [vec])
+  assert.deepEqual(await embedChunks(["x"]), [vec])
+  assert.equal(calls, 5)
+})
