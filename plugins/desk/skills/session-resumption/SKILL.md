@@ -15,7 +15,7 @@ at the desk again. the operator picked an active task to resume — a manilla en
 
 ## Protected evidence
 
-Private or sensitive evidence (raw transcripts, credentials, private measurement, customer data) stays outside Git, in an approved private location. The desk records a pointer and a non-sensitive summary. Everything else (briefs, reports, reviews, plans, small logs, checkpoints) goes in the task's folder in the desk and is committed to `main`. No host memory, plan or task store is a substitute.
+Private or sensitive evidence (raw transcripts, credentials, private measurement, customer data) stays outside Git, in an approved private location. The desk records a pointer and a non-sensitive summary. Customer data means data about other people that a product or employer holds. The operator's own records are context, not customer data: their personal, financial, legal and medical records, their correspondence, case files, drafts and screenshots of their own accounts go in the task's folder and are committed, because the desk is theirs. Only secrets and credentials among them stay out. Everything else (briefs, reports, reviews, plans, small logs, checkpoints) goes in the task's folder in the desk and is committed to `main`. No host memory, plan or task store is a substitute.
 
 ## Checkpoint before handoff
 

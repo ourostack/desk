@@ -26,7 +26,7 @@ These rules hold for the whole evaluation.
 - **Follow the packet exactly as written.** Where it is ambiguous, take the reading a newcomer would most likely take, record the ambiguity as a confusion, and continue.
 - **Never certify.** You never certify your own work or declare the release ready; you report what you observed against the packet's stated outcomes.
 - **Human gates stay human.** A sign-in, an approval or a decision that belongs to the evaluator waits for them. In a dry run with no human present, record the step as `blocked` at that gate.
-- **Evidence stays safe.** Never capture a secret, token or password, even in a screenshot. Private evidence (raw session logs, screenshots with personal data) stays outside Git, where `desk:session-resumption` says private evidence lives; the record holds pointers to it.
+- **Evidence stays safe.** Never capture a secret, token or password, even in a screenshot. Private evidence (raw session logs, screenshots that show other people's data) stays outside Git, where `desk:session-resumption` says private evidence lives; the record holds pointers to it.
 
 ## Start cold on the named host
 
