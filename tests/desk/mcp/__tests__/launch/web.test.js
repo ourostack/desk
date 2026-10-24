@@ -1820,7 +1820,7 @@ async function fixturePlugin(prefix) {
   }
   for (const entry of ["index.js","package.json","package-lock.json","config","scripts","src","artifacts",
     "browser-context.cjs","browser-context-common.cjs","browser-context-runtime.cjs","browser-context-mcp.cjs",
-    "browser-private.cjs","private-browser-runtime.cjs"]) {
+    "browser-private.cjs","browser-local.cjs","browser-native.cjs","private-browser-runtime.cjs"]) {
     fs.cpSync(path.join(mcpRoot,entry),path.join(plugin,"mcp",entry),{recursive:true})
   }
   const state = path.join(root, "state")

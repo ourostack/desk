@@ -20,11 +20,22 @@ function noLinks(file, root) {
   });
 }
 function validatePrivate(entry, info, request) {
+  var managed = request.backend === "managed";
   if (entry.file !== path.join(info.daemonProfilesDir,request.contextId+".session") ||
       entry.daemonDir !== info.daemonProfilesDir || entry.config.name !== request.contextId ||
-      !entry.config.browser || entry.config.browser.userDataDir != null || !entry.config.cli ||
-      entry.config.cli.persistent || entry.config.attached || entry.config.workspaceDir !== request.root)
-    fail("unsafe_registry","Session metadata does not describe this in-memory context");
+      !entry.config.browser || !entry.config.cli || entry.config.attached || entry.config.workspaceDir !== request.root ||
+      (managed ? entry.config.browser.userDataDir !== path.join(request.root,"profile") || entry.config.cli.persistent !== true :
+        entry.config.browser.userDataDir != null || entry.config.cli.persistent))
+    fail("unsafe_registry","Session metadata does not describe this exact owned browser context");
+  if (managed) {
+    var expected = JSON.parse(fs.readFileSync(path.join(request.root,"config","browser.json"),"utf8")).browser;
+    var actual = entry.config.browser.launchOptions;
+    if (!actual || actual.executablePath !== expected.launchOptions.executablePath ||
+        actual.channel !== expected.launchOptions.channel || actual.headless !== expected.launchOptions.headless ||
+        actual.chromiumSandbox !== true || entry.config.browser.cdpEndpoint || entry.config.browser.remoteEndpoint)
+      fail("unsafe_registry","Persistent session browser binding changed");
+    noLinks(path.join(request.root,"profile"),request.root);
+  }
   noLinks(entry.file,request.root);
   if (process.platform === "win32") {
     if (typeof entry.config.socketPath !== "string" || entry.config.socketPath.indexOf("\\\\.\\pipe\\pw-") !== 0 ||
@@ -113,7 +124,7 @@ function runPage(request, socket, SocketConnection, native) {
   });
 }
 function privateMain(request, registryModule, Session, program, SocketConnection, info) {
-  var entry,session;
+  var entry,session,handoff;
   function load() {
     var expected = path.join(info.daemonProfilesDir,request.contextId+".session");
     noLinks(expected,request.root);
@@ -130,9 +141,16 @@ function privateMain(request, registryModule, Session, program, SocketConnection
     return connect(entry.config.socketPath);
   }
   return load().then(function() {
-    if (request.operation === "create") {
+  function start() {
       if (entry) fail("context_exists","A private context with this ID already exists");
-      var captured = "",write = process.stdout.write;
+      var captured = "",write = process.stdout.write, originalStart = Session.startDaemon, invoked = false, recorded;
+      if (handoff && typeof originalStart === "function") Session.startDaemon = function() {
+        invoked = true;
+        return Promise.resolve(originalStart.apply(this,arguments)).then(function(result) {
+          // Record the maintained daemon before its caller opens the browser.
+          return recordManagedDaemon(request,result).then(function() { recorded = result.pid; return result; });
+        });
+      };
       process.argv = [process.execPath,"playwright-cli","--session="+request.contextId,"--json","open","--idle-timeout=0"].concat(request.browserArgs || []);
       process.stdout.write = function(chunk) { captured += String(chunk); return true; };
       return Promise.resolve().then(function() { return program(); }).then(function() {
@@ -140,11 +158,35 @@ function privateMain(request, registryModule, Session, program, SocketConnection
         var result;
         try { result = JSON.parse(captured); } catch (_) { result = captured; }
         if (process.exitCode || (result && result.isError)) fail("upstream_failed",typeof result === "object" ? result.error || "Upstream command failed" : captured);
-        return load().then(live).then(function(socket) { socket.destroy(); return {state:"running",result:result}; });
-      },function(error) { process.stdout.write = write; throw error; });
-    }
-    if (request.operation === "discard") {
-      if (!entry) return {state:"absent"};
+        return load().then(live).then(function(socket) {
+          socket.destroy();
+          if (recorded && (!result || result.pid !== recorded)) fail("startup_unconfirmed","Replacement daemon acknowledgement changed");
+          return (request.backend === "managed" && !recorded ? recordManagedDaemon(request,result) : Promise.resolve())
+            .then(function() { return {state:"running",result:result}; });
+        });
+      }).then(function(result) {
+        Session.startDaemon = originalStart; return result;
+      },function(error) {
+        process.stdout.write = write; Session.startDaemon = originalStart;
+        // Only a positively observed pre-spawn rejection is retryable.
+        // A lost/pending start without an exact daemon receipt stays unknown.
+        if (handoff && typeof originalStart === "function" && !invoked) {
+          handoff.phase = "ready";
+          handoff.lastFailure = {stage:"before-daemon-start",code:error.code || "upstream_failed"};
+          common.atomicJson(path.join(request.root,".managed-sign-in-handoff.json"),handoff);
+        }
+        throw error;
+      });
+  }
+  function stop() {
+      if (request.backend === "managed") {
+        var pending = common.readManagedState(request.root,".managed-sign-in-handoff.json",request.contextId);
+        if (pending && pending.phase === "starting" &&
+            JSON.stringify(common.readManagedState(request.root,".managed-daemon.json",request.contextId)) === JSON.stringify(pending.launchPreviousDaemon))
+          fail("cleanup_unconfirmed","Replacement startup has no confirmed daemon identity; authentication profile retained");
+      }
+      if (!entry) return request.backend === "managed" ? managedDaemonExited(request)
+        .then(function() { return {state:"discarded"}; }) : {state:"absent"};
       return live().then(function(socket) { return send(socket,SocketConnection,"stop",{}); }).then(function(ack) {
         if (ack !== "ok") fail("cleanup_unconfirmed","Private browser did not confirm stop");
         if (process.platform !== "win32" && fs.existsSync(entry.config.socketPath)) fail("cleanup_unconfirmed","Private socket remains after stop");
@@ -156,8 +198,112 @@ function privateMain(request, registryModule, Session, program, SocketConnection
         });
       }).then(function() {
         if (fs.existsSync(entry.file)) fail("cleanup_unconfirmed","Private session metadata remains after stop");
-        return {state:"discarded"};
+        return (request.backend === "managed" ? managedDaemonExited(request) : Promise.resolve())
+          .then(function() { return {state:"discarded"}; });
       });
+  }
+    if (request.operation === "create") return start();
+    if (request.operation === "discard") return stop();
+    if (request.operation === "finish-sign-in") return finishSignIn();
+    async function finishSignIn() {
+      var configFile = path.join(request.root,"config","browser.json");
+      var config = JSON.parse(fs.readFileSync(configFile,"utf8"));
+      var handoffFile = path.join(request.root,".managed-sign-in-handoff.json");
+      handoff = common.readManagedState(request.root,".managed-sign-in-handoff.json",request.contextId);
+      if (request.backend !== "managed" || (!handoff && config.browser.launchOptions.headless !== false) ||
+          (handoff && handoff.phase === "completed"))
+        fail("invalid_context_state","Only an explicitly interactive sign-in context can be finished; no work context was restarted");
+      if (!handoff) {
+        handoff = {version:1,contextId:request.contextId,phase:"stopping",profile:common.profileIdentity(request.root),
+          originalDaemon:common.readManagedState(request.root,".managed-daemon.json",request.contextId)};
+        if (!handoff.originalDaemon) fail("cleanup_unconfirmed","Interactive daemon identity is unavailable");
+        common.atomicJson(handoffFile,handoff);
+      }
+      if (["stopping","ready","starting"].indexOf(handoff.phase) === -1 ||
+          JSON.stringify(common.profileIdentity(request.root)) !== JSON.stringify(handoff.profile))
+        fail("cleanup_unconfirmed","Incomplete sign-in handoff or profile identity is invalid");
+      function completed() {
+        handoff.phase = "completed"; common.atomicJson(handoffFile,handoff);
+        return {state:"running",result:{interactive:false,authentication:"inspect-page",previousPages:"closed-without-replay"}};
+      }
+      if (handoff.phase === "stopping") {
+        var result = await stop();
+        if (result.state !== "discarded") fail("cleanup_unconfirmed","Sign-in browser shutdown is unconfirmed; profile retained");
+        common.profileUnused(request.root,handoff.profile,false);
+        var archived = common.readManagedState(request.root,".managed-sign-in-daemon.json",request.contextId);
+        if (archived && JSON.stringify(archived) !== JSON.stringify(handoff.originalDaemon))
+          fail("cleanup_unconfirmed","Original sign-in receipt changed");
+        if (!archived) common.atomicJson(path.join(request.root,".managed-sign-in-daemon.json"),handoff.originalDaemon);
+        handoff.phase = "ready"; common.atomicJson(handoffFile,handoff);
+      }
+      await load();
+      var current = common.readManagedState(request.root,".managed-daemon.json",request.contextId);
+      if (handoff.phase === "starting") {
+        if (!current || JSON.stringify(current) === JSON.stringify(handoff.launchPreviousDaemon))
+          fail("cleanup_unconfirmed","Replacement startup remains unconfirmed; no start was replayed");
+        if (entry) {
+          if (!Number.isSafeInteger(current.pid) || current.pid <= 0 || typeof current.started !== "string" || !current.started)
+            fail("cleanup_unconfirmed","Replacement daemon receipt is invalid");
+          var reader = await processReader();
+          if (await reader.readProcessStart(current.pid) !== current.started)
+            fail("cleanup_unconfirmed","Replacement daemon generation is not confirmed");
+          var socket = await live(); socket.destroy();
+          return completed();
+        }
+        await managedDaemonExited(request,current);
+        common.profileUnused(request.root,handoff.profile,false);
+        handoff.phase = "ready"; common.atomicJson(handoffFile,handoff);
+      }
+      if (entry) fail("cleanup_unconfirmed","Unexpected session remains during sign-in handoff");
+      await managedDaemonExited(request,current);
+      await managedDaemonExited(request,handoff.originalDaemon);
+      common.profileUnused(request.root,handoff.profile,false);
+      config.browser.launchOptions.headless = true;
+      common.atomicJson(configFile,config);
+      handoff.launchPreviousDaemon = current;
+      handoff.phase = "starting"; common.atomicJson(handoffFile,handoff);
+      await start();
+      return completed();
+    }
+    function processReader() {
+      return import(require("url").pathToFileURL(path.join(__dirname,"src/readiness/process-start.js")).href);
+    }
+    async function recordManagedDaemon(request, result) {
+      if (!result || !Number.isSafeInteger(result.pid) || result.pid <= 0)
+        fail("startup_unconfirmed","Browser started without a confirmed daemon identity; retain this context");
+      var reader = await processReader(), started = await reader.readProcessStart(result.pid);
+      if (typeof started !== "string" || !started) fail("startup_unconfirmed","Browser daemon generation could not be confirmed; retain this context");
+      var file = path.join(request.root,".managed-daemon.json");
+      var record = {version:1,contextId:request.contextId,pid:result.pid,started:started};
+      if (handoff) {
+        if (JSON.stringify(common.readManagedState(request.root,".managed-daemon.json",request.contextId)) !== JSON.stringify(handoff.launchPreviousDaemon))
+          fail("cleanup_unconfirmed","Previous daemon receipt changed during replacement launch");
+        common.atomicJson(file,record);
+      } else fs.writeFileSync(file,JSON.stringify(record),{flag:"wx",mode:384});
+    }
+    async function managedDaemonExited(request, supplied) {
+      var file = path.join(request.root,".managed-daemon.json");
+      noLinks(file,request.root); common.checkOwned(file,false);
+      var record = supplied || JSON.parse(fs.readFileSync(file,"utf8"));
+      if (record.version !== 1 || record.contextId !== request.contextId ||
+          !Number.isSafeInteger(record.pid) || record.pid <= 0 || typeof record.started !== "string" || !record.started)
+        fail("cleanup_unconfirmed","Owned browser daemon identity is unavailable");
+      var reader = await processReader(), deadline = Date.now()+15000;
+      do {
+        var observed = await reader.readProcessStart(record.pid);
+        if (typeof observed === "string" && observed) {
+          if (observed !== record.started) return;
+        } else {
+          try { process.kill(record.pid,0); }
+          catch (error) {
+            if (error.code === "ESRCH") return;
+            throw Object.assign(new Error("Owned daemon inspection failed; authentication profile retained"),
+              {code:"cleanup_unconfirmed",resources:{daemonDisposition:"unknown",inspectionCode:error.code || "unavailable"}});
+          }
+        }
+        await new Promise(function(resolve) { setTimeout(resolve,100); });
+      } while (Date.now() < deadline);
+      fail("cleanup_unconfirmed","Owned browser daemon exit remains unconfirmed; authentication profile retained");
     }
     return live().then(function(socket) {
       if (request.operation === "run") return runPage(request,socket,SocketConnection);
@@ -258,8 +404,19 @@ function main(request) {
     if (!request || ["private","signed-in"].indexOf(request.mode) === -1) fail("invalid_arguments","Expected an explicit context mode");
     if (common.modeOf(request.contextId) !== request.mode) fail("invalid_arguments","Handle namespace mismatch");
     if (request.mode === "signed-in" && process.platform !== "win32") process.umask(63);
-    if (request.mode === "signed-in" && require("./web-playwright-patch.cjs").readRevision(request.installed) !== 4)
+    if (request.backend !== undefined && (request.backend !== "managed" || request.mode !== "signed-in"))
+      fail("invalid_arguments","Unknown browser backend binding");
+    if (request.mode === "signed-in" && request.backend !== "managed" && require("./web-playwright-patch.cjs").readRevision(request.installed) !== 4)
       fail("unsupported_cli","Native generation is not qualified");
+    if (request.backend === "managed") {
+      common.marker(request.root,JSON.stringify({contextId:request.contextId,directory:request.root,backend:"managed"}),false,".desk-context-owner");
+      noLinks(path.join(request.root,"config","browser.json"),request.root);
+      common.checkOwned(path.join(request.root,"config","browser.json"),false);
+      common.validateManagedConfig(JSON.parse(fs.readFileSync(path.join(request.root,"config","browser.json"),"utf8")),request.root);
+      var pending = common.readManagedState(request.root,".managed-sign-in-handoff.json",request.contextId);
+      if (pending && pending.phase !== "completed" && ["discard","finish-sign-in"].indexOf(request.operation) === -1)
+        fail("sign_in_incomplete","Complete or discard the explicit sign-in handoff before ordinary page work");
+    }
     var registry = require(path.join(request.cliDir,"registry.js"));
     var Session = require(path.join(request.cliDir,"session.js")).Session;
     var program = require(path.join(request.cliDir,"program.js")).program;
@@ -268,7 +425,7 @@ function main(request) {
         typeof Session !== "function" || typeof program !== "function" || typeof SocketConnection !== "function")
       fail("unsupported_cli","Installed maintained CLI module interface is unsupported");
     var info = registry.createClientInfo(); noLinks(info.daemonProfilesDir,request.root);
-    return request.mode === "private" ? privateMain(request,registry,Session,program,SocketConnection,info) :
+    return request.mode === "private" || request.backend === "managed" ? privateMain(request,registry,Session,program,SocketConnection,info) :
       signedMain(request,registry,Session,SocketConnection,info);
   });
 }

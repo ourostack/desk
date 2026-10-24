@@ -1,5 +1,5 @@
-// Retained non-MCP profile reader APIs plus explicit-context declaration/native
-// readiness preflight. No default page-MCP/token route remains. All profile and
+// Retained non-MCP profile reader APIs plus legacy-native compatibility
+// readiness preflight. This is not the new managed default. All profile and
 // OS observations are owned fixtures; no test reads a real browser profile.
 
 import { test } from "node:test"
@@ -25,7 +25,7 @@ const stockLifecycle = readFileSync(new URL("./fixtures/playwright-server-lifecy
 const TOKEN = "tok-9f3a-never-print-me"
 const posixOnly = { skip: process.platform === "win32" ? "the fixture Node is a POSIX link" : false }
 
-test("unbound launches clear an inherited private profile binding", posixOnly, async () => {
+test("legacy-native unbound launches clear an inherited private profile binding", posixOnly, async () => {
   const machine = await realMachine({ declare: null })
   machine.launchOptions.env.DESK_BROWSER_PROFILE_DIR = path.join(machine.root, "foreign")
   const result = await direct(machine)
@@ -667,7 +667,7 @@ function nativeController(machine,resources={}) {
       return Function(...args)
     },
   }
-  return canonicalCjs("browser-context.cjs",context)
+  return canonicalCjs("browser-native.cjs",context)
 }
 function controllerOptions(machine,extra={}) {
   return {...machine.launchOptions,...extra,prepareBrowserRuntime:()=>browser.prepareBrowserRuntime({...machine.launchOptions,...extra})}
@@ -875,7 +875,7 @@ function session(machine, extra = {}) {
 
 const textOf = (message) => message.result.content[0].text
 
-test("without a declaration default signed-in creation refuses before allocating an owner, never falls back headless", posixOnly, async () => {
+test("legacy-native creation without a declaration refuses before allocating an owner, never falls back headless", posixOnly, async () => {
   const machine = await realMachine({ declare: null })
   const result=await direct(machine)
   assert.equal(result.exitCode,1)

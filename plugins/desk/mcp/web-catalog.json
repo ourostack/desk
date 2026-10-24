@@ -3,27 +3,29 @@
   "tools": [
     {
       "name": "browser_context",
-      "description": "Create a fresh handle for each actual agent before browsing. Signed-in is the default and needs a useful label and an already-attested declared profile. Private is explicit. Keep/resume/discard require the exact returned contextId. Keep preserves this agent's task-owned context across turns without an extra approval step. Never infer ownership from an MCP connection, PID or title. Unknown cleanup is an error, not disposal.",
+      "description": "Create a fresh handle for each actual agent before browsing. Default signed-in mode uses a separate persistent profile in installed Edge or Chrome, normally headless; it never borrows the person's browser or needs an extension. Normal OS SSO may sign in automatically; inspect the page rather than assume authentication or account restrictions. Private is explicit. Keep/resume preserve the exact context across frontend turns without another approval. After the human finishes an explicitly interactive sign-in, finish-sign-in closes that sign-in browser and reopens its same profile headlessly without replaying pages; inspect authentication again. Discard removes the owned profile while preserving exports; inspect cleanup resources. No implicit recreation or replay after an uncertain result.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "action": {"type":"string","enum":["create","keep","resume","discard"],"description":"Create generates a new contextId for this actual agent. Every other action requires its explicit existing handle; there is no ambient default."},
-          "mode": {"type":"string","enum":["signed-in","private"],"description":"Create only. Omit for the declared existing signed-in profile. Choose private explicitly for isolation. Forbidden for other actions."},
+          "action": {"type":"string","enum":["create","keep","resume","discard","finish-sign-in"],"description":"Create generates a new contextId for this actual agent. Every other action requires its explicit existing handle. Finish-sign-in is only for an interactive sign-in context after the human finishes, never an ordinary work-context restart."},
+          "mode": {"type":"string","enum":["signed-in","private"],"description":"Create only. Omit for an agent-owned persistent profile using the declared installed browser, or installed Edge then Chrome. Private is fresh in-memory state. Neither is an account-authorization boundary."},
+          "interactive": {"type":"boolean","description":"Signed-in create only. Set true only when the operator agreed to a visible window for genuine sign-in/security interaction. Default false. Do not automate credentials, MFA or consent; do not silently replace an existing uncertain context."},
           "contextId": {"type":"string","pattern":"^(?:private-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$","description":"Required except create, where caller-supplied IDs are forbidden. Retain the exact generated handle, including private- prefix."},
           "label": {"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$","description":"Create only. Required for default/signed-in create; optional for explicit private. Describe the actual agent and useful work, not an ownership principal."}
         },
         "required": ["action"],
         "oneOf": [
-          {"type":"object","additionalProperties":false,"properties":{"action":{"const":"create"},"mode":{"const":"signed-in"},"label":{"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"}},"required":["action","label"]},
+          {"type":"object","additionalProperties":false,"properties":{"action":{"const":"create"},"mode":{"const":"signed-in"},"interactive":{"type":"boolean"},"label":{"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"}},"required":["action","label"]},
           {"type":"object","additionalProperties":false,"properties":{"action":{"const":"create"},"mode":{"const":"private"},"label":{"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"}},"required":["action","mode"]},
-          {"type":"object","additionalProperties":false,"properties":{"action":{"enum":["keep","resume","discard"]},"contextId":{"type":"string","pattern":"^(?:private-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}},"required":["action","contextId"]}
+          {"type":"object","additionalProperties":false,"properties":{"action":{"enum":["keep","resume","discard"]},"contextId":{"type":"string","pattern":"^(?:private-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}},"required":["action","contextId"]},
+          {"type":"object","additionalProperties":false,"properties":{"action":{"const":"finish-sign-in"},"contextId":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}},"required":["action","contextId"]}
         ]
       }
     },
     {
       "name": "browser_command",
-      "description": "Run an ordinary maintained Playwright CLI page command using this actual agent's explicit contextId. args are argv, never shell text. Start with [\"snapshot\"] or [\"tab-list\"], then use observed refs with [\"fill\",\"e4\",\"value\"] or [\"click\",\"e4\"]. Wait for each action before its dependent snapshot. Private mode supports [\"snapshot\",\"--json\"] for inline state. Help/--help and session/profile/configuration/lifecycle/global overrides are refused. Put literal leading-dash page data after an inner --. Missing sessions are never recreated. Preserve screenshot/export files.",
+      "description": "Run ordinary maintained Playwright CLI page argv using this agent's explicit contextId, never shell text. Call [\"snapshot\"] for an inline accessibility snapshot and element refs, then [\"fill\",\"e4\",\"value\"] or [\"click\",\"e4\"]. Navigation may return a snapshot file path; call [\"snapshot\"] explicitly for inline refs instead of reading files. [\"tab-list\"] lists this context's tabs. Wait for an action before its dependent snapshot. [\"eval\",\"document.title\"] reads inline page state. Help and session/profile/configuration/lifecycle/global overrides are refused. Literal leading-dash page data goes after an inner --. Missing sessions are never recreated. Inspect an uncertain result before retrying.",
       "inputSchema": {
         "type":"object","additionalProperties":false,
         "properties":{

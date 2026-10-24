@@ -23,11 +23,16 @@ function generateId(mode) {
   return (mode === "private" ? "private-" : "") + hex.slice(0,8) + "-" + hex.slice(8,12) + "-" +
     hex.slice(12,16) + "-" + hex.slice(16,20) + "-" + hex.slice(20);
 }
-function layout(stateRoot, id, mode, socketRoot) {
+function layout(stateRoot, id, mode, socketRoot, backend) {
   if (modeOf(id) !== mode) fail("invalid_arguments", "Context namespace does not match its mode");
   var parent = path.join(stateRoot, mode === "private" ? "private" : "signed-in");
   var root = path.join(parent, id);
-  var owner = JSON.stringify({contextId:id,directory:root});
+  var record = {contextId:id,directory:root};
+  if (backend !== undefined) {
+    if (backend !== "managed" || mode !== "signed-in") fail("invalid_arguments","Invalid browser owner backend");
+    record.backend = backend;
+  }
+  var owner = JSON.stringify(record);
   var shortBase = socketRoot || (process.platform === "win32" ? os.tmpdir() : "/tmp");
   return { parent:parent, root:root, owner:owner,
     markerName:mode === "private" ? ".desk-private-owner" : ".desk-context-owner",
@@ -64,7 +69,7 @@ function marker(dir, value, create, markerName) {
   checkOwned(file,false);
   if (fs.readFileSync(file,"utf8") !== value) fail("unsafe_path","Context ownership marker does not match");
 }
-function environment(source, root, socketDir, node) {
+function environment(source, root, socketDir, node, managed) {
   var env = {};
   Object.keys(source).forEach(function(key) {
     if (/^(PATH|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|USER|USERNAME|LANG|LC_[A-Z_]+)$/i.test(key)) env[key] = source[key];
@@ -75,8 +80,75 @@ function environment(source, root, socketDir, node) {
   env.XDG_RUNTIME_DIR = path.join(root,"runtime");
   env.LOCALAPPDATA = process.platform === "win32" ? path.join(env.HOME,"AppData","Local") : path.join(root,"local");
   env.APPDATA = process.platform === "win32" ? path.join(env.HOME,"AppData","Roaming") : path.join(root,"roaming");
+  if (managed) {
+    if (typeof managed.nativeHome !== "string" || !path.isAbsolute(managed.nativeHome))
+      fail("invalid_arguments","Managed browser execution requires the native account home");
+    env.HOME = managed.nativeHome; env.USERPROFILE = managed.nativeHome;
+    if (process.platform === "win32") {
+      env.LOCALAPPDATA = path.join(managed.nativeHome,"AppData","Local");
+      env.APPDATA = path.join(managed.nativeHome,"AppData","Roaming");
+    }
+    ["LOGNAME","SECURITYSESSIONID","XPC_FLAGS","DISPLAY","WAYLAND_DISPLAY","XAUTHORITY","DBUS_SESSION_BUS_ADDRESS"].forEach(function(key) {
+      if (typeof source[key] === "string") env[key] = source[key];
+    });
+    env.PWTEST_DAEMON_SESSION_DIR = path.join(root,"registry");
+  }
   env.TMPDIR = socketDir; env.TMP = socketDir; env.TEMP = socketDir;
   return require("./web.cjs").withNodeFirst(env,node,process.platform);
+}
+function validateManagedConfig(config, root) {
+  var browser = config && config.browser, launch = browser && browser.launchOptions;
+  function keys(value, allowed) {
+    return value && typeof value === "object" && !Array.isArray(value) &&
+      Object.keys(value).every(function(key) { return allowed.indexOf(key) !== -1; });
+  }
+  if (!keys(config,["browser"]) || !keys(browser,["browserName","isolated","userDataDir","launchOptions"]) ||
+      !keys(launch,["headless","chromiumSandbox","channel","executablePath"]) ||
+      browser.browserName !== "chromium" || browser.isolated !== false ||
+      browser.userDataDir !== path.join(root,"profile") || launch.chromiumSandbox !== true ||
+      typeof launch.headless !== "boolean" || ["msedge","chrome"].indexOf(launch.channel) === -1 ||
+      typeof launch.executablePath !== "string" || !path.isAbsolute(launch.executablePath))
+    fail("unsafe_registry","Browser configuration no longer describes this exact owned profile");
+}
+function readManagedState(root, name, id) {
+  var file = path.join(root,name);
+  try { checkOwned(file,false); } catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  var value = JSON.parse(fs.readFileSync(file,"utf8"));
+  if (!value || value.version !== 1 || value.contextId !== id)
+    fail("cleanup_unconfirmed","Managed lifecycle receipt does not match this handle");
+  return value;
+}
+function atomicJson(file, value) {
+  ownedDir(path.dirname(file),false);
+  try { checkOwned(file,false); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  var temporary = file+".pending-"+crypto.randomBytes(8).toString("hex");
+  // Failed publications remain exact owned evidence, never a partial config.
+  fs.writeFileSync(temporary,JSON.stringify(value),{flag:"wx",mode:384});
+  try { checkOwned(file,false); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  try { fs.renameSync(temporary,file); }
+  catch (error) {
+    error.resources = Object.assign({},error.resources,{unpublishedStateFile:temporary});
+    throw error;
+  }
+}
+function profileIdentity(root) {
+  var profile = path.join(root,"profile");
+  ownedDir(profile,false);
+  var value = fs.lstatSync(profile);
+  return {dev:String(value.dev),ino:String(value.ino),birthtimeMs:String(value.birthtimeMs)};
+}
+function profileUnused(root, identity, allowMissing) {
+  var current;
+  try { current = profileIdentity(root); }
+  catch (error) { if (allowMissing && error.code === "ENOENT") return false; throw error; }
+  if (!identity || current.dev !== identity.dev || current.ino !== identity.ino || current.birthtimeMs !== identity.birthtimeMs)
+    fail("cleanup_unconfirmed","Authentication-profile identity changed; it was not removed or reopened");
+  ["SingletonLock","SingletonSocket","SingletonCookie"].forEach(function(name) {
+    try { fs.lstatSync(path.join(root,"profile",name)); }
+    catch (error) { if (error.code === "ENOENT") return; throw error; }
+    fail("cleanup_unconfirmed","Authentication profile still has a browser singleton; retained");
+  });
+  return true;
 }
 function scrub(value, source) {
   if (typeof value === "string") {
@@ -130,6 +202,7 @@ function execute(node, args, options) {
     });
   });
 }
-module.exports = {generateId:generateId,modeOf:modeOf,layout:layout,validatePageArgs:validatePageArgs,
+module.exports = {generateId:generateId,modeOf:modeOf,layout:layout,validatePageArgs:validatePageArgs,validateManagedConfig:validateManagedConfig,
+  readManagedState:readManagedState,atomicJson:atomicJson,profileIdentity:profileIdentity,profileUnused:profileUnused,
   checkOwned:checkOwned,ownedDir:ownedDir,marker:marker,environment:environment,scrub:scrub,
   execute:execute,errorPayload:errorPayload,fail:fail};

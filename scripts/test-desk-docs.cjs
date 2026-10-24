@@ -685,28 +685,24 @@ function validateBrowserFocusPolicy(errors, {
 } = {}) {
   const body = readFile("plugins/desk/skills/cdp-headed-browser/SKILL.md");
   const lower = body.toLowerCase();
-  if (
-    !lower.includes("browser-context-broker") ||
-    !["acquire", "proxy", "release", "status", "doctor"].every((term) => lower.includes(term))
-  ) {
-    errors.push("cdp-headed-browser must route acquisition, proxying, release, status, and doctor through the browser context broker");
+  if (!["browser_context", "browser_command", "contextId", "keep", "resume", "discard"].every((term) => body.includes(term))) {
+    errors.push("cdp-headed-browser must teach the explicit context tools and retained handle lifecycle");
   }
-  if (!/\blease\b[\s\S]+\bowned targets?\b/iu.test(body)) {
-    errors.push("cdp-headed-browser must describe lease-owned target isolation");
+  if (!/\bowns?\b[\s\S]+\bpersistent profile\b/iu.test(body) || !lower.includes("headless") ||
+      !lower.includes("does not borrow") || !lower.includes("installed edge")) {
+    errors.push("cdp-headed-browser must describe each agent's owned persistent profile without borrowing the person's browser");
   }
-  if (
-    !body.includes("$BROWSER_CONTEXT_BROKER_BIN") ||
-    !lower.includes("plugin-relative") ||
-    !lower.includes("does not place") ||
-    !lower.includes("path")
-  ) {
-    errors.push("cdp-headed-browser must document the overlay-supplied plugin-relative broker executable contract without claiming PATH installation");
+  if (!["interactive:true", "sign-in-only", "human", "finish-sign-in"].every((term) => lower.includes(term))) {
+    errors.push("cdp-headed-browser must reserve interactive sign-in for the human and return the same profile headlessly");
+  }
+  if (!lower.includes("acknowledgement") || !lower.includes("inspect") || !lower.includes("without replay")) {
+    errors.push("cdp-headed-browser must reconcile interruption by inspecting the retained context without replay");
+  }
+  if (!body.includes("profileDisposition") || !lower.includes("exports remain") || !lower.includes("authentication profile")) {
+    errors.push("cdp-headed-browser must verify exact profile disposal while retaining exports");
   }
   if (/\bbrowser-context-broker (?:acquire|proxy|release|status|doctor|cleanup)\b/u.test(body)) {
     errors.push("cdp-headed-browser must not assume the broker is available as a bare PATH command");
-  }
-  if (!body.includes("Target.createTarget") || !/background:\s*true/u.test(body)) {
-    errors.push("cdp-headed-browser must document background target creation");
   }
   if (
     /(?:localhost|127\.0\.0\.1):\d+/u.test(body) ||
@@ -716,10 +712,7 @@ function validateBrowserFocusPolicy(errors, {
   ) {
     errors.push("cdp-headed-browser must not recommend fixed-port or arbitrary endpoint discovery");
   }
-  if (!body.includes("desk.browser") || !/(?:its|their) own tab group/u.test(lower) || !body.includes("`browser_close`")) {
-    errors.push("cdp-headed-browser must describe the real browser profile: the desk.browser declaration, each session's own tab group, and closing it with browser_close");
-  }
-  if (!lower.includes("no first-window focus-stealing exception") || lower.includes("does not apply to the one new window")) {
+  if (lower.includes("does not apply to the one new window")) {
     errors.push("cdp-headed-browser must prohibit focus stealing, including the first window a context opens");
   }
   if (/\b(?:pkill|killall|pgrep)\b/u.test(body)) {
