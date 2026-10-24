@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.349 — 2026-10-24
+
+Meaning-based search now becomes ready when several Desk builds share one desk. Before, every build's search controller wrote the shared search index in the background. When one build committed while another was embedding, the other's change-log cleanup was refused and it started again at once, which undid the first build's work. Neither ever finished, so `desk_recall` waited out its 30 s and refused.
+
+Only the Desk build that owns the index writes it now. The owner is the highest-ranked running build on the desk, by the ranking that already decided who answers: the newer Desk version, then the larger build digest. Each controller publishes its Desk version in its owner record, and before each catch-up it checks the running controllers beside it and the index's last writer. A lower-ranked build stands aside and writes nothing. It checks that the owner's index covers the desk's files as it sees them, then reads from it, so its `desk_recall`, `desk_similar` and `desk_search` answer from the owner's index. When the owner's index is still behind, the lower build checks again after a growing pause. When the owner's session ends, the next catch-up makes the lower build the owner.
+
+An older Desk build that cannot stand aside may keep committing the unchanged desk while its session stays open. The owner now treats a generation with the same content as its own: the same documents and content hashes, built with the same settings. Its change-log cleanup goes ahead, and its proof that the index is current holds, so it becomes ready within one catch-up. A cleanup that another build's commit with different content refused is retried after a growing pause, from 250 ms to 5 s, instead of at once. After the last pause the controller stops and waits for the next desk change or search.
+
+`desk_status` names the build that owns the search index and whether it is this session's, for example "Desk 3.2.0-alpha.349 (another session) owns the search index; this session only reads it." The detailed answer carries it as `readiness.owner` and `readiness.owned_by_this_session`, and the compact answer as `search_owner`. Every `desk_recall` and `desk_similar` refusal adds the same sentence when the controller reports an owner. The deadline refusal now reads "Meaning-based search did not finish catching up within 30 seconds." Every refusal, detail and fallback note on this path is in plain words, and an error's own technical text moves to `diagnostic.technical`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.348 — 2026-10-23
 
 Keep public task explanations moving after an update by spreading known task paths throughout bounded discovery, without changing its time limit or evidence checks.
