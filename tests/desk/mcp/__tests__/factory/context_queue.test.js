@@ -1068,6 +1068,21 @@ test("a ready input that spends the remaining budget is held rather than returne
   assert.deepEqual(plan.ready, [])
 })
 
+test("a freshness check that spends the publication allowance cannot return a late ready item", async (t) => {
+  const f = await reviewed()
+  let elapsed = 0
+  const plan = await withFsFault(t, {
+    lstatSync: (original, file, ...args) => {
+      if (String(file) === f.entries[0].logPath) elapsed = 1000
+      return original(file, ...args)
+    },
+  }, () => queue.planContextPublication(f.env, {
+    ...f.options, now: 1000, deadline: 2000, clock: () => elapsed,
+  }))
+  assert.equal(plan.deferred, true)
+  assert.deepEqual(plan.ready, [])
+})
+
 test("a refreshed publication state disappearing before readback cannot publish old wording", async (t) => {
   const f = await reviewed()
   await queue.saveContextSent(f.env, STORE, [f.item], 102)
