@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.352 — 2026-10-24
+
+Let task-context discovery use enough of a shortened preparation turn to resolve a task and save its input, while retaining the one-second discovery ceiling and two-second total allowance.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.351 — 2026-10-24
 
 Keep validated task explanations moving through bounded publication checks. Resume from a protected cursor instead of discarding ready progress when later work reaches the unchanged time limit, and preserve immediate withdrawal of stale wording.
