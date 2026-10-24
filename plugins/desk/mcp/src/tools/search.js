@@ -17,6 +17,7 @@ import { toDeskPath } from "../util/paths.js"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath, closeDb } from "../db/init.js"
+import { ACTIVE_VECTOR_SPACE } from "../indexer/text-vectors.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { embedQuery } from "../util/embed-query.js"
 import { objectInput } from "../util/object-input.js"
@@ -32,6 +33,9 @@ import {
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
 const SNIPPET_MAX_CHARS = 280
+// Each section's vector, found by its text in the active vector space.
+// A text skipped as too long has a row with no embedding; meaning-based search never reads it.
+const ACTIVE_TEXT_VECTOR_JOIN = `text_vectors tv ON tv.vector_space = '${ACTIVE_VECTOR_SPACE}' AND tv.text_hash = c.text_hash AND tv.embedding IS NOT NULL`
 
 // Every field each search tool reads off `input` — not in the exported
 // `desk_search`/`desk_recall`/`desk_similar`/`desk_timeline` themselves
@@ -332,19 +336,18 @@ function gatherFtsCandidates(db, matchExpr, filterFragment, filterParams, candid
 }
 
 /**
- * Gather candidate chunks from sqlite-vec via KNN. Returns rows of
- * `{ chunk_id, distance }`. Caller computes true cosine separately.
- *
- * vec0 doesn't let us filter inside the MATCH (it predates SQLite's
- * generated-column filtering); we over-fetch and let the caller post-filter.
+ * Gather the `k` sections nearest the query vector (Euclidean distance, as
+ * sqlite-vec's KNN ranked them). Returns rows of `{ chunk_id, distance }`.
+ * Caller computes true cosine separately, and post-filters by scope.
  */
 function gatherVecCandidates(db, queryVec, k) {
   if (!queryVec) return []
   const sql = `
-    SELECT chunk_id, distance
-    FROM chunk_vecs
-    WHERE embedding MATCH ? AND k = ?
-    ORDER BY distance
+    SELECT c.id AS chunk_id, vec_distance_l2(tv.embedding, ?) AS distance
+    FROM chunks c
+    JOIN ${ACTIVE_TEXT_VECTOR_JOIN}
+    ORDER BY distance, c.id
+    LIMIT ?
   `
   return db.prepare(sql).all(new Float32Array(queryVec), k)
 }
@@ -362,10 +365,10 @@ function hydrateChunks(db, chunkIds, lexicalOnly = false) {
       `SELECT c.id AS chunk_id, c.text, c.heading, c.doc_id,
               d.path AS doc_path, d.kind, d.track, d.task_slug,
               d.status, d.updated_at, d.is_archived,
-              ${lexicalOnly ? "NULL" : "v.embedding"} AS embedding
+              ${lexicalOnly ? "NULL" : "tv.embedding"} AS embedding
        FROM chunks c
        JOIN docs d ON d.id = c.doc_id
-       ${lexicalOnly ? "" : "LEFT JOIN chunk_vecs v ON v.chunk_id = c.id"}
+       ${lexicalOnly ? "" : `LEFT JOIN ${ACTIVE_TEXT_VECTOR_JOIN}`}
        WHERE c.id IN (${placeholders})
        ORDER BY d.path, c.chunk_index`,
     )
@@ -686,8 +689,8 @@ export async function indexedRecall({ deskRoot, input, opts, db: suppliedDb }) {
 /**
  * desk_similar — "more like this" against a given doc path.
  *
- * Strategy: read the seed doc's chunk embeddings out of vec0; average them
- * into a centroid; KNN-search against the rest of vec0 excluding the seed
+ * Strategy: read the seed doc's section embeddings; average them
+ * into a centroid; nearest-search the other sections excluding the seed
  * doc's own chunks; rank by cosine. Centroid > first-chunk-only because
  * task docs often have boilerplate frontmatter at the top — using the doc's
  * entire embedded body better captures what the doc is "about".
@@ -727,9 +730,9 @@ export async function indexedSimilar({ deskRoot, input, db: suppliedDb }) {
     // Pull seed embeddings.
     const seedRows = db
       .prepare(
-        `SELECT v.chunk_id, v.embedding
+        `SELECT c.id AS chunk_id, tv.embedding
          FROM chunks c
-         JOIN chunk_vecs v ON v.chunk_id = c.id
+         JOIN ${ACTIVE_TEXT_VECTOR_JOIN}
          WHERE c.doc_id = ?`,
       )
       .all(seedDoc.id)

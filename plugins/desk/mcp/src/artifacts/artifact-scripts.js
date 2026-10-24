@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 
 import { closeDb, indexDbPath, openDb } from "../db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
+import { ACTIVE_VECTOR_SPACE } from "../indexer/text-vectors.js"
 import {
   deriveVectorPackPaths,
   validateVectorPackFile,
@@ -331,12 +332,14 @@ function vectorPackRows(db) {
             c.embedding_spec_id,
             v.embedding
      FROM chunks c
-     JOIN chunk_vecs v ON v.chunk_id = c.id
+     JOIN text_vectors v ON v.vector_space = ? AND v.text_hash = c.text_hash
+      AND v.embedding IS NOT NULL AND v.kept_chars IS NULL
      WHERE c.embedding_spec_id = ?
        AND c.chunker_id = ?
        AND c.normalization_id = ?
      ORDER BY c.chunk_key`,
   ).all(
+    ACTIVE_VECTOR_SPACE,
     ACTIVE_EMBEDDING_SPEC.id,
     ACTIVE_EMBEDDING_SPEC.chunker_id,
     ACTIVE_EMBEDDING_SPEC.normalization_id,

@@ -10,7 +10,8 @@
 //     avoid hammering a dead Ollama); query-time is single-shot
 //   - tests can inject a deterministic `fetch` here without poking the
 //     indexer's internals
-//   - future work (cached query vectors keyed by query string) lives here
+//   - a caller that reads more than once for one request passes
+//     `opts.queryVectors`, a Map, so the query is embedded only once
 
 import { embedChunkDetailed } from "../indexer/embed.js"
 
@@ -20,17 +21,23 @@ import { embedChunkDetailed } from "../indexer/embed.js"
  * is the boolean form callers use to flip semantic vs FTS-only paths.
  *
  * @param {string} query
- * @param {object} [opts] — forwarded to embedChunk (endpoint, model, fetch).
+ * @param {object} [opts] — forwarded to embedChunk (endpoint, model, fetch);
+ *   `queryVectors`, when given, is a Map that keeps each answered query's
+ *   vector for the rest of one request.
  * @returns {Promise<{ vector: number[] | null, available: boolean }>}
  */
 export async function embedQuery(query, opts = {}) {
   if (typeof query !== "string" || query.trim().length === 0) {
     return { vector: null, available: false, diagnostic: null }
   }
+  const kept = opts.queryVectors?.get(query)
+  if (kept) return kept
   const result = await embedChunkDetailed(query, opts)
-  return {
+  const answer = {
     vector: result.vector,
     available: result.available,
     diagnostic: result.diagnostic,
   }
+  if (answer.available) opts.queryVectors?.set(query, answer)
+  return answer
 }

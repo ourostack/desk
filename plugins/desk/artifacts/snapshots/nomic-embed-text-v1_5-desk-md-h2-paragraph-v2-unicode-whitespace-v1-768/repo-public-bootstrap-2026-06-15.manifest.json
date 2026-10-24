@@ -19,7 +19,7 @@
     "arch": "portable",
     "node_abi": "portable"
   },
-  "artifact_source_scope_hash": "sha256:50a49d29486f907a0c0a36f44e7a6f59afda4cbe172bcbc9653e4ad0a174fa03",
+  "artifact_source_scope_hash": "sha256:af5942ad31b610b7ee48ac62258ddfe787ca9a2d88e29c0859cf8cfdee4a9f2a",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "included_pack_ids": [
     "repo-public-bootstrap-2026-06-15"
@@ -30,7 +30,7 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-10-23T17:33:09.180Z",
+  "created_at": "2026-10-24T04:40:01.000Z",
   "artifact": {
     "file": "repo-public-bootstrap-2026-06-15.sqlite.zst",
     "format": "sqlite-zstd",

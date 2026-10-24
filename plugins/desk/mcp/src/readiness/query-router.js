@@ -115,6 +115,9 @@ async function observedStatus(controller, signal) {
   }
 }
 
+// With no deadline, a recall whose index keeps moving on reads at most this many times before it refuses.
+const READ_ATTEMPTS_WITHOUT_DEADLINE = 20
+
 // One deadline for a whole call: each wait inside it gets only the time that is left. A deadline of 0 or less means none.
 export function callDeadline(timeoutMs, now = Date.now) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return () => timeoutMs
@@ -484,51 +487,65 @@ export function createQueryRouter({
       // A refusal whose detail already names the owner passes `observed: null`, so the owner is not named twice.
       return semanticCapabilityError(reason, detail, { ...embeddingRefusal(observed), observed, ...options })
     }
+    // A change landing during the wait or the read does not end the call: the controller catches up again and the read
+    // starts over, until one read is current from start to finish or the deadline runs out. Each answer still comes from
+    // a proven current index, and a read whose index moved on is never returned.
+    const deadlineAt = Number.isFinite(semanticDeadlineMs) && semanticDeadlineMs > 0 ? Date.now() + semanticDeadlineMs : null
+    const mayReadAgain = (attempt) => deadlineAt === null ? attempt < READ_ATTEMPTS_WITHOUT_DEADLINE : Date.now() < deadlineAt
+    // A read that starts over reuses the query's vector, so a re-read does not queue another request at the embedding service.
+    const opts = { ...request.opts, embed: { ...request.opts?.embed, queryVectors: new Map() } }
     try {
-      const barrier = await semanticBarrierState(controller, request, remaining())
-      if (barrier.current !== true) {
-        const reason = barrier.reason ?? "semantic_unavailable"
-        return refuse(reason, barrier.message ?? plainReason(reason), {
-          ...(reason === NEWER_DESK_REASON ? NEWER_DESK_REFUSAL : {}),
-          ...(barrier.technical ? { technical: barrier.technical } : {}),
-        })
-      }
-      before = await serviceProof(request, { semanticRequired: true, remaining })
-      observed = before.observed
-      if (before.reclaimable) {
-        before.snapshot.db.close()
+      for (let attempt = 1; ; attempt += 1) {
+        before?.snapshot?.db.close()
         before = null
-        await reclaimIndex(request, remaining)
+        const barrier = await semanticBarrierState(controller, request, remaining())
+        if (barrier.current !== true) {
+          const reason = barrier.reason ?? "semantic_unavailable"
+          return refuse(reason, barrier.message ?? plainReason(reason), {
+            ...(reason === NEWER_DESK_REASON ? NEWER_DESK_REFUSAL : {}),
+            ...(barrier.technical ? { technical: barrier.technical } : {}),
+          })
+        }
         before = await serviceProof(request, { semanticRequired: true, remaining })
         observed = before.observed
-      }
-      if (before.yields) {
-        return refuse(NEWER_DESK_REASON, cannotReadOwnersIndex(before.snapshot.writer.version), { ...NEWER_DESK_REFUSAL, observed: null })
-      }
-      if (!before.semanticProven) {
-        const diagnostic = before.lexicalProven ? before.semanticDiagnostic : { reason: before.diagnostic.reason, message: INDEX_CATCHING_UP }
-        return refuse(diagnostic.reason, diagnostic.message)
-      }
-      const result = await cancellable(() => semanticBackend({
-        ...request,
-        db: before.snapshot.db,
-        generation: before.snapshot.generation,
-      }), signal)
-      if (result?.error === "semantic_unavailable") {
-        // The proof already showed the embedding service answering and no vectors missing, so for desk_similar this means the chosen document has none of its own.
-        return request.kind === "similar"
-          ? refuse("semantic_unavailable", DOCUMENT_HAS_NO_TEXT, { ...UNINDEXED_DOCUMENT_REFUSAL, ...(result.note ? { technical: result.note } : {}) })
-          : refuse("semantic_unavailable", EMBEDDING_NOT_ANSWERING, { fix: EMBEDDING_FIX, ...(result.note ? { technical: result.note } : {}) })
-      }
-      const after = await serviceProof(request, { semanticRequired: true, waitForSemantic: false })
-      try {
-        if (!after.semanticProven || before.identity !== after.identity) {
-          return refuse("readiness_changed_during_read", `${INDEX_CHANGED} Retry the search.`)
+        if (before.reclaimable) {
+          before.snapshot.db.close()
+          before = null
+          await reclaimIndex(request, remaining)
+          before = await serviceProof(request, { semanticRequired: true, remaining })
+          observed = before.observed
         }
-        lastProof = { generation: after.snapshot.generation, cursor: after.snapshot.cursor, owner: after.owner }
-        return result
-      } finally {
-        after.snapshot?.db.close()
+        if (before.yields) {
+          return refuse(NEWER_DESK_REASON, cannotReadOwnersIndex(before.snapshot.writer.version), { ...NEWER_DESK_REFUSAL, observed: null })
+        }
+        if (!before.semanticProven) {
+          // The controller is catching up with a change that arrived after the wait.
+          if (before.lexicalBarrier.current !== true && mayReadAgain(attempt)) continue
+          const diagnostic = before.lexicalProven ? before.semanticDiagnostic : { reason: before.diagnostic.reason, message: INDEX_CATCHING_UP }
+          return refuse(diagnostic.reason, diagnostic.message)
+        }
+        const result = await cancellable(() => semanticBackend({
+          ...request,
+          opts,
+          db: before.snapshot.db,
+          generation: before.snapshot.generation,
+        }), signal)
+        if (result?.error === "semantic_unavailable") {
+          // The proof already showed the embedding service answering and no vectors missing, so for desk_similar this means the chosen document has none of its own.
+          return request.kind === "similar"
+            ? refuse("semantic_unavailable", DOCUMENT_HAS_NO_TEXT, { ...UNINDEXED_DOCUMENT_REFUSAL, ...(result.note ? { technical: result.note } : {}) })
+            : refuse("semantic_unavailable", EMBEDDING_NOT_ANSWERING, { fix: EMBEDDING_FIX, ...(result.note ? { technical: result.note } : {}) })
+        }
+        const after = await serviceProof(request, { semanticRequired: true, waitForSemantic: false })
+        try {
+          if (after.semanticProven && before.identity === after.identity) {
+            lastProof = { generation: after.snapshot.generation, cursor: after.snapshot.cursor, owner: after.owner }
+            return result
+          }
+        } finally {
+          after.snapshot?.db.close()
+        }
+        if (!mayReadAgain(attempt)) return refuse("readiness_changed_during_read", `${INDEX_CHANGED} Retry the search.`)
       }
     } catch (error) {
       signal?.throwIfAborted()

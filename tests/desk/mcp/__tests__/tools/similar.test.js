@@ -121,7 +121,7 @@ test("indexedSimilar — seed without embeddings returns semantic_unavailable", 
     "trackA/seed/task.md",
     "---\nstatus: processing\nschema_version: 1\n---\nalpha body\n",
   )
-  // Build the index with Ollama-down → no chunk_vecs rows.
+  // Build the index with Ollama-down → no stored vectors.
   const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
   await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
 
