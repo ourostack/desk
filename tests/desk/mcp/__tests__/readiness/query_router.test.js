@@ -19,6 +19,7 @@ import { promises as fs } from "node:fs"
 import { mkdirSync } from "node:fs"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
+import { setTimeout as sleep } from "node:timers/promises"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { createHash } from "node:crypto"
@@ -223,7 +224,12 @@ async function queuedSemanticChange(t, { changesDuringEvaluation = 0, changesAft
   const deskRoot = await fs.realpath(await mkTempDeskRoot())
   t.diagnostic(`queued semantic fixture: ${deskRoot}`)
   const documentPath = "track/work/task.md"
-  const embed = { fetch: makeEmbedFetch() }
+  const queryEmbeds = []
+  const answer = makeEmbedFetch()
+  const embed = { fetch: async (url, request) => {
+    if (JSON.parse(request.body).prompt === "quartz") queryEmbeds.push(url)
+    return answer(url, request)
+  } }
   let cursor = { journal_id: "queued-semantic-change", sequence: 0 }
   let current = true
   let discovered = false
@@ -278,7 +284,7 @@ async function queuedSemanticChange(t, { changesDuringEvaluation = 0, changesAft
     async semanticBackend(request) {
       evaluations++
       const result = await indexedRecall({
-        deskRoot, db: request.db, input: request, opts: { embed },
+        deskRoot, db: request.db, input: request, opts: { embed: { ...embed, ...request.opts?.embed } },
       })
       if (evaluations <= changesDuringEvaluation) {
         await writeFile(deskRoot, documentPath, `later quartz ${evaluations}`)
@@ -289,7 +295,7 @@ async function queuedSemanticChange(t, { changesDuringEvaluation = 0, changesAft
     },
   })
   const result = await router.semantic({ deskRoot, kind: "recall", topic: "quartz", limit: 3 })
-  return { result, evaluations, waitChanges }
+  return { result, evaluations, waitChanges, queryEmbeds: queryEmbeds.length }
 }
 
 test("semantic recall refreshes proof after a fenced change finishes convergence", async (t) => {
@@ -300,8 +306,9 @@ test("semantic recall refreshes proof after a fenced change finishes convergence
 })
 
 test("a read whose index moves on once is discarded, and recall reads again once the controller catches up", async (t) => {
-  const { result, evaluations } = await queuedSemanticChange(t, { changesDuringEvaluation: 1 })
+  const { result, evaluations, queryEmbeds } = await queuedSemanticChange(t, { changesDuringEvaluation: 1 })
   assert.equal(evaluations, 2, "the first read is discarded and the recall reads once more")
+  assert.equal(queryEmbeds, 1, "the second read reuses the query's vector")
   assert.equal(result.results?.[0]?.snippet, "later quartz 1", JSON.stringify(result))
 })
 
@@ -1550,8 +1557,10 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
       sqliteVec.load(db)
       assert.ok(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n > 0)
       // A vector whose text no section has any more is kept for a grace period, marked unused, in case the text comes back.
+      // The controller's cleanup marks it on its own timer, shortly after the catch-up.
       const orphans = `FROM text_vectors t WHERE t.unused_since IS NULL
         AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = t.text_hash)`
+      for (let waited = 0; waited < 5_000 && db.prepare(`SELECT COUNT(*) AS n ${orphans}`).get().n > 0; waited += 50) await sleep(50)
       assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count ${orphans}`).get().orphan_count, 0, JSON.stringify({
           orphanHashes: db.prepare(`SELECT t.text_hash ${orphans}`).all(),
           chunks: db.prepare("SELECT c.id, d.path FROM chunks c JOIN docs d ON d.id = c.doc_id").all(),

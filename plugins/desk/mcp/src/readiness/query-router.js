@@ -492,6 +492,8 @@ export function createQueryRouter({
     // a proven current index, and a read whose index moved on is never returned.
     const deadlineAt = Number.isFinite(semanticDeadlineMs) && semanticDeadlineMs > 0 ? Date.now() + semanticDeadlineMs : null
     const mayReadAgain = (attempt) => deadlineAt === null ? attempt < READ_ATTEMPTS_WITHOUT_DEADLINE : Date.now() < deadlineAt
+    // A read that starts over reuses the query's vector, so a re-read does not queue another request at the embedding service.
+    const opts = { ...request.opts, embed: { ...request.opts?.embed, queryVectors: new Map() } }
     try {
       for (let attempt = 1; ; attempt += 1) {
         before?.snapshot?.db.close()
@@ -524,6 +526,7 @@ export function createQueryRouter({
         }
         const result = await cancellable(() => semanticBackend({
           ...request,
+          opts,
           db: before.snapshot.db,
           generation: before.snapshot.generation,
         }), signal)
