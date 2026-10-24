@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.351 — 2026-10-24
+
+Keep validated task explanations moving through bounded publication checks. Resume from a protected cursor instead of discarding ready progress when later work reaches the unchanged time limit, and preserve immediate withdrawal of stale wording.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.350 — 2026-10-24
 
 Browser setup now works when the helper for another platform is missing from the installed plugin. Microsoft Defender removed the Windows browser helper from an installed Desk plugin on a Mac, and because setup required every platform's helper, browser setup on the Mac stopped too. Setup now requires only this computer's helper, which must be present and match the release, as before. A helper for another platform that is present must still match, so changed bytes still stop setup. A missing one no longer does: the setup result and the signed-in `browser_context` result carry a `notice` that names each missing file and says that Desk cannot connect to a browser on that platform until Desk is reinstalled there. The release, packaging and CI checks still require all eight helpers.
