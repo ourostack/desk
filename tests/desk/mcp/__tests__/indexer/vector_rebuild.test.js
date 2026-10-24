@@ -1103,6 +1103,49 @@ test("ensureIndex preserves probe diagnostics when repair skips a section the mo
   assert.equal(ensured.semantic.embedding_diagnostic.reason, "ok")
 })
 
+test("ensureIndex keeps the failed probe's diagnostic when only sections an older build refused are still missing", async () => {
+  const deskRoot = await trustedRoot()
+  const refusedPath = "trackA/task-refused/task.md"
+  const changedPath = "trackA/task-changed/task.md"
+  await writeFile(deskRoot, refusedPath, "---\nstatus: processing\n---\nrefused by an older build")
+  await rebuildIndex(deskRoot, {
+    ...NO_RELEASE_ARTIFACTS,
+    embed: {
+      endpoint: "http://127.0.0.1:9/api/embeddings",
+      fetch: async () => ({ ok: false, status: 500, json: async () => ({ error: "the input length exceeds the context length" }) }),
+    },
+  })
+  asOlderBuildRefusal(deskRoot)
+  await writeFile(deskRoot, changedPath, "---\nstatus: processing\n---\nfirst text")
+  await rebuildIndex(deskRoot, { ...NO_RELEASE_ARTIFACTS, skipEmbed: true })
+  await writeFile(deskRoot, changedPath, "---\nstatus: processing\n---\nsecond text")
+  const future = new Date(Date.now() + 5000)
+  await fs.utimes(path.join(deskRoot, changedPath), future, future)
+
+  const prompts = []
+  const ensured = await ensureIndex(deskRoot, {
+    ...NO_RELEASE_ARTIFACTS,
+    embed: {
+      endpoint: "http://127.0.0.1:9/api/embeddings",
+      // The health probe fails, so only the changed card is embedded, and that works.
+      fetch: async (_url, request) => {
+        const prompt = JSON.parse(request.body).prompt
+        prompts.push(prompt)
+        if (prompt === "desk semantic health probe") throw new Error("probe timed out")
+        return { ok: true, json: async () => ({ embedding: vector(47) }) }
+      },
+    },
+  })
+  assert.equal(ensured.built, true)
+  assert.equal(ensured.reason, "stale")
+  assert.deepEqual(prompts.slice(1), ["second text"], "the refused section of the unchanged card waits for a pass that embeds every card")
+  assert.equal(ensured.semantic.missing_vectors, 1)
+  assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
+  assert.equal(ensured.semantic.repairable_missing_vectors, 0)
+  assert.equal(ensured.semantic.embedding_available, false)
+  assert.equal(ensured.semantic.embedding_diagnostic.reason, "network_error")
+})
+
 test("ensureIndex treats a stale index whose only gaps are skipped sections as semantically available", async () => {
   const deskRoot = await trustedRoot()
   const docPath = "trackA/task-oversize/task.md"
