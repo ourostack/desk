@@ -224,7 +224,7 @@ test("a missing browser, a failed start and bad input each give a plain message"
 
 test("browser_command refuses lifecycle commands and browser options, and reports failures plainly", async () => {
   const { options } = await setup()
-  const controller = web.createController({ ...options, commandMs: 500 })
+  const controller = web.createController(options)
   const { contextId } = json(await controller.call("browser_context", { action: "open" }))
   const run = async (args) => text(await controller.call("browser_command", { contextId, args }))
   for (const args of [undefined, [], [1]]) assert.match(await run(args), /args must be a list of strings/u)
@@ -234,7 +234,8 @@ test("browser_command refuses lifecycle commands and browser options, and report
   }
   assert.equal(await run(["fail-quiet"]), "The command failed.")
   assert.equal(await run(["fail-loud"]), "boom")
-  assert.match(await run(["sleep"]), /longer than 0.5 seconds/u)
+  const impatient = web.createController({ ...options, commandMs: 2000 })
+  assert.match(text(await impatient.call("browser_command", { contextId, args: ["sleep"] })), /longer than 2 seconds/u)
   await controller.closeAll()
 })
 
@@ -283,6 +284,15 @@ test("a controller with no options uses the real process settings", () => {
   assert.equal(controller.settings.node, process.execPath)
   assert.equal(controller.settings.platform, process.platform)
   assert.ok(controller.settings.stateRoot.length > 0)
+})
+
+test("the state folder follows XDG_STATE_HOME, else the home folder, and mine looks in the browser's own profile folder", async () => {
+  const home = path.join(repoRoot, "no-such-home")
+  assert.equal(web.createController({ env: {}, homeDir: home }).settings.stateRoot, path.join(home, ".local", "state", "ouroboros-skills", "desk", "browser"))
+  assert.equal(web.createController({ env: { XDG_STATE_HOME: "/x" }, homeDir: home }).settings.stateRoot, path.join("/x", "ouroboros-skills", "desk", "browser"))
+  const { options } = await setup()
+  const result = await web.createController({ ...options, homeDir: home, profileRoots: undefined }).call("browser_context", { action: "open", browser: "mine" })
+  assert.match(text(result), /could not find your own Edge or Chrome profile/u)
 })
 
 // ---- leftovers ----

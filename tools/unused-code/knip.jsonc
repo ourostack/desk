@@ -35,7 +35,7 @@
       "ignore": ["evals/offline/vendor/**", "evals/fixtures/**", "evals/offline/cases/**"],
       "ignoreDependencies": [
         // Tests under tests/desk import the MCP server's packages. tests/desk/link-dependencies.mjs links them from plugins/desk/mcp/node_modules, so they resolve at run time but are declared only in that package.
-        "better-sqlite3", "sqlite-vec", "@modelcontextprotocol/sdk", "playwright-core", "gray-matter", "ws",
+        "better-sqlite3", "sqlite-vec", "@modelcontextprotocol/sdk", "gray-matter",
         // The coverage helpers under evals/offline run nyc and its ESM loader from the MCP package's install.
         "nyc", "@istanbuljs/esm-loader-hook",
         // Resolved through the same link as transitive dependencies of the MCP package's own dependencies. Declaring them at the root would change the lockfile for no runtime effect.

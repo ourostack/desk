@@ -264,11 +264,7 @@ Boots the server with temp roots, asserts the tool surface registers, and exerci
 
 The tests live in [`tests/desk/mcp/__tests__`](../../../tests/desk/mcp/__tests__/), outside the plugin folder, so hosts that install or refresh Desk never download them. `tests/desk/mcp` mirrors this folder, and the test setup links `tests/desk/mcp/node_modules` to this folder's installed `node_modules` so the tests' package imports resolve. Run `npm ci` here first.
 
-Browser component tests also read a locked public Playwright source input. Install it from this folder before running the suite:
-
-```sh
-npm ci --ignore-scripts --prefix ../../../tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
-```
+The browser tests (`launch/web.test.js`) use a fake Playwright CLI. Set `DESK_BROWSER_REAL=1` to also drive a real Edge or Chrome; that run installs `playwright-core` from npm.
 
 CI installs the same test-only package. It is not a runtime dependency or browser download. `DESK_TEST_MAINTAINED_CLI_DIR` remains an explicit override for an admitted input; full-source and bounded-region hashes reject unknown input instead of borrowing a user cache.
 

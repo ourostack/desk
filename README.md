@@ -30,7 +30,7 @@ Agency and other hosts that resolve plugins from Git use the coordinates `github
 ```
 .claude-plugin/marketplace.json   # Claude Code marketplace (ourostack)
 .agents/plugins/marketplace.json  # Codex marketplace
-plugins/desk/                     # Desk plugin, MCP server, activation and browser context broker
+plugins/desk/                     # Desk plugin, MCP server, activation and browser
 plugins/superpowers/              # Vendored Superpowers; upstream-sources.lock.json records the upstream commit as evidence
 plugins/plain-language/           # Plain Language plugin
 plugins/crew/                     # Crew plugin
