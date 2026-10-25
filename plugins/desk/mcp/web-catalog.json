@@ -1,36 +1,31 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "tools": [
     {
       "name": "browser_context",
-      "description": "Create a fresh handle for each actual agent before browsing. Signed-in is the default and needs a useful label and an already-attested declared profile. Private is explicit. Keep/resume/discard require the exact returned contextId. Keep preserves this agent's task-owned context across turns without an extra approval step. Never infer ownership from an MCP connection, PID or title. Unknown cleanup is an error, not disposal.",
+      "description": "Open or close a browser for this agent. Open with browser \"fresh\" for a throwaway browser that is never signed in, or \"mine\" for a private copy of the person's own Edge (or Chrome) profile so their sign-ins work. Both run in the background and never touch the person's open browser windows. Keep the returned contextId for browser_command, and close the browser when you are done; closing deletes its folder.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "action": {"type":"string","enum":["create","keep","resume","discard"],"description":"Create generates a new contextId for this actual agent. Every other action requires its explicit existing handle; there is no ambient default."},
-          "mode": {"type":"string","enum":["signed-in","private"],"description":"Create only. Omit for the declared existing signed-in profile. Choose private explicitly for isolation. Forbidden for other actions."},
-          "contextId": {"type":"string","pattern":"^(?:private-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$","description":"Required except create, where caller-supplied IDs are forbidden. Retain the exact generated handle, including private- prefix."},
-          "label": {"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$","description":"Create only. Required for default/signed-in create; optional for explicit private. Describe the actual agent and useful work, not an ownership principal."}
+          "action": { "type": "string", "enum": ["open", "close"], "description": "open starts a new browser and returns its contextId; close shuts it and deletes its folder." },
+          "browser": { "type": "string", "enum": ["fresh", "mine"], "description": "open only. fresh: empty, never signed in. mine: a copy of the person's own profile, deleted on close. Defaults to fresh." },
+          "contextId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "close only. The contextId that open returned." }
         },
-        "required": ["action"],
-        "oneOf": [
-          {"type":"object","additionalProperties":false,"properties":{"action":{"const":"create"},"mode":{"const":"signed-in"},"label":{"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"}},"required":["action","label"]},
-          {"type":"object","additionalProperties":false,"properties":{"action":{"const":"create"},"mode":{"const":"private"},"label":{"type":"string","minLength":1,"maxLength":120,"pattern":"^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"}},"required":["action","mode"]},
-          {"type":"object","additionalProperties":false,"properties":{"action":{"enum":["keep","resume","discard"]},"contextId":{"type":"string","pattern":"^(?:private-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}},"required":["action","contextId"]}
-        ]
+        "required": ["action"]
       }
     },
     {
       "name": "browser_command",
-      "description": "Run an ordinary maintained Playwright CLI page command using this actual agent's explicit contextId. args are argv, never shell text. Start with [\"snapshot\"] or [\"tab-list\"], then use observed refs with [\"fill\",\"e4\",\"value\"] or [\"click\",\"e4\"]. Wait for each action before its dependent snapshot. Private mode supports [\"snapshot\",\"--json\"] for inline state. Help/--help and session/profile/configuration/lifecycle/global overrides are refused. Put literal leading-dash page data after an inner --. Missing sessions are never recreated. Preserve screenshot/export files.",
+      "description": "Run one Playwright CLI page command in a browser that browser_context opened. args is argv, never shell text. Start with [\"goto\",\"https://example.com\"] or [\"snapshot\"], then use the refs the snapshot shows, for example [\"click\",\"e4\"] or [\"fill\",\"e4\",\"text\"]. Other commands include type, press, select, hover, check, go-back, reload, eval, screenshot, pdf, tab-list, tab-new, tab-select and tab-close. Opening, closing and choosing the browser happen only through browser_context.",
       "inputSchema": {
-        "type":"object","additionalProperties":false,
-        "properties":{
-          "contextId":{"type":"string","pattern":"^(?:private-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$","description":"This actual agent's generated handle; mandatory for every command."},
-          "args":{"type":"array","minItems":1,"maxItems":256,"items":{"type":"string","maxLength":65536,"pattern":"^[^\\u0000]*$"},"description":"Maintained ordinary page argv, for example [\"snapshot\"] or [\"fill\",\"e4\",\"value\"]. No shell or connection options."}
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contextId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "The contextId that browser_context open returned." },
+          "args": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "maxLength": 65536 }, "description": "The command and its arguments, for example [\"snapshot\"] or [\"fill\",\"e4\",\"text\"]." }
         },
-        "required":["contextId","args"]
+        "required": ["contextId", "args"]
       }
     }
   ]
