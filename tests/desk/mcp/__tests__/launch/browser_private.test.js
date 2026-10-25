@@ -9,6 +9,7 @@ import { createRequire } from "node:module"
 import childProcess, { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import net from "node:net"
+import { pathToFileURL } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 import { mcpRoot } from "./_mcp_handshake.js"
 import { removeTree } from "../_remove_tree.js"
@@ -135,6 +136,16 @@ require("net").createConnection=(socketPath,connected)=>{
   return socket;
 };
 `)
+  const processPreload = path.join(root, "process-observation.mjs")
+  put(processPreload, `
+import fs from "node:fs";
+import {processStartReaders} from ${JSON.stringify(pathToFileURL(path.join(mcpRoot, "src/readiness/process-start.js")).href)};
+const file=${JSON.stringify(path.join(root, "runtime-controls.json"))};
+const controls=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};
+// The fake CLI runs in this frontend, not in an independently observable daemon.
+processStartReaders[process.platform]=async pid=>
+  pid===process.pid&&!controls.unobservableDaemon?"fixture:"+process.pid:null;
+`)
   put(path.join(modules, "..", "utils", "socketConnection.js"), `
 exports.SocketConnection=class {
   constructor(socket) {
@@ -187,7 +198,7 @@ exports.program=async () => {
     execute: async (node, args, opts) => {
       // Coverage may inject its own preload after this product boundary.
       assert.equal(opts.env.NODE_OPTIONS, undefined, "private runner must not inherit caller preloads")
-      const result = await exec(node, [...resourceImports(),"--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
+      const result = await exec(node, [...resourceImports(),"--import", processPreload,"--require", preload, ...args], { cwd: opts.cwd, env: opts.env })
         .catch(error => {
           const payload = JSON.parse(error.stdout)
           throw Object.assign(Error(payload.message), { code: payload.code })
@@ -228,6 +239,18 @@ function managedOptions(f,id) {
     env:{...f.options.env,PROGRAMFILES:f.root,"PROGRAMFILES(X86)":f.root,LOCALAPPDATA:f.root},
     browserExists:file=>/msedge|Microsoft Edge/i.test(file)}
 }
+
+test("managed worker retains its profile when the daemon generation cannot be observed", async t => {
+  const f = await fixture()
+  const id = "11111111-1111-4111-8111-111111111111"
+  t.mock.method(require(path.join(mcpRoot, "web-real-profile.cjs")), "readDeclaration", () => ({ state: "none" }))
+  f.control({ unobservableDaemon: true })
+  const controller = require(path.join(mcpRoot, "browser-context.cjs"))
+  const result = await controller.context({ action: "create", label: "Unconfirmed daemon" }, managedOptions(f,id))
+  assert.equal(result.exitCode, 1, JSON.stringify(result.payload))
+  assert.equal(result.payload.code, "startup_unconfirmed")
+  assert.equal(fs.existsSync(path.join(result.payload.contextResources.contextDirectory, "profile")), true)
+})
 
 test("managed worker retains its persistent profile across frontend calls without a native extension", async t => {
   const f = await fixture()

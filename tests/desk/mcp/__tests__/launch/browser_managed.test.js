@@ -628,6 +628,8 @@ for(const accepted of [true,false])test("managed Windows creation requires "+(ac
         profileProtected=paths.some(item=>item.path===path.join(f.stateRoot,"signed-in",
           "11111111-1111-4111-8111-111111111111","profile")&&item.kind==="directory"&&item.created===true)
         if(!accepted)throw Object.assign(Error("Owner ACL refused"),{code:"OWNER_ACL_REFUSED"})
+        if(process.platform==="win32")
+          await protectWindowsPaths(paths,{label:"managed_creation_fixture"})
       }})
     }
   }
@@ -637,7 +639,7 @@ for(const accepted of [true,false])test("managed Windows creation requires "+(ac
   },{execution:"function"})
   const result=await local.run(["create"],f.options,"signed-in")
   assert.equal(profileProtected,true)
-  assert.equal(result.exitCode,accepted?0:1)
+  assert.equal(result.exitCode,accepted?0:1,JSON.stringify(result.payload))
   if(!accepted)assert.equal(result.payload.code,"OWNER_ACL_REFUSED")
   assert.equal(f.requests.length,accepted?1:0)
 })
