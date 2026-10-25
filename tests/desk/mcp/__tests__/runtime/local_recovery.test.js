@@ -504,7 +504,7 @@ if (threads.isMainThread) {
       // later. The preflight must be one of the pending-marked details answered after the prewarm finished.
       const answered = observed.filter((status) => Date.parse(status.at) >= Date.parse(completed.completedObservedAt) &&
         status.detail?.includes("Destination verification is pending") && status.detail.startsWith("cached:"))
-      assert.ok(answered.length > 0, `the actual bootstrap must publish a completed same-context detail while resolution is pending: ${JSON.stringify({ completed, observed: observed.slice(-6) })}`)
+      assert.ok(answered.length > 0, "the actual bootstrap must publish a completed same-context detail while resolution is pending")
       const pending = answered.find((status) => status.from === report.preflight.statusDetailFrom)
       assert.ok(pending, `the preflight must use a pending-marked detail: ${JSON.stringify({ preflight: report.preflight, answered })}`)
       assert.equal(pending.writes, "refused")
