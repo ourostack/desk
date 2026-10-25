@@ -3,7 +3,7 @@
 # The Desk release workflow (.github/workflows/desk-release.yml) and the release dry run in pull request CI
 # (.github/workflows/desk-mcp-tests.yml) both call this script, so the two lists of steps cannot drift apart.
 #
-#   scripts/build-and-check-release.sh [--dry-run] [--stage auto|rc]
+#   scripts/build-and-check-release.sh [--dry-run] [--stage auto|rc|stable]
 #
 # Run from the repository root with the Desk MCP dependencies installed (npm ci in plugins/desk/mcp) and a clean tree.
 # Folds the pending changelog fragments with scripts/release-desk.cjs, commits the result, then checks that commit.
@@ -21,14 +21,14 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
     --stage)
-      [ "$#" -ge 2 ] || { echo "usage: $0 [--dry-run] [--stage auto|rc]" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "usage: $0 [--dry-run] [--stage auto|rc|stable]" >&2; exit 2; }
       stage="$2"; shift 2 ;;
-    *) echo "usage: $0 [--dry-run] [--stage auto|rc]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--dry-run] [--stage auto|rc|stable]" >&2; exit 2 ;;
   esac
 done
 case "$stage" in
-  auto|rc) ;;
-  *) echo "unsupported release stage $stage; use auto or rc" >&2; exit 2 ;;
+  auto|rc|stable) ;;
+  *) echo "unsupported release stage $stage; use auto, rc or stable" >&2; exit 2 ;;
 esac
 
 test -z "$(git status --porcelain)" || { echo "::error::The working tree must be clean before the release is built."; exit 1; }
