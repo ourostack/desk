@@ -44,7 +44,8 @@ async function until(condition) {
 test("before the model is ready, recall answers with exact words and says meaning search is getting ready", async (t) => {
   const deskRoot = await desk({ "cars/task-a/task.md": CAR, "food/task-b/task.md": SOUP })
   let release
-  const engine = engineFor(t, deskRoot, { loadModel: () => new Promise((resolve) => { release = resolve }) })
+  // A model still loading after the short wait: exact words answer.
+  const engine = engineFor(t, deskRoot, { modelWaitMs: 0, loadModel: () => new Promise((resolve) => { release = resolve }) })
   const result = await engine.semantic({ kind: "recall", topic: "soup" })
   assert.equal(result.search_mode, "exact_words")
   assert.equal(result.note, SEARCH_WORDING.recallGettingReady)
@@ -315,4 +316,19 @@ test("recall fuses meaning and exact words, so a runbook in an iteration folder 
   const recall = await engine.semantic({ kind: "recall", topic: "out of alpha promotion runbook", limit: 3 })
   assert.equal(recall.search_mode, "meaning")
   assert.deepEqual(recall.results[0], { ...recall.results[0], path: runbook, match: "meaning_and_exact_words" })
+})
+
+test("a new server on a desk whose vectors are stored answers its first recall by meaning", async (t) => {
+  const deskRoot = await desk({ "cars/task-a/task.md": CAR, "food/task-b/task.md": SOUP })
+  const first = createSearchEngine({ deskRoot, pauseMs: 0, cleanup: () => ({ removed: false, bytes: 0 }), ...countingModel() })
+  await first.reindex()
+  await first.settled()
+  await first.close()
+  const second = countingModel()
+  const engine = engineFor(t, deskRoot, second)
+  const recall = await engine.semantic({ kind: "recall", topic: "automobile" })
+  assert.equal(recall.search_mode, "meaning")
+  assert.equal(recall.results[0].path, "cars/task-a/task.md")
+  // Only the query was embedded: the sections' vectors came from the file the first server wrote.
+  assert.deepEqual(second.calls, ["automobile"])
 })

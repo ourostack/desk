@@ -72,6 +72,9 @@ const IGNORED = new Set([".git", ".state", "node_modules"])
 const DEFAULT_LIMIT = 10
 // A model download that failed is tried again at the next desk change after this long.
 const MODEL_RETRY_MS = 60_000
+// How long a search waits for the model to load. Loading a downloaded model takes well under a second, so a new
+// session's first search on a desk whose vectors are already stored answers by meaning.
+const MODEL_WAIT_MS = 3000
 
 export const SEARCH_WORDING = Object.freeze({
   ready: "Search is ready.",
@@ -85,7 +88,7 @@ export const SEARCH_WORDING = Object.freeze({
 })
 
 export function createSearchEngine(options) {
-  const { deskRoot, stateDir, semantic, loadModel, watch, batchSize, pauseMs, now, cleanup } = {
+  const { deskRoot, stateDir, semantic, loadModel, watch, batchSize, pauseMs, now, cleanup, modelWaitMs } = {
     stateDir: path.join(options.deskRoot, ".state"),
     semantic: "background",
     loadModel: loadEmbedder,
@@ -94,6 +97,7 @@ export function createSearchEngine(options) {
     pauseMs: 25,
     now: Date.now,
     cleanup: removeOldIndex,
+    modelWaitMs: MODEL_WAIT_MS,
     ...options,
   }
   // The index lives in memory, so opening it does not keep `.state/` out of Git or install the card guard. Both run git
@@ -207,6 +211,15 @@ export function createSearchEngine(options) {
     return modelLoading
   }
 
+  // Starts loading the model, if it is not loaded, and resolves once it is or after `ms`, whichever comes first.
+  async function modelWithin(ms) {
+    const loading = ensureModel()
+    if (loading === null) return
+    let timer
+    await Promise.race([loading, new Promise((resolve) => { timer = setTimeout(resolve, ms) })])
+    clearTimeout(timer)
+  }
+
   // Distinct section texts that have no vector yet.
   function pendingTexts() {
     const pending = new Map()
@@ -287,7 +300,9 @@ export function createSearchEngine(options) {
     const topic = String(request.topic ?? "").trim()
     if (!topic) return { topic, results: [], note: "empty topic" }
     const limit = Number.isInteger(request.limit) && request.limit > 0 ? Math.min(request.limit, 50) : DEFAULT_LIMIT
+    const loading = modelWithin(modelWaitMs)
     await current()
+    await loading
     embedInBackground()
     if (model === null) {
       return { topic, results: await exactWords(topic, request.scope, limit), search_mode: "exact_words", note: SEARCH_WORDING.recallGettingReady }
@@ -306,7 +321,9 @@ export function createSearchEngine(options) {
     const seed = String(request.path ?? "").trim()
     if (!seed) return { error: "invalid_input", note: "`path` is required" }
     const limit = Number.isInteger(request.limit) && request.limit > 0 ? Math.min(request.limit, 50) : DEFAULT_LIMIT
+    const loading = modelWithin(modelWaitMs)
     await current()
+    await loading
     embedInBackground()
     const doc = db.prepare("SELECT id FROM docs WHERE path = ?").get(seed)
     if (doc === undefined) return { error: "not_found", note: `path not in index: ${seed}` }
