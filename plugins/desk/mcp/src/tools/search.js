@@ -18,7 +18,7 @@ import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath, closeDb } from "../db/init.js"
 import { ACTIVE_VECTOR_SPACE } from "../indexer/text-vectors.js"
-import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { searchRouter } from "../search/files-router.js"
 import { embedQuery } from "../util/embed-query.js"
 import { objectInput } from "../util/object-input.js"
 import {
@@ -165,7 +165,7 @@ function isPinned(docPath, pinPrefixes) {
 }
 
 /** Trim a chunk text to a snippet, preferring sentence-ish boundaries. */
-function makeSnippet(text, queryTerms) {
+export function makeSnippet(text, queryTerms) {
   if (!text) return ""
   const flat = text.replace(/\s+/g, " ").trim()
   if (flat.length <= SNIPPET_MAX_CHARS) return flat
@@ -413,7 +413,7 @@ function passesFilter(row, filters) {
  * Post-filter a hydrated row by scope. Used after KNN gather where the
  * is_archived filter couldn't be expressed inside the vec0 MATCH.
  */
-function passesScope(row, scope, toolDefault) {
+export function passesScope(row, scope, toolDefault) {
   const resolved = ["active", "archived", "all"].includes(scope) ? scope : toolDefault
   if (resolved === "all") return true
   const archived = row.is_archived ? true : false
@@ -456,7 +456,7 @@ export async function desk_search({ deskRoot, input, opts, readiness, queryRoute
     effect: "nothing was searched",
     example: '{"track": "desk-plugin", "status": ["implementing", "blocked"]}',
   })
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
+  return (queryRouter ?? searchRouter(readiness)).lexical({
     ...request, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
   })
 }
@@ -611,7 +611,7 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
  *   payload when Ollama is down.
  */
 export async function desk_recall({ deskRoot, input, opts, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({
+  return (queryRouter ?? searchRouter(readiness)).semantic({
     ...input, deskRoot, opts, signal, kind: "recall",
   })
 }
@@ -700,7 +700,7 @@ export async function indexedRecall({ deskRoot, input, opts, db: suppliedDb }) {
  *   the seed has no embeddings (Ollama was down at index time).
  */
 export async function desk_similar({ deskRoot, input, opts, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({
+  return (queryRouter ?? searchRouter(readiness)).semantic({
     ...input, deskRoot, opts, signal, kind: "similar",
   })
 }
@@ -814,7 +814,7 @@ export async function indexedSimilar({ deskRoot, input, db: suppliedDb }) {
  * Returns: { results, semantic_unavailable, latency_ms }
  */
 export async function desk_timeline({ deskRoot, input, opts, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
+  return (queryRouter ?? searchRouter(readiness)).lexical({
     ...input, deskRoot, now: opts?.now, opts, signal, kind: "timeline",
   })
 }
