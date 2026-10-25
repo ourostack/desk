@@ -159,7 +159,6 @@ export async function main({
   timers,
   offload = runInWorker,
   crashHandlers = false,
-  hung,
   spawnDetached = spawn,
   onClosed = () => {},
 }) {
@@ -232,7 +231,6 @@ export async function main({
     stderr,
     notifyToolsChanged: () => frontDoor?.notifyToolsChanged(),
     launcher,
-    hung: hung ?? hungTuning(env),
     // Root and activation resolution read files: they run on the admission worker, never on the thread that answers the host.
     resolveInputs: () => offload({
       kind: "resolve",
@@ -476,12 +474,6 @@ export function launcherMode(args) {
   if (!LAUNCHER_READ_ONLY_CODES.includes(code)) return { code, reason, mode: "refuse", blocksWrites: true }
   const branchChecked = code.startsWith("crew_state_") && hasText(args.stateBranch)
   return { code, reason, mode: "read_only", blocksWrites: !branchChecked }
-}
-
-// How long one probe of an unresponsive readiness controller waits (DESK_READINESS_PROBE_MS, default 5 s). Tests shorten it; three missed probes in a row mark the controller hung.
-export function hungTuning(env) {
-  const probeMs = Number.parseInt(env.DESK_READINESS_PROBE_MS ?? "", 10)
-  return Number.isSafeInteger(probeMs) && probeMs > 0 ? { probeMs } : {}
 }
 
 // Last-resort handlers for the process: an exception or rejection nothing caught is recorded by the session (degraded:runtime_exception, then re-admission) instead of ending the process and the host's connection with it. Returns a function that removes them.

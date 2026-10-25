@@ -17,7 +17,7 @@ const ready = {
   state: "ready",
   root: { path: "/d", source: "host-project", valid: true },
   runtime: { plugin: { version: "1.2.3" } },
-  readiness: { state: "ready" },
+  search: { state: "ready", message: "Search is ready." },
   write_scope: { mode: "workspace", person: null },
   sync: { blocked: false, ahead: 0, behind: 0 },
   admission: { summary: "ok", blockers: [] },
@@ -80,7 +80,7 @@ test("a ready desk answers in one word with nothing to fix and pointers to the r
   assert.equal(compact.state, "ready")
   assert.equal(compact.summary, "Desk is ready.")
   assert.deepEqual(compact.degraded, [])
-  assert.equal(compact.search, "ready")
+  assert.equal(compact.search, "Search is ready.")
   assert.deepEqual(compact.notes, [])
   assert.deepEqual(compact.root, { path: "/d", source: "host-project" })
   assert.deepEqual(compact.write_scope, { mode: "workspace", person: null })
@@ -91,19 +91,15 @@ test("a ready desk answers in one word with nothing to fix and pointers to the r
   assert.ok(JSON.stringify(compact).length < 800)
 })
 
-test("a degraded search index never makes the state degraded: it is its own word, with a note", () => {
-  const compact = compactStatus({
-    ...ready,
-    readiness: { state: "degraded", detail: { controller_state: "RECOVERING", convergence: { status: "failed", diagnostic: { message: "journal has unsafe state directory ancestry" } } } },
-  })
-  assert.equal(compact.state, "ready", "boot would say ready for the same desk")
-  assert.equal(compact.search, "degraded")
+test("search that is still preparing never makes the state degraded, and the old index's removal is a note", () => {
+  const preparing = "Search is preparing 3 of 10 sections for meaning-based search; exact-word search is ready."
+  const removed = "Desk removed its old search index (9.7 GB), which this version no longer uses."
+  const compact = compactStatus({ ...ready, search: { state: "preparing", message: preparing, old_index_removed: removed } })
+  assert.equal(compact.state, "ready")
+  assert.equal(compact.search, preparing)
   assert.deepEqual(compact.degraded, [])
-  assert.match(compact.notes[0], /Search index degraded \(journal has unsafe state directory ancestry\): search reads the files directly/u)
-  const bare = compactStatus({ ...ready, readiness: { state: "unavailable" } })
-  assert.match(bare.notes[0], /^Search index unavailable: search reads/u)
-  assert.equal(compactStatus({ ...ready, readiness: undefined }).search, "not_checked")
-  assert.deepEqual(compactStatus({ ...ready, readiness: { state: "converging" } }).notes, [])
+  assert.deepEqual(compact.notes, [removed])
+  assert.equal(compactStatus({ ...ready, search: undefined }).search, "not_checked")
 })
 
 test("a desk that is not ready says why, with the code, the fix and the onboarding path", () => {
@@ -187,7 +183,6 @@ async function makeSession(t, runtimePayload) {
     }),
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
-    hung: { probe: async () => ({ state: "refused" }) },
   })
   t.after(() => session.dispose())
   await session.admission.refresh({ force: true })
@@ -235,7 +230,6 @@ async function revalidatingSession(t, { resolve }) {
       connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }),
     }, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: () => ({ status: "setup_required", mode: "setup", summary: "no desk" }),
-    hung: { probe: async () => ({ state: "refused" }) },
   })
   t.after(() => session.dispose())
   return session
@@ -252,7 +246,7 @@ test("desk_status does not say ready while admission is still running", async (t
   // Each step is named in plain words, or not at all.
   const step = (phase, extra = {}) => compactStatus({ status: "admitting", admission: { starting: true, phase, ...extra } }).summary
   assert.equal(step("resolving_inputs"), "Desk is still starting (finding this session's desk). Call desk_status again in about 10 s.")
-  assert.equal(step("connecting_controller", { phase_since: "not a date" }), "Desk is still starting (connecting to the search controller). Call desk_status again in about 10 s.")
+  assert.equal(step("connecting_controller", { phase_since: "not a date" }), "Desk is still starting (starting search). Call desk_status again in about 10 s.")
   assert.equal(step("some_future_step"), "Desk is still starting. Call desk_status again in about 10 s.")
   assert.equal(step(null), "Desk is still starting. Call desk_status again in about 10 s.")
   // An admitted desk that re-admits after a change keeps its own words: it is not starting.

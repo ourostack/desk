@@ -371,7 +371,6 @@ test("cold rebuild preserves active archive scope and refs graph with production
       opts: { embed },
     })
     assert.equal(active.search_mode, "lexical")
-    assert.equal(active.semantic_unavailable, true)
     assert.ok(active.results.length >= 1)
     assert.ok(
       active.results.every((resultRow) => !resultRow.path.includes("_archive")),
@@ -384,7 +383,6 @@ test("cold rebuild preserves active archive scope and refs graph with production
       opts: { embed },
     })
     assert.equal(all.search_mode, "lexical")
-    assert.equal(all.semantic_unavailable, true)
     assert.ok(
       all.results.some((resultRow) =>
         resultRow.path === "tasks/_archive/scope-old/task.md"
@@ -401,7 +399,7 @@ test("cold rebuild preserves active archive scope and refs graph with production
       },
     })
     assert.equal(thread.status, "error")
-    assert.equal(thread.code, "required_capability_unavailable")
+    assert.equal(thread.code, "search_starting")
 
     const db = openDb(deskRoot)
     try {
@@ -496,16 +494,14 @@ test("cold rebuild remains fresh and searchable in degraded lexical mode", async
         opts: { embed },
       })
       assert.equal(search.search_mode, "lexical")
-      assert.equal(search.semantic_unavailable, true)
-      assert.ok(
+        assert.ok(
         search.results.some((resultRow) => resultRow.path === productionDocPath),
         JSON.stringify(search.results, null, 2),
       )
       const productionResult = search.results.find((resultRow) =>
         resultRow.path === productionDocPath
       )
-      assert.equal(productionResult.score_breakdown.semantic, 0)
-      assert.ok(productionResult.score_breakdown.bm25 > 0)
+      assert.ok(productionResult)
       assert.equal(embeddingCalls, 2)
     } finally {
       configureRuntimeArtifacts({ pluginRoot: null })

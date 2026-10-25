@@ -2,13 +2,13 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { spawn } from "node:child_process"
 import { openDb, closeDb, getMeta, setMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
-import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
-import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
 import { openSnapshot } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import {
+  RETAINED_LEXICAL_GENERATIONS, commitLexicalGeneration, generationContent, readGenerationContent, withActiveLexicalGeneration,
+} from "../../../../../plugins/desk/mcp/src/readiness/generations.js"
 
 const identities = {
   schema_version: 1,
@@ -27,12 +27,7 @@ function deferred() {
 }
 
 async function generationModule() {
-  const module = await import("../../../../../plugins/desk/mcp/src/readiness/generations.js").catch((error) => {
-    if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
-    return {}
-  })
-  assert.equal(typeof module.commitLexicalGeneration, "function", "coherent generation primitive must exist")
-  return module
+  return { RETAINED_LEXICAL_GENERATIONS, commitLexicalGeneration, generationContent, readGenerationContent, withActiveLexicalGeneration }
 }
 
 test("generation tables migrate idempotently and use durable SQLite commits", async () => {
@@ -190,128 +185,6 @@ test("each generation records its writer, and only the newest generations are ke
   } finally { closeDb(db) }
 })
 
-test("controller reconciliation hashes canonical files even when mtimes look fresh and compacts only covered events", async () => {
-  const directory = await mkTempRoot("desk-generation-controller-")
-  const root = path.join(directory, "workspace")
-  const stateHome = path.join(directory, "controller")
-  fs.mkdirSync(root)
-  const file = path.join(root, "task.md")
-  fs.writeFileSync(file, "# old content")
-  const client = await connectOrStartController({
-    deskRoot: root, stateHome, ephemeral: true,
-    policy: { lexical: "required", semantic: "unsupported" },
-  })
-  try {
-    await client.beginConvergence()
-    const previous = fs.statSync(file)
-    fs.writeFileSync(file, "# changed content")
-    fs.utimesSync(file, previous.atime, previous.mtime)
-    await client.recordChange("task.md")
-    await client.barrier({ capability: "lexical", wait: true })
-    const db = openDb(root)
-    try {
-      assert.equal(db.prepare("SELECT text FROM chunks").get().text, "# changed content")
-      const generation = db.prepare("SELECT * FROM lexical_generations ORDER BY id DESC LIMIT 1").get()
-      assert.equal(JSON.parse(generation.event_cursor).sequence, 1)
-      assert.notEqual(generation.policy_identity, "desk-lexical-required-v1")
-    } finally { closeDb(db) }
-    const log = fs.readFileSync(path.join(stateHome, client.id, "journal", "changes.jsonl"), "utf8")
-    assert.equal(JSON.parse(log.trim()).checkpoint, true)
-  } finally { await client.close() }
-})
-
-test("controller reports a forced generation after a fresh fast path as built", async () => {
-  const directory = await mkTempRoot("desk-generation-status-")
-  const root = path.join(directory, "workspace")
-  fs.mkdirSync(root)
-  const client = await connectOrStartController({
-    deskRoot: root, stateHome: path.join(directory, "state"), ephemeral: true,
-    policy: { lexical: "required", semantic: "unsupported" },
-  })
-  try {
-    await client.beginConvergence()
-    const refreshed = await client.beginConvergence()
-    assert.equal(refreshed.built, true, "status must describe the actual full lexical pass")
-    assert.equal(refreshed.reason, "journal_reconciled")
-  } finally { await client.close() }
-})
-
-// A SIGKILLed process is normally gone within milliseconds; the wait watches for it and gives a loaded machine ample room.
-const CONTROLLER_EXIT_WAIT_MS = 30000
-
-async function waitForExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    try {
-      process.kill(pid, 0)
-    } catch (error) {
-      if (error.code === "ESRCH") return
-      throw error
-    }
-    assert.ok(Date.now() < deadline, `process ${pid} still exists ${timeoutMs} ms after SIGKILL`)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}
-
-test("support smoke: process restart replays durable mutations and discovers external downtime writes", async (t) => {
-  const directory = await mkTempRoot("desk-task4-restart-")
-  const root = path.join(directory, "workspace")
-  const stateHome = path.join(directory, "state")
-  fs.mkdirSync(root)
-  const options = { deskRoot: root, stateHome, ephemeral: true, policy: { lexical: "required", semantic: "unsupported" } }
-  const serverUrl = new URL("../../../../../plugins/desk/mcp/src/server.js", import.meta.url).href
-  const child = spawn(process.execPath, ["--input-type=module", "-e", `
-    import { writeFileSync } from 'node:fs';
-    import path from 'node:path';
-    import { connectOrStartController, callTool } from ${JSON.stringify(serverUrl)};
-    const options = ${JSON.stringify(options)};
-    const controller = await connectOrStartController(options);
-    const result = await callTool({
-      deskRoot: options.deskRoot, name: 'task_create',
-      input: { track: 'track', slug: 'durable-task', title: 'durable mutation', body: 'kept across restart' },
-      statusContext: { admission: { controller } },
-    });
-    if (result.isError) throw new Error(JSON.stringify(result));
-    // Only the owner's pid is needed here. The 2 s default is a liveness budget, and a controller that has just started and indexed
-    // the new card can take longer to answer on a slow Windows runner.
-    const owner = (await controller.status(30000)).owner;
-    if (owner.pid === process.pid) throw new Error("controller must be a child");
-    console.log(JSON.stringify({ id: controller.id, pid: owner.pid }));
-    process.kill(owner.pid, "SIGKILL");
-    process.exit(0);
-  `], { stdio: ["ignore", "pipe", "pipe"] })
-  let stdout = ""
-  let stderr = ""
-  child.stdout.on("data", (chunk) => { stdout += chunk })
-  child.stderr.on("data", (chunk) => { stderr += chunk })
-  const code = await new Promise((resolve, reject) => {
-    child.once("error", reject)
-    child.once("close", resolve)
-  })
-  assert.equal(code, 0, stderr)
-  const { id, pid } = JSON.parse(stdout.trim())
-  // SIGKILL is delivered asynchronously: until the killed controller is gone, Desk rightly refuses to start a second controller beside a running owner (controller_owner_unresponsive). Restart only once the process no longer exists.
-  const killed = performance.now()
-  await waitForExit(pid, CONTROLLER_EXIT_WAIT_MS)
-  t.diagnostic(`the killed controller ${pid} was gone ${Math.round(performance.now() - killed)} ms after its parent exited`)
-  assert.equal(JSON.parse(fs.readFileSync(path.join(stateHome, id, "journal", "journal.json"))).clean_shutdown, false)
-  const canonicalBefore = fs.readFileSync(path.join(root, "track", "durable-task", "task.md"), "utf8")
-  fs.writeFileSync(path.join(root, "track", "durable-task", "doing.md"), "# external downtime write\n")
-  const restarted = await connectOrStartController(options)
-  try {
-    assert.equal((await restarted.status(30000)).state, "CONTROL_READY")
-    await restarted.beginConvergence()
-    assert.equal((await restarted.barrier({ capability: "lexical" })).current, true)
-    const db = openDb(root)
-    try {
-      const docs = db.prepare("SELECT path FROM docs ORDER BY path").all().map((row) => row.path)
-      assert.deepEqual(docs, [path.posix.join("track", "durable-task", "doing.md"), path.posix.join("track", "durable-task", "task.md")])
-      assert.equal(JSON.parse(getMeta(db, "covered_event_cursor")).sequence, 1)
-    } finally { closeDb(db) }
-    assert.equal(fs.readFileSync(path.join(root, "track", "durable-task", "task.md"), "utf8"), canonicalBefore)
-  } finally { await restarted.close() }
-})
-
 test("F1 compaction rejects generation A when B becomes active before queued compaction", async () => {
   const { commitLexicalGeneration } = await generationModule()
   const root = await mkTempRoot("desk-r1-generation-")
@@ -407,65 +280,6 @@ test("F1 another SQLite writer cannot advance the generation inside journal repl
     assert.ok(commitLexicalGeneration({ db: writer, documents: [], eventCursor: null, identities }) > generationA)
   } finally { competingWrite = null; await journal.close(); closeDb(writer); closeDb(db) }
 })
-
-for (const [finding, failure] of [["F1", "generation_superseded"], ["F2", "journal_integrity_failed"]]) {
-test(`${finding} failed compaction keeps controller barriers uncertain and schedules a fresh reconciliation`, async () => {
-  const { commitLexicalGeneration } = await generationModule()
-  const root = await mkTempRoot("desk-r1-generation-controller-")
-  const db = openDb(root)
-  const finished = deferred()
-  const recovering = deferred()
-  const release = deferred()
-  let passes = 0
-  let original
-  const options = { root, stateHome: path.join(root, "state"), ephemeral: true, handlers: {
-    async beginConvergence({ journal, eventCursor }) {
-      const pass = ++passes
-      if (pass === 3) { recovering.resolve(); await release.promise }
-      const id = commitLexicalGeneration({ db, documents: [], eventCursor, identities })
-      const compacting = journal.compact({ db, generationId: id })
-      if (pass === 2) {
-        if (failure === "journal_integrity_failed") {
-          fs.appendFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"), "corrupt\n")
-        }
-        original = fs.readFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"))
-        if (failure === "generation_superseded") {
-          commitLexicalGeneration({ db, documents: [], eventCursor: null, identities: { ...identities, policy_identity: "other-policy" } })
-        }
-        try {
-          await compacting
-          finished.resolve(null)
-        } catch (error) {
-          finished.resolve(error.code)
-          throw error
-        }
-      } else {
-        await compacting
-      }
-      return { indexed: true }
-    },
-  } }
-  const client = await connectController(options)
-  try {
-    await client.beginConvergence()
-    await client.recordChange("task.md")
-    assert.equal(await finished.promise, failure)
-    await recovering.promise
-    const status = await client.status()
-    assert.equal(status.freshness.certain, false)
-    assert.equal(status.freshness.reason, failure)
-    assert.equal((await client.barrier({ capability: "lexical" })).current, false)
-    const journalDir = path.join(options.stateHome, client.id, "journal")
-    const evidenceFile = failure === "generation_superseded" ? "changes.jsonl"
-      : fs.readdirSync(journalDir).find((name) => name.startsWith("changes.corrupt-"))
-    assert.ok(evidenceFile)
-    assert.deepEqual(fs.readFileSync(path.join(journalDir, evidenceFile)), original)
-    release.resolve()
-    assert.equal((await client.barrier({ capability: "lexical", wait: true })).current, true)
-    assert.equal(passes, 3)
-  } finally { release.resolve(); await client.close(); closeDb(db) }
-})
-}
 
 test("a generation's content ignores document order and how the embedding settings are stored", async () => {
   const { generationContent } = await generationModule()

@@ -38,7 +38,7 @@ const STEP_WORDS = {
   inspecting_state_branch: "checking the desk's Git branch",
   admitting_authority: "checking write access",
   verifying_authority: "checking write access",
-  connecting_controller: "connecting to the search controller",
+  connecting_controller: "starting search",
   checking_semantic_readiness: "waiting for meaning-based search",
 }
 
@@ -83,12 +83,9 @@ function syncLine(sync) {
   return "in sync"
 }
 
-function notesFor(payload, search) {
+function notesFor(payload) {
   const notes = []
-  if (search === "degraded" || search === "unavailable") {
-    const message = payload.readiness?.detail?.convergence?.diagnostic?.message
-    notes.push(`Search index ${search}${message ? ` (${line(message)})` : ""}: search reads the files directly and every other tool still works. Mention it only if the work needs search.`)
-  }
+  if (typeof payload.search?.old_index_removed === "string") notes.push(payload.search.old_index_removed)
   const sync = typeof payload.sync === "object" && payload.sync !== null ? payload.sync : null
   if (sync?.blocked === true) notes.push(`Pushing the desk is blocked${sync.reason ? ` (${sync.reason})` : ""}.`)
   // The latest thing Desk repaired by itself in this session (at its start, the checkout switched back to the state branch, for example), in the repair log's own words: the agent was not there to see it.
@@ -120,7 +117,8 @@ export function compactStatus(payload) {
   const base = stateWord(payload)
   // A desk that is otherwise ready is degraded by a failed sync, exactly as the boot script reports it.
   const state = base === "ready" ? healthWord(syncProblem === null ? [] : [syncProblem]) : base
-  const search = payload.readiness?.state ?? "not_checked"
+  // Search in plain words: ready, or how many sections are still being prepared.
+  const search = payload.search?.message ?? "not_checked"
   // Only the session's first admission is a start; a desk that re-admits after a change keeps its own summary and fix.
   const starting = base === "admitting" && payload.admission?.starting === true
   // Desk is ready, but the runtime's status detail missed this call's short budget: the root, search and sync fields below are empty because they are not loaded yet, not because there is no desk.
@@ -139,9 +137,7 @@ export function compactStatus(payload) {
     ...(state === "ready" ? {} : Object.fromEntries(DIAGNOSTIC_KEYS.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]))),
     ...(payload.activation?.selected_id ? { activation: { selected_id: payload.activation.selected_id, chain: payload.activation.chain ?? [] } } : {}),
     search,
-    // Which Desk build owns the shared search index, in one sentence, when the search controller said.
-    ...(typeof payload.readiness?.owner === "string" ? { search_owner: payload.readiness.owner } : {}),
-    notes: notesFor(payload, search),
+    notes: notesFor(payload),
     ...(detailPending ? { detail_pending: true } : {}),
     ...(statusError === null ? {} : { status_error: statusError }),
     root: { path: payload.root?.path ?? null, source: payload.root?.source ?? null },

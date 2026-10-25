@@ -18,7 +18,7 @@ import {
 } from "../../../../../plugins/desk/mcp/src/indexer/text-vectors.js"
 import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { inspectLocalDb, inspectStatusIndex } from "../../../../../plugins/desk/mcp/src/db/status-read.js"
-import { indexedRecall, indexedSearch } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { indexedSearch } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import { embedShortened } from "../../../../../plugins/desk/mcp/src/indexer/embed.js"
 import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import Database from "better-sqlite3"
@@ -527,16 +527,13 @@ test("status of an index with no sections table reports no shortened or skipped 
   assert.deepEqual([status.shortened_sections, status.skipped_sections, status.note], [0, 0, undefined])
 })
 
-test("meaning-based search never reads a skipped text: recall leaves its card out, and search finds it by its words alone", async () => {
+test("meaning-based search never reads a skipped text: search finds its card by its words alone", async () => {
   const root = await deskWith({ "track/a/task.md": "# Card\n\nalpha section.\n", "track/b/task.md": `${BRAVO}\n` })
   const embed = refusingEmbed(refusesAtEveryLength(BRAVO))
   await rebuildIndex(root, { ...NO_ARTIFACTS, embed })
   assert.equal(inspectLocalDb(root).document_vectors.skipped_sections, 1)
   const db = openDb(root)
   try {
-    const recalled = await indexedRecall({ deskRoot: root, db, input: { topic: "bravo section", limit: 5 }, opts: { embed } })
-    assert.equal(recalled.error, undefined, JSON.stringify(recalled))
-    assert.deepEqual(recalled.results.map((result) => result.path), ["track/a/task.md"], "the skipped section's card has no meaning-based score")
     const searched = await indexedSearch({ deskRoot: root, db, input: { query: "bravo", limit: 5 }, opts: { embed } })
     const card = searched.results.find((result) => result.path === "track/b/task.md")
     assert.ok(card, JSON.stringify(searched))
