@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.357 — 2026-10-25
+
+Desk's browser is now simple. `browser_context` opens one of two browsers: `fresh`, an empty throwaway profile that is never signed in, or `mine`, a private copy of your own Edge (or Chrome) profile so your sign-ins work. Both run headless as their own browser processes, never take focus, never touch your open browser windows or another agent's browser, and delete their folder on close. `browser_command` runs Playwright CLI page commands such as `goto`, `snapshot`, `click` and `screenshot`; it refuses commands that open, close, list or kill browsers, run Node code or save sign-in state, wherever they appear. Screenshots and other files stay in the browser's private folder and are deleted with it on close. Installing the plugin is the only setup step: Desk installs `playwright-core` on the first open. The browser extension, native messaging helpers and their per-platform binaries, managed and real profiles, the browser-context broker, the `cdp-headed-browser` skill and the recovery layers are removed; [the browser roadmap](../../docs/roadmap/browser.md) lists what each would solve. On Windows, files a running Edge locks are skipped instead of failing the copy; with Edge open only your work sign-in carries over, and Desk says so.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.356 — 2026-10-25
 
 Meaning-based search now works with nothing to install. Desk embeds the desk inside its own MCP server with a small built-in model (Model2Vec `potion-base-8M`, run in plain JavaScript), downloaded once on first use into the desk's `.state` folder. There is no separate search controller process, no Ollama and no shared index between Desk builds any more.
