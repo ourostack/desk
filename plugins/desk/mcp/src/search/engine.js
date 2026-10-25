@@ -7,7 +7,7 @@ import { stat } from "node:fs/promises"
 import * as path from "node:path"
 import { openDb, closeDb } from "../db/init.js"
 import { rebuildIndex } from "../indexer/index.js"
-import { createDiscoverCache } from "../indexer/discover.js"
+import { createDiscoverCache, useForNextDiscover } from "../indexer/discover.js"
 import { resolveEnsureIndexOptions } from "../server-helpers.js"
 import { indexedSearch, indexedTimeline, makeSnippet, passesScope } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
@@ -117,8 +117,10 @@ export function createSearchEngine(options) {
       fullScan = false
       try {
         const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
-        const changedPaths = full || await movesFiles(others) ? undefined : files
-        await rebuildIndex(deskRoot, { db, skipEmbed: true, vectorCleanup: false, tombstones, discoverCache, changedPaths })
+        useForNextDiscover(deskRoot, discoverCache, full || await movesFiles(others) ? null : files)
+        const run = rebuildIndex(deskRoot, { db, skipEmbed: true, vectorCleanup: false, tombstones })
+        useForNextDiscover(null)
+        await run
         built = true
       } catch (error) {
         dirty = true

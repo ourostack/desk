@@ -13,5 +13,5 @@ Desk search now runs inside each session's Desk MCP server: an in-memory exact-w
 | Shared vector packs and index snapshots shipped in the plugin | An instant first run on a very large desk. Today the first embedding of a 19,000-section desk takes about 20 seconds in the background. The code is still in the repository but no longer called; delete it with its release checks. |
 | Meaning-based ranking inside `desk_search` and `desk_timeline` | Hybrid exact-word plus meaning ranking. These tools now rank exact words only; `desk_recall` covers meaning. |
 | Cleanup of vectors no section uses any more | The vectors file only grows (about 1.5 KB per distinct section text). Add compaction if it becomes large. |
-| A persisted exact-word index | Each session builds its index in memory at start (3.6 s for 583 documents). Persist it if large desks start slowly. |
+| A persisted exact-word index, or one built off the main thread | Each session builds its index in memory at start: about 5 s on a copy of a 19,000-section desk, and the last database write of that build blocks the server for about 2 s once. Persist the index or build it on a worker thread if that pause shows up in real sessions. |
 | `sqlite-vec` nearest-neighbour search | Recall compares the query with every vector in memory, which is fast to roughly 100,000 sections. Add an index above that. |

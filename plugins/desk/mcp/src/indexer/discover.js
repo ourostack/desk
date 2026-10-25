@@ -88,7 +88,20 @@ export function createDiscoverCache() {
   return { docs: new Map(), rules: null }
 }
 
+// rebuildIndex calls discover itself, and its source is pinned by the shared artifacts' source hash, so a caller that
+// reaches discover through it hands over its cache here, just before that call; the next discover of `deskRoot` in the
+// same turn takes it. With `changed` (after a full run with that cache) it rereads only those paths.
+let handOver = null
+
+export function useForNextDiscover(deskRoot, cache, changed) {
+  handOver = deskRoot === null ? null : { deskRoot, cache, changed }
+}
+
 export async function discover(deskRoot, { signal, cache = null } = {}) {
+  const handed = handOver?.deskRoot === deskRoot ? handOver : null
+  if (handed) handOver = null
+  if (handed?.changed) return rediscover(deskRoot, { cache: handed.cache, changed: handed.changed, signal })
+  cache = handed?.cache ?? cache
   throwIfAborted(signal)
   const results = []
   const exclusionRules = await loadExclusionRules({ deskRoot })

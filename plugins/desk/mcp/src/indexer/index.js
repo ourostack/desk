@@ -18,7 +18,7 @@ import {
 } from "../artifacts/tombstones.js"
 import { commitLexicalGeneration } from "../readiness/generations.js"
 import { stableStringify } from "../readiness/identity.js"
-import { discover, rediscover } from "./discover.js"
+import { discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
   embedChunksDetailed,
@@ -58,8 +58,6 @@ const MISSING_VECTOR_ROUNDS = 3
  *   answering, so it tries only the new text). Ignored with reembedMissing.
  * @param {object|null} [opts.eventCursor] — journal identity/sequence captured before discovery.
  * @param {object} [opts.identities] — controller policy_identity recorded with the generation.
- * @param {object} [opts.discoverCache] — from createDiscoverCache, kept by a long-lived caller so unchanged files are not read again.
- * @param {Iterable<string>} [opts.changedPaths] — with discoverCache after a full run: reread only these desk-relative paths.
  * @param {object} [opts.vectorPacks] — import shared vector packs before
  *   live embedding generation.
  * @param {string} [opts.vectorPacks.pluginRoot] — plugin root containing
@@ -84,9 +82,7 @@ export async function rebuildIndex(deskRoot, opts = {}) {
 
   try {
     throwIfAborted(opts.signal)
-    const discoveredRaw = opts.changedPaths
-      ? await rediscover(deskRoot, { cache: opts.discoverCache, changed: opts.changedPaths, signal: opts.signal })
-      : await discover(deskRoot, { signal: opts.signal, cache: opts.discoverCache })
+    const discoveredRaw = await discover(deskRoot, { signal: opts.signal })
     const ledger = await loadTombstoneLedger({ pluginRoot: opts.tombstones?.pluginRoot })
     if (!ledger.valid) {
       const error = new Error("artifact tombstone ledger is invalid")
