@@ -1,5 +1,16 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.356 — 2026-10-25
+
+Meaning-based search now works with nothing to install. Desk embeds the desk inside its own MCP server with a small built-in model (Model2Vec `potion-base-8M`, run in plain JavaScript), downloaded once on first use into the desk's `.state` folder. There is no separate search controller process, no Ollama and no shared index between Desk builds any more.
+
+- `desk_recall` always answers. Before the model is ready it returns exact-word matches and says meaning-based search is getting ready; while sections are still being embedded it adds exact-word matches and says how many sections remain.
+- Vectors are kept in `.state/desk-vectors.sqlite` by section text, so an edit embeds only the changed sections and nothing is embedded again after a restart. The first run embeds in small batches with short pauses so the machine stays responsive.
+- `desk_status` reports search in plain words: "Search is ready." or "Search is preparing N of M sections…".
+- At start Desk deletes the old shared index (`.state/desk-index.sqlite`, which reached 9.7 GB on one desk) when no other process has it open.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.355 — 2026-10-25
 
 Meaning-based search (`desk_recall`, `desk_similar`) now becomes ready on a busy desk that older Desk builds also write to. Desk stored each section's embedding by the section's row number, and re-indexing a card gives every section a new row number even when its text is unchanged. On a desk where an older session re-indexed a busy card every minute or so, each pass embedded thousands of sections only to lose them at the next re-index, so recall never became ready and the index file kept growing. Embeddings now live in a new `text_vectors` table, keyed by the section's text and by a hash of the same provenance record older builds read (its schema version, and the embedding specification, model, model revision, dimension, chunker and normalization), so they survive any re-index and a vector made under other settings is never reused; an edit embeds only the sections whose text is new, and re-indexing a card rewrites only the sections that changed, so an append to a long card writes one row instead of rewriting them all. A vector is saved only while a section with its text still exists, and vectors no section uses are removed after an hour. When the index moves on while recall waits or reads, or a change is marked between its wait and its status check, recall waits for the index to catch up and reads again instead of refusing, until one read is current from start to finish or its deadline runs out; while the status stays uncertain it pauses 50 ms between reads, so it never spins. It never answers from an index that moved on, and it embeds the query only once.
