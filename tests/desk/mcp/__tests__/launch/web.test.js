@@ -25,7 +25,7 @@ const FAKE_CLI = `
 const fs = require("fs"), path = require("path")
 const args = process.argv.slice(2)
 fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify({ args, cwd: process.cwd() }) + "\\n")
-const verb = args[1], mode = process.env.FAKE_CLI_MODE || ""
+const verb = args[1] === "eval" ? args[2] : args[1], mode = process.env.FAKE_CLI_MODE || ""
 if (verb === "open" && mode === "open-fail") { process.stderr.write("Browser failed\\nline two\\n"); process.exit(1) }
 if (verb === "snapshot") process.stdout.write("- generic [ref=e1]\\n")
 if (verb === "fail-quiet") process.exit(1)
@@ -147,14 +147,17 @@ test("fresh opens in a private folder, runs page commands and deletes the folder
   const { contextId, browser, app, files } = json(opened)
   assert.equal(browser, "fresh")
   assert.equal(app, "Microsoft Edge")
-  assert.equal(files, path.join(state, "output", contextId))
   const dir = path.join(tmp, `desk-browser-${contextId}`)
+  assert.equal(files, path.join(dir, "files"))
+  assert.equal(fs.statSync(files).isDirectory(), true)
   if (!NO_POSIX_MODES) assert.equal(fs.statSync(dir).mode & 0o777, 0o700)
   const config = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"))
   assert.equal(config.browser.launchOptions.headless, true)
   assert.equal(config.browser.launchOptions.channel, "msedge")
   assert.equal(config.browser.launchOptions.ignoreDefaultArgs, undefined)
   assert.equal(config.browser.userDataDir, path.join(dir, "profile"))
+  assert.equal(config.outputDir, files)
+  assert.equal(fs.existsSync(path.join(state, "output")), false, "nothing is written outside the private folder")
 
   const snapshot = await controller.call("browser_command", { contextId, args: ["snapshot"] })
   assert.deepEqual([snapshot.isError, text(snapshot)], [false, "- generic [ref=e1]"])
@@ -259,20 +262,32 @@ test("a missing browser, a failed start and bad input each give a plain message"
   assert.deepEqual(json(gone), { contextId: "00000000-0000-4000-8000-000000000000", closed: true })
 })
 
-test("browser_command refuses lifecycle commands and browser options, and reports failures plainly", async () => {
-  const { options } = await setup()
+test("browser_command runs only page commands, refuses options that switch session or browser, and reports failures plainly", async () => {
+  const { options, calls } = await setup()
   const controller = web.createController(options)
   const { contextId } = json(await controller.call("browser_context", { action: "open" }))
   const run = async (args) => text(await controller.call("browser_command", { contextId, args }))
+  const before = calls().length
   for (const args of [undefined, [], [1]]) assert.match(await run(args), /args must be a list of strings/u)
-  for (const verb of ["open", "close", "kill-all", "close-all", "attach", "list"]) assert.match(await run([verb]), /is not available here/u)
-  for (const option of ["--session=x", "-s", "--browser=chrome", "--profile", "--config=x", "--extension"]) {
-    assert.match(await run(["snapshot", option]), /is not available here; the browser is chosen/u)
+  // The CLI takes the first argument that is not an option as the command, so a leading option or "--" must not let these through.
+  for (const args of [["open"], ["close"], ["kill-all"], ["close-all"], ["attach"], ["list"], ["run-code", "async page => 1"], ["state-save"], ["cookie-list"],
+    ["--json", "kill-all"], ["--raw", "close-all"], ["--", "kill-all"], ["--raw", "list", "--all"], ["--json", "attach", "--cdp=msedge"], ["-s=other", "snapshot"]]) {
+    assert.match(await run(args), /must start with a page command/u, JSON.stringify(args))
   }
-  assert.equal(await run(["fail-quiet"]), "The command failed.")
-  assert.equal(await run(["fail-loud"]), "boom")
+  for (const args of [["snapshot", "--session=x"], ["snapshot", "--session", "x"], ["snapshot", "--no-session"], ["goto", "--browser=chrome", "u"], ["snapshot", "--profile"],
+    ["snapshot", "--config=x"], ["snapshot", "--extension"], ["snapshot", "--cdp=msedge"], ["snapshot", "--help"], ["snapshot", "--all"]]) {
+    assert.match(await run(args), /is not available here; the browser is chosen/u, JSON.stringify(args))
+  }
+  for (const args of [["goto", "-js", "other", "u"], ["snapshot", "-s"], ["snapshot", "-h"], ["snapshot", "-v"]]) {
+    assert.match(await run(args), /Short options such as -\w+ are not available here/u, JSON.stringify(args))
+  }
+  assert.equal(calls().length, before, "nothing refused reaches the CLI")
+  assert.equal(await run(["mousewheel", "0", "-100"]), "")
+  assert.equal(await run(["fill", "e1", "--", "-s", "--session=x"]), "")
+  assert.equal(await run(["eval", "fail-quiet"]), "The command failed.")
+  assert.equal(await run(["eval", "fail-loud"]), "boom")
   const impatient = web.createController({ ...options, commandMs: 2000 })
-  assert.match(text(await impatient.call("browser_command", { contextId, args: ["sleep"] })), /longer than 2 seconds/u)
+  assert.match(text(await impatient.call("browser_command", { contextId, args: ["eval", "sleep"] })), /longer than 2 seconds/u)
   await controller.closeAll()
 })
 
@@ -319,10 +334,11 @@ test("the first open installs playwright-core once, even when two opens race", a
 
 test("install failures give plain messages", async () => {
   for (const [npmMode, expected] of [["fail", /npm said: npm ERR! offline$/u], ["fail-quiet", /npm said: nothing$/u], ["empty", /npm said: nothing$/u], ["race-broken", /could not put it in place/u]]) {
-    const { options } = await setup({ cli: false, npmMode })
+    const { options, state } = await setup({ cli: false, npmMode })
     const result = await web.createController(options).call("browser_context", { action: "open" })
     assert.equal(result.isError, true, npmMode)
     assert.match(text(result), expected, npmMode)
+    assert.deepEqual(fs.readdirSync(state).filter((name) => name.startsWith("install-")), [], "a failed install leaves no staging folder")
   }
   const { options } = await setup({ cli: false })
   const noNpm = await web.createController({ ...options, npmCli: null }).call("browser_context", { action: "open" })

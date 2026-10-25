@@ -15,3 +15,7 @@ On October 25, 2026 Desk's browser became two choices, `fresh` and `mine`, run h
 ## Known gap
 
 - **All sign-ins in `mine` on Windows while Edge is open:** Windows locks Edge's cookie file and a few others while Edge runs, so Desk copies everything else and skips them. The Microsoft work sign-in still carries over through the Windows account, but ordinary site sign-ins do not, and `browser_context` says so. Closing Edge first carries them all. Reading the locked files would need an administrator-only snapshot or touching the running Edge, and Desk does neither.
+
+## Out of scope
+
+- **Cleaning up what older Desk versions left behind:** this change does not remove the native messaging host registrations, the browser extension, the running `desk-browser-messaging` helper, or the old folders under Desk's browser state folder (`native-owned`, `private`, `signed-in`, `launch-*`, `installs` and `output`). They do no harm but use disk space; removing them on upgrade is a separate job.

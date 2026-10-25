@@ -27,11 +27,19 @@ var ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var PREFIX = "desk-browser-";
 // Each context folder is its own Playwright CLI workspace, so one fixed session name per folder is enough.
 var SESSION = "desk";
-// Commands that would open, close, re-point or attach a browser, or reach other sessions. Only browser_context opens and closes.
-var REFUSED = ["open", "attach", "detach", "close", "close-all", "kill-all", "list", "delete-data", "install", "install-browser",
-  "config-print", "show", "tray", "pause-at", "resume", "step-over"];
-var REFUSED_OPTIONS = ["-s", "--session", "--config", "--profile", "--browser", "--persistent", "--headed", "--extension",
-  "--endpoint", "--cdp-endpoint", "--help", "-h", "--version", "-v"];
+// The page commands browser_command may run; one of them must come first. Everything else stays out: opening, closing,
+// attaching or listing browsers (only browser_context opens and closes, and some of these reach other sessions or kill every
+// Playwright browser on the machine), running Node code (run-code), and saving or reading sign-in state and cookies.
+var PAGE_COMMANDS = ["goto", "go-back", "go-forward", "reload", "snapshot", "find", "click", "dblclick", "type", "fill", "press",
+  "keydown", "keyup", "select", "check", "uncheck", "hover", "drag", "drop", "upload", "mousemove", "mousedown", "mouseup",
+  "mousewheel", "eval", "console", "dialog-accept", "dialog-dismiss", "resize", "screenshot", "pdf", "tab-list", "tab-new",
+  "tab-close", "tab-select", "localstorage-list", "localstorage-get", "localstorage-set", "localstorage-delete",
+  "localstorage-clear", "sessionstorage-list", "sessionstorage-get", "sessionstorage-set", "sessionstorage-delete",
+  "sessionstorage-clear", "requests", "request", "request-headers", "request-body", "response-headers", "response-body",
+  "route", "route-list", "unroute", "network-state-set", "generate-locator", "highlight"];
+// Long options that would switch session or browser, or print help instead of running. The CLI also refuses any option the command does not have.
+var REFUSED_OPTIONS = ["session", "s", "config", "profile", "browser", "persistent", "headed", "extension", "endpoint", "cdp",
+  "cdp-endpoint", "all", "global", "g", "help", "h", "version", "v"];
 // Parts of a profile that are large caches, belong to extensions, or would reopen the person's own tabs. Sign-ins live in Cookies, Local Storage and Login Data, which are kept.
 var SKIP = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "ShaderCache", "CacheStorage",
   "ScriptCache", "Extensions", "Extension Scripts", "Extension State", "Extension Rules", "Local Extension Settings",
@@ -190,6 +198,7 @@ function installPlaywright(s) {
     }, function (error, stdout, stderr) {
       var installed = path.join(staging, path.relative(dir, cliPath(s)));
       if (error || !exists(installed)) {
+        removeDir(staging);
         reject(plain("Desk could not install the browser driver (playwright-core " + PLAYWRIGHT_VERSION + ") with npm. Check the internet connection, then try again. npm said: " + (stderr.trim().split("\n").filter(function (line) { return line.indexOf("complete log") === -1; }).pop() || "nothing")));
         return;
       }
@@ -197,6 +206,7 @@ function installPlaywright(s) {
         fs.renameSync(staging, dir);
       } catch (renameError) {
         // Another Desk process finished the same install first; its copy is used.
+        removeDir(staging);
       }
       resolve();
     });
@@ -230,12 +240,14 @@ function open(s, kind) {
   var short = BROWSERS[browser.channel].short;
   var id = crypto.randomUUID();
   var dir = contextDir(s, id);
-  var outputDir = path.join(s.stateRoot, "output", id);
+  // Screenshots, snapshots and logs stay inside the private context folder, so they go when the context closes.
+  var outputDir = path.join(dir, "files");
   var cookiesLeft = false;
   return ensurePlaywright(s).then(function () {
     fs.mkdirSync(dir, { mode: 448 });
     fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid, browser: kind }) + "\n");
     fs.mkdirSync(path.join(dir, ".playwright"));
+    fs.mkdirSync(outputDir);
     var profileDir = path.join(dir, "profile");
     var profileName = null;
     if (kind === "mine") {
@@ -255,7 +267,7 @@ function open(s, kind) {
     if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
     var opened = {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
-      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done."
+      note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done; closing deletes the files folder, so copy out any screenshot you need first."
     };
     if (cookiesLeft) {
       opened.signIns = browser.channel === "msedge"
@@ -296,17 +308,19 @@ function checkId(id) {
   if (typeof id !== "string" || !ID.test(id)) throw plain("contextId must be the id that browser_context open returned.");
 }
 
+// The CLI takes its command from the first argument that is not an option, and reads options anywhere before "--".
 function checkArgs(args) {
   if (!Array.isArray(args) || args.length === 0 || args.some(function (arg) { return typeof arg !== "string"; })) {
     throw plain("args must be a list of strings, for example [\"snapshot\"].");
   }
-  if (REFUSED.indexOf(args[0]) !== -1) {
-    throw plain("\"" + args[0] + "\" is not available here. Open and close browsers with browser_context; browser_command runs page commands such as snapshot, click and goto.");
+  if (PAGE_COMMANDS.indexOf(args[0]) === -1) {
+    throw plain("args must start with a page command such as snapshot, click or goto, and \"" + args[0] + "\" is not one. Open and close browsers with browser_context.");
   }
   var end = args.indexOf("--");
   (end === -1 ? args : args.slice(0, end)).forEach(function (arg) {
-    var name = arg.split("=")[0];
-    if (REFUSED_OPTIONS.indexOf(name) !== -1) throw plain("The option " + name + " is not available here; the browser is chosen when browser_context opens it.");
+    if (/^-[A-Za-z]/.test(arg)) throw plain("Short options such as " + arg + " are not available here. Use the long form, such as --filename, and put text that starts with - after \"--\".");
+    var name = /^--/.test(arg) ? arg.slice(2).split("=")[0].replace(/^no-/, "") : null;
+    if (REFUSED_OPTIONS.indexOf(name) !== -1) throw plain("The option " + arg.split("=")[0] + " is not available here; the browser is chosen when browser_context opens it.");
   });
 }
 
