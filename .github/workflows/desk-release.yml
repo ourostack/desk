@@ -86,12 +86,6 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
-      - name: Install broker dependencies
-        run: npm ci --prefix plugins/desk/browser-context-broker
-
-      - name: Install locked maintained browser test input
-        run: npm ci --ignore-scripts --prefix tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright
-
       # Builds the release on the checked-out main and runs every check on the release commit. The steps live in
       # scripts/build-and-check-release.sh, which pull request CI also runs as a dry run (desk-mcp-tests.yml), so a
       # release that would fail fails its pull request first.

@@ -24,7 +24,7 @@ claude --version && node --version && git --version && gh --version
 
 - Claude Code 2.1.277 or later. If older, run `claude update`. The desktop app bundles its own Claude Code; this check is for the `claude` CLI the setup commands use, which can lag behind the app.
 - Node 22 on macOS arm64 or Linux x64, or Node 24 on Windows x64. It does not need to be the default `node`: Desk finds a compatible installed Node on its own. If none is installed, install it yourself (for example `nvm install 22`, or the platform's package manager), and change the default `node` if that helps other tools; involve the operator only for something only they can do, such as a password prompt. Desk ships its native runtime for exactly these platforms; others are unsupported.
-- Google Chrome or Edge for the browser Desk ships. Windows always has Edge. If neither is installed, install one, or run `npx -y @playwright/mcp@latest install-browser chrome`, which installs Google Chrome system-wide and needs an administrator password on macOS and Linux. Desk's first session downloads its browser server from npm once, so the machine must reach the npm registry that time. Desk's browser is signed out; for signed-in pages see `desk:cdp-headed-browser`.
+- Edge or Chrome for the browser Desk ships. Windows always has Edge. Desk's first browser open downloads `playwright-core` from npm once, so the machine must reach the npm registry that time.
 - `gh auth status` should be healthy so desk discovery can find the operator's desk repository. If it is not, give the repair (`gh auth login`) and continue; local discovery still works.
 
 ### 2. Install the plugins
@@ -95,16 +95,11 @@ Plugins and their MCP servers load when a session starts, so ask the operator to
 - the session runs as `desk:worker`, and the Desk foundation appears at startup;
 - `desk_status` reports the bound desk root and its source;
 - `desk:session-start` runs normally and offers work to resume or start;
-- the `desk-web` server's tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
+- the `desk-web` server lists `browser_context` and `browser_command`, and opening a `fresh` browser, then running `["goto","https://example.com"]`, shows the page title "Example Domain". Close it afterwards.
 
-The browser is part of the default install, so check it here, but never let it block setup. The first call on a machine can wait up to two minutes while Desk installs `@playwright/mcp`. Two kinds of failure can follow:
+The browser is part of the default install, so check it here, but never let it block setup. The first open on a machine can take a minute while Desk installs `playwright-core`. Every failure is a plain sentence that says what to do, for example to install Edge or Chrome, or to check the internet connection. Retry once after the fix. If it still fails, or `example.com` is unreachable, report the browser as not verified, with the error, in your setup report, and continue; the rest of setup does not depend on it.
 
-- A `status: degraded` answer carries a `code` and a `fix`. It means Node, npm or the npm registry is missing or unreachable, or the launcher could not start. Apply the fix and reconnect the `desk-web` server.
-- A plain Playwright error on a page call means neither Chrome nor Edge is installed. Install one (see step 1).
-
-Retry once after the fix. If it still fails, or `example.com` is unreachable, report the browser as not verified, with the error, in your setup report, and continue; the rest of setup does not depend on it.
-
-For a signed-in page, which the default `desk-web` cannot reach, an installed plugin can declare `desk.browser` so `desk-web` drives the operator's own signed-in browser profile, each session in its own tab group (`desk:cdp-headed-browser` explains it). Without that declaration, `desk:cdp-headed-browser` shows how to make the browser context broker runnable from the installed plugin with a short copy-and-install sequence. The broker also needs a provider that launches the signed-in browser, and a personal install has none yet, so on such an install use the Playwright MCP options that skill names.
+For a signed-in page, open `browser: "mine"`, which uses a private copy of the operator's own Edge or Chrome profile and deletes it on close.
 
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 

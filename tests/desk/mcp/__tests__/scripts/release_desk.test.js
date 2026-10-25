@@ -354,8 +354,6 @@ test("release setup installs all committed dependency sets before running native
   }
   assert.deepEqual(installed, [
     { command: "ci", root: "plugins/desk/mcp" },
-    { command: "ci", root: "plugins/desk/browser-context-broker" },
-    { command: "ci", root: "tests/desk/mcp/__tests__/launch/fixtures/maintained-playwright" },
   ], "the actual release job must establish native dependencies before acceptance, just like the PR dry run")
 })
 
@@ -585,9 +583,9 @@ test("pull request CI dry-runs auto and RC through the full shared helper, and t
     assert.deepEqual(result.stdout.trim().split("\n"), ["--dry-run", "--stage", stage])
   }
   assert.deepEqual(tests.jobs["ci-gate"].needs, [
-    "browser-lifecycle-install", "private-browser-lifecycle", "desk-mcp-coverage-shards",
+    "browser", "desk-mcp-coverage-shards",
     "offline-eval-tests", "release-dry-run", "desk-mcp-tests", "desk-runtime-packs",
-    "desk-native-windows", "desk-native-messaging", "unused-code",
+    "desk-native-windows", "unused-code",
   ])
   assert.equal(tests.jobs["ci-gate"].name, "CI gate")
   assert.equal(tests.jobs["ci-gate"].if, "${{ always() }}")
