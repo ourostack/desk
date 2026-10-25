@@ -14,8 +14,31 @@ import { indexedThread } from "../tools/thread.js"
 import { loadEmbedder, MODEL } from "./embedder.js"
 import { openVectorStore } from "./vectors.js"
 import { removeOldIndex } from "./old-index.js"
-import { ensureStateIgnored } from "../util/state-ignore.js"
-import { ensureCardGuard } from "../desk/card-commit-guard.js"
+import { Worker } from "node:worker_threads"
+
+const TIDY_SOURCE = `
+  const { workerData } = require("node:worker_threads")
+  Promise.all([import(workerData.ignore), import(workerData.guard)]).then(([ignore, guard]) => {
+    ignore.ensureStateIgnored(workerData.root)
+    guard.ensureCardGuard(workerData.root)
+  })
+`
+
+// Resolves when the worker is done; a worker that fails leaves things as they were, as both steps do on their own.
+function tidyRepository(root) {
+  return new Promise((resolve) => {
+    const worker = new Worker(TIDY_SOURCE, {
+      eval: true,
+      workerData: {
+        root,
+        ignore: new URL("../util/state-ignore.js", import.meta.url).href,
+        guard: new URL("../desk/card-commit-guard.js", import.meta.url).href,
+      },
+    })
+    worker.once("error", resolve)
+    worker.once("exit", resolve)
+  })
+}
 
 const IGNORED = new Set([".git", ".state", "node_modules"])
 const DEFAULT_LIMIT = 10
@@ -45,9 +68,9 @@ export function createSearchEngine(options) {
     cleanup: removeOldIndex,
     ...options,
   }
-  // The index lives in memory, so opening it does not keep `.state/` out of Git or install the card guard; do both here.
-  ensureStateIgnored(deskRoot)
-  ensureCardGuard(deskRoot)
+  // The index lives in memory, so opening it does not keep `.state/` out of Git or install the card guard. Both run git
+  // several times, which takes hundreds of milliseconds on Windows, so a worker does them off the server's event loop.
+  const tidying = tidyRepository(deskRoot)
   const db = openDb(deskRoot, { dbPath: ":memory:" })
   const store = semantic === "unsupported" ? null : openVectorStore(stateDir, MODEL.id)
   let oldIndex = { removed: false, bytes: 0 }
@@ -313,7 +336,7 @@ export function createSearchEngine(options) {
     searchStatus,
     // Resolves once the current refresh and background embedding are done (tests).
     async settled() {
-      await cleaning
+      await Promise.all([cleaning, tidying])
       while (refreshing || embedding || modelLoading) await Promise.allSettled([refreshing, embedding, modelLoading])
     },
     async close() {
