@@ -546,3 +546,39 @@ test("existing hook command relays one decision while retaining the accounting m
   assert.equal(markers.length, 1)
   assert.ok(!JSON.stringify(markers).includes(PACKET[0]))
 }))
+
+for (const host of ["copilot", "claude"]) for (const fault of ["delayed", "rejected"]) {
+  test(`${host}: a ${fault} full CLI import cannot lose the bounded decision or accounting marker`, () => scratch(async ctx => {
+    const f = await fixture(ctx, host)
+    const expected = await check(f)
+    assert.equal(expected.status, "correction")
+    const loader = new URL("./_factory_cli_fault.mjs", import.meta.url).href
+    const record = path.join(ctx.base, `factory-cli-imports-${host}-${fault}.txt`)
+    const registration = `import { register } from "node:module"; register(${JSON.stringify(loader)}, { data: { fault: ${JSON.stringify(fault)}, record: ${JSON.stringify(record)} } });`
+    const preload = `data:text/javascript,${encodeURIComponent(registration)}`
+    // Only the fault loader: a chained coverage loader would push the instrumented worker past the hook's unchanged 1.5s deadline.
+    const env = { ...ctx.env, NODE_OPTIONS: `--import=${preload}` }
+    // The hook kills its worker at a fixed wall-clock deadline, and a starved CI runner can miss it whatever the code does.
+    // Only that kill is retried; the import record below is what proves the full CLI stays off the bounded path.
+    let r
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      r = spawnSync(process.execPath, [SCRIPT, host], { env, input: JSON.stringify(f.payload), encoding: "utf8", timeout: 6000 })
+      assert.equal(r.error, undefined)
+      assert.equal(r.signal, null)
+      assert.equal(r.status, 0)
+      if (!(r.stdout === "" && /hook_worker_unavailable/u.test(r.stderr))) break
+    }
+    assert.equal(await fs.readFile(record, "utf8").catch(() => ""), "", "the bounded hook must not import the full factory CLI")
+    assert.notEqual(r.stdout, "", `worker killed or failed on 3 attempts; stderr: ${r.stderr}`)
+    assert.deepEqual(JSON.parse(r.stdout), expected.output)
+    assert.doesNotMatch(r.stderr, /hook_worker_unavailable|guard_unavailable/u)
+    for (const line of PACKET) assert.ok(expected.output.reason.includes(line))
+    const { listMarkers } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
+    const markers = await listMarkers(ctx.env)
+    assert.equal(markers.length, 1)
+    assert.equal(markers[0].session_id, ID)
+    assert.equal(markers[0].host, host === "claude" ? "claude-code" : "copilot-cli")
+    assert.equal(markers[0].desk_root, ctx.desk)
+    assert.ok(!JSON.stringify(markers).includes(PACKET[0]))
+  }))
+}

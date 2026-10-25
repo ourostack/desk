@@ -1,0 +1,1 @@
+Production's Ouro tenant now has the Hosted Desk admin API: the gateway app exposes the `desk.admin` scope and the `ouro.admin` role, the `ouro-cli` public client is registered and preauthorized, and Ari's production account holds the role. `identity-prod.json` records them, so the next production `provision.sh` run publishes the admin settings at `/.well-known/ouro-desk-admin`.

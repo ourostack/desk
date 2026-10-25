@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { ensureClone, runGit } from "../src/clone.js";
+import { ensureClone, publishNewBranch, runGit } from "../src/clone.js";
 import { serveTokens } from "../src/token-socket.js";
 
 const HELPER = fileURLToPath(new URL("../bin/git-credential-desk.js", import.meta.url));
@@ -154,4 +154,54 @@ test("in the clone, Git takes GitHub credentials from the token socket and not f
   assert.equal(code, 0);
   assert.match(stdout, /^username=x-access-token$/m);
   assert.match(stdout, /^password=ghs_fromsocket$/m);
+});
+
+// A private-context clone (the realm helper's): Git runs inside `dir`, and `desk::origin` stands for a local bare
+// repository instead of Desk's private transport.
+function privateRemote(t, { seeded }) {
+  const root = mkdtempSync(join(tmpdir(), "desk-private-clone-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bare = join(root, "remote.git");
+  execFileSync("git", ["init", "--bare", "-q", "-b", "trunk", bare]);
+  execFileSync("git", ["-C", bare, "config", "uploadpack.allowFilter", "true"]);
+  if (seeded) {
+    const seed = join(root, "seed");
+    execFileSync("git", ["init", "-q", "-b", "trunk", seed]);
+    writeFileSync(join(seed, "AGENTS.md"), "# Desk\n");
+    execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "-C", seed, "add", "."]);
+    execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "-C", seed, "commit", "-q", "-m", "seed"]);
+    execFileSync("git", ["-C", seed, "push", "-q", bare, "trunk"]);
+  }
+  const dir = join(root, "desk");
+  mkdirSync(dir);
+  const env = { ...process.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.file://${bare}.insteadOf`, GIT_CONFIG_VALUE_0: "desk::origin" };
+  const git = (args) => runGit(args, { cwd: dir, env });
+  const read = (args) => execFileSync("git", args, { cwd: dir, env, encoding: "utf8" }).trim();
+  return { bare, dir, git, read };
+}
+
+test("a private-context clone checks out the remote's default branch, tracking it", async (t) => {
+  const { dir, git, read } = privateRemote(t, { seeded: true });
+  await ensureClone({ dir, repo: "jordan-dev/desk", git, privateContext: true });
+  assert.ok(existsSync(join(dir, "AGENTS.md")));
+  assert.equal(read(["rev-parse", "--abbrev-ref", "@{u}"]), "origin/trunk");
+  assert.equal(await publishNewBranch(git), false, "a tracked branch needs no first push");
+});
+
+test("a private-context clone of an empty repository starts its first branch, and the first push creates it", async (t) => {
+  const { bare, dir, git, read } = privateRemote(t, { seeded: false });
+  await ensureClone({ dir, repo: "jordan-dev/empty", git, privateContext: true });
+  assert.equal(read(["symbolic-ref", "HEAD"]), "refs/heads/main");
+  assert.equal(read(["config", "branch.main.merge"]), "refs/heads/main");
+  assert.ok(existsSync(join(dir, ".git", "desk-ready")));
+  assert.equal(await publishNewBranch(git), false, "nothing to push before the first commit");
+  writeFileSync(join(dir, "README.md"), "# Desk\n");
+  await git(["add", "README.md"]);
+  await git(["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "Start the desk"]);
+  assert.equal(await publishNewBranch(git), true);
+  assert.equal(execFileSync("git", ["-C", bare, "rev-parse", "refs/heads/main"], { encoding: "utf8" }).trim(), read(["rev-parse", "HEAD"]));
+  assert.equal(read(["rev-list", "@{u}..HEAD"]), "", "the branch now tracks the remote's");
+  assert.equal(await publishNewBranch(git), false);
+  await ensureClone({ dir, repo: "jordan-dev/empty", git, privateContext: true });
+  assert.equal(read(["symbolic-ref", "HEAD"]), "refs/heads/main", "a second prepare leaves the clone as it is");
 });

@@ -69,7 +69,7 @@ const stderrLog = (message) => process.stderr.write(`desk-hosted auth: ${message
 // milliseconds, for tests.
 //
 // With Ouro accounts: `accounts` is the account cache (cache.js), `store` the
-// accounts store and `repo` this gateway's desk (both for the GitHub
+// accounts store and `repo` this gateway's desk, or null on a multi-user gateway (both for the GitHub
 // fallback's admission check), `entra` the tenant's sign-in (entra.js),
 // `github.signIn` whether the GitHub fallback is on, and `legacy` is
 // `{ byUserId: Map<GitHub user id, { login, accountId }>, cutoff: Date | null }`;
@@ -91,6 +91,8 @@ export function createProvider({
   store,
   repo,
   entra,
+  // The gateway mounts GitHub linking: the no-desk page links to it.
+  linkGitHub = false,
   legacy = { byUserId: new Map(), cutoff: null },
 }) {
   if (!signingKeys[0]?.key) throw new Error("createProvider needs a signing key");
@@ -101,7 +103,7 @@ export function createProvider({
   if (!resource) throw new Error("createProvider needs the MCP resource URL");
   const audience = new URL(resource).href;
   const withAccounts = Boolean(accounts);
-  if (withAccounts && (!store || !repo)) throw new Error("createProvider with accounts needs the accounts store and the desk's repo");
+  if (withAccounts && (!store || (repo !== null && !repo))) throw new Error("createProvider with accounts needs the accounts store and the desk's repo (null on a multi-user gateway)");
   const githubFallbackOn = withAccounts && github.signIn === true;
   const signIn = createGitHubSignIn({
     sealed,
@@ -120,7 +122,7 @@ export function createProvider({
           now,
           async admit(accountId, clientId) {
             try {
-              return await admissionRefusal({ store, accountId, repo, clientId, log });
+              return await admissionRefusal({ store, accountId, repo, clientId, linkGitHub, log });
             } catch (error) {
               log(`sign-in failed: store_unavailable (${error?.name ?? "error"}) client ${clientId}`);
               return signInUnavailablePage();
@@ -374,7 +376,7 @@ export function createProvider({
 // sends Sec-Fetch-Site on every request it makes; one that does not falls
 // back to Origin, which every browser sends on a cross-origin POST. A request
 // with neither is refused.
-function fromOwnOrigin(req, issuerOrigin) {
+export function fromOwnOrigin(req, issuerOrigin) {
   const site = req.get("sec-fetch-site");
   if (site !== undefined) return site === "same-origin";
   return req.get("origin") === issuerOrigin;

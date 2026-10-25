@@ -51,4 +51,5 @@ export function runControllerChild(proc = process, load = () => import("../serve
   })
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) runControllerChild()
+const privateMain = process.env.DESK_ISOLATED_HOSTED === "1" && process.env.DESK_BUILTIN_SCRIPT === import.meta.url
+if (privateMain || (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)) runControllerChild()

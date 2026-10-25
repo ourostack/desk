@@ -11,6 +11,7 @@
 // is real work in the recorded repo, so accepting it is correct.
 
 import { realpathSync } from "node:fs"
+import { deskGitInvocation } from "../runtime/desk-git-context.js"
 import * as os from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -20,7 +21,15 @@ import { deskRelativePath, resolveLocalPath, isPathContained } from "../util/pat
 const GIT_TIMEOUT_MS = 5000
 
 function git(spawnGit, dir, args) {
-  const result = spawnGit("git", ["-C", dir, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+  let invocation
+  try {
+    invocation = deskGitInvocation({ root: dir, args })
+  } catch {
+    // The only refusal is DESK_GIT_CONTEXT_REFUSED: an isolated hosted realm runs Git only inside its own desk. A clone
+    // outside it reads as no repository, so it is never local-only and never a reason to refuse the card that names it.
+    return null
+  }
+  const result = spawnGit("git", invocation.args, { ...invocation.options, encoding: "utf8", timeout: GIT_TIMEOUT_MS })
   return result?.status === 0 && typeof result.stdout === "string" ? result.stdout : null
 }
 
@@ -137,4 +146,3 @@ export function assertLocalOnlyUnchanged(repos, prior) {
     }
   }
 }
-

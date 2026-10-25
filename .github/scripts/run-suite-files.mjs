@@ -7,7 +7,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { suiteFiles } from "./suite-files.mjs"
-import { assignShards, loadDurations } from "./suite-shards.mjs"
+import { assignShards, loadDurations, underweighted } from "./suite-shards.mjs"
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback)
@@ -165,6 +165,7 @@ for (const file of mine) {
   const result = await runFile(file)
   results.push(result)
   console.log(`${result.timedOut ? "TIMEOUT" : result.exitCode === 0 ? "ok     " : "FAIL   "} ${result.file} pass=${result.pass} fail=${result.fail} ${result.ms}ms`)
+  if (underweighted(result.file, result.ms / 1000, durations)) console.log(`::warning::${result.file} took ${Math.round(result.ms / 1000)}s but suite-durations.json weighs it ${durations.files[result.file] ?? durations.defaultSeconds}s; refresh the table so it does not share a shard with another long file`)
 }
 fs.writeFileSync(out, JSON.stringify({ shard: `${index}/${total}`, platform: process.platform, aclProbe, results }, null, 1))
 const bad = results.filter((r) => r.exitCode !== 0)

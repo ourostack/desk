@@ -22,6 +22,35 @@ const AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
 
+// The App's user authorization: trades GitHub's `code` for a user token, or null when GitHub doesn't grant one.
+export async function exchangeCode({ clientId, clientSecret, callbackUrl, code, fetch = globalThis.fetch, timeoutMs }) {
+  const exchange = await fetch(TOKEN_URL, {
+    method: "POST",
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+    headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: callbackUrl }).toString(),
+  });
+  const grant = exchange.ok ? await exchange.json() : {};
+  return typeof grant.access_token === "string" && grant.access_token ? grant.access_token : null;
+}
+
+// The user a user token belongs to (`{ id, login, name, ... }`), or null.
+export async function readUser(token, fetch = globalThis.fetch, timeoutMs) {
+  const response = await fetch(USER_URL, {
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "ouro-desk-hosted" },
+  });
+  if (!response.ok) return null;
+  const user = await response.json();
+  return typeof user?.login === "string" ? user : null;
+}
+
+export const authorizeUrlFor = ({ clientId, callbackUrl, state }) => {
+  const authorize = new URL(AUTHORIZE_URL);
+  authorize.search = new URLSearchParams({ client_id: clientId, redirect_uri: callbackUrl, state });
+  return authorize.href;
+};
+
 export const githubSignInOffPage = () => page(403, "GitHub sign-in is turned off for this Hosted Desk. Start again from Claude and sign in with Apple or email.");
 
 // `log` receives one line per refused or failed sign-in: the error code and
@@ -33,11 +62,7 @@ export const githubSignInOffPage = () => page(403, "GitHub sign-in is turned off
 // undefined, cookies (createSigninCookies'), admit(accountId, clientId) -> page
 // | null, now() }`.
 export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, callbackUrl, allowedLogins = [], fetch = globalThis.fetch, log = () => {}, fallback }) {
-  const url = (state) => {
-    const authorize = new URL(AUTHORIZE_URL);
-    authorize.search = new URLSearchParams({ client_id: clientId, redirect_uri: callbackUrl, state });
-    return authorize.href;
-  };
+  const url = (state) => authorizeUrlFor({ clientId, callbackUrl, state });
 
   // The browser goes to GitHub carrying the client's sign-in request as a
   // sealed `pending` state, and comes back with it to githubCallback.
@@ -54,19 +79,8 @@ export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, c
   }
 
   async function readGitHubUser(code) {
-    const exchange = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: callbackUrl }).toString(),
-    });
-    const grant = exchange.ok ? await exchange.json() : {};
-    if (!grant.access_token) return null;
-    const response = await fetch(USER_URL, {
-      headers: { accept: "application/vnd.github+json", authorization: `Bearer ${grant.access_token}`, "user-agent": "ouro-desk-hosted" },
-    });
-    if (!response.ok) return null;
-    const user = await response.json();
-    return typeof user?.login === "string" ? user : null;
+    const token = await exchangeCode({ clientId, clientSecret, callbackUrl, code, fetch });
+    return token ? readUser(token, fetch) : null;
   }
 
   async function confirmedUser(code, pending) {
@@ -176,10 +190,12 @@ export function createGitHubSignIn({ sealed, unsealed, clientId, clientSecret, c
   return { authorizeUrl, begin, githubCallback: fallback ? fallbackCallback : allowedLoginCallback };
 }
 
-// The Express route for GitHub's redirect back to the gateway.
-export function githubCallbackHandler({ githubCallback }) {
+// The Express route for GitHub's redirect back to the gateway. The App has one callback URL, so it serves both
+// sign-in and linking a desk (github-link.js): `link`, when set, takes every answer whose state is a linking state.
+export function githubCallbackHandler({ githubCallback, link }) {
   return async (req, res) => {
     res.setHeader("cache-control", "no-store");
+    if (link?.ownsState(req.query.state)) return link.callbackHandler(req, res);
     try {
       const text = (value) => (typeof value === "string" ? value : undefined);
       const outcome = await githubCallback({

@@ -37,14 +37,36 @@ function ownerOf(auth) {
 // or a promise of it; `auth` is the SDK AuthInfo of the initializing request.
 // `close()` stops every child: SIGTERM first, then SIGKILL for any child still
 // running after `killAfterMs`.
-export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, callTimeoutMs = 200_000, killAfterMs = 10_000 }) {
+//
+// Capacity (spec item 20): at most `maxSessions` sessions in all and, for an
+// Ouro account, `maxPerAccount` of its own. A new session past either limit
+// may close an idle session (one not waiting on Desk) to make room: the
+// account's own least recently used one idle for `minIdleOwnMs`, then, at the
+// total limit only, another account's oldest one idle for `minIdleForeignMs`
+// (by default never). A gateway without accounts reaps any idle session, as it
+// always has.
+export function createRelay({
+  spawnDesk,
+  maxSessions = 4,
+  maxPerAccount = Infinity,
+  minIdleOwnMs = 0,
+  minIdleForeignMs = Infinity,
+  idleMs = 30 * 60_000,
+  callTimeoutMs = 200_000,
+  killAfterMs = 10_000,
+  now = Date.now,
+}) {
   // Insertion order is recency order: touching a session moves it to the end.
   const sessions = new Map();
+  const retiring = new Set();
   let starting = 0;
+  // Sessions still starting, by owner key, so concurrent initializes can't pass a per-account limit together.
+  const startingFor = new Map();
   let closing = false;
 
   function touch(session) {
     if (session.closed) return;
+    session.lastActive = now();
     sessions.delete(session.id);
     sessions.set(session.id, session);
     clearTimeout(session.idleTimer);
@@ -73,7 +95,18 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
       .then(() => session.transport.close())
       .catch((error) => log(`could not close transport: ${error.message}`));
     const { child } = session;
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    if (child && child.exitCode === null && child.signalCode === null) {
+      retiring.add(session);
+      child.kill("SIGTERM");
+      const kill = setTimeout(() => {
+        log(`session ${session.id} Desk process ignored SIGTERM for ${killAfterMs / 1000} s; sending SIGKILL`);
+        child.kill("SIGKILL");
+      }, killAfterMs);
+      session.exited.then(() => {
+        clearTimeout(kill);
+        retiring.delete(session);
+      });
+    }
   }
 
   function attachDesk(session, child) {
@@ -150,19 +183,32 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     return session;
   }
 
-  // Frees one slot by closing the least recently used session that is not
-  // waiting on Desk. Returns false when every session is busy. An Ouro
-  // account's new session reaps only that account's own idle sessions, never
-  // another account's (spec item 20); without accounts, any idle session.
-  function reapIdle(owner) {
+  // Closes the least recently used session that is not waiting on Desk and has been quiet for at least `minIdle`,
+  // among those `which` selects. Returns false when there is none.
+  function reapOne(which, minIdle, reason) {
     for (const session of sessions.values()) {
-      if (owner.accountId !== undefined && session.owner !== owner.key) continue;
-      if (session.pending.size === 0) {
-        closeSession(session, "reaped for a new session");
-        return true;
-      }
+      if (!which(session) || session.pending.size > 0 || now() - session.lastActive < minIdle) continue;
+      closeSession(session, reason);
+      return true;
     }
     return false;
+  }
+
+  const ownedBy = (owner) => (session) => session.owner === owner.key;
+  const countOf = (owner) => [...sessions.values()].filter(ownedBy(owner)).length + (startingFor.get(owner.key) ?? 0);
+
+  // Makes room for `owner`'s new session, or says why there is none: "account" when the account is at its own
+  // limit, "busy" when the gateway is full. Never closes another account's session quiet for under minIdleForeignMs.
+  function makeRoom(owner) {
+    if (owner.accountId === undefined) {
+      if (sessions.size + starting < maxSessions || reapOne(() => true, 0, "reaped for a new session")) return null;
+      return "busy";
+    }
+    if (countOf(owner) >= maxPerAccount && !reapOne(ownedBy(owner), minIdleOwnMs, "reaped for the same account's new session")) return "account";
+    if (sessions.size + starting < maxSessions) return null;
+    if (reapOne(ownedBy(owner), minIdleOwnMs, "reaped for the same account's new session")) return null;
+    if (reapOne((session) => session.owner !== owner.key, minIdleForeignMs, "reaped for a new session")) return null;
+    return "busy";
   }
 
   async function handle(req, res, auth) {
@@ -181,21 +227,36 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     }
     if (!owner) return refuse(res, 403, -32000, "Forbidden: token names no account");
     if (closing) return refuse(res, 503, -32000, "Service Unavailable: the gateway is shutting down; reconnect shortly.");
-    if (sessions.size + starting >= maxSessions && !reapIdle(owner)) {
-      return refuse(res, 503, -32000, "Service Unavailable: every session is busy");
+    const full = makeRoom(owner);
+    if (full === "account") {
+      log(`refused a new session for ${owner.label}: it has ${maxPerAccount} open`);
+      return refuse(res, 429, -32000, `You already have ${maxPerAccount} Desk sessions open, the most one account can have at once. Close Desk in another app or chat, or try again in a few minutes.`);
+    }
+    if (full === "busy") {
+      log(`refused a new session: the gateway is full (${sessions.size} open, ${starting} starting)`);
+      return refuse(res, 503, -32000, "Hosted Desk is full right now. Please try again in a few minutes.");
     }
     // The Desk child starts before the transport sees the initialize, so it
     // is ready for the first message; a spawn still in progress holds its slot.
     const id = randomUUID();
     let child;
     starting += 1;
+    startingFor.set(owner.key, (startingFor.get(owner.key) ?? 0) + 1);
     try {
       child = await spawnDesk({ auth, sessionId: id });
     } catch (error) {
+      // A refusal the person can act on (a suspended GitHub link, say) reaches them as it is.
+      if (error?.code === "DESK_SESSION_REFUSED") {
+        log(`refused a new session for ${owner.label}: ${error.message}`);
+        return refuse(res, 403, -32000, error.message);
+      }
       log(`could not start Desk for a new session: ${error.message}`);
       return refuse(res, 502, -32000, "Bad Gateway: Desk could not be started; try again shortly.");
     } finally {
       starting -= 1;
+      const left = startingFor.get(owner.key) - 1;
+      if (left > 0) startingFor.set(owner.key, left);
+      else startingFor.delete(owner.key);
     }
     // close() ran while this child was starting: it has served nothing, so
     // it is killed outright rather than left running past the shutdown.
@@ -216,16 +277,7 @@ export function createRelay({ spawnDesk, maxSessions = 4, idleMs = 30 * 60_000, 
     closing = true;
     const all = [...sessions.values()];
     for (const session of all) closeSession(session, "gateway closing");
-    await Promise.all(
-      all.map(async (session) => {
-        const kill = setTimeout(() => {
-          log(`session ${session.id} Desk process ignored SIGTERM for ${killAfterMs / 1000} s; sending SIGKILL`);
-          session.child?.kill("SIGKILL");
-        }, killAfterMs);
-        await session.exited;
-        clearTimeout(kill);
-      }),
-    );
+    await Promise.all([...new Set([...all, ...retiring])].map(session => session.exited));
   }
 
   // Ends every session of one account at once (its Desk access was turned

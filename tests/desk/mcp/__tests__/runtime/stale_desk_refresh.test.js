@@ -117,6 +117,17 @@ test("the started line says what was started and the new version", () => {
   assert.equal(startedLine({ ...finding(), behind: null }, { doing: "refreshing the Agency plugin cache" }), "Desk 3.2.0-alpha.153 is behind main (3.2.0-alpha.172); refreshing the Agency plugin cache in the background, so a new session will run 3.2.0-alpha.172.")
 })
 
+test("the direct refresh planner refuses an isolated host before reading its Agency cache", async () => {
+  const { home, pluginRoot } = await agency()
+  const context = { env: { AGENCY_ENGINE: "copilot" }, pluginRoot, agentHost: "copilot", running: "3.2.0-alpha.153", homeDir: home }
+  assert.equal(refreshPlan(context).host, "agency", "the same non-isolated installation has a real cache-backed plan")
+  assert.equal(refreshPlan({
+    ...context, env: { ...context.env, DESK_ISOLATED_HOSTED: "1" },
+    readFile() { assert.fail("isolated direct planning must not inspect the host package cache") },
+  }), null)
+  assert.equal(refreshPlan({ env: { DESK_ISOLATED_HOSTED: "1" } }), null, "private refusal does not need host paths or a host identity")
+})
+
 async function ctx(over = {}) {
   const stateDir = await mkTempRoot("desk-refresh-state-")
   return { stateDir, options: { finding: finding(), env: {}, pluginRoot: CLAUDE_ROOT, agentHost: "claude", stateDir, root: "/desk", allowInTest: true, ...over } }

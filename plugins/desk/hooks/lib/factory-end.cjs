@@ -89,8 +89,8 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     const log = claude || codex ? payload.transcript_path : path.join(env.COPILOT_HOME || path.join(home, ".copilot"), "session-state", id, "events.jsonl");
     if (!absolutePath(log)) return "invalid";
     if (codex && childThread(payload, log)) return "invalid";
-    const [{ resolveHookDeskRoot }, outbox, { resolveStore }, cli] = await Promise.all([
-      import("../../mcp/scripts/resolve-desk-root.js"), import("../../mcp/src/factory/outbox.js"), import("../../mcp/src/factory/store-route.js"), import("../../mcp/scripts/factory.js"),
+    const [{ resolveHookDeskRoot }, outbox, { resolveStore }, { SUPPORTED_COMMANDS }] = await Promise.all([
+      import("../../mcp/scripts/resolve-desk-root.js"), import("../../mcp/src/factory/outbox.js"), import("../../mcp/src/factory/store-route.js"), import("../../mcp/src/factory/commands.js"),
     ]);
     const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd });
     if (deskRoot === null) return "unavailable";
@@ -128,7 +128,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     if (ended) {
       const root = await outbox.factoryStateRoot(env);
       await start(script, ["derive", "--marker", path.join(root, "markers", `${marker.host}-${id}.json`), "--wait-quiet", "30000"], env, resolveOnce);
-    } else if (supportsFinalize ?? cli.SUPPORTED_COMMANDS.includes("finalize")) {
+    } else if (supportsFinalize ?? SUPPORTED_COMMANDS.includes("finalize")) {
       const jobs = await outbox.listFinalizeJobs(env);
       for (const job of jobs) await start(script, ["finalize", "--job", job], workerEnv, resolveOnce);
       // A finalize run starts the loop worker itself once it has derived the job's sessions; with none pending, the end of a turn

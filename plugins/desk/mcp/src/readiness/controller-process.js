@@ -11,6 +11,7 @@ import { probeController, probeMissed } from "./hung-controller.js"
 import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 import { request } from "./controller-client.js"
 import { CONTROLLER_START_MS, WINDOWS_CONTROLLER_START_MS, controllerStartTimeoutMs } from "./process-start.js"
+import { deskForkInvocation, isolatedDeskRoot } from "../runtime/desk-git-context.js"
 
 const childEntry = fileURLToPath(new URL("./controller-child.js", import.meta.url))
 
@@ -27,6 +28,7 @@ const KILL_WAIT_MS = 5000
 
 export async function startControllerProcess(options, { spawn = fork, platform = process.platform, timeoutMs = controllerStartTimeoutMs(platform), createServer = net.createServer, socketTimeoutMs = 10000, killWaitMs = KILL_WAIT_MS } = {}) {
   const { identity, endpoint, stateDir } = options
+  if (process.env.DESK_ISOLATED_HOSTED === "1") isolatedDeskRoot(identity.root)
   const supervisor = { endpoint: supervisorEndpoint(endpoint), token: randomUUID() }
   validateControllerEndpoint(supervisor.endpoint)
   const events = new EventEmitter()
@@ -97,8 +99,9 @@ export async function startControllerProcess(options, { spawn = fork, platform =
   }
 
   try {
-    // Host execArgv may contain a session-only preload or --test. The runtime and its dependency mirror are already selected.
-    child = spawn(childEntry, [], { execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true })
+    // Drop host preloads/--test; only the private mode's fixed module-loader flags may replace them.
+    const invocation = deskForkInvocation({ script: childEntry })
+    child = spawn(invocation.modulePath, invocation.args, { ...invocation.options, stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true })
     child.once("exit", onExit)
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("readiness controller child startup timed out")), timeoutMs)

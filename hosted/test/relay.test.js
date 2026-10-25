@@ -137,6 +137,19 @@ test("two concurrent initializes for different logins each get a child of their 
   }
 });
 
+test("a session refusal the person can act on answers the initialize with 403 and its message", async (t) => {
+  const message = "Your GitHub desk link is suspended. Link it again at https://desk.ouro.bot/link/github";
+  const { relay, url, children } = await start(t, { beforeSpawn: async () => Promise.reject(Object.assign(new Error(message), { code: "DESK_SESSION_REFUSED" })) });
+  const stderr = t.mock.method(process.stderr, "write", () => true);
+  const reply = await post(url, initialize());
+  stderr.mock.restore();
+  assert.equal(reply.status, 403);
+  assert.equal(reply.messages[0].error.message, message);
+  assert.equal(reply.sessionId, null);
+  assert.equal(relay.size(), 0);
+  assert.equal(children.length, 0);
+});
+
 test("a spawn that fails answers the initialize with 502 and opens no session", async (t) => {
   const { relay, url, children } = await start(t, { beforeSpawn: async () => Promise.reject(new Error("no installation token")) });
   const stderr = t.mock.method(process.stderr, "write", () => true);
@@ -278,6 +291,19 @@ test("close() stops every child, and one that ignores SIGTERM gets SIGKILL after
   const [, signal] = await children[0].closed;
   assert.equal(signal, "SIGKILL");
   assert.equal(relay.size(), 0);
+});
+
+test("account closure escalates an ignoring child even after its session leaves the relay", async (t) => {
+  const { relay, url, children } = await start(t, { childEnv: { ECHO_IGNORE_SIGTERM: "1" }, killAfterMs: 30 });
+  await open(url, undefined, { account: "synthetic-account" });
+  const { child, closed } = children[0];
+  t.after(() => child.kill("SIGKILL"));
+  assert.equal(relay.closeAccount("synthetic-account"), 1);
+  const result = await Promise.race([
+    closed.then(([, signal]) => signal),
+    new Promise(resolve => setTimeout(() => resolve("still running"), 500)),
+  ]);
+  assert.equal(result, "SIGKILL");
 });
 
 test("after close() starts, a new session is refused with 503", async (t) => {

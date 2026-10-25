@@ -382,3 +382,26 @@ test("only recorded entries without a url on the card qualify, whichever list sh
   // Not a list, null, a string and an entry without the mark: nothing qualifies.
   for (const existingRepos of ["nope", [null, "w", { name: "w" }]]) assert.throws(await mockedCall({ rules: base, existingRepos }), /not pushed|no remote-tracking|does not qualify/)
 })
+
+test("in an isolated hosted realm a clone outside the desk is never local-only, and probing it runs no Git and never throws", async () => {
+  const clone = await makeRepo()
+  const root = await mkTempDeskRoot()
+  const saved = { DESK: process.env.DESK, DESK_ISOLATED_HOSTED: process.env.DESK_ISOLATED_HOSTED }
+  process.env.DESK = root
+  process.env.DESK_ISOLATED_HOSTED = "1"
+  const spawned = []
+  const spawnGit = (...args) => {
+    spawned.push(args)
+    return spawnSync(...args)
+  }
+  try {
+    assert.equal(isLocalOnlyClone(clone, { spawnGit, deskRoot: root }), false)
+    assert.deepEqual(withLocalOnlyRecorded([entry(clone, { local_only: true })], { spawnGit, deskRoot: root }), [entry(clone)])
+    assert.deepEqual(spawned, [], "the hosted Git guard refuses before any spawn")
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})

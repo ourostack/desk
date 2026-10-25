@@ -398,6 +398,31 @@ test("a core.hooksPath that holds tracked files is left alone with a remedy; uni
   }
 })
 
+test("private installation leaves a tracked repository-root hooks policy unchanged", () => {
+  const root = makeDesk()
+  const previous = { DESK: process.env.DESK, DESK_ISOLATED_HOSTED: process.env.DESK_ISOLATED_HOSTED }
+  try {
+    assert.equal(sh(root, ["config", "core.hooksPath", "."]).status, 0)
+    process.env.DESK = root
+    process.env.DESK_ISOLATED_HOSTED = "1"
+    const before = sh(root, ["status", "--porcelain"]).stdout
+    const result = installCardGuard(root)
+    assert.equal(result.state, "tracked")
+    assert.equal(result.path, path.join(root, "pre-commit"))
+    assert.match(result.reason, /core\.hooksPath \(\.\) holds tracked files/)
+    assert.match(result.remedy, /tracked pre-commit hook/)
+    assert.equal(existsSync(result.path), false, "a root hooks policy must not cause an untracked guard to be installed")
+    assert.equal(sh(root, ["status", "--porcelain"]).stdout, before)
+    assert.equal(sh(root, ["config", "--get", "core.hooksPath"]).stdout.trim(), ".")
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("uninstallCardGuard removes Desk's hook and puts a chained hook back; absent and failed states", () => {
   const root = makeDesk()
   try {

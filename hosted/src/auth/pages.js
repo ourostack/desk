@@ -7,6 +7,12 @@ export const escapeHtml = (text) =>
 const document = (body) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Desk sign-in</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/assets/desk.css"></head><body><header class="brand"><img src="/assets/desk-logo.png" width="80" height="80" alt=""><h1>Hosted Desk</h1></header><main>${body}</main></body></html>`;
 
+// Where a signed-in person links a GitHub repository as their desk (github-link.js LINK_PATH).
+const LINK_GITHUB = "/link/github";
+
+// A page whose body is `bodyHtml`, which the caller has already escaped.
+export const htmlPage = (status, bodyHtml) => ({ status, html: document(bodyHtml) });
+
 // A page holding one message.
 export const page = (status, message) => ({ status, html: document(`<p>${escapeHtml(message)}</p>`) });
 
@@ -48,18 +54,50 @@ export function consentPage({ clientName, clientHost, redirectUri, consent, sign
 
 // Pages for sign-in through the Ouro tenant and for invites.
 export const startingUpPage = () => page(503, "Sign-in is starting up. Please try again shortly.");
-export const signInUnavailablePage = () => page(503, "Sign-in can't be completed right now. Please try again shortly, starting again from Claude.");
-export const startAgainPage = () => page(400, "This sign-in link has expired, or it was started in another browser. Start again from Claude.");
-export const inviteOnlyPage = () => page(403, "Hosted Desk is invite-only. Open your invite link in this browser first, then start again from Claude.");
+// `{ page: true }` words a page for a sign-in to the gateway's own pages (/signin), which starts again there, not in
+// Claude.
+const again = ({ page: forPage } = {}) => (forPage ? "sign in again" : "start again from Claude");
+const Again = (options) => again(options).replace(/^s/, "S");
+export const signInUnavailablePage = (options) => page(503, `Sign-in can't be completed right now. Please try again shortly, then ${again(options)}.`);
+export const startAgainPage = (options) => page(400, `This sign-in link has expired, or it was started in another browser. ${Again(options)}.`);
+export const inviteOnlyPage = (options) => page(403, `Hosted Desk is invite-only. Open your invite link in this browser first, then ${again(options)}.`);
 export const inviteRefusedPage = () => page(403, "This invite has already been used or has expired. Ask for a new invite.");
 export const accessOffPage = () => page(403, "Desk access is turned off for this account.");
-export const noDeskPage = () => page(403, "There is no desk for this account yet on this Hosted Desk.");
+// `link`: the gateway links GitHub desks (a multi-user gateway), so the page sends the person there.
+export const noDeskPage = ({ link = false } = {}) =>
+  link
+    ? htmlPage(403, `<p>There is no desk for this account yet on this Hosted Desk.</p><p><a href="${LINK_GITHUB}">Link a GitHub repository as your desk</a>, then connect Hosted Desk from Claude again.</p>`)
+    : page(403, "There is no desk for this account yet on this Hosted Desk.");
 export const inviteInvalidPage = () => page(404, "This invite link isn't valid: it may have expired or already been used. Ask for a new invite.");
-export const invitePage = ({ issuer } = {}) => ({
+// `linkGitHub`: the gateway links GitHub desks, so the person first signs in here and links the repository that is
+// their desk, then connects Claude.
+export const invitePage = ({ issuer, linkGitHub = false } = {}) => {
+  const connector = `add a custom connector${issuer ? ` with the URL <strong>${escapeHtml(new URL("/mcp", issuer).href)}</strong>` : ""}`;
+  return {
+    status: 200,
+    html: document(
+      "<p>You're invited to Hosted Desk.</p>" +
+        (linkGitHub
+          ? `<p>First, <a href="/signin?next=${LINK_GITHUB}">sign in and link the GitHub repository for your desk</a>. Sign in with Apple or email in this browser. Your invite is used the first time you sign in.</p>` +
+            `<p>Then, in Claude, ${connector} and connect it.</p>`
+          : `<p>In Claude, ${connector}, then connect it and sign in with Apple or email in this browser. Your invite is used the first time you sign in.</p>`),
+    ),
+  };
+};
+
+// Pages of the browser session (browser-session.js).
+export const signInCancelledPage = () => page(400, "Sign-in was cancelled. Sign in again to continue.");
+export const signedOutPage = ({ everywhere = true } = {}) =>
+  page(200, everywhere ? "You're signed out of Hosted Desk." : "You're signed out of Hosted Desk in this browser. Hosted Desk couldn't sign out your other browsers just now; to do that, sign in and sign out again later.");
+export const pageRefusedPage = () => page(403, "This change didn't come from a Hosted Desk page in this browser. Reload the page and try again.");
+// The signed-in account's page: who is signed in, a link to its GitHub desk when the gateway links them
+// (`linkGitHub`), and a sign-out form carrying the session's CSRF token.
+export const accountPage = ({ displayName, csrf, linkGitHub = false }) => ({
   status: 200,
   html: document(
-    "<p>You're invited to Hosted Desk.</p>" +
-      `<p>In Claude, add a custom connector${issuer ? ` with the URL <strong>${escapeHtml(new URL("/mcp", issuer).href)}</strong>` : ""}, then connect it and sign in with Apple or email in this browser. Your invite is used the first time you sign in.</p>`,
+    `<p>You're signed in to Hosted Desk as <strong>${escapeHtml(displayName || "your account")}</strong>.</p>` +
+      (linkGitHub ? `<p><a href="${LINK_GITHUB}">Your GitHub desk</a></p>` : "") +
+      `<form method="post" action="/signout"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Sign out</button></form>`,
   ),
 });
 

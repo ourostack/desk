@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// Git's standard HTTPS helper accepts a remote name without a URL. Supply the
+// verified repository through private Git configuration, not its process argv.
+import { execFileSync, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+try {
+  if (process.argv[2] !== "origin" || process.argv[3] !== "origin") throw new Error("Invalid private remote.");
+  process.chdir(process.env.DESK);
+  const repo = readFileSync(join(".git", "desk-repository"), "utf8");
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error("Invalid private repository.");
+  const count = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+  if (!Number.isSafeInteger(count) || count < 0 || count > 64) throw new Error("Invalid private Git configuration.");
+  const execPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
+  const child = spawn(join(execPath, "git-remote-https"), ["desk-http"], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      GIT_CONFIG_COUNT: String(count + 1),
+      [`GIT_CONFIG_KEY_${count}`]: "remote.desk-http.url",
+      [`GIT_CONFIG_VALUE_${count}`]: `https://github.com/${repo}.git`,
+    },
+  });
+  child.once("error", () => process.exit(1));
+  child.once("close", code => process.exit(code ?? 1));
+} catch {
+  process.stderr.write("Desk's private Git transport could not start.\n");
+  process.exit(1);
+}

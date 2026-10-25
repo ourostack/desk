@@ -1,0 +1,11 @@
+Multi-user hosted Desk serves each signed-in account from the repository its own binding names, in its own realm, instead of requiring every binding to name the gateway's single `DESK_REPO`. Sign-in admission, the GitHub fallback and realm preparation all follow the account's binding; a single-desk gateway still admits only `DESK_REPO`. The native Linux job now runs the gateway end to end with two accounts on two repositories and checks that a session refuses another account's token.
+
+A binding to any repository other than `DESK_REPO` must record the GitHub App installation it was verified through, and every token mint checks that the repository is still served by that installation. Within one gateway, a repository serves one account at a time.
+
+A multi-user gateway mounts its account pages (`/signin`, `/account`, `/signout`) on one browser session shared with the Ouro tenant's page sign-in, and the admin routes at `/admin`. An admin's access change reaches the account cache at once, and deleting an account ends its sessions and purges its realm.
+
+Verified GitHub linking is wired in: each session start rechecks the account's GitHub link and refuses a suspended or unconfirmed one with a message naming the relink page, and the runtime refuses a suspended binding. Linking drops the account's cached row, open sessions and prepared realm, and making a repository a desk runs `desk init` in a fresh realm as the account's own UID, with no path on its command line, and pushes the result.
+
+A desk init that fails, prints nothing or runs past two minutes leaves its realm discarded without a push, so a rolled-back link leaves nothing in the repository. A session start waits for a relink's realm release to finish, a release that lands while a realm is being prepared makes that preparation start again from the new binding, and a release that could not save the old realm is retried before the account's next session.
+
+A realm close or discard that fails cleanly (the push could not be verified, say) can now be retried, so shutdown pushes a write the first push missed instead of reporting it unsaved. A discard asked for while a pushing release is under way still keeps the writes out of the repository, and an `already_a_desk` init keeps its realm.

@@ -3,14 +3,17 @@
 // against the memory store in unit tests.
 //
 // Tables (spec item 10): `accounts` (PartitionKey accountId), `identities` (PartitionKey tid, RowKey oid),
-// `invites` (PartitionKey: SHA-256 of the invite token, base64url; the token itself is never stored) and
-// `bindings` (PartitionKey accountId). Single-row partitions use an empty RowKey.
+// `invites` (PartitionKey: SHA-256 of the invite token, base64url; the token itself is never stored),
+// `bindings` (PartitionKey accountId) and `repoclaims` (PartitionKey owner, RowKey name, both lower-cased: which
+// account a GitHub repository is the desk of). Single-row partitions use an empty RowKey.
 //
 // A `tables` backend provides:
 //   get(table, partitionKey, rowKey) -> { entity, etag } | null
 //   create(table, entity)            -> etag; throws Conflict if the row exists
 //   update(table, entity, etag)      -> etag; replaces the row only if its ETag still matches, else PreconditionFailed
 //   upsert(table, entity)            -> etag
+//   remove(table, partitionKey, rowKey, etag?) -> deletes the row; a row already gone is not an error. With `etag`,
+//                                     only if the row's ETag still matches, else PreconditionFailed
 //   list(table)                      -> entity[]
 // where an entity is `{ partitionKey, rowKey, ...string or boolean properties }`.
 //
@@ -30,7 +33,11 @@ export class PreconditionFailed extends Error {
   }
 }
 
-export const TABLE_NAMES = ["accounts", "identities", "invites", "bindings"];
+export const TABLE_NAMES = ["accounts", "identities", "invites", "bindings", "repoclaims"];
+
+// How long a new claim on a repository holds before its account's binding must name the repository: long enough for
+// linking to write the binding (and desk init to run) after claiming it.
+export const CLAIM_GRACE_MS = 5 * 60_000;
 
 // A store call that failed for any reason other than the outcomes above: the store is down, slow, misconfigured
 // or refusing. Its message names the operation, table and status only; never a key, URL or the SDK's error object,
@@ -57,7 +64,7 @@ const TOKEN_HASH = /^[A-Za-z0-9_-]{43}$/;
 // and can't be `.` or `..`.
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/;
-const validRepo = (repo) => {
+export const validRepo = (repo) => {
   const parts = typeof repo === "string" ? repo.split("/") : [];
   return parts.length === 2 && OWNER.test(parts[0]) && REPO_NAME.test(parts[1]) && parts[1] !== "." && parts[1] !== "..";
 };
@@ -85,8 +92,46 @@ function checkBinding(binding) {
   if (binding.installationId !== undefined && !(Number.isSafeInteger(binding.installationId) && binding.installationId > 0)) {
     throw new Error("a binding's installationId must be a positive integer");
   }
+  if (binding.githubUserId !== undefined && !(Number.isSafeInteger(binding.githubUserId) && binding.githubUserId > 0)) {
+    throw new Error("a binding's githubUserId must be a positive integer");
+  }
+  if (binding.login !== undefined && !(typeof binding.login === "string" && OWNER.test(binding.login))) throw new Error("a binding's login must be a GitHub login");
+  if (binding.suspended !== undefined && binding.suspended !== true) throw new Error("a binding's suspended flag is true or absent");
   const { name, email } = binding.author ?? {};
   if (typeof name !== "string" || !name || typeof email !== "string" || !email) throw new Error("a binding needs an author name and email");
+}
+
+function bindingOf(entity) {
+  const { kind, repo, installationId, githubUserId, login, suspended, authorName, authorEmail } = entity;
+  const binding = { kind, repo };
+  if (installationId) binding.installationId = Number(installationId);
+  // A binding linked through the gateway (github-link.js) names the GitHub user who linked it; one the operator
+  // seeded doesn't.
+  if (githubUserId) binding.githubUserId = Number(githubUserId);
+  if (login) binding.login = login;
+  if (suspended === true) binding.suspended = true;
+  binding.author = { name: authorName, email: authorEmail };
+  checkBinding(binding);
+  return binding;
+}
+
+function bindingEntity(accountId, binding) {
+  key(accountId, "accountId");
+  checkBinding(binding);
+  const entity = { partitionKey: accountId, rowKey: "", kind: binding.kind, repo: binding.repo, authorName: binding.author.name, authorEmail: binding.author.email };
+  // Stored as text: Table Storage numbers are 32-bit unless typed, and installation ids may outgrow that.
+  if (binding.installationId !== undefined) entity.installationId = String(binding.installationId);
+  if (binding.githubUserId !== undefined) entity.githubUserId = String(binding.githubUserId);
+  if (binding.login !== undefined) entity.login = binding.login;
+  if (binding.suspended) entity.suspended = true;
+  return entity;
+}
+
+// A repository's claim key: GitHub's names are case-insensitive.
+function claimKey(repo) {
+  if (!validRepo(repo)) throw new TypeError("a repository must be owner/name");
+  const [owner, name] = repo.toLowerCase().split("/");
+  return { partitionKey: owner, rowKey: name };
 }
 
 const noop = async () => {};
@@ -178,6 +223,42 @@ export function storeOn(tables, { onStep = noop } = {}) {
     }
   }
 
+  async function repoBoundElsewhere(repo, accountId) {
+    const wanted = String(repo).toLowerCase();
+    const other = (await tables.list("bindings")).find((row) => String(row.repo).toLowerCase() === wanted && row.partitionKey !== accountId && row.suspended !== true);
+    return other ? other.partitionKey : null;
+  }
+
+  // Whether `accountId`'s binding still holds `repo`. An unreadable binding row holds nothing.
+  async function holds(accountId, repo) {
+    const found = await tables.get("bindings", accountId, "");
+    if (!found) return false;
+    let binding;
+    try {
+      binding = bindingOf(found.entity);
+    } catch {
+      return false;
+    }
+    return binding.repo.toLowerCase() === repo.toLowerCase() && binding.suspended !== true;
+  }
+
+  // The claims table is newer than the others; a store provisioned before it gets it on first use.
+  async function createClaim(claim) {
+    try {
+      await tables.create("repoclaims", claim);
+    } catch (error) {
+      if (error?.code !== "TableNotFound" || !tables.ensure) throw error;
+      await tables.ensure();
+      await tables.create("repoclaims", claim);
+    }
+  }
+
+  // A store with no claims table yet holds no claims.
+  const missingTable = (error) => {
+    if (error?.code === "TableNotFound") return null;
+    throw error;
+  };
+
   return {
     tables,
 
@@ -188,36 +269,133 @@ export function storeOn(tables, { onStep = noop } = {}) {
     async getAccount(accountId) {
       const found = await tables.get("accounts", key(accountId, "accountId"), "");
       if (!found) return null;
-      const { displayName, deskAccess } = found.entity;
-      return { accountId, displayName: displayName ?? "", deskAccess: deskAccess === true };
+      const { displayName, deskAccess, sessionsNotBefore } = found.entity;
+      const account = { accountId, displayName: displayName ?? "", deskAccess: deskAccess === true };
+      // Sessions issued before this time were signed out (revokeSessions). A value that isn't a date refuses every
+      // session (fail closed).
+      if (sessionsNotBefore !== undefined) account.sessionsNotBefore = typeof sessionsNotBefore === "string" && Number.isFinite(Date.parse(sessionsNotBefore)) ? Date.parse(sessionsNotBefore) : Number.MAX_SAFE_INTEGER;
+      return account;
     },
 
+    // Writes the account's name and access, keeping a recorded sign-out (revokeSessions), so writing an account again
+    // never revives sessions that were signed out.
     async putAccount({ accountId, displayName, deskAccess }) {
       if (typeof displayName !== "string") throw new TypeError("displayName must be a string");
       if (typeof deskAccess !== "boolean") throw new TypeError("deskAccess must be true or false");
-      await tables.upsert("accounts", { partitionKey: key(accountId, "accountId"), rowKey: "", displayName, deskAccess });
+      key(accountId, "accountId");
+      // Conditional, like setAccess: a sign-out recorded meanwhile is re-read rather than overwritten.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const existing = await tables.get("accounts", accountId, "");
+        const signedOut = existing?.entity.sessionsNotBefore;
+        const row = { partitionKey: accountId, rowKey: "", displayName, deskAccess, ...(signedOut !== undefined ? { sessionsNotBefore: signedOut } : {}) };
+        try {
+          if (existing) await tables.update("accounts", row, existing.etag);
+          else await tables.create("accounts", row);
+          return;
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed || error instanceof Conflict)) throw error;
+        }
+      }
+      throw new Error("the account kept changing; try again");
     },
 
     findIdentity,
 
     async getBinding(accountId) {
+      return (await this.getBindingEntry(accountId))?.binding ?? null;
+    },
+
+    // The binding with its row's ETag, for replaceBinding: `{ binding, etag }`, or null when there is none.
+    async getBindingEntry(accountId) {
       const found = await tables.get("bindings", key(accountId, "accountId"), "");
       if (!found) return null;
-      const { kind, repo, installationId, authorName, authorEmail } = found.entity;
-      const binding = { kind, repo };
-      if (installationId) binding.installationId = Number(installationId);
-      binding.author = { name: authorName, email: authorEmail };
-      checkBinding(binding);
-      return binding;
+      return { binding: bindingOf(found.entity), etag: found.etag };
     },
 
     async putBinding(accountId, binding) {
+      await tables.upsert("bindings", bindingEntity(accountId, binding));
+    },
+
+    // Replaces the binding only if it is still the one read with `etag`; else throws PreconditionFailed, leaving the
+    // newer binding.
+    async replaceBinding(accountId, binding, etag) {
+      await tables.update("bindings", bindingEntity(accountId, binding), etag);
+    },
+
+
+    async removeBinding(accountId) {
+      await tables.remove("bindings", key(accountId, "accountId"), "");
+    },
+
+    // The account other than `accountId` whose active binding names `repo`, or null. GitHub's names are
+    // case-insensitive, and a suspended binding no longer holds its repository. A read only: claimRepo is what makes
+    // one repository one account's desk.
+    repoBoundElsewhere,
+
+    // Claims `repo` as `accountId`'s desk, atomically: `{ claimed: true }`, or `{ heldBy }` naming the account that
+    // holds it. A claim holds while its account's binding names the repository and isn't suspended, and for
+    // CLAIM_GRACE_MS after it is made, so the claimer can write its binding. A claim that no longer holds passes to
+    // the next claimer by a conditional update, so of two claimers exactly one gets it. A binding from before claims
+    // existed keeps its repository: a new claim that finds one yields the claim to it.
+    async claimRepo(repo, accountId, { now = Date.now() } = {}) {
       key(accountId, "accountId");
-      checkBinding(binding);
-      const entity = { partitionKey: accountId, rowKey: "", kind: binding.kind, repo: binding.repo, authorName: binding.author.name, authorEmail: binding.author.email };
-      // Stored as text: Table Storage numbers are 32-bit unless typed, and installation ids may outgrow that.
-      if (binding.installationId !== undefined) entity.installationId = String(binding.installationId);
-      await tables.upsert("bindings", entity);
+      const at = millis(now);
+      const row = claimKey(repo);
+      const claim = { ...row, accountId, claimedAt: new Date(at).toISOString() };
+      for (let attempt = 0; attempt < 5; attempt++) {
+        let found;
+        try {
+          await createClaim(claim);
+        } catch (error) {
+          if (!(error instanceof Conflict)) throw error;
+          found = await tables.get("repoclaims", row.partitionKey, row.rowKey);
+          if (!found) continue;
+        }
+        if (!found) {
+          const legacy = await repoBoundElsewhere(repo, accountId);
+          if (legacy === null) return { claimed: true };
+          found = await tables.get("repoclaims", row.partitionKey, row.rowKey);
+          if (!found || found.entity.accountId !== accountId) continue;
+          try {
+            await tables.update("repoclaims", { ...found.entity, accountId: legacy }, found.etag);
+          } catch (error) {
+            if (!(error instanceof PreconditionFailed)) throw error;
+            continue;
+          }
+          return { heldBy: legacy };
+        }
+        const holder = found.entity.accountId;
+        if (holder !== accountId && (at - expiryOf(found.entity.claimedAt) < CLAIM_GRACE_MS || (await holds(holder, repo)))) return { heldBy: holder };
+        // An active binding that names the repository without holding its claim (one a rolled-back desk init
+        // restored, or one seeded) still holds the repository: a takeover would make it two accounts' desk.
+        if (holder !== accountId) {
+          const bound = await repoBoundElsewhere(repo, accountId);
+          if (bound !== null) return { heldBy: bound };
+        }
+        // A takeover, or the holder renewing its own claim. Both write the row, so a holder whose binding comes back
+        // and a newcomer taking the claim over can't both win: the second write finds the ETag changed and re-reads.
+        try {
+          await tables.update("repoclaims", claim, found.etag);
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed)) throw error;
+          continue;
+        }
+        return { claimed: true };
+      }
+      throw new Error("the repository's claim kept changing; try again");
+    },
+
+    // Releases `accountId`'s claim on `repo`; a claim another account holds, or none, is left as it is.
+    async releaseRepo(repo, accountId) {
+      key(accountId, "accountId");
+      const row = claimKey(repo);
+      const found = await tables.get("repoclaims", row.partitionKey, row.rowKey).catch(missingTable);
+      if (found?.entity.accountId !== accountId) return;
+      try {
+        await tables.remove("repoclaims", row.partitionKey, row.rowKey, found.etag);
+      } catch (error) {
+        if (!(error instanceof PreconditionFailed)) throw error;
+      }
     },
 
     async putInvite({ tokenHash, accountId, expiresAt }) {
@@ -234,5 +412,76 @@ export function storeOn(tables, { onStep = noop } = {}) {
     },
 
     redeemInvite,
+
+    // Turns an account's Desk access on or off, keeping its name: a conditional update, so a concurrent change to
+    // the row is re-read rather than overwritten. Returns the account, or null when there is none.
+    async setAccess(accountId, deskAccess) {
+      if (typeof deskAccess !== "boolean") throw new TypeError("deskAccess must be true or false");
+      key(accountId, "accountId");
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const found = await tables.get("accounts", accountId, "");
+        if (!found) return null;
+        try {
+          await tables.update("accounts", { ...found.entity, deskAccess }, found.etag);
+          return { accountId, deskAccess };
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed)) throw error;
+        }
+      }
+      throw new Error("the account kept changing; try again");
+    },
+
+    // Signs out every browser session of the account issued before `at`: a conditional update keeping the rest of
+    // the row. Returns false when there is no account.
+    async revokeSessions(accountId, at) {
+      key(accountId, "accountId");
+      const notBefore = new Date(millis(at)).toISOString();
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const found = await tables.get("accounts", accountId, "");
+        if (!found) return false;
+        try {
+          await tables.update("accounts", { ...found.entity, sessionsNotBefore: notBefore }, found.etag);
+          return true;
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed)) throw error;
+        }
+      }
+      throw new Error("the account kept changing; try again");
+    },
+
+    // Whether any identity signs in to this account.
+    async hasIdentity(accountId) {
+      key(accountId, "accountId");
+      return (await tables.list("identities")).some((row) => row.accountId === accountId);
+    },
+
+    // Deletes an account and every row that names it: its identities, its unredeemed and redeemed invites, its
+    // binding and last the account itself. Access goes off first, so the account stops working at once even if a
+    // later step fails; a retry finishes the job, because the account row is the last to go. Returns false when
+    // there was no account. The desk's clone and repository are the caller's.
+    async deleteAccount(accountId) {
+      key(accountId, "accountId");
+      if ((await this.setAccess(accountId, false)) === null) return false;
+      for (const row of await tables.list("identities")) {
+        if (row.accountId === accountId) await tables.remove("identities", row.partitionKey, row.rowKey);
+      }
+      for (const row of await tables.list("invites")) {
+        if (row.accountId === accountId) await tables.remove("invites", row.partitionKey, row.rowKey);
+      }
+      // The binding goes before the claims, so a claim made meanwhile can't be handed back to this account's binding.
+      await tables.remove("bindings", accountId, "");
+      for (const row of await tables.list("repoclaims").catch(missingTable) ?? []) {
+        if (row.accountId !== accountId) continue;
+        const found = await tables.get("repoclaims", row.partitionKey, row.rowKey);
+        if (found?.entity.accountId !== accountId) continue;
+        try {
+          await tables.remove("repoclaims", row.partitionKey, row.rowKey, found.etag);
+        } catch (error) {
+          if (!(error instanceof PreconditionFailed)) throw error;
+        }
+      }
+      await tables.remove("accounts", accountId, "");
+      return true;
+    },
   };
 }

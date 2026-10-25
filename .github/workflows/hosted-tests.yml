@@ -29,6 +29,12 @@ concurrency:
 
 permissions: {}
 
+# npm's advisory audit gates nothing here and, when the registry's audit endpoint stalls, holds each install for
+# about seven minutes; tests/desk/mcp/__tests__/ci/npm_install_no_audit.test.js keeps it off.
+env:
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+
 jobs:
   hosted-tests:
     name: Hosted gateway tests
@@ -119,3 +125,108 @@ jobs:
           echo "Azurite tests run: $count of $memory"
           echo "Azurite tests run: $count of $memory" >> "$GITHUB_STEP_SUMMARY"
           if [ "$count" -lt 1 ] || [ "$count" -ne "$memory" ]; then echo "Every store test must pass against Azurite as well as in memory" >&2; exit 1; fi
+
+  native-runtime:
+    name: Native owning-UID runtime (Linux amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record exact source and native runner
+        run: |
+          source_status="$(git status --porcelain)"
+          mkdir -p native-runtime-evidence/fixture-context
+          git rev-parse HEAD > native-runtime-evidence/source.head
+          test "$(cat native-runtime-evidence/source.head)" = "$GITHUB_SHA"
+          printf '%s' "$source_status" > native-runtime-evidence/source.status
+          test ! -s native-runtime-evidence/source.status
+          git ls-tree -r HEAD hosted plugins/desk .github/workflows/hosted-tests.yml > native-runtime-evidence/source-tree.txt
+          uname -a > native-runtime-evidence/runner-kernel.txt
+          uname -m > native-runtime-evidence/runner-architecture.txt
+          test "$(cat native-runtime-evidence/runner-architecture.txt)" = x86_64
+          docker version > native-runtime-evidence/docker-version.txt
+          cp hosted/test/fixtures/runtime-native.Dockerfile native-runtime-evidence/fixture-context/Dockerfile
+          cp hosted/test/fixtures/runtime-{native,child,timeout-native,service-native}.js native-runtime-evidence/fixture-context/
+          cp hosted/test/fixtures/isolation-e2e-native.js hosted/test/fixtures/legacy-native.js native-runtime-evidence/fixture-context/
+          cp hosted/test/fixtures/echo-desk.js hosted/test/fixtures/entra-discovery-ourobottest.json native-runtime-evidence/fixture-context/
+          sha256sum hosted/Dockerfile .dockerignore hosted/package-lock.json plugins/desk/mcp/package-lock.json \
+            hosted/src/account-runtime.js hosted/src/realm-helper.js hosted/src/service-lifetime.js hosted/src/service-output.js \
+            plugins/desk/mcp/index.js plugins/desk/mcp/src/readiness/identity.js \
+            native-runtime-evidence/fixture-context/* > native-runtime-evidence/source.sha256
+
+      - name: Build actual production dependencies and source
+        run: |
+          trap 'printf "%s\n" "$?" > native-runtime-evidence/production-build.exit-code' EXIT
+          docker build --platform linux/amd64 --file hosted/Dockerfile \
+            --tag desk-hosted-native:production --iidfile native-runtime-evidence/production-image.id . \
+            > native-runtime-evidence/production-build.stdout 2> native-runtime-evidence/production-build.stderr
+          docker image inspect desk-hosted-native:production > native-runtime-evidence/production-image.json
+          docker image inspect --format '{{.Os}}/{{.Architecture}}' desk-hosted-native:production \
+            > native-runtime-evidence/production-image.platform
+          test "$(cat native-runtime-evidence/production-image.platform)" = linux/amd64
+
+      - name: Add COPY-only maintained fixture overlay
+        run: |
+          trap 'printf "%s\n" "$?" > native-runtime-evidence/fixture-build.exit-code' EXIT
+          docker build --platform linux/amd64 --network none --pull=false \
+            --build-arg DESK_NATIVE_BASE=desk-hosted-native:production \
+            --tag desk-hosted-native:qualification --iidfile native-runtime-evidence/fixture-image.id \
+            native-runtime-evidence/fixture-context \
+            > native-runtime-evidence/fixture-build.stdout 2> native-runtime-evidence/fixture-build.stderr
+          docker image inspect desk-hosted-native:qualification > native-runtime-evidence/fixture-image.json
+
+      # Cases run sequentially against one real production build. A failure is
+      # retained and makes the step red; subsequent cases still supply evidence.
+      - name: Qualify actual MCP services, unchanged I1 deadlines, multi-account routing, two-account isolation and the single-desk gateway
+        run: |
+          failed=0
+          for mode in services unproven i1 main isolation legacy; do
+            multi=1
+            script=runtime-native.js
+            state=/data/runtime-native
+            case "$mode" in
+              services) flags=(-e DESK_NATIVE_SERVICES=1) ;;
+              unproven) flags=(-e DESK_NATIVE_SERVICES=1 -e DESK_SERVICE_UNPROVEN=1) ;;
+              i1) flags=(-e DESK_NATIVE_TIMEOUTS=1) ;;
+              main) flags=(-e DESK_NATIVE_MAIN=1) ;;
+              isolation) flags=(-e DESK_NATIVE_ISOLATION=1) ;;
+              legacy) flags=(); multi=0; script=legacy-native.js; state=/data/legacy-native-desk ;;
+            esac
+            evidence="native-runtime-evidence/$mode"
+            mkdir -p "$evidence"
+            name="desk-native-$mode"
+            if docker run --name "$name" --platform linux/amd64 \
+              --network none --cpus 2 --memory 4g --memory-swap 4g \
+              --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+              -e DESK_MULTI_USER="$multi" "${flags[@]}" desk-hosted-native:qualification \
+              node "/app/hosted/test/fixtures/$script" > "$evidence/stdout.log" 2> "$evidence/stderr.log"; then
+              status=0
+            else
+              status=$?
+              failed=1
+            fi
+            printf '%s\n' "$status" > "$evidence/exit-code"
+            if ! docker inspect "$name" > "$evidence/container.json" 2> "$evidence/inspect.stderr"; then
+              failed=1
+            fi
+            if ! docker cp "$name:$state" - > "$evidence/state.tar" 2> "$evidence/state.stderr"; then
+              failed=1
+            fi
+            printf '%s: exit %s\n' "$mode" "$status" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$failed"
+
+      - name: Retain native source, image, kernel, output and failure evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-runtime-${{ github.sha }}-${{ github.run_attempt }}
+          path: native-runtime-evidence/
+          if-no-files-found: error
+          retention-days: 14

@@ -14,6 +14,7 @@ import { tmpdir } from "node:os"
 import { test } from "node:test"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { DESK_GITIGNORE } from "../../../../../plugins/desk/mcp/scripts/desk-init.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const bootstrapSkillPath = path.join(repoRoot, "plugins", "desk", "skills", "first-run-bootstrap", "SKILL.md")
@@ -40,13 +41,12 @@ const GITIGNORE_LINES = [
   "_cache/",
 ]
 
-test("first-run-bootstrap's fresh-create .gitignore template lists every anchored scratch pattern and the quarantine dir", () => {
+test("desk-init writes every anchored scratch pattern and the quarantine dir, and first-run-bootstrap's fresh-create step calls it", () => {
+  assert.deepEqual(DESK_GITIGNORE, GITIGNORE_LINES)
   const skill = readFileSync(bootstrapSkillPath, "utf8")
-  const gitignoreLine = skill.split("\n").find((line) => line.includes(".machine-local.yml"))
-  assert.ok(gitignoreLine, "expected the fresh-create bullet naming .machine-local.yml to still exist")
-  for (const pattern of GITIGNORE_LINES) {
-    assert.ok(gitignoreLine.includes(pattern), `expected the .gitignore template line to include ${pattern}`)
-  }
+  const freshCreate = skill.split("\n").find((line) => line.startsWith("- **Fresh-create:**"))
+  assert.ok(freshCreate, "expected the fresh-create bullet to still exist")
+  assert.match(freshCreate, /mcp\/scripts\/desk-init\.js --root <path>/)
 })
 
 test("session-start warns against running non-desk work with the desk root as cwd", () => {

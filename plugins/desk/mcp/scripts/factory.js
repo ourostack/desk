@@ -58,6 +58,7 @@ import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { jobId } from "../src/factory/binding.js"
+import { SUPPORTED_COMMANDS } from "../src/factory/commands.js"
 import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { kickLoop } from "../src/factory/evaluate-kick.js"
@@ -78,7 +79,7 @@ import { issuesClient } from "../src/factory/store-issues.js"
 import { contextPathParts, factsPathsForSession, isCapturePath, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 import { isTriagePath } from "../src/factory/triage-schema.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile", "loop", "triage", "triage-qualify"])
+export { SUPPORTED_COMMANDS }
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])

@@ -1,6 +1,7 @@
 import { fork } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { reviveError } from "./admission-worker.js"
+import { deskForkInvocation, isolatedDeskRoot } from "./desk-git-context.js"
 
 const childEntry = fileURLToPath(new URL("./status-inspection-child.js", import.meta.url))
 const ownedInspections = new WeakMap()
@@ -21,8 +22,10 @@ export function createStatusInspection(deskRoot, {
   signal, spawn = fork, closeGraceMs = 100, terminateGraceMs = 100, killGraceMs = 200,
 } = {}) {
   signal?.throwIfAborted()
-  const child = spawn(childEntry, [], {
-    execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"],
+  if (process.env.DESK_ISOLATED_HOSTED === "1") isolatedDeskRoot(deskRoot)
+  const invocation = deskForkInvocation({ script: childEntry })
+  const child = spawn(invocation.modulePath, invocation.args, {
+    ...invocation.options, stdio: ["ignore", "ignore", "inherit", "ipc"],
     windowsHide: true, serialization: "advanced",
   })
   let pending = null
