@@ -239,7 +239,7 @@ function open(s, kind) {
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(launchConfig(kind, browser, profileDir, profileName, outputDir)));
     return runCli(s, dir, ["open", "--config=config.json"], s.openMs);
   }).then(function (result) {
-    if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.split("\n").slice(0, 6).join(" "));
+    if (result.code !== 0) throw plain("The browser did not start. Try again, or use a fresh browser. Details: " + result.text.slice(-1500));
     return {
       contextId: id, browser: kind, app: BROWSERS[browser.channel].name, files: outputDir,
       note: "Runs in the background and leaves your own browser windows alone. Close it with browser_context action \"close\" when done."
@@ -251,11 +251,24 @@ function open(s, kind) {
   });
 }
 
+// A browser that just exited can hold its files for a moment, most often on Windows, so a refused removal is retried for about two seconds.
+function removeDir(dir) {
+  for (var attempt = 1; ; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= 10 || ["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].indexOf(error.code) === -1) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+  }
+}
+
 function close(s, id) {
   var dir = contextDir(s, id);
   var stop = fs.existsSync(path.join(dir, "config.json")) && exists(cliPath(s)) ? runCli(s, dir, ["close"], 30000) : Promise.resolve();
   return stop.then(function () {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    removeDir(dir);
     return { contextId: id, closed: true };
   });
 }

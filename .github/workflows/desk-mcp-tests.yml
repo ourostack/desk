@@ -95,6 +95,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # Ubuntu 24.04 blocks the unprivileged user namespaces the browser sandbox uses unless the browser ships its own AppArmor profile.
+      - name: Allow the browser sandbox on Linux
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Open, use and close real fresh and mine browsers
         env:
           DESK_BROWSER_REAL: "1"

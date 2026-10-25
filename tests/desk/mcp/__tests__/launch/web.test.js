@@ -211,7 +211,7 @@ test("a missing browser, a failed start and bad input each give a plain message"
   const controller = web.createController(options)
   const failed = await controller.call("browser_context", { action: "open", browser: "fresh" })
   assert.equal(failed.isError, true)
-  assert.equal(text(failed), "The browser did not start. Try again, or use a fresh browser. Details: Browser failed line two")
+  assert.equal(text(failed), "The browser did not start. Try again, or use a fresh browser. Details: Browser failed\nline two")
   assert.deepEqual(fs.readdirSync(tmp), [])
   assert.match(text(await controller.call("browser_context", { action: "open", browser: "other" })), /must be "fresh" or "mine"/u)
   assert.match(text(await controller.call("browser_context", { action: "reopen" })), /action must be "open" or "close"/u)
@@ -245,6 +245,27 @@ test("an unexpected error is reported as such", async () => {
   const result = await controller.call("browser_context", { action: "open" })
   assert.equal(result.isError, true)
   assert.match(text(result), /^Desk's browser hit an unexpected problem: /u)
+})
+
+test("closing retries a folder the browser still holds, and reports one that stays locked", async () => {
+  const { options, tmp } = await setup()
+  const controller = web.createController(options)
+  const original = fs.rmSync
+  const busy = Object.assign(new Error("busy"), { code: "EBUSY" })
+  try {
+    const first = json(await controller.call("browser_context", { action: "open" }))
+    let refusals = 1
+    fs.rmSync = (...args) => { if (refusals-- > 0) throw busy; return original(...args) }
+    assert.equal((await controller.call("browser_context", { action: "close", contextId: first.contextId })).isError, false)
+    assert.equal(fs.existsSync(path.join(tmp, `desk-browser-${first.contextId}`)), false)
+    const second = json(await controller.call("browser_context", { action: "open" }))
+    fs.rmSync = () => { throw busy }
+    const locked = await controller.call("browser_context", { action: "close", contextId: second.contextId })
+    assert.equal(locked.isError, true)
+    assert.match(text(locked), /unexpected problem: busy/u)
+  } finally {
+    fs.rmSync = original
+  }
 })
 
 // ---- installing playwright-core ----
