@@ -28,7 +28,7 @@ function readState(root) {
   try {
     return {
       provenance: getMeta(db, "active_vector_provenance"),
-      vectors: db.prepare("SELECT * FROM chunk_vecs").all(),
+      vectors: db.prepare("SELECT * FROM text_vectors").all(),
     }
   } finally { closeDb(db) }
 }

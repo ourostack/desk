@@ -162,7 +162,9 @@ test(`synchronous ${phase} work cannot stall the answering thread or its budget$
   assert.equal(detail.local_db.path, indexDbPath(root))
   assert.ok(detail.status_detail_from, "a late computation must carry its actual start timestamp")
   if (slowControl) {
-    await assert.rejects(controller.status(), /readiness controller request timed out: status/u)
+    // The session's own background check gives up on this slow controller about 6.5 s after the first desk_status
+    // (three 2 s status timeouts) and closes it; a short timeout here settles well before that.
+    await assert.rejects(controller.status(500), /readiness controller request timed out: status/u)
     assert.equal(Number(readFileSync(controlDelayed, "utf8")), observed.pid)
   }
   t.diagnostic(JSON.stringify({ phase, statusMs: elapsedMs, firstTimerMs: timerMs, busyTimerMs,

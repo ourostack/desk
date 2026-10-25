@@ -14,6 +14,7 @@ import {
 import { assertCanonicalArtifactSourcePaths } from "../artifacts/source-scope.js"
 import { assertArtifactInputsAllowed } from "./exclusions.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
+import { ACTIVE_VECTOR_SPACE } from "./text-vectors.js"
 
 const VECTOR_ENCODING = "float32-json"
 const ROW_FIELDS = new Set([
@@ -176,11 +177,14 @@ export async function importVectorPacks({
      WHERE chunk_key = ?
      ORDER BY id`,
   )
+  // Pack vectors are active-model vectors; one per section text serves every section with that text. A pack's
+  // vector of the whole text replaces a vector of a shortened text or a record that the text was skipped as too long.
   const hasVector = db.prepare(
-    "SELECT chunk_id FROM chunk_vecs WHERE chunk_id = ?",
+    "SELECT 1 FROM text_vectors WHERE vector_space = ? AND text_hash = ? AND embedding IS NOT NULL AND kept_chars IS NULL",
   )
   const insertVector = db.prepare(
-    "INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)",
+    `INSERT INTO text_vectors (vector_space, text_hash, embedding) VALUES (?, ?, ?)
+     ON CONFLICT (vector_space, text_hash) DO UPDATE SET embedding = excluded.embedding, kept_chars = NULL`,
   )
   const deleteFailure = db.prepare(
     `DELETE FROM chunk_embedding_failures
@@ -228,15 +232,12 @@ export async function importVectorPacks({
 
         let inserted = 0
         let skipped = 0
-        for (const chunk of chunks) {
-          throwIfAborted(signal)
-          if (hasVector.get(chunk.id)) {
-            skipped += 1
-            continue
-          }
-          insertVector.run(BigInt(chunk.id), new Float32Array(row.vector))
-          deleteFailure.run(chunk)
-          inserted += 1
+        if (hasVector.get(ACTIVE_VECTOR_SPACE, row.text_hash)) {
+          skipped = chunks.length
+        } else {
+          insertVector.run(ACTIVE_VECTOR_SPACE, row.text_hash, Buffer.from(new Float32Array(row.vector).buffer))
+          for (const chunk of chunks) deleteFailure.run(chunk)
+          inserted = chunks.length
         }
         if (inserted === 0) {
           seenInRun.add(row.chunk_key)

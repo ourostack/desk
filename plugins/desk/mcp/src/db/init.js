@@ -110,6 +110,8 @@ export function runMigrations(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_chunk_key ON chunks(chunk_key)")
   db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_embedding_spec_id ON chunks(embedding_spec_id)")
+  // Vectors are found, saved and cleaned up by section text.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash)")
 
   if (!hadChunksFts) {
     const row = db.prepare("SELECT COUNT(*) AS count FROM chunks").get()

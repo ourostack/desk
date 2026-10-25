@@ -19,6 +19,7 @@ import { promises as fs } from "node:fs"
 import { mkdirSync } from "node:fs"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
+import { setTimeout as sleep } from "node:timers/promises"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { createHash } from "node:crypto"
@@ -218,15 +219,22 @@ test("semantic request starts or reuses convergence and executes one proven sema
 
 // The controller/watcher boundary is the only concurrency double: publication,
 // snapshots, query routing and indexed recall all use their real implementations.
-async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) {
+// `changesDuringEvaluation` is how many backend reads see a desk change land while they run (Infinity: every read).
+async function queuedSemanticChange(t, { changesDuringEvaluation = 0, changesAfterWait = 0, semanticDeadlineMs } = {}) {
   const deskRoot = await fs.realpath(await mkTempDeskRoot())
   t.diagnostic(`queued semantic fixture: ${deskRoot}`)
   const documentPath = "track/work/task.md"
-  const embed = { fetch: makeEmbedFetch() }
+  const queryEmbeds = []
+  const answer = makeEmbedFetch()
+  const embed = { fetch: async (url, request) => {
+    if (JSON.parse(request.body).prompt === "quartz") queryEmbeds.push(url)
+    return answer(url, request)
+  } }
   let cursor = { journal_id: "queued-semantic-change", sequence: 0 }
   let current = true
   let discovered = false
   let evaluations = 0
+  let waitChanges = 0
   await writeFile(deskRoot, documentPath, "old quartz")
   await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
   const controller = {
@@ -240,9 +248,17 @@ async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) 
       }
       return { certain: true, cursor: { ...cursor } }
     },
-    barrier: async ({ capability }) => ({
-      capability, current, certain: true, state: current ? "READY" : "LEXICAL_CONVERGING",
-    }),
+    async barrier({ capability, wait }) {
+      const result = { capability, current, certain: true, state: current ? "READY" : "LEXICAL_CONVERGING" }
+      // A change that lands just after the semantic wait reports the index current.
+      if (capability === "semantic" && wait === true && current && waitChanges < changesAfterWait) {
+        waitChanges++
+        await writeFile(deskRoot, documentPath, `moved quartz ${waitChanges}`)
+        cursor = { ...cursor, sequence: cursor.sequence + 1 }
+        current = false
+      }
+      return result
+    },
     async beginConvergence() {
       await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
       current = true
@@ -264,21 +280,22 @@ async function queuedSemanticChange(t, { changeDuringEvaluation = false } = {}) 
   }
   const router = createQueryRouter({
     controller,
+    ...(semanticDeadlineMs === undefined ? {} : { semanticDeadlineMs }),
     async semanticBackend(request) {
       evaluations++
       const result = await indexedRecall({
-        deskRoot, db: request.db, input: request, opts: { embed },
+        deskRoot, db: request.db, input: request, opts: { embed: { ...embed, ...request.opts?.embed } },
       })
-      if (changeDuringEvaluation) {
-        await writeFile(deskRoot, documentPath, "later quartz")
-        cursor = { ...cursor, sequence: 2 }
+      if (evaluations <= changesDuringEvaluation) {
+        await writeFile(deskRoot, documentPath, `later quartz ${evaluations}`)
+        cursor = { ...cursor, sequence: cursor.sequence + 1 }
         current = false
       }
       return result
     },
   })
   const result = await router.semantic({ deskRoot, kind: "recall", topic: "quartz", limit: 3 })
-  return { result, evaluations }
+  return { result, evaluations, waitChanges, queryEmbeds: queryEmbeds.length }
 }
 
 test("semantic recall refreshes proof after a fenced change finishes convergence", async (t) => {
@@ -288,12 +305,134 @@ test("semantic recall refreshes proof after a fenced change finishes convergence
   assert.equal(evaluations, 1, "recall must evaluate once, never replay its backend")
 })
 
-test("refreshed semantic proof still discards a change during backend evaluation", async (t) => {
-  const { result, evaluations } = await queuedSemanticChange(t, { changeDuringEvaluation: true })
-  assert.equal(evaluations, 1)
+test("a read whose index moves on once is discarded, and recall reads again once the controller catches up", async (t) => {
+  const { result, evaluations, queryEmbeds } = await queuedSemanticChange(t, { changesDuringEvaluation: 1 })
+  assert.equal(evaluations, 2, "the first read is discarded and the recall reads once more")
+  assert.equal(queryEmbeds, 1, "the second read reuses the query's vector")
+  assert.equal(result.results?.[0]?.snippet, "later quartz 1", JSON.stringify(result))
+})
+
+test("a recall whose index keeps moving on never answers from a moved index, and refuses when its deadline runs out", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesDuringEvaluation: Infinity, semanticDeadlineMs: 300 })
+  assert.ok(evaluations >= 2, `the recall read again (${evaluations} reads)`)
   assert.equal(result.code, "required_capability_unavailable")
+  // The deadline can run out during a read or during a wait for the controller.
+  assert.ok(["readiness_changed_during_read", "semantic_deadline"].includes(result.diagnostic.reason), result.diagnostic.reason)
+  assert.equal(result.results, undefined)
+})
+
+test("a change landing just after the wait sends recall back to wait for the controller before it reads", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesAfterWait: 1 })
+  assert.equal(evaluations, 1, "recall reads only once the controller has caught up")
+  assert.equal(result.results?.[0]?.snippet, "moved quartz 1", JSON.stringify(result))
+})
+
+test("with no deadline, a recall whose index moves on after every wait stops waiting after a bounded number of tries", async (t) => {
+  const { result, evaluations, waitChanges } = await queuedSemanticChange(t, { changesAfterWait: Infinity, semanticDeadlineMs: 0 })
+  assert.equal(evaluations, 0, "recall never reads a moved index")
+  assert.ok(waitChanges >= 20 && waitChanges < 60, `about 20 tries (${waitChanges} waits)`)
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.results, undefined)
+})
+
+test("with no deadline, a recall whose index keeps moving on stops after a bounded number of reads", async (t) => {
+  const { result, evaluations } = await queuedSemanticChange(t, { changesDuringEvaluation: Infinity, semanticDeadlineMs: 0 })
+  assert.equal(evaluations, 20)
   assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
   assert.equal(result.results, undefined)
+})
+
+// A controller whose status, read after the lexical barrier came back current, reports a change marked in between
+// (`pending_change`) until the next catch-up, or for every read when `staysUncertain` is set.
+async function changeMarkedBeforeStatus(t, { staysUncertain = false, semanticDeadlineMs = 5_000, signal, onStatus } = {}) {
+  const deskRoot = await fs.realpath(await mkTempDeskRoot())
+  const embed = { fetch: makeEmbedFetch() }
+  const cursor = { journal_id: "change-before-status", sequence: 0 }
+  let current = true
+  let certain = true
+  let statusCalls = 0
+  let convergences = 0
+  await writeFile(deskRoot, "track/work/task.md", "old quartz")
+  await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
+  const controller = {
+    identity: { semantic_contract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC } },
+    async fenceEvents() { return { certain: true, cursor: { ...cursor } } },
+    async barrier({ capability }) { return { capability, current, certain: true, state: current ? "READY" : "RECOVERING" } },
+    async beginConvergence() {
+      convergences++
+      await rebuildIndex(deskRoot, { eventCursor: cursor, embed })
+      current = true
+      if (!staysUncertain) certain = true
+      return { accepted: true }
+    },
+    async status() {
+      statusCalls++
+      // The change is marked while this status request is in flight.
+      if (statusCalls === 1) { current = false; certain = false }
+      onStatus?.(statusCalls)
+      return {
+        state: current ? "READY" : "RECOVERING",
+        owner: { token: "fixture-owner" },
+        freshness: { certain, reason: certain ? null : "pending_change", cursor: { ...cursor } },
+        convergence: {
+          status: current ? "succeeded" : "pending",
+          semantic: {
+            chunks_total: 1, vectors_indexed: 1, missing_vectors: 0, provenance_current: true,
+            query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } },
+          },
+        },
+      }
+    },
+  }
+  const router = createQueryRouter({
+    controller, semanticDeadlineMs,
+    semanticBackend: (request) => indexedRecall({ deskRoot, db: request.db, input: request, opts: { embed: { ...embed, ...request.opts?.embed } } }),
+  })
+  const started = Date.now()
+  const result = await router.semantic({ deskRoot, kind: "recall", topic: "quartz", limit: 3, ...(signal ? { signal } : {}) })
+  return { result, ms: Date.now() - started, convergences, statusCalls }
+}
+
+test("a change marked after the lexical barrier but before the status read sends recall back to wait, and it answers", async (t) => {
+  const { result, convergences } = await changeMarkedBeforeStatus(t)
+  assert.ok(Array.isArray(result.results) && result.results.length > 0, JSON.stringify(result.diagnostic))
+  assert.equal(convergences, 1, "recall waited for the controller to catch up")
+})
+
+test("a status that never becomes certain does not make recall spin: it pauses between reads and refuses at its deadline", async (t) => {
+  const { result, ms, statusCalls } = await changeMarkedBeforeStatus(t, { staysUncertain: true, semanticDeadlineMs: 400 })
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "pending_change")
+  assert.ok(ms >= 350, `recall waited out its deadline (${ms} ms)`)
+  assert.ok(statusCalls <= 20, `recall paused between reads (${statusCalls} status reads in ${ms} ms)`)
+})
+
+test("with no deadline, a status that never becomes certain stops recall after a bounded number of paused reads", async (t) => {
+  const { result, ms } = await changeMarkedBeforeStatus(t, { staysUncertain: true, semanticDeadlineMs: 0 })
+  assert.equal(result.diagnostic.reason, "pending_change")
+  assert.ok(ms >= 19 * 45, `recall paused before each of its reads (${ms} ms)`)
+})
+
+test("a recall cancelled while it pauses between reads stops at once", async (t) => {
+  const stop = new AbortController()
+  // The pause starts as soon as this status answer is read, and lasts 50 ms.
+  const onStatus = (call) => { if (call === 1) setTimeout(() => stop.abort(new Error("the caller went away")), 20) }
+  const started = Date.now()
+  await assert.rejects(changeMarkedBeforeStatus(t, { staysUncertain: true, signal: stop.signal, onStatus }), /the caller went away/)
+  assert.ok(Date.now() - started < 1_000)
+})
+
+test("a router with no controller reports no automatic work and no semantic mode", async () => {
+  const deskRoot = await fs.realpath(await mkTempDeskRoot())
+  const snapshot = await createQueryRouter({}).snapshot({ deskRoot })
+  assert.equal(snapshot.lexical.current_automatic_action, null)
+  assert.equal(snapshot.semantic.current_automatic_action, null)
+  assert.equal(snapshot.semantic.mode, "unsupported")
+  const pending = await createQueryRouter({
+    controller: { status: async () => ({ state: "LEXICAL_CONVERGING", convergence: { status: "pending" } }) },
+  }).snapshot({ deskRoot })
+  assert.equal(pending.lexical.current_automatic_action, "reconciling")
+  assert.equal(pending.semantic.current_automatic_action, "converging")
 })
 
 test("semantic request never executes against an unproven generation", async (t) => {
@@ -506,7 +645,7 @@ test("semantic proof rejects snapshots with missing vectors", async (t) => {
   const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
   try {
     sqliteVec.load(db)
-    db.prepare("DELETE FROM chunk_vecs").run()
+    db.prepare("DELETE FROM text_vectors").run()
   } finally { db.close() }
   const result = await f.router.semantic({
     deskRoot: f.deskRoot,
@@ -1496,10 +1635,14 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
     const db = new Database(path.join(deskRoot, ".state", "desk-index.sqlite"), { readonly: true })
     try {
       sqliteVec.load(db)
-      assert.ok(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n > 0)
-      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM chunk_vecs v
-        LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL`).get().orphan_count, 0, JSON.stringify({
-          orphanIds: db.prepare("SELECT v.chunk_id FROM chunk_vecs v LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL").all(),
+      assert.ok(db.prepare("SELECT COUNT(*) AS n FROM text_vectors").get().n > 0)
+      // A vector whose text no section has any more is kept for a grace period, marked unused, in case the text comes back.
+      // The controller's cleanup marks it on its own timer, shortly after the catch-up.
+      const orphans = `FROM text_vectors t WHERE t.unused_since IS NULL
+        AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.text_hash = t.text_hash)`
+      for (let waited = 0; waited < 5_000 && db.prepare(`SELECT COUNT(*) AS n ${orphans}`).get().n > 0; waited += 50) await sleep(50)
+      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count ${orphans}`).get().orphan_count, 0, JSON.stringify({
+          orphanHashes: db.prepare(`SELECT t.text_hash ${orphans}`).all(),
           chunks: db.prepare("SELECT c.id, d.path FROM chunks c JOIN docs d ON d.id = c.doc_id").all(),
           generations: db.prepare("SELECT id, documents FROM lexical_generations").all(),
         }))

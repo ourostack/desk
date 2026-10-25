@@ -213,8 +213,8 @@ test("chunk_vecs vec0 virtual table accepts a 768-dim float vector", async () =>
     vec[0] = 1.0
     // sqlite-vec rejects non-integer bound values on a vec0 primary-key
     // column; chunkId comes back as a JS number from RETURNING, so we
-    // coerce to BigInt at the bind boundary (this mirrors what the
-    // indexer does in src/indexer/index.js).
+    // coerce to BigInt at the bind boundary, as every build that writes
+    // or deletes rows of this table does.
     db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(chunkId), vec)
     const back = db
       .prepare("SELECT chunk_id FROM chunk_vecs WHERE chunk_id = ?")

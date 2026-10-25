@@ -16,6 +16,8 @@ import { ownerState } from "./owner-record.js"
 
 // A catch-up that another Desk build's commit undid, or a build standing aside whose owner has not caught up yet, tries again after a growing pause instead of at once: retrying at once is what kept two builds undoing each other's work. After the last pause the controller stops and stays uncertain; the next desk change or search starts it again.
 export const RETRY_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000])
+const CLEANUP_BUSY_MS = 250
+const CLEANUP_IDLE_MS = 60_000
 // Why a build standing aside for a higher build cannot answer from the index yet.
 const STAND_ASIDE_REASONS = Object.freeze(["index_owner_catching_up", "index_owned_by_newer_desk"])
 
@@ -34,6 +36,9 @@ export async function startReadinessController({
   // The Desk version this controller runs. With it the controller publishes the version in its owner record and writes the shared index only while no running build ranks above it (index-writer.js); without it (older callers and tests) it writes as before.
   version = null,
   retryDelaysMs = RETRY_DELAYS_MS,
+  // How long the vector cleanup waits before its next round: soon while the last round left work, longer once nothing was left.
+  cleanupBusyMs = CLEANUP_BUSY_MS,
+  cleanupIdleMs = CLEANUP_IDLE_MS,
 } = {}) {
   validateControllerEndpoint(endpoint)
   if (process.platform !== "win32") validatePrivateDirectory(path.dirname(endpoint))
@@ -70,6 +75,9 @@ export async function startReadinessController({
   // What the index held when this controller last proved it current (generationContent): another build's generation with the same content serves the same answers.
   let readyContent = null
   let retryAttempt = 0
+  // Whether this build wrote the index at its last catch-up, rather than standing aside for a higher build.
+  let ownsIndex = false
+  let cleanup = null
   const semanticMode = identity.semantic_contract?.mode
   const semanticEnabled = semanticMode === "required" || semanticMode === "background"
   const server = net.createServer((socket) => {
@@ -120,6 +128,39 @@ export async function startReadinessController({
     }
   }
 
+  // Older builds sharing the desk leave vectors no section can use whether or not this build catches up, so while this
+  // build owns the index a cleanup round runs on its own timer, not only after a catch-up: soon again while a round
+  // left work, and once every cleanupIdleMs after a round found nothing left.
+  function scheduleCleanup(delayMs) {
+    if (closing || typeof handlers.cleanupVectors !== "function" || !ownsIndex) return
+    if (cleanup?.running) return
+    if (cleanup && cleanup.dueAt <= Date.now() + delayMs) return
+    clearTimeout(cleanup?.timer)
+    const timer = setTimeout(runCleanup, delayMs)
+    timer.unref?.()
+    cleanup = { timer, dueAt: Date.now() + delayMs, running: false }
+  }
+
+  function runCleanup() {
+    const stop = new AbortController()
+    const round = (async () => {
+      let result = null
+      try {
+        // A catch-up in progress already writes the index; the round waits for it.
+        await convergence?.catch(() => {})
+        // A newer build may have started since the last catch-up without any desk change; it owns the index from then on.
+        if (!closing && ownsIndex && await readCurrentOwnership() !== null) ownsIndex = false
+        if (!closing && ownsIndex) result = await handlers.cleanupVectors({ signal: stop.signal })
+      } catch {
+        // A failed round leaves the vectors for the next one.
+      }
+      cleanup = null
+      // A build that stands aside runs no more rounds until a catch-up of its own makes it the owner again.
+      scheduleCleanup(result?.complete === false ? cleanupBusyMs : cleanupIdleMs)
+    })()
+    cleanup = { running: true, round, stop }
+  }
+
   // The next pause, or null once every pause is spent.
   function nextRetryDelay() {
     const delay = retryDelaysMs[retryAttempt] ?? null
@@ -141,11 +182,16 @@ export async function startReadinessController({
     return indexOwnedBy
   }
 
-  // Status reads the owner afresh, so it never names a session that has ended or misses one that started since the last catch-up. Every query reads status, so owners are judged by their PID alone: reading a process's start time can take seconds on Windows.
+  // Owners judged by their PID alone: reading a process's start time can take seconds on Windows.
+  function readCurrentOwnership() {
+    return readOwnership({ inspect: ({ stateDir: dir }) => ownerState({ stateDir: dir, processStart: async () => null }) })
+  }
+
+  // Status reads the owner afresh, so it never names a session that has ended or misses one that started since the last catch-up. Every query reads status, so it uses the cheap read.
   async function currentIndexOwner() {
     if (self === null) return null
     const before = indexOwnedBy
-    await readOwnership({ inspect: ({ stateDir: dir }) => ownerState({ stateDir: dir, processStart: async () => null }) })
+    await readCurrentOwnership()
     // The owner's session ended while this build stood aside: catch up and take the index over now, not at the next desk change.
     if (before !== null && indexOwnedBy === null && STAND_ASIDE_REASONS.includes(freshnessReason)) scheduleReconciliation()
     return indexOwnerStatus()
@@ -268,10 +314,12 @@ export async function startReadinessController({
       })
       // Only the build that owns the index writes it. A lower build reads the owner's index once it covers the desk as this build sees it, and writes nothing.
       if (await readOwnership() !== null) {
+        ownsIndex = false
         const checked = await handlers.verifyIndex?.({ eventCursor })
         return { ...(checked ?? { verified: false, same_settings: false, semantic: null }), stood_aside: true }
       }
       const result = await handlers.beginConvergence?.({ eventCursor, reason: freshnessReason, journal })
+      ownsIndex = true
       if (result && typeof result.content !== "string") {
         const content = await committedContent(result.summary?.lexical_generation)
         if (content !== null) result.content = content
@@ -313,6 +361,7 @@ export async function startReadinessController({
       throw error
     }).finally(() => {
       convergence = null
+      scheduleCleanup(cleanupBusyMs)
       if (retryDelay !== null) scheduleReconciliation(retryDelay)
       else if (!convergenceError && revision !== startedRevision) scheduleReconciliation()
       if (!ephemeral) server.unref()
@@ -469,6 +518,9 @@ export async function startReadinessController({
       unregisterRelease()
       reconcileScheduled?.cancel()
       reconcileScheduled = null
+      clearTimeout(cleanup?.timer)
+      cleanup?.stop?.abort()
+      await cleanup?.round
       await convergence?.catch(() => {})
       await journalWork
       try {
